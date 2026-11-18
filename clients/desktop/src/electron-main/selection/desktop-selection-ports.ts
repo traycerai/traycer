@@ -508,18 +508,15 @@ export class DesktopHostFleetSource implements HostFleetSource {
       // `readAtMs` here is this observation's own time, not a registry read's:
       // signing out is a fact about the account learned right now, and it must
       // supersede any read that observed the fleet before it - in every scope.
-      return this.adoptionOutcome(
-        this.applyFetched(
-          generation,
-          seq,
-          this.localIdentitySeq,
-          null,
-          { personal: [], team: [] },
-          readAtMs,
-        ),
+      this.applyFetched(
         generation,
-        REGISTRY_SCOPES,
+        seq,
+        this.localIdentitySeq,
+        null,
+        { personal: [], team: [] },
+        readAtMs,
       );
+      return this.fleetOutcome(generation, REGISTRY_SCOPES);
     }
     // Stamped BEFORE the read, so ordering follows what each read OBSERVED.
     this.localIdentitySeq += 1;
@@ -555,20 +552,18 @@ export class DesktopHostFleetSource implements HostFleetSource {
       // rows it could not refresh marks them stale, which the subscription
       // forwards anyway: they are still the freshest personal rows anyone has.
       // It speaks for the personal scope alone (see `RegistryScope`).
-      return this.adoptionOutcome(
-        this.publishAndAdopt(
-          identity,
-          generation,
-          seq,
-          identitySeq,
-          localHostId,
-          pushed.response,
-          scopeRows(pushed.response, PUSH_SCOPES),
-          readAtMs,
-        ),
+      this.publishAndAdopt(
+        identity,
         generation,
-        PUSH_SCOPES,
+        seq,
+        identitySeq,
+        localHostId,
+        pushed.response,
+        scopeRows(pushed.response, PUSH_SCOPES),
+        readAtMs,
+        false,
       );
+      return this.fleetOutcome(generation, PUSH_SCOPES);
     }
     let result: HostListFetchResult;
     try {
@@ -596,20 +591,18 @@ export class DesktopHostFleetSource implements HostFleetSource {
       this.adoptLocalIdentityRead(generation, identitySeq, localHostId);
       return { kind: "unavailable" };
     }
-    return this.adoptionOutcome(
-      this.publishAndAdopt(
-        identity,
-        generation,
-        seq,
-        identitySeq,
-        localHostId,
-        result.response,
-        scopeRows(result.response, REGISTRY_SCOPES),
-        readAtMs,
-      ),
+    this.publishAndAdopt(
+      identity,
       generation,
-      REGISTRY_SCOPES,
+      seq,
+      identitySeq,
+      localHostId,
+      result.response,
+      scopeRows(result.response, REGISTRY_SCOPES),
+      readAtMs,
+      true,
     );
+    return this.fleetOutcome(generation, REGISTRY_SCOPES);
   }
 
   /**
@@ -635,13 +628,20 @@ export class DesktopHostFleetSource implements HostFleetSource {
     response: HostListResponse,
     scoped: ScopedRows,
     readAtMs: number,
-  ): boolean {
+    bearer: boolean,
+  ): void {
     const current = generation === this.options.identity.current().generation;
     const admitted: ScopedRows = {
-      personal: this.admitScope("personal", scoped, current, seq, readAtMs),
-      team: this.admitScope("team", scoped, current, seq, readAtMs),
+      personal: this.admitScope("personal", scoped, current, seq, readAtMs, {
+        generation,
+        bearer,
+      }),
+      team: this.admitScope("team", scoped, current, seq, readAtMs, {
+        generation,
+        bearer,
+      }),
     };
-    if (admitted.personal === null && admitted.team === null) return false;
+    if (admitted.personal === null && admitted.team === null) return;
     this.options.publishRegistryResponse({
       identityKey: identity.identityKey,
       response: current
@@ -653,7 +653,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
           }
         : response,
     });
-    return this.applyFetched(
+    this.applyFetched(
       generation,
       seq,
       identitySeq,
@@ -666,6 +666,14 @@ export class DesktopHostFleetSource implements HostFleetSource {
   /**
    * This read's rows for `scope`, or null when it does not speak for the
    * scope or a newer read of the scope has already been adopted.
+   *
+   * The read-time fence does not hold a BEARER read for the current identity
+   * against a mark another identity's adoption left: that read was made by
+   * this process with this identity's credential, so it is this identity's
+   * answer whatever the wall clock says, and declining it on a mark from an
+   * account the user has left (a clock that stepped back) would serve the new
+   * account nothing. Pushes keep the fence across the change - the reason it
+   * is retained at all.
    */
   private admitScope(
     scope: RegistryScope,
@@ -673,11 +681,16 @@ export class DesktopHostFleetSource implements HostFleetSource {
     currentIdentity: boolean,
     seq: number,
     readAtMs: number,
+    read: { readonly generation: number; readonly bearer: boolean },
   ): readonly HostListItem[] | null {
     const rows = scoped[scope];
     if (rows === null) return null;
     const watermark = this.watermarks[scope];
-    if (readAtMs < watermark.readAtMs) {
+    const markFromAnotherIdentity =
+      read.bearer &&
+      currentIdentity &&
+      watermark.generation !== read.generation;
+    if (!markFromAnotherIdentity && readAtMs < watermark.readAtMs) {
       // An answer that observed the scope EARLIER than one already adopted.
       // Declined before the publish, not just before the adoption: the renderer
       // push is the display half of the same fact, and showing windows a fleet
@@ -827,8 +840,8 @@ export class DesktopHostFleetSource implements HostFleetSource {
     localHostId: string | null,
     scoped: ScopedRows,
     readAtMs: number,
-  ): boolean {
-    if (this.disposed) return false;
+  ): void {
+    if (this.disposed) return;
     if (generation !== this.options.identity.current().generation) {
       // A late completion for a RETIRED identity. It is still published -
       // stamped with the generation it was fetched under, which is exactly
@@ -841,7 +854,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
         localHostId,
         projectFleetRows([...(scoped.personal ?? []), ...(scoped.team ?? [])]),
       );
-      return false;
+      return;
     }
     // Same-identity ordering (see `refreshSeq`), per scope: a scope whose
     // newer completion was adopted while this one awaited is declined, so an
@@ -855,7 +868,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
       this.options.log.debug("[selection-fleet] dropped a superseded refresh", {
         seq,
       });
-      return false;
+      return;
     }
     for (const scope of adopting) {
       const watermark = this.watermarks[scope];
@@ -882,29 +895,25 @@ export class DesktopHostFleetSource implements HostFleetSource {
       });
     }
     this.publishAt(generation);
-    return true;
   }
 
   /**
-   * What a read this port adopted or declined did to the authority's fleet.
+   * What a read did to the authority's fleet, decided from the fleet rather
+   * than from whether this read was the one adopted.
    *
-   * Declined by a disposed source, or for a retired identity: nothing current
-   * came of it, `superseded`. Declined for the CURRENT identity, it is
-   * `published` only when every scope it spoke for is serving rows this same
-   * generation adopted - it then lost to a newer read of this identity, and
-   * the authority already holds that fleet. The current generation alone is
-   * not that proof: the seq and read-time fences outlive an identity change
-   * while the rows are cleared, so a new account's read can be declined
-   * against the previous account's marks (a wall clock that stepped back)
-   * with nothing of its own adopted. That is `unavailable`: no current fleet
-   * covers the read, and the caller keeps its obligation to re-ask.
+   * A disposed source, or a retired identity: nothing current came of it,
+   * `superseded`. Otherwise `published` exactly when every scope the read
+   * spoke for is serving rows adopted under this generation - by this read,
+   * or by a newer read of the same identity that won the scope - so a partial
+   * adoption with one scope still on another identity's marks is not
+   * `published`. Anything less is `unavailable`, and the caller keeps its
+   * obligation to re-ask. Generation alone is not proof: the seq and
+   * read-time fences outlive an identity change while the rows are cleared.
    */
-  private adoptionOutcome(
-    adopted: boolean,
+  private fleetOutcome(
     generation: number,
     scopes: readonly RegistryScope[],
   ): FleetRefreshOutcome {
-    if (adopted) return { kind: "published" };
     if (
       this.disposed ||
       generation !== this.options.identity.current().generation
