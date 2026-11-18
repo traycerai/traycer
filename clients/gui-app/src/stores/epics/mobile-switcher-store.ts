@@ -24,6 +24,11 @@ import { create } from "zustand";
  */
 interface MobileSwitcherState {
   readonly openTabId: string | null;
+  /**
+   * What an edge swipe opens, by the id of the focused tab's ref: an epic's tab
+   * id, or `"tracy"` for the Tracy surface. A registration replaces the one
+   * under its key, and its cleanup removes only itself.
+   */
   readonly swipeOpenByTabId: Readonly<Record<string, (() => void) | undefined>>;
   readonly registerSwipeOpen: (tabId: string, open: () => void) => () => void;
   /**

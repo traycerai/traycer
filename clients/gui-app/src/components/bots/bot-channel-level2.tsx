@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import { createPortal } from "react-dom";
 import {
@@ -20,6 +20,8 @@ import { cn } from "@/lib/utils";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import { useStandaloneBotName } from "@/hooks/bots/use-standalone-bot-name";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
+import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
+import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
 
 function stayOpen(): void {}
 
@@ -150,6 +152,13 @@ export function BotChannelTitle(props: {
   );
 }
 
+/**
+ * The key the picker registers its swipe-open under: the id of the one Tracy
+ * surface's ref (`TRACY_TAB_REF`), which is what the shell's edge recognizer
+ * reads for a focused Tracy tab.
+ */
+const TRACY_SWIPE_OPEN_KEY = "tracy";
+
 function BotChannelPicker(props: {
   readonly title: string;
   readonly activeBotId: string | null;
@@ -160,6 +169,15 @@ function BotChannelPicker(props: {
   const [open, setOpen] = useState(false);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const { resolvedTheme, themePreset } = useResolvedTheme();
+  const paneVisible = usePaneVisible();
+  const registerSwipeOpen = useMobileSwitcherStore((s) => s.registerSwipeOpen);
+  // The shell's edge swipe from the trailing edge opens this picker while the
+  // pane is on screen; the recognizer itself stands down while a modal layer,
+  // this drawer included, covers the app.
+  useEffect(() => {
+    if (!paneVisible) return;
+    return registerSwipeOpen(TRACY_SWIPE_OPEN_KEY, () => setOpen(true));
+  }, [paneVisible, registerSwipeOpen]);
   const close = (): void => setOpen(false);
   // The list that shows the environment is closed while this is read.
   const name = useStandaloneBotName(activeBotId, title);

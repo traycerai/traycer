@@ -453,6 +453,86 @@ describe("useMobileHistorySwipes", () => {
     useMobileSwitcherStore.setState({ swipeOpenByTabId: {} });
   });
 
+  describe("with the Tracy surface focused", () => {
+    const TRACY_REF = {
+      kind: "tracy" as const,
+      id: "tracy" as const,
+      hostId: "host-1",
+      botId: null,
+      route: "/bot",
+      name: "Tracy",
+      icon: null,
+      canDuplicate: false,
+      canOpenInNewWindow: false,
+    };
+
+    beforeEach(() => {
+      useSettingsStore.setState({ mobileSwipeHistory: false });
+      useTabsStore.setState({
+        items: [{ kind: "tab", id: "item", ref: TRACY_REF }],
+        activeItemId: "item",
+        stripOrder: [TRACY_REF],
+      });
+    });
+
+    afterEach(() => {
+      useMobileSwitcherStore.setState({ swipeOpenByTabId: {} });
+    });
+
+    it("opens the registered picker on a trailing-edge swipe", () => {
+      const open = vi.fn();
+      useMobileSwitcherStore.getState().registerSwipeOpen(TRACY_REF.id, open);
+      mountSwipes(createMemoryHistory({ initialEntries: ["/"] }));
+
+      swipeFromEdge("trailing");
+
+      expect(open).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the newer registration when an older one is cleaned up", () => {
+      const older = vi.fn();
+      const newer = vi.fn();
+      const switcher = useMobileSwitcherStore.getState();
+      const unregisterOlder = switcher.registerSwipeOpen(TRACY_REF.id, older);
+      const unregisterNewer = switcher.registerSwipeOpen(TRACY_REF.id, newer);
+      mountSwipes(createMemoryHistory({ initialEntries: ["/"] }));
+
+      unregisterOlder();
+      swipeFromEdge("trailing");
+
+      expect(newer).toHaveBeenCalledTimes(1);
+      expect(older).not.toHaveBeenCalled();
+      unregisterNewer();
+      swipeFromEdge("trailing");
+      expect(newer).toHaveBeenCalledTimes(1);
+    });
+
+    it("declines a trailing-edge swipe when no picker is registered", () => {
+      const history = createMemoryHistory({ initialEntries: ["/", "/epics"] });
+      const forwardSpy = vi.spyOn(history, "forward");
+      mountSwipes(history);
+
+      swipeFromEdge("trailing");
+
+      expect(forwardSpy).not.toHaveBeenCalled();
+      expect(useMobileNavStore.getState().open).toBe(false);
+    });
+
+    it("goes forward in history, and opens no picker, with swipe history on", () => {
+      useSettingsStore.setState({ mobileSwipeHistory: true });
+      const open = vi.fn();
+      useMobileSwitcherStore.getState().registerSwipeOpen(TRACY_REF.id, open);
+      const history = createMemoryHistory({ initialEntries: ["/", "/epics"] });
+      const forwardSpy = vi.spyOn(history, "forward");
+      mountSwipes(history);
+
+      swipeFromEdge("trailing");
+
+      expect(forwardSpy).toHaveBeenCalledTimes(1);
+      expect(open).not.toHaveBeenCalled();
+    });
+  });
+
   it("sends a leading-edge swipe to the shared back action", () => {
     const history = createMemoryHistory({ initialEntries: ["/", "/epics"] });
     const backSpy = vi.spyOn(history, "back");

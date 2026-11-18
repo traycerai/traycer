@@ -31,7 +31,7 @@ export function useMobileHistorySwipes(): ReactElement | null {
     const captureTarget = () => {
       const focused = selectHostFocusedRef(useTabsStore.getState());
       swipeTarget.current =
-        focused?.kind === "epic"
+        focused?.kind === "epic" || focused?.kind === "tracy"
           ? useMobileSwitcherStore.getState().swipeOpenByTabId[focused.id]
           : undefined;
     };
