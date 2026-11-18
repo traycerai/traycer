@@ -378,6 +378,17 @@ describe("<BotFeedbackDraftCard /> across an account switch", () => {
     expect(pendingRetry.hasAttribute("disabled")).toBe(true);
     expect(pendingRetry.textContent).toContain("Retry Send");
     expect(pendingRetry.querySelector('[aria-hidden="true"]')).not.toBeNull();
+
+    decideGate.resolve({
+      kind: "error",
+      code: "session-unavailable",
+      feedbackDraft: null,
+    });
+    await settle();
+
+    const failedRetry = screen.getByRole("button", { name: "Retry Send" });
+    expect(failedRetry.hasAttribute("disabled")).toBe(false);
+    expect(failedRetry.querySelector('[aria-hidden="true"]')).toBeNull();
   });
 
   it("repeats the failed click id on Retry in the same session", async () => {
@@ -452,7 +463,9 @@ describe("<BotFeedbackDraftCard /> refusals", () => {
     expect(refused.queryByRole("button", { name: "Send" })).toBeNull();
     // The other card, on another block, still offers its actions, and the
     // shared state for the refused address carries no stamp and no pending.
-    expect(other.getByRole("button", { name: "Send" })).toBeTruthy();
+    expect(
+      other.getByRole("button", { name: "Send" }).hasAttribute("disabled"),
+    ).toBe(false);
     expect(other.queryByText(NOT_ALLOWED_COPY)).toBeNull();
     expect(probeText("probe-pending")).toBe("false");
     expect(probeText("probe-settled")).toBe("none");

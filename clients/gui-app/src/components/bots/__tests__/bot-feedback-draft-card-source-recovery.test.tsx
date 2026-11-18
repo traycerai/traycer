@@ -170,9 +170,13 @@ function renderCard(): {
 }
 
 function actionsOffered(): boolean {
+  const send = screen.queryByRole("button", { name: "Send" });
+  const skip = screen.queryByRole("button", { name: "Skip" });
   return (
-    screen.queryByRole("button", { name: "Send" }) !== null &&
-    screen.queryByRole("button", { name: "Skip" }) !== null &&
+    send !== null &&
+    !send.hasAttribute("disabled") &&
+    skip !== null &&
+    !skip.hasAttribute("disabled") &&
     screen.queryByRole("button", { name: "View" }) !== null
   );
 }
@@ -252,7 +256,11 @@ describe("<BotFeedbackDraftCard /> when its source host leaves and returns", () 
 
       // Only the original intent: offering the other would change the decision
       // the uncertain first attempt may already have made.
-      expect(screen.getByRole("button", { name: "Retry Send" })).toBeTruthy();
+      expect(
+        screen
+          .getByRole("button", { name: "Retry Send" })
+          .hasAttribute("disabled"),
+      ).toBe(false);
       expect(screen.queryByRole("button", { name: "Retry Skip" })).toBeNull();
       expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
       expect(screen.queryByRole("button", { name: "View" })).toBeNull();
@@ -288,7 +296,11 @@ describe("<BotFeedbackDraftCard /> when its source host leaves and returns", () 
   it("offers only Retry Skip after a failed Skip, and retries that Skip with its original identity and no diagnostics", async () => {
     await failThenReturn("Skip");
 
-    expect(screen.getByRole("button", { name: "Retry Skip" })).toBeTruthy();
+    expect(
+      screen
+        .getByRole("button", { name: "Retry Skip" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
     expect(screen.queryByRole("button", { name: "Retry Send" })).toBeNull();
     expect(requests.decide).toHaveLength(1);
     const first = requests.decide[0];

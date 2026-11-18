@@ -309,7 +309,9 @@ describe("<BotFeedbackDraftCard />", () => {
     });
 
     expect(screen.getByText(/Not sent: network down/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Send" }).hasAttribute("disabled"),
+    ).toBe(false);
   });
 
   it("is read-only, with nothing sent, on a source host lacking the method", () => {

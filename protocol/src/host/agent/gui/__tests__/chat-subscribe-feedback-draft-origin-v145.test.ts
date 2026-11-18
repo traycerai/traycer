@@ -3,6 +3,20 @@ import { z } from "zod";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { toolCallBlockSchema } from "@traycer/protocol/persistence/epic/content-blocks";
 import { assistantMessageSchema } from "@traycer/protocol/persistence/epic/messages";
+import type { ChatSyncAssistantMessage } from "@traycer/protocol/persistence/chat-sync/entries";
+import { getRecordSchema } from "@traycer/protocol/framework/index";
+import {
+  canonicalJsonStringify,
+  type JsonObject,
+} from "@traycer/protocol/persistence/chat-sync/json";
+import {
+  encodeChatShard,
+  serializeChatShard,
+} from "@traycer/protocol/persistence/chat-sync/shard";
+import {
+  persistenceRecordRegistry,
+  type ChatShard,
+} from "@traycer/protocol/persistence/registry";
 import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-sync/version";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
@@ -204,9 +218,83 @@ describe("the live leaves", () => {
       }).success,
     ).toBe(false);
   });
+});
 
-  it("ride chat-sync 1.15", () => {
-    expect(CHAT_SYNC_SCHEMA_VERSION).toEqual({ major: 1, minor: 15 });
+describe("a chat-sync messages shard", () => {
+  const chatShardSchema = getRecordSchema(
+    persistenceRecordRegistry,
+    "chat-shard",
+    "latest",
+  );
+
+  const assistantRow: JsonObject = {
+    role: "assistant",
+    messageId: "m-1",
+    sender: {
+      type: "agent",
+      harnessId: "claude",
+      agentId: "agent-1",
+      displayName: "Claude",
+    },
+    blocks: [
+      {
+        type: "tool_call",
+        blockId: "b-1",
+        status: "completed",
+        timestamp: 1,
+        toolName: "traycer_draft_feedback",
+        error: null,
+        feedbackDraft: STAMP,
+        feedbackDraftOrigin: CHANNEL_ORIGIN,
+      },
+    ],
+    startedAt: 1,
+    timestamp: 1,
+    turnId: "t-1",
+    usage: null,
+    feedbackDraft: PROJECTION,
+  };
+
+  function shardAt(schemaVersion: JsonObject): JsonObject {
+    return {
+      schemaVersion,
+      chatId: "chat-1",
+      section: "messages",
+      messages: [assistantRow],
+      events: [],
+      hostPrivate: null,
+    };
+  }
+
+  function assistantOf(shard: ChatShard): ChatSyncAssistantMessage {
+    const value = shard.messages[0].value;
+    if (value === null || value.role !== "assistant") {
+      throw new Error("expected an interpreted assistant message");
+    }
+    return value;
+  }
+
+  it("a chat-sync 1.15 messages shard keeps the feedback projection and the tool call's origin through a parse and re-encode", () => {
+    const shard = shardAt(CHAT_SYNC_SCHEMA_VERSION);
+
+    const parsed = chatShardSchema.parse(shard);
+    const reparsed = chatShardSchema.parse(encodeChatShard(parsed));
+
+    for (const read of [parsed, reparsed]) {
+      const message = assistantOf(read);
+      expect(message.feedbackDraft).toEqual(PROJECTION);
+      expect(message.blocks[0].value).toMatchObject({
+        feedbackDraft: STAMP,
+        feedbackDraftOrigin: CHANNEL_ORIGIN,
+      });
+    }
+    expect(serializeChatShard(parsed)).toBe(canonicalJsonStringify(shard));
+  });
+
+  it("refuses a shard that declares chat-sync 1.14", () => {
+    expect(
+      chatShardSchema.safeParse(shardAt({ major: 1, minor: 14 })).success,
+    ).toBe(false);
   });
 });
 
