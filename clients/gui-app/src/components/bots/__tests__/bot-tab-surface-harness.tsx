@@ -31,7 +31,11 @@ import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useTeamCloudCreateStore } from "@/stores/bots/team-cloud-create-store";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import { EMPTY_DIRECTORY_STATE } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
-import { mocks, type OpenResult } from "./bot-tab-surface-mocks";
+import {
+  mocks,
+  type OpenResult,
+  type TeamCloudBinding,
+} from "./bot-tab-surface-mocks";
 
 export const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
@@ -207,15 +211,10 @@ const TEAM_DEFAULTS = {
   restingMinutes: 1_440,
 } as const;
 
-/**
- * The control plane a new team's setup card reads and creates through: one
- * provider with room for the team's default shape, a model a team sandbox
- * runs, no sandboxes listed, and a signed-in viewer. A mint answers a
- * network error until a case scripts it.
- */
-export function scriptTeamControlPlane(): void {
+/** The control plane a team's setup card reads through, with no store or session state around it. */
+export function teamControlPlaneBinding(): TeamCloudBinding {
   const base = createFakeSandboxBinding();
-  mocks.binding = {
+  return {
     ...base,
     auth: {
       ...base.auth,
@@ -233,6 +232,16 @@ export function scriptTeamControlPlane(): void {
       ),
     },
   };
+}
+
+/**
+ * The control plane a new team's setup card reads and creates through: one
+ * provider with room for the team's default shape, a model a team sandbox
+ * runs, no sandboxes listed, and a signed-in viewer. A mint answers a
+ * network error until a case scripts it.
+ */
+export function scriptTeamControlPlane(): void {
+  mocks.binding = teamControlPlaneBinding();
   mocks.sandboxDefaults = {
     kind: "ready",
     value: { defaults: TEAM_DEFAULTS, revision: 3 },

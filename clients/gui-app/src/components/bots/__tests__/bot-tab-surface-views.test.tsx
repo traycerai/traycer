@@ -86,7 +86,7 @@ import {
   endBotTabSurfaceCase,
   admitBotDrafts,
   resetBotTabSurfaceMocks,
-  scriptTeamControlPlane,
+  teamControlPlaneBinding,
   snapshot,
   TAB_HOST,
   trackingTask,
@@ -1336,9 +1336,7 @@ describe("a bot notification activated beside the tab", () => {
       requestWithSignal: answer,
       requestWithSignalRequiringHostMethodVersion: answer,
     };
-    scriptTeamControlPlane();
-    if (mocks.binding === null) throw new Error("no binding scripted");
-    const binding = { ...mocks.binding, hostClient };
+    const binding = { ...teamControlPlaneBinding(), hostClient };
     mocks.binding = binding;
   }
 
