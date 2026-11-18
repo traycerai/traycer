@@ -17,6 +17,9 @@ import {
 } from "../strip-sections";
 import { StripSectionsContext } from "../strip-sections-context";
 
+// The row itself is a marker: it needs the router, the drag provider and the
+// tab stores, and which rows a section draws, and in which lane, is decided
+// above it, by the real sections, their fold and the hold hooks.
 vi.mock("../side-strip-item", () => ({
   SideStripItem: (props: {
     readonly itemId: string;
