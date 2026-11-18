@@ -799,6 +799,8 @@ vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => testState.activeHostClient,
   // The SPINE, a separate export.
   useHostRuntimeClient: () => testState.activeHostClient,
+  // A local chat row asks whether a team owns its host; no sign-in, no read.
+  useHostBinding: () => null,
 }));
 
 vi.mock("@/hooks/host/use-host-client-for", () => ({
