@@ -1,6 +1,7 @@
 import { structuredPatch } from "diff";
 import type { BundledLanguage, SpecialLanguage } from "shiki";
 import { contentFingerprint } from "@/lib/text-hash";
+import { ownValue } from "@/lib/own-value";
 
 /**
  * Structured hunks for a file-change diff, used by the cumulative/bundle diff
@@ -198,5 +199,5 @@ export function languageFromFilePath(
   const lastDot = filePath.lastIndexOf(".");
   if (lastDot === -1) return "text";
   const ext = filePath.slice(lastDot + 1).toLowerCase();
-  return LANGUAGE_BY_EXTENSION[ext] ?? "text";
+  return ownValue(LANGUAGE_BY_EXTENSION, ext) ?? "text";
 }

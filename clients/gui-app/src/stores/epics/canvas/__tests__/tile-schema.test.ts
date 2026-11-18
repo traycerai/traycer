@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isEpicNodeTileRef,
   isTileRefRecordBacked,
   parseTileRef,
   serializeTileRef,
@@ -74,6 +75,26 @@ describe("gitDiffTileId", () => {
     expect(new Set([fileA, fileAStaged, fileB, otherHost, bundle]).size).toBe(
       5,
     );
+  });
+});
+
+describe("isEpicNodeTileRef", () => {
+  const artifact: EpicArtifactRef = {
+    id: "art-1",
+    instanceId: "inst-art-1",
+    type: "chat",
+    name: "Chat",
+    hostId: HOST,
+  };
+
+  it("is true for a ref that names an epic node", () => {
+    expect(isEpicNodeTileRef(artifact)).toBe(true);
+  });
+
+  it("is false for a ref whose type is named like an inherited member", () => {
+    const ref: EpicArtifactRef = { ...artifact };
+    Reflect.set(ref, "type", "constructor");
+    expect(isEpicNodeTileRef(ref)).toBe(false);
   });
 });
 

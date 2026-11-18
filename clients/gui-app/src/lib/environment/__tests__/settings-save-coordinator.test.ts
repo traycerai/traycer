@@ -30,6 +30,8 @@ const KIND = "agent_memory";
 
 type Value = { readonly enabled: boolean };
 
+const noFollowUp = (): (() => void) => () => undefined;
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason: unknown) => void;
@@ -216,6 +218,7 @@ describe("settings save edit fence", () => {
         return proposalsAnswer.promise;
       },
       now: () => 100,
+      schedule: noFollowUp,
     });
 
     await beginTicket(coordinator, { enabled: false });
@@ -248,6 +251,7 @@ describe("settings save edit fence", () => {
         }),
       readProposals: () => Promise.resolve(proposals()),
       now: () => 100,
+      schedule: noFollowUp,
     });
 
     await beginTicket(coordinator, { enabled: false });
@@ -276,6 +280,7 @@ describe("settings save edit fence", () => {
         }),
       readProposals: () => Promise.resolve(proposals()),
       now: () => 100,
+      schedule: noFollowUp,
     });
 
     await beginTicket(coordinator, { enabled: false });
@@ -369,6 +374,7 @@ describe("settings save edit fence", () => {
         }),
       readProposals: () => Promise.resolve(proposalsForBoth),
       now: () => 100,
+      schedule: noFollowUp,
     });
 
     await beginTicket(coordinator, { enabled: false });
@@ -406,6 +412,7 @@ describe("settings save edit fence", () => {
         return proposalsAnswer.promise;
       },
       now: () => now,
+      schedule: noFollowUp,
     });
 
     const original = await beginTicket(coordinator, { enabled: false });
@@ -433,6 +440,7 @@ describe("settings save edit fence", () => {
         return Promise.resolve({ proposals: [] });
       },
       now: () => 100,
+      schedule: noFollowUp,
     });
 
     const ticket = await beginTicket(coordinator, { enabled: true });

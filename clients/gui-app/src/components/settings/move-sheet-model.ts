@@ -8,6 +8,7 @@ import {
   itemPageName,
   moveRowLabel,
 } from "@/components/settings/personal/personal-page-status";
+import { ownValue } from "@/lib/own-value";
 
 export type MovePlan = EnvironmentMovePlanResponseV20;
 export type MoveRow = MovePlan["rows"]["moves"][number];
@@ -192,7 +193,10 @@ function summaryLabel(group: string, count: number): string {
   }
   const pageName = itemPageName(group);
   if (pageName !== null) return pageName;
-  const words = SUMMARY_WORDS[group] ?? { one: "item", many: "items" };
+  const words = ownValue(SUMMARY_WORDS, group) ?? {
+    one: "item",
+    many: "items",
+  };
   return count === 1 ? `1 ${words.one}` : `${String(count)} ${words.many}`;
 }
 

@@ -10,6 +10,7 @@ import {
   detailsTime,
 } from "@/components/settings/details/details-copy";
 import { unusedSettingLabel } from "@/components/settings/details/details-unused-setting";
+import { ownValue } from "@/lib/own-value";
 
 const STATE_LABELS: Readonly<Record<string, string>> = {
   applied: "Applied",
@@ -31,7 +32,7 @@ const STATE_LABELS: Readonly<Record<string, string>> = {
 };
 
 function stateLabel(state: string): string {
-  return STATE_LABELS[state] ?? "Status unknown";
+  return ownValue(STATE_LABELS, state) ?? "Status unknown";
 }
 
 /** These rows consume only authorized metadata supplied by their provider. */

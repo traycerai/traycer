@@ -6,6 +6,7 @@ import {
   type ReviewEntryFacts,
 } from "@/components/settings/move/review-v11";
 import { harnessLabel } from "@/components/settings/panels/fallback/fallback-harness-label";
+import { ownValue } from "@/lib/own-value";
 
 /**
  * Approve writes the held entry as Personal's item (`applyHeldEntry`, a live
@@ -112,7 +113,7 @@ function removalLine(entry: ReviewHeldEntry): HeldCommandLine {
       : entry.key;
   return {
     name: `Remove ${name}`,
-    clause: `(${KIND_LABELS[entry.kind] ?? entry.kind.replaceAll("_", " ")})`,
+    clause: `(${ownValue(KIND_LABELS, entry.kind) ?? entry.kind.replaceAll("_", " ")})`,
     acts: false,
     reach: "",
   };

@@ -3,7 +3,7 @@ import type {
   SetupAttempt,
 } from "@traycer/protocol/host/environment-schemas";
 import { moveItemCounts } from "@/components/settings/panels/host-overview-settings-card-model";
-import { MOVE_STOPPED_REASONS } from "@/lib/environment/move-in-progress";
+import { moveStoppedReason } from "@/lib/environment/move-in-progress";
 
 /** The settings Details export's own name, `traycer-settings-diagnostics.json`, for the move. */
 export const MOVE_DIAGNOSTICS_FILE_NAME = "traycer-move-diagnostics.json";
@@ -47,8 +47,7 @@ export function moveDiagnosticsExport(
     version: 1,
     exportedAt,
     setup: setup === null ? null : { stage: setup.stage, state: setup.state },
-    stopReason:
-      setup === null ? null : (MOVE_STOPPED_REASONS[setup.state] ?? null),
+    stopReason: setup === null ? null : moveStoppedReason(setup.state),
     items: { applied, total },
     pendingUploads: status.pendingUploads.length,
     attempts:

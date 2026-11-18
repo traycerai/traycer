@@ -9,7 +9,7 @@ import {
 } from "@/components/settings/environment/local-row-cohort";
 import {
   moveIsPastTheAccept,
-  MOVE_STOPPED_REASONS,
+  moveStoppedReason,
 } from "@/lib/environment/move-in-progress";
 
 /**
@@ -66,8 +66,8 @@ export function hostSettingsCardState(
   const setup = status.setup;
   if (setup !== null && moveIsPastTheAccept(status)) {
     const { applied, total } = moveItemCounts(status);
-    const reason = MOVE_STOPPED_REASONS[setup.state];
-    if (reason !== undefined) {
+    const reason = moveStoppedReason(setup.state);
+    if (reason !== null) {
       return { kind: "move_stopped", reason, left: total - applied };
     }
     return { kind: "moving", applied, total };

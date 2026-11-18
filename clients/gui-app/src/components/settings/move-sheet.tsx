@@ -1,4 +1,4 @@
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import {
   GUIDE_DIFFERS_NOTE,
@@ -33,6 +33,7 @@ import { TeamReadFailed } from "@/components/settings/environment/team-read-fail
 import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
 import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
 import { moveRowLabel } from "@/components/settings/personal/personal-page-status";
+import { useMoveRerun } from "@/components/settings/move/use-move-rerun";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -123,8 +124,9 @@ function MoveSheetBody(props: {
   // the person's own sign-in; the plan waits for that read.
   const personalRead = usePersonalForMoveQuery(supported === true);
   const personalItems = personalRead.data ?? null;
+  const rerun = useMoveRerun(client, target.hostId);
   const plan = useHostQuery<HostRpcRegistry, "environment.move.plan">({
-    cacheKeyIdentity: undefined,
+    cacheKeyIdentity: rerun.planKey,
     client,
     method: "environment.move.plan",
     params: {
@@ -135,7 +137,8 @@ function MoveSheetBody(props: {
       enabled:
         supported === true &&
         personal.environmentId !== null &&
-        personalRead.data !== undefined,
+        personalRead.data !== undefined &&
+        rerun.planReadable,
       refetchOnWindowFocus: false,
     },
   });
@@ -150,6 +153,15 @@ function MoveSheetBody(props: {
     "Couldn't start the move.",
   );
   const openProgress = useMoveProgressDialogStore((state) => state.openDialog);
+  const { onClose } = props;
+  // A re-run that resumes the accepted move asks nothing: the move's progress
+  // takes over, as after Accept.
+  const { resumed } = rerun;
+  useEffect(() => {
+    if (!resumed) return;
+    onClose();
+    openProgress(target);
+  }, [resumed, onClose, openProgress, target]);
   // `null` takes a Moves row's choice back: it moves as planned.
   const choose = (key: string, choice: MoveKeyChoice | null): void => {
     setChoices((current) => {
@@ -192,7 +204,16 @@ function MoveSheetBody(props: {
   // A plan refused for want of Personal is asked again only with Personal
   // read again: rows read now give the plan a new request, which it reads by
   // itself; a read that fails again asks the same plan again.
+  // A re-run that stopped again before asking is the refused plan it came from.
+  const refusal = plan.isError ? plan.error.message : rerun.stoppedAgain;
   const retryPlan = (): void => {
+    if (rerun.stopped && refusal !== null) {
+      rerun.rerun(refusal, () => {
+        setChoices(new Map());
+        setNotAwaiting(false);
+      });
+      return;
+    }
     if (personalRead.data !== null) {
       void plan.refetch().catch(ignoreError);
       return;
@@ -207,7 +228,12 @@ function MoveSheetBody(props: {
     .map((host) => host.name);
   // Who the settings reach is said, and the plan offered, only once the
   // host list has answered: an unread list is not "no other computer".
-  const shownPlan = planOnceReachKnown(runningPersonal, plan.data);
+  const shownPlan = planOnceReachKnown(
+    runningPersonal,
+    plan.data,
+    refusal !== null,
+    rerun.planReadable,
+  );
   const environmentId = personal.environmentId;
   const versionDiffers = disclosureDiffers(shownPlan);
   return (
@@ -234,29 +260,20 @@ function MoveSheetBody(props: {
             {needsUpdateSubtitle(target.hostName)}
           </p>
         ) : null}
-        {plan.isError ? (
-          <div
-            role="status"
-            className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground"
-          >
-            <span className="min-w-0">{plan.error.message}</span>
-            <Button type="button" size="sm" variant="ghost" onClick={retryPlan}>
-              Retry
-            </Button>
-          </div>
-        ) : null}
+        <PlanRefusedLine
+          refusal={refusal}
+          pending={rerun.pending}
+          onRetry={retryPlan}
+        />
         <HostListReadFailed running={runningPersonal} />
-        {supported === true &&
-        shownPlan === null &&
-        runningPersonal.state !== "failed" &&
-        !plan.isError ? (
-          <AgentSpinningDots
-            className={undefined}
-            testId="move-sheet-loading"
-            variant={undefined}
-            tone="muted"
-          />
-        ) : null}
+        <PlanLoading
+          shown={
+            supported === true &&
+            shownPlan === null &&
+            runningPersonal.state !== "failed" &&
+            refusal === null
+          }
+        />
         {planChanged ? (
           <p
             role="status"
@@ -346,12 +363,76 @@ function MoveAcceptButton(props: {
   );
 }
 
-/** The plan, once the host list has answered: its lines name where it reaches. */
+/**
+ * The plan, once the host list has answered: its lines name where it reaches.
+ * A refused read keeps the last plan in the cache, which is not the plan the
+ * computer would move now; nor is one read for a consent wait that is over.
+ */
 function planOnceReachKnown(
   running: HostsRunningConfiguration,
   plan: MovePlan | undefined,
+  refused: boolean,
+  readable: boolean,
 ): MovePlan | null {
-  return running.state === "ready" && plan !== undefined ? plan : null;
+  return running.state === "ready" && plan !== undefined && !refused && readable
+    ? plan
+    : null;
+}
+
+/** A refused plan's line and its Retry. */
+function PlanRefusedLine(props: {
+  readonly refusal: string | null;
+  readonly pending: boolean;
+  readonly onRetry: () => void;
+}): ReactNode {
+  if (props.refusal === null) return null;
+  return (
+    <div
+      role="status"
+      className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground"
+    >
+      <span className="min-w-0">{props.refusal}</span>
+      <PlanRetryButton pending={props.pending} onRetry={props.onRetry} />
+    </div>
+  );
+}
+
+function PlanLoading(props: { readonly shown: boolean }): ReactNode {
+  if (!props.shown) return null;
+  return (
+    <AgentSpinningDots
+      className={undefined}
+      testId="move-sheet-loading"
+      variant={undefined}
+      tone="muted"
+    />
+  );
+}
+
+/** The refused plan's Retry; busy while a stopped move is started again. */
+function PlanRetryButton(props: {
+  readonly pending: boolean;
+  readonly onRetry: () => void;
+}): ReactNode {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      disabled={props.pending}
+      onClick={props.onRetry}
+    >
+      Retry
+      {props.pending ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+          tone="muted"
+        />
+      ) : null}
+    </Button>
+  );
 }
 
 /** The host list could not be read, so nothing says where the move reaches. */

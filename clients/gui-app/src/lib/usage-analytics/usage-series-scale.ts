@@ -17,6 +17,8 @@
  * a seventeenth color - a generated color is indistinguishable from an
  * existing one under CVD and breaks every validated-palette check.
  */
+import { ownValue } from "@/lib/own-value";
+
 export const USAGE_SERIES_SLOT_COUNT = 16;
 export const USAGE_SERIES_OTHER_KEY = "__usage_series_other__";
 
@@ -156,7 +158,7 @@ function allocateHarnessBrandColors(
   allocation: HarnessColorAllocation,
 ): void {
   for (const seriesKey of primary) {
-    const fixed = FIXED_HARNESS_COLOR[seriesKey];
+    const fixed = ownValue(FIXED_HARNESS_COLOR, seriesKey);
     if (fixed !== undefined) {
       reserveHarnessBrandColor(allocation, seriesKey, fixed);
     }
@@ -164,7 +166,7 @@ function allocateHarnessBrandColors(
 
   for (const seriesKey of primary) {
     if (allocation.colorByKey.has(seriesKey)) continue;
-    const preferred = PREFERRED_HARNESS_COLOR[seriesKey];
+    const preferred = ownValue(PREFERRED_HARNESS_COLOR, seriesKey);
     if (
       preferred !== undefined &&
       !preferred.reservedSlots.some((slot) =>
@@ -228,7 +230,7 @@ export function buildHarnessUsageSeriesScale(
   for (const seriesKey of primary) {
     if (allocation.colorByKey.has(seriesKey)) continue;
     const slot = findAvailableUsageSeriesSlot(
-      HARNESS_PREFERRED_SLOT[seriesKey],
+      ownValue(HARNESS_PREFERRED_SLOT, seriesKey),
       occupiedSlots,
       allocation.brandFamilyReservedSlots,
       allocation.exactColorReservedSlots,

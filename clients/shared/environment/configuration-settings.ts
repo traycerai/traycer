@@ -236,6 +236,27 @@ async function readMcpServerItems(
   });
 }
 
+/** An `mcp_server` item's whole value: its server, tool switches and `offFor`. */
+function sameMcpServerItemValue(a: McpServerItem, b: McpServerItem): boolean {
+  const providers = Object.keys(a.toolToggles);
+  return (
+    a.mcpServerId === b.mcpServerId &&
+    a.offFor.length === b.offFor.length &&
+    a.offFor.every((target, index) => b.offFor[index] === target) &&
+    providers.length === Object.keys(b.toolToggles).length &&
+    providers.every((provider) => {
+      const tools = a.toolToggles[provider];
+      const other = b.toolToggles[provider];
+      if (tools === undefined || other === undefined) return false;
+      const names = Object.keys(tools);
+      return (
+        names.length === Object.keys(other).length &&
+        names.every((name) => tools[name] === other[name])
+      );
+    })
+  );
+}
+
 interface ListedSecret {
   readonly name: string;
   readonly kind: string;
@@ -538,11 +559,27 @@ export async function setConfigurationMcpServerEnabled(
       ),
     );
     if (kept.outcome !== "saved") return kept;
+    // A PATCH that moves a credential the row still held encrypted marks the
+    // item, moving its revision, and answers with the row alone. The re-read
+    // row's revision is adopted when its value matches the held one, so a server
+    // switched off and on elsewhere inside this round trip is removed too; any
+    // other change, or a failed read, sends the held revision.
+    let revision = held.revision;
+    try {
+      const marked = (
+        await readMcpServerItems(cloud, request.environmentId)
+      ).find(
+        (row) => row.key === held.key && sameMcpServerItemValue(row, held),
+      );
+      if (marked !== undefined) revision = marked.revision;
+    } catch {
+      // The DELETE below answers for the switch.
+    }
     return mutationOutcome(
       await sendSettings(cloud, "DELETE", `${path}/items/mcp_server`, {
         key: held.key,
         os: null,
-        revision: held.revision,
+        revision,
         upload: null,
       }),
     );
