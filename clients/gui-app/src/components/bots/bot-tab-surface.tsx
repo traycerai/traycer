@@ -2359,16 +2359,9 @@ function BotChannelActions({
               : "Channel actions"
           }
           data-testid="bot-channel-actions-open"
-          className="relative ml-auto"
+          className="ml-auto"
         >
           <EllipsisVertical aria-hidden="true" />
-          <UnreadCountBadge
-            count={props.activityCount}
-            size="xs"
-            testId="bot-channel-actions-activity-count"
-            corner="absolute top-0 right-0"
-            noun="active"
-          />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent

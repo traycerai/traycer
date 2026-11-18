@@ -42,7 +42,7 @@ import {
 } from "@/stores/epics/canvas/store";
 import {
   isOpenLandingDraft,
-  newestLandingDraftId,
+  resumableLandingDraftId,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import { tabRouteOptions } from "@/stores/tabs/registry";
@@ -2151,7 +2151,7 @@ export class TabNavigationController {
     }
     this.activateExternalTarget({
       kind: "draft",
-      draftId: newestLandingDraftId(),
+      draftId: resumableLandingDraftId(),
       // Same as `/draft/new`: a minted draft reads its settings from the
       // composer's placement, the host its folders come from.
       settings: null,
