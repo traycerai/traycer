@@ -1,4 +1,4 @@
-import { use, useEffect, useMemo, type ReactNode } from "react";
+import { use, useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useActiveHeaderTab } from "@/components/epic-canvas/dnd/dnd-store";
 import { useMotionEnabled } from "@/lib/animation/use-motion-enabled";
@@ -32,7 +32,10 @@ import { StripSectionHeader } from "./strip-section-header";
 import { useStripSectionFolded } from "./strip-section-fold";
 import {
   holdInPlace,
+  type StripSectionHold,
   useCurrentSectionHold,
+  useReleasedSectionHolds,
+  useStripPointerInside,
   useStripSectionHolds,
 } from "./strip-section-hold";
 import { sectionStyleOf, twoLineStatusOf } from "./strip-section-row";
@@ -67,7 +70,8 @@ import { StripSectionsContext } from "./strip-sections-context";
  * A task that changes section slides there and glows, unless the pointer is on
  * its row or keyboard focus is, in which case it stays until the person leaves
  * it. The current task's row rises with its state and never sinks: it stays
- * in the most urgent section it has been in until another task is opened.
+ * in the most urgent section it has been in until another task is opened,
+ * and then until the pointer is out of the list, so no row moves under it.
  * Needs you counts only the tasks still waiting on the person. Arrivals in Needs you are announced, and while that section's header is
  * out of view the header stuck on top holds a "↑ N need you" chip.
  */
@@ -85,16 +89,30 @@ export function SideStripSections(props: {
     props;
   const assigned = use(StripSectionsContext);
   const holds = useStripSectionHolds(scroller);
+  // The rows waiting from the last render: a waiting row opened again is
+  // still drawn where it waits, which is where its hold as the current one starts.
+  const [heldOver, setHeldOver] = useState<ReadonlyArray<StripSectionHold>>([]);
   const current = useCurrentSectionHold(
     assigned,
     controller.layoutItems,
     controller.activeItemId,
-    holds,
+    heldOver.length === 0 ? holds : [...holds, ...heldOver],
   );
+  const released = useReleasedSectionHolds(
+    current,
+    assigned,
+    useStripPointerInside(scroller),
+  );
+  if (released !== heldOver) setHeldOver(released);
   // A row the person is on is held where it is drawn, over the current task's hold.
   const sections = useMemo(
-    () => holdInPlace(assigned, current === null ? holds : [current, ...holds]),
-    [assigned, current, holds],
+    () =>
+      holdInPlace(assigned, [
+        ...released,
+        ...(current === null ? [] : [current]),
+        ...holds,
+      ]),
+    [assigned, released, current, holds],
   );
   const announcement = useNeedsYouAnnouncement(assigned);
   const slide = useMotionEnabled();

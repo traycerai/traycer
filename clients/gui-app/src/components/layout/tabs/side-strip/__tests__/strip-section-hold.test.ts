@@ -6,7 +6,7 @@
  * close does not. Where a held row is drawn, and when it lets go on screen, is
  * `browser-tests/side-strip-section-motion.spec.ts`'s.
  */
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import {
   emptyTabStripLayout,
@@ -18,7 +18,13 @@ import {
   type StripItem,
 } from "@/stores/tabs/layout";
 import type { TabRef } from "@/stores/tabs/types";
-import { holdInPlace, useCurrentSectionHold } from "../strip-section-hold";
+import {
+  holdInPlace,
+  useCurrentSectionHold,
+  useReleasedSectionHolds,
+  useStripPointerInside,
+  type StripSectionHold,
+} from "../strip-section-hold";
 import {
   groupEntriesBySection,
   type StripSection,
@@ -355,5 +361,190 @@ describe("useCurrentSectionHold", () => {
       expect(layout.activeItemId).toBe(ID_A);
       expect(drawn.section()).toBe("idle");
     });
+  });
+});
+
+describe("useStripPointerInside", () => {
+  function mounted() {
+    const scroller = document.createElement("div");
+    const child = document.createElement("span");
+    scroller.append(child);
+    document.body.append(scroller);
+    const { result } = renderHook(() => useStripPointerInside(scroller));
+    const fire = (target: EventTarget, event: Event): void => {
+      act(() => {
+        target.dispatchEvent(event);
+      });
+    };
+    return { scroller, child, inside: () => result.current, fire };
+  }
+
+  function showing(state: DocumentVisibilityState): void {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => state,
+    });
+  }
+
+  it("is false at mount", () => {
+    expect(mounted().inside()).toBe(false);
+  });
+
+  it("is true after a pointerover on a descendant of the scroller", () => {
+    const list = mounted();
+
+    list.fire(list.child, new PointerEvent("pointerover", { bubbles: true }));
+
+    expect(list.inside()).toBe(true);
+  });
+
+  it("is false after the pointer leaves the scroller", () => {
+    const list = mounted();
+    list.fire(list.child, new PointerEvent("pointerover", { bubbles: true }));
+
+    list.fire(list.scroller, new PointerEvent("pointerleave"));
+
+    expect(list.inside()).toBe(false);
+  });
+
+  it("is false after the window blurs, and true again on the next pointerover", () => {
+    const list = mounted();
+    list.fire(list.child, new PointerEvent("pointerover", { bubbles: true }));
+
+    list.fire(window, new Event("blur"));
+    expect(list.inside()).toBe(false);
+
+    list.fire(list.child, new PointerEvent("pointerover", { bubbles: true }));
+    expect(list.inside()).toBe(true);
+  });
+
+  it("is false once the page becomes hidden, and unchanged when it is visible", () => {
+    const list = mounted();
+    list.fire(list.child, new PointerEvent("pointerover", { bubbles: true }));
+
+    showing("visible");
+    list.fire(document, new Event("visibilitychange"));
+    expect(list.inside()).toBe(true);
+
+    showing("hidden");
+    list.fire(document, new Event("visibilitychange"));
+    expect(list.inside()).toBe(false);
+  });
+
+  it("is unchanged when focus leaves the scroller", () => {
+    const list = mounted();
+    list.fire(list.child, new PointerEvent("pointerover", { bubbles: true }));
+
+    list.fire(list.child, new FocusEvent("focusout", { bubbles: true }));
+
+    expect(list.inside()).toBe(true);
+  });
+});
+
+describe("useReleasedSectionHolds", () => {
+  const ID_A = "a";
+  const ID_B = "b";
+  const HELD_A: StripSectionHold = { itemId: ID_A, section: "to-review" };
+  const HELD_B: StripSectionHold = { itemId: ID_B, section: "idle" };
+  const AT_REST = sectionsOf([
+    [ID_A, "idle"],
+    [ID_B, "idle"],
+  ]);
+
+  interface Input {
+    readonly current: StripSectionHold | null;
+    readonly sections: ReadonlyArray<StripSectionGroup>;
+    readonly pointerInside: boolean;
+  }
+
+  function released(input: Input) {
+    const { result, rerender } = renderHook(
+      (props: Input) =>
+        useReleasedSectionHolds(
+          props.current,
+          props.sections,
+          props.pointerInside,
+        ),
+      { initialProps: input },
+    );
+    let latest = input;
+    return {
+      holds: () => result.current,
+      set: (next: Partial<Input>) => {
+        latest = { ...latest, ...next };
+        rerender(latest);
+      },
+    };
+  }
+
+  const openingA: Input = {
+    current: HELD_A,
+    sections: AT_REST,
+    pointerInside: true,
+  };
+
+  it("is empty at mount", () => {
+    expect(released(openingA).holds()).toEqual([]);
+  });
+
+  it("keeps the row that stopped being current in the section it was held in, while the pointer is inside", () => {
+    const list = released(openingA);
+
+    list.set({ current: HELD_B });
+
+    expect(list.holds()).toEqual([HELD_A]);
+  });
+
+  it("keeps nothing when the pointer is outside as the current task changes", () => {
+    const list = released({ ...openingA, pointerInside: false });
+
+    list.set({ current: HELD_B });
+
+    expect(list.holds()).toEqual([]);
+  });
+
+  it("drops a waiting hold when the pointer leaves", () => {
+    const list = released(openingA);
+    list.set({ current: HELD_B });
+
+    list.set({ pointerInside: false });
+
+    expect(list.holds()).toEqual([]);
+  });
+
+  it("drops a waiting hold when its task is current again", () => {
+    const list = released(openingA);
+    list.set({ current: HELD_B });
+
+    list.set({ current: HELD_A });
+
+    expect(list.holds()).toEqual([]);
+  });
+
+  it("keeps nothing for a row held in the section it really is in", () => {
+    const list = released({
+      ...openingA,
+      current: { itemId: ID_A, section: "idle" },
+    });
+
+    list.set({ current: HELD_B });
+
+    expect(list.holds()).toEqual([]);
+  });
+
+  it("keeps nothing for an item that has no row any more", () => {
+    const list = released(openingA);
+
+    list.set({ current: HELD_B, sections: sectionsOf([[ID_B, "idle"]]) });
+
+    expect(list.holds()).toEqual([]);
+  });
+
+  it("keeps nothing when the current hold's section changes for the same item", () => {
+    const list = released(openingA);
+
+    list.set({ current: { itemId: ID_A, section: "needs-you" } });
+
+    expect(list.holds()).toEqual([]);
   });
 });

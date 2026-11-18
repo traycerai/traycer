@@ -110,6 +110,39 @@ export function useStripSectionHolds(
   );
 }
 
+/**
+ * Whether the pointer is inside the list, as far as the page can tell. A
+ * window that lost focus or a page that was hidden gets no `pointerleave`, so
+ * either one ends it too; the next `pointerover` starts it again. Pointer
+ * events of every type count, and a touch pointer leaves when it lifts.
+ */
+export function useStripPointerInside(scroller: HTMLElement | null): boolean {
+  const [inside, setInside] = useState(false);
+  useEffect(() => {
+    if (scroller === null) return;
+    const enter = (): void => {
+      setInside(true);
+    };
+    const leave = (): void => {
+      setInside(false);
+    };
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState === "hidden") setInside(false);
+    };
+    scroller.addEventListener("pointerover", enter);
+    scroller.addEventListener("pointerleave", leave);
+    window.addEventListener("blur", leave);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      scroller.removeEventListener("pointerover", enter);
+      scroller.removeEventListener("pointerleave", leave);
+      window.removeEventListener("blur", leave);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [scroller]);
+  return inside;
+}
+
 function sectionOfItem(
   sections: ReadonlyArray<StripSectionGroup>,
   itemId: string,
@@ -240,6 +273,66 @@ export function useCurrentSectionHold(
     });
   }
   return state.hold;
+}
+
+const NO_HOLDS: ReadonlyArray<StripSectionHold> = [];
+
+interface ReleasedHoldState {
+  readonly current: StripSectionHold | null;
+  readonly released: ReadonlyArray<StripSectionHold>;
+}
+
+function releasedHoldsOf(
+  prev: ReleasedHoldState,
+  current: StripSectionHold | null,
+  sections: ReadonlyArray<StripSectionGroup>,
+  pointerInside: boolean,
+): ReadonlyArray<StripSectionHold> {
+  if (!pointerInside) return NO_HOLDS;
+  const left =
+    prev.current !== null && prev.current.itemId !== current?.itemId
+      ? [prev.current]
+      : [];
+  // A row with nowhere else to go is not waiting, and neither is one whose
+  // item is gone: a pair that lost a member has a new item id.
+  const waiting = [...prev.released, ...left].filter((held) => {
+    if (held.itemId === current?.itemId) return false;
+    const now = sectionOfItem(sections, held.itemId);
+    return now !== null && now !== held.section;
+  });
+  if (waiting.length === 0) return NO_HOLDS;
+  return waiting.length === prev.released.length &&
+    waiting.every((held, index) => held === prev.released[index])
+    ? prev.released
+    : waiting;
+}
+
+/**
+ * The holds of rows that stopped being the current one while the pointer was
+ * inside the list. Letting such a row go to its own section at once would
+ * move the rows under the pointer, the one just clicked among them, so it
+ * waits where it was drawn until the pointer is no longer inside. A change
+ * made with the pointer elsewhere lets it go at once.
+ */
+export function useReleasedSectionHolds(
+  current: StripSectionHold | null,
+  sections: ReadonlyArray<StripSectionGroup>,
+  pointerInside: boolean,
+): ReadonlyArray<StripSectionHold> {
+  const [state, setState] = useState<ReleasedHoldState>({
+    current,
+    released: NO_HOLDS,
+  });
+  if (
+    state.current !== current ||
+    (!pointerInside && state.released.length > 0)
+  ) {
+    setState({
+      current,
+      released: releasedHoldsOf(state, current, sections, pointerInside),
+    });
+  }
+  return state.released;
 }
 
 /**
