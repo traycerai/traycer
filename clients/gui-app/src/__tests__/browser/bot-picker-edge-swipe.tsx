@@ -4,6 +4,7 @@ import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
 import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
+import { TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
 import { useTabsStore } from "@/stores/tabs/store";
 import { FixtureApp } from "./bot-compact-actions-menu-frame";
 import { HOST_ID, useSelectedBotId } from "./bot-compact-actions-menu-host";
@@ -21,22 +22,10 @@ declare global {
   }
 }
 
-const TRACY_REF = {
-  kind: "tracy" as const,
-  id: "tracy" as const,
-  hostId: HOST_ID,
-  botId: null,
-  route: "/bot",
-  name: "Tracy",
-  icon: null,
-  canDuplicate: false,
-  canOpenInNewWindow: false,
-};
-
 useTabsStore.setState({
-  items: [{ kind: "tab", id: "tracy-item", ref: TRACY_REF }],
+  items: [{ kind: "tab", id: "tracy-item", ref: TRACY_TAB_REF }],
   activeItemId: "tracy-item",
-  stripOrder: [TRACY_REF],
+  stripOrder: [TRACY_TAB_REF],
 });
 
 window.__pickerSwipeOpens = 0;

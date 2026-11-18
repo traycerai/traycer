@@ -42,6 +42,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { setMobileApp } from "@/lib/mobile-app";
 import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -454,24 +455,12 @@ describe("useMobileHistorySwipes", () => {
   });
 
   describe("with the Tracy surface focused", () => {
-    const TRACY_REF = {
-      kind: "tracy" as const,
-      id: "tracy" as const,
-      hostId: "host-1",
-      botId: null,
-      route: "/bot",
-      name: "Tracy",
-      icon: null,
-      canDuplicate: false,
-      canOpenInNewWindow: false,
-    };
-
     beforeEach(() => {
       useSettingsStore.setState({ mobileSwipeHistory: false });
       useTabsStore.setState({
-        items: [{ kind: "tab", id: "item", ref: TRACY_REF }],
+        items: [{ kind: "tab", id: "item", ref: TRACY_TAB_REF }],
         activeItemId: "item",
-        stripOrder: [TRACY_REF],
+        stripOrder: [TRACY_TAB_REF],
       });
     });
 
@@ -481,7 +470,9 @@ describe("useMobileHistorySwipes", () => {
 
     it("opens the registered picker on a trailing-edge swipe", () => {
       const open = vi.fn();
-      useMobileSwitcherStore.getState().registerSwipeOpen(TRACY_REF.id, open);
+      useMobileSwitcherStore
+        .getState()
+        .registerSwipeOpen(TRACY_TAB_REF.id, open);
       mountSwipes(createMemoryHistory({ initialEntries: ["/"] }));
 
       swipeFromEdge("trailing");
@@ -493,8 +484,14 @@ describe("useMobileHistorySwipes", () => {
       const older = vi.fn();
       const newer = vi.fn();
       const switcher = useMobileSwitcherStore.getState();
-      const unregisterOlder = switcher.registerSwipeOpen(TRACY_REF.id, older);
-      const unregisterNewer = switcher.registerSwipeOpen(TRACY_REF.id, newer);
+      const unregisterOlder = switcher.registerSwipeOpen(
+        TRACY_TAB_REF.id,
+        older,
+      );
+      const unregisterNewer = switcher.registerSwipeOpen(
+        TRACY_TAB_REF.id,
+        newer,
+      );
       mountSwipes(createMemoryHistory({ initialEntries: ["/"] }));
 
       unregisterOlder();
@@ -521,7 +518,9 @@ describe("useMobileHistorySwipes", () => {
     it("goes forward in history, and opens no picker, with swipe history on", () => {
       useSettingsStore.setState({ mobileSwipeHistory: true });
       const open = vi.fn();
-      useMobileSwitcherStore.getState().registerSwipeOpen(TRACY_REF.id, open);
+      useMobileSwitcherStore
+        .getState()
+        .registerSwipeOpen(TRACY_TAB_REF.id, open);
       const history = createMemoryHistory({ initialEntries: ["/", "/epics"] });
       const forwardSpy = vi.spyOn(history, "forward");
       mountSwipes(history);

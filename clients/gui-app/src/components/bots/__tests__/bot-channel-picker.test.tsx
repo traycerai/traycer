@@ -28,6 +28,7 @@ import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
+import { TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
 
 vi.mock("@/components/bots/bot-channel-sidebar", () => ({
   BotChannelSidebar: (props: {
@@ -228,7 +229,7 @@ describe("the unselected pane's title", () => {
 
 describe("the swipe-open the picker registers for the shell", () => {
   const swipeOpen = () =>
-    useMobileSwitcherStore.getState().swipeOpenByTabId["tracy"];
+    useMobileSwitcherStore.getState().swipeOpenByTabId[TRACY_TAB_REF.id];
 
   afterEach(() => {
     useMobileSwitcherStore.setState({ swipeOpenByTabId: {} });

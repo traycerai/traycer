@@ -22,6 +22,7 @@ import { useStandaloneBotName } from "@/hooks/bots/use-standalone-bot-name";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
+import type { HeaderTab } from "@/stores/tabs/types";
 
 function stayOpen(): void {}
 
@@ -154,10 +155,12 @@ export function BotChannelTitle(props: {
 
 /**
  * The key the picker registers its swipe-open under: the id of the one Tracy
- * surface's ref (`TRACY_TAB_REF`), which is what the shell's edge recognizer
- * reads for a focused Tracy tab.
+ * surface's ref, which is what the shell's edge recognizer reads for a focused
+ * Tracy tab. Typed from the tab union's Tracy member, so a change to that id
+ * stops compiling here.
  */
-const TRACY_SWIPE_OPEN_KEY = "tracy";
+const TRACY_SWIPE_OPEN_KEY: Extract<HeaderTab, { kind: "tracy" }>["id"] =
+  "tracy";
 
 function BotChannelPicker(props: {
   readonly title: string;
