@@ -107,11 +107,9 @@ async function assertBoundTo(
   const binding = await client
     .request("environment.host.read", {})
     .catch(() => null);
-  if (
-    binding === null ||
-    binding.sharingGeneration === null ||
-    binding.environment.environmentId !== environmentId
-  )
+  if (binding === null || binding.sharingGeneration === null)
+    throw refusedDisconnect();
+  if (binding.environment.environmentId !== environmentId)
     throw bindingChanged();
 }
 
