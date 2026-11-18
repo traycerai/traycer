@@ -592,6 +592,30 @@
       "payload": "request",
       "path": "**.properties.executableWriteGrant",
       "reason": "The unused grant field is retired only from current @3 requests; the frozen strict @2 parser and its inert null downgrade carrier remain unchanged in shape. Release packaging stamps minimum client compatibility epoch 3, and admission refuses peers below epoch 3 before any method runs. The host no longer reads the grant and apps no longer mint it; the global support floor is unchanged."
+    },
+    {
+      "family": "unary",
+      "method": "environment.move.plan",
+      "version": "*",
+      "payload": null,
+      "path": null,
+      "reason": "The optional method's canonical moved to a new major that a released 1.x peer cannot bridge. Release packaging stamps minimum client compatibility epoch 3 (scripts/native-packaging/host-client-floor.json), and connection admission refuses peers below epoch 3 before any method runs; the protected cli-v1.5.2, cli-v1.5.3 and cli-v1.5.4 declare epoch 2. @2.0 names the move's target and has no downgrade; @1.x stays registered as the frozen predecessor, and its upgrade path throws by design (v1.2 names no target), so no released @1.x caller is served. The global released support floor is unchanged."
+    },
+    {
+      "family": "unary",
+      "method": "epic.attachEnvironment",
+      "version": "*",
+      "payload": null,
+      "path": null,
+      "reason": "The optional method's canonical moved to a new major that a released 1.x peer cannot bridge. Release packaging stamps minimum client compatibility epoch 3 (scripts/native-packaging/host-client-floor.json), and connection admission refuses peers below epoch 3 before any method runs; the protected cli-v1.5.2, cli-v1.5.3 and cli-v1.5.4 declare epoch 2. @2.0 prepares without the cloud attachment and has no downgrade; @1.0 stays registered as the frozen predecessor, and its upgrade path throws by design (v2.0 attaches nothing), so no released @1.0 caller is served. The global released support floor is unchanged."
+    },
+    {
+      "family": "unary",
+      "method": "host.remoteAccess.set",
+      "version": "*",
+      "payload": null,
+      "path": null,
+      "reason": "The optional method's canonical moved to a new major that a released 1.x peer cannot bridge. Release packaging stamps minimum client compatibility epoch 3 (scripts/native-packaging/host-client-floor.json), and connection admission refuses peers below epoch 3 before any method runs; the protected cli-v1.5.2, cli-v1.5.3 and cli-v1.5.4 declare epoch 2. @2.0 only turns remote access off and has no downgrade; @1.0 stays registered as the frozen predecessor, and its upgrade path throws by design (hostRemoteAccessSetUpgradeV10ToV20), so no released @1.0 caller is served. The global released support floor is unchanged."
     }
   ]
 }
