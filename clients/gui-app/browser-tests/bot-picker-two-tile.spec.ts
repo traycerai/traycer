@@ -144,12 +144,16 @@ test("on a 1024 by 768 device with the expanded strip the picker rests across th
 });
 
 // One pixel under the boundary the same page, with the same rail open, is the
-// one-tile column form: there is no picker to measure, and the column draws.
+// one-tile form: the rail takes the pane on its own (the channel beside it is
+// hidden), the column draws, and there is no picker trigger to measure. The
+// rail being drawn is what shows it was set, so the case cannot pass on a page
+// where the rail never opened.
 test("one pixel under the boundary the rail does not make the form two-tile", async ({
   page,
 }) => {
   await openPage(page, { width: 827, height: 600 }, "collapsed");
 
+  await expect(page.locator(RAIL)).toBeVisible();
   await expect(page.locator(COLUMN)).toBeVisible();
   await expect(page.locator(TRIGGER)).toHaveCount(0);
 });
