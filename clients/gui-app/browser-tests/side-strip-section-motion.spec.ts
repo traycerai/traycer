@@ -215,6 +215,25 @@ test("keeps an answered task in Needs you while it is the current one, out of th
   await expect.poll(() => laneOf(onboarding)).toBe("working");
 });
 
+test("keeps a task opened from To review there while it starts working, until another task is opened", async ({
+  page,
+}) => {
+  await openStrip(page);
+  const release = row(page, "release");
+  const at = await centreOf(release);
+  await page.mouse.click(at.x, at.y);
+  await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+
+  await moveTask(page, "release", "working");
+
+  await expect(release.getByTestId("side-tab-section-detail")).toHaveCount(0);
+  expect(await laneOf(release)).toBe("to-review");
+
+  await page.evaluate('window.__sideTabStripProbe.activate("fixture-watcher")');
+
+  await expect.poll(() => laneOf(release)).toBe("working");
+});
+
 test.describe("over a list that overflows", () => {
   test.use({ viewport: { width: 900, height: 700 } });
 
@@ -227,6 +246,31 @@ test.describe("over a list that overflows", () => {
     }, top);
     await nextFrames(page, 3);
   };
+
+  test("counts a held, answered current row out of Needs you, so the chip is gone once its header scrolls away", async ({
+    page,
+  }) => {
+    await openStrip(page);
+    await moveTask(page, "staging", "idle");
+    const onboarding = row(page, "onboarding");
+    const at = await centreOf(onboarding);
+    await page.mouse.click(at.x, at.y);
+    await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+    // Onboarding is still waiting, so the chip is drawn once the header is
+    // out of view: the absence below is not vacuous.
+    await scrollTo(page, 1000);
+    await expect(chip(page)).toBeVisible();
+    await scrollTo(page, 0);
+
+    await moveTask(page, "onboarding", "working");
+
+    await expect(page.getByTestId("side-strip-section-needs-you")).toHaveText(
+      "Needs you0",
+    );
+    expect(await laneOf(onboarding)).toBe("needs-you");
+    await scrollTo(page, 1000);
+    await expect(chip(page)).toHaveCount(0);
+  });
 
   test("shows the chip only while the Needs you header is out of view", async ({
     page,

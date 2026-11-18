@@ -126,13 +126,12 @@ export function SideStripSections(props: {
         )
       : sections;
   // The chip rides in the header in front on the top edge, never in one
-  // being pushed out from under it.
+  // being pushed out from under it, and only while a task waits: a row only
+  // held in Needs you is nothing to go back up for.
+  const waiting = needsYou === undefined ? 0 : sectionTaskCount(needsYou);
   const chip =
-    needsYouAbove && scroller !== null && needsYou !== undefined ? (
-      <StripNeedsYouChip
-        scroller={scroller}
-        count={sectionTaskCount(needsYou)}
-      />
+    needsYouAbove && scroller !== null && waiting > 0 ? (
+      <StripNeedsYouChip scroller={scroller} count={waiting} />
     ) : null;
   return (
     <>

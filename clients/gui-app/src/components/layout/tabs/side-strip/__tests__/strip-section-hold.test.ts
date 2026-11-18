@@ -200,6 +200,92 @@ describe("useCurrentSectionHold", () => {
     expect(drawn.sectionOf(ID_B)).toBe("to-review");
   });
 
+  it("keeps a task answered into Working in To review while it is current, and lets it go when another is opened", () => {
+    const drawn = drawnOf({
+      activeItemId: ID_B,
+      sections: sectionsOf([
+        [ID_A, "to-review"],
+        [ID_B, "idle"],
+      ]),
+      items: [loneTab(REF_A), loneTab(REF_B)],
+    });
+    drawn.set({ activeItemId: ID_A });
+
+    drawn.set({
+      sections: sectionsOf([
+        [ID_A, "working"],
+        [ID_B, "idle"],
+      ]),
+    });
+    expect(drawn.sectionOf(ID_A)).toBe("to-review");
+
+    drawn.set({ activeItemId: ID_B });
+
+    expect(drawn.sectionOf(ID_A)).toBe("working");
+  });
+
+  it("holds a current task that had no row at mount from the section it first appears in", () => {
+    const drawn = drawnOf({
+      activeItemId: ID_A,
+      sections: sectionsOf([[ID_B, "idle"]]),
+      items: [loneTab(REF_A), loneTab(REF_B)],
+    });
+
+    drawn.set({
+      sections: sectionsOf([
+        [ID_B, "idle"],
+        [ID_A, "to-review"],
+      ]),
+    });
+    drawn.set({
+      sections: sectionsOf([
+        [ID_B, "idle"],
+        [ID_A, "working"],
+      ]),
+    });
+
+    expect(drawn.sectionOf(ID_A)).toBe("to-review");
+  });
+
+  describe("when the layout changes around a held current tab", () => {
+    function heldTab(): Drawn {
+      return drawnOf({
+        activeItemId: ID_A,
+        sections: sectionsOf([
+          [ID_A, "to-review"],
+          [ID_B, "idle"],
+        ]),
+        items: [loneTab(REF_A), loneTab(REF_B)],
+      });
+    }
+
+    it("keeps the hold when the items are reordered", () => {
+      const drawn = heldTab();
+
+      drawn.set({
+        items: [loneTab(REF_B), loneTab(REF_A)],
+        sections: sectionsOf([
+          [ID_B, "idle"],
+          [ID_A, "idle"],
+        ]),
+      });
+
+      expect(drawn.sectionOf(ID_A)).toBe("to-review");
+    });
+
+    it("keeps the hold when the tab is paired as the focused member of a split", () => {
+      const drawn = heldTab();
+
+      drawn.set({
+        items: [pairFocusing("left")],
+        activeItemId: PAIR,
+        sections: sectionsWithPairIn("idle"),
+      });
+
+      expect(drawn.sectionOf(PAIR)).toBe("to-review");
+    });
+  });
+
   it("keeps a pair's hold through a swap of its sides", () => {
     const drawn = drawnOf({
       activeItemId: PAIR,
