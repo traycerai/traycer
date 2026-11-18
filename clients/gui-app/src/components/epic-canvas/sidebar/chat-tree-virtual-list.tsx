@@ -31,6 +31,7 @@ import {
   withPinnedIndexes,
 } from "@/components/epic-canvas/sidebar/virtual-row-pins";
 import { useChatTreeListEffects } from "@/components/epic-canvas/sidebar/use-chat-tree-list-effects";
+import { ChatTreeDragSupport } from "@/components/epic-canvas/sidebar/chat-tree-drag-support";
 import {
   ChatTreeVirtualContext,
   useChatTreeVirtual,
@@ -185,6 +186,7 @@ export function ChatTreeVirtualList(props: ChatTreeVirtualListProps) {
     <ChatTreeVirtualContext.Provider value={api}>
       <VirtualRowPinContext.Provider value={pinStore}>
         <ChatTreeListEffects />
+        <ChatTreeDragSupport tabId={tabId} />
         <ul
           ref={listRef}
           role="tree"
