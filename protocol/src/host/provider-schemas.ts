@@ -3824,8 +3824,11 @@ export type ProvidersSetEnabledRequestV22 = z.infer<
   typeof providersSetEnabledRequestSchemaV22
 >;
 
-// No released `providers.setEnabled@2.2` carries a `mode`: one that did was withdrawn. `enabled` -
-// a required boolean since 2.0 - stays the whole enable request.
+// No released `providers.setEnabled@2.2` carries a `mode`. One was opened to
+// carry an optional tri-state `mode` for a three-way Auto/On/Off settings
+// control; that control is gone, and `mode` was the minor's entire delta over
+// 2.1. `enabled` - a required boolean since 2.0 - is once again the whole
+// request, which is what the method's name has always promised.
 
 export const providersSetApiKeyRequestSchema = lazySchema(() =>
   z.object({
