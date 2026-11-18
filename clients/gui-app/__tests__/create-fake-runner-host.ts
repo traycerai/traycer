@@ -216,7 +216,11 @@ export function createFakeRunnerHost(
     onNetworkPathChanged: () => ({ dispose: () => undefined }),
     // Voice is off for a shell with no server behind it: the dormant answers.
     getVoiceAvailability: () =>
-      Promise.resolve({ kind: "ok" as const, available: false }),
+      Promise.resolve({
+        kind: "ok" as const,
+        available: false,
+        voiceSelection: null,
+      }),
     mintVoiceSession: () => Promise.resolve({ kind: "dormant" as const }),
     endVoiceSession: () =>
       Promise.resolve({ kind: "ok" as const, closedAt: null }),

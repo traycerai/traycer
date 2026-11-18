@@ -7,6 +7,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  TracyOpening,
+  TracyPlaybackScope,
+  TracyPlaybackSlot,
+} from "@/components/bots/tracy-playback-slot";
 import { createPortal } from "react-dom";
 import { useMobileBotHeaderSlot } from "@/components/layout/header/mobile-bot-header-context";
 import {
@@ -18,7 +23,6 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type CSSProperties,
   type ReactNode,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -54,11 +58,7 @@ import {
   type BotSubscriptionSnapshot,
 } from "@/hooks/bots/use-bot-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
-import {
-  BotLooksContext,
-  botLooksOf,
-  useChannelBackground,
-} from "@/hooks/bots/use-bot-appearance";
+import { BotLooksContext, botLooksOf } from "@/hooks/bots/use-bot-appearance";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
@@ -98,6 +98,7 @@ import {
   type TracyChannelView,
 } from "@/lib/bots/tracy-place";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import { useBotDraftsAdmitted } from "@/hooks/bots/use-bot-drafts-admitted";
 import { TRACY_TAB_LABEL } from "@/stores/tabs/kinds/tracy";
 import {
   useBotTabLandingStore,
@@ -154,7 +155,10 @@ import {
   type BotMemoryAccess,
 } from "@/components/bots/bot-memory-context";
 import { BotSettingsOpenerContext } from "@/components/bots/bot-settings-opener-context";
-import { ExpressiveBotAvatar } from "@/components/bots/bot-avatars";
+import {
+  ExpressiveBotAvatar,
+  NamedBotAvatar,
+} from "@/components/bots/bot-avatars";
 import { botExpressionOn, useBotActivity } from "@/hooks/bots/use-bot-activity";
 import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
@@ -197,15 +201,34 @@ export function BotTabSurface(props: {
   readonly botId: string | null;
   readonly hostId: string;
 }): ReactNode {
+  return (
+    <TracyPlaybackScope>
+      <BotTabSurfaceBody botId={props.botId} hostId={props.hostId} />
+    </TracyPlaybackScope>
+  );
+}
+
+function BotTabSurfaceBody(props: {
+  readonly botId: string | null;
+  readonly hostId: string;
+}): ReactNode {
   const { botId, hostId } = props;
   useClaimBotSurfaceFocus();
+  const admitted = useBotDraftsAdmitted();
   // A RESTORED surface (the store persists) meets whatever its host
   // advertises now. `bot.open` is the newest method of the `bot.*` block, so
   // its presence stands for every write the surface offers; without it the
   // surface shows the update notice and no control that would call a method
   // the host lacks.
   const support = useHostMethodSupport(hostId, "bot.open");
-  if (support === null) return <BotTabConnecting />;
+  // Not known yet, or the drafts not yet admitted: on the way to a channel.
+  const level2 = useInstalledAppTileForm(1)?.level2 ?? null;
+  const onTheWay = (
+    <ChannelOpening botId={null} title={undefined} level2={level2}>
+      <BotTabConnecting />
+    </ChannelOpening>
+  );
+  if (support === null) return onTheWay;
   if (!support) {
     return (
       <div
@@ -218,7 +241,16 @@ export function BotTabSurface(props: {
   }
   return (
     <TabHostProvider key={hostId} hostId={hostId}>
-      <TracySurfaceShell botId={botId} hostId={hostId} />
+      {/* What the person has not sent, wherever this tree holds it - a box's
+          edit, a send that failed, quotes waiting for their box, a card's
+          answer - is the signed-in account's. At a change of account the
+          tree goes while the drafts store still holds the outgoing one's,
+          and the next account's starts once the store is its own (T186). */}
+      {admitted ? (
+        <TracySurfaceShell botId={botId} hostId={hostId} />
+      ) : (
+        onTheWay
+      )}
     </TabHostProvider>
   );
 }
@@ -345,6 +377,7 @@ function TracySurfaceShell(props: {
                   botList.status === "error" || environments.status === "error"
                 }
                 onRetry={retryLists}
+                level2={level2}
               />
             </BotUnselectedLevel2Pane>
           ) : null}
@@ -556,6 +589,7 @@ function TracyUnselected(props: {
   readonly unavailable: ReadonlySet<string>;
   readonly listsFailed: boolean;
   readonly onRetry: () => void;
+  readonly level2: MobileLevel2Form | null;
 }): ReactNode {
   const { groups } = props;
   if (groups === null) {
@@ -566,12 +600,18 @@ function TracyUnselected(props: {
         className="m-4"
       />
     ) : (
-      <BotTabConnecting />
+      <ChannelOpening botId={null} title={undefined} level2={props.level2}>
+        <BotTabConnecting />
+      </ChannelOpening>
     );
   }
   return defaultTracyChannelOf(groups, props.unavailable) === null ? (
     <TracyNoChannel />
-  ) : null;
+  ) : (
+    <ChannelOpening botId={null} title={undefined} level2={props.level2}>
+      {null}
+    </ChannelOpening>
+  );
 }
 
 /** The surface with no channel: there is no bot to show yet. */
@@ -697,7 +737,16 @@ function TracyChannelPane(props: {
   }, [botId, landing]);
   const { route, botList, retry } = useChannelRoute(botId, hostId);
   if (threadsShown && route.kind !== "bot") return null;
-  if (route.kind === "connecting") return <BotTabConnecting />;
+  const opening = (content: ReactNode): ReactNode => (
+    <ChannelOpening
+      botId={botId}
+      title={botList.data?.bots.find((bot) => bot.botId === botId)?.title}
+      level2={level2}
+    >
+      {content}
+    </ChannelOpening>
+  );
+  if (route.kind === "connecting") return opening(<BotTabConnecting />);
   if (route.kind === "setup") {
     return (
       <TeamSetupChannel
@@ -710,12 +759,12 @@ function TracyChannelPane(props: {
     );
   }
   if (route.kind === "unresolved") {
-    return (
+    return opening(
       <ErrorNotice
         text="Couldn't load this channel."
         onRetry={retry}
         className="m-4"
-      />
+      />,
     );
   }
   return (
@@ -900,36 +949,46 @@ function BotTabBody(props: {
     return () => clearTimeout(timer);
   }, [openError, openPending, paneVisible, reopen]);
 
+  const opening = (content: ReactNode): ReactNode =>
+    threadsShown ? null : (
+      <ChannelOpening
+        botId={botId}
+        title={props.listedBots?.find((bot) => bot.botId === botId)?.title}
+        level2={props.level2}
+      >
+        {content}
+      </ChannelOpening>
+    );
   if (openState.kind === "failed") {
-    return threadsShown ? null : (
+    return opening(
       <ErrorNotice
         text={`Couldn't open this bot: ${openState.message}`}
         onRetry={reopen}
         className="m-4"
-      />
+      />,
     );
   }
   if (openState.kind === "reconnecting") {
-    return threadsShown ? null : (
+    return opening(
       <OpenReconnecting
         onRetry={reopen}
         pending={openPending}
         className="m-4"
-      />
+      />,
     );
   }
   const snapshot = subscription.snapshot;
   if (snapshot === null && subscription.error !== null) {
-    return threadsShown ? null : (
+    return opening(
       <ErrorNotice
         text={`Couldn't reach this bot: ${subscription.error}`}
         onRetry={resubscribe}
         className="m-4"
-      />
+      />,
     );
   }
   if (snapshot === null || openState.kind === "opening") {
-    return threadsShown ? null : <BotTabConnecting />;
+    return opening(<BotTabConnecting />);
   }
 
   return (
@@ -1861,11 +1920,44 @@ function environmentBotsOf(
   return bots.filter((bot) => bot.environmentId === environmentId);
 }
 
+/**
+ * A channel before its own header exists, selected or still being chosen:
+ * the reserved title row, with the bot's picture and listed name once both
+ * are known, over what the surface shows meanwhile.
+ */
+function ChannelOpening(props: {
+  /** The channel being opened; `null` while the default one is being chosen. */
+  readonly botId: string | null;
+  /** The bot's listed name; `undefined` until the list names it. */
+  readonly title: string | undefined;
+  readonly level2: MobileLevel2Form | null;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { botId, title } = props;
+  return (
+    <TracyOpening
+      titled={props.level2 !== "menu" && props.level2 !== "bar"}
+      identity={
+        botId === null || title === undefined ? null : (
+          <>
+            <NamedBotAvatar botId={botId} size="sm" />
+            <h1 className="min-w-0 truncate text-ui-md font-bold text-foreground">
+              {title}
+            </h1>
+          </>
+        )
+      }
+    >
+      {props.children}
+    </TracyOpening>
+  );
+}
+
 /** The tab while anything about its host is unknown. */
 function BotTabConnecting(): ReactNode {
   return (
     <div
-      className="flex h-full items-center justify-center text-muted-foreground"
+      className="flex size-full items-center justify-center text-muted-foreground"
       aria-busy="true"
       data-testid="bot-tab-connecting"
     >
@@ -2014,10 +2106,13 @@ type BotChannelHeaderProps = {
 function BotChannelActions({
   header: props,
   titleTarget,
+  titleRowHidden,
   settingsButtonRef,
 }: {
   readonly header: BotChannelHeaderProps;
   readonly titleTarget: HTMLDivElement | null;
+  /** The title row is not drawn now, so it holds no place for the playback controls. */
+  readonly titleRowHidden: boolean;
   readonly settingsButtonRef: React.RefObject<HTMLButtonElement | null>;
 }): ReactNode {
   const { settingsOpen } = props;
@@ -2031,6 +2126,7 @@ function BotChannelActions({
   );
   return titleTarget === null ? (
     <>
+      {titleRowHidden ? null : <TracyPlaybackSlot />}
       {props.onOpenSearch === null ? null : (
         <TooltipWrapper
           label={`Search in ${props.title} ${formatChordForDisplay("mod+f")}`}
@@ -2044,7 +2140,6 @@ function BotChannelActions({
             size="icon-sm"
             aria-label={`Search in ${props.title}`}
             data-testid="bot-channel-search-open"
-            className="ml-auto"
             onClick={props.onOpenSearch}
           >
             <Search aria-hidden="true" />
@@ -2059,7 +2154,6 @@ function BotChannelActions({
         aria-label="Channel settings"
         aria-expanded={settingsOpen}
         data-testid="bot-channel-settings-open"
-        className={props.onOpenSearch === null ? "ml-auto" : undefined}
         onClick={props.onToggleSettings}
       >
         <EllipsisVertical aria-hidden="true" />
@@ -2157,7 +2251,6 @@ function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
     props.level2 === "menu" || props.level2 === "bar"
       ? (botHeaderSlot?.target ?? null)
       : null;
-  const background = useChannelBackground(props.botId);
   const expression = botExpressionOn("title", useBotActivity(props.botId));
   // With the keyboard up on a short viewport: the name row alone while the
   // channel's box has the focus, and nothing while a thread's does, since the
@@ -2179,7 +2272,7 @@ function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
     <div
       hidden={threadHasFocus}
       className={cn(
-        "flex min-w-0 items-center gap-2",
+        "@container/title-strip flex min-w-0 items-center gap-2",
         titleTarget !== null && "w-full",
         focusOwner !== null && "min-h-11",
       )}
@@ -2207,6 +2300,7 @@ function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
       <BotChannelActions
         header={props}
         titleTarget={titleTarget}
+        titleRowHidden={threadHasFocus}
         settingsButtonRef={settingsButtonRef}
       />
     </div>
@@ -2216,12 +2310,9 @@ function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
       ref={setHeader}
       hidden={threadHasFocus}
       data-testid="bot-channel-header"
-      data-channel-background={background.index}
-      style={{ "--channel-tint": background.color } as CSSProperties}
       className={cn(
         "flex shrink-0 flex-col gap-1 px-4",
         focusOwner === null && titleTarget === null && "pt-3",
-        background.className,
       )}
     >
       {titleTarget === null ? titleRow : createPortal(titleRow, titleTarget)}
@@ -2235,13 +2326,6 @@ function BotChannelHeader(props: BotChannelHeaderProps): ReactNode {
         </TabsTrigger>
         <TabsTrigger value="activity" data-testid="bot-tab-view-activity">
           Activity
-          <UnreadCountBadge
-            count={props.activityCount}
-            size="xs"
-            testId="bot-tab-activity-count"
-            corner={null}
-            noun="active"
-          />
         </TabsTrigger>
       </TabsList>
     </header>

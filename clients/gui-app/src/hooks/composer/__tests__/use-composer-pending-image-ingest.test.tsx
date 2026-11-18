@@ -15,10 +15,14 @@ import {
   useComposerPendingImageIngest,
   type PendingImageIngestEditorHandle,
 } from "@/hooks/composer/use-composer-pending-image-ingest";
+import { createHash } from "node:crypto";
 import { IMAGE_READ_TIMEOUT_MS } from "@/hooks/composer/use-composer-paste";
 import { PREPARED_IMAGE_MAX_BYTES } from "@/lib/composer/composer-image-preparation-session";
 import type { ImageAttachmentRewrite } from "@/components/chat/composer/editor/extensions/image-attachment-extension";
-import { getImageBytes } from "@/lib/composer/landing-image-store";
+import {
+  getImageBytes,
+  imageHashKeys,
+} from "@/lib/composer/landing-image-store";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import {
@@ -26,6 +30,8 @@ import {
   pngBytesWithHeader,
 } from "@/lib/composer/__tests__/composer-image-preparation-fixtures";
 import {
+  LANDING_IMAGE_BUDGET_BYTES,
+  registerExtraImageRootSource,
   resetLandingImageBudgetReservationsForTesting,
   type LandingImageBudgetReservation,
 } from "@/lib/composer/landing-image-budget";
@@ -84,6 +90,28 @@ vi.mock("@/lib/reportable-error-toast", async (importOriginal) => {
   return { ...actual, reportableErrorToast: toastMocks.reportableErrorToast };
 });
 
+/**
+ * A root source that cannot be read from the reservation numbered
+ * `fromReservation` on (the budget's reservations are counted by the mock
+ * above), as the bot drafts' stored drafts are when storage fails. Registered
+ * once for the file; `afterEach` makes it readable again.
+ */
+const unreadableRoots = vi.hoisted(() => ({
+  fromReservation: Number.POSITIVE_INFINITY,
+}));
+
+registerExtraImageRootSource({
+  hashes: () => {
+    if (
+      landingImageBudgetMocks.reserveLandingImageBudget.mock.calls.length >=
+      unreadableRoots.fromReservation
+    ) {
+      throw new Error("the image roots cannot be read");
+    }
+    return [];
+  },
+});
+
 const landingImageStoreMocks = vi.hoisted(() => ({
   putImage: vi.fn<(bytes: ImageBytes) => Promise<string>>(),
   actualPutImage: null as ((bytes: ImageBytes) => Promise<string>) | null,
@@ -136,6 +164,15 @@ function immediateRunPendingImageJob(
   void job(new AbortController().signal);
 }
 
+/** The budget's real reservation, which the module's mock wraps: a fixture without it fails the case instead of refusing. */
+function realReserve(): NonNullable<
+  typeof landingImageBudgetMocks.actualReserve
+> {
+  const reserve = landingImageBudgetMocks.actualReserve;
+  if (reserve === null) throw new Error("the budget's real reserve is not set");
+  return reserve;
+}
+
 function b64Of(text: string): string {
   return btoa(text);
 }
@@ -175,6 +212,7 @@ afterEach(() => {
   // installs its own wrapping implementation restores the passthrough itself
   // before this runs (see the F3 describe block).
   landingImageBudgetMocks.reserveLandingImageBudget.mockClear();
+  unreadableRoots.fromReservation = Number.POSITIVE_INFINITY;
 });
 
 describe("ingestPastedComposerImages (rich-clipboard channel)", () => {
@@ -1125,5 +1163,118 @@ describe("a full budget does not delete an image the draft already holds", () =>
     // bytes were never charged to the budget.
     expect(editor.removeImageAttachmentById).not.toHaveBeenCalled();
     expect(editor.rewriteImageAttachmentHashById).not.toHaveBeenCalled();
+  });
+});
+
+describe("the budget's admission while the image roots cannot be read (Tracy Bots T186)", () => {
+  beforeEach(() => {
+    const passthrough = landingImageStoreMocks.actualPutImage;
+    if (passthrough !== null) {
+      landingImageStoreMocks.putImage.mockImplementation(passthrough);
+    }
+  });
+
+  afterEach(() => {
+    const passthrough = landingImageBudgetMocks.actualReserve;
+    if (passthrough !== null) {
+      landingImageBudgetMocks.reserveLandingImageBudget.mockImplementation(
+        passthrough,
+      );
+    }
+  });
+
+  it("refuses both pasted images, with nothing escaping the paste handler, no reservation left, nothing written and the attach-failed toast once, never the budget toast, when the roots cannot be read at the second reservation", async () => {
+    unreadableRoots.fromReservation = 2;
+    const editor = fakeEditor({ type: "doc", content: [] });
+    const { result } = renderHook(() =>
+      useComposerPendingImageIngest({
+        editorRef: { current: editor.handle },
+        runPendingImageJob: immediateRunPendingImageJob,
+        draftId: null,
+      }),
+    );
+    let outcomes: ReadonlyArray<{ readonly kind: string }> = [];
+
+    expect(() => {
+      outcomes = result.current.ingestPastedComposerImages([
+        {
+          fileName: "first.png",
+          mimeType: "image/png",
+          b64content: b64Of("unreadable-first"),
+        },
+        {
+          fileName: "second.png",
+          mimeType: "image/png",
+          b64content: b64Of("unreadable-second"),
+        },
+      ]);
+    }).not.toThrow();
+
+    expect(outcomes.map((outcome) => outcome.kind)).toEqual([
+      "rejected",
+      "rejected",
+    ]);
+    expect(toastMocks.reportableErrorToast).toHaveBeenCalledTimes(1);
+    expect(toastMocks.reportableErrorToast).toHaveBeenCalledWith(
+      "Couldn't attach the image.",
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(toastMocks.reportableErrorToast).not.toHaveBeenCalledWith(
+      "Couldn't add the image.",
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(landingImageStoreMocks.putImage).not.toHaveBeenCalled();
+    // Bytes no other case pastes, since an earlier case's write can still be landing in the fresh database.
+    const stored = await imageHashKeys();
+    for (const bytes of ["unreadable-first", "unreadable-second"]) {
+      expect(stored).not.toContain(
+        createHash("sha256").update(bytes).digest("hex"),
+      );
+    }
+    // No reservation was left: the whole budget is still there to take.
+    unreadableRoots.fromReservation = Number.POSITIVE_INFINITY;
+    const full = realReserve()(null, [
+      { hash: null, bytes: LANDING_IMAGE_BUDGET_BYTES },
+    ]);
+    if (full === null) throw new Error("the whole budget was not free");
+    full.release();
+  });
+
+  it("keeps the inline node, and shows no toast, when a MIGRATION cannot read the roots to reserve capacity", async () => {
+    const reserve = realReserve();
+    landingImageBudgetMocks.reserveLandingImageBudget.mockImplementation(
+      (draftId, candidates) => {
+        unreadableRoots.fromReservation = 1;
+        return reserve(draftId, candidates);
+      },
+    );
+    const jobs: Array<Promise<void>> = [];
+    const editor = fakeEditor({
+      type: "doc",
+      content: [
+        pendingImageNode("legacy-1", b64Of("legacy-bytes"), "image/png"),
+      ],
+    });
+    const { result } = renderHook(() =>
+      useComposerPendingImageIngest({
+        editorRef: { current: editor.handle },
+        runPendingImageJob: (job) => {
+          jobs.push(job(new AbortController().signal));
+        },
+        draftId: null,
+      }),
+    );
+
+    result.current.reingestPendingImages();
+
+    expect(jobs).toHaveLength(1);
+    await Promise.all(jobs);
+
+    expect(landingImageStoreMocks.putImage).toHaveBeenCalled();
+    expect(editor.removeImageAttachmentById).not.toHaveBeenCalled();
+    expect(editor.rewriteImageAttachmentHashById).not.toHaveBeenCalled();
+    expect(toastMocks.reportableErrorToast).not.toHaveBeenCalled();
   });
 });

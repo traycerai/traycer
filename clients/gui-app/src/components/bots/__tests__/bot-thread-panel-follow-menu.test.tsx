@@ -119,6 +119,7 @@ function mountPanel(
               boundHostId={HOST_ID}
               imageReach="none"
               answerReach="each"
+              replyReach="none"
               botTitle="Release Bot"
               conversationId={CONVERSATION_ID}
               originMessageId="anchor-1"

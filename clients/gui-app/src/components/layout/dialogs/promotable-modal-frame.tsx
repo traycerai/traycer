@@ -17,6 +17,8 @@ interface PromotableModalFrameProps {
   readonly contentClassName: string;
   /** Extra `data-*` attributes spread onto the content (debug/test hooks). */
   readonly dataAttributes: Record<string, string>;
+  /** Controls the body places in the title bar, before Promote and Close; `null` for none. */
+  readonly headerActions: ReactNode;
   readonly promoteAriaLabel: string;
   readonly promoteTestId: string;
   readonly closeTestId: string;
@@ -118,7 +120,7 @@ export function PromotableModalFrame(
         onEscapeKeyDown={props.onEscapeKeyDown}
         {...props.dataAttributes}
       >
-        <header className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-secondary px-4 py-2">
+        <header className="@container/title-strip flex shrink-0 items-center gap-2 border-b border-border/60 bg-secondary px-4 py-2">
           {props.icon}
           <DialogPrimitive.Title
             data-slot="dialog-title"
@@ -126,7 +128,8 @@ export function PromotableModalFrame(
           >
             {props.title}
           </DialogPrimitive.Title>
-          <div className="ml-auto flex items-center gap-1">
+          <div className="ml-auto flex min-w-0 items-center gap-1">
+            {props.headerActions}
             {/* No promote on phones: the strip-tab surface it opens isn't
                 mobile-ready, and below md the modal is already full-screen. */}
             <Button

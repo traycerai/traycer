@@ -1,5 +1,5 @@
 /**
- * A bot's icon, colour, eyewear, accessory and channel background (Tracy Bots
+ * A bot's icon, colour, eyewear and accessory (Tracy Bots
  * T147): the real
  * section, hooks and HostClient over a mock messenger whose host records each
  * `bot.updateAppearance` it is sent and answers it with the row it would
@@ -63,7 +63,7 @@ const mocks = vi.hoisted(() => ({
   inFlight: 0,
   maxInFlight: 0,
   /** The look `bot.list` answers with; a held write's answer becomes it. */
-  listed: { mark: null, color: null, background: null } as BotAppearance,
+  listed: { mark: null, color: null } as BotAppearance,
   /** The next `bot.list` read answers with the look it started with only once this resolves. */
   listGate: null as Promise<void> | null,
   listReads: 0,
@@ -98,13 +98,23 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     !mocks.unsupported.has(method),
 }));
 
+import { deliveredLook } from "@/components/bots/__tests__/mascot-drawing";
 import { BotAppearanceSettings } from "@/components/bots/bot-appearance-settings";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { BotLooksContext, botLooksOf } from "@/hooks/bots/use-bot-appearance";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
-const BARE: BotAppearance = { mark: null, color: null, background: null };
+const BARE: BotAppearance = { mark: null, color: null };
+
+/**
+ * A look as a host of the same method version still delivers it: raw, with the
+ * channel background it once carried. Nothing reads it, and nothing parses it away.
+ */
+const STALE_BACKGROUND: BotAppearance & { readonly background: number } = {
+  ...BARE,
+  background: 9,
+};
 
 function botRow(appearance: BotAppearance): BotDirectoryRecord {
   return {
@@ -128,18 +138,22 @@ function botRow(appearance: BotAppearance): BotDirectoryRecord {
   };
 }
 
-/** What the host stores when `request` is applied to `appearance`. */
+/**
+ * What the host stores when `request` is applied to `appearance`: a cleared
+ * colour is the colour the bot was created with, which the host keeps.
+ */
 function applied(
   appearance: BotAppearance,
   request: BotUpdateAppearanceRequest,
 ): BotAppearance {
+  const created = appearance.createdColor ?? null;
   return {
     mark: request.mark === undefined ? appearance.mark : request.mark,
-    color: request.color === undefined ? appearance.color : request.color,
-    background:
-      request.background === undefined
-        ? appearance.background
-        : request.background,
+    createdColor: created,
+    color:
+      request.color === undefined
+        ? appearance.color
+        : (request.color ?? created),
     eyewear:
       request.eyewear === undefined ? appearance.eyewear : request.eyewear,
     accessory:
@@ -354,6 +368,32 @@ const EYEWEAR_NAMES: readonly string[] = [
   "Visor",
 ];
 
+const LINE_UP: ReadonlyArray<readonly [string, string]> = [
+  ["Red", "#f04c4c"],
+  ["Orange", "#f08f4c"],
+  ["Amber", "#f0b34c"],
+  ["Emerald", "#4df0ba"],
+  ["Cyan", "#4cd8f0"],
+  ["Blue", "#4c8af0"],
+  ["Violet", "#7e4cf0"],
+  ["Pink", "#ed4f9d"],
+  ["Teal", "#93bdc8"],
+];
+const BLUE = "#4c8af0";
+const VIOLET = "#7e4cf0";
+const CREATED = "#f04c4c";
+
+/** The colour swatches, by name, that the bot's colour section shows pressed. */
+function pressedColours(): string[] {
+  return within(screen.getByTestId("bot-settings-colour"))
+    .queryAllByRole("button", { pressed: true })
+    .map((button) => button.getAttribute("aria-label") ?? "");
+}
+
+function resetButton(): HTMLButtonElement {
+  return screen.getByTestId<HTMLButtonElement>("bot-settings-avatar-reset");
+}
+
 /** The choice a section shows pressed. */
 function pressedIn(section: "icon" | "eyewear" | "accessory"): string {
   const [pressed, ...rest] = within(
@@ -377,8 +417,8 @@ function chosenShape(): BotMascotShape {
 }
 
 describe("<BotAppearanceSettings />", () => {
-  it("names the five sections Icon, Colour, Eyewear, Accessory and Background", () => {
-    mount(BARE);
+  it("names the four sections Icon, Colour, Eyewear and Accessory, and offers no Background though the host still delivers one", () => {
+    mount(STALE_BACKGROUND);
 
     expect(screen.getByTestId("bot-settings-icon").textContent).toContain(
       "Icon",
@@ -392,10 +432,45 @@ describe("<BotAppearanceSettings />", () => {
     expect(screen.getByTestId("bot-settings-accessory").textContent).toContain(
       "Accessory",
     );
-    expect(screen.getByTestId("bot-settings-background").textContent).toContain(
-      "Background",
+    expect(screen.queryByText("Background")).toBeNull();
+    expect(
+      document.querySelector('[data-testid^="bot-settings-background"]'),
+    ).toBeNull();
+  });
+
+  it("offers one Reset avatar beside a preview, and no Use the default anywhere", () => {
+    mount(BARE);
+
+    const avatar = screen.getByTestId("bot-settings-avatar");
+    expect(within(avatar).getByText("Reset avatar")).toBe(resetButton());
+    expect(avatar.querySelector('[data-slot="bot-mascot"]')).not.toBeNull();
+    expect(screen.queryByText("Use the default")).toBeNull();
+    expect(document.querySelector('[data-testid$="-default"]')).toBeNull();
+  });
+
+  it("offers nine named colours, and presses the one the bot holds", () => {
+    mount({ ...BARE, color: VIOLET });
+
+    const swatches = within(
+      screen.getByTestId("bot-settings-colour"),
+    ).getAllByRole("button");
+    expect(swatches.map((swatch) => swatch.getAttribute("aria-label"))).toEqual(
+      LINE_UP.map(([name]) => name),
     );
-    expect(screen.getAllByText("Use the default")).toHaveLength(5);
+    expect(
+      swatches.map((swatch) => swatch.getAttribute("data-testid")),
+    ).toEqual(LINE_UP.map(([, hex]) => `bot-settings-colour-${hex.slice(1)}`));
+    expect(pressedColours()).toEqual(["Violet"]);
+  });
+
+  it.each([
+    ["a hex off the line-up", "#123456"],
+    ["no colour", null],
+    ["a colour this client cannot read", "unrecognised"],
+  ] as const)("presses no colour for %s", (_name, color) => {
+    mount({ ...BARE, color });
+
+    expect(pressedColours()).toEqual([]);
   });
 
   it("is absent when the host does not support bot.updateAppearance", () => {
@@ -404,7 +479,6 @@ describe("<BotAppearanceSettings />", () => {
 
     expect(screen.queryByTestId("bot-settings-icon")).toBeNull();
     expect(screen.queryByTestId("bot-settings-colour")).toBeNull();
-    expect(screen.queryByTestId("bot-settings-background")).toBeNull();
   });
 
   it("offers exactly the shapes it draws and writes the chosen one alone", async () => {
@@ -427,22 +501,17 @@ describe("<BotAppearanceSettings />", () => {
     });
   });
 
-  it("writes the chosen colour and the chosen background as their own partial payloads", async () => {
+  it("writes the chosen colour alone, carrying no background, over a look the host still delivers a background with", async () => {
     const user = userEvent.setup();
-    mount(BARE);
+    mount(STALE_BACKGROUND);
 
-    await user.click(screen.getByTestId("bot-settings-colour-14"));
+    await user.click(screen.getByTestId("bot-settings-colour-ed4f9d"));
     await waitFor(() => {
       expect(mocks.appearanceWrites).toHaveLength(1);
     });
-    await user.click(screen.getByTestId("bot-settings-background-5"));
-    await waitFor(() => {
-      expect(mocks.appearanceWrites).toHaveLength(2);
-    });
 
     expect(mocks.appearanceWrites).toEqual([
-      { botId: BOT_ID, color: 14 },
-      { botId: BOT_ID, background: 5 },
+      { botId: BOT_ID, color: "#ed4f9d" },
     ]);
   });
 
@@ -489,68 +558,96 @@ describe("<BotAppearanceSettings />", () => {
     ]);
   });
 
-  it("sends null for each Use the default, and only for its own field", async () => {
+  it("sends one change of four nulls, nothing else, for Reset avatar", async () => {
     const user = userEvent.setup();
     mount({
       mark: { kind: "mascot", shape: "cat" },
-      color: 2,
-      background: 9,
+      color: VIOLET,
+      createdColor: CREATED,
       eyewear: "visor",
       accessory: "bow",
     });
 
-    await user.click(screen.getByTestId("bot-settings-icon-default"));
+    await user.click(resetButton());
     await waitFor(() => {
       expect(mocks.appearanceWrites).toHaveLength(1);
     });
-    await user.click(screen.getByTestId("bot-settings-colour-default"));
-    await waitFor(() => {
-      expect(mocks.appearanceWrites).toHaveLength(2);
-    });
-    await user.click(screen.getByTestId("bot-settings-eyewear-default"));
-    await waitFor(() => {
-      expect(mocks.appearanceWrites).toHaveLength(3);
-    });
-    await user.click(screen.getByTestId("bot-settings-accessory-default"));
-    await waitFor(() => {
-      expect(mocks.appearanceWrites).toHaveLength(4);
-    });
-    await user.click(screen.getByTestId("bot-settings-background-default"));
-    await waitFor(() => {
-      expect(mocks.appearanceWrites).toHaveLength(5);
-    });
 
     expect(mocks.appearanceWrites).toEqual([
-      { botId: BOT_ID, mark: null },
-      { botId: BOT_ID, color: null },
-      { botId: BOT_ID, eyewear: null },
-      { botId: BOT_ID, accessory: null },
-      { botId: BOT_ID, background: null },
+      {
+        botId: BOT_ID,
+        mark: null,
+        color: null,
+        eyewear: null,
+        accessory: null,
+      },
     ]);
+    expect(mocks.appearanceWrites[0]).not.toHaveProperty("createdColor");
   });
 
-  it("offers Use the default only where a choice stands", () => {
-    mount({ mark: null, color: 2, background: null, eyewear: "glasses" });
+  it.each([
+    ["untouched, with no creation colour", { ...BARE }, true],
+    [
+      "untouched, holding its creation colour",
+      { ...BARE, color: CREATED, createdColor: CREATED },
+      true,
+    ],
+    [
+      "holding a colour that is not its creation colour",
+      { ...BARE, color: BLUE, createdColor: CREATED },
+      false,
+    ],
+    [
+      "holding a colour with no creation colour",
+      { ...BARE, color: BLUE },
+      false,
+    ],
+    [
+      "holding a colour this client cannot read",
+      { ...BARE, color: "unrecognised" },
+      false,
+    ],
+    [
+      "with a chosen icon",
+      { ...BARE, mark: { kind: "mascot", shape: "cat" } },
+      false,
+    ],
+    ["with a chosen eyewear", { ...BARE, eyewear: "visor" }, false],
+    ["with a chosen accessory", { ...BARE, accessory: "halo" }, false],
+  ] as const)(
+    "keeps Reset avatar %s: disabled is %s",
+    (_name, look, disabled) => {
+      mount(look);
 
-    expect(
-      screen.getByTestId<HTMLButtonElement>("bot-settings-icon-default")
-        .disabled,
-    ).toBe(true);
-    expect(
-      screen.getByTestId<HTMLButtonElement>("bot-settings-colour-default")
-        .disabled,
-    ).toBe(false);
-    expect(
-      screen.getByTestId<HTMLButtonElement>("bot-settings-eyewear-default")
-        .disabled,
-    ).toBe(false);
-    for (const section of ["accessory", "background"]) {
-      expect(
-        screen.getByTestId<HTMLButtonElement>(`bot-settings-${section}-default`)
-          .disabled,
-      ).toBe(true);
-    }
-  });
+      expect(resetButton().disabled).toBe(disabled);
+    },
+  );
+
+  it.each([
+    ["a number colour", '{"mark":null,"color":3}', false, []],
+    ["a colour that is not a hex", '{"mark":null,"color":"red"}', false, []],
+    [
+      "a hex colour and a created colour that is junk",
+      '{"mark":null,"color":"#4c8af0","createdColor":7}',
+      false,
+      ["Blue"],
+    ],
+    [
+      "no colour and a created colour that is junk",
+      '{"mark":null,"color":null,"createdColor":"red"}',
+      true,
+      [],
+    ],
+  ])(
+    "draws the section and keeps Reset avatar sensible for a delivered look with %s",
+    (_name, json, disabled, pressed) => {
+      mount(deliveredLook(json));
+
+      expect(screen.getByTestId("bot-settings-avatar")).toBeTruthy();
+      expect(resetButton().disabled).toBe(disabled);
+      expect(pressedColours()).toEqual(pressed);
+    },
+  );
 
   it("offers no upload: neither a button nor a file input", () => {
     mount(BARE);
@@ -610,15 +707,23 @@ describe("<BotAppearanceSettings />", () => {
     );
   });
 
-  it("sends null for Use the default, and a reload shows the bot's own shape again", async () => {
+  it("sends the reset's four nulls, and a reload shows the bot's own shape again", async () => {
     const user = userEvent.setup();
     mount({ ...BARE, mark: { kind: "mascot", shape: chosenShape() } });
     expect(pressedShape()).toBe(partName(chosenShape()));
 
-    await user.click(screen.getByTestId("bot-settings-icon-default"));
+    await user.click(resetButton());
 
     await waitFor(() => {
-      expect(mocks.appearanceWrites).toEqual([{ botId: BOT_ID, mark: null }]);
+      expect(mocks.appearanceWrites).toEqual([
+        {
+          botId: BOT_ID,
+          mark: null,
+          color: null,
+          eyewear: null,
+          accessory: null,
+        },
+      ]);
     });
     const returned = mocks.stored;
     if (returned === null) throw new Error("the host stored nothing");
@@ -631,7 +736,7 @@ describe("<BotAppearanceSettings />", () => {
   });
 
   describe("over the surface's own bot.list, with a save held open", () => {
-    const BASE: BotAppearance = { ...BARE, color: 3, eyewear: null };
+    const BASE: BotAppearance = { ...BARE, color: BLUE, eyewear: null };
 
     /** The write the host holds `index`th, once it has reached the host. */
     async function writeAt(index: number): Promise<HeldWrite> {
@@ -640,6 +745,22 @@ describe("<BotAppearanceSettings />", () => {
       });
       return mocks.heldWrites[index];
     }
+
+    it("enables Reset avatar the moment a pick is made, and not before", async () => {
+      const user = userEvent.setup();
+      await mountListed({ ...BARE, color: CREATED, createdColor: CREATED });
+      expect(resetButton().disabled).toBe(true);
+
+      await user.click(screen.getByTestId("bot-settings-eyewear-shades"));
+
+      expect(resetButton().disabled).toBe(false);
+      (await writeAt(0)).answer({
+        ...BARE,
+        color: CREATED,
+        createdColor: CREATED,
+        eyewear: "shades",
+      });
+    });
 
     it("presses a chosen eyewear and repaints the avatar before the host has answered", async () => {
       const user = userEvent.setup();
@@ -821,17 +942,17 @@ describe("<BotAppearanceSettings />", () => {
       await user.click(screen.getByTestId("bot-settings-eyewear-shades"));
       const write = await writeAt(0);
 
-      setCachedLook(queryClient, { ...BASE, eyewear: "visor", color: 7 });
+      setCachedLook(queryClient, { ...BASE, eyewear: "visor", color: VIOLET });
 
       await waitFor(() => {
         expect(
           screen
-            .getByTestId("bot-settings-colour-7")
+            .getByTestId("bot-settings-colour-7e4cf0")
             .getAttribute("aria-pressed"),
         ).toBe("true");
       });
       expect(pressedIn("eyewear")).toBe("Shades");
-      write.answer({ ...BASE, eyewear: "shades", color: 7 });
+      write.answer({ ...BASE, eyewear: "shades", color: VIOLET });
     });
 
     it("leaves the bot no entry once its saves are answered", async () => {

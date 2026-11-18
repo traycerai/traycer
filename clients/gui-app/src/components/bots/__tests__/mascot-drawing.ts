@@ -1,3 +1,4 @@
+import type { BotAppearance } from "@traycer/protocol/host/bot/schemas";
 import {
   MASCOT_AT_REST,
   botMascot,
@@ -138,4 +139,20 @@ export function expectedTracyGlyph(box: 16 | 24 | 40): TracyGlyphRead {
 /** Whether `root` draws the lucide robot glyph the mascot replaces. */
 export function drawsRobotGlyph(root: Element): boolean {
   return root.querySelector("svg.lucide-bot") !== null;
+}
+
+/**
+ * A look as a host of the same method version delivers it: wire JSON that no
+ * schema has read, so its fields are whatever that host wrote. Only that it
+ * is an object is checked.
+ */
+export function deliveredLook(json: string): BotAppearance {
+  const wire: unknown = JSON.parse(json);
+  if (!isLookObject(wire))
+    throw new Error("the delivered look is not an object");
+  return wire;
+}
+
+function isLookObject(value: unknown): value is BotAppearance {
+  return typeof value === "object" && value !== null;
 }

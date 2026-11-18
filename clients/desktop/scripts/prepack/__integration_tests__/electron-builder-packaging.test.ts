@@ -28,7 +28,11 @@
  * `resources/cli/darwin-<arch>/` (gitignored - see `.gitignore`) and the
  * packaged output under `release/` (also gitignored) - lives inside this
  * workspace only. It never touches `/Applications`, a real running Traycer
- * host, or calls `launchctl`. `src/config.ts` is stamped to `"production"`
+ * host, or calls `launchctl`. After the run the packaged output is moved (one
+ * rename) to `.tmp-electron-builder-packaging-release/` (gitignored, like
+ * `release/`) and deleted at the start of the next run: deleting two packed
+ * apps recursively has a disk-dependent cost, and `afterAll` has only vitest's
+ * 10 s hook budget. `src/config.ts` is stamped to `"production"`
  * for the duration of the pack and unconditionally restored to `"dev"` in a
  * `finally`, exactly mirroring the real release workflow's own
  * stamp/build/restore sequence - never left mutated even if the build
@@ -58,7 +62,6 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -66,6 +69,7 @@ import {
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createPackagingWorkspace } from "./packaging-workspace";
 
 const DESKTOP_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -80,6 +84,10 @@ const PRODUCT_NAME = REAL_PACKAGE_JSON.build.productName;
 const APP_ID = REAL_PACKAGE_JSON.build.appId;
 
 const RELEASE_DIR = path.join(DESKTOP_ROOT, "release");
+const PARK_DIR = path.join(
+  DESKTOP_ROOT,
+  ".tmp-electron-builder-packaging-release",
+);
 const SET_DEPLOY_TARGET_SCRIPT = path.join(
   DESKTOP_ROOT,
   "scripts",
@@ -168,31 +176,25 @@ describe.skipIf(process.platform !== "darwin")(
       return apps;
     }
 
-    beforeAll(() => {
-      rmSync(RELEASE_DIR, { recursive: true, force: true });
-      // A developer may have a REAL staged CLI + host archive in the
-      // (gitignored) arch dirs - e.g. from `make dev-desktop` or a local
-      // install build. The test must not destroy it: the real content is
-      // moved aside here and restored in `afterAll`.
-      for (const arch of MAC_PACK_ARCHES) {
-        const dir = cliArchDir(arch);
-        const backup = `${dir}.packaging-test-backup`;
-        // Recover from a prior run that crashed between backup and restore:
-        // the backup holds the developer's real content, so it wins.
-        if (existsSync(backup)) {
-          rmSync(dir, { recursive: true, force: true });
-          renameSync(backup, dir);
-        }
-        if (existsSync(dir)) renameSync(dir, backup);
+    const workspace = createPackagingWorkspace({
+      releaseDir: RELEASE_DIR,
+      parkDir: PARK_DIR,
+      cliDirs: MAC_PACK_ARCHES.map((arch) => ({
+        dir: cliArchDir(arch),
         // Per-arch marker bytes: without them "the x64 app has a darwin-x64
         // dir" would also be satisfied by the arm64 CLI copied under the x64
         // name, which is precisely the bug class being gated.
-        stageFakeCli(
-          dir,
-          `#!/bin/sh\n# ${archMarker(arch)}\nexit 0\n`,
-          archVersion(arch),
-        );
-      }
+        stage: (dir: string) =>
+          stageFakeCli(
+            dir,
+            `#!/bin/sh\n# ${archMarker(arch)}\nexit 0\n`,
+            archVersion(arch),
+          ),
+      })),
+    });
+
+    beforeAll(() => {
+      workspace.prepare();
 
       // Mirrors release-desktop.yml: stamp production BEFORE build:app (the
       // baked config values get inlined by esbuild/vite at build time), pack,
@@ -248,13 +250,7 @@ describe.skipIf(process.platform !== "darwin")(
     }, 900_000);
 
     afterAll(() => {
-      rmSync(RELEASE_DIR, { recursive: true, force: true });
-      for (const arch of MAC_PACK_ARCHES) {
-        const dir = cliArchDir(arch);
-        const backup = `${dir}.packaging-test-backup`;
-        rmSync(dir, { recursive: true, force: true });
-        if (existsSync(backup)) renameSync(backup, dir);
-      }
+      workspace.teardown();
     });
 
     it("packages without error and restores src/config.ts to dev afterwards", () => {

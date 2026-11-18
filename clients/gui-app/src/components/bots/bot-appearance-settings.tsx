@@ -1,6 +1,6 @@
 import { useId, type CSSProperties, type ReactNode } from "react";
+import { BOT_COLOR_LINE_UP } from "@traycer/protocol/host/bot/colors";
 import {
-  BOT_COLOR_COUNT,
   BOT_MASCOT_ACCESSORIES,
   BOT_MASCOT_EYEWEAR,
   type BotAppearance,
@@ -11,40 +11,17 @@ import { BotMascotPreview } from "@/components/bots/bot-avatars";
 import { BotSettingsRefusal } from "@/components/bots/bot-settings-group";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
-import { useBotIsMain, useBotLook } from "@/hooks/bots/use-bot-appearance";
+import {
+  creationColorOf,
+  useBotIsMain,
+  useBotLook,
+} from "@/hooks/bots/use-bot-appearance";
 import { useBotLookSaver } from "@/hooks/bots/use-bot-look-save";
 import {
   MASCOT_SHAPES,
   botMascot,
   type MascotLook,
 } from "@/lib/bots/mascot-mark";
-import { botColorAt } from "@/lib/providers/profile-accent-color";
-
-/** The twelve hues' names, in the colours' order; the deep tones follow. */
-const HUE_NAMES: readonly string[] = [
-  "Red",
-  "Orange",
-  "Amber",
-  "Lime",
-  "Emerald",
-  "Teal",
-  "Cyan",
-  "Blue",
-  "Violet",
-  "Purple",
-  "Fuchsia",
-  "Pink",
-];
-
-function colorName(index: number): string {
-  const hue = HUE_NAMES[index % HUE_NAMES.length] ?? "Colour";
-  return index < HUE_NAMES.length ? hue : `Deep ${hue.toLowerCase()}`;
-}
-
-const COLORS: readonly number[] = Array.from(
-  { length: BOT_COLOR_COUNT },
-  (_, index) => index,
-);
 
 /**
  * A part's name as its button reads it: "Blob", "Shades", "None". The
@@ -56,9 +33,9 @@ function partName(part: string): string {
 }
 
 /**
- * A bot's icon, its colour, what it wears and its channel's background, in
- * its channel settings. Each part starts as the one the bot's id gives it.
- * Drawn where the tab's host can change it; the rename authority decides who may.
+ * A bot's icon, its colour and what it wears, in its channel settings, and
+ * one reset that puts all four back as the bot started. Drawn where the
+ * tab's host can change it; the rename authority decides who may.
  */
 export function BotAppearanceSettings(props: {
   readonly botId: string;
@@ -73,27 +50,46 @@ export function BotAppearanceSettings(props: {
   const appearance: BotAppearance = look ?? {
     mark: null,
     color: null,
-    background: null,
     eyewear: null,
     accessory: null,
   };
   const change = saver.choose;
   const current = botMascot(botId, appearance, main);
+  const asStarted =
+    appearance.mark === null &&
+    (appearance.eyewear ?? null) === null &&
+    (appearance.accessory ?? null) === null &&
+    appearance.color === creationColorOf(appearance);
   return (
     <>
+      <div
+        data-testid="bot-settings-avatar"
+        className="flex items-center justify-between gap-2"
+      >
+        <BotMascotPreview mascot={current} size="default" />
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          data-testid="bot-settings-avatar-reset"
+          disabled={asStarted}
+          onClick={() =>
+            change({ mark: null, color: null, eyewear: null, accessory: null })
+          }
+        >
+          Reset avatar
+        </Button>
+      </div>
       <MascotPartSection
         label="Icon"
         testId="bot-settings-icon"
         choiceTestId="bot-settings-icon-shape"
         options={MASCOT_SHAPES}
         chosen={current.shape}
-        isDefault={appearance.mark === null}
         preview={(shape) => ({ ...current, shape })}
         pending={saver.saving("mark")}
         refusal={saver.refusal("mark")}
-        onChange={(shape) =>
-          change({ mark: shape === null ? null : { kind: "mascot", shape } })
-        }
+        onChange={(shape) => change({ mark: { kind: "mascot", shape } })}
       />
       <ColorSection
         label="Colour"
@@ -109,7 +105,6 @@ export function BotAppearanceSettings(props: {
         choiceTestId="bot-settings-eyewear"
         options={BOT_MASCOT_EYEWEAR}
         chosen={current.eyewear}
-        isDefault={(appearance.eyewear ?? null) === null}
         preview={(eyewear) => ({ ...current, eyewear })}
         pending={saver.saving("eyewear")}
         refusal={saver.refusal("eyewear")}
@@ -121,19 +116,10 @@ export function BotAppearanceSettings(props: {
         choiceTestId="bot-settings-accessory"
         options={BOT_MASCOT_ACCESSORIES}
         chosen={current.accessory}
-        isDefault={(appearance.accessory ?? null) === null}
         preview={(accessory) => ({ ...current, accessory })}
         pending={saver.saving("accessory")}
         refusal={saver.refusal("accessory")}
         onChange={(accessory) => change({ accessory })}
-      />
-      <ColorSection
-        label="Background"
-        testId="bot-settings-background"
-        chosen={appearance.background}
-        pending={saver.saving("background")}
-        refusal={saver.refusal("background")}
-        onChange={(background) => change({ background })}
       />
     </>
   );
@@ -162,32 +148,13 @@ function SectionLabel(props: {
   );
 }
 
-function UseDefaultButton(props: {
-  readonly testId: string;
-  readonly disabled: boolean;
-  readonly onClick: () => void;
-}): ReactNode {
-  return (
-    <Button
-      type="button"
-      size="sm"
-      variant="ghost"
-      data-testid={props.testId}
-      disabled={props.disabled}
-      onClick={props.onClick}
-    >
-      Use the default
-    </Button>
-  );
-}
-
 /** A choice's frame: pressed when it is the current one. */
 const CHOICE_CLASS =
   "rounded-md p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 aria-pressed:ring-2 aria-pressed:ring-foreground";
 
 /**
- * One part of the mascot: every option drawn on the bot as it looks now, the
- * one it shows pressed, and "Use the default" for the one its id gives it.
+ * One part of the mascot: every option drawn on the bot as it looks now,
+ * the one it shows pressed.
  */
 function MascotPartSection<Part extends string>(props: {
   readonly label: string;
@@ -196,12 +163,10 @@ function MascotPartSection<Part extends string>(props: {
   readonly choiceTestId: string;
   readonly options: readonly Part[];
   readonly chosen: Part;
-  /** Whether nobody chose this part, so the bot's id decides it. */
-  readonly isDefault: boolean;
   readonly preview: (option: Part) => MascotLook;
   readonly pending: boolean;
   readonly refusal: string | null;
-  readonly onChange: (option: Part | null) => void;
+  readonly onChange: (option: Part) => void;
 }): ReactNode {
   const { options, chosen, preview, onChange, testId, choiceTestId } = props;
   const labelId = useId();
@@ -231,27 +196,20 @@ function MascotPartSection<Part extends string>(props: {
           </button>
         ))}
       </div>
-      <div>
-        <UseDefaultButton
-          testId={`${testId}-default`}
-          disabled={props.isDefault}
-          onClick={() => onChange(null)}
-        />
-      </div>
       <BotSettingsRefusal message={props.refusal} />
     </section>
   );
 }
 
-/** A row of the colours, the chosen one pressed, and "Use the default". */
+/** A row of the colours on offer; the bot's own pressed when it is one of them. */
 function ColorSection(props: {
   readonly label: string;
   readonly testId: string;
-  /** The chosen colour; one this client cannot read presses none. */
+  /** The bot's colour; one that is not on offer presses none. */
   readonly chosen: BotAppearance["color"];
   readonly pending: boolean;
   readonly refusal: string | null;
-  readonly onChange: (color: number | null) => void;
+  readonly onChange: (color: string) => void;
 }): ReactNode {
   const { chosen, onChange, testId } = props;
   const labelId = useId();
@@ -267,30 +225,23 @@ function ColorSection(props: {
         aria-labelledby={labelId}
         className="flex flex-wrap gap-1.5"
       >
-        {COLORS.map((index) => (
+        {BOT_COLOR_LINE_UP.map(({ name, hex }) => (
           <button
-            key={index}
+            key={hex}
             type="button"
-            aria-label={colorName(index)}
-            aria-pressed={chosen === index}
+            aria-label={name}
+            aria-pressed={chosen === hex}
             className={CHOICE_CLASS}
-            data-testid={`${testId}-${String(index)}`}
-            onClick={() => onChange(index)}
+            data-testid={`${testId}-${hex.slice(1)}`}
+            onClick={() => onChange(hex)}
           >
             <span
               aria-hidden="true"
               className="block size-6 rounded-sm bg-(--choice-color)"
-              style={{ "--choice-color": botColorAt(index) } as CSSProperties}
+              style={{ "--choice-color": hex } as CSSProperties}
             />
           </button>
         ))}
-      </div>
-      <div>
-        <UseDefaultButton
-          testId={`${testId}-default`}
-          disabled={chosen === null}
-          onClick={() => onChange(null)}
-        />
       </div>
       <BotSettingsRefusal message={props.refusal} />
     </section>
