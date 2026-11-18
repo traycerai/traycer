@@ -44,10 +44,9 @@ export const RPC_ERROR_CODES = [
   "signed-out-by-person",
   // Additive: an old peer narrows it to RPC_ERROR, keeping status and message.
   "removed-by-person",
-  // A sign-in (an Add or a re-sign-in) named an account the environment holds,
-  // which is signed in through the environment, not here. Additive and
-  // degrade-safe: old peers narrow the unknown code to RPC_ERROR while
-  // preserving the response status and message.
+  // An Add or re-sign-in named an account the environment holds. Additive and
+  // degrade-safe: old peers narrow the unknown code to RPC_ERROR, keeping
+  // status and message.
   "environment-managed",
   // A served legacy key mutation requires the client's direct-to-broker flow.
   "update-required",

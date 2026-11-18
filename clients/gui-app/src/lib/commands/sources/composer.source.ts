@@ -358,12 +358,10 @@ function useFocusedComposerCatalog(): GuiHarnessCatalog {
  * probe that never consults auth, so a provider whose account is signed out
  * was offered here indistinguishably from a live one.
  *
- * The signed-out verdict is the row-carried `authStatus`: the same
- * definitive-only verdict the rail reads, taken straight off the row being
- * listed. On a host below `agent.gui.listHarnesses@7.1` the field is absent,
- * the predicate is false for every row, and both subpages look exactly as
- * they do today. Only the exception to it, any signed-in managed profile
- * (see {@link providerSignedOutInPalette}), reads `providers.list`.
+ * The signed-out verdict is the row-carried `authStatus`, as the rail reads it;
+ * absent on a host below `agent.gui.listHarnesses@7.1`, where both subpages
+ * look as before. Only the signed-in managed profile exception (see
+ * {@link providerSignedOutInPalette}) reads `providers.list`.
  */
 function providerOfferableInPalette(provider: HarnessOption): boolean {
   return provider.available;
@@ -385,7 +383,8 @@ function providerOfferableInPalette(provider: HarnessOption): boolean {
  * The rail reads the same signal (`railHarnessDegraded`) and the same
  * exception: a provider with any enabled, signed-in managed profile beside the
  * signed-out Terminal login is neither badged nor demoted here, nor dimmed
- * there. Otherwise the rail dims the row and leaves it exactly where it is, because the rail is a fixed strip of ⌘-digit positions
+ * there. Otherwise the rail dims the row and leaves it in place, because the
+ * rail is a fixed strip of ⌘-digit positions
  * a user learns. This is a searched list with no positional memory to break,
  * so it may additionally group the unusable rows last.
  */

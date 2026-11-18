@@ -512,8 +512,10 @@ function answerSignInWith(awaitAnswer: {
 const ENVIRONMENT_MANAGED_LINE =
   "This account is managed by your environment — sign in there.";
 
-/** The host answers `startLogin` with a started sign-in, then refuses the
- *  `awaitLogin` because the account is held by the environment. */
+/**
+ * The host starts the sign-in, then refuses `awaitLogin` because the
+ * environment holds the account.
+ */
 function refuseAwaitAsEnvironmentManaged(): void {
   host.request.mockImplementation((method) =>
     method === "providers.startLogin"

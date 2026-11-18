@@ -108,10 +108,9 @@ export function resolveActiveProfileForHarness(input: {
     )
   )
     return null;
-  // Nothing browsed and nothing committed for this provider, and its Terminal
-  // login signed out: the one signed-in managed profile, as a new chat's
-  // default account. Ahead of the browsed match, which a null id would read as
-  // the Terminal row.
+  // Terminal login signed out, nothing browsed or committed: the one signed-in
+  // managed profile is the default, ahead of the browsed match (a null id reads
+  // as the Terminal row).
   if (browsedProfileId === null && selectedProfileId === null) {
     const sole = soleSignedInProfileFromRows(profiles);
     if (sole !== null) return sole;
@@ -386,10 +385,8 @@ export function railHarnessDegraded(
 }
 
 /**
- * Whether a rail entry is dimmed: the Terminal login's signed-out verdict
- * (`railHarnessDegraded`), except for a provider with any enabled, signed-in
- * managed profile (`signedOutTerminalBesideSignedInProfile`), which can run a
- * turn and so is not dimmed for the Terminal login's sake.
+ * Whether a rail entry is dimmed: the Terminal login's signed-out verdict,
+ * except for a provider with a signed-in managed profile, which can run a turn.
  */
 export function railEntryDegraded(
   harness: HarnessOption,
@@ -405,9 +402,8 @@ export function railEntryDegraded(
 
 /**
  * Whether a click on a lit tab only browses it: the Terminal login is signed
- * out and two or more managed profiles are signed in, so nothing says which
- * one to commit and the person picks. With exactly one, the click lands on it
- * (`resolveActiveProfileForHarness`).
+ * out and two or more managed profiles are signed in, so the person picks (with
+ * one, the click lands on it).
  */
 export function railEntryBrowseOnly(
   profiles: ReadonlyArray<ProviderProfile>,

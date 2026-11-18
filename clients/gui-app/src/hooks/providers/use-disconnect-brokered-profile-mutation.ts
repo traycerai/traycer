@@ -131,8 +131,8 @@ function readOnSignIn<T>(
 }
 
 /**
- * Sends the entry's binding version, never the row's presence counter, which
- * is this computer's. No entry for the row means it is already disconnected.
+ * Sends the entry's binding version, not the row's presence counter (this
+ * computer's); no entry means it is already disconnected.
  */
 export function useDisconnectBrokeredProfile(): UseMutationResult<
   void,

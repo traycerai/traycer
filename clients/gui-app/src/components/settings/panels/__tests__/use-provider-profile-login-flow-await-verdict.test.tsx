@@ -138,8 +138,10 @@ function controlFlowRejection(
 const ENVIRONMENT_MANAGED_LINE =
   "This account is managed by your environment — sign in there.";
 
-/** The host's refusal of an environment-held account, minted by the real
- *  boundary from the typed host error the transport delivers. */
+/**
+ * The host's refusal of an environment-held account, as the real boundary mints
+ * it from the typed host error.
+ */
 function environmentManagedRejection(): Promise<AwaitLoginResponse> {
   return withHostQueryErrorBoundary<AwaitLoginResponse>(
     "providers.awaitLogin",

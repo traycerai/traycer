@@ -217,10 +217,9 @@ export function soleSignedInProfileForSignedOutTerminal(
 }
 
 /**
- * Whether the Terminal login shows as signed out (by its own row alone, as a
- * harness catalog row carries no `providers.list` state) while at least one
- * enabled managed profile is signed in: the provider can run a turn on that
- * profile, so the Terminal login's verdict is not the provider's.
+ * Whether the Terminal login shows as signed out (by its own row alone) while
+ * an enabled managed profile is signed in, which can run a turn: the Terminal
+ * login's verdict is not the provider's.
  */
 export function signedOutTerminalBesideSignedInProfile(
   profiles: DefaultAccountSources["profiles"],
@@ -238,8 +237,7 @@ export function signedOutTerminalBesideSignedInProfile(
 
 /**
  * {@link soleSignedInProfileForSignedOutTerminal} read from a provider's
- * profile rows alone, where only the Terminal row's own verdict is at hand
- * (a harness catalog row carries no `providers.list` state).
+ * profile rows alone (a harness catalog row carries no `providers.list` state).
  */
 export function soleSignedInProfileFromRows(
   profiles: DefaultAccountSources["profiles"],
