@@ -11,7 +11,7 @@ import {
 
 /**
  * The notification center carries agent states and access-change notices.
- * Sandbox, environment, secret and notification-hook state is read on its own page. A host on
+ * Sandbox, environment and secret state is read on its own page. A host on
  * this protocol already leaves the retired kinds out; a row of them that an
  * older host or the cloud feed still holds is dropped wherever rows enter the
  * merged list.
@@ -23,8 +23,8 @@ const DROPPED_NOTIFICATION_KINDS: ReadonlySet<HostNotificationKind> = new Set(
 /**
  * Kinds the center holds and shows without announcing: no toast, no chime.
  * Role changes and retired read-only access stay readable here. The server's
- * push policy excludes the same kinds. Notification hooks observe the host's
- * origin store; these notices are written only by the server.
+ * push policy excludes the same kinds. These notices are written only by the
+ * server.
  */
 const NO_LIVE_ANNOUNCE_NOTIFICATION_KINDS: ReadonlySet<HostNotificationKind> =
   new Set(["team.role.changed", "access.readonly.retired"]);

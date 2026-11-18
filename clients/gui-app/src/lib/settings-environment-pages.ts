@@ -23,8 +23,7 @@ export type EnvironmentPageId =
   | "secrets"
   | "sandboxes"
   | "storage"
-  | "members"
-  | "notification-hooks";
+  | "members";
 
 /**
  * A configuration: `"personal"` (`PERSONAL_CONFIGURATION_ID`) for the
@@ -86,7 +85,6 @@ const PAGE_SECTIONS: Readonly<Record<EnvironmentPageId, SettingsSectionId>> = {
   sandboxes: "sandboxes",
   storage: "storage",
   members: "members",
-  "notification-hooks": "notification-hooks",
 };
 
 export function environmentPageSection(
@@ -121,9 +119,9 @@ function isEnvironmentPageId(value: string): value is EnvironmentPageId {
 const PAGES_HIDDEN_BY_PICK: Readonly<
   Record<EnvironmentPick["kind"], ReadonlySet<EnvironmentPageId>>
 > = {
-  unresolved: new Set(["members", "notification-hooks"]),
-  personal: new Set(["members", "notification-hooks"]),
-  local: new Set(["members", "notification-hooks"]),
+  unresolved: new Set(["members"]),
+  personal: new Set(["members"]),
+  local: new Set(["members"]),
   team: new Set(),
 };
 

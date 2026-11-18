@@ -743,6 +743,8 @@ import {
   botConversationSendUpgradeV13ToV14,
   botConversationSendV15,
   botConversationSendUpgradeV14ToV15,
+  botConversationSendV16,
+  botConversationSendUpgradeV15ToV16,
   botThreadListV10,
   botThreadListV11,
   botThreadListV12,
@@ -1284,11 +1286,6 @@ import {
   hostNotificationHooksSave,
   hostNotificationHooksSaveV20,
   hostNotificationHooksSaveV30,
-  hostNotificationHooksSaveV40,
-  hostNotificationHooksSaveUpgradeV3ToV4,
-  hostNotificationHooksSaveDowngradeV40ToV30,
-  hostNotificationHooksSaveDowngradeV40ToV20,
-  hostNotificationHooksSaveDowngradeV40ToV10,
   hostNotificationHooksSaveUpgradeV2ToV3,
   hostNotificationHooksSaveDowngradeV30ToV20,
   hostNotificationHooksSaveDowngradeV30ToV10,
@@ -8158,20 +8155,6 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         2: hostNotificationHooksSaveDowngradeV30ToV20,
       },
     },
-    4: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostNotificationHooksSaveV40,
-          upgradeFromPreviousVersion: hostNotificationHooksSaveUpgradeV3ToV4,
-        },
-      },
-      downgradePathsFromLatest: {
-        1: hostNotificationHooksSaveDowngradeV40ToV10,
-        2: hostNotificationHooksSaveDowngradeV40ToV20,
-        3: hostNotificationHooksSaveDowngradeV40ToV30,
-      },
-    },
   },
   "host.accountSettings.refresh": {
     degrade: { kind: "unsupported" },
@@ -10231,7 +10214,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.conversation.send": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: botConversationSendV10,
@@ -10265,6 +10248,12 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         5: {
           contract: botConversationSendV15,
           upgradeFromPreviousVersion: botConversationSendUpgradeV14ToV15,
+        },
+        // @1.6 names the message a member chose to reply to (`replyTo`,
+        // T166).
+        6: {
+          contract: botConversationSendV16,
+          upgradeFromPreviousVersion: botConversationSendUpgradeV15ToV16,
         },
       },
       downgradePathsFromLatest: {},

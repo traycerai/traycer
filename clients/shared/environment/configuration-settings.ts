@@ -1,5 +1,3 @@
-import { notificationHookRefusalSchema } from "./account-notification-schemas";
-import { NotificationHookRefusalError } from "./notification-hook-refusal";
 // The configuration, MCP, policy, history and plans methods answered by authn
 // directly, in the shapes the host's forwarder answered.
 import { z } from "zod";
@@ -114,14 +112,6 @@ async function itemWriteOutcome(
   answer: EnvironmentAnswer,
 ): Promise<EnvironmentConfigurationItemWriteResponse> {
   if (answer.status === 403) return { outcome: "forbidden" };
-  if (answer.status === 400) {
-    const refusal = notificationHookRefusalSchema.safeParse(answer.body);
-    if (refusal.success)
-      throw new NotificationHookRefusalError(
-        refusal.data.code,
-        refusal.data.index,
-      );
-  }
   if (answer.status === 409) {
     const conflict = authnItemConflictSchema.safeParse(answer.body);
     if (conflict.success) {

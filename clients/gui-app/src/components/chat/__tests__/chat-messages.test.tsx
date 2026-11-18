@@ -3197,6 +3197,7 @@ describe("ChatMessages scroll policy", () => {
       openAnnouncementThread: () => undefined,
       threadAnchorKinds: [],
       chooseOption: null,
+      reply: null,
       questions: null,
       failedRequest: null,
       failedRecovery: null,

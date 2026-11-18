@@ -46,7 +46,6 @@ export const SETTINGS_PATHS = new Set([
   "machine-setup",
   "mcp-servers",
   "members",
-  "notification-hooks",
   "notifications",
   "opening-behavior",
   "permissions",

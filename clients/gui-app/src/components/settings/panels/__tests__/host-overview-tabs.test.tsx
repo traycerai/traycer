@@ -396,7 +396,6 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
       "secrets",
       "costs",
       "simulators",
-      "notifications",
     ]);
   });
 
@@ -469,7 +468,6 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
       "host-overview-tab-secrets",
       "host-overview-tab-costs",
       "host-overview-tab-simulators",
-      "host-overview-tab-notifications",
     ]);
     expect(
       screen
@@ -857,14 +855,14 @@ describe("<HostSettingsPanel /> Overview — tabbed shell", () => {
     ).toBe(true);
   });
 
-  it("renders the seven personal-host tab triggers under a connecting host", async () => {
+  it("renders the six personal-host tab triggers under a connecting host", async () => {
     scopeOverrides.current = coldConnectingScope();
     renderPanel();
 
     const tabs = HOST_OVERVIEW_TABS.filter(
       (tab) => tab !== "secrets" && tab !== "costs",
     );
-    expect(tabs).toHaveLength(7);
+    expect(tabs).toHaveLength(6);
     for (const tab of tabs) {
       expect(
         await screen.findByTestId(`host-overview-tab-${tab}`),

@@ -867,6 +867,7 @@ describe("the Tracy surface's place on the route", () => {
         supersedes: null,
         content: { type: "doc", content: [] },
         held: [],
+        replyTo: null,
       });
       const held = () => {
         const { answers, threadBoxes, unsentBoxes } =

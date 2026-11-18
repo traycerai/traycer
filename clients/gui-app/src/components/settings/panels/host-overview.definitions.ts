@@ -1,4 +1,3 @@
-import { ACCOUNT_NOTIFICATIONS_COPY } from "./cloud-notification-copy";
 import { alwaysAvailable } from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
 
@@ -143,24 +142,6 @@ export const HOST_OVERVIEW = defineSettingsSection("host", {
       "device",
       "phone",
     ],
-  },
-  notificationHooks: {
-    kind: "group",
-    search: { contributesTo: "notificationsTab" },
-    label: "Notification hooks",
-    description: null,
-    breadcrumb: null,
-    availableWhen: alwaysAvailable,
-    keywords: ["script", "command", "webhook", "test"],
-  },
-  notificationsTab: {
-    kind: "group",
-    search: { anchor: "host-overview-tab-notifications" },
-    label: ACCOUNT_NOTIFICATIONS_COPY.computerTab,
-    description: null,
-    breadcrumb: "Overview",
-    availableWhen: alwaysAvailable,
-    keywords: ["long turn", "notification hooks", "script", "test hook"],
   },
   accessTab: {
     kind: "group",
@@ -560,7 +541,6 @@ export const HOST_OVERVIEW_TABS = [
   "secrets",
   "costs",
   "simulators",
-  "notifications",
 ] as const;
 
 export type HostOverviewTab = (typeof HOST_OVERVIEW_TABS)[number];
@@ -610,7 +590,6 @@ export const HOST_OVERVIEW_TAB_GROUPS = {
   secrets: HOST_OVERVIEW.definitions.secretsTab,
   costs: HOST_OVERVIEW.definitions.costsTab,
   simulators: HOST_OVERVIEW.definitions.simulatorsTab,
-  notifications: HOST_OVERVIEW.definitions.notificationsTab,
 } as const;
 
 /**

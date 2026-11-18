@@ -1,5 +1,4 @@
 export const notificationsMutationKeys = {
-  accountHooks: () => ["account-notifications.hooks"] as const,
   markRead: () => ["notifications.markRead"] as const,
   resolve: () => ["notifications.resolve"] as const,
   resolveAll: () => ["notifications.resolveAll"] as const,
@@ -13,6 +12,4 @@ export const notificationsMutationKeys = {
   loadMore: () => ["notifications.loadMore"] as const,
   loadMoreAttention: () => ["notifications.loadMoreAttention"] as const,
   loadMoreUnreadRecent: () => ["notifications.loadMoreUnreadRecent"] as const,
-  testHook: () => ["host.notificationHooks.test"] as const,
-  saveHooks: () => ["host.notificationHooks.save"] as const,
 };

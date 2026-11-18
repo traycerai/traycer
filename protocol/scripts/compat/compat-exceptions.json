@@ -591,7 +591,7 @@
       "version": "*",
       "payload": "request",
       "path": "**.properties.executableWriteGrant",
-      "reason": "The unused grant field is retired only from current @3/@4 requests; the frozen strict @2 parser and its inert null downgrade carrier remain unchanged in shape. Release packaging stamps minimum client compatibility epoch 3, and admission refuses peers below epoch 3 before any method runs. The host no longer reads the grant and apps no longer mint it; the global support floor is unchanged."
+      "reason": "The unused grant field is retired only from current @3 requests; the frozen strict @2 parser and its inert null downgrade carrier remain unchanged in shape. Release packaging stamps minimum client compatibility epoch 3, and admission refuses peers below epoch 3 before any method runs. The host no longer reads the grant and apps no longer mint it; the global support floor is unchanged."
     }
   ]
 }

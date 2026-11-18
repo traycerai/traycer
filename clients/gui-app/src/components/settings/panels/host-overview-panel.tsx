@@ -1,4 +1,3 @@
-import { NotificationsSettingsPanelForClient } from "./notifications-settings-panel";
 import { useIsMutatingOf } from "@/hooks/use-mutation-state-of";
 import { HostRestartSessions } from "@/components/host/host-restart-sessions";
 import {
@@ -2103,9 +2102,6 @@ export function HostOverviewPanel(props: {
             secrets: secretsTab,
             costs: costsTab,
             simulators: simulatorsTab,
-            notifications: (
-              <NotificationsSettingsPanelForClient client={client} />
-            ),
           }}
         />
       </HostIdentityCard>

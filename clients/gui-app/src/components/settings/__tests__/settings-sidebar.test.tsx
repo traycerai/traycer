@@ -416,19 +416,15 @@ describe("<SettingsSidebar /> leader hints", () => {
     expect(section?.label).toBe("Agents");
   });
 
-  it("labels application sounds and alerts apart from host notification events", () => {
+  it("labels application sounds and alerts apart", () => {
     const sounds = SETTINGS_SECTIONS.find(
       (section) => section.id === "app-notifications",
     );
     const alerts = SETTINGS_SECTIONS.find((section) => section.id === "alerts");
-    const host = SETTINGS_SECTIONS.find(
-      (section) => section.id === "notifications",
-    );
     expect(sounds?.label).toBe("Sounds");
     expect(alerts?.label).toBe("Alerts");
-    expect(host?.label).toBe("Notifications");
     // Different controls, so different icons too (the rail-table rule).
-    expect(new Set([sounds?.icon, alerts?.icon, host?.icon]).size).toBe(3);
+    expect(sounds?.icon).not.toBe(alerts?.icon);
   });
 
   it("puts Getting started before General in the application settings order", () => {
@@ -794,7 +790,6 @@ const EXPECTED_SECTION_GROUPS: ReadonlyArray<
   ["sandboxes", "personal"],
   ["storage", "personal"],
   ["members", "personal"],
-  ["notification-hooks", "personal"],
   ["agent-definitions", "personal"],
   ["machine-setup", "personal"],
   // Dev-only proof pages: offered whenever `import.meta.env.DEV` holds, which
@@ -923,15 +918,15 @@ describe("<SettingsSidebar /> scope groups", () => {
         if (id === "delete-account") continue;
         // Sounds holds only the soundtrack, so a build without one has no row.
         if (id === "app-notifications" && !soundtrackOffered) continue;
-        // Machine setup, Agent definitions and Browser agent access are retired
-        // from navigation; Members is a team's page, and the default pick is
+        // Machine setup, Agent definitions, Browser agent access and
+        // Notifications are retired from navigation; Members is a team's page, and the default pick is
         // Personal.
         if (
           id === "machine-setup" ||
           id === "agent-definitions" ||
           id === "browser-agent-access" ||
-          id === "members" ||
-          id === "notification-hooks"
+          id === "notifications" ||
+          id === "members"
         ) {
           continue;
         }
@@ -941,6 +936,15 @@ describe("<SettingsSidebar /> scope groups", () => {
       expect(Object.fromEntries(filed)).toEqual(Object.fromEntries(expected));
     },
   );
+
+  it("does not list the retired Notifications page, on any build", async () => {
+    await renderRail();
+
+    expect(
+      screen.queryByTestId("settings-sidebar-item-notifications"),
+    ).toBeNull();
+    expect(screen.getByTestId("settings-sidebar-item-alerts")).toBeTruthy();
+  });
 
   it("renders the host picker once, after Account and Environment and before the host rows", async () => {
     const aside = await renderRail();
@@ -954,7 +958,7 @@ describe("<SettingsSidebar /> scope groups", () => {
         Node.DOCUMENT_POSITION_FOLLOWING) !==
       0;
 
-    for (const id of ["providers", "secrets", "devices", "notifications"]) {
+    for (const id of ["providers", "secrets", "devices"]) {
       expect(
         follows(screen.getByTestId(`settings-sidebar-item-${id}`), picker),
         id,
@@ -1041,7 +1045,6 @@ describe("<SettingsSidebar /> scope groups", () => {
       "permissions",
       "agent-memories",
       "sandboxes",
-      "notifications",
     ]) {
       expect(columnOf(id).className, id).not.toContain("ml-4");
     }
@@ -1155,10 +1158,6 @@ describe("<SettingsSidebar /> Environment pick", () => {
 
     await renderRail();
 
-    expect(environmentRows()).toEqual([
-      ...PERSONAL_ROWS,
-      "Members",
-      "Notification hooks",
-    ]);
+    expect(environmentRows()).toEqual([...PERSONAL_ROWS, "Members"]);
   });
 });

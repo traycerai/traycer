@@ -99,6 +99,7 @@ import {
   type BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
 import type { BotComposerEdit } from "@/components/bots/bot-message-composer";
+import type { BotReplyReach } from "@/hooks/bots/use-bot-send-version";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import type { BotTranscriptLanding } from "@/components/bots/bot-chat-transcript";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
@@ -460,6 +461,8 @@ let panelSent: BotSentPost | null;
 let panelLanding: BotTranscriptLanding | null;
 /** The bot's task list the panel is handed. */
 let panelTasks: ReadonlyArray<BotTaskEntry>;
+/** Where a Reply on a row of the thread reaches the bot. */
+let panelReplyReach: BotReplyReach;
 const onEditPost = vi.fn<(edit: BotComposerEdit) => void>();
 /** The turn a tap on the replying strip asks the tab to open. */
 const onOpenTurn = vi.fn<BotTurnOpen>();
@@ -552,6 +555,7 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
                 boundHostId={HOST_ID}
                 imageReach="none"
                 answerReach="each"
+                replyReach={panelReplyReach}
                 botTitle="Release Bot"
                 conversationId={CONVERSATION_ID}
                 originMessageId={originOf(thread)}
@@ -593,6 +597,7 @@ beforeEach(() => {
   panelSent = null;
   panelLanding = null;
   panelTasks = [];
+  panelReplyReach = "none";
   panelOrigin = null;
   mocks.threadHandle.held = false;
   onEditPost.mockClear();
@@ -1681,6 +1686,56 @@ describe("<BotThreadPanel /> the anchor", () => {
   });
 });
 
+describe("<BotThreadPanel /> Reply on a row of the thread", () => {
+  it("names the row in the thread's box when Reply is chosen, and sends its id as the message it replies to", async () => {
+    const user = userEvent.setup();
+    panelReplyReach = "delivered";
+    mountPanel(listed("user-teammate"), [botReply(null)]);
+    const row = within(screen.getByTestId("chat-messages-stub")).getByTestId(
+      "bot-reply-row",
+    );
+
+    await user.click(within(row).getByTestId("bot-message-reply"));
+
+    expect(
+      screen.getByTestId("bot-thread-composer-reply-author").textContent,
+    ).toBe("Release Bot");
+    expect(
+      screen.getByTestId("bot-thread-composer-reply-line").textContent,
+    ).toBe("Which way should I go?");
+    typeInto(boxInput("Reply in the thread"), "Hold");
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+
+    expect(sent).toEqual([
+      {
+        botId: BOT_ID,
+        conversationId: CONVERSATION_ID,
+        text: "Hold",
+        threadId: THREAD_ID,
+        announcementId: null,
+        redeliver: null,
+        supersedes: null,
+        answer: null,
+        replyTo: "reply-1",
+      },
+    ]);
+    expect(screen.queryByTestId("bot-thread-composer-reply")).toBeNull();
+  });
+
+  it.each<BotReplyReach>(["held-back", "none"])(
+    "offers no Reply on a row of the thread where the reach is %s",
+    (reach) => {
+      panelReplyReach = reach;
+      mountPanel(listed("user-teammate"), [botReply(null)]);
+      const row = within(screen.getByTestId("chat-messages-stub")).getByTestId(
+        "bot-reply-row",
+      );
+
+      expect(within(row).queryByTestId("bot-message-reply")).toBeNull();
+    },
+  );
+});
+
 describe("<BotThreadPanel /> a message the bot failed to answer", () => {
   const REPLY_REQUEST = "req-reply";
   const POST_REQUEST = "req-1";
@@ -1836,6 +1891,17 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
         within(row).getByTestId("bot-message-retry").hasAttribute("disabled"),
       ).toBe(false);
     });
+  });
+
+  it("offers no Reply on a row of the thread while the thread's box edits a failed reply", async () => {
+    const user = userEvent.setup();
+    panelReplyReach = "delivered";
+    mountFailedReply();
+    expect(within(replyRow()).getByTestId("bot-message-reply")).toBeTruthy();
+
+    await user.click(within(replyRow()).getByTestId("bot-message-edit"));
+
+    expect(screen.queryByTestId("bot-message-reply")).toBeNull();
   });
 
   it("puts a failed reply back in the thread's box, and what is sent replaces it", async () => {
@@ -2661,7 +2727,9 @@ describe("<BotThreadPanel /> a reply box whose stored draft names images still b
     const user = userEvent.setup();
     channelMessages = [announcement("anchor-1", "Ship the release today?")];
     useBotDraftsStore.setState({
-      boxesReading: { [BOT_ID]: { "anchor-1": { text: "Stored reply" } } },
+      boxesReading: {
+        [BOT_ID]: { "anchor-1": { text: "Stored reply", replyTo: null } },
+      },
     });
     mountPanel(listed("user-teammate"), []);
 
@@ -2680,5 +2748,53 @@ describe("<BotThreadPanel /> a reply box whose stored draft names images still b
     expect(useBotDraftsStore.getState().boxesReading).toEqual({});
     expect(screen.queryByTestId("bot-thread-composer-reading")).toBeNull();
     expect(textOf(boxInput("Reply in the thread"))).toBe("");
+  });
+
+  describe("with a reply chosen while it waits (T166)", () => {
+    const REPLYING_TO = {
+      messageId: "message-1",
+      author: "Sam",
+      line: "Ship it on Friday",
+    };
+
+    function mountWaiting(reach: BotReplyReach): void {
+      panelReplyReach = reach;
+      channelMessages = [announcement("anchor-1", "Ship the release today?")];
+      useBotDraftsStore.setState({
+        boxesReading: {
+          [BOT_ID]: {
+            "anchor-1": { text: "Stored reply", replyTo: REPLYING_TO },
+          },
+        },
+      });
+      mountPanel(listed("user-teammate"), []);
+    }
+
+    it("shows the reply the box waits under, and cancelling it clears it from the waiting box", async () => {
+      const user = userEvent.setup();
+      mountWaiting("delivered");
+
+      expect(
+        screen.getByTestId("bot-thread-composer-reply-author").textContent,
+      ).toBe("Sam");
+      expect(
+        screen.getByTestId("bot-thread-composer-reply-line").textContent,
+      ).toBe("Ship it on Friday");
+
+      await user.click(screen.getByTestId("bot-thread-composer-reply-cancel"));
+
+      expect(screen.queryByTestId("bot-thread-composer-reply")).toBeNull();
+      expect(screen.getByTestId("bot-thread-composer-reading")).toBeTruthy();
+      expect(
+        useBotDraftsStore.getState().boxesReading[BOT_ID]?.["anchor-1"],
+      ).toEqual({ text: "Stored reply", replyTo: null });
+    });
+
+    it("shows no reply where the bot's host takes none", () => {
+      mountWaiting("none");
+
+      expect(screen.getByTestId("bot-thread-composer-reading")).toBeTruthy();
+      expect(screen.queryByTestId("bot-thread-composer-reply")).toBeNull();
+    });
   });
 });

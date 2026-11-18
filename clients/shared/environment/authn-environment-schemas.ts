@@ -1,7 +1,6 @@
 // Mirrors the fields the app reads from authn's environment routes. Non-strict,
 // so a field a newer authn adds still parses.
 import { z } from "zod";
-import { NOTIFICATION_HOOKS_ITEM } from "./notification-hook-item-kind";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 export const ITEM_OS_VALUES = ["any", "linux", "macos", "windows"] as const;
@@ -25,9 +24,7 @@ export const ITEM_ROUTE_KINDS = [
   "sandbox_defaults",
   "storage_policy",
   "snapshot_policy",
-  NOTIFICATION_HOOKS_ITEM.kind,
 ] as const;
-
 const revisionSchema = lazySchema(() => z.number().int().nonnegative());
 const epochMsSchema = lazySchema(() => z.number().int().nonnegative());
 const nullableOsSchema = lazySchema(() => z.enum(ITEM_OS_VALUES).nullable());

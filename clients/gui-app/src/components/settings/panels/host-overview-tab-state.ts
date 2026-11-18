@@ -44,7 +44,6 @@ export const NO_HOST_OVERVIEW_TAB_BADGES: HostOverviewTabBadges = {
   secrets: null,
   costs: null,
   simulators: null,
-  notifications: null,
 };
 
 /** The tab bodies, one per tab, rendered by `HostOverviewTabs`. */

@@ -1,4 +1,3 @@
-import { TEAM_NOTIFICATION_HOOKS } from "@/components/settings/environment/team-notification-hooks-page.definitions";
 /**
  * Docs: see `src/components/settings/SETTINGS.md` § Search.
  *
@@ -25,13 +24,13 @@ import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.defini
 import { KEYBINDINGS } from "@/components/settings/panels/keybindings-settings.definitions";
 import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
 import { LINK_PHONE } from "@/components/settings/panels/link-phone.definitions";
-import { HOST_NOTIFICATIONS } from "@/components/settings/panels/notifications-settings.definitions";
 import { OPENING_BEHAVIOR } from "@/components/settings/panels/opening-behavior.definitions";
 import { PERMISSIONS } from "@/components/settings/panels/permissions-settings.definitions";
 import { PROVIDERS } from "@/components/settings/panels/providers-settings.definitions";
 import { SECRETS } from "@/components/settings/panels/secrets.definitions";
 import { AGENT_DEFINITIONS } from "@/components/settings/panels/agent-definitions.definitions";
 import { MACHINE_SETUP } from "@/components/settings/panels/machine-setup.definitions";
+import { HOST_NOTIFICATIONS } from "@/components/settings/panels/notifications-settings.definitions";
 import { MCP_SERVERS } from "@/components/settings/panels/mcp-servers.definitions";
 import { SKILLS } from "@/components/settings/panels/skills.definitions";
 import { SHELL } from "@/components/settings/panels/shell-settings.definitions";
@@ -75,13 +74,12 @@ export const SETTINGS_SEARCH_COLLECTIONS: ReadonlyArray<AnySettingsSectionCollec
     SANDBOXES,
     STORAGE,
     MEMBERS,
-    TEAM_NOTIFICATION_HOOKS,
     MACHINE_SETUP,
+    HOST_NOTIFICATIONS,
     DEVICES,
     LINK_PHONE,
     USAGE,
     CREDITS,
-    HOST_NOTIFICATIONS,
     DELETE_ACCOUNT,
     HOST_OVERVIEW,
     WORKTREES,
