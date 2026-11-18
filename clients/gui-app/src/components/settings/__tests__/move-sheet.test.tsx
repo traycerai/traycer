@@ -190,7 +190,6 @@ function mountReaching(
     thisComputerUnread: false,
     collisions: [],
     retry: runningPersonalMock.retry,
-    reread: () => undefined,
   });
 }
 
@@ -525,7 +524,6 @@ describe("<MoveSheet />", () => {
         thisComputerUnread: false,
         collisions: [],
         retry: () => undefined,
-        reread: () => undefined,
       },
     );
     await settle();
@@ -545,7 +543,6 @@ describe("<MoveSheet />", () => {
         thisComputerUnread: false,
         collisions: [],
         retry,
-        reread: () => undefined,
       },
     );
     await settle();

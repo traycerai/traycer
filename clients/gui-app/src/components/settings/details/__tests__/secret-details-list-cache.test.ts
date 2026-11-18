@@ -16,7 +16,6 @@ import {
   mountTeamPage,
   poolSource,
   requireTeamEnvironmentAuthnBinding,
-  requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
@@ -132,14 +131,10 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
     harness.queryClient.setDefaultOptions({
       queries: { retry: false, gcTime: Infinity },
     });
-    const client = requireTeamHostClient();
-    const hostId = client.getActiveHostId();
 
     const loaded = await loadSecretDetails(
       { environmentId: ENVIRONMENT, kind: "secret", key: SECRET },
       {
-        hostId,
-        client,
         environmentCloud: beginEnvironmentCloudOperation(() =>
           requireTeamEnvironmentAuthnBinding().auth.environmentCloud(),
         ),
@@ -173,8 +168,6 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
     harness.queryClient.setDefaultOptions({
       queries: { retry: false, gcTime: Infinity, staleTime: 60_000 },
     });
-    const client = requireTeamHostClient();
-    const hostId = client.getActiveHostId();
     harness.queryClient.setQueryData<SecretsList>(listKey(), {
       secrets: [],
       removed: [],
@@ -183,8 +176,6 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
     const loaded = await loadSecretDetails(
       { environmentId: ENVIRONMENT, kind: "secret", key: SECRET },
       {
-        hostId,
-        client,
         environmentCloud: beginEnvironmentCloudOperation(() =>
           requireTeamEnvironmentAuthnBinding().auth.environmentCloud(),
         ),
@@ -204,15 +195,12 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
     const harness = mountDetails(() => {
       onOriginSignIn = false;
     });
-    const client = requireTeamHostClient();
     const baseCloud =
       requireTeamEnvironmentAuthnBinding().auth.environmentCloud();
 
     const loaded = loadSecretDetails(
       { environmentId: ENVIRONMENT, kind: "secret", key: SECRET },
       {
-        hostId: client.getActiveHostId(),
-        client,
         environmentCloud: beginEnvironmentCloudOperation(() => ({
           ...baseCloud,
           onOriginSignIn: () => onOriginSignIn,

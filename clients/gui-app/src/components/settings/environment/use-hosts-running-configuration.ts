@@ -37,9 +37,8 @@ function firsthandHost(host: HostScopeOption): FirsthandHost {
  * that runs Personal by its own status is added when the list does not name
  * it (`hostsRunningConfiguration`).
  *
- * Every surface that names or counts these hosts reads this: the status
- * chip and its popover, Personal's dropdown row, Getting started, the move
- * sheet's reach line.
+ * Every surface that names or counts these hosts reads this: Personal's
+ * dropdown row, Getting started, the move sheet's reach line.
  *
  * `enabled` is the caller's own: a Local row's save reaches only this
  * computer and never reads `hosts`, so it passes `false` rather than firing
@@ -74,10 +73,6 @@ export function useHostsRunningConfiguration(
     }
     void refetch();
   }, [environmentId, personalTarget, retryPersonal, refetch]);
-  const reread = useCallback(() => {
-    if (environmentId === null) return;
-    void refetch({ cancelRefetch: false });
-  }, [environmentId, refetch]);
   const localHostIds = new Set(
     computers.computers
       .filter(
@@ -123,7 +118,6 @@ export function useHostsRunningConfiguration(
     collisions: model.collisions,
     state,
     retry,
-    reread,
   };
 }
 

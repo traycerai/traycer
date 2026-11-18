@@ -134,7 +134,6 @@ import {
   type BrowserTabPresentation,
 } from "@/components/epic-canvas/canvas/browser-tab-presentation";
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
-import { TerminalViewerFaces } from "@/components/terminals/terminal-viewer-faces";
 
 /**
  * Neighbour displacement while a tile is dragged past it. Same shape as the
@@ -961,12 +960,6 @@ function TabItemBody(
               tabInstanceId={tab.instanceId}
               tabIndex={index}
             />
-            {tab.type === "terminal" || tab.type === "terminal-agent" ? (
-              <TerminalViewerFaces
-                instanceId={tab.instanceId}
-                hostId={tab.hostId}
-              />
-            ) : null}
           </div>
         </ContextMenuTrigger>
       </TabItemMotionFrame>

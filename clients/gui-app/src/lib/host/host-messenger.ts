@@ -1024,7 +1024,7 @@ interface RemoteBinding<Registry extends VersionedRpcRegistry> {
  * other kind - a relay host, the server pool, a kind this code does not know
  * - goes through the session binding, which refuses what it cannot build.
  */
-function servesOverLocalSocket(entry: HostDirectoryEntry): boolean {
+export function servesOverLocalSocket(entry: HostDirectoryEntry): boolean {
   return entry.kind === "local" || entry.kind === "mock";
 }
 

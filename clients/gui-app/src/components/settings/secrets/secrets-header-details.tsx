@@ -5,13 +5,13 @@ import { useHostsRunningPersonal } from "@/components/settings/environment/use-h
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 
 /**
- * `Details` beside the Secrets page's chip: the configuration's secrets,
- * including recent removals. Resolved through the surface's client, as the
- * chip is.
+ * The Secrets page's `Details`: the configuration's secrets, including
+ * recent removals.
  */
 export function SecretsHeaderDetails(): ReactNode {
   const pick = useEnvironmentPick();
-  // On a Local pick no chip holds the host list the drawer counts sandboxes from.
+  // On a Local pick nothing else holds the host list the drawer counts
+  // sandboxes from.
   useHostsRunningPersonal(pick.kind === "local");
   const environmentId = useDetailsEnvironmentId();
   if (environmentId === null) return null;

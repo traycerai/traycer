@@ -28,8 +28,6 @@ import { EpicWriteCommandsDialog } from "@/components/epic-canvas/panels/epic-wr
 import { HomeFocusTaskStopCluster } from "@/components/home-focus/home-focus-rows";
 import type { HomeFocusRowActions } from "@/components/home-focus/home-focus-rows";
 import { SandboxShapeSheet } from "@/components/hosts/sandbox-shape-sheet";
-import { ConfigurationStatusChip } from "@/components/settings/environment/status-chip";
-import type { ConfigurationChipHost } from "@/components/settings/environment/status-chip-model";
 import { McpServerDialog } from "@/components/settings/environment/mcp-server-dialog";
 import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
@@ -304,16 +302,6 @@ function resetOverlayStores(): void {
   );
 }
 
-function chipHosts(): ConfigurationChipHost[] {
-  return Array.from({ length: ROW_COUNT }, (_, index) => ({
-    hostId: `host-${String(index + 1)}`,
-    name: `host-${String(index + 1)}`,
-    state: "applied",
-    lastReportedAt: Date.UTC(2026, 9, 20, 9, 30),
-    rows: [],
-  }));
-}
-
 function pickableHosts(): HostScopeOption[] {
   return Array.from({ length: ROW_COUNT }, (_, index) =>
     hostScopeOptionFixture({
@@ -457,36 +445,6 @@ afterEach(() => {
 });
 
 describe("overlay cap and scroll classes", () => {
-  it("ConfigurationStatusChip content carries the popover cap and the host list carries the scroll classes", async () => {
-    const user = userEvent.setup();
-    render(
-      <ConfigurationStatusChip
-        hosts={chipHosts()}
-        emptyText="Nothing runs this yet"
-        savingOffline={false}
-        local={false}
-        onDetails={() => undefined}
-        onRecover={() => undefined}
-        recoveryPending={false}
-      />,
-    );
-    await user.click(screen.getByRole("button"));
-    const popover = requireElement(
-      document.querySelector("[data-slot='popover-content']"),
-      "popover content",
-    );
-    assertCapClass(popover, POPOVER_CAP);
-    assertColumn(popover);
-    expect(hasToken(popover.className, "overflow-hidden")).toBe(true);
-    const list = requireElement(
-      popover.querySelector("ul.overflow-y-auto"),
-      "host list",
-    );
-    assertScrollClasses(list);
-    expect(within(list).getAllByRole("listitem")).toHaveLength(ROW_COUNT);
-    assertOutsideScroll(screen.getByRole("button", { name: "Details" }), list);
-  });
-
   it("browser host submenu carries the dropdown cap and the host list carries the scroll classes", async () => {
     const user = userEvent.setup();
     browserHostOptionsState.hosts = pickableHosts();

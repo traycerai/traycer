@@ -46,7 +46,6 @@ vi.mock(
       state: harness.membershipState,
       collisions: [],
       retry: () => undefined,
-      reread: () => undefined,
       thisComputerUnread: false,
     }),
   }),
