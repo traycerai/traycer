@@ -609,7 +609,11 @@ describe("TeamProviders items", () => {
       });
       render(<TeamProviders />, { wrapper: harness.Wrapper });
 
-      expect(await screen.findByText("On")).toBeTruthy();
+      expect(
+        await screen.findByRole("switch", {
+          name: "Allow agents to use Work",
+        }),
+      ).toBeTruthy();
       const profileCombobox = screen.queryByRole("combobox", {
         name: "Profile",
       });

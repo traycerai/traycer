@@ -36,7 +36,7 @@ import { useConfigurationName } from "@/components/settings/environment/mcp-serv
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
- * Under a Personal page's status line: its convergence notices ("LOG_LEVEL
+ * In a Personal page's header: its convergence notices ("LOG_LEVEL
  * from dev-box now applies everywhere.", with Undo and, on that host, "Keep
  * dev-box's value on dev-box") and its "needs you" rows: a held value's opens
  * the retrospective sheet, every other one Secrets.

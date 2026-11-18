@@ -99,7 +99,6 @@ vi.mock(
       thisComputerUnread: false,
       collisions: [],
       retry: () => undefined,
-      reread: () => undefined,
     }),
   }),
 );

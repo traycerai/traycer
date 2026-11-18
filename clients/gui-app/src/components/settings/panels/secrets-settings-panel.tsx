@@ -3,6 +3,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
 import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
 import { SECRETS } from "@/components/settings/panels/secrets.definitions";
+import { isListedSecret } from "@/components/settings/secrets/listed-secrets";
 import { SecretsPage } from "@/components/settings/secrets/secrets-page";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
@@ -89,7 +90,7 @@ function SecretsListPanelShell(props: {
   const empty =
     canEdit &&
     list.data !== undefined &&
-    list.data.secrets.length === 0 &&
+    !list.data.secrets.some(isListedSecret) &&
     list.data.removed.every((entry) => entry.removal.outcome === "destroyed");
   return (
     <SettingsPanelShell
