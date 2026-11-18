@@ -2238,7 +2238,17 @@ export function applyLandingHostDocument(
       next.closed && state.activeDraftId === next.id
         ? null
         : state.activeDraftId;
-    return { drafts, activeDraftId };
+    // A successor of this device's resume draft (a host re-mint, or a fork
+    // made on another device) is the same draft to the person: "New task"
+    // follows it, as it follows a fork made here (`forkDraft`). The ancestor
+    // may already be gone (its tombstone can arrive first), so this matches
+    // on the remembered id, not on a row.
+    const resumeDraftId =
+      document.supersedes !== null &&
+      state.resumeDraftId === document.supersedes
+        ? next.id
+        : state.resumeDraftId;
+    return { drafts, activeDraftId, resumeDraftId };
   });
   return true;
 }

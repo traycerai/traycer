@@ -2267,6 +2267,63 @@ describe("useLandingComposerActions", () => {
     queryClient.clear();
   });
 
+  it("deletes a still-current draft's row when it has no tab to replace", async () => {
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-tabless", null);
+    useTabsStore.setState({
+      items: [],
+      activeItemId: null,
+      systemTabs: { history: null, settings: null },
+      stripOrder: [],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
+        settled: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    createGate.resolve({ roomInfo: null });
+
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith(
+        "Epic created in the background.",
+      );
+    });
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === draftId),
+    ).toBe(false);
+    queryClient.clear();
+  });
+
   it("re-preflights a moved draft ref and replaces its current location", async () => {
     const draftId = useLandingDraftStore
       .getState()
