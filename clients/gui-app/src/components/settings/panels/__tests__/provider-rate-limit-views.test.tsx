@@ -118,6 +118,23 @@ describe("CodexRateLimitView (extended fields)", () => {
     expect(screen.getByText("68% used")).toBeTruthy();
   });
 
+  it.each([
+    ["rate_limit_reached", "Usage limit reached"],
+    ["a_value_from_a_newer_host", "A Value From A Newer Host"],
+    ["constructor", "Constructor"],
+  ])(
+    "badges a reached limit of type %s as %s",
+    (rateLimitReachedType, label) => {
+      render(
+        <CodexRateLimitView
+          data={{ ...codex, rateLimitReachedType }}
+          variant="settings"
+        />,
+      );
+      expect(screen.getByText(label)).toBeTruthy();
+    },
+  );
+
   it("never renders the plan/tier label itself - the header popover owns that chip", () => {
     // `resolveProviderPlanLabel` (provider-rate-limit-content.test.ts) covers the
     // planType -> "Pro 5x" mapping; the popover header's own test coverage

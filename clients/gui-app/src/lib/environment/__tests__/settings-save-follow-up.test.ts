@@ -273,6 +273,8 @@ interface Outside {
   /** The status of each next apply answer, in order; the apply is taken once it is empty. */
   applyStatuses: number[];
   readGate: Promise<void> | null;
+  /** Holds the next held-changes reads until it settles. */
+  holdsGate: Promise<void> | null;
 }
 
 interface World {
@@ -280,6 +282,8 @@ interface World {
   readonly outside: Outside;
   /** The clock time of every `readProposals` call. */
   readonly reads: number[];
+  /** How many held-changes reads the host has been sent. */
+  readonly holdsReadCount: () => number;
   readonly applies: EnvironmentTransportRequest[];
   readonly applied: Mock<() => void>;
   readonly save: () => Promise<SettingsSaveTicket>;
@@ -295,8 +299,10 @@ function createWorld(item: Item, receipt: Receipt): World {
     failNextApply: false,
     applyStatuses: [],
     readGate: null,
+    holdsGate: null,
   };
   const reads: number[] = [];
+  let holdsReads = 0;
   const applies: EnvironmentTransportRequest[] = [];
   const waiters: { count: number; resolve: () => void }[] = [];
   const applied = vi.fn<() => void>();
@@ -306,15 +312,16 @@ function createWorld(item: Item, receipt: Receipt): World {
     bearer: { kind: "cloud", getBearerToken: () => "test-bearer" },
     transport: (request) => {
       if (request.method === "GET") {
+        holdsReads += 1;
         if (outside.failNextHoldsRead) {
           outside.failNextHoldsRead = false;
           return Promise.reject(new Error("no answer"));
         }
-        return Promise.resolve(
+        const answer: EnvironmentTransportAnswer =
           outside.receipt === "proposed"
             ? heldReview(item)
-            : { status: 200, text: JSON.stringify({ review: null }) },
-        );
+            : { status: 200, text: JSON.stringify({ review: null }) };
+        return (outside.holdsGate ?? Promise.resolve()).then(() => answer);
       }
       applies.push(request);
       for (const waiter of waiters) {
@@ -349,6 +356,7 @@ function createWorld(item: Item, receipt: Receipt): World {
     coordinator,
     outside,
     reads,
+    holdsReadCount: () => holdsReads,
     applies,
     applied,
     save: async () => {
@@ -876,5 +884,113 @@ describe("settings save follow-up account, expiry and stop", () => {
     await vi.advanceTimersByTimeAsync(HOUR);
 
     expect(world.reads).toHaveLength(0);
+  });
+});
+
+describe("settings save follow-up that stop overtakes", () => {
+  it("reads no held changes and applies nothing when stop came while its proposals were read", async () => {
+    const world = createWorld(VARIABLE_PUT, "queued");
+    const ticket = await world.save();
+    await world.coordinator.settle(ticket, true);
+    const gate = Promise.withResolvers<void>();
+    world.outside.readGate = gate.promise;
+    await vi.advanceTimersByTimeAsync(2 * SECOND);
+    expect(world.reads).toHaveLength(2);
+
+    world.coordinator.stop();
+    world.outside.receipt = "proposed";
+    gate.resolve();
+    await vi.advanceTimersByTimeAsync(HOUR);
+
+    expect(world.holdsReadCount()).toBe(0);
+    expect(world.applies).toHaveLength(0);
+    expect(recordCount()).toBe(1);
+  });
+
+  it("applies nothing when stop came while its held changes were read", async () => {
+    const world = createWorld(VARIABLE_PUT, "queued");
+    const ticket = await world.save();
+    await world.coordinator.settle(ticket, true);
+    world.outside.receipt = "proposed";
+    const holdsGate = Promise.withResolvers<void>();
+    world.outside.holdsGate = holdsGate.promise;
+    await vi.advanceTimersByTimeAsync(2 * SECOND);
+    expect(world.holdsReadCount()).toBe(1);
+
+    world.coordinator.stop();
+    holdsGate.resolve();
+    await vi.advanceTimersByTimeAsync(HOUR);
+
+    expect(world.applies).toHaveLength(0);
+    expect(world.applied).not.toHaveBeenCalled();
+    expect(recordCount()).toBe(1);
+  });
+
+  it("still applies for a reconcile asked for before stop and answered after it", async () => {
+    const world = createWorld(VARIABLE_PUT, "proposed");
+    await world.save();
+    const gate = Promise.withResolvers<void>();
+    world.outside.readGate = gate.promise;
+    const reconciled = world.coordinator.reconcile(HOST_ID);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(world.reads).toHaveLength(1);
+
+    world.coordinator.stop();
+    gate.resolve();
+    await reconciled;
+
+    expect(world.applies).toHaveLength(1);
+    expect(recordCount()).toBe(0);
+  });
+});
+
+describe("settings save follow-up and the tries another window spends", () => {
+  it("applies nothing once another window's answered settlement spent the hold's second try while its held changes were read", async () => {
+    const world = createWorld(VARIABLE_PUT, "proposed");
+    world.outside.applyStatuses = [400];
+    const ticket = await world.save();
+    await world.coordinator.settle(ticket, true);
+    await world.applyPosted(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rememberedSave().unanswered).toEqual({
+      revision: HELD_REVISION,
+      tries: 1,
+    });
+    const holdsGate = Promise.withResolvers<void>();
+    world.outside.holdsGate = holdsGate.promise;
+    const holdsReadsBefore = world.holdsReadCount();
+    await vi.advanceTimersByTimeAsync(2 * SECOND);
+    expect(world.holdsReadCount()).toBe(holdsReadsBefore + 1);
+
+    const [id] = Object.keys(useSettingsSaveMemoryStore.getState().records);
+    useSettingsSaveMemoryStore.getState().noteUnanswered(id, HELD_REVISION);
+    holdsGate.resolve();
+    await vi.advanceTimersByTimeAsync(HOUR);
+
+    expect(world.applies).toHaveLength(1);
+    expect(rememberedSave().unanswered).toEqual({
+      revision: HELD_REVISION,
+      tries: 2,
+    });
+  });
+});
+
+describe("settings save follow-up for a memory that is not the signed-in account's", () => {
+  it("arms no further follow-up once the one in flight found the memory another account's", async () => {
+    const world = createWorld(VARIABLE_PUT, "queued");
+    const ticket = await world.save();
+    await world.coordinator.settle(ticket, true);
+    expect(world.reads).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(1);
+
+    useSettingsSaveMemoryStore.persist.setOptions({
+      name: settingsSaveMemoryKey("account-b"),
+    });
+    await vi.advanceTimersByTimeAsync(2 * SECOND);
+
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(HOUR);
+    expect(world.reads).toHaveLength(1);
+    expect(recordCount()).toBe(1);
   });
 });

@@ -111,6 +111,15 @@ describe("sharedInUseFromItems naming", () => {
   });
 });
 
+describe("sharedInUseFromItems with a kind this build has no page for", () => {
+  it.each(["something_new", "constructor"])(
+    "leaves an applied item of kind %s out of the list",
+    (kind) => {
+      expect(sharedInUseFromItems([item(kind, "x", "applied")])).toEqual([]);
+    },
+  );
+});
+
 describe("roomSharedLine", () => {
   const shared: EnvironmentPlanes = {
     records: "shared_unrecorded",
