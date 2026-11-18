@@ -4,6 +4,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -365,6 +366,20 @@ describe("<BotFeedbackDraftCard /> across an account switch", () => {
     expect(decideCalls[1].clientActionId).not.toBe(first.clientActionId);
   });
 
+  it("shows a spinner inside Retry only while the retried decision is in flight", async () => {
+    await failSend();
+    const retry = screen.getByRole("button", { name: "Retry Send" });
+    expect(retry.querySelector('[aria-hidden="true"]')).toBeNull();
+
+    fireEvent.click(retry);
+    await settle();
+
+    const pendingRetry = screen.getByRole("button", { name: "Retry Send" });
+    expect(pendingRetry.hasAttribute("disabled")).toBe(true);
+    expect(pendingRetry.textContent).toContain("Retry Send");
+    expect(pendingRetry.querySelector('[aria-hidden="true"]')).not.toBeNull();
+  });
+
   it("repeats the failed click id on Retry in the same session", async () => {
     await failSend();
     const first = decideCalls[0];
@@ -406,17 +421,25 @@ describe("<BotFeedbackDraftCard /> when the projection lags the decision", () =>
 
 describe("<BotFeedbackDraftCard /> refusals", () => {
   it("keeps a not-allowed refusal on the card that was refused", async () => {
-    const otherBlock = { ...OTHER_SOURCE };
     const view = render(
       <QueryClientProvider client={queryClient}>
         <Probe />
-        <BotFeedbackDraftCard source={{ ...SOURCE }} draft={{ ...PENDING }} />
-        <BotFeedbackDraftCard source={otherBlock} draft={{ ...PENDING }} />
+        <div data-testid="refused-card">
+          <BotFeedbackDraftCard source={{ ...SOURCE }} draft={{ ...PENDING }} />
+        </div>
+        <div data-testid="other-card">
+          <BotFeedbackDraftCard
+            source={{ ...OTHER_SOURCE }}
+            draft={{ ...PENDING }}
+          />
+        </div>
       </QueryClientProvider>,
     );
+    const refused = within(screen.getByTestId("refused-card"));
+    const other = within(screen.getByTestId("other-card"));
     expect(screen.getAllByRole("button", { name: "Send" })).toHaveLength(2);
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Send" })[0]);
+    fireEvent.click(refused.getByRole("button", { name: "Send" }));
     await settle();
     decideGate.resolve({
       kind: "error",
@@ -425,10 +448,12 @@ describe("<BotFeedbackDraftCard /> refusals", () => {
     });
     await settle();
 
-    expect(screen.getByText(NOT_ALLOWED_COPY)).toBeTruthy();
+    expect(refused.getByText(NOT_ALLOWED_COPY)).toBeTruthy();
+    expect(refused.queryByRole("button", { name: "Send" })).toBeNull();
     // The other card, on another block, still offers its actions, and the
     // shared state for the refused address carries no stamp and no pending.
-    expect(screen.getAllByRole("button", { name: "Send" })).toHaveLength(1);
+    expect(other.getByRole("button", { name: "Send" })).toBeTruthy();
+    expect(other.queryByText(NOT_ALLOWED_COPY)).toBeNull();
     expect(probeText("probe-pending")).toBe("false");
     expect(probeText("probe-settled")).toBe("none");
     expect(decideCalls).toHaveLength(1);

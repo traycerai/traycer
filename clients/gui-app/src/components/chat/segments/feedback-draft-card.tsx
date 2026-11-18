@@ -297,7 +297,6 @@ function FeedbackDraftActions(props: {
   const [includeDiagnostics, setIncludeDiagnostics] = useState(
     draft.suggestDiagnostics,
   );
-  const [viewing, setViewing] = useState(false);
   const checkboxId = useId();
   const sessionReadOnly = useContext(ChatStatusReadOnlyContext);
   const readOnly: FeedbackDraftReadOnlyReason | null =
@@ -326,13 +325,7 @@ function FeedbackDraftActions(props: {
             {draft.suggestDiagnostics
               ? "The agent suggested this. You can untick it."
               : "Logs from this machine and app and host details, as in Report an issue."}{" "}
-            <Button
-              variant="link"
-              size="inline-xs"
-              onClick={() => setViewing(true)}
-            >
-              View
-            </Button>
+            <FeedbackDraftPreviewLink live={live} />
           </span>
         </div>
       </div>
@@ -360,12 +353,29 @@ function FeedbackDraftActions(props: {
           Skip
         </Button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Owns whether the preview is open, so the preview closes with the actions:
+ * it opens again only from a View click, never on the actions returning.
+ */
+function FeedbackDraftPreviewLink(props: {
+  readonly live: LiveDraftActions;
+}): ReactNode {
+  const [viewing, setViewing] = useState(false);
+  return (
+    <>
+      <Button variant="link" size="inline-xs" onClick={() => setViewing(true)}>
+        View
+      </Button>
       <FeedbackDraftPreviewDialog
         open={viewing}
         onOpenChange={setViewing}
-        live={live}
+        live={props.live}
       />
-    </div>
+    </>
   );
 }
 

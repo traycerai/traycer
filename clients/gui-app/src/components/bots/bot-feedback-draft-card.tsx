@@ -9,6 +9,7 @@ import {
   FeedbackDraftView,
   type FeedbackDraftReadOnlyReason,
 } from "@/components/chat/segments/feedback-draft-card";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
   useHostClientForHostId,
   useHostDirectoryEntryForHostId,
@@ -76,6 +77,13 @@ export function BotFeedbackDraftCard(
           onClick={decision.retry}
         >
           {uncertain.decision === "send" ? "Retry Send" : "Retry Skip"}
+          {decision.isPending ? (
+            <AgentSpinningDots
+              className="size-3"
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
         </Button>
       ) : null}
     </>
