@@ -34,6 +34,7 @@ export async function readProviderStates(): Promise<
   return (await readProvidersList()).providers;
 }
 
+/** The envelope includes whether this computer offers sign-ins. */
 export async function readProvidersList(): Promise<ProvidersListResponse> {
   return await toAgentCliError(
     callHostRpcWithDispatch("providers.list", { native: null }, PLAIN_DISPATCH),

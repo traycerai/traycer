@@ -305,9 +305,12 @@ export async function provisionInstalledHostCredential(
   let stopMintRefusals: () => void = () => undefined;
   const lease = new MutableBearerLease(options.auth.token, options.auth.userId);
   const remaining = (): number => Math.max(0, deadlineAt - Date.now());
-  // A cancelable deadline, not `sleep()`: an uncleared `setTimeout` keeps the event
-  // loop alive and the CLI exits by draining it, so a plain race would hold `host
-  // install` open for the whole remaining budget.
+  // A recovery still in flight is waited for only as long as the bound has
+  // left, never past it. A CANCELABLE deadline, not `sleep()`: an uncleared
+  // `setTimeout` keeps the Node event loop alive, and the CLI exits by
+  // draining it rather than calling `process.exit`, so a plain race would
+  // hold `host install` open for the whole remaining budget every time the
+  // recovery won.
   const waitForInFlightRevalidation = async (): Promise<void> => {
     if (inFlightRevalidation === null) return;
     const pending: Promise<RevalidateOutcome> = inFlightRevalidation;
@@ -389,11 +392,16 @@ export async function provisionInstalledHostCredential(
         recovery: HostTokenSessionRevalidator,
       ) => Promise<RevalidateOutcome>,
     ): Promise<RevalidateOutcome> => {
-      // The host answered. Recorded before the early return, so even a recovery the
-      // deadline cannot cover counts as contact.
+      // Reaching this callback at all means the host answered and refused
+      // the token we presented - it was up and talking, whatever happens to
+      // the recovery below. Recorded before the early return so even a
+      // recovery the deadline cannot cover still counts as contact.
       hostAnswered = true;
-      // Never start a recovery the deadline cannot cover: the CLI exits by draining the
-      // event loop, so a late mint or refresh would keep `host install` past its bound.
+      // Never START a recovery the deadline cannot cover. The CLI sets
+      // `process.exitCode` rather than calling `process.exit` (see
+      // `runner/exit.ts`), so the process waits for the event loop to
+      // drain: a mint or refresh begun as the budget ran out would keep
+      // `host install` alive past its advertised bound.
       if (remaining() <= 0 || endpoint === null) {
         return Promise.resolve<RevalidateOutcome>("rejected");
       }
@@ -791,8 +799,11 @@ export async function provisionInstalledHostCredential(
     if (poll !== null) {
       clearInterval(poll);
     }
-    // A revalidation only starts with budget left, so the remainder is the most a started
-    // rotation gets to land; an interrupted one leaves its marker for the next process.
+    // A revalidation only ever STARTS with budget left, so the remainder is
+    // the most a started rotation gets to land cleanly (a landed rotation
+    // leaves the credentials file consistent; an interrupted one leaves its
+    // spent-base marker armed for the next process to resolve). Whatever is
+    // still pending when the bound fires is cancelled just below.
     await waitForInFlightRevalidation();
     if (client !== null) {
       client.close("host-install-credential-provisioning-settled");

@@ -54,8 +54,9 @@ async function applyProfileAction(
 }
 
 /**
- * On a row with other names the name goes through `providers.answerProfileName`,
- * which sets it on every computer and clears the others.
+ * `traycer profile rename <provider> <profile> <label>`. On a row that has
+ * other names the name is set through `providers.answerProfileName`, which
+ * makes it the name on every computer and clears the other names there.
  */
 export function buildProfileRenameCommand(opts: {
   readonly provider: string;

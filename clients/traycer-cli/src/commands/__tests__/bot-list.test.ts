@@ -1089,6 +1089,7 @@ describe("bot list on a host without bots", () => {
 
     await expectUpdateMessage(runList());
 
+    // The bot RPC failed first: no stream client was ever opened.
     expect(hoisted.openLocalStreamClient).not.toHaveBeenCalled();
   });
 

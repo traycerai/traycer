@@ -364,9 +364,12 @@ async function signInMonitorCredential(
     epicId: target.epicId,
   });
   const lease = new MutableBearerLease(auth.token, auth.userId);
-  // Through the locked `rotate`, so a monitor refresh and a concurrent desktop refresh
-  // never double-spend the single-use refresh token. One store for the monitor's
-  // lifetime: its continuation timer can land a spend while it runs.
+  // Refreshes of the sign-in (when authn refuses it for a mint, and ahead of
+  // its TTL) route through the locked `rotate` (§7) so a monitor refresh and a
+  // concurrent desktop refresh can never double-spend the single-use refresh
+  // token. One store for the monitor's lifetime - its background continuation
+  // timer can land a `commit-failed` spend while the monitor keeps running -
+  // disposed by `stopUpkeep`.
   const store = createCliCredentialsStore();
   // `signal: null`: the monitor's revalidator lives as long as the command
   // itself - there is no earlier deadline to cancel a rotation against.
@@ -390,7 +393,11 @@ async function signInMonitorCredential(
     admitted: (hostId) => hostTokens.streamRecovery(hostId).admitted(),
     signInRejected: () => hostTokens.signInRejected(),
     onMintRefused: (listener) => hostTokens.onMintRefused(listener),
-    // Silent, so it works the same from a terminal or as a background command.
+    // Delegated host-credential provisioning. `monitor` is the CLI command
+    // that most needs it: the host it watches should keep serving after this
+    // process exits. Provisioning is silent, so this works the same whether
+    // `monitor` is run from a terminal or as the background command it
+    // usually is.
     hostCredentialMint: createCliHostCredentialMintFlow({
       authnBaseUrl: auth.authnBaseUrl,
       bearer: () => readLeaseBearer(lease),
@@ -400,9 +407,12 @@ async function signInMonitorCredential(
         "continuing without a host credential — it will stop working when this connection ends.",
       onUnauthorized: null,
     }),
-    // Ahead of the ~4h TTL, buying the host-only token at once, so a long-running
-    // monitor never carries a dead token into a reconnect. The shared single-flight
-    // `revalidator` keeps a proactive and a reactive refresh from racing.
+    // Proactively refresh the sign-in shortly before its ~4h TTL, and buy the
+    // host-only token with it at once, so a long-running monitor never
+    // carries a dead token into a reconnect. The reactive recovery in
+    // `runInboxSubscription` stays as the safety net. The scheduler shares the
+    // same single-flight `revalidator`, so a proactive and reactive refresh
+    // can't race into a double rotation.
     startUpkeep: (hostId, onRenewed) => {
       const scheduler = createProactiveRefreshScheduler<NodeJS.Timeout>({
         getToken: () => readLeaseBearer(lease),
@@ -414,7 +424,10 @@ async function signInMonitorCredential(
             current !== null &&
             (await hostTokens.renewAfterSignInRefresh(current))
           ) {
-            // Updated in place; the reactive path already re-dials with the fresh token.
+            // The host updates its captured credential in place - no
+            // reconnect. The reactive path already re-dials with the fresh
+            // token, so it needs no push. A refused mint ends the monitor
+            // through `onMintRefused`.
             onRenewed();
           }
           return outcome;
