@@ -2846,3 +2846,82 @@ export const providerNativeCapabilitiesSchemaV70 = lazySchema(() =>
 export type ProviderNativeCapabilitiesV70 = z.infer<
   typeof providerNativeCapabilitiesSchemaV70
 >;
+
+const nativeProviderIdSchemaPreMuse = lazySchema(() =>
+  z.enum([
+    "claude-code",
+    "codex",
+    "opencode",
+    "cursor",
+    "traycer",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+    "huggingface",
+    "reasonix",
+    "antigravity",
+    "commandcode",
+  ]),
+);
+
+export const nativeListQuerySchemaPreMuse = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("mcp"),
+        providerId: nativeProviderIdSchemaPreMuse,
+        scope: providerNativeScopeSchema,
+        workspaceRoot: z.string().nullable(),
+      }),
+      z.object({
+        kind: z.literal("plugins"),
+        providerId: nativeProviderIdSchemaPreMuse,
+        scope: providerNativeScopeSchema,
+        workspaceRoot: z.string().nullable(),
+      }),
+      z.object({
+        kind: z.literal("skills"),
+        providerId: nativeProviderIdSchemaPreMuse,
+        scope: providerNativeScopeSchema,
+        workspaceRoot: z.string().nullable(),
+      }),
+      z.object({
+        kind: z.literal("mcpDiscover"),
+        providerId: nativeProviderIdSchemaPreMuse,
+        scope: providerNativeScopeSchema,
+        workspaceRoot: z.string().nullable(),
+        serverName: z.string().min(1),
+        /**
+         * When true, bypass the discovery cache and re-probe / re-query native.
+         */
+        forceRefresh: z.boolean(),
+      }),
+      /**
+       * One plugin's artwork, addressed BY ID rather than by a path taken from
+       * the `plugins` row. The host re-resolves the file from its own walk, so
+       * no client-supplied filesystem path is ever opened - the same reason
+       * `assertRemovableSkill` re-lists instead of trusting the row it was
+       * handed. Split off `plugins` so the megabyte-scale bytes are not re-sent
+       * on that list's 30s refetch.
+       */
+      z.object({
+        kind: z.literal("pluginIcon"),
+        providerId: nativeProviderIdSchemaPreMuse,
+        scope: providerNativeScopeSchema,
+        workspaceRoot: z.string().nullable(),
+        pluginId: z.string().min(1),
+        theme: providerPluginIconThemeSchema,
+      }),
+    ])
+    .superRefine(refineProviderNativeScope),
+);

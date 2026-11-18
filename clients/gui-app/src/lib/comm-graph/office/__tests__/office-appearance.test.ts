@@ -46,6 +46,12 @@ describe("agentAppearance", () => {
     expect(HARNESS_ACCENT.commandcode).not.toBe(HARNESS_ACCENT.grok);
   });
 
+  it("uses the Muse Code accent for its agents", () => {
+    expect(agentAppearance("a", "terminal-agent", "muse").accent).toBe(
+      "#c084fc",
+    );
+  });
+
   it("carries the harness brand color as its accent", () => {
     expect(agentAppearance("a", "terminal-agent", "codex").accent).toBe(
       HARNESS_ACCENT.codex,

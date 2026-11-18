@@ -1,3 +1,7 @@
+import { providersListRequestSchemaV70 } from "../provider-schemas";
+import { listGuiHarnessesResponseSchemaV101 } from "../agent/gui/unary-schemas";
+import { listAgentsResponseSchemaV103 } from "../agent/shared";
+import { providersListResponseSchemaV1010Preimage } from "../provider-schemas";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
@@ -62,12 +66,12 @@ import {
   providersListResponseSchemaV60,
 } from "@traycer/protocol/host/provider-schemas";
 import {
-  getChatRunSettingsResponseSchema,
+  getChatRunSettingsResponseSchemaV40,
   getChatRunSettingsResponseSchemaV10,
   getChatRunSettingsResponseSchemaV20,
   getChatRunSettingsResponseSchemaV30,
   getChatRunSettingsResponseSchemaV41,
-  getChatRunSettingsBatchResponseSchema,
+  getChatRunSettingsBatchResponseSchemaV20,
   getChatRunSettingsBatchResponseSchemaV10,
   getChatRunSettingsBatchResponseSchemaV21,
 } from "@traycer/protocol/host/epic/chat-records";
@@ -125,7 +129,7 @@ const LIVE_FROZEN_EXPORTS = {
   "agent.gui.listHarnesses@10.0": listGuiHarnessesResponseSchemaV100,
   // The head line, holding 10.0's old job: it names the LIVE schema, so the
   // next attempt to grow the row fails here first.
-  "agent.gui.listHarnesses@10.1": listGuiHarnessesResponseSchema,
+  "agent.gui.listHarnesses@10.1": listGuiHarnessesResponseSchemaV101,
   "agent.list@1.0": listAgentsResponseSchemaV10,
   "agent.list@2.0": listAgentsResponseSchemaV20,
   "agent.list@3.0": listAgentsResponseSchemaV30,
@@ -168,7 +172,7 @@ const LIVE_FROZEN_EXPORTS = {
   "agent.list@10.2": listAgentsResponseSchemaV102,
   // The head line. It dumps LIVE, so the next attempt to grow the agent
   // summary goes red on this line.
-  "agent.list@10.3": listAgentsResponseSchema,
+  "agent.list@10.3": listAgentsResponseSchemaV103,
   "providers.list@1.0": providersListResponseSchemaV10,
   "providers.list@2.0": providersListResponseSchemaV20,
   "providers.list@3.0": providersListResponseSchemaV30,
@@ -314,7 +318,7 @@ const LIVE_FROZEN_EXPORTS = {
   "providers.list@10.9": providersListResponseSchemaV109Preimage,
   // The head line. It names the LIVE response, so the next attempt to grow the
   // provider state goes red on this line.
-  "providers.list@10.10": providersListResponseSchema,
+  "providers.list@10.10": providersListResponseSchemaV1010Preimage,
   // 1.0 is hand-frozen at the three-code failure arm when `macos-ineligible`
   // opened 1.1; its dump did not change by the freeze.
   "providers.usePackVersion@1.0": providersUsePackVersionResponseSchemaV10,
@@ -339,7 +343,7 @@ const LIVE_FROZEN_EXPORTS = {
   "epic.getChatRunSettings@3.0": getChatRunSettingsResponseSchemaV30,
   // The head line: it names the LIVE response, so the next attempt to grow the
   // settings tuple fails here first.
-  "epic.getChatRunSettings@4.0": getChatRunSettingsResponseSchema,
+  "epic.getChatRunSettings@4.0": getChatRunSettingsResponseSchemaV40,
   // 4.1 froze when the portable profile binding opened 4.2: its tuple carries
   // the Ultracode request and no binding, so a released 4.1 reader never sees a
   // key it cannot spell.
@@ -349,12 +353,12 @@ const LIVE_FROZEN_EXPORTS = {
   "epic.getChatRunSettingsBatch@1.0": getChatRunSettingsBatchResponseSchemaV10,
   // The head line: it names the LIVE response, so the next attempt to grow a
   // batch entry fails here first.
-  "epic.getChatRunSettingsBatch@2.0": getChatRunSettingsBatchResponseSchema,
+  "epic.getChatRunSettingsBatch@2.0": getChatRunSettingsBatchResponseSchemaV20,
   // 2.1 froze when the portable profile binding opened 2.2, for the reason 4.1
   // did above.
   "epic.getChatRunSettingsBatch@2.1": getChatRunSettingsBatchResponseSchemaV21,
   "providers.list@1.0..6.0 request": providersListRequestSchemaBeforeV70,
-  "providers.list@7.0 request": providersListRequestSchema,
+  "providers.list@7.0 request": providersListRequestSchemaV70,
 } as const;
 
 describe("frozen catalog line snapshots", () => {

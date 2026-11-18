@@ -118,6 +118,7 @@ const PROVIDER_SHARES_SKILLS_AND_PLUGINS: Record<
   reasonix: false,
   antigravity: false,
   commandcode: false,
+  muse: false,
 };
 
 export interface FailedProviderProfileAttempt {

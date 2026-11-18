@@ -39,6 +39,11 @@ describe("agentProviderLabel", () => {
     expect(agentProviderLabel("antigravity")).toBe("Antigravity");
   });
 
+  it("recognizes Muse Code in sender display", () => {
+    expect(agentProviderLabel("muse")).toBe("Muse Code");
+    expect(knownHarnessId("muse")).toBe("muse");
+  });
+
   it("labels a known harness with its friendly name", () => {
     expect(agentProviderLabel("claude")).toBe("Claude Code");
   });

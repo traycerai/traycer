@@ -11,6 +11,7 @@ import {
   protocolSurfaceSchema,
 } from "@traycer/protocol/framework/surface-compat";
 import { DEFAULT_ACCOUNT_CONTEXT } from "@traycer/protocol/common/schemas";
+import { chatRunSettingsSchemaPreUltracode } from "@traycer/protocol/persistence/epic/foundation";
 import {
   hostRpcRegistry,
   hostStreamRpcRegistry,
@@ -66,6 +67,17 @@ const baselinePath = join(
 describe("chat.prestartRuntime request", () => {
   it("parses settings and account context and keeps them as sent", () => {
     expect(chatPrestartRuntimeRequestSchema.parse(REQUEST)).toEqual(REQUEST);
+  });
+
+  it("accepts Muse without new settings fields while released settings stay frozen", () => {
+    const request = {
+      ...REQUEST,
+      settings: { ...SETTINGS, harnessId: "muse" },
+    };
+    expect(chatPrestartRuntimeRequestSchema.parse(request)).toEqual(request);
+    expect(
+      chatRunSettingsSchemaPreUltracode.safeParse(request.settings).success,
+    ).toBe(false);
   });
 
   it("is strict: an unknown key is refused rather than stripped", () => {

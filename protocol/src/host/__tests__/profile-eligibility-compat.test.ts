@@ -9,6 +9,7 @@ import {
   providerProfileSchema,
   providerProfileSchemaV70,
   providersListResponseSchema,
+  providersListResponseSchemaV1010Preimage,
   providersListResponseSchemaV70,
   providersSetEnabledRequestSchemaV21,
   providersSetProfileEnabledRequestSchema,
@@ -106,7 +107,7 @@ describe("profile eligibility protocol compatibility", () => {
   });
 
   it("omits disabled profiles from the v9-to-v7 older-client projection", () => {
-    const current = providersListResponseSchema.parse({
+    const current = providersListResponseSchemaV1010Preimage.parse({
       providers: [
         providerCliStateSchema.parse({
           ...providerState("claude-code"),

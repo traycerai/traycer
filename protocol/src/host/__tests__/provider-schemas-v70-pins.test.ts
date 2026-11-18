@@ -19,6 +19,7 @@ import {
   providersListRequestSchema,
   providersListRequestSchemaV70,
   providersListResponseSchema,
+  providersListResponseSchemaV1010Preimage,
   providersListResponseSchemaV60,
   providersListResponseSchemaV70,
   providersListResponseSchemaV80,
@@ -28,6 +29,7 @@ import {
   providersListResponseSchemaV70Preimage,
 } from "@traycer/protocol/host/provider-schemas";
 import { toCanonicalJsonSchema } from "@traycer/protocol/framework/json-schema-fingerprint";
+import { nativeListQuerySchemaPreMuse } from "@traycer/protocol/host/provider-native-schemas";
 
 /**
  * Pins the frozen `providers.list` shapes around v7.0 - hand-copied off the
@@ -189,8 +191,7 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
     // "A line that has STOPPED being the head still points at live" is the
     // defect being guarded, so both halves are asserted: the head names live,
     // and every line below it does not.
-    // `commandcode` opened major 10 over the frozen 9.2 (the 1.5.0 head), so
-    // the head is now major 10 and EVERY 9.x line is frozen below it.
+    // Muse opened major 11 over the frozen 10.10 response.
     const majorNine = hostRpcRegistry["providers.list"][9];
     const majorTen = hostRpcRegistry["providers.list"][10];
     const v70 = hostRpcRegistry["providers.list"][7].versions[0].contract;
@@ -198,10 +199,14 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
     const v90 = majorNine.versions[0].contract;
     const v91 = majorNine.versions[1].contract;
     const v92 = majorNine.versions[majorNine.latestMinor].contract;
-    const head = majorTen.versions[majorTen.latestMinor].contract;
+    const v1010 = majorTen.versions[majorTen.latestMinor].contract;
+    const majorEleven = hostRpcRegistry["providers.list"][11];
+    const head = majorEleven.versions[majorEleven.latestMinor].contract;
 
     // The head names live, whichever minor the head happens to be.
     expect(head.responseSchema).toBe(providersListResponseSchema);
+    expect(v1010.responseSchema).toBe(providersListResponseSchemaV1010Preimage);
+    expect(v1010.responseSchema).not.toBe(providersListResponseSchema);
     // ...and nothing below it does, on any major. 9.1 is listed explicitly
     // because it is the line this guard was written too late for: it held the
     // head row while pointing at live, two login-capability markers were added
@@ -282,6 +287,7 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
       "reasonix",
       "antigravity",
       "commandcode",
+      "muse",
     ] as const;
     expect([...providerIdSchema.options].sort()).toEqual(
       [...providerIdSchemaV70.options, ...POST_V70_PROVIDER_IDS].sort(),
@@ -542,22 +548,20 @@ describe("v7.0 is behaviour-preserving for what it already serializes", () => {
     );
   });
 
-  // The round-trip above drives ONE sample value, which an added optional field
-  // would slip straight past. This compares the schemas themselves, and it is
-  // what keeps the bare `V70` name honest: v7.0 binds the LIVE request, so the
-  // day a field is added there the frozen copy stops being the v7.0 wire - the
-  // exact drift the response side had to be renamed out of. Red here means
-  // "update the copy, or rename it `Preimage` like the response", never
-  // "regenerate to green".
-  it("the frozen v7.0 request is still exactly the live request", () => {
+  // Compare the complete request shape with the live request's native query
+  // pinned before Muse, so later query enum additions cannot widen this copy.
+  it("the frozen v7.0 request matches the pre-Muse request", () => {
     expect(
       toCanonicalJsonSchema(providersListRequestSchemaV70, {
         unrepresentable: "any",
       }),
     ).toEqual(
-      toCanonicalJsonSchema(providersListRequestSchema, {
-        unrepresentable: "any",
-      }),
+      toCanonicalJsonSchema(
+        providersListRequestSchema.extend({
+          native: nativeListQuerySchemaPreMuse.nullable().default(null),
+        }),
+        { unrepresentable: "any" },
+      ),
     );
   });
 });
@@ -574,7 +578,7 @@ describe("downgrade bridges v7.0 -> v6.0..v1.0 still work through the real regis
         hostRpcRegistry["providers.list"],
         10,
         target,
-        providersListResponseSchema.parse({
+        providersListResponseSchemaV1010Preimage.parse({
           providers: [state],
           native: null,
         }),
@@ -611,7 +615,7 @@ describe("downgrade bridges v7.0 -> v6.0..v1.0 still work through the real regis
         hostRpcRegistry["providers.list"],
         10,
         target,
-        providersListResponseSchema.parse({
+        providersListResponseSchemaV1010Preimage.parse({
           providers: [huggingfaceState],
           native: null,
         }),
@@ -638,7 +642,7 @@ describe("downgrade bridge v9.0 -> v8.0 works through the real registry", () => 
       hostRpcRegistry["providers.list"],
       10,
       8,
-      providersListResponseSchema.parse({
+      providersListResponseSchemaV1010Preimage.parse({
         providers: [antigravityState],
         native: null,
       }),

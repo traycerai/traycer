@@ -130,6 +130,7 @@ const SHARED_CLI_CANDIDATE_SOURCE: Record<ProviderId, ProviderId | null> = {
   antigravity: null,
   // Command Code runs its own `cmd` binary (`cmdc` on Windows).
   commandcode: null,
+  muse: null,
 };
 
 /**
@@ -184,6 +185,7 @@ const PROVIDER_INSTALL_GUIDE_URL: Record<ProviderId, string | null> = {
   // PATH, like Hermes. Not found is therefore this provider's normal first
   // state, and the quickstart is the page that installs it.
   commandcode: "https://commandcode.ai/docs/quickstart",
+  muse: "https://dev.meta.ai/docs/muse-code",
 };
 
 interface ProviderCandidateConfig {

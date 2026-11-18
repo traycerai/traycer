@@ -2,7 +2,7 @@ import {
   classifyHostRequestFailure,
   type HostRpcError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { CreateChatRequestV11 } from "@traycer/protocol/host/epic/unary-schemas";
+import type { CreateChatRequestV15 } from "@traycer/protocol/host/epic/unary-schemas";
 
 /**
  * The two client-visible ways a LATEST-checkpoint fork request can fail
@@ -61,7 +61,7 @@ export function classifyRecoverableForkFailure(
  */
 export function isRecoverableLatestForkRefusal(
   error: HostRpcError,
-  request: CreateChatRequestV11,
+  request: CreateChatRequestV15,
 ): boolean {
   if (request.forkSource?.boundary !== "latest") return false;
   return classifyRecoverableForkFailure(error) !== null;

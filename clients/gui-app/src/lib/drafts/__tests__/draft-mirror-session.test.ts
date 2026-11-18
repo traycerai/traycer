@@ -10,7 +10,7 @@ import type {
   DraftDocument,
   DraftWrite,
   DraftsListResponse,
-  DraftsSubscribeServerFrameV11,
+  DraftsSubscribeServerFrameV12,
 } from "@traycer/protocol/host";
 import {
   DraftMirrorSession,
@@ -145,7 +145,7 @@ function unsupportedError(method: string): HostRpcError {
 
 function createStreamHarness(): {
   readonly client: DraftsStreamSubscribe;
-  readonly emit: (frame: DraftsSubscribeServerFrameV11) => void;
+  readonly emit: (frame: DraftsSubscribeServerFrameV12) => void;
   /** Drive the session's own status handler - how a reconnect is staged. */
   readonly emitStatus: (status: StreamConnectionStatus) => void;
   readonly sent: Array<{ readonly kind: string; readonly draftIds?: unknown }>;
@@ -790,6 +790,62 @@ describe("DraftMirrorSession", () => {
     expect(sink.deletes).toEqual([]);
     expect(dropped).toEqual([]);
   });
+
+  it.each(["claude", "muse"] as const)(
+    "applies a current subscribe draft for %s without adding settings fields",
+    async (harnessId) => {
+      const sink = createSink({ dirty: new Set(), writes: [] });
+      const stream = createStreamHarness();
+      const session = new DraftMirrorSession({
+        hostId: HOST_ID,
+        rpc: createRpc({
+          list: () =>
+            Promise.resolve(listResponse([], 0, EMPTY_LIST_TOMBSTONES)),
+          upsert: (write) =>
+            Promise.resolve({
+              draft: landingDocument({ draftId: write.draftId, revision: 1 }),
+            }),
+          delete: () => Promise.resolve({ deleted: false }),
+        }),
+        streamClient: stream.client,
+        sink,
+        timing: { debounceMs: 0, maxWaitMs: 0 },
+        now: () => 0,
+      });
+      const base = landingDocument({ draftId: "live-settings", revision: 1 });
+      if (base.kind !== "landing") throw new Error("Expected landing fixture");
+      const draft: DraftDocument = {
+        ...base,
+        portable: {
+          ...base.portable,
+          runSettings: {
+            harnessId,
+            model: "test-model",
+            permissionMode: "supervised",
+            reasoningEffort: null,
+            serviceTier: null,
+            agentMode: "epic",
+            profileId: null,
+          },
+        },
+      };
+      try {
+        session.start();
+        await vi.waitFor(() => expect(stream.subscribeCalls.count).toBe(1));
+        stream.emit({
+          kind: "upsert",
+          hasBinaryPayload: false,
+          storeSeq: 1,
+          draftId: draft.draftId,
+          revision: draft.revision,
+          draft,
+        });
+        await vi.waitFor(() => expect(sink.upserts).toEqual([draft]));
+      } finally {
+        session.close();
+      }
+    },
+  );
 
   it("drops a subscribe upsert of an omitted list id whose storeSeq is not newer", async () => {
     const sink = createSink({ dirty: new Set(), writes: [] });

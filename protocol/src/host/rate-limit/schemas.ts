@@ -11,6 +11,7 @@ import {
   providerIdSchemaV70,
   providerIdSchemaV80,
   providerIdSchemaV91,
+  providerIdSchemaV100,
 } from "@traycer/protocol/host/provider-schemas";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
@@ -647,6 +648,10 @@ const unavailableProviderRateLimitsSchemaV2 = lazySchema(() =>
 // enum. Feeds `providerRateLimitsSchemaV151` only.
 const unavailableProviderRateLimitsSchemaV151 = lazySchema(() =>
   unavailableProviderRateLimitsSchemaV2.extend({
+    // Pinned to the twenty-two ids through Command Code when Muse landed, as
+    // `providerIdSchemaV91` pinned the 1.5.0 union - the sentence below asked
+    // for exactly this when the next id arrived.
+    provider: providerIdSchemaV100,
     // Present on OpenCode snapshots so renderer retention is scoped to the
     // credential observed by the host. Other providers omit it.
     credentialGeneration: z.string().min(1).optional(),
@@ -670,6 +675,7 @@ export type RateLimitChatCredential = z.infer<
 
 const unavailableProviderRateLimitsSchema = lazySchema(() =>
   unavailableProviderRateLimitsSchemaV151.extend({
+    provider: providerIdSchema,
     reason: rateLimitUnavailableReasonSchemaV3,
     // Present only on a Claude Code `rate_limits_not_available` read whose
     // handshake reported a credential other than the plan login: the plan's
@@ -753,6 +759,46 @@ export const providerRateLimitsSchema = lazySchema(() =>
   ]),
 );
 export type ProviderRateLimits = z.infer<typeof providerRateLimitsSchema>;
+
+// The unavailable arm as the live-union heads carried it when Muse landed,
+// with the `provider` pinned to `providerIdSchemaV100`. Feeds
+// `providerRateLimitsSchemaV100` only.
+const unavailableProviderRateLimitsSchemaV100 = lazySchema(() =>
+  unavailableProviderRateLimitsSchema.extend({
+    provider: providerIdSchemaV100,
+  }),
+);
+
+/**
+ * Frozen provider union as the kimi-era heads shipped it on `main`: every
+ * available arm through Kimi, and the unavailable arm (v3 reason enum,
+ * `chatCredential`) with its `provider` pinned to `providerIdSchemaV100`.
+ *
+ * Muse opening the next majors freezes the three lines that ranged over the
+ * live union - `host.getRateLimitUsage@6.0` → 7.0,
+ * `agent.getProviderProfileRateLimits@8.0` → 9.0 and
+ * `providers.refreshProfileStatus@4.0` → 5.0 - exactly as the Kimi arm opened
+ * 6.0 / 8.0 / 4.0. Do NOT widen this schema - extend the live union and use
+ * those bridges.
+ */
+export const providerRateLimitsSchemaV100 = lazySchema(() =>
+  z.union([
+    codexRateLimitsSchema,
+    claudeCodeRateLimitsSchema,
+    openRouterRateLimitsSchema,
+    kiloCodeRateLimitsSchema,
+    grokRateLimitsSchema,
+    huggingFaceRateLimitsSchema,
+    openCodeRateLimitsSchema,
+    cursorRateLimitsSchema,
+    antigravityRateLimitsSchema,
+    kimiRateLimitsSchema,
+    unavailableProviderRateLimitsSchemaV100,
+  ]),
+);
+export type ProviderRateLimitsV100 = z.infer<
+  typeof providerRateLimitsSchemaV100
+>;
 
 // Frozen v3.0-line union - the live union as `cli-v1.1.8` first shipped it and
 // every release through `cli-v1.1.10` has carried it: codex-with-per-credit-
@@ -1219,10 +1265,9 @@ export type ProviderRateLimitsV91 = z.infer<typeof providerRateLimitsSchemaV91>;
  * union until the Kimi available arm was added, which is what opened 6.0, 8.0
  * and 4.0.
  *
- * The unavailable arm still names the live `providerIdSchema`: no provider id
- * has been added since 1.5.1, so the live set is the shipped set. The next id
- * added must pin this arm's `provider` too, as `providerIdSchemaV91` pinned the
- * 1.5.0 union.
+ * The unavailable arm's `provider` is pinned to `providerIdSchemaV100` (the
+ * id set through Command Code), as the note here always said the next id
+ * change must pin it.
  *
  * Do NOT widen this schema - extend the latest union and use the 6.0 / 8.0 /
  * 4.0 bridges.
@@ -1349,11 +1394,27 @@ export type RateLimitUsageResponseV50 = z.infer<
 //
 // This is the LIVE line while `6` is unreleased. The moment a tag ships it,
 // freeze it against a snapshot union and open 7.0 for the next arm.
+/**
+ * Frozen `host.getRateLimitUsage@6.0` response: the kimi-era live union,
+ * frozen against `providerRateLimitsSchemaV100` when Muse opened 7.0 - a new
+ * id is not strippable by the within-major skew handler, exactly what the 6.0
+ * contract's comment says about the Kimi arm.
+ */
 export const rateLimitUsageResponseSchemaV60 = lazySchema(() =>
+  rateLimitUsageResponseSchema.extend({
+    providerRateLimits: providerRateLimitsSchemaV100.nullable(),
+  }),
+);
+
+/** The `host.getRateLimitUsage@7.0` response, where Muse rides. */
+export const rateLimitUsageResponseSchemaV70 = lazySchema(() =>
   rateLimitUsageResponseSchema.extend({
     providerRateLimits: providerRateLimitsSchema.nullable(),
   }),
 );
+export type RateLimitUsageResponseV70 = z.infer<
+  typeof rateLimitUsageResponseSchemaV70
+>;
 export type RateLimitUsageResponseV60 = z.infer<
   typeof rateLimitUsageResponseSchemaV60
 >;
@@ -1425,6 +1486,21 @@ export const providersRefreshProfileStatusResponseSchemaV30 = lazySchema(() =>
     providerRateLimits: providerRateLimitsSchemaV151,
   }),
 );
+
+/**
+ * Frozen `providers.refreshProfileStatus@4.0` response: the live-union head as
+ * Muse froze it against `providerRateLimitsSchemaV100` when it opened 5.0 -
+ * the snapshot freeze the 4.0 contract's comment asked for once a tag shipped
+ * the line.
+ */
+export const providersRefreshProfileStatusResponseSchemaV40 = lazySchema(() =>
+  z.object({
+    providerRateLimits: providerRateLimitsSchemaV100,
+  }),
+);
+export type ProvidersRefreshProfileStatusResponseV40 = z.infer<
+  typeof providersRefreshProfileStatusResponseSchemaV40
+>;
 export type ProvidersRefreshProfileStatusResponseV30 = z.infer<
   typeof providersRefreshProfileStatusResponseSchemaV30
 >;

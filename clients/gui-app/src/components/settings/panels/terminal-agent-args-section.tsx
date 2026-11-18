@@ -34,6 +34,7 @@ const TERMINAL_AGENT_ARGS_PLACEHOLDER: Record<ProviderId, string> = {
   reasonix: "CLI arguments (optional)",
   antigravity: "CLI arguments (optional)",
   commandcode: "CLI arguments (optional)",
+  muse: "CLI arguments (optional)",
 };
 
 function terminalAgentArgsPlaceholder(providerId: ProviderId): string {

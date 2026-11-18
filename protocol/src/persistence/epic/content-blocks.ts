@@ -7,6 +7,7 @@ import { managedCommandStatusSchema } from "@traycer/protocol/host/managed-comma
 import {
   userMessageSenderSchema,
   userMessageSenderSchemaPreReasonix,
+  userMessageSenderSchemaPreMuse,
 } from "@traycer/protocol/persistence/epic/senders";
 import { z } from "zod";
 import {
@@ -62,6 +63,10 @@ const harnessIdSchema = getRecordSchema(
   commonRecordRegistry,
   "harness-id",
   "latest",
+);
+
+const harnessIdSchemaPreMuse = lazySchema(() =>
+  harnessIdSchema.exclude(["muse"]),
 );
 
 // Frozen pre-Reasonix copy of the canonical harness enum, for the three block
@@ -371,7 +376,7 @@ export type ProviderNoticeMetadata = z.infer<
 export const providerNoticeMetadataSchemaPreReceipt = lazySchema(() =>
   z
     .object({
-      harnessId: harnessIdSchema,
+      harnessId: harnessIdSchemaPreMuse,
       noticeKind: providerNoticeKindSchema,
       tone: providerNoticeToneSchema,
       title: z.string(),
@@ -3019,7 +3024,7 @@ export const contentBlockSchemaPreSettlement = lazySchema(() =>
 export const providerNoticeMetadataSchemaPreFallback = lazySchema(() =>
   z
     .object({
-      harnessId: harnessIdSchema,
+      harnessId: harnessIdSchemaPreMuse,
       noticeKind: providerNoticeKindSchemaPreFallback,
       tone: providerNoticeToneSchema,
       title: z.string(),
@@ -3062,11 +3067,11 @@ export const contentBlockSchemaPreFallback = lazySchema(() =>
     subAgentBlockSchema,
     approvalBlockSchema,
     todoBlockSchema,
-    planBlockSchema,
+    planBlockSchemaPreMuse,
     errorBlockSchemaPreFallback,
     compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchemaPreShellHost,
-    steerBlockSchema,
+    steerBlockSchemaPreMuse,
     interviewBlockSchema,
     artifactOperationBlockSchemaPreHtml,
   ]),
@@ -3090,11 +3095,11 @@ export const contentBlockSchemaPreShellHost = lazySchema(() =>
     subAgentBlockSchema,
     approvalBlockSchema,
     todoBlockSchema,
-    planBlockSchema,
+    planBlockSchemaPreMuse,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchemaPreShellHost,
-    steerBlockSchema,
+    steerBlockSchemaPreMuse,
     interviewBlockSchema,
     artifactOperationBlockSchemaPreHtml,
   ]),
@@ -3114,11 +3119,11 @@ export const contentBlockSchemaPreBrowser = lazySchema(() =>
     subAgentBlockSchema,
     approvalBlockSchema,
     todoBlockSchema,
-    planBlockSchema,
+    planBlockSchemaPreMuse,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchemaPreConversationMessage,
-    steerBlockSchema,
+    steerBlockSchemaPreMuse,
     interviewBlockSchema,
     artifactOperationBlockSchemaPreHtml,
   ]),
@@ -3141,11 +3146,11 @@ export const contentBlockSchemaPreReceipt = lazySchema(() =>
     subAgentBlockSchema,
     approvalBlockSchema,
     todoBlockSchema,
-    planBlockSchema,
+    planBlockSchemaPreMuse,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchemaPreConversationMessage,
-    steerBlockSchema,
+    steerBlockSchemaPreMuse,
     interviewBlockSchema,
     artifactOperationBlockSchemaPreHtml,
   ]),
@@ -3160,7 +3165,7 @@ export const contentBlockSchemaPreReceipt = lazySchema(() =>
 // shapes: freeze a member here before adding a field on the current line.
 export const contentBlockSchemaPreMcpApp = lazySchema(() =>
   z.discriminatedUnion("type", [
-    textBlockSchema,
+    textBlockSchemaPreMuse,
     reasoningBlockSchema,
     toolCallBlockSchemaPreMcpApp,
     fileChangeBlockSchema,
@@ -3168,11 +3173,11 @@ export const contentBlockSchemaPreMcpApp = lazySchema(() =>
     subAgentBlockSchema,
     approvalBlockSchema,
     todoBlockSchema,
-    planBlockSchema,
+    planBlockSchemaPreMuse,
     errorBlockSchema,
     compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchemaPreConversationMessage,
-    steerBlockSchema,
+    steerBlockSchemaPreMuse,
     interviewBlockSchema,
     artifactOperationBlockSchemaPreHtml,
   ]),
@@ -3212,12 +3217,39 @@ export const contentBlockSchemaV18 = lazySchema(() =>
     subAgentBlockSchema,
     approvalBlockSchema,
     todoBlockSchema,
-    planBlockSchema,
+    planBlockSchemaPreMuse,
     errorBlockSchemaPreFallback,
     compactionBlockSchemaPreNotApplied,
     autonomousResumeBlockSchemaV18,
-    steerBlockSchema,
+    steerBlockSchemaPreMuse,
     interviewBlockSchema,
     artifactOperationBlockSchemaPreHtml,
   ]),
+);
+
+const planSourceSchemaPreMuse = lazySchema(() =>
+  planSourceSchema.extend({ harnessId: harnessIdSchemaPreMuse }),
+);
+const planBlockSchemaPreMuse = lazySchema(() =>
+  planBlockSchema.extend({
+    harnessId: harnessIdSchemaPreMuse,
+    source: planSourceSchemaPreMuse,
+  }),
+);
+const steerBlockSchemaPreMuse = lazySchema(() =>
+  steerBlockSchema.extend({
+    sender: userMessageSenderSchemaPreMuse.nullable().default(null),
+  }),
+);
+const providerNoticeMetadataSchemaPreMuse = lazySchema(() =>
+  providerNoticeMetadataSchema.safeExtend({
+    harnessId: harnessIdSchemaPreMuse,
+  }),
+);
+const textBlockSchemaPreMuse = lazySchema(() =>
+  textBlockSchema.extend({
+    providerNotice: providerNoticeMetadataSchemaPreMuse
+      .nullable()
+      .default(null),
+  }),
 );

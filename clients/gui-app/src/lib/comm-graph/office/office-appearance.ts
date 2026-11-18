@@ -45,6 +45,7 @@ export const HARNESS_ACCENT: Readonly<Record<GuiHarnessId, string>> = {
   // Command Code's mark is black. Lightened to a warm neutral, so it reads on
   // the dark floor and does not pass for Grok's cool gray.
   commandcode: "#a8a29e",
+  muse: "#c084fc",
 };
 
 /** A chat has no harness, so it carries the app's own accent instead. */

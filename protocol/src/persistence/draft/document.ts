@@ -12,7 +12,6 @@ import {
   chatHeadAddressPartSchema,
   type ChatHeadAddressPart,
 } from "@traycer/protocol/persistence/chat-sync/head";
-import type { ChatRunSettingsPreUltracode } from "@traycer/protocol/persistence/epic/foundation";
 import {
   draftHeadReaderSchema,
   type DraftComposerPortable,
@@ -61,7 +60,9 @@ function encodeJsonContent(content: JsonContent): JsonValue {
   return content;
 }
 
-function encodeRunSettings(settings: ChatRunSettingsPreUltracode): JsonObject {
+function encodeRunSettings(
+  settings: NonNullable<DraftComposerPortable["runSettings"]>,
+): JsonObject {
   return {
     harnessId: settings.harnessId,
     model: settings.model,

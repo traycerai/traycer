@@ -387,6 +387,28 @@ describe("ProviderCliCandidatesSection: empty-candidate notice (F2 route-back)",
     );
   });
 
+  it("links to the Muse Code installation guide when no CLI is found", () => {
+    renderSection(
+      providerState({
+        providerId: "muse",
+        selected: { kind: "path" },
+        candidates: [],
+      }),
+    );
+    const guide = screen.getByRole("link", {
+      name: "Muse Code installation guide",
+    });
+    expect(guide.getAttribute("href")).toBe(
+      "https://dev.meta.ai/docs/muse-code",
+    );
+    fireEvent.click(guide);
+    expect(openLink).toHaveBeenCalledWith(
+      "https://dev.meta.ai/docs/muse-code",
+      "docs",
+      null,
+    );
+  });
+
   it("waits for the PATH probe instead of declaring the binary missing", () => {
     // `availabilityPending` means the host's shell/PATH probe has not settled,
     // and the protocol is explicit that `candidates` must not be trusted until

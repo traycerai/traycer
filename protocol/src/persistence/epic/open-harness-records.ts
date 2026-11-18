@@ -70,6 +70,7 @@ import {
 } from "@traycer/protocol/persistence/epic/messages";
 import {
   agentSenderSchema,
+  chatSessionAnchorSchemaPreMuse,
   userSenderSchema,
 } from "@traycer/protocol/persistence/epic/senders";
 import { z } from "zod";
@@ -365,6 +366,11 @@ export const openUserMessageSchema = lazySchema(() =>
       });
     }),
 );
+export const openUserMessageSchemaPreMuse = lazySchema(() =>
+  openUserMessageSchema.safeExtend({
+    sessionAnchor: chatSessionAnchorSchemaPreMuse.nullable(),
+  }),
+);
 export type OpenUserMessage = z.infer<typeof openUserMessageSchema>;
 
 // The open user row as `chat.subscribe@1.22` through `@1.24` ship it: the
@@ -441,6 +447,12 @@ export const openMessageSchemaPreNotApplied = lazySchema(() =>
 export const openMessageSchema = lazySchema(() =>
   z.discriminatedUnion("role", [
     openUserMessageSchema,
+    openAssistantMessageSchema,
+  ]),
+);
+export const openMessageSchemaPreMuse = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    openUserMessageSchemaPreMuse,
     openAssistantMessageSchema,
   ]),
 );

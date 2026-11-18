@@ -178,6 +178,7 @@ const AGENT_PROVIDER_LABEL: Record<GuiHarnessId, string> = {
   reasonix: "Reasonix",
   antigravity: "Antigravity",
   commandcode: "Command Code",
+  muse: "Muse Code",
 };
 
 function isKnownProvider(provider: string): provider is GuiHarnessId {

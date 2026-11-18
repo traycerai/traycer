@@ -6,6 +6,7 @@ import {
   userMessageSenderSchema,
   userMessageSenderSchemaPreInReplyTo,
   userMessageSenderSchemaPreReasonix,
+  userMessageSenderSchemaPreMuse,
 } from "@traycer/protocol/persistence/epic/senders";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
@@ -99,6 +100,10 @@ export const chatEventSchema = lazySchema(() =>
 export type ChatEvent = z.infer<typeof chatEventSchema>;
 
 /** The event shape served before chat.subscribe@1.44; persistence stays live. */
+export const chatEventSchemaPreMuse = lazySchema(() =>
+  chatEventSchema.extend({ actor: userMessageSenderSchemaPreMuse.nullable() }),
+);
+
 export const chatEventSchemaPreProviderSelection = lazySchema(() =>
   z.object({
     eventId: z.string(),
@@ -144,7 +149,7 @@ export const chatEventSchemaPreProviderSelection = lazySchema(() =>
     ]),
     timestamp: z.number(),
     clientActionId: z.string().nullable(),
-    actor: userMessageSenderSchema.nullable(),
+    actor: userMessageSenderSchemaPreMuse.nullable(),
     message: z.string().nullable(),
     turnId: z.string().nullable(),
     messageId: z.string().nullable(),

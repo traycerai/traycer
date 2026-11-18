@@ -26,6 +26,7 @@ import {
   providersEnsurePackRequestSchema,
   providersEnsurePackResponseSchema,
   providersListResponseSchema,
+  providersListResponseSchemaV1010Preimage,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
   providersListResponseSchemaV40,
@@ -146,7 +147,7 @@ describe("cliBinaryResolved additive field (binary-absent explanation)", () => {
         hostRpcRegistry["providers.list"],
         10,
         target,
-        providersListResponseSchema.parse({
+        providersListResponseSchemaV1010Preimage.parse({
           providers: [state],
           native: null,
         }),
@@ -342,7 +343,7 @@ describe("old-client behavior on the error arm", () => {
         hostRpcRegistry["providers.list"],
         10,
         targetMajor,
-        providersListResponseSchema.parse({
+        providersListResponseSchemaV1010Preimage.parse({
           providers: [erroredState],
           native: null,
         }),
@@ -537,7 +538,7 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
       hostRpcRegistry["providers.list"],
       10,
       2,
-      providersListResponseSchema.parse({
+      providersListResponseSchemaV1010Preimage.parse({
         providers: [stateWithRegistryFields],
         native: null,
       }),
@@ -556,7 +557,7 @@ describe("providers.list latest -> v2.0/v3.0 downgrade strips the new fields", (
       hostRpcRegistry["providers.list"],
       10,
       3,
-      providersListResponseSchema.parse({
+      providersListResponseSchemaV1010Preimage.parse({
         providers: [stateWithRegistryFields],
         native: null,
       }),
@@ -668,7 +669,7 @@ describe("providers.list v6.0 is frozen against the registry fields", () => {
       // `native` is required here and absent from the major-6 cases above
       // because the live response shape carries it - v6.0 froze before it
       // existed. Same reason the registry fields only ride v7.0 and up.
-      providersListResponseSchema.parse({
+      providersListResponseSchemaV1010Preimage.parse({
         providers: [stateWithRegistryFields],
         native: null,
       }),
@@ -709,7 +710,7 @@ describe("providers.list v5.0 is frozen against the registry fields", () => {
       hostRpcRegistry["providers.list"],
       10,
       5,
-      providersListResponseSchema.parse({
+      providersListResponseSchemaV1010Preimage.parse({
         providers: [stateWithRegistryFields],
         native: null,
       }),

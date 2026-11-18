@@ -2,6 +2,8 @@ import { z } from "zod";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import {
+  guiHarnessIdSchema,
+  guiHarnessIdSchemaPreMuse,
   chatRunSettingsStrictSchemaPreUltracode,
   chatRunSettingsStrictSchemaPreCommandCode,
 } from "@traycer/protocol/persistence/epic/foundation";
@@ -69,7 +71,11 @@ export const draftComposerPortableSchema = lazySchema(() =>
   z.object({
     content: jsonContentSchema,
     selection: draftSelectionSchema.nullable(),
-    runSettings: chatRunSettingsStrictSchemaPreUltracode.nullable(),
+    runSettings: chatRunSettingsStrictSchemaPreUltracode
+      .extend({
+        harnessId: guiHarnessIdSchema,
+      })
+      .nullable(),
     composerMode: draftComposerModeSchema,
     blobHashes: z.array(sha256HexSchema),
     closed: z.boolean().default(false),
@@ -288,3 +294,11 @@ export type DraftHeadRecord = z.infer<typeof draftHeadSchema>;
  */
 export const draftHeadReaderSchema = draftHeadSchema;
 export type DraftHeadReaderRecord = DraftHeadRecord;
+
+export const draftComposerPortableSchemaPreMuse = lazySchema(() =>
+  draftComposerPortableSchema.extend({
+    runSettings: chatRunSettingsStrictSchemaPreUltracode
+      .extend({ harnessId: guiHarnessIdSchemaPreMuse })
+      .nullable(),
+  }),
+);

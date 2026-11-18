@@ -148,6 +148,15 @@ describe("buildHarnessUsageSeriesScale", () => {
     expect(both.colorVar("commandcode")).toBe("var(--usage-series-1)");
   });
 
+  it("assigns Muse Code a preferred slot without colliding with OpenRouter", () => {
+    const scale = buildHarnessUsageSeriesScale(["openrouter", "muse"]);
+    expect(scale.colorVar("openrouter")).toBe("var(--usage-series-11)");
+    expect(scale.colorVar("muse")).not.toBe(scale.colorVar("openrouter"));
+    expect(buildHarnessUsageSeriesScale(["muse"]).colorVar("muse")).toBe(
+      "var(--usage-series-11)",
+    );
+  });
+
   it("keeps all selected supported harnesses visually distinct", () => {
     const supportedHarnesses = [
       "amp",

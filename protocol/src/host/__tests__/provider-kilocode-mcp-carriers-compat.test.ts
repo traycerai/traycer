@@ -12,6 +12,7 @@ import {
   providersListV101,
   providersListV102,
   providersListV103,
+  providersListV1010,
   providersNativeMutateV10,
   providersNativeMutateV11,
   providersNativeMutateV12,
@@ -348,7 +349,7 @@ describe("list@10.3 -> 9.2 / 8.0 / 7.0 bridges map the new codes (A38)", () => {
       hostRpcRegistry["providers.list"],
       10,
       major,
-      providersListResponseSchema.parse({ providers: [], native }),
+      providersListV1010.responseSchema.parse({ providers: [], native }),
     );
     expect(downgraded.ok).toBe(true);
     return downgraded.ok ? downgraded.value.native : undefined;

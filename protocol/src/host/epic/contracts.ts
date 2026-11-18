@@ -1,4 +1,11 @@
 import {
+  getChatRunSettingsResponseSchemaV50,
+  getChatRunSettingsBatchResponseSchemaV30,
+  getChatRunSettingsResponseSchemaV40,
+  getChatRunSettingsBatchResponseSchemaV20,
+  getChatRunSettingsBatchEntrySchemaV22,
+} from "./chat-records";
+import {
   createChatRequestSchemaV14,
   createChatRequestSchemaV15,
   createEpicRequestSchemaV14,
@@ -219,13 +226,11 @@ import {
   listChatRecordsResponseV13Schema,
   listChatRecordsResponseV14Schema,
   getChatRunSettingsRequestSchema,
-  getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
   getChatRunSettingsResponseSchemaV20,
   getChatRunSettingsResponseSchemaV30,
   getChatRunSettingsBatchEntrySchemaV10,
   getChatRunSettingsBatchRequestSchema,
-  getChatRunSettingsBatchResponseSchema,
   getChatRunSettingsBatchResponseSchemaV10,
 } from "@traycer/protocol/host/epic/chat-records";
 import {
@@ -2257,7 +2262,7 @@ export const epicGetChatRunSettingsV40 = defineRpcContract({
   method: "epic.getChatRunSettings",
   schemaVersion: { major: 4, minor: 0 } as const,
   requestSchema: getChatRunSettingsRequestSchema,
-  responseSchema: getChatRunSettingsResponseSchema,
+  responseSchema: getChatRunSettingsResponseSchemaV40,
 });
 
 export const epicGetChatRunSettingsUpgradeV30ToV40 = defineUpgradePath<
@@ -2474,7 +2479,7 @@ export const epicGetChatRunSettingsBatchV20 = defineRpcContract({
   method: "epic.getChatRunSettingsBatch",
   schemaVersion: { major: 2, minor: 0 } as const,
   requestSchema: getChatRunSettingsBatchRequestSchema,
-  responseSchema: getChatRunSettingsBatchResponseSchema,
+  responseSchema: getChatRunSettingsBatchResponseSchemaV20,
 });
 
 export const epicGetChatRunSettingsBatchUpgradeV10ToV20 = defineUpgradePath<
@@ -2804,6 +2809,156 @@ export const epicGetChatRunSettingsBatchDowngradeV22ToV10 = defineDowngradePath<
     value: {
       entries: response.entries.flatMap((entry) => {
         const parsed = getChatRunSettingsBatchEntrySchemaV10.safeParse(entry);
+        return parsed.success ? [parsed.data] : [];
+      }),
+    },
+  }),
+});
+
+export const epicGetChatRunSettingsV50 = defineRpcContract({
+  method: "epic.getChatRunSettings",
+  schemaVersion: { major: 5, minor: 0 } as const,
+  requestSchema: getChatRunSettingsRequestSchema,
+  responseSchema: getChatRunSettingsResponseSchemaV50,
+});
+export const epicGetChatRunSettingsUpgradeV42ToV50 = defineUpgradePath<
+  typeof epicGetChatRunSettingsV42,
+  typeof epicGetChatRunSettingsV50
+>({
+  from: epicGetChatRunSettingsV42.schemaVersion,
+  to: epicGetChatRunSettingsV50.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+export const epicGetChatRunSettingsDowngradeV50ToV10 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV50,
+  typeof epicGetChatRunSettingsV10
+>({
+  from: epicGetChatRunSettingsV50.schemaVersion,
+  to: epicGetChatRunSettingsV10.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed = epicGetChatRunSettingsV10.responseSchema.safeParse(response);
+    return parsed.success
+      ? { ok: true, value: parsed.data }
+      : {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED",
+            message:
+              "Reading these chat settings requires a newer Traycer client.",
+          },
+        };
+  },
+});
+export const epicGetChatRunSettingsDowngradeV50ToV20 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV50,
+  typeof epicGetChatRunSettingsV20
+>({
+  from: epicGetChatRunSettingsV50.schemaVersion,
+  to: epicGetChatRunSettingsV20.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed = epicGetChatRunSettingsV20.responseSchema.safeParse(response);
+    return parsed.success
+      ? { ok: true, value: parsed.data }
+      : {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED",
+            message:
+              "Reading these chat settings requires a newer Traycer client.",
+          },
+        };
+  },
+});
+export const epicGetChatRunSettingsDowngradeV50ToV30 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV50,
+  typeof epicGetChatRunSettingsV30
+>({
+  from: epicGetChatRunSettingsV50.schemaVersion,
+  to: epicGetChatRunSettingsV30.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed = epicGetChatRunSettingsV30.responseSchema.safeParse(response);
+    return parsed.success
+      ? { ok: true, value: parsed.data }
+      : {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED",
+            message:
+              "Reading these chat settings requires a newer Traycer client.",
+          },
+        };
+  },
+});
+export const epicGetChatRunSettingsDowngradeV50ToV42 = defineDowngradePath<
+  typeof epicGetChatRunSettingsV50,
+  typeof epicGetChatRunSettingsV42
+>({
+  from: epicGetChatRunSettingsV50.schemaVersion,
+  to: epicGetChatRunSettingsV42.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed = epicGetChatRunSettingsV42.responseSchema.safeParse(response);
+    return parsed.success
+      ? { ok: true, value: parsed.data }
+      : {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED",
+            message:
+              "Reading these chat settings requires a newer Traycer client.",
+          },
+        };
+  },
+});
+
+export const epicGetChatRunSettingsBatchV30 = defineRpcContract({
+  method: "epic.getChatRunSettingsBatch",
+  schemaVersion: { major: 3, minor: 0 } as const,
+  requestSchema: getChatRunSettingsBatchRequestSchema,
+  responseSchema: getChatRunSettingsBatchResponseSchemaV30,
+});
+export const epicGetChatRunSettingsBatchUpgradeV22ToV30 = defineUpgradePath<
+  typeof epicGetChatRunSettingsBatchV22,
+  typeof epicGetChatRunSettingsBatchV30
+>({
+  from: epicGetChatRunSettingsBatchV22.schemaVersion,
+  to: epicGetChatRunSettingsBatchV30.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+export const epicGetChatRunSettingsBatchDowngradeV30ToV10 = defineDowngradePath<
+  typeof epicGetChatRunSettingsBatchV30,
+  typeof epicGetChatRunSettingsBatchV10
+>({
+  from: epicGetChatRunSettingsBatchV30.schemaVersion,
+  to: epicGetChatRunSettingsBatchV10.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: {
+      entries: response.entries.flatMap((entry) => {
+        const parsed = getChatRunSettingsBatchEntrySchemaV10.safeParse(entry);
+        return parsed.success ? [parsed.data] : [];
+      }),
+    },
+  }),
+});
+export const epicGetChatRunSettingsBatchDowngradeV30ToV22 = defineDowngradePath<
+  typeof epicGetChatRunSettingsBatchV30,
+  typeof epicGetChatRunSettingsBatchV22
+>({
+  from: epicGetChatRunSettingsBatchV30.schemaVersion,
+  to: epicGetChatRunSettingsBatchV22.schemaVersion,
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: {
+      entries: response.entries.flatMap((entry) => {
+        const parsed = getChatRunSettingsBatchEntrySchemaV22.safeParse(entry);
         return parsed.success ? [parsed.data] : [];
       }),
     },

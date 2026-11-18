@@ -43,6 +43,7 @@ import {
   nativeAuthPollContextSchema,
   nativeAuthResultSchema,
   nativeListQuerySchema,
+  nativeListQuerySchemaPreMuse,
   nativeListResultSchema,
   nativeListResultSchemaBeforeMcpRemedies,
   nativeListResultSchemaV101Preimage,
@@ -316,6 +317,36 @@ export const providerIdSchemaV91 = lazySchema(() =>
 );
 export type ProviderIdV91 = z.infer<typeof providerIdSchemaV91>;
 
+// Major 10's provider ids, before Muse. Keep this pin closed; new ids use a
+// newer contract and downgrade bridges instead of widening released responses.
+export const providerIdSchemaV100 = lazySchema(() =>
+  z.enum([
+    "claude-code",
+    "codex",
+    "opencode",
+    "cursor",
+    "traycer",
+    "grok",
+    "qwen",
+    "kiro",
+    "droid",
+    "kimi",
+    "copilot",
+    "kilocode",
+    "openrouter",
+    "amp",
+    "devin",
+    "pi",
+    "hermes",
+    "omp",
+    "huggingface",
+    "reasonix",
+    "antigravity",
+    "commandcode",
+  ]),
+);
+export type ProviderIdV100 = z.infer<typeof providerIdSchemaV100>;
+
 /** Human-readable provider names, shared by the host and the GUI. */
 export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   "claude-code": "Claude Code",
@@ -340,6 +371,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   reasonix: "Reasonix",
   antigravity: "Antigravity",
   commandcode: "Command Code",
+  muse: "Muse Code",
 };
 
 /**
@@ -2197,14 +2229,37 @@ export const providerCliStateSchema = lazySchema(() =>
 );
 export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
 
+const providerManagedVersionsSchemaV100 = lazySchema(() =>
+  providerManagedVersionsSchema.extend({
+    sharedWithProviders: z.array(providerIdSchemaV100).catch([]),
+  }),
+);
+const providerManagedLineSchemaV100 = lazySchema(() =>
+  providerManagedLineSchema.extend({
+    managedVersions: providerManagedVersionsSchemaV100.nullable().catch(null),
+  }),
+);
+
 /**
  * The provider row `providers.list@10.8` and `@10.9` published: without
  * `hiddenModelProviders`, which 10.10 added. 10.9 grew the envelope and the
  * profile projection but not this row, so the two lines share it. Every older
  * row derives from this one, so the key reaches no older reader.
+ *
+ * The id is `providerIdSchemaV100`, pinned when Muse opened major 11: major
+ * 10 is registered by `host-v1.5.1`, so the frozen chain every 10.x line
+ * derives from must not read the live id enum - the same pin the 9.x rows
+ * took with `providerIdSchemaV91`.
  */
 const providerCliStateSchemaV109 = lazySchema(() =>
-  providerCliStateSchema.omit({ hiddenModelProviders: true }),
+  providerCliStateSchema.omit({ hiddenModelProviders: true }).extend({
+    providerId: providerIdSchemaV100,
+    managedVersions: providerManagedVersionsSchemaV100
+      .nullable()
+      .catch(null)
+      .optional(),
+    managedLines: z.array(providerManagedLineSchemaV100).catch([]).optional(),
+  }),
 );
 
 /**
@@ -2608,7 +2663,7 @@ export type ProvidersListRequestBeforeV70 = z.infer<
 export const providersListRequestSchemaV70 = lazySchema(() =>
   z.object({
     forceAuthRefresh: z.boolean().optional(),
-    native: nativeListQuerySchema.nullable().default(null),
+    native: nativeListQuerySchemaPreMuse.nullable().default(null),
   }),
 );
 export type ProvidersListRequestV70 = z.infer<
@@ -2689,6 +2744,45 @@ export const providersListResponseSchema = lazySchema(() =>
   }),
 );
 export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
+
+/**
+ * The provider row `providers.list@10.10` shipped: the live row's keys plus
+ * the usage/profile projection the canonical response attaches, with the id
+ * pinned to `providerIdSchemaV100` when Muse opened major 11. The 11.0 → 10.10
+ * bridge reparses rows through this schema, so an id major 10 cannot spell
+ * fails the parse and the row is dropped.
+ */
+export const providerCliStateSchemaV1010 = lazySchema(() =>
+  providerCliStateSchema
+    .extend({
+      usageReporting: z.boolean().optional(),
+      profiles: z.array(providerProfileProjectionSchema).catch([]),
+    })
+    .extend({
+      providerId: providerIdSchemaV100,
+      managedVersions: providerManagedVersionsSchemaV100
+        .nullable()
+        .catch(null)
+        .optional(),
+      managedLines: z.array(providerManagedLineSchemaV100).catch([]).optional(),
+    }),
+);
+export type ProviderCliStateV1010 = z.infer<typeof providerCliStateSchemaV1010>;
+
+/**
+ * Frozen `providers.list@10.10` response: the live envelope over the 10.10 row
+ * (`providerCliStateSchemaV1010`), which is the canonical shape with the id
+ * enum pinned. 10.10 bound the canonical schema while it was the head; major
+ * 10 is registered by `host-v1.5.1`, so Muse opening major 11 freezes it here.
+ */
+export const providersListResponseSchemaV1010Preimage = lazySchema(() =>
+  providersListResponseSchemaV108Preimage.extend({
+    providers: z.array(providerCliStateSchemaV1010),
+  }),
+);
+export type ProvidersListResponseV1010Preimage = z.infer<
+  typeof providersListResponseSchemaV1010Preimage
+>;
 
 /**
  * Frozen `providers.list@10.7` response: the live envelope over the 10.7 row
@@ -5862,6 +5956,19 @@ export function downgradeProviderCliStateListToV92(
   states: readonly unknown[],
 ): ProviderCliStateV92[] {
   return projectRowsOntoFrozenLine(providerCliStateSchemaV92, states);
+}
+
+/**
+ * Drop the providers major 10 cannot spell for an already-shipped major-10
+ * client. Nothing else differs from the head row, so the reparse is a pure row
+ * filter - an id outside the frozen `providerIdSchemaV100` enum fails the
+ * parse and the row is dropped, exactly as the v9.2 helper drops a post-v9
+ * one.
+ */
+export function downgradeProviderCliStateListToV1010(
+  states: readonly unknown[],
+): ProviderCliStateV1010[] {
+  return projectRowsOntoFrozenLine(providerCliStateSchemaV1010, states);
 }
 
 /**

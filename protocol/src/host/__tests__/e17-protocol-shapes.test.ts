@@ -12,6 +12,7 @@ import {
   agentListV101,
   agentListV102,
   agentListV103,
+  agentListV110,
 } from "@traycer/protocol/host/agent/contracts";
 import {
   agentSummarySchemaV102,
@@ -19,6 +20,7 @@ import {
   listAgentsResponseSchemaV100,
   listAgentsResponseSchemaV101,
   listAgentsResponseSchemaV102,
+  listAgentsResponseSchemaV103,
 } from "@traycer/protocol/host/agent/shared";
 import { epicListTaskHostsV10 } from "@traycer/protocol/host/epic/contracts";
 import { hostRpcRegistry } from "@traycer/protocol/host/registry";
@@ -115,7 +117,7 @@ describe("agent.list@10.2 and @10.3", () => {
     ],
   });
 
-  const V103_RESPONSE = listAgentsResponseSchema.parse({
+  const V103_RESPONSE = agentListV103.responseSchema.parse({
     ...V102_RESPONSE,
     agents: V102_RESPONSE.agents.map((row) => ({
       ...row,
@@ -196,13 +198,14 @@ describe("agent.list@10.2 and @10.3", () => {
     });
   });
 
-  it("keeps @10.2 frozen and names the canonical schema on @10.3", () => {
+  it("keeps @10.2 and @10.3 frozen and names the canonical schema on @11.0", () => {
     expect(agentListV100.responseSchema).toBe(listAgentsResponseSchemaV100);
     expect(agentListV101.responseSchema).toBe(listAgentsResponseSchemaV101);
     expect(agentListV102.responseSchema).toBe(listAgentsResponseSchemaV102);
     expect(agentListV102.schemaVersion).toEqual({ major: 10, minor: 2 });
-    expect(agentListV103.responseSchema).toBe(listAgentsResponseSchema);
+    expect(agentListV103.responseSchema).toBe(listAgentsResponseSchemaV103);
     expect(agentListV103.schemaVersion).toEqual({ major: 10, minor: 3 });
+    expect(agentListV110.responseSchema).toBe(listAgentsResponseSchema);
   });
 
   it("upgrades a 10.1 response by stamping reach: null and hostConnectivity: unknown on every row", () => {

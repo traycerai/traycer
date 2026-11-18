@@ -24,6 +24,12 @@ describe("PROVIDER_ICON_CONFIG", () => {
     expect(PROVIDER_ICON_CONFIG.reasonix.Icon).not.toBe(CommandCodeIcon);
   });
 
+  it("renders the Muse Code placeholder monogram through the provider map", () => {
+    const Icon = PROVIDER_ICON_CONFIG.muse.Icon;
+    const { container } = render(<Icon />);
+    expect(container.querySelector("svg text")?.textContent).toBe("M");
+  });
+
   it("renders the Command Code logomark with its fixed brand colours", () => {
     const { container } = render(<CommandCodeIcon />);
     const svg = container.querySelector("svg");

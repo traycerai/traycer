@@ -3,6 +3,7 @@ import {
   providerIdSchema,
   providerIdSchemaV80,
   providerIdSchemaV91,
+  providerIdSchemaV100,
 } from "@traycer/protocol/host/provider-schemas";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
@@ -102,12 +103,43 @@ export const providersChangedV11 = defineStreamRpcContract({
 });
 
 /**
+ * Frozen server-frame shape @1.2 shipped on `main`: the `changed` arm's
+ * provider id pinned to the twenty-two ids through Command Code
+ * (`providerIdSchemaV100`), frozen when Muse landed rather than a minor later,
+ * for the reason the @1.1 freeze gives.
+ */
+export const providersChangedServerFrameSchemaV12 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("changed"),
+      providerId: providerIdSchemaV100,
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+
+/**
  * @1.2 is the first minor whose `changed` frames may name a provider added
  * after 1.5.0 (Command Code is the first).
  */
 export const providersChangedV12 = defineStreamRpcContract({
   method: "providers.changed",
   schemaVersion: { major: 1, minor: 2 } as const,
+  openRequestSchema: providersChangedOpenRequestSchema,
+  serverFrameSchema: providersChangedServerFrameSchemaV12,
+  clientFrameSchema: providersChangedClientFrameSchema,
+});
+
+/**
+ * @1.3 is the first minor whose `changed` frames may name Muse.
+ */
+export const providersChangedV13 = defineStreamRpcContract({
+  method: "providers.changed",
+  schemaVersion: { major: 1, minor: 3 } as const,
   openRequestSchema: providersChangedOpenRequestSchema,
   serverFrameSchema: providersChangedServerFrameSchema,
   clientFrameSchema: providersChangedClientFrameSchema,

@@ -10,6 +10,7 @@ import {
   providerCliStateSchemaV70,
   providerCliStateSchemaV80,
   providersListResponseSchema,
+  providersListResponseSchemaV1010Preimage,
   providersListResponseSchemaV70,
   providersListResponseSchemaV91,
   providersListResponseSchemaV92,
@@ -444,7 +445,10 @@ describe("providers.list downgrade keeps what a frozen line CAN represent", () =
       hostRpcRegistry["providers.list"],
       10,
       8,
-      providersListResponseSchema.parse({ providers: [state], native: null }),
+      providersListResponseSchemaV1010Preimage.parse({
+        providers: [state],
+        native: null,
+      }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -476,7 +480,10 @@ describe("providers.list downgrade keeps what a frozen line CAN represent", () =
       hostRpcRegistry["providers.list"],
       10,
       7,
-      providersListResponseSchema.parse({ providers: [state], native: null }),
+      providersListResponseSchemaV1010Preimage.parse({
+        providers: [state],
+        native: null,
+      }),
     );
     expect(downgraded.ok).toBe(true);
     if (!downgraded.ok) return;
@@ -594,7 +601,7 @@ describe("providers.list downgrade keeps what a frozen line CAN represent", () =
       hostRpcRegistry["providers.list"],
       10,
       7,
-      providersListResponseSchema.parse({
+      providersListResponseSchemaV1010Preimage.parse({
         providers: [providerState("claude-code"), providerState("antigravity")],
         native: null,
       }),

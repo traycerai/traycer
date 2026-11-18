@@ -10,12 +10,14 @@ import {
 import {
   guiHarnessIdSchema,
   guiHarnessIdSchemaPreReasonix,
+  guiHarnessIdSchemaV100,
 } from "@traycer/protocol/host/agent/shared";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import {
   userMessageSenderSchema,
   userMessageSenderSchemaPreInReplyTo,
   userMessageSenderSchemaPreReasonix,
+  userMessageSenderSchemaPreMuse,
 } from "@traycer/protocol/persistence/epic/senders";
 import {
   interviewAnswerSchema,
@@ -172,13 +174,16 @@ export type RuntimeImageAttachment = z.infer<
   typeof runtimeImageAttachmentSchema
 >;
 
-export const runtimeSessionInfoSchema = lazySchema(() =>
+const runtimeSessionInfoSchemaPreMuse = lazySchema(() =>
   z.object({
     id: z.string(),
-    harnessId: guiHarnessIdSchema,
+    harnessId: guiHarnessIdSchemaV100,
     createdAt: z.number(),
     metadata: z.record(z.string(), z.unknown()).optional(),
   }),
+);
+export const runtimeSessionInfoSchema = lazySchema(() =>
+  runtimeSessionInfoSchemaPreMuse.extend({ harnessId: guiHarnessIdSchema }),
 );
 export type RuntimeSessionInfo = z.infer<typeof runtimeSessionInfoSchema>;
 
@@ -370,13 +375,16 @@ export const runtimePlanStatusSchema = lazySchema(() =>
 );
 export type RuntimePlanStatus = z.infer<typeof runtimePlanStatusSchema>;
 
-export const runtimePlanSourceSchema = lazySchema(() =>
+const runtimePlanSourceSchemaPreMuse = lazySchema(() =>
   z.object({
-    harnessId: guiHarnessIdSchema,
+    harnessId: guiHarnessIdSchemaV100,
     sessionId: z.string().nullable(),
     turnId: z.string().nullable(),
     kind: z.string(),
   }),
+);
+export const runtimePlanSourceSchema = lazySchema(() =>
+  runtimePlanSourceSchemaPreMuse.extend({ harnessId: guiHarnessIdSchema }),
 );
 export type RuntimePlanSource = z.infer<typeof runtimePlanSourceSchema>;
 
@@ -991,7 +999,7 @@ export const chatQueueSteerModeSchema = lazySchema(() =>
 );
 export type ChatQueueSteerMode = z.infer<typeof chatQueueSteerModeSchema>;
 
-export const steerSubmittedEventSchema = lazySchema(() =>
+const steerSubmittedEventSchemaPreMuse = lazySchema(() =>
   z.object({
     ...baseRuntimeEventFields,
     type: z.literal("steer.submitted"),
@@ -1006,6 +1014,11 @@ export const steerSubmittedEventSchema = lazySchema(() =>
     // from a human one. Additive + nullable: a host that predates this field sends
     // no sender, the block's stays `null`, and the fallback renders a plain user
     // row exactly as before.
+    sender: userMessageSenderSchemaPreMuse.nullable().default(null),
+  }),
+);
+export const steerSubmittedEventSchema = lazySchema(() =>
+  steerSubmittedEventSchemaPreMuse.extend({
     sender: userMessageSenderSchema.nullable().default(null),
   }),
 );
@@ -1232,11 +1245,11 @@ export type WorkflowCompletedEvent = z.infer<
  * `completionEventsBeforeRuntimeEvent`), so an interleaved notice never
  * finalizes an active text/reasoning stream.
  */
-export const providerNoticeUpsertEventSchema = lazySchema(() =>
+const providerNoticeUpsertEventSchemaPreMuse = lazySchema(() =>
   z.object({
     ...baseRuntimeEventFields,
     type: z.literal("provider_notice.upsert"),
-    harnessId: guiHarnessIdSchema,
+    harnessId: guiHarnessIdSchemaV100,
     noticeKind: providerNoticeKindSchema,
     tone: providerNoticeToneSchema,
     status: z.enum(["streaming", "completed"]),
@@ -1245,6 +1258,11 @@ export const providerNoticeUpsertEventSchema = lazySchema(() =>
     details: z.array(providerNoticeDetailSchema),
     fallbackText: z.string().min(1),
     metadata: providerNoticeNormalizedMetadataSchema.nullable(),
+  }),
+);
+export const providerNoticeUpsertEventSchema = lazySchema(() =>
+  providerNoticeUpsertEventSchemaPreMuse.extend({
+    harnessId: guiHarnessIdSchema,
   }),
 );
 export type ProviderNoticeUpsertEvent = z.infer<
@@ -1293,7 +1311,7 @@ const providerNoticeUpsertEventSchemaPreFallback = lazySchema(() =>
   z.object({
     ...baseRuntimeEventFields,
     type: z.literal("provider_notice.upsert"),
-    harnessId: guiHarnessIdSchema,
+    harnessId: guiHarnessIdSchemaV100,
     noticeKind: providerNoticeKindSchemaPreFallback,
     tone: providerNoticeToneSchema,
     status: z.enum(["streaming", "completed"]),
@@ -1743,7 +1761,7 @@ export const commandCodeUserMessageAnchorResolvedSchema = lazySchema(() =>
   }),
 );
 
-export const userMessageAnchorResolvedEventSchema = lazySchema(() =>
+export const userMessageAnchorResolvedEventSchemaPreMuse = lazySchema(() =>
   z.object({
     ...baseRuntimeEventFields,
     type: z.literal("user_message.anchor_resolved"),
@@ -1771,6 +1789,14 @@ export const userMessageAnchorResolvedEventSchema = lazySchema(() =>
       reasonixUserMessageAnchorResolvedSchema,
       antigravityUserMessageAnchorResolvedSchema,
       commandCodeUserMessageAnchorResolvedSchema,
+    ]),
+  }),
+);
+export const userMessageAnchorResolvedEventSchema = lazySchema(() =>
+  userMessageAnchorResolvedEventSchemaPreMuse.extend({
+    anchor: z.discriminatedUnion("harnessId", [
+      ...userMessageAnchorResolvedEventSchemaPreMuse.shape.anchor.options,
+      z.object({ harnessId: z.literal("muse"), sessionId: z.string() }),
     ]),
   }),
 );
@@ -2101,6 +2127,26 @@ export type ImageResolutionUpdatedEvent = z.infer<
   typeof imageResolutionUpdatedEventSchema
 >;
 
+const planDeltaEventSchemaPreMuse = lazySchema(() =>
+  planDeltaEventSchema.extend({ source: runtimePlanSourceSchemaPreMuse }),
+);
+const planUpdatedEventSchemaPreMuse = lazySchema(() =>
+  planUpdatedEventSchema.extend({ source: runtimePlanSourceSchemaPreMuse }),
+);
+const planCompletedEventSchemaPreMuse = lazySchema(() =>
+  planCompletedEventSchema.extend({ source: runtimePlanSourceSchemaPreMuse }),
+);
+const sessionCreatedEventSchemaPreMuse = lazySchema(() =>
+  sessionCreatedEventSchema.extend({
+    session: runtimeSessionInfoSchemaPreMuse,
+  }),
+);
+const sessionResumedEventSchemaPreMuse = lazySchema(() =>
+  sessionResumedEventSchema.extend({
+    session: runtimeSessionInfoSchemaPreMuse,
+  }),
+);
+
 // ─── Frozen pre-`workflow.*` runtime-event union (`chat.subscribe@1.2`) ────
 //
 // Kept so `chat.subscribe@1.2`'s frozen `blockDelta` frame schema (see
@@ -2124,9 +2170,9 @@ export const runtimeEventSchemaV12 = lazySchema(() =>
     approvalRequestedEventSchema,
     approvalResolvedEventSchema,
     todoUpdatedEventSchema,
-    planDeltaEventSchema,
-    planUpdatedEventSchema,
-    planCompletedEventSchema,
+    planDeltaEventSchemaPreMuse,
+    planUpdatedEventSchemaPreMuse,
+    planCompletedEventSchemaPreMuse,
     compactionStartedEventSchema,
     compactionCompletedEventSchema,
     compactionErroredEventSchema,
@@ -2141,14 +2187,14 @@ export const runtimeEventSchemaV12 = lazySchema(() =>
     artifactOperationEventSchemaPreHtml,
     commandStartedEventSchema,
     commandCompletedEventSchema,
-    sessionCreatedEventSchema,
-    sessionResumedEventSchema,
+    sessionCreatedEventSchemaPreMuse,
+    sessionResumedEventSchemaPreMuse,
     turnStartedEventSchema,
-    userMessageAnchorResolvedEventSchema,
+    userMessageAnchorResolvedEventSchemaPreMuse,
     turnCompletedEventSchema,
     turnStoppedEventSchema,
     turnInterruptedEventSchema,
-    steerSubmittedEventSchema,
+    steerSubmittedEventSchemaPreMuse,
     usageUpdatedEventSchema,
     errorEventSchema,
   ]),
@@ -2157,9 +2203,24 @@ export const runtimeEventSchemaV12 = lazySchema(() =>
 export const runtimeEventSchema = lazySchema(() =>
   z.discriminatedUnion("type", [
     artifactOperationEventSchema,
-    ...runtimeEventSchemaV12.def.options.filter(
-      (schema) => schema !== artifactOperationEventSchemaPreHtml,
-    ),
+    ...runtimeEventSchemaV12.def.options
+      .filter((schema) => schema !== artifactOperationEventSchemaPreHtml)
+      .map((schema) => {
+        if (schema === userMessageAnchorResolvedEventSchemaPreMuse)
+          return userMessageAnchorResolvedEventSchema;
+        if (schema === planDeltaEventSchemaPreMuse) return planDeltaEventSchema;
+        if (schema === planUpdatedEventSchemaPreMuse)
+          return planUpdatedEventSchema;
+        if (schema === planCompletedEventSchemaPreMuse)
+          return planCompletedEventSchema;
+        if (schema === sessionCreatedEventSchemaPreMuse)
+          return sessionCreatedEventSchema;
+        if (schema === sessionResumedEventSchemaPreMuse)
+          return sessionResumedEventSchema;
+        if (schema === steerSubmittedEventSchemaPreMuse)
+          return steerSubmittedEventSchema;
+        return schema;
+      }),
     workflowStartedEventSchema,
     workflowProgressEventSchema,
     workflowCompletedEventSchema,
@@ -2190,9 +2251,9 @@ export const runtimeEventSchemaPreDisplayFacts = lazySchema(() =>
     approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,
     todoUpdatedEventSchema,
-    planDeltaEventSchema,
-    planUpdatedEventSchema,
-    planCompletedEventSchema,
+    planDeltaEventSchemaPreMuse,
+    planUpdatedEventSchemaPreMuse,
+    planCompletedEventSchemaPreMuse,
     compactionStartedEventSchema,
     compactionCompletedEventSchema,
     compactionErroredEventSchemaPreNotApplied,
@@ -2207,20 +2268,20 @@ export const runtimeEventSchemaPreDisplayFacts = lazySchema(() =>
     artifactOperationEventSchemaPreHtml,
     commandStartedEventSchema,
     commandCompletedEventSchema,
-    sessionCreatedEventSchema,
-    sessionResumedEventSchema,
+    sessionCreatedEventSchemaPreMuse,
+    sessionResumedEventSchemaPreMuse,
     turnStartedEventSchema,
-    userMessageAnchorResolvedEventSchema,
+    userMessageAnchorResolvedEventSchemaPreMuse,
     turnCompletedEventSchema,
     turnStoppedEventSchema,
     turnInterruptedEventSchema,
-    steerSubmittedEventSchema,
+    steerSubmittedEventSchemaPreMuse,
     usageUpdatedEventSchema,
     errorEventSchema,
     workflowStartedEventSchema,
     workflowProgressEventSchema,
     workflowCompletedEventSchema,
-    providerNoticeUpsertEventSchema,
+    providerNoticeUpsertEventSchemaPreMuse,
     imageResolutionUpdatedEventSchema,
     userMessageAnchorTailUpdatedEventSchema,
   ]),
@@ -2244,9 +2305,9 @@ export const runtimeEventSchemaPreMcpApp = lazySchema(() =>
     approvalRequestedEventSchema,
     approvalResolvedEventSchema,
     todoUpdatedEventSchema,
-    planDeltaEventSchema,
-    planUpdatedEventSchema,
-    planCompletedEventSchema,
+    planDeltaEventSchemaPreMuse,
+    planUpdatedEventSchemaPreMuse,
+    planCompletedEventSchemaPreMuse,
     compactionStartedEventSchema,
     compactionCompletedEventSchema,
     compactionErroredEventSchemaPreNotApplied,
@@ -2261,20 +2322,20 @@ export const runtimeEventSchemaPreMcpApp = lazySchema(() =>
     artifactOperationEventSchemaPreHtml,
     commandStartedEventSchema,
     commandCompletedEventSchema,
-    sessionCreatedEventSchema,
-    sessionResumedEventSchema,
+    sessionCreatedEventSchemaPreMuse,
+    sessionResumedEventSchemaPreMuse,
     turnStartedEventSchema,
-    userMessageAnchorResolvedEventSchema,
+    userMessageAnchorResolvedEventSchemaPreMuse,
     turnCompletedEventSchema,
     turnStoppedEventSchema,
     turnInterruptedEventSchema,
-    steerSubmittedEventSchema,
+    steerSubmittedEventSchemaPreMuse,
     usageUpdatedEventSchema,
     errorEventSchema,
     workflowStartedEventSchema,
     workflowProgressEventSchema,
     workflowCompletedEventSchema,
-    providerNoticeUpsertEventSchema,
+    providerNoticeUpsertEventSchemaPreMuse,
     imageResolutionUpdatedEventSchema,
     userMessageAnchorTailUpdatedEventSchema,
   ]),
@@ -2297,9 +2358,9 @@ export const runtimeEventSchemaPreBrowser = lazySchema(() =>
     approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,
     todoUpdatedEventSchema,
-    planDeltaEventSchema,
-    planUpdatedEventSchema,
-    planCompletedEventSchema,
+    planDeltaEventSchemaPreMuse,
+    planUpdatedEventSchemaPreMuse,
+    planCompletedEventSchemaPreMuse,
     compactionStartedEventSchema,
     compactionCompletedEventSchema,
     compactionErroredEventSchemaPreNotApplied,
@@ -2314,20 +2375,20 @@ export const runtimeEventSchemaPreBrowser = lazySchema(() =>
     artifactOperationEventSchemaPreHtml,
     commandStartedEventSchema,
     commandCompletedEventSchema,
-    sessionCreatedEventSchema,
-    sessionResumedEventSchema,
+    sessionCreatedEventSchemaPreMuse,
+    sessionResumedEventSchemaPreMuse,
     turnStartedEventSchema,
-    userMessageAnchorResolvedEventSchema,
+    userMessageAnchorResolvedEventSchemaPreMuse,
     turnCompletedEventSchema,
     turnStoppedEventSchema,
     turnInterruptedEventSchema,
-    steerSubmittedEventSchema,
+    steerSubmittedEventSchemaPreMuse,
     usageUpdatedEventSchema,
     errorEventSchema,
     workflowStartedEventSchema,
     workflowProgressEventSchema,
     workflowCompletedEventSchema,
-    providerNoticeUpsertEventSchema,
+    providerNoticeUpsertEventSchemaPreMuse,
     imageResolutionUpdatedEventSchema,
     userMessageAnchorTailUpdatedEventSchema,
   ]),
@@ -2534,9 +2595,9 @@ export const runtimeEventSchemaPreFallback = lazySchema(() =>
     approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,
     todoUpdatedEventSchema,
-    planDeltaEventSchema,
-    planUpdatedEventSchema,
-    planCompletedEventSchema,
+    planDeltaEventSchemaPreMuse,
+    planUpdatedEventSchemaPreMuse,
+    planCompletedEventSchemaPreMuse,
     compactionStartedEventSchema,
     compactionCompletedEventSchema,
     compactionErroredEventSchemaPreNotApplied,
@@ -2551,14 +2612,14 @@ export const runtimeEventSchemaPreFallback = lazySchema(() =>
     artifactOperationEventSchemaPreHtml,
     commandStartedEventSchema,
     commandCompletedEventSchema,
-    sessionCreatedEventSchema,
-    sessionResumedEventSchema,
+    sessionCreatedEventSchemaPreMuse,
+    sessionResumedEventSchemaPreMuse,
     turnStartedEventSchema,
-    userMessageAnchorResolvedEventSchema,
+    userMessageAnchorResolvedEventSchemaPreMuse,
     turnCompletedEventSchema,
     turnStoppedEventSchema,
     turnInterruptedEventSchemaPreFallback,
-    steerSubmittedEventSchema,
+    steerSubmittedEventSchemaPreMuse,
     usageUpdatedEventSchema,
     errorEventSchemaPreFallback,
     workflowStartedEventSchema,

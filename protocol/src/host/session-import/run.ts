@@ -54,6 +54,7 @@ import {
   guiHarnessIdSchema,
   guiHarnessIdSchemaPreAntigravity,
   guiHarnessIdSchemaPreCommandCode,
+  guiHarnessIdSchemaPreMuse,
   permissionModeSchema,
   permissionModeSchemaPreAuto,
 } from "@traycer/protocol/persistence/epic/foundation";
@@ -249,6 +250,17 @@ export type SessionImportRunClientFrame = z.infer<
   typeof sessionImportRunClientFrameSchema
 >;
 
+export const sessionImportRunServerFrameSchemaPreMuse = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    sessionImportRunStartedFrameSchema,
+    sessionImportRunProgressFrameSchema.extend({
+      harness: guiHarnessIdSchemaPreMuse,
+    }),
+    sessionImportRunCompleteFrameSchema,
+    sessionImportRunPongFrameSchema,
+  ]),
+);
+
 export const sessionImportRunV10 = defineStreamRpcContract({
   method: "sessionImport.run",
   schemaVersion: { major: 1, minor: 0 } as const,
@@ -311,6 +323,14 @@ export const sessionImportRunV12 = defineStreamRpcContract({
 export const sessionImportRunV13 = defineStreamRpcContract({
   method: "sessionImport.run",
   schemaVersion: { major: 1, minor: 3 } as const,
+  openRequestSchema: sessionImportRunOpenRequestSchema,
+  serverFrameSchema: sessionImportRunServerFrameSchemaPreMuse,
+  clientFrameSchema: sessionImportRunClientFrameSchema,
+});
+
+export const sessionImportRunV14 = defineStreamRpcContract({
+  method: "sessionImport.run",
+  schemaVersion: { major: 1, minor: 4 } as const,
   openRequestSchema: sessionImportRunOpenRequestSchema,
   serverFrameSchema: sessionImportRunServerFrameSchema,
   clientFrameSchema: sessionImportRunClientFrameSchema,

@@ -10,6 +10,7 @@ import {
   openChatEventSchema,
   openChatEventSchemaPreProviderSelection,
   openMessageSchema,
+  openMessageSchemaPreMuse,
   openMessageSchemaPreFeedbackDraft,
   openMessageSchemaPreSlack,
   openMessageSchemaPreNotApplied,
@@ -47,6 +48,7 @@ import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-t
 import {
   transcriptRowContextSchemaPreCommandCode,
   transcriptRowContextSchemaPreFallback,
+  transcriptRowContextSchemaPreMuse,
 } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import {
   interviewAnswerabilitySchema,
@@ -793,13 +795,20 @@ export const chatTranscriptWindowSchemaPreProviderSelection = lazySchema(() =>
      * asked for them and a wrong elapsed time or profile label persists until the
      * rows are evicted. Most tails have nothing to say and omit it.
      */
-    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+    // Pinned to the released rows' anchor set (`transcriptRowContextSchemaPreMuse`)
+    // when Muse landed: every line below `@1.45` withholds a Muse session
+    // anchor, so the base the frozen copies derive from must not read the live
+    // union. The live window widens it again below.
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreMuse)
+      .optional(),
   }),
 );
 /** Provider dispatch provenance first rides chat.subscribe@1.44. */
 export const chatTranscriptWindowSchema = lazySchema(() =>
   chatTranscriptWindowSchemaPreProviderSelection.extend({
     events: z.array(chatEventSchema),
+    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
   }),
 );
 export type ChatTranscriptWindow = z.infer<typeof chatTranscriptWindowSchema>;
@@ -812,7 +821,11 @@ export const openChatTranscriptWindowSchemaPreNotApplied = lazySchema(() =>
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(openMessageSchemaPreNotApplied),
     events: z.array(openChatEventSchemaPreProviderSelection),
-    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+    // Pinned to `transcriptRowContextSchemaPreMuse` when Muse landed, for the
+    // reason the window base above gives.
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreMuse)
+      .optional(),
   }),
 );
 
@@ -846,7 +859,7 @@ export const openChatTranscriptWindowSchemaPreCanvas = lazySchema(() =>
 export const openChatTranscriptWindowSchemaPreProviderSelection = lazySchema(
   () =>
     chatTranscriptWindowSchemaPreProviderSelection.extend({
-      messages: z.array(openMessageSchema),
+      messages: z.array(openMessageSchemaPreMuse),
       events: z.array(openChatEventSchemaPreProviderSelection),
     }),
 );
@@ -860,7 +873,19 @@ export const openChatTranscriptWindowSchemaPreFeedbackDraft = lazySchema(() =>
 /** Provider dispatch provenance first rides chat.subscribe@1.44. */
 export const openChatTranscriptWindowSchema = lazySchema(() =>
   openChatTranscriptWindowSchemaPreProviderSelection.extend({
+    messages: z.array(openMessageSchema),
     events: z.array(openChatEventSchema),
+    // The live window widens the pinned base back to the live union, so the
+    // `@1.45` head carries a Muse session anchor.
+    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+  }),
+);
+export const openChatTranscriptWindowSchemaPreMuse = lazySchema(() =>
+  openChatTranscriptWindowSchema.extend({
+    messages: z.array(openMessageSchemaPreMuse),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreMuse)
+      .optional(),
   }),
 );
 export type OpenChatTranscriptWindow = z.infer<
@@ -977,7 +1002,11 @@ export const chatTranscriptWindowSchemaPreMcpApp = lazySchema(() =>
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreMcpApp),
     events: z.array(chatEventSchemaPreProviderSelection),
-    rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+    // Pinned to `transcriptRowContextSchemaPreMuse` when Muse landed, for the
+    // reason the window base above gives.
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreMuse)
+      .optional(),
   }),
 );
 
@@ -1194,7 +1223,11 @@ export const chatRangeResponseSchemaPreProviderSelection = lazySchema(() =>
      * a consumer falls back to its own derivation, which is what keeps a host
      * predating a field from silently asserting one.
      */
-    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+    // Pinned to `transcriptRowContextSchemaPreMuse` when Muse landed, for the
+    // reason the window base above gives.
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreMuse)
+      .default({}),
     reachedStart: z.boolean(),
     reachedEnd: z.boolean(),
     truncatedAtOrdinal: z.number().int().nonnegative().optional(),
@@ -1204,6 +1237,7 @@ export const chatRangeResponseSchemaPreProviderSelection = lazySchema(() =>
 export const chatRangeResponseSchema = lazySchema(() =>
   chatRangeResponseSchemaPreProviderSelection.extend({
     events: z.array(chatEventSchema),
+    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
   }),
 );
 export type ChatRangeResponse = z.infer<typeof chatRangeResponseSchema>;
@@ -1223,7 +1257,11 @@ export const chatRangeResponseSchemaPreMcpApp = lazySchema(() =>
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(messageSchemaPreMcpApp),
     events: z.array(chatEventSchemaPreProviderSelection),
-    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+    // Pinned to `transcriptRowContextSchemaPreMuse` when Muse landed, for the
+    // reason the window base above gives.
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreMuse)
+      .default({}),
     reachedStart: z.boolean(),
     reachedEnd: z.boolean(),
     truncatedAtOrdinal: z.number().int().nonnegative().optional(),
@@ -1240,7 +1278,11 @@ export const openChatRangeResponseSchemaPreNotApplied = lazySchema(() =>
     incompleteRowIds: z.array(z.string()).optional(),
     messages: z.array(openMessageSchemaPreNotApplied),
     events: z.array(openChatEventSchemaPreProviderSelection),
-    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+    // Pinned to `transcriptRowContextSchemaPreMuse` when Muse landed, for the
+    // reason the window base above gives.
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreMuse)
+      .default({}),
     reachedStart: z.boolean(),
     reachedEnd: z.boolean(),
     truncatedAtOrdinal: z.number().int().nonnegative().optional(),
@@ -1274,14 +1316,26 @@ export const openChatRangeResponseSchemaPreCanvas = lazySchema(() =>
  */
 export const openChatRangeResponseSchemaPreProviderSelection = lazySchema(() =>
   chatRangeResponseSchemaPreProviderSelection.extend({
-    messages: z.array(openMessageSchema),
+    messages: z.array(openMessageSchemaPreMuse),
     events: z.array(openChatEventSchemaPreProviderSelection),
   }),
 );
 /** Provider dispatch provenance first rides chat.subscribe@1.44. */
 export const openChatRangeResponseSchema = lazySchema(() =>
   openChatRangeResponseSchemaPreProviderSelection.extend({
+    messages: z.array(openMessageSchema),
     events: z.array(openChatEventSchema),
+    // The live range widens the pinned base back to the live union, so the
+    // `@1.45` head carries a Muse session anchor.
+    rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+  }),
+);
+export const openChatRangeResponseSchemaPreMuse = lazySchema(() =>
+  openChatRangeResponseSchema.extend({
+    messages: z.array(openMessageSchemaPreMuse),
+    rowContext: z
+      .record(z.string(), transcriptRowContextSchemaPreMuse)
+      .default({}),
   }),
 );
 export type OpenChatRangeResponse = z.infer<typeof openChatRangeResponseSchema>;

@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   draftComposerPortableSchema,
   draftComposerPortableSchemaPreCommandCode,
+  draftComposerPortableSchemaPreMuse,
   draftComposerPortableWriteSchema,
   draftInterviewPortableSchema,
   draftStashPortableSchema,
@@ -766,7 +767,7 @@ export const draftsSubscribeServerFrameSchemaV11 = lazySchema(() =>
         ...storeSeqField,
         draftId: z.string().min(1),
         revision: z.number().int().nonnegative(),
-        draft: draftDocumentSchema,
+        draft: draftDocumentSchemaV20,
       }),
       z.object({
         kind: z.literal("delete"),
@@ -878,3 +879,82 @@ export function draftSurfaceKindOf(kind: DraftKind): DraftSurfaceKind | null {
   }
   return null;
 }
+
+export const draftDocumentSchemaV20 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("landing"),
+      portable: draftComposerPortableSchemaPreMuse,
+    }),
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("new-chat"),
+      portable: draftComposerPortableSchemaPreMuse,
+    }),
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("chat-composer"),
+      portable: draftComposerPortableSchemaPreMuse,
+    }),
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("interview"),
+      portable: draftInterviewPortableSchema,
+    }),
+    z.object({
+      ...draftDocumentCommonFields,
+      kind: z.literal("stash-entry"),
+      portable: draftStashPortableSchema,
+    }),
+  ]),
+);
+
+export const draftsListResponseSchemaV20 = lazySchema(() =>
+  draftsListResponseSchema.extend({ drafts: z.array(draftDocumentSchemaV20) }),
+);
+export const draftsUpsertResponseSchemaV20 = lazySchema(() =>
+  draftsUpsertResponseSchema.extend({ draft: draftDocumentSchemaV20 }),
+);
+
+export type DraftsSubscribeServerFrameV12 = z.infer<
+  typeof draftsSubscribeServerFrameSchemaV12
+>;
+
+export const draftsSubscribeServerFrameSchemaV12 = lazySchema(() =>
+  z
+    .discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("upsert"),
+        ...textFrameFields,
+        ...storeSeqField,
+        draftId: z.string().min(1),
+        revision: z.number().int().nonnegative(),
+        draft: draftDocumentSchema,
+      }),
+      z.object({
+        kind: z.literal("delete"),
+        ...textFrameFields,
+        ...storeSeqField,
+        draftId: z.string().min(1),
+        // Same domain as `draftListTombstoneSchema.revision` - see there.
+        revision: z.number().int().positive(),
+      }),
+      z.object({
+        kind: z.literal("pong"),
+        ...textFrameFields,
+      }),
+      /**
+       * Advisory: the host's personal drafts-scope id resolved after
+       * `drafts.list` returned `scopeId: null`. No `storeSeq` — this is
+       * not a store mutation. A client that never sees it keeps the
+       * cloud-drafts section absent (hide-not-fail), never errors.
+       */
+      z.object({
+        kind: z.literal("scope"),
+        ...textFrameFields,
+        scopeId: z.string().min(1),
+      }),
+    ])
+    .superRefine(refineDraftsSubscribeUpsertEnvelope),
+);

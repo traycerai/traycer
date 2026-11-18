@@ -87,6 +87,7 @@ Traycer connects to the subscriptions you already pay for instead of locking you
   </tr>
   <tr>
     <td align="center" width="150"><a href="https://commandcode.ai"><img src="assets/readme/agents/commandcode.svg" width="28" alt="Command Code" /><br /><b>Command Code</b></a></td>
+    <td align="center" width="150"><a href="https://dev.meta.ai/docs/muse-code"><img src="assets/readme/agents/muse.svg" width="28" alt="Muse Code" /><br /><b>Muse Code</b></a><br /><small>Requires a host with Muse support</small></td>
   </tr>
 </table>
 </div>

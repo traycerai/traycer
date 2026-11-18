@@ -50,6 +50,7 @@ import {
   providersListModelProvidersRequestSchema,
   providersListModelProvidersResponseSchema,
   providersListResponseSchema,
+  providersListResponseSchemaV1010Preimage,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -194,7 +195,7 @@ const claudeState = providerCliStateSchema.parse({
   },
 });
 
-const liveResponse = providersListResponseSchema.parse({
+const liveResponse = providersListResponseSchemaV1010Preimage.parse({
   providers: [opencodeState, claudeState],
   native: null,
 });
@@ -1972,7 +1973,10 @@ describe("no downgrade hop fails a whole response over one unsupported provider"
         hostRpcRegistry["providers.list"],
         10,
         targetMajor,
-        { providers: [newestProvider, claudeState], native: null },
+        providersListResponseSchemaV1010Preimage.parse({
+          providers: [newestProvider, claudeState],
+          native: null,
+        }),
       );
       // `ok`, not a thrown error. This is the whole assertion.
       expect(downgraded.ok).toBe(true);

@@ -169,6 +169,16 @@ describe("TERMINAL_SIGN_IN_COPY", () => {
     );
   });
 
+  it("guides Muse Code sign-in through the browser", () => {
+    const guidance = providerTerminalGuidance("muse");
+    expect(guidance.stepsAfterAction).toEqual([
+      "Complete the sign-in in the browser.",
+      "Refresh this list.",
+    ]);
+    expect(guidance.terminalHint).toContain("browser");
+    expect(guidance.manualCommand).toBeNull();
+  });
+
   it("re-words Amp around a printed sign-in link that finishes in the terminal, without promising a code paste or that a browser opens", () => {
     const guidance = providerTerminalGuidance("amp");
     expect(providerSetupGuidance("amp")).toBeNull();
