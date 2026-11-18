@@ -16,12 +16,17 @@ import { base64ToBytes } from "@/lib/composer/image-base64";
 const links = new Map<string, string>();
 /**
  * The bots each wanted hash is drawn for, and how many pictures of each
- * want it. The hash is read through the first of them: a bot that no longer
- * draws it may no longer wear it, and a read through that bot answers none.
+ * want it. The hash is read through the first of them not yet read through:
+ * a bot that no longer draws it may no longer wear it, and a read through
+ * that bot answers none.
  */
 const wanted = new Map<string, Map<string, number>>();
-/** The hashes the loader has read once, held or not, since its last reset. */
-const tried = new Set<string>();
+/**
+ * The reads made this round, by hash and then by the bot read through. A
+ * read is of one bot's picture, so one that failed or found none says
+ * nothing of another bot that wears the same bytes.
+ */
+const tried = new Map<string, Set<string>>();
 /**
  * Which host the loader asks, counted: every read belongs to one round, and
  * a new round reads afresh and takes nothing from the one before.
@@ -97,7 +102,10 @@ export function wantBotPicture(sha256: string, botId: string): () => void {
     wanted.set(sha256, new Map([[botId, 1]]));
     changed();
   } else {
-    bots.set(botId, (bots.get(botId) ?? 0) + 1);
+    const drawn = bots.get(botId);
+    bots.set(botId, (drawn ?? 0) + 1);
+    // Another bot to read the hash through, if the reads so far found none.
+    if (drawn === undefined) changed();
   }
   return () => {
     const held = wanted.get(sha256);
@@ -107,28 +115,32 @@ export function wantBotPicture(sha256: string, botId: string): () => void {
       held.set(botId, drawn - 1);
       return;
     }
-    const wasReader = held.keys().next().value === botId;
     held.delete(botId);
     if (held.size === 0) {
       wanted.delete(sha256);
       prune();
-    } else if (wasReader) {
-      // A read through the bot that left says nothing of the bots that stay.
-      tried.delete(sha256);
     }
     changed();
   };
 }
 
 /**
- * The first wanted picture that is not held and has not been tried, or
- * `null`. The same object for the same answer, so it can be subscribed to.
+ * The first wanted picture that is not held, as the first bot drawing it
+ * that it has not been read through this round, or `null`. The same object
+ * for the same answer, so it can be subscribed to.
  */
 export function nextWantedBotPicture(): BotPictureRead | null {
   for (const [sha256, bots] of wanted) {
-    if (links.has(sha256) || tried.has(sha256)) continue;
-    const botId = bots.keys().next().value;
-    if (botId === undefined) continue;
+    if (links.has(sha256)) continue;
+    const read = tried.get(sha256);
+    let botId: string | null = null;
+    for (const drawing of bots.keys()) {
+      if (read?.has(drawing) !== true) {
+        botId = drawing;
+        break;
+      }
+    }
+    if (botId === null) continue;
     if (
       next?.sha256 !== sha256 ||
       next.botId !== botId ||
@@ -143,8 +155,9 @@ export function nextWantedBotPicture(): BotPictureRead | null {
 }
 
 /**
- * Holds the picture a read answered and marks its hash tried, whatever the
- * answer was: `null` for a read that failed or found no picture. A picture
+ * Holds the picture a read answered and marks the hash tried through that
+ * bot, whatever the answer was: `null` for a read that failed or found no
+ * picture. A picture
  * nothing wants and no listed bot wears by now is not kept, and an answer
  * to a read of an earlier round is dropped.
  */
@@ -153,8 +166,10 @@ export function settleBotPictureRead(
   picture: BotPictureBytes | null,
 ): void {
   if (read.round !== round) return;
-  const { sha256 } = read;
-  tried.add(sha256);
+  const { sha256, botId } = read;
+  const through = tried.get(sha256);
+  if (through === undefined) tried.set(sha256, new Set([botId]));
+  else through.add(botId);
   const link = picture === null ? null : linkOf(picture);
   if (link !== null) {
     const before = links.get(sha256);
@@ -193,15 +208,16 @@ export function retryBotPictures(): void {
  * Says which pictures the listed bots wear, and drops the links none of
  * them wears and nothing drawn wants: a replaced picture's link does not
  * outlive the bot's change. A picture a bot has come to wear since the last
- * say may be read again, whoever else wore it meanwhile: a read that found
- * none was of a bot that did not wear it yet, or no longer did. Only a change
- * of a listed bot's look reopens a read this way; a list that still shows the
- * same bot wearing the same picture reopens none.
+ * say may be read through that bot again: a read that found none was of a
+ * bot that did not wear it yet, or no longer did. Only a change of a listed
+ * bot's look reopens a read this way; a list that still shows the same bot
+ * wearing the same picture reopens none.
  */
 export function keepBotPictures(wornByNow: ReadonlyMap<string, string>): void {
   let retried = false;
   for (const [botId, sha256] of wornByNow) {
-    if (wornBy.get(botId) !== sha256 && tried.delete(sha256)) retried = true;
+    if (wornBy.get(botId) === sha256) continue;
+    if (tried.get(sha256)?.delete(botId) === true) retried = true;
   }
   wornBy = wornByNow;
   worn = new Set(wornByNow.values());

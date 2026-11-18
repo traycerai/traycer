@@ -38,15 +38,30 @@ function roundNow(): number {
   return read.round;
 }
 
-/** A read of `sha256` in the current round settled as `picture`. */
-function settle(sha256: string, picture: BotPictureBytes | null): void {
-  settleBotPictureRead({ sha256, botId: BOT, round: roundNow() }, picture);
+/** A read of `sha256` through `botId` in the current round settled as `picture`. */
+function settleThrough(
+  sha256: string,
+  botId: string,
+  picture: BotPictureBytes | null,
+): void {
+  settleBotPictureRead({ sha256, botId, round: roundNow() }, picture);
 }
 
-/** The pictures listed bots wear: the n-th hash is worn by the n-th of a fixed run of bots. */
+/** A read of `sha256` through {@link BOT} settled as `picture`. */
+function settle(sha256: string, picture: BotPictureBytes | null): void {
+  settleThrough(sha256, BOT, picture);
+}
+
+/** The bots a test lists, in the order their pictures are named by {@link wears}. */
+const LISTED_BOTS = [BOT, OTHER_BOT, "bot_wearing_2"];
+
+/** The pictures listed bots wear: the n-th hash is worn by the n-th listed bot. */
 function wears(...hashes: readonly string[]): ReadonlyMap<string, string> {
   return new Map(
-    hashes.map((sha256, i) => [`bot_wearing_${String(i)}`, sha256]),
+    hashes.map((sha256, i) => [
+      LISTED_BOTS[i] ?? `bot_wearing_${String(i)}`,
+      sha256,
+    ]),
   );
 }
 
@@ -133,16 +148,20 @@ describe("which pictures are wanted", () => {
     expect(nextWantedBotPicture()?.sha256).toBe(OTHER);
   });
 
-  it("tells a subscriber when a hash is first wanted, and not when a second picture wants it", () => {
+  it("tells a subscriber when a hash is first wanted and when another bot starts to draw it, and not when another picture of the same bot does", () => {
     const listener = vi.fn();
     const stop = subscribeBotPictures(listener);
 
     want(HASH, BOT);
+    expect(listener).toHaveBeenCalledTimes(1);
+    want(HASH, BOT);
+    expect(listener).toHaveBeenCalledTimes(1);
     want(HASH, OTHER_BOT);
+    expect(listener).toHaveBeenCalledTimes(2);
     stop();
     want(OTHER, BOT);
 
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -376,21 +395,18 @@ describe("bots drawing the same picture", () => {
     expect(after).not.toBe(before);
   });
 
-  it("offers it again through the bot that stays when the read through the bot that left settled as none", () => {
-    const withdrawA = want(HASH, BOT);
+  it("reads it through the other bot at once when the read through the first found none, with no withdrawal, and then no more", () => {
+    want(HASH, BOT);
     want(HASH, OTHER_BOT);
-    settle(HASH, null);
-    expect(nextWantedBotPicture()).toBeNull();
-    const listener = vi.fn();
-    subscribe(listener);
 
-    withdrawA();
-
-    expect(listener).toHaveBeenCalledTimes(1);
+    settleThrough(HASH, BOT, null);
     expect(nextWantedBotPicture()).toMatchObject({
       sha256: HASH,
       botId: OTHER_BOT,
     });
+    settleThrough(HASH, OTHER_BOT, null);
+
+    expect(nextWantedBotPicture()).toBeNull();
   });
 
   it("does not offer it again when the bot that withdrew was not the one it was read through", () => {
@@ -406,7 +422,6 @@ describe("bots drawing the same picture", () => {
   it("counts drawers per bot: one of two drawers of the same bot leaving changes nothing", () => {
     const first = want(HASH, BOT);
     want(HASH, BOT);
-    want(HASH, OTHER_BOT);
     settle(HASH, null);
     const listener = vi.fn();
     subscribe(listener);
@@ -415,6 +430,32 @@ describe("bots drawing the same picture", () => {
 
     expect(listener).not.toHaveBeenCalled();
     expect(nextWantedBotPicture()).toBeNull();
+  });
+
+  it("skips a hash every bot drawing it has been read through, and offers the next wanted hash", () => {
+    want(HASH, BOT);
+    want(HASH, OTHER_BOT);
+    want(OTHER, BOT);
+    settleThrough(HASH, BOT, null);
+    settleThrough(HASH, OTHER_BOT, null);
+
+    expect(nextWantedBotPicture()).toMatchObject({ sha256: OTHER });
+  });
+
+  it("tells subscribers and offers the hash when a new bot starts to draw it after every current drawer was read through", () => {
+    want(HASH, BOT);
+    settle(HASH, null);
+    expect(nextWantedBotPicture()).toBeNull();
+    const listener = vi.fn();
+    subscribe(listener);
+
+    want(HASH, OTHER_BOT);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(nextWantedBotPicture()).toMatchObject({
+      sha256: HASH,
+      botId: OTHER_BOT,
+    });
   });
 
   it("keeps reading it through the first bot until that bot's last drawer has left", () => {
@@ -525,10 +566,26 @@ describe("a hash that becomes worn again", () => {
     expect(nextWantedBotPicture()).toMatchObject({ sha256: HASH, botId: BOT });
   });
 
-  it("is offered again when a listed bot that does not draw it newly wears it, and only then: a keep showing the same bot with the same hash changes nothing", () => {
+  it("is offered through the bot that stays when the bot it was read through leaves the picture and then its drawer leaves, though the read found none", () => {
+    keepBotPictures(wears(HASH, HASH));
+    const withdrawA = want(HASH, BOT);
+    settle(HASH, null);
+    keepBotPictures(new Map([[OTHER_BOT, HASH]]));
+    withdrawA();
+    expect(nextWantedBotPicture()).toBeNull();
+
+    want(HASH, OTHER_BOT);
+
+    expect(nextWantedBotPicture()).toMatchObject({
+      sha256: HASH,
+      botId: OTHER_BOT,
+    });
+  });
+
+  it("clears only the pair of the bot that newly wears it: a bot that does not draw it newly wearing it reopens nothing, and a keep showing the same pairs changes nothing", () => {
     want(HASH, BOT);
     keepBotPictures(new Map([[BOT, HASH]]));
-    settleBotPictureRead({ sha256: HASH, botId: BOT, round: roundNow() }, null);
+    settle(HASH, null);
 
     keepBotPictures(new Map([[BOT, HASH]]));
     expect(nextWantedBotPicture()).toBeNull();
@@ -539,7 +596,7 @@ describe("a hash that becomes worn again", () => {
       ]),
     );
 
-    expect(nextWantedBotPicture()).toMatchObject({ sha256: HASH });
+    expect(nextWantedBotPicture()).toBeNull();
   });
 });
 

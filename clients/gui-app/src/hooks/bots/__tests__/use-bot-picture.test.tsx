@@ -30,6 +30,28 @@ import type { HomeBotsGroup, HomeBotsModel } from "@/lib/home-bots/bots-model";
 import { deliveredLook } from "@/components/bots/__tests__/mascot-drawing";
 import { tracyRecord } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
 
+/** The props each loader harness is rendered and re-rendered with. */
+type LoaderClient = Parameters<typeof useBotPictureLoads>[0];
+interface ModelProps {
+  readonly model: HomeBotsModel | null;
+}
+interface ListingProps {
+  readonly listing: HomeBotsModel | null;
+}
+interface ReadyProps {
+  readonly ready: boolean;
+}
+interface ReadyListingProps {
+  readonly ready: boolean;
+  readonly listing: HomeBotsModel | null;
+}
+interface ClientProps {
+  readonly client: LoaderClient;
+}
+interface SupportedProps {
+  readonly supported: boolean;
+}
+
 const HASH = "a".repeat(64);
 const OTHER = "b".repeat(64);
 const THIRD = "c".repeat(64);
@@ -369,20 +391,60 @@ describe("reading the pictures that drawn bots want", () => {
     });
   });
 
-  it("reads a picture again through the bot that still draws it when the bot it was read through leaves and the read found none", async () => {
+  it("reads a picture through the other bot drawing it as soon as the read through the first found none, with no withdrawal, and stops when that finds none too", async () => {
     const host = pictureHost();
-    const model = modelOf(
-      [PICTURE_BOT, "env-1", MASCOT_LOOK],
-      [SECOND_PICTURE_BOT, "env-2", pictureLook(HASH)],
-    );
-    renderHook(
-      () => {
+    const lists = (): HomeBotsModel =>
+      modelOf(
+        [PICTURE_BOT, "env-1", pictureLook(HASH)],
+        [SECOND_PICTURE_BOT, "env-2", pictureLook(HASH)],
+      );
+    const { rerender } = renderHook<void, ModelProps>(
+      ({ model }: ModelProps) => {
         useBotPictureLoads(host.client, true, true, model);
       },
-      { wrapper },
+      { wrapper, initialProps: { model: lists() } },
+    );
+    drawn(PICTURE_BOT, pictureLook(HASH));
+    drawn(SECOND_PICTURE_BOT, pictureLook(HASH));
+    await waitFor(() => {
+      expect(host.reads).toHaveLength(1);
+    });
+    expect(host.reads[0].request.botId).toBe(PICTURE_BOT);
+    host.reads[0].answerNone();
+    await waitFor(() => {
+      expect(host.reads).toHaveLength(2);
+    });
+    expect(host.reads[1].request).toEqual({
+      botId: SECOND_PICTURE_BOT,
+      sha256: HASH,
+    });
+    host.reads[1].answerNone();
+    await settled();
+
+    rerender({ model: lists() });
+    rerender({ model: lists() });
+
+    await waitFor(() => {
+      expect(readsInFlight()).toBe(0);
+    });
+    expectNoRequestInFlight();
+    expect(host.reads).toHaveLength(2);
+  });
+
+  it("reads a picture through the bot that stays when the bot it was read through leaves the picture and its drawer leaves, and holds the answer", async () => {
+    const host = pictureHost();
+    const lists = (first: BotAppearance): HomeBotsModel =>
+      modelOf(
+        [PICTURE_BOT, "env-1", first],
+        [SECOND_PICTURE_BOT, "env-2", pictureLook(HASH)],
+      );
+    const { rerender } = renderHook<void, ModelProps>(
+      ({ model }: ModelProps) => {
+        useBotPictureLoads(host.client, true, true, model);
+      },
+      { wrapper, initialProps: { model: lists(pictureLook(HASH)) } },
     );
     const leaving = drawn(PICTURE_BOT, pictureLook(HASH));
-    const staying = drawn(SECOND_PICTURE_BOT, pictureLook(HASH));
     await waitFor(() => {
       expect(host.reads).toHaveLength(1);
     });
@@ -390,7 +452,9 @@ describe("reading the pictures that drawn bots want", () => {
     host.reads[0].answerNone();
     await settled();
 
+    rerender({ model: lists(MASCOT_LOOK) });
     leaving.unmount();
+    const staying = drawn(SECOND_PICTURE_BOT, pictureLook(HASH));
 
     await waitFor(() => {
       expect(host.reads).toHaveLength(2);
@@ -405,12 +469,40 @@ describe("reading the pictures that drawn bots want", () => {
     });
   });
 
+  it("reads a picture through a bot that starts to draw it after the read through the only bot drawing it found none", async () => {
+    const host = pictureHost();
+    const model = modelOf(
+      [PICTURE_BOT, "env-1", pictureLook(HASH)],
+      [SECOND_PICTURE_BOT, "env-2", pictureLook(HASH)],
+    );
+    renderHook<void, ModelProps>(
+      ({ model: listed }: ModelProps) => {
+        useBotPictureLoads(host.client, true, true, listed);
+      },
+      { wrapper, initialProps: { model } },
+    );
+    drawn(PICTURE_BOT, pictureLook(HASH));
+    await waitFor(() => {
+      expect(host.reads).toHaveLength(1);
+    });
+    host.reads[0].answerNone();
+    await settled();
+    expectNoRequestInFlight();
+
+    drawn(SECOND_PICTURE_BOT, pictureLook(HASH));
+
+    await waitFor(() => {
+      expect(host.reads).toHaveLength(2);
+    });
+    expect(host.reads[1].request.botId).toBe(SECOND_PICTURE_BOT);
+  });
+
   it("reads a picture again in the same round when a member sets another picture and then sets it back, though the first read found none", async () => {
     const host = pictureHost();
     const lists = (sha256: string) =>
       modelOf([PICTURE_BOT, "env-1", pictureLook(sha256)]);
-    const { rerender } = renderHook(
-      ({ model }) => {
+    const { rerender } = renderHook<void, ModelProps>(
+      ({ model }: ModelProps) => {
         useBotPictureLoads(host.client, true, true, model);
       },
       { wrapper, initialProps: { model: lists(HASH) } },
@@ -443,8 +535,8 @@ describe("reading the pictures that drawn bots want", () => {
         [PICTURE_BOT, "env-1", first],
         [SECOND_PICTURE_BOT, "env-2", pictureLook(HASH)],
       );
-    const { rerender } = renderHook(
-      ({ model }: { readonly model: HomeBotsModel | null }) => {
+    const { rerender } = renderHook<void, ModelProps>(
+      ({ model }: ModelProps) => {
         useBotPictureLoads(host.client, true, true, model);
       },
       {
@@ -481,8 +573,8 @@ describe("reading the pictures that drawn bots want", () => {
     const host = pictureHost();
     const lists = (): HomeBotsModel =>
       modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]);
-    const { rerender } = renderHook(
-      ({ model }: { readonly model: HomeBotsModel | null }) => {
+    const { rerender } = renderHook<void, ModelProps>(
+      ({ model }: ModelProps) => {
         useBotPictureLoads(host.client, true, true, model);
       },
       { wrapper, initialProps: { model: lists() } },
@@ -511,8 +603,8 @@ describe("reading the pictures that drawn bots want", () => {
     const listed: { readonly model: HomeBotsModel | null } = {
       model: lists(),
     };
-    const { rerender } = renderHook(
-      ({ model }: { readonly model: HomeBotsModel | null }) => {
+    const { rerender } = renderHook<void, ModelProps>(
+      ({ model }: ModelProps) => {
         useBotPictureLoads(host.client, true, true, model);
       },
       { wrapper, initialProps: listed },
@@ -536,8 +628,8 @@ describe("reading the pictures that drawn bots want", () => {
 
   it("does not read a picture again when a none answer is followed by a listing that still names it", async () => {
     const host = pictureHost();
-    const { rerender } = renderHook(
-      ({ model }) => {
+    const { rerender } = renderHook<void, ModelProps>(
+      ({ model }: ModelProps) => {
         useBotPictureLoads(host.client, true, true, model);
       },
       {
@@ -565,8 +657,8 @@ describe("reading the pictures that drawn bots want", () => {
 
     it("reads a failed picture again exactly once when the host turns ready after not being, holds it, and sends nothing more while it stays ready", async () => {
       const host = pictureHost();
-      const { rerender } = renderHook(
-        ({ ready, listing }) => {
+      const { rerender } = renderHook<void, ReadyListingProps>(
+        ({ ready, listing }: ReadyListingProps) => {
           useBotPictureLoads(host.client, true, ready, listing);
         },
         { wrapper, initialProps: { ready: true, listing: model } },
@@ -600,8 +692,8 @@ describe("reading the pictures that drawn bots want", () => {
 
     it("stays in one round while it stays ready across re-renders and changed listings, so a tried hash is not read again", async () => {
       const host = pictureHost();
-      const { rerender } = renderHook(
-        ({ listing }) => {
+      const { rerender } = renderHook<void, ListingProps>(
+        ({ listing }: ListingProps) => {
           useBotPictureLoads(host.client, true, true, listing);
         },
         { wrapper, initialProps: { listing: model } },
@@ -626,8 +718,8 @@ describe("reading the pictures that drawn bots want", () => {
 
     it("sends nothing new for a tried hash when the host only turns unready", async () => {
       const host = pictureHost();
-      const { rerender } = renderHook(
-        ({ ready }) => {
+      const { rerender } = renderHook<void, ReadyProps>(
+        ({ ready }: ReadyProps) => {
           useBotPictureLoads(host.client, true, ready, model);
         },
         { wrapper, initialProps: { ready: true } },
@@ -764,8 +856,8 @@ describe("reading the pictures that drawn bots want", () => {
     const first = pictureHost();
     const second = pictureHost();
     const model = modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]);
-    const { rerender } = renderHook(
-      ({ client }) => {
+    const { rerender } = renderHook<void, ClientProps>(
+      ({ client }: ClientProps) => {
         useBotPictureLoads(client, true, true, model);
       },
       { wrapper, initialProps: { client: first.client } },
@@ -788,8 +880,8 @@ describe("reading the pictures that drawn bots want", () => {
   it("tries a failed hash again once the host is found to support the method, and never asks while it does not", async () => {
     const host = pictureHost();
     const model = modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]);
-    const { rerender } = renderHook(
-      ({ supported }) => {
+    const { rerender } = renderHook<void, SupportedProps>(
+      ({ supported }: SupportedProps) => {
         useBotPictureLoads(host.client, supported, true, model);
       },
       { wrapper, initialProps: { supported: true } },
@@ -859,8 +951,8 @@ describe("reading the pictures that drawn bots want", () => {
       const first = pictureHost();
       const second = pictureHost();
       const model = modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]);
-      const { rerender } = renderHook(
-        ({ client }) => {
+      const { rerender } = renderHook<void, ClientProps>(
+        ({ client }: ClientProps) => {
           useBotPictureLoads(client, true, true, model);
         },
         { wrapper, initialProps: { client: first.client } },
@@ -992,8 +1084,8 @@ describe("reading the pictures that drawn bots want", () => {
 
   it("drops the link of a picture when the directory lists no bot wearing it and nothing drawn wants it", async () => {
     const host = pictureHost();
-    const { rerender } = renderHook(
-      ({ model }) => {
+    const { rerender } = renderHook<void, ModelProps>(
+      ({ model }: ModelProps) => {
         useBotPictureLoads(host.client, true, true, model);
       },
       {
@@ -1024,8 +1116,8 @@ describe("reading the pictures that drawn bots want", () => {
     const listed: { readonly model: HomeBotsModel | null } = {
       model: modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]),
     };
-    const { rerender } = renderHook(
-      ({ model }: { readonly model: HomeBotsModel | null }) => {
+    const { rerender } = renderHook<void, ModelProps>(
+      ({ model }: ModelProps) => {
         useBotPictureLoads(host.client, true, true, model);
       },
       { wrapper, initialProps: listed },
@@ -1049,8 +1141,8 @@ describe("reading the pictures that drawn bots want", () => {
 
   it("keeps the link of a picture a drawn bot still wants when the directory no longer lists a bot wearing it", async () => {
     const host = pictureHost();
-    const { rerender } = renderHook(
-      ({ model }) => {
+    const { rerender } = renderHook<void, ModelProps>(
+      ({ model }: ModelProps) => {
         useBotPictureLoads(host.client, true, true, model);
       },
       {
