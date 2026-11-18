@@ -4,6 +4,14 @@ import type { EnvironmentStatusResponse } from "@traycer/protocol/host/environme
 /** The configuration a host runs, from its `environment.status`; `null` for none. */
 export type ProviderKeyPrincipal = EnvironmentStatusResponse["principal"];
 
+export function providerKeyEnvironmentName(
+  principal: ProviderKeyPrincipal,
+): string | null {
+  if (principal?.kind === "personal") return "Personal";
+  if (principal?.kind === "team") return principal.teamName;
+  return null;
+}
+
 /**
  * The providers whose key, saved through `providers.setApiKey` on a host
  * running Personal, becomes Personal's `provider` secret: the host forwards it
@@ -31,6 +39,22 @@ export function providerKeyIsPersonalSecret(
     hostRunsPersonal(principal) && PERSONAL_SECRET_KEY_PROVIDERS.has(providerId)
   );
 }
+
+/** The record's custody applies to every computer running its environment. */
+export function recordKeyCustodyLine(
+  providerId: ProviderId,
+  environmentName: string | null,
+): string {
+  const environment = environmentName?.trim() || "this environment";
+  const sandbox = PERSONAL_SECRET_KEY_PROVIDERS.has(providerId)
+    ? "; sandboxes use it without seeing it."
+    : ".";
+  return `Stored encrypted in Traycer's cloud. Computers running ${environment} receive the value, readable by their tools and agents${sandbox}`;
+}
+
+/** Under a key that becomes Personal's: where the value is stored and who reads it. */
+export const PROVIDER_KEY_CUSTODY_SENTENCE =
+  "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.";
 
 /**
  * Whether the host runs Personal, so its other computers and sandboxes are

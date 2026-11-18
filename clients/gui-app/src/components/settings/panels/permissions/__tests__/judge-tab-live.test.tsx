@@ -66,6 +66,11 @@ vi.mock("@/components/settings/host-scope/use-host-scope", () => {
     usePersonalHostScope: useHostScope,
   };
 });
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return { useHostOptions: () => hostOptionsFixture({ hosts: [] }) };
+});
 vi.mock(
   "@/components/settings/host-scope/use-scoped-host-binding",
   async () => {

@@ -32,6 +32,9 @@ const directoryState = vi.hoisted(
 const hostState = vi.hoisted(
   (): { client: HostClient<HostRpcRegistry> | null } => ({ client: null }),
 );
+const authServiceStub = vi.hoisted(() => ({
+  recordSignInRequest: vi.fn(() => Promise.resolve({ kind: "failed" })),
+}));
 
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
   useHostCredentialRefusal: () => null,
@@ -47,11 +50,16 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => hostState.client,
 }));
+vi.mock("@/lib/host", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/host")>();
+  return { ...actual, useAuthService: () => authServiceStub };
+});
 vi.mock("@/lib/host/runtime", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/host/runtime")>();
   return {
     ...actual,
     useHostBinding: () => ({ hostClient: { id: "real-client" } }),
+    useAuthService: () => authServiceStub,
   };
 });
 vi.mock("@/hooks/providers/use-providers-login-ownership", () => ({

@@ -7,9 +7,14 @@ import { Button } from "@/components/ui/button";
 import {
   profileCommitId,
   profileDisplayLabel,
+  resolveProfilePin,
+  type RemovedProviderProfile,
 } from "@/components/providers/provider-profile-model";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { providerDisplayName } from "@/lib/provider-ordering";
+
+// The recovery names no pin of its own that could have been removed.
+const NO_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
 
 export function CloneProfileRecovery(props: {
   readonly client: HostClient<HostRpcRegistry>;
@@ -84,7 +89,11 @@ export function CloneProfileRecovery(props: {
           <ProfileDropdown
             providerLabel={providerDisplayName(props.resolution.providerId)}
             profiles={profiles}
-            activeProfileId={activeProfileId}
+            pin={resolveProfilePin(
+              profiles,
+              NO_REMOVED_PROFILES,
+              activeProfileId,
+            )}
             onSelectProfile={props.onChooseProfile}
             onCreateProfile={null}
             createProfileDisabled
@@ -97,6 +106,7 @@ export function CloneProfileRecovery(props: {
             eligibilityControls={null}
             admissionByProfileId={null}
             showTerminalBadge
+            terminalComputerName={null}
           />
         </div>
       ) : (

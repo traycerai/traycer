@@ -1,3 +1,4 @@
+import type { ModelOption } from "@/components/home/data/landing-options";
 /**
  * On a team's sandbox host only a harness whose credential stays a
  * placeholder may run. The in-task New conversation modal must hold both of
@@ -9,7 +10,7 @@
  */
 
 import { useRef, useState, type ReactNode } from "react";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -34,6 +35,18 @@ import type {
 } from "@/components/composer/use-staged-sandbox-send";
 import type { SandboxStagingSurface } from "@/components/composer/use-sandbox-staging";
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
+import { HostRuntime } from "@traycer-clients/shared/host-client/host-runtime";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { TaskEnvironmentAttachmentResult } from "@traycer-clients/shared/host-client/task-environment-attachment";
+import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import { AuthService } from "@/lib/auth/auth-service";
+import * as environmentArms from "@/hooks/environment/use-environment-arms";
+import { HostDirectoryService } from "@/lib/host/host-directory-service";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { HostRuntimeContext } from "@/lib/host/runtime";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import { createComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
 import {
@@ -41,6 +54,8 @@ import {
   HostRpcError,
   HostTransportFailureError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
+import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -410,48 +425,177 @@ vi.mock("@/lib/composer/repointed-staging-toast", () => ({
 
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
-  const store = createStore(() => ({
-    ultracode: false,
-    selection: { harnessId: "claude", modelSlug: "sonnet", profileId: null },
-    // The raw pick; `selection` above is what this host's catalog shows.
-    values: {
-      ultracode: false,
-      selection: {
-        harnessId: "codex",
-        modelSlug: "gpt-6.1-sol",
-        profileId: null,
-      },
-      permission: "supervised",
-      reasoning: "high",
-      serviceTier: "",
-    },
-    selectedModel: null,
-    permission: "supervised",
-    reasoning: "medium",
-    serviceTier: "",
-    agentMode: "regular",
-    get catalog() {
-      return testState.catalogHostId === null
-        ? {
-            hostId: null,
-            harnesses: undefined,
-            modelsHarnessId: "claude",
-            modelsProfileId: null,
-            models: [],
-            modelsLoaded: false,
-            modelsFailed: false,
-          }
-        : {
-            hostId: testState.catalogHostId,
-            harnesses: [],
-            modelsHarnessId: "claude",
-            modelsProfileId: null,
-            models: [],
-            modelsLoaded: true,
-            modelsFailed: false,
+  type ToolbarAccount = {
+    readonly harnessId: string;
+    readonly profileId: string;
+  };
+  type ToolbarSelection = {
+    readonly harnessId: string;
+    readonly modelSlug: string;
+    readonly profileId: string | null;
+  };
+  type ToolbarMockState = {
+    readonly accountChosen: boolean;
+    readonly defaultAccount: ToolbarAccount | null;
+    readonly setAccountChosen: (chosen: boolean) => void;
+    readonly setDefaultAccount: (account: ToolbarAccount | null) => void;
+    readonly ultracode: boolean;
+    readonly selection: ToolbarSelection;
+    readonly values: {
+      readonly selection: ToolbarSelection;
+      readonly ultracode?: boolean;
+      readonly permission?: string;
+      readonly reasoning?: string;
+      readonly serviceTier?: string;
+    };
+    readonly selectedModel: ModelOption | null;
+    readonly permission: string;
+    readonly reasoning: string;
+    readonly serviceTier: string;
+    readonly agentMode: string;
+    readonly catalog: {
+      readonly hostId?: string | null;
+      readonly harnesses: ReadonlyArray<string> | undefined;
+      readonly modelsLoaded?: boolean;
+      readonly modelsHarnessId?: string;
+      readonly modelsProfileId?: string | null;
+      readonly models?: ReadonlyArray<never>;
+      readonly modelsFailed?: boolean;
+    };
+  };
+  const emptyDefaultAccount: ToolbarAccount | null = null;
+  const store = createStore<ToolbarMockState>((set, get) => {
+    const replaceStatePreservingCatalog = (
+      state: ToolbarMockState,
+      nextState: ToolbarMockState,
+    ): void => {
+      const catalogDescriptor = Object.getOwnPropertyDescriptor(
+        state,
+        "catalog",
+      );
+      if (
+        catalogDescriptor !== undefined &&
+        (typeof catalogDescriptor.get === "function" ||
+          typeof catalogDescriptor.set === "function")
+      ) {
+        Object.defineProperty(nextState, "catalog", catalogDescriptor);
+      }
+      set(nextState, true);
+    };
+
+    return {
+      accountChosen: false,
+      defaultAccount: emptyDefaultAccount,
+      setAccountChosen: (chosen: boolean) => {
+        const state = get();
+        const rawSelection = state.values.selection;
+        const defaultAccount = state.defaultAccount;
+        const defaultApplies =
+          !chosen &&
+          defaultAccount !== null &&
+          rawSelection.profileId === null &&
+          rawSelection.harnessId === defaultAccount.harnessId &&
+          state.selection.harnessId === defaultAccount.harnessId;
+        let presentedSelection = state.selection;
+        if (defaultApplies) {
+          presentedSelection = {
+            ...state.selection,
+            profileId: defaultAccount.profileId,
           };
-    },
-  }));
+        } else if (
+          defaultAccount !== null &&
+          state.selection.profileId === defaultAccount.profileId
+        ) {
+          presentedSelection = {
+            ...state.selection,
+            profileId: rawSelection.profileId,
+          };
+        }
+        const nextState: ToolbarMockState = {
+          ...state,
+          accountChosen: chosen,
+          selection: presentedSelection,
+        };
+        replaceStatePreservingCatalog(state, nextState);
+      },
+      setDefaultAccount: (
+        account: {
+          readonly harnessId: string;
+          readonly profileId: string;
+        } | null,
+      ) => {
+        const state = get();
+        const rawSelection = state.values.selection;
+        const defaultApplies =
+          !state.accountChosen &&
+          account !== null &&
+          rawSelection.profileId === null &&
+          rawSelection.harnessId === account.harnessId &&
+          state.selection.harnessId === account.harnessId;
+        let presentedSelection = state.selection;
+        if (defaultApplies) {
+          presentedSelection = {
+            ...state.selection,
+            profileId: account.profileId,
+          };
+        } else if (
+          state.defaultAccount !== null &&
+          state.selection.profileId === state.defaultAccount.profileId
+        ) {
+          presentedSelection = {
+            ...state.selection,
+            profileId: rawSelection.profileId,
+          };
+        }
+        const nextState: ToolbarMockState = {
+          ...state,
+          defaultAccount: account,
+          selection: presentedSelection,
+        };
+        replaceStatePreservingCatalog(state, nextState);
+      },
+      ultracode: false,
+      selection: { harnessId: "claude", modelSlug: "sonnet", profileId: null },
+      // The raw pick; `selection` above is what this host's catalog shows.
+      values: {
+        ultracode: false,
+        selection: {
+          harnessId: "codex",
+          modelSlug: "gpt-6.1-sol",
+          profileId: null,
+        },
+        permission: "supervised",
+        reasoning: "high",
+        serviceTier: "",
+      },
+      selectedModel: null,
+      permission: "supervised",
+      reasoning: "medium",
+      serviceTier: "",
+      agentMode: "regular",
+      get catalog() {
+        return testState.catalogHostId === null
+          ? {
+              hostId: null,
+              harnesses: undefined,
+              modelsHarnessId: "claude",
+              modelsProfileId: null,
+              models: [],
+              modelsLoaded: false,
+              modelsFailed: false,
+            }
+          : {
+              hostId: testState.catalogHostId,
+              harnesses: [],
+              modelsHarnessId: "claude",
+              modelsProfileId: null,
+              models: [],
+              modelsLoaded: true,
+              modelsFailed: false,
+            };
+      },
+    };
+  });
   testState.toolbarStore = store;
   return { useComposerToolbarStore: () => store };
 });
@@ -681,12 +825,224 @@ function QueryWrapper({ children }: { readonly children: ReactNode }) {
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 
-function renderModal(): RenderResult {
-  const view = render(<Harness />, { wrapper: QueryWrapper });
+const MODAL_TEAM_ENVIRONMENT = {
+  environmentId: "env-team-9",
+  ownerKind: "organization" as const,
+  ownerId: "team-9",
+  roomId: "room-team-9",
+  label: "Team",
+  effectiveRole: "editor" as const,
+  kind: "team" as const,
+  hostCount: 1,
+  providerHandle: "team-9",
+};
+
+interface AttachmentAuthFixture {
+  readonly auth: AuthService;
+  readonly runnerHost: MockRunnerHost;
+  readonly binding: HostRuntimeBinding<HostRpcRegistry>;
+  readonly authnCalls: Array<
+    | { readonly kind: "list"; readonly bearer: string }
+    | {
+        readonly kind: "attach";
+        readonly bearer: string;
+        readonly request: {
+          readonly taskId: string;
+          readonly environmentId: string;
+        };
+      }
+  >;
+  readonly dispose: () => void;
+}
+
+const attachmentFixtureDisposers: Array<() => void> = [];
+
+function signedInResponse(userId: string): Response {
+  return new Response(
+    JSON.stringify({
+      user: {
+        id: userId,
+        name: userId,
+        providerId: `gh-${userId}`,
+        providerHandle: userId,
+        providerType: "GITHUB",
+        email: `${userId}@example.com`,
+        avatarUrl: null,
+        activatedAt: null,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z",
+        lastSeenAt: null,
+        privacyMode: false,
+        isLearningEnabled: true,
+      },
+      userSubscription: {
+        id: `sub-${userId}`,
+        userID: userId,
+        orgID: null,
+        teamID: null,
+        customerId: `cus-${userId}`,
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-01T00:00:00.000Z",
+        subscriptionExpiry: null,
+        trialEndsAt: null,
+        subscriptionStatus: "FREE",
+        hasPaymentMethod: false,
+        isInTrial: false,
+        rechargeRateSeconds: 0,
+      },
+      teamSubscriptions: [],
+      payAsYouGoUsage: { allowPayAsYouGo: false },
+    }),
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "x-traycer-user-record-version": "2.0",
+      },
+    },
+  );
+}
+
+async function createAttachmentAuthBinding(
+  heldPost: Promise<TaskEnvironmentAttachmentResult> | null,
+): Promise<AttachmentAuthFixture> {
+  const runnerHost = new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "https://authn.traycer.invalid",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+  vi.stubGlobal("fetch", () => Promise.resolve(signedInResponse("modal-user")));
+  const auth = new AuthService({ runnerHost });
+  await runnerHost.tokenStore.signIn(
+    { token: "modal-token-a", refreshToken: "modal-token-a-refresh" },
+    { id: "modal-user", email: "modal-user@example.com", name: "Modal User" },
+  );
+  await auth.start();
+  const directory = new HostDirectoryService({
+    runnerHost,
+    remoteFetcher: () => Promise.resolve({ kind: "hosts", entries: [] }),
+    onRegistryPollTick: null,
+    authContextId: () => auth.currentAuthEra().identity,
+    credentialGeneration: () => auth.getCredentialGeneration(),
+    localHostIdSeeder: () => Promise.resolve("host-modal"),
+  });
+  const queryClient = new QueryClient();
+  const authnCalls: AttachmentAuthFixture["authnCalls"] = [];
+  vi.spyOn(runnerHost, "listEnvironments").mockImplementation((bearer) => {
+    authnCalls.push({ kind: "list", bearer });
+    return Promise.resolve({
+      kind: "ok",
+      list: { environments: [MODAL_TEAM_ENVIRONMENT] },
+    });
+  });
+  vi.spyOn(runnerHost, "attachTaskEnvironment").mockImplementation(
+    (bearer, request) => {
+      authnCalls.push({ kind: "attach", bearer, request });
+      return heldPost ?? Promise.resolve({ kind: "ok" });
+    },
+  );
+  let requestId = 0;
+  const runtime = new HostRuntime<HostRpcRegistry>({
+    runnerHost,
+    onHostTokenRenewal: () => undefined,
+    registry: hostRpcRegistry,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `modal-auth-${++requestId}`,
+      handlers: {},
+    }),
+    requestContextProvider: auth.getRequestContextProvider(),
+    directory,
+    invalidator: createHostQueryInvalidator(queryClient),
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    authorityRegistry: null,
+    requestCoordinator: null,
+    connectionRegistry: null,
+    selectedHostId: () => "host-modal",
+    singleAttemptMessenger: null,
+  });
+  const fixture: AttachmentAuthFixture = {
+    auth,
+    runnerHost,
+    authnCalls,
+    binding: {
+      runtime,
+      hostClient: runtime.hostClient,
+      directory,
+      auth,
+      hostId: "host-modal",
+    },
+    dispose: () => {
+      runtime.dispose();
+      directory.dispose();
+      auth.dispose();
+      queryClient.clear();
+    },
+  };
+  attachmentFixtureDisposers.push(fixture.dispose);
+  return fixture;
+}
+
+async function signInAs(
+  fixture: AttachmentAuthFixture,
+  userId: string,
+  token: string,
+): Promise<void> {
+  await fixture.auth.signIn();
+  fixture.runnerHost.deviceFlow.emitResult({
+    kind: "authorized",
+    token,
+    refreshToken: `${token}-refresh`,
+  });
+  await waitFor(() => {
+    expect(fixture.auth.getCurrentSessionSnapshot().token).toBe(token);
+  });
+  useAuthStore
+    .getState()
+    .setSignedIn(
+      { userId, userName: userId, email: `${userId}@example.com` },
+      { userId, username: userId },
+      [],
+    );
+}
+
+function renderModal(
+  binding: HostRuntimeBinding<HostRpcRegistry> | null,
+): RenderResult {
+  const body =
+    binding === null ? (
+      <Harness />
+    ) : (
+      <HostRuntimeContext.Provider value={binding}>
+        <Harness />
+      </HostRuntimeContext.Provider>
+    );
+  const view = render(body, { wrapper: QueryWrapper });
   act(() => {
     testState.installEditor?.();
   });
   return view;
+}
+
+async function renderSignedInModal(
+  heldPost: Promise<TaskEnvironmentAttachmentResult> | null,
+): Promise<AttachmentAuthFixture> {
+  const fixture = await createAttachmentAuthBinding(heldPost);
+  useAuthStore.getState().setSignedIn(
+    {
+      userId: "modal-user",
+      userName: "Modal User",
+      email: "modal-user@example.com",
+    },
+    { userId: "modal-user", username: "Modal User" },
+    [],
+  );
+  renderModal(fixture.binding);
+  return fixture;
 }
 
 function draftSurvived(): boolean {
@@ -715,6 +1071,9 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  for (const dispose of attachmentFixtureDisposers.splice(0)) dispose();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   useAuthStore.getState().setSignedOut();
   testState.createChat.mockClear();
   testState.attachEnvironment.mockReset();
@@ -768,7 +1127,7 @@ describe("new-conversation modal holds its creates to the team-sandbox harness r
   });
 
   it("creates once when the selected chat harness is not blocked (control)", () => {
-    renderModal();
+    renderModal(null);
     act(() => {
       testState.bodySubmit?.();
     });
@@ -779,7 +1138,7 @@ describe("new-conversation modal holds its creates to the team-sandbox harness r
 
   it("creates no chat, shows the refused notice and keeps the draft when the selected chat harness is blocked", () => {
     gateState.blockedIds.add("claude");
-    renderModal();
+    renderModal(null);
     act(() => {
       testState.bodySubmit?.();
     });
@@ -794,7 +1153,7 @@ describe("new-conversation modal holds its creates to the team-sandbox harness r
     useNewConversationModalStore
       .getState()
       .setComposerMode("epic-1", "terminal");
-    renderModal();
+    renderModal(null);
     act(() => {
       testState.bodyStartTerminal?.(terminalLaunch("claude"), "host-a");
     });
@@ -810,7 +1169,7 @@ describe("new-conversation modal holds its creates to the team-sandbox harness r
     // The toolbar's own selection ("claude") is NOT blocked: the launch's
     // harness is the one the rule has to read.
     gateState.blockedIds.add("codex");
-    renderModal();
+    renderModal(null);
     act(() => {
       testState.bodyStartTerminal?.(terminalLaunch("codex"), "host-a");
     });
@@ -884,7 +1243,7 @@ describe("new-conversation modal refusals at Send", () => {
       SENTENCE,
       "Open Personal's Providers",
     );
-    renderModal();
+    renderModal(null);
 
     act(() => {
       testState.bodySubmit?.();
@@ -907,7 +1266,7 @@ describe("new-conversation modal refusals at Send", () => {
       "Codex doesn't run on sandboxes. Choose a Traycer model to run agents here.",
       "Choose a model",
     );
-    renderModal();
+    renderModal(null);
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX);
     });
@@ -942,7 +1301,7 @@ describe("new-conversation modal refusals at Send", () => {
       "Codex doesn't run on sandboxes. Choose a Traycer model to run agents here.",
       "Choose a model",
     );
-    renderModal();
+    renderModal(null);
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX);
     });
@@ -974,7 +1333,7 @@ describe("new-conversation modal refusals at Send", () => {
   });
 
   it("hands the same staged send over when the agent is signed in", async () => {
-    renderModal();
+    renderModal(null);
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX);
     });
@@ -996,7 +1355,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
   it("keeps a changed selection while the staged Send check is pending", async () => {
     const checked = deferred<ComposerHostNoticeState | null>();
     testState.beforeStagedSend.mockReturnValue(checked.promise);
-    renderModal();
+    renderModal(null);
     act(() =>
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX),
     );
@@ -1029,7 +1388,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
   it("attaches a team-staged chat before handing its draft to the sandbox", async () => {
     const attach = deferred<{ readonly attached: true }>();
     testState.attachEnvironment.mockReturnValue(attach.promise);
-    renderModal();
+    const fixture = await renderSignedInModal(null);
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
       testState.bodySubmit?.();
@@ -1038,7 +1397,6 @@ describe("new-conversation modal's send on a staged sandbox", () => {
     await waitFor(() => {
       expect(testState.attachEnvironment).toHaveBeenCalledWith({
         epicId: "epic-1",
-        teamId: "team-9",
       });
     });
     expect(usePendingSandboxSendStore.getState().sends).toEqual({});
@@ -1052,6 +1410,16 @@ describe("new-conversation modal's send on a staged sandbox", () => {
     await act(async () => {
       attach.resolve({ attached: true });
       await attach.promise;
+    });
+    await waitFor(() => {
+      expect(fixture.authnCalls).toContainEqual({
+        kind: "attach",
+        bearer: "modal-token-a",
+        request: {
+          taskId: "epic-1",
+          environmentId: MODAL_TEAM_ENVIRONMENT.environmentId,
+        },
+      });
     });
     await waitFor(() => {
       expect(
@@ -1068,7 +1436,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
   it("attaches a team-staged terminal request before taking the stage", async () => {
     const attach = deferred<{ readonly attached: true }>();
     testState.attachEnvironment.mockReturnValue(attach.promise);
-    renderModal();
+    const fixture = await renderSignedInModal(null);
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
     });
@@ -1083,7 +1451,6 @@ describe("new-conversation modal's send on a staged sandbox", () => {
     await waitFor(() => {
       expect(testState.attachEnvironment).toHaveBeenCalledWith({
         epicId: "epic-1",
-        teamId: "team-9",
       });
     });
     expect(usePendingSandboxSendStore.getState().sends).toEqual({});
@@ -1094,6 +1461,16 @@ describe("new-conversation modal's send on a staged sandbox", () => {
     await act(async () => {
       attach.resolve({ attached: true });
       await attach.promise;
+    });
+    await waitFor(() => {
+      expect(fixture.authnCalls).toContainEqual({
+        kind: "attach",
+        bearer: "modal-token-a",
+        request: {
+          taskId: "epic-1",
+          environmentId: MODAL_TEAM_ENVIRONMENT.environmentId,
+        },
+      });
     });
     await waitFor(() => {
       expect(
@@ -1108,32 +1485,25 @@ describe("new-conversation modal's send on a staged sandbox", () => {
   });
 
   it("keeps the staged chat and draft when its team attachment is refused", async () => {
-    const attach = deferred<{ readonly attached: true }>();
-    testState.attachEnvironment.mockReturnValue(attach.promise);
-    renderModal();
+    const fixture = await renderSignedInModal(
+      Promise.resolve({ kind: "forbidden" }),
+    );
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
       testState.bodySubmit?.();
     });
 
     await waitFor(() => {
-      expect(testState.attachEnvironment).toHaveBeenCalledWith({
-        epicId: "epic-1",
-        teamId: "team-9",
+      expect(fixture.authnCalls).toContainEqual({
+        kind: "attach",
+        bearer: "modal-token-a",
+        request: {
+          taskId: "epic-1",
+          environmentId: MODAL_TEAM_ENVIRONMENT.environmentId,
+        },
       });
     });
-    await act(async () => {
-      attach.reject(
-        new HostRpcError({
-          code: "FORBIDDEN",
-          message: "This task cannot be attached to that team.",
-          requestId: "request-attach-refused",
-          method: "epic.attachEnvironment",
-          fatalDetails: null,
-        }),
-      );
-      await attach.promise.catch(() => undefined);
-    });
+    await waitFor(() => expect(testState.bodySubmitting).toBe(false));
 
     expect(usePendingSandboxSendStore.getState().sends).toEqual({});
     expect(readStagedSandbox(SANDBOX_SURFACE)).toMatchObject({
@@ -1159,6 +1529,14 @@ describe("new-conversation modal's send on a staged sandbox", () => {
       "a plain failure",
       attachRefusal("RPC_ERROR"),
       [{ via: "error", message: "Couldn't send your message." }],
+    ],
+    [
+      "a host below the minimum version",
+      new HostBelowMinimumError({
+        requestId: "request-attach-floor",
+        method: "epic.attachEnvironment",
+      }),
+      [{ via: "error", message: HOST_UPDATE_SKEW_COPY.title }],
     ],
     [
       "a task that could not be shared (offline)",
@@ -1213,7 +1591,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
       toastLog.length = 0;
       const attach = deferred<{ readonly attached: true }>();
       testState.attachEnvironment.mockReturnValue(attach.promise);
-      renderModal();
+      await renderSignedInModal(null);
       act(() => {
         useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
         testState.bodySubmit?.();
@@ -1243,41 +1621,29 @@ describe("new-conversation modal's send on a staged sandbox", () => {
   );
 
   it("keeps the staged chat and draft when the account changes during attachment", async () => {
-    useAuthStore
-      .getState()
-      .setSignedIn(
-        { userId: "modal-user", userName: "Modal", email: "modal@example.com" },
-        { userId: "modal-user", username: "Modal" },
-        [],
-      );
-    const attach = deferred<{ readonly attached: true }>();
-    testState.attachEnvironment.mockReturnValue(attach.promise);
-    renderModal();
+    const post = deferred<TaskEnvironmentAttachmentResult>();
+    const fixture = await renderSignedInModal(post.promise);
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
       testState.bodySubmit?.();
     });
 
     await waitFor(() => {
-      expect(testState.attachEnvironment).toHaveBeenCalledWith({
-        epicId: "epic-1",
-        teamId: "team-9",
+      expect(fixture.authnCalls).toContainEqual({
+        kind: "attach",
+        bearer: "modal-token-a",
+        request: {
+          taskId: "epic-1",
+          environmentId: MODAL_TEAM_ENVIRONMENT.environmentId,
+        },
       });
     });
-    act(() => {
-      useAuthStore.getState().setSignedIn(
-        {
-          userId: "other-user",
-          userName: "Other",
-          email: "other@example.com",
-        },
-        { userId: "other-user", username: "Other" },
-        [],
-      );
-    });
+    await fixture.auth.signOut();
+    useAuthStore.getState().setSignedOut();
+    await signInAs(fixture, "other-user", "modal-token-b");
     await act(async () => {
-      attach.resolve({ attached: true });
-      await attach.promise;
+      post.resolve({ kind: "ok" });
+      await post.promise;
     });
 
     expect(usePendingSandboxSendStore.getState().sends).toEqual({});
@@ -1289,11 +1655,123 @@ describe("new-conversation modal's send on a staged sandbox", () => {
     expect(testState.onSubmitted).not.toHaveBeenCalled();
   });
 
+  it("does not continue or reopen the team arms when the same account signs in again while the attachment POST is out", async () => {
+    toastLog.length = 0;
+    const post = deferred<TaskEnvironmentAttachmentResult>();
+    const fixture = await createAttachmentAuthBinding(post.promise);
+    const reopenArms = vi.spyOn(environmentArms, "reopenEnvironmentArms");
+    const pressedIdentityGeneration = fixture.auth.getIdentityGeneration();
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "modal-user",
+        userName: "Modal User",
+        email: "modal-user@example.com",
+      },
+      { userId: "modal-user", username: "Modal User" },
+      [],
+    );
+    renderModal(fixture.binding);
+    act(() => {
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
+      testState.bodySubmit?.();
+    });
+
+    await waitFor(() => {
+      expect(fixture.authnCalls).toContainEqual({
+        kind: "attach",
+        bearer: "modal-token-a",
+        request: {
+          taskId: "epic-1",
+          environmentId: MODAL_TEAM_ENVIRONMENT.environmentId,
+        },
+      });
+    });
+    await fixture.auth.signOut();
+    useAuthStore.getState().setSignedOut();
+    await signInAs(fixture, "modal-user", "modal-token-a-again");
+    expect(fixture.auth.getIdentityGeneration()).not.toBe(
+      pressedIdentityGeneration,
+    );
+
+    await act(async () => {
+      post.resolve({ kind: "ok" });
+      await post.promise;
+    });
+    await waitFor(() => expect(testState.bodySubmitting).toBe(false));
+
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(readStagedSandbox(SANDBOX_SURFACE)).toMatchObject({
+      target: TEAM_SANDBOX,
+    });
+    expect(draftSurvived()).toBe(true);
+    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(testState.onSubmitted).not.toHaveBeenCalled();
+    expect(toastLog).toEqual([]);
+    expect(reopenArms).not.toHaveBeenCalled();
+  });
+
+  it("continues the staged modal handoff when the bearer rotates on the same sign-in during the attachment POST", async () => {
+    toastLog.length = 0;
+    const post = deferred<TaskEnvironmentAttachmentResult>();
+    const fixture = await createAttachmentAuthBinding(post.promise);
+    const reopenArms = vi.spyOn(environmentArms, "reopenEnvironmentArms");
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "modal-user",
+        userName: "Modal User",
+        email: "modal-user@example.com",
+      },
+      { userId: "modal-user", username: "Modal User" },
+      [],
+    );
+    renderModal(fixture.binding);
+    act(() => {
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
+      testState.bodySubmit?.();
+    });
+
+    await waitFor(() => {
+      expect(fixture.authnCalls).toContainEqual({
+        kind: "attach",
+        bearer: "modal-token-a",
+        request: {
+          taskId: "epic-1",
+          environmentId: MODAL_TEAM_ENVIRONMENT.environmentId,
+        },
+      });
+    });
+    const identityGeneration = fixture.auth.getIdentityGeneration();
+    const session = fixture.auth.getCurrentSessionSnapshot();
+    await fixture.auth.ingestProjectedSessionSnapshot({
+      ...session,
+      token: "modal-token-a-rotated",
+    });
+    expect(fixture.auth.getIdentityGeneration()).toBe(identityGeneration);
+
+    await act(async () => {
+      post.resolve({ kind: "ok" });
+      await post.promise;
+    });
+    await waitFor(() => {
+      expect(
+        Object.values(usePendingSandboxSendStore.getState().sends),
+      ).toHaveLength(1);
+    });
+
+    expect(onlyPendingSend()).toMatchObject({
+      epicId: "epic-1",
+      request: { kind: "chat", parentId: null, placement: null },
+    });
+    expect(testState.onSubmitted).toHaveBeenCalledTimes(1);
+    expect(toastLog).toEqual([]);
+    expect(reopenArms).toHaveBeenCalledOnce();
+  });
+
   it("hands the send to this task and closes, though this host's workspace folder is unresolved", async () => {
     // The sandbox starts empty: the chip reads Empty sandbox and the
     // workspace controls are hidden.
     testState.workspaceReady = false;
-    renderModal();
+    renderModal(null);
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX);
     });
@@ -1344,7 +1822,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
   ] as const)(
     "sends to %s on the model the person picked, not the one the toolbar shows",
     async (_label, target) => {
-      renderModal();
+      renderModal(null);
       act(() => {
         useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, target);
       });
@@ -1364,7 +1842,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
   );
 
   it("opens a terminal on the staged sandbox from Open terminal instead, with no agent sent", () => {
-    renderModal();
+    renderModal(null);
     act(() => {
       useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, NEW_SANDBOX);
     });
@@ -1403,7 +1881,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
         },
       ],
     );
-    renderModal();
+    renderModal(null);
     const input = testState.stagedHandoffInput;
     if (input === null) throw new Error("expected the staged handoff");
 
@@ -1424,7 +1902,7 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
       .getState()
       .setComposerMode("epic-1", "terminal");
     testState.staged = true;
-    const view = renderModal();
+    const view = renderModal(null);
     const surfaceKey = testState.stagedSendInput?.surfaceKey ?? null;
     if (surfaceKey === null) throw new Error("expected a staging surface");
     useStagedSandboxStore.getState().stage(surfaceKey, {
@@ -1458,7 +1936,7 @@ describe("new-conversation modal's terminal Start on a staged sandbox", () => {
 
     // The modal closes while the sandbox boots, and opens again.
     view.unmount();
-    renderModal();
+    renderModal(null);
     const staged = () => {
       const input = testState.stagedHandoffInput;
       if (input === null) throw new Error("expected the staged handoff");

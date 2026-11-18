@@ -1,0 +1,63 @@
+// The host computes the item the same way, so a current read confirms the save
+// without a click. Before that read answers, a save that needs it states nothing.
+import { defaultShellArgs } from "@traycer/protocol/config/shell-family";
+import type {
+  ConfigShellEntry,
+  ConfigShellGetResponseV11,
+  ConfigShellSelection,
+  ConfigShellSetRequestV10,
+} from "@traycer/protocol/host/config/index";
+
+const NOT_STATED: ConfigShellSelection = { kind: "not_stated" };
+
+function argsOf(path: string, entries: readonly ConfigShellEntry[]): string[] {
+  const remembered = entries.find((entry) => entry.path === path)?.args;
+  return [...(remembered ?? defaultShellArgs(path))];
+}
+
+/** New arguments while following the system default are saved on this computer and propose nothing. */
+export function shellSetSelection(
+  request: ConfigShellSetRequestV10,
+  config: ConfigShellGetResponseV11 | undefined,
+): ConfigShellSelection {
+  if (request.path !== null && request.args !== null) {
+    return { kind: "shell", path: request.path, args: [...request.args] };
+  }
+  if (config === undefined) return NOT_STATED;
+  if (request.path === null) {
+    return config.synthesised
+      ? NOT_STATED
+      : { kind: "shell", path: config.path, args: [...request.args] };
+  }
+  return {
+    kind: "shell",
+    path: request.path,
+    args: argsOf(request.path, config.entries),
+  };
+}
+
+export function shellAddSelection(path: string): ConfigShellSelection {
+  return { kind: "shell", path, args: [...defaultShellArgs(path)] };
+}
+
+/** Removing any shell but the current one is saved on this computer and proposes nothing. */
+export function shellRemoveSelection(
+  path: string,
+  config: ConfigShellGetResponseV11 | undefined,
+): ConfigShellSelection {
+  if (config === undefined) return NOT_STATED;
+  return !config.synthesised && config.path === path
+    ? { kind: "system_default" }
+    : NOT_STATED;
+}
+
+/** Reverting any shell but the current one is saved on this computer and proposes nothing. */
+export function shellRevertSelection(
+  path: string,
+  config: ConfigShellGetResponseV11 | undefined,
+): ConfigShellSelection {
+  if (config === undefined) return NOT_STATED;
+  return !config.synthesised && config.path === path
+    ? { kind: "shell", path, args: [...defaultShellArgs(path)] }
+    : NOT_STATED;
+}

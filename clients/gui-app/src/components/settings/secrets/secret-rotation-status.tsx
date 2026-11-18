@@ -1,7 +1,9 @@
 import { useState, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
-import { useHostQuery } from "@/hooks/host/use-host-query";
+import {
+  useSecretsEnvironment,
+  useSecretsRead,
+} from "@/hooks/environment/use-environment-secrets-calls";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   secretRotationSettled,
@@ -18,33 +20,21 @@ const TONE: Readonly<Record<SecretRotationLine["tone"], string>> = {
 
 /**
  * A secret's current rotation on Settings ▸ Personal ▸ Secrets: "New value
- * accepted, closing old sessions." until every class and host has proved the
+ * accepted, closing old sessions." until every worker class has proved the
  * old value out of use, then "New value enforced." with each one's proof.
  * Re-read every few seconds only while it is still moving.
  */
 export function SecretRotationStatus(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly secretId: string;
-  readonly hostName: (hostId: string) => string;
 }): ReactNode {
-  const { environmentId, resolved } = useAddressedEnvironment();
+  const { environmentId, resolved } = useSecretsEnvironment(props.client);
   const [moving, setMoving] = useState(true);
-  const rotation = useHostQuery<
-    HostRpcRegistry,
-    "environment.secrets.rotation"
-  >({
-    cacheKeyIdentity: undefined,
-    client: props.client,
+  const rotation = useSecretsRead({
     method: "environment.secrets.rotation",
     params: { secretId: props.secretId, environmentId },
-    requiredHostMethodVersion: () =>
-      environmentId === null
-        ? null
-        : {
-            method: "environment.secrets.rotation",
-            version: { major: 1, minor: 1 },
-          },
-    options: { enabled: resolved, poll: moving },
+    enabled: resolved,
+    poll: moving,
   });
   const current = rotation.data?.rotation;
   // Derived during render, not in an effect: a settled answer stops the poll
@@ -52,7 +42,7 @@ export function SecretRotationStatus(props: {
   const stillMoving = current === undefined || !secretRotationSettled(current);
   if (stillMoving !== moving) setMoving(stillMoving);
   if (current === undefined) return null;
-  const status = secretRotationStatus(current, props.hostName);
+  const status = secretRotationStatus(current);
   if (status === null) return null;
   return (
     <div

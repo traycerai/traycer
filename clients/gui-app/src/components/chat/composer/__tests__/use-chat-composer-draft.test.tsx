@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   act,
   cleanup,
@@ -18,10 +17,9 @@ import {
 } from "../../quote/append-quote-to-draft";
 
 import { useChatComposerDraft } from "../use-chat-composer-draft";
-import { ComposerPromptEditor } from "../composer-prompt-editor";
 import type { ComposerPromptEditorHandle } from "../composer-prompt-editor";
-import { createComposerPickerStore } from "../picker/composer-picker-store";
 import { createFakeComposerPromptEditorHandle } from "./composer-prompt-editor-handle-fixtures";
+import { ComposerDraftEditorHarness } from "./composer-draft-test-support";
 
 afterEach(() => {
   cleanup();
@@ -272,51 +270,13 @@ interface QuoteFocusHarnessProps {
 }
 
 function QuoteFocusHarness(props: QuoteFocusHarnessProps) {
-  const { taskId, editorRef, selectionRef } = props;
-  // Mirrors ChatComposer's real wiring: onEditorReady bumps a tick the bridge
-  // keys its handle-ready catch-up on.
-  const [editorReadyTick, setEditorReadyTick] = useState(0);
-  const { initialContent, initialSelection } = useChatComposerDraft({
-    chatId: taskId,
-    epicId: "epic-1",
-    hostId: "host-1",
-    editorRef,
-    editorReadyTick,
-    chatTitle: null,
-    epicTitle: null,
-  });
-  const [pickerStore] = useState(() => createComposerPickerStore());
   return (
-    <ComposerPromptEditor
-      ref={(instance) => {
-        editorRef.current = instance;
-      }}
-      initialContent={initialContent}
-      initialSelection={initialSelection}
-      pickerStore={pickerStore}
-      placeholder="test"
-      editorClassName={undefined}
-      isActive={false}
-      disabled={false}
-      slashProviderId="claude"
-      hasPastedImageBytes={null}
-      ingestPastedComposerImages={null}
-      stabilizeImageAttachmentCaret={false}
-      onDocumentChange={(_content, selection) => {
-        selectionRef.current = selection;
-      }}
-      onSelectionChange={(selection) => {
-        selectionRef.current = selection;
-      }}
-      onSubmit={() => undefined}
-      onPaste={() => undefined}
-      onDragOver={() => undefined}
-      onDrop={() => undefined}
-      onKeyDown={undefined}
-      interceptKeyDown={null}
-      onFocus={() => undefined}
-      onBlur={() => undefined}
-      onEditorReady={() => setEditorReadyTick((tick) => tick + 1)}
+    <ComposerDraftEditorHarness
+      chatId={props.taskId}
+      epicId="epic-1"
+      hostId="host-1"
+      editorRef={props.editorRef}
+      selectionRef={props.selectionRef}
     />
   );
 }

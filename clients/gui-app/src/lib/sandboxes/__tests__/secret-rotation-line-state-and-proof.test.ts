@@ -77,10 +77,7 @@ function rotationWith(
 }
 
 function producerLines(producers: RotationProducer[]): readonly string[] {
-  const status = secretRotationStatus(
-    rotationWith(producers),
-    (hostId) => `host ${hostId}`,
-  );
+  const status = secretRotationStatus(rotationWith(producers));
   return (status?.producers ?? []).map((line) => line.text);
 }
 
@@ -110,23 +107,6 @@ describe("a producer's line names a proof only when the evidence proves somethin
           },
         ]),
       ).toEqual(["https: not confirmed yet"]);
-    },
-  );
-
-  it.each(NO_PROOF)(
-    "reads not confirmed yet for an acknowledged host with %s",
-    (_, evidence) => {
-      expect(
-        producerLines([
-          {
-            producer: "host",
-            hostId: "h1",
-            incarnation: "proc-1",
-            status: "acknowledged",
-            evidence,
-          },
-        ]),
-      ).toEqual(["not confirmed yet on host h1"]);
     },
   );
 });

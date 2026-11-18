@@ -224,8 +224,13 @@ vi.mock("@/markdown", () => ({
   TraycerMarkdown: () => null,
 }));
 
-vi.mock("@tanstack/react-query", () => ({
+vi.mock("@tanstack/react-query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+}));
+
+vi.mock("@/lib/host-error-toast", () => ({
+  showHostUpdateNeededForGesture: vi.fn(),
 }));
 
 vi.mock("@/components/epic-canvas/image-preview/image-preview", () => ({

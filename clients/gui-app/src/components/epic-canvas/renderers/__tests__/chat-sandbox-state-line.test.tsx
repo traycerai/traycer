@@ -58,6 +58,10 @@ vi.mock(
       configurations: mocks.configurations,
       teamEnvironmentIds: new Set<string>(),
       complete: false,
+      personalEnvironmentId:
+        mocks.environments?.environments.find(
+          (environment) => environment.ownerKind === "user",
+        )?.environmentId ?? null,
     }),
   }),
 );

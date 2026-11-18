@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { putConfigurationMcpServer } from "@traycer-clients/shared/environment/configuration-settings";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type { SlackAppWriteResult } from "@traycer-clients/shared/host-client/slack-app";
 import {
   AUTH_FETCH_MAX_ATTEMPTS,
   authRetryDelayMs,
@@ -12,6 +18,13 @@ import type {
   TokenRotateResult,
 } from "@traycer-clients/shared/platform/runner-host";
 import type { UserSessionListItem } from "@traycer/protocol/auth/devices-sessions";
+import type { EnvironmentConfigurationMcpServerPutRequestV11 } from "@traycer/protocol/host/environment/configuration-contracts";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
+import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
 import {
   DEFAULT_SKEW_ENTER_MS,
   DEFAULT_SKEW_EXIT_MS,
@@ -539,6 +552,75 @@ describe("AuthService", () => {
     useAuthStore.getState().setCloudVerdictLoss("unreachable");
     vi.useRealTimers();
     restoreFetch();
+  });
+
+  it("forwards all bot setup writes on the verified bearer and makes no signed-out call", async () => {
+    const { service, host } = makeService();
+    const runSettings: BotUpdateRunSettingsRequest = {
+      botId: "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      harness: "claude",
+      model: "model-a",
+      effort: null,
+      profile: null,
+    };
+    const replyMode: BotUpdateReplyModeRequest = {
+      botId: runSettings.botId,
+      replyMode: "direct",
+    };
+    const deleteRequest: BotDeleteRequest = { botId: runSettings.botId };
+    const slackRequest: SlackAppRegisterRequest = {
+      botId: runSettings.botId,
+      appId: "A07K2M9QX4T",
+      clientId: "123.456",
+      clientSecret: "client-secret",
+      signingSecret: "signing-secret",
+    };
+    const run = vi.spyOn(host, "updateBotRunSettings").mockResolvedValue({
+      kind: "no_response",
+    } satisfies BotSetupWriteResult);
+    const reply = vi.spyOn(host, "updateBotReplyMode").mockResolvedValue({
+      kind: "no_response",
+    } satisfies BotSetupWriteResult);
+    const deletion = vi.spyOn(host, "deleteBot").mockResolvedValue({
+      kind: "no_response",
+    } satisfies BotDeleteResult);
+    const slack = vi.spyOn(host, "registerSlackApp").mockResolvedValue({
+      kind: "network-error",
+      detail: "test",
+    } satisfies SlackAppWriteResult);
+
+    await expect(service.updateBotRunSettings(runSettings)).resolves.toEqual({
+      kind: "no_response",
+    });
+    await expect(service.updateBotReplyMode(replyMode)).resolves.toEqual({
+      kind: "no_response",
+    });
+    await expect(service.deleteBot(deleteRequest)).resolves.toEqual({
+      kind: "no_response",
+    });
+    await expect(service.registerSlackApp(slackRequest)).resolves.toEqual({
+      kind: "unauthorized",
+    });
+    expect(run).not.toHaveBeenCalled();
+    expect(reply).not.toHaveBeenCalled();
+    expect(deletion).not.toHaveBeenCalled();
+    expect(slack).not.toHaveBeenCalled();
+
+    await host.tokenStore.signIn(
+      { token: "verified-bearer", refreshToken: "refresh" },
+      { ...DEFAULT_IDENTITY },
+    );
+    await service.start();
+
+    await service.updateBotRunSettings(runSettings);
+    await service.updateBotReplyMode(replyMode);
+    await service.deleteBot(deleteRequest);
+    await service.registerSlackApp(slackRequest);
+
+    expect(run).toHaveBeenCalledWith("verified-bearer", runSettings);
+    expect(reply).toHaveBeenCalledWith("verified-bearer", replyMode);
+    expect(deletion).toHaveBeenCalledWith("verified-bearer", deleteRequest);
+    expect(slack).toHaveBeenCalledWith("verified-bearer", slackRequest);
   });
 
   it("rehydrates a persisted token after AuthnV3 validation succeeds", async () => {
@@ -4196,6 +4278,139 @@ describe("AuthService", () => {
       expect(appServerClock.currentState().verdict).toBe("ok");
 
       resetAppClockToOk();
+    });
+  });
+
+  describe("environment calls stop at the sign-in an operation began on", () => {
+    const ITEMS_URL =
+      "http://localhost:5005/api/v3/environments/env-1/items?kind=mcp_server";
+    const SERVER_URL =
+      "http://localhost:5005/api/v3/environments/env-1/mcp-servers/srv-1";
+
+    const SAVE: EnvironmentConfigurationMcpServerPutRequestV11 = {
+      environmentId: "env-1",
+      serverId: "srv-1",
+      name: "github",
+      transport: "http",
+      url: "https://mcp.example.com",
+      command: null,
+      args: [],
+      env: [],
+      toolToggles: {},
+      offFor: [],
+      credential: { kind: "unchanged" },
+    };
+
+    interface Sent {
+      readonly url: string;
+      readonly method: string;
+      readonly authorization: string;
+    }
+
+    function installEnvironmentFetch(
+      beforeAnswer: () => Promise<void>,
+    ): Sent[] {
+      const sent: Sent[] = [];
+      restoreFetch();
+      restoreFetch = installFetch(async (input, init) => {
+        const url = String(input);
+        if (!url.includes("/api/v3/environments/")) {
+          return init?.headers?.Authorization === "Bearer account-b-token"
+            ? okWithProfileForUser("user-2")
+            : okWithProfile();
+        }
+        sent.push({
+          url,
+          method: init?.method ?? "GET",
+          authorization: init?.headers?.Authorization ?? "",
+        });
+        if (url !== ITEMS_URL) {
+          return Response.json({ code: "item_refused" }, { status: 400 });
+        }
+        await beforeAnswer();
+        return Response.json({
+          items: [
+            {
+              kind: "mcp_server",
+              key: "github",
+              os: null,
+              value: { mcpServerId: "srv-1", toolToggles: {} },
+              revision: 3,
+              updatedAt: 1,
+              writtenBy: { source: "dashboard", hostId: null, hostName: null },
+            },
+          ],
+        });
+      });
+      return sent;
+    }
+
+    async function signedIn(): Promise<{
+      service: AuthService;
+      host: MockRunnerHost;
+    }> {
+      const made = makeService();
+      await made.service.start();
+      await deviceSignIn(made.service, made.host, "account-a-token");
+      return made;
+    }
+
+    it("sends both of a save's requests while its sign-in holds", async () => {
+      const { service } = await signedIn();
+      const sent = installEnvironmentFetch(() => Promise.resolve());
+
+      await expect(
+        putConfigurationMcpServer(service.environmentCloud(), SAVE, 3),
+      ).resolves.toEqual({
+        outcome: "refused",
+        reason: "item_refused",
+        serverId: null,
+      });
+
+      expect(sent).toEqual([
+        {
+          url: ITEMS_URL,
+          method: "GET",
+          authorization: "Bearer account-a-token",
+        },
+        {
+          url: SERVER_URL,
+          method: "PATCH",
+          authorization: "Bearer account-a-token",
+        },
+      ]);
+    });
+
+    it("never sends a save's write once another person's session replaces it", async () => {
+      const { service } = await signedIn();
+      const cloud = service.environmentCloud();
+      const sent = installEnvironmentFetch(() => {
+        service.applyExternalSession(
+          externalSessionForUser("user-2", "account-b-token"),
+        );
+        return Promise.resolve();
+      });
+
+      await expect(putConfigurationMcpServer(cloud, SAVE, 3)).rejects.toThrow(
+        "Connect to manage settings.",
+      );
+
+      expect(service.getCurrentSessionSnapshot().token).toBe("account-b-token");
+      expect(sent.map((request) => request.url)).toEqual([ITEMS_URL]);
+    });
+
+    it("never sends a save's write once the same person signs in again", async () => {
+      const { service, host } = await signedIn();
+      const cloud = service.environmentCloud();
+      const sent = installEnvironmentFetch(() =>
+        deviceSignIn(service, host, "account-a-token-2"),
+      );
+
+      await expect(putConfigurationMcpServer(cloud, SAVE, 3)).rejects.toThrow(
+        "Connect to manage settings.",
+      );
+
+      expect(sent.map((request) => request.url)).toEqual([ITEMS_URL]);
     });
   });
 });

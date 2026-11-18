@@ -1,25 +1,21 @@
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
-import {
-  useQueryClient,
-  type QueryClient,
-  type UseMutationResult,
-} from "@tanstack/react-query";
+import type {
+  AuthnSecretsCreateResponse,
+  AuthnSecretsReplaceValueResponse,
+} from "@traycer-clients/shared/environment/configuration-secrets";
+import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
   RequestOfMethod,
-  RequiredHostMethodVersion,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
-import { useAddressedEnvironment } from "@/hooks/environment/use-addressed-environment";
-import { useHostMutation } from "@/hooks/host/use-host-query";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
+import {
+  useSecretsEnvironment,
+  useSecretsOperationMutation,
+} from "@/hooks/environment/use-environment-secrets-calls";
 import type { HostRpcRegistry } from "@/lib/host";
-import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { SECRET_READS } from "@/lib/environment/delta-fed-reads";
-import { hostQueryKeys } from "@/lib/query-keys";
 import { settingsDetailsMutationKeys } from "@/lib/query-keys/settings-details-query-keys";
 import { replaceOutcome } from "@/lib/sandboxes/secret-replace-outcome";
 
@@ -29,51 +25,14 @@ import { replaceOutcome } from "@/lib/sandboxes/secret-replace-outcome";
  * dispatch, so the value never becomes the mutation's variables and reaches
  * no query or mutation cache.
  *
- * A write that names its environment (a team's, or Personal's) carries it at
- * @1.1, so an older host refuses it before it is sent rather than writing
- * whatever environment it runs.
+ * Each is the app's own call to authn on the person's sign-in, naming the
+ * environment the page's secrets calls name (`useSecretsEnvironment`). Its
+ * sign-in is captured at the press, before the mutation can yield; the typed
+ * value is still read only when its request is dispatched.
  */
-
-type ValueMethod =
-  | "environment.secrets.create"
-  | "environment.secrets.verify"
-  | "environment.secrets.replaceValue";
 
 interface CapturedHost {
   readonly hostId: string | null;
-}
-
-function namedEnvironmentFloor(
-  environmentId: string | null,
-  method: ValueMethod,
-): RequiredHostMethodVersion | null {
-  return environmentId === null
-    ? null
-    : { method, version: { major: 1, minor: 1 } };
-}
-
-function preflightNamedEnvironment(
-  environmentId: string | null,
-  method: ValueMethod,
-): void {
-  if (environmentId !== null) cloudVerdictPreflight(method)();
-}
-
-/** A saved or rotated value moves the list, its versions and its rotation. */
-function rereadSecrets(queryClient: QueryClient, hostId: string | null): void {
-  for (const method of SECRET_READS) {
-    void queryClient.invalidateQueries({
-      queryKey: hostQueryKeys.methodScope(
-        hostRpcServingTierHostId(
-          method,
-          hostId,
-          readProcessHostRpcTierPlan(),
-          null,
-        ),
-        method,
-      ),
-    });
-  }
 }
 
 export function useEnvironmentSecretsCreateMutation(
@@ -83,35 +42,29 @@ export function useEnvironmentSecretsCreateMutation(
     "environment.secrets.create"
   >,
 ): UseMutationResult<
-  ResponseOfMethod<HostRpcRegistry, "environment.secrets.create">,
+  AuthnSecretsCreateResponse,
   HostRpcError,
   void,
   CapturedHost
 > {
-  const { environmentId } = useAddressedEnvironment();
+  const { environmentId } = useSecretsEnvironment(client);
   const queryClient = useQueryClient();
-  return useHostMutation<
-    HostRpcRegistry,
-    "environment.secrets.create",
-    CapturedHost,
-    void
+  return useSecretsOperationMutation<
+    AuthnSecretsCreateResponse,
+    void,
+    CapturedHost
   >({
-    client,
-    method: "environment.secrets.create",
-    mapVariables: () => {
-      preflightNamedEnvironment(environmentId, "environment.secrets.create");
-      return { ...readRequest(), environmentId };
-    },
-    requiredHostMethodVersion: () =>
-      namedEnvironmentFloor(environmentId, "environment.secrets.create"),
-    options: {
-      mutationKey: settingsDetailsMutationKeys.secretCreate(),
-      onMutate: () => ({ hostId: client.getActiveHostId() }),
-      onSuccess: (outcome, _variables, captured) => {
-        if (outcome.outcome !== "refused") {
-          rereadSecrets(queryClient, captured.hostId);
-        }
-      },
+    mutationKey: settingsDetailsMutationKeys.secretCreate(),
+    mutationFn: (_variables, send) =>
+      send("environment.secrets.create", {
+        ...readRequest(),
+        environmentId,
+      }),
+    onMutate: () => ({ hostId: null }),
+    onSuccess: (outcome) => {
+      if (outcome.outcome !== "refused") {
+        void invalidateEnvironmentReads(queryClient, SECRET_READS);
+      }
     },
   });
 }
@@ -127,24 +80,17 @@ export function useEnvironmentSecretsVerifyCandidateMutation(
   HostRpcError,
   void
 > {
-  const { environmentId } = useAddressedEnvironment();
-  return useHostMutation<
-    HostRpcRegistry,
-    "environment.secrets.verify",
-    unknown,
+  const { environmentId } = useSecretsEnvironment(client);
+  return useSecretsOperationMutation<
+    ResponseOfMethod<HostRpcRegistry, "environment.secrets.verify">,
     void
   >({
-    client,
-    method: "environment.secrets.verify",
-    mapVariables: () => {
-      preflightNamedEnvironment(environmentId, "environment.secrets.verify");
-      return { ...readRequest(), environmentId };
-    },
-    requiredHostMethodVersion: () =>
-      namedEnvironmentFloor(environmentId, "environment.secrets.verify"),
-    options: {
-      mutationKey: settingsDetailsMutationKeys.secretVerifyCandidate(),
-    },
+    mutationKey: settingsDetailsMutationKeys.secretVerifyCandidate(),
+    mutationFn: (_variables, send) =>
+      send("environment.secrets.verify", {
+        ...readRequest(),
+        environmentId,
+      }),
   });
 }
 
@@ -158,40 +104,32 @@ export function useEnvironmentSecretsReplaceValueMutation(
   client: HostClient<HostRpcRegistry>,
   readValue: () => string,
 ): UseMutationResult<
-  ResponseOfMethod<HostRpcRegistry, "environment.secrets.replaceValue">,
+  AuthnSecretsReplaceValueResponse,
   HostRpcError,
   SecretReplaceTarget,
   CapturedHost
 > {
-  const { environmentId } = useAddressedEnvironment();
+  const { environmentId } = useSecretsEnvironment(client);
   const queryClient = useQueryClient();
-  return useHostMutation<
-    HostRpcRegistry,
-    "environment.secrets.replaceValue",
-    CapturedHost,
-    SecretReplaceTarget
+  return useSecretsOperationMutation<
+    AuthnSecretsReplaceValueResponse,
+    SecretReplaceTarget,
+    CapturedHost
   >({
-    client,
-    method: "environment.secrets.replaceValue",
-    mapVariables: (target) => {
-      preflightNamedEnvironment(
+    mutationKey: settingsDetailsMutationKeys.secretReplaceValue(),
+    mutationFn: (target, send) =>
+      send("environment.secrets.replaceValue", {
+        ...target,
+        value: readValue(),
         environmentId,
-        "environment.secrets.replaceValue",
-      );
-      return { ...target, value: readValue(), environmentId };
-    },
-    requiredHostMethodVersion: () =>
-      namedEnvironmentFloor(environmentId, "environment.secrets.replaceValue"),
-    options: {
-      mutationKey: settingsDetailsMutationKeys.secretReplaceValue(),
-      onMutate: () => ({ hostId: client.getActiveHostId() }),
-      onSuccess: (answer, _variables, captured) => {
-        // Accepted, or changed elsewhere: either way the list moved.
-        const outcome = replaceOutcome(answer);
-        if (outcome.kind === "accepted" || outcome.reread) {
-          rereadSecrets(queryClient, captured.hostId);
-        }
-      },
+      }),
+    onMutate: () => ({ hostId: null }),
+    onSuccess: (answer) => {
+      // Accepted, or changed elsewhere: either way the list moved.
+      const outcome = replaceOutcome(answer);
+      if (outcome.kind === "accepted" || outcome.reread) {
+        void invalidateEnvironmentReads(queryClient, SECRET_READS);
+      }
     },
   });
 }

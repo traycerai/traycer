@@ -343,6 +343,16 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
   },
   { path: "host", options: [], args: [] },
   {
+    path: "host claim",
+    options: [
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+      { flags: "--yes", mandatory: false },
+    ],
+    args: [],
+  },
+  {
     path: "host start",
     options: [
       { flags: "--cwd <path>", mandatory: false },
@@ -813,6 +823,7 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
       { flags: "--json", mandatory: false },
       { flags: "--no-progress", mandatory: false },
       { flags: "--quiet", mandatory: false },
+      { flags: "--switch-account", mandatory: false },
     ],
     args: [
       { name: "provider", required: true, variadic: false },
@@ -1798,6 +1809,15 @@ describe("rendered root/parent/leaf --help (CLI command audit regression suite)"
       expect(login.options.some((option) => option.long === "--token")).toBe(
         true,
       );
+    });
+
+    it("profile login --help names the switch-account option", () => {
+      const program = freshProgram();
+      const login = findByPath(program, ["profile", "login"]);
+      const help = renderHelp(login);
+
+      expect(help).toContain("--switch-account");
+      expect(help).toContain("Switch account");
     });
 
     it("agent send --help explains response-id direction", () => {

@@ -48,7 +48,7 @@ interface CapturedMutation {
       data: unknown,
       variables: unknown,
       context: { readonly hostId: string | null },
-    ) => void;
+    ) => Promise<void>;
   };
 }
 
@@ -60,19 +60,28 @@ function wrapper({ children }: { readonly children: ReactNode }) {
   );
 }
 
+function useSetProfileApiKeyWithoutDispatch(
+  onSuccess: (() => void) | undefined,
+) {
+  return useSetProviderProfileApiKey(
+    () => "unused test input",
+    () => undefined,
+    onSuccess,
+  );
+}
+
 function captureLastMutation(): CapturedMutation {
   const call = mocks.useHostMutation.mock.calls.at(-1);
   if (call === undefined) throw new Error("useHostMutation was never called");
   return call[0] as CapturedMutation;
 }
 
-function renderAndSucceed(hook: () => unknown): CapturedMutation {
+async function renderAndSucceed(hook: () => unknown): Promise<void> {
   mocks.useHostMutation.mockClear();
   mocks.track.mockClear();
   renderHook(hook, { wrapper });
   const captured = captureLastMutation();
-  captured.options.onSuccess({}, {}, { hostId: "host-1" });
-  return captured;
+  await captured.options.onSuccess({}, {}, { hostId: "host-1" });
 }
 
 // `globals: false` here, so Testing Library's auto-cleanup never registers:
@@ -81,7 +90,7 @@ function renderAndSucceed(hook: () => unknown): CapturedMutation {
 afterEach(cleanup);
 
 describe("per-profile API-key mutations", () => {
-  it("reports a stored key as an api_key provider change", () => {
+  it("reports a stored key as an api_key provider change", async () => {
     // These hooks used to call `useHostMutation` directly, which bypasses
     // `useHostScopedMutation` - the only path that emits
     // `ProviderConfigurationChanged`. Every per-profile key change was
@@ -92,7 +101,7 @@ describe("per-profile API-key mutations", () => {
     // FALSIFICATION: remove the `setProfileApiKey` entry from
     // `PROVIDER_MUTATION_OPERATIONS` and this reddens; route the hook back
     // through a bare `useHostMutation` and it reddens too.
-    renderAndSucceed(() => useSetProviderProfileApiKey(undefined));
+    await renderAndSucceed(() => useSetProfileApiKeyWithoutDispatch(undefined));
 
     expect(mocks.track).toHaveBeenCalledWith(
       AnalyticsEvent.ProviderConfigurationChanged,
@@ -100,11 +109,11 @@ describe("per-profile API-key mutations", () => {
     );
   });
 
-  it("reports a removed key the same way", () => {
+  it("reports a removed key the same way", async () => {
     // Same operation, not a second one: `api_key` answers "did this user
     // configure a key", and the provider-wide pair already reports set and
     // clear under one value.
-    renderAndSucceed(() => useClearProviderProfileApiKey(undefined));
+    await renderAndSucceed(() => useClearProviderProfileApiKey(undefined));
 
     expect(mocks.track).toHaveBeenCalledWith(
       AnalyticsEvent.ProviderConfigurationChanged,
@@ -112,7 +121,7 @@ describe("per-profile API-key mutations", () => {
     );
   });
 
-  it("CONTROL: tracking is keyed by the mutation key, not by every success", () => {
+  it("CONTROL: tracking is keyed by the mutation key, not by every success", async () => {
     // Otherwise the two arms above would pass against a helper that reports
     // `api_key` for anything that succeeds through it. `startLogin` runs the
     // same helper and is deliberately absent from the operations map, so it
@@ -129,7 +138,7 @@ describe("per-profile API-key mutations", () => {
         }),
       { wrapper },
     );
-    captureLastMutation().options.onSuccess({}, {}, { hostId: "host-1" });
+    await captureLastMutation().options.onSuccess({}, {}, { hostId: "host-1" });
 
     expect(mocks.track).not.toHaveBeenCalled();
   });
@@ -144,7 +153,9 @@ describe("per-profile API-key mutations", () => {
     // `useHostScopedMutation`'s options passthrough, which is where it now
     // travels - and the ids stop matching.
     mocks.useHostMutation.mockClear();
-    renderHook(() => useSetProviderProfileApiKey(undefined), { wrapper });
+    renderHook(() => useSetProfileApiKeyWithoutDispatch(undefined), {
+      wrapper,
+    });
     const set = captureLastMutation();
 
     mocks.useHostMutation.mockClear();
@@ -172,11 +183,11 @@ describe("per-profile API-key mutations", () => {
   // the clear back to `mutate(vars, { onSuccess })` in the dialog, and the
   // spy stops firing.
   it.each([
-    ["set", useSetProviderProfileApiKey],
+    ["set", useSetProfileApiKeyWithoutDispatch],
     ["clear", useClearProviderProfileApiKey],
   ] as const)(
     "runs the %s caller's onSuccess from the mutation options after unmount",
-    (_label, hook) => {
+    async (_label, hook) => {
       mocks.useHostMutation.mockClear();
       const onSuccess = vi.fn();
       const { unmount } = renderHook(() => hook(onSuccess), { wrapper });
@@ -185,12 +196,12 @@ describe("per-profile API-key mutations", () => {
       unmount();
       expect(onSuccess).not.toHaveBeenCalled();
 
-      captured.options.onSuccess({}, {}, { hostId: "host-1" });
+      await captured.options.onSuccess({}, {}, { hostId: "host-1" });
       expect(onSuccess).toHaveBeenCalledTimes(1);
     },
   );
 
-  it("still succeeds when the caller passes no onSuccess", () => {
+  it("still succeeds when the caller passes no onSuccess", async () => {
     // The passthrough must tolerate `undefined` rather than calling into it:
     // `useHostScopedMutation` always defines its OWN options.onSuccess (it
     // tracks and invalidates), so the only observable question here is whether
@@ -198,8 +209,8 @@ describe("per-profile API-key mutations", () => {
     mocks.useHostMutation.mockClear();
     renderHook(() => useClearProviderProfileApiKey(undefined), { wrapper });
     const captured = captureLastMutation();
-    expect(() =>
+    await expect(
       captured.options.onSuccess({}, {}, { hostId: "host-1" }),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
   });
 });

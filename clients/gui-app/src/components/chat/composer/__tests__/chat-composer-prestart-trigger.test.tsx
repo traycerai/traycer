@@ -506,7 +506,6 @@ describe("ChatComposer fires chat.prestartRuntime", () => {
         displayName: "e2e-sbx-rest",
       }),
       configuration: { kind: "personal" },
-      wakeChangesPayer: false,
     };
     mountComposer();
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import type { ChatRecordSummaryV14 } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV15 } from "@traycer/protocol/host/epic/chat-records";
 import type {
   RecordListRecencyPatch,
   RecordListStamp,
@@ -29,7 +29,7 @@ import { GUI_PROJECTS_EPIC_DOC_REPLICA } from "@/stores/epics/open-epic/projecti
  */
 interface ChatRecordListAnswer {
   /**
-   * The `@1.4` row, NOT the base one and not an older minor's. A narrower row
+   * The `@1.5` row, NOT the base one and not an older minor's. A narrower row
    * is assignable to this in the wrong direction, so typing it down is a
    * silent narrowing rather than a type error, and each dropped field fails
    * somewhere different:
@@ -45,6 +45,8 @@ interface ChatRecordListAnswer {
    *  - without `evicted` (the `@1.4` field), a chat whose records the host
    *    dropped opens its tile on that host, which no longer holds them,
    *    instead of on the server pool.
+   *  - without `starterUserId` (the `@1.5` field), a chat on a team's
+   *    computer never says who started it.
    *
    * A host on an older minor upgrades with `head` absent, which the head
    * plane treats as "nothing to say about the head" rather than as a
@@ -54,7 +56,7 @@ interface ChatRecordListAnswer {
    * `unchanged` arm. Distinct from `[]`, which is the positive claim that
    * this epic has no chats and retracts everything the fence allows.
    */
-  readonly chats: readonly ChatRecordSummaryV14[] | null;
+  readonly chats: readonly ChatRecordSummaryV15[] | null;
   /**
    * What the `unchanged` arm carried instead of rows: the recency facts a
    * QUIET write moved since the stamp this request sent. Empty on the

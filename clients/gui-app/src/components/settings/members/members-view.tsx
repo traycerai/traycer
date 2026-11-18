@@ -1,9 +1,8 @@
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import type { UseQueryResult } from "@tanstack/react-query";
-import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { ConfigurationRemovalPreview } from "@traycer-clients/shared/environment/configuration-members";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { EnvironmentMembersRemovePreviewResponse } from "@traycer/protocol/host/environment/contracts";
 import { DemotionPreviewDialog } from "@/components/settings/members/demotion-preview";
 import { InviteDialog } from "@/components/settings/members/invite-dialog";
 import { InviteSeatLine } from "@/components/settings/members/invite-seat-line";
@@ -21,12 +20,9 @@ import {
   SET_ROLE_FORBIDDEN_REFUSAL,
   LEGACY_NOTICE_READ_FAILED,
   MANAGE_SEATS_LABEL,
-  MEMBERS_NEED_UPDATED_HOST,
   RETRY_LABEL,
   acceptedPeopleCount,
   addPlanOnDashboardLabel,
-  cancelRoleChangeAriaLabel,
-  demotionWhatKeepsWorking,
   isRoleDemotion,
   memberDisplayName,
   memberFirstName,
@@ -34,11 +30,10 @@ import {
   membersHeaderLine,
   membersReadFailed,
   planRequiredRefusal,
-  roleCheckRunning,
 } from "@/components/settings/members/copy";
 import {
   seatsManagementUrl,
-  teamPlanUrl,
+  teamBillingUrl,
 } from "@/components/settings/members/dashboard-urls";
 import type {
   MembersDetailsSubject,
@@ -47,8 +42,7 @@ import type {
   MembersReadState,
   MembersRemoveOutcome,
   MembersSetRoleOutcome,
-  PendingRoleCheck,
-  PlanUnlinkPreviewModel,
+  MemberWorkNow,
   PreviewState,
   RemovePreviewModel,
   TeamRole,
@@ -56,8 +50,12 @@ import type {
 import { DashboardLinkButton } from "@/components/settings/host-scope/dashboard-link-button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { useEnvironmentMembersRemovePreviewQuery } from "@/hooks/environment/use-environment-members-remove-preview-query";
-import type { HostRpcRegistry } from "@/lib/host";
+import { useEnvironmentMembersRemovalPreviewQuery } from "@/hooks/environment/use-environment-members-removal-preview-query";
+import {
+  useTeamComputerWorkNow,
+  type TeamComputerCounts,
+  type TeamComputerWorkNow,
+} from "@/hooks/environment/use-team-computer-work-now";
 
 type PendingRemove =
   | { readonly kind: "accepted"; readonly member: MembersListMember }
@@ -71,18 +69,17 @@ type PendingDemotion = {
 /**
  * The two roles the demotion confirm asks about. A closed dialog asks about
  * nothing, and the member it last named is already gone from the state, so it
- * reads the lowest role rather than claiming one it cannot see. A member whose
- * seat carries no role cannot be demoted, so it reads the lowest role too.
+ * reads the lowest role rather than claiming one it cannot see.
  */
 function demotionRoles(demotion: PendingDemotion | null): {
   readonly currentRole: TeamRole;
   readonly nextRole: TeamRole;
 } {
-  const currentRole = demotion?.member.effectiveRole ?? null;
-  if (demotion === null || currentRole === null) {
-    return { currentRole: "editor", nextRole: "editor" };
-  }
-  return { currentRole, nextRole: demotion.nextRole };
+  if (demotion === null) return { currentRole: "viewer", nextRole: "viewer" };
+  return {
+    currentRole: demotion.member.effectiveRole,
+    nextRole: demotion.nextRole,
+  };
 }
 
 /**
@@ -100,66 +97,53 @@ function announceRemoval(removed: PendingRemove, teamName: string): void {
 }
 
 /**
- * A dialog's preview from its read: the answer once read (while no re-read
- * after a failure is in flight), the failure once a read is refused, and
- * loading otherwise. Never an answer read for another member.
+ * The removal confirm's preview from authn's read joined with the team
+ * computer's count: the answer once both are in (while no re-read after a
+ * failure is in flight), the failure once authn's read is refused, and
+ * loading otherwise, so the work row never says no count while one is still
+ * being made. Never an answer read for another member.
  */
-function previewState<Preview>(
-  query: UseQueryResult<EnvironmentMembersRemovePreviewResponse, HostRpcError>,
-  model: (preview: EnvironmentMembersRemovePreviewResponse) => Preview,
-): PreviewState<Preview> {
+function previewState(
+  query: UseQueryResult<ConfigurationRemovalPreview, HostRpcError>,
+  workNow: TeamComputerWorkNow,
+  hostLabel: (hostId: string) => string | null,
+): PreviewState<RemovePreviewModel> {
   if (query.isError) {
     return query.isFetching ? { status: "loading" } : { status: "failed" };
   }
-  if (query.data === undefined) return { status: "loading" };
-  return { status: "ready", preview: model(query.data) };
+  if (query.data === undefined || workNow.status === "pending") {
+    return { status: "loading" };
+  }
+  return {
+    status: "ready",
+    preview: {
+      sandboxesToRekey: query.data.sandboxesToRekey,
+      workNow: memberWorkNow(workNow.answer, workNow.hostId, hostLabel),
+    },
+  };
 }
 
 /**
- * How a demotion's confirm stands. It opens only once the check has ANSWERED,
- * read or refused: the dialog's description is not a live region, so a
- * consequence appended to it after focus has entered is one a screen reader is
- * never told, and the plan lead can only be written once the rows are known.
- *
- * Answered is `isFetched`, the count of reads this entry has completed, and
- * neither `previewState` nor the live `data`/`isError` pair can stand in for
- * it. Both say `loading` while a re-read is in flight, and a retry after a
- * REFUSED first read un-errors the entry on its way out: the fetch dispatch
- * spreads `{error: null, status: 'pending'}` whenever there is no data
- * (query-core `fetchState`), so `isError` goes false with `data` still
- * undefined and the dialog would close under its own Retry button. The
- * completion count only ever grows, so an answered question stays answered.
- *
- * It names a question this gesture asked, not a leftover, because the preview
- * query is read with `gcTime: 0` and `enabled` only while a dialog names the
- * member (`use-environment-members-remove-preview-query.ts`): a pick starts
- * cold. A later `gcTime` here would hand a new pick an older answer, so the
- * two belong together.
- *
- * Until the answer lands the pick has no dialog to show for it, so the row it
- * came from says so, and offers to take it back.
+ * The member's running work where the window's own host, a team computer,
+ * counted it, named by that host. No answer, or that host's "cannot count",
+ * is no count.
  */
-function demotionGate(
-  query: UseQueryResult<EnvironmentMembersRemovePreviewResponse, HostRpcError>,
-  demotion: PendingDemotion | null,
-): {
-  readonly open: boolean;
-  readonly checking: PendingRoleCheck | null;
-} {
-  const answered = query.isFetched;
+function memberWorkNow(
+  counts: TeamComputerCounts | null,
+  hostId: string | null,
+  hostLabel: (hostId: string) => string | null,
+): MemberWorkNow | null {
+  if (
+    counts === null ||
+    counts.activeTurns === null ||
+    counts.terminals === null
+  ) {
+    return null;
+  }
   return {
-    open: answered && demotion !== null,
-    checking:
-      answered || demotion === null
-        ? null
-        : {
-            userId: demotion.member.userId,
-            running: roleCheckRunning(demotion.nextRole),
-            cancelLabel: cancelRoleChangeAriaLabel(
-              memberDisplayName(demotion.member),
-              demotion.nextRole,
-            ),
-          },
+    activeTurns: counts.activeTurns,
+    terminals: counts.terminals,
+    hostName: hostId === null ? null : hostLabel(hostId),
   };
 }
 
@@ -210,17 +194,6 @@ function MembersReadFallback(props: {
       />
     );
   }
-  if (props.membersRead === "unsupported") {
-    return (
-      <p
-        role="status"
-        className="text-ui-sm text-muted-foreground"
-        data-testid="members-needs-update"
-      >
-        {MEMBERS_NEED_UPDATED_HOST}
-      </p>
-    );
-  }
   if (props.membersRead === "failed") {
     return (
       <p
@@ -268,8 +241,8 @@ function MembersBanner(props: {
   readonly teamHandle: string;
 }): ReactNode {
   if (props.banner === null) return null;
-  const planPage = (signInUrl: string): string => {
-    return teamPlanUrl(signInUrl, props.teamHandle) ?? signInUrl;
+  const billingPage = (signInUrl: string): string => {
+    return teamBillingUrl(signInUrl, props.teamHandle) ?? signInUrl;
   };
   return (
     <div
@@ -281,7 +254,7 @@ function MembersBanner(props: {
       {props.banner === planRequiredRefusal(props.teamName) &&
       props.teamHandle.length > 0 ? (
         <DashboardLinkButton
-          page={planPage}
+          page={billingPage}
           label={addPlanOnDashboardLabel()}
           testId="members-plan-required-link"
         />
@@ -294,17 +267,15 @@ function MembersBanner(props: {
  * Settings ▸ Members body: header, seats link, invite, legacy notice, the
  * list, and the invite / remove / demotion dialogs. E4's stub wraps this.
  * Until the members read succeeds the list, Invite and the notice wait: a read
- * in flight shows loading, a failed one says so with Retry. Each dialog's
- * preview is read for the member it names.
+ * in flight shows loading, a failed one says so with Retry. The removal
+ * confirm's preview is read for the member it names.
  */
 export function MembersView(props: {
-  readonly client: HostClient<HostRpcRegistry> | null;
   readonly environmentId: string;
   readonly teamName: string;
   readonly teamHandle: string;
   readonly currentUserId: string;
-  /** `null` for a reader holding no seat authority. */
-  readonly viewerRole: TeamRole | null;
+  readonly viewerRole: TeamRole;
   readonly membersRead: MembersReadState;
   readonly members: readonly MembersListMember[];
   readonly legacyMembers: readonly string[];
@@ -326,15 +297,12 @@ export function MembersView(props: {
   readonly invitePending: boolean;
   readonly setRolePending: boolean;
   readonly removePending: boolean;
-  /** Whether the host serves `environment.members.seats`, the invite's seat read. */
-  readonly seatsSupported: boolean;
   /** The name a host id shows as, null when this window does not know it. */
   readonly hostLabel: (hostId: string) => string | null;
   /** The admin dismissed the legacy-role notice; nothing else calls it. */
   readonly onNoticeSeen: () => void;
 }): ReactNode {
   const {
-    client,
     environmentId,
     teamName,
     teamHandle,
@@ -351,7 +319,6 @@ export function MembersView(props: {
     invitePending,
     setRolePending,
     removePending,
-    seatsSupported,
     hostLabel,
     onNoticeSeen,
   } = props;
@@ -368,37 +335,19 @@ export function MembersView(props: {
   const revoking = removeTargetOfKind(removeTarget, "pending-invite");
   const demoting = demotion === null ? null : demotion.member;
   const demotionRoleChange = demotionRoles(demotion);
-  const removeQuery = useEnvironmentMembersRemovePreviewQuery(
-    client,
+  const removeQuery = useEnvironmentMembersRemovalPreviewQuery(
     environmentId,
     targetUserId(removing),
   );
-  const demotionQuery = useEnvironmentMembersRemovePreviewQuery(
-    client,
+  const workNow = useTeamComputerWorkNow({
     environmentId,
-    targetUserId(demoting),
-  );
-  const removePreview = previewState(
-    removeQuery,
-    (preview): RemovePreviewModel => ({
-      activeTurns: preview.activeTurns,
-      terminals: preview.terminals,
-      hostName:
-        preview.localHostId === null ? null : hostLabel(preview.localHostId),
-      sharedSignIns: preview.sharedSignIns,
-      paidSandboxes: preview.paidSandboxes,
-      linkedPlan: preview.linkedPlan,
-    }),
-  );
-  const demotionPreview = previewState(
-    demotionQuery,
-    (preview): PlanUnlinkPreviewModel => ({
-      planLabel: preview.linkedPlan ?? "",
-      turnsOnPlan: preview.activeTurns,
-      whatKeepsWorking: demotionWhatKeepsWorking(),
-    }),
-  );
-  const demotionDialog = demotionGate(demotionQuery, demotion);
+    subject: targetUserId(removing),
+    read: {
+      method: "environment.members.removePreview",
+      paramsFor: (userId) => ({ environmentId, userId }),
+    },
+  });
+  const removePreview = previewState(removeQuery, workNow, hostLabel);
 
   const membersReady = membersRead === "ready";
   // Dismissed here: hidden at once, before the read that carries the seen
@@ -428,35 +377,7 @@ export function MembersView(props: {
     setDemotionRefusal(null);
   };
 
-  /**
-   * The Details entry, wrapped once for every subject this view hands out —
-   * each row's and the notice's. Details opens its dialog inside the entry,
-   * which this view does not own, so there is no opener here to teach; the
-   * invariant is instead that **every entry this view hands out retires a
-   * pending pick on the way in**, like every opener below. It belongs here and
-   * not on the row, because the pick is the view's while only its tell is the
-   * row's: a press on another member's Details, or on the notice's, is as much
-   * a replacement of the question as Remove is.
-   *
-   * The span is rendered always, never only while a pick is pending. The entry
-   * holds its drawer's own open state, so changing the element at this position
-   * would unmount it in the very commit the press opens it, and `closeDemotion`
-   * with nothing pending is a no-op.
-   */
-  const detailsEntry = (subject: MembersDetailsSubject): ReactNode => (
-    <span className="contents" onClickCapture={closeDemotion}>
-      {rowDetails(subject)}
-    </span>
-  );
-
-  // Every opener of a question in this view retires a demotion still waiting
-  // on its check, Remove and Revoke through here and Invite below. Its confirm
-  // is deferred until the answer lands, so without this the answer mounts a
-  // second modal over the dialog this gesture just opened — and on the same
-  // member, a confirmed removal would leave a confirm asking to change the
-  // role of someone who is gone.
   const openRemove = (member: MembersListMember): void => {
-    closeDemotion();
     setRemoveRefusal(null);
     setRemoveTarget({
       kind: member.inviteState === "pending" ? "pending-invite" : "accepted",
@@ -465,7 +386,6 @@ export function MembersView(props: {
   };
 
   const openInvite = (): void => {
-    closeDemotion();
     setInviteOpen(true);
   };
 
@@ -491,17 +411,10 @@ export function MembersView(props: {
   };
 
   const openRoleChange = (member: MembersListMember, role: TeamRole): void => {
-    // Every pick replaces the one before it. A demotion whose check has not
-    // answered has no dialog up to cancel, so the next pick is how it is taken
-    // back — and without this its answer would open a question about a role
-    // the person has already changed their mind about.
-    closeDemotion();
-    const currentRole = member.effectiveRole;
-    if (role === currentRole) return;
+    if (role === member.effectiveRole) return;
     // Every demotion is confirmed, because it takes something away; a
-    // promotion gives, so it is written straight through. A seat with no
-    // authority has nothing to take away, so naming a role for it promotes.
-    if (currentRole !== null && isRoleDemotion(currentRole, role)) {
+    // promotion gives, so it is written straight through.
+    if (isRoleDemotion(member.effectiveRole, role)) {
       setDemotion({ member, nextRole: role });
       return;
     }
@@ -582,7 +495,7 @@ export function MembersView(props: {
         <LegacyRoleNotice
           teamName={teamName}
           names={legacyMembers}
-          details={detailsEntry(noticeSubject)}
+          details={rowDetails(noticeSubject)}
           onDismiss={dismissNotice}
         />
       ) : null}
@@ -603,9 +516,7 @@ export function MembersView(props: {
           pendingCount={pendingCount}
           peopleCount={peopleCount}
           legacyMembers={legacyMembers}
-          rowDetails={detailsEntry}
-          checkingRole={demotionDialog.checking}
-          onCancelRoleChange={closeDemotion}
+          rowDetails={rowDetails}
           onRoleChange={openRoleChange}
           onRemove={openRemove}
           onRetry={onRetryMembers}
@@ -615,13 +526,7 @@ export function MembersView(props: {
         open={inviteOpen}
         teamName={teamName}
         busy={invitePending}
-        seatLine={
-          <InviteSeatLine
-            client={client}
-            environmentId={environmentId}
-            supported={seatsSupported}
-          />
-        }
+        seatLine={<InviteSeatLine environmentId={environmentId} />}
         onOpenChange={setInviteOpen}
         onInvite={onInvite}
       />
@@ -643,19 +548,15 @@ export function MembersView(props: {
         onConfirm={confirmRemove}
       />
       <DemotionPreviewDialog
-        open={demotionDialog.open}
+        open={demotion !== null}
         memberName={targetName(demoting)}
         teamName={teamName}
         currentRole={demotionRoleChange.currentRole}
         nextRole={demotionRoleChange.nextRole}
-        preview={demotionPreview}
         busy={setRolePending}
         blockedReason={demotionRefusal}
         onOpenChange={(open) => {
           if (!open) closeDemotion();
-        }}
-        onRetry={() => {
-          void demotionQuery.refetch();
         }}
         onConfirm={confirmDemotion}
       />

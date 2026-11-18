@@ -1,13 +1,13 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-reads";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import {
@@ -16,6 +16,11 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
+import {
+  mountTeamPage,
+  personalPoolSource,
+  resetTeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
 
 // Personal's id is read from `environment.list` under the signed-in viewer.
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
@@ -30,6 +35,7 @@ const PERSONAL = { environmentId: "env-personal" } as const;
 
 afterEach(() => {
   cleanup();
+  resetTeamPageHarness();
   resetNegotiatedManifests();
 });
 
@@ -59,7 +65,7 @@ function PersonalReaders(props: {
 
 describe("a Personal revision change", () => {
   it("rereads the Personal MCP servers and Skills a change elsewhere moved", async () => {
-    let status: EnvironmentStatusResponseV12 = environmentStatusFixture({
+    let status: EnvironmentStatusResponseV13 = environmentStatusFixture({
       principal: { kind: "personal" },
       receivedRevision: 1,
       appliedRevision: 1,
@@ -67,54 +73,50 @@ describe("a Personal revision change", () => {
     let listAsked = 0;
     let mcpAsked = 0;
     let skillsAsked = 0;
-    const { client } = buildEnvironmentClient({
-      hostId: HOST_ID,
-      handlers: {
-        "environment.status": () => status,
-        "environment.list": () => {
-          listAsked += 1;
-          return {
-            environments: [
-              {
-                environmentId: "env-personal",
-                ownerKind: "user" as const,
-                ownerId: "user-me",
-                roomId: "room-personal",
-                label: "Personal",
-                effectiveRole: "owner" as const,
-                kind: "personal" as const,
-                hostCount: 1,
-                providerHandle: null,
-              },
-            ],
-          };
-        },
-        "environment.configuration.mcpServers.list": () => {
-          mcpAsked += 1;
-          return { servers: [] };
-        },
-        "environment.configuration.skills.list": () => {
-          skillsAsked += 1;
-          return {
-            outcome: "listed" as const,
-            revision: null,
-            policyRevision: null,
-            skills: [],
-            deletedBundled: [],
-          };
-        },
+    const handlers: MockHandlerMap<HostRpcRegistry> = {
+      "environment.status": () => status,
+      "environment.list": () => {
+        listAsked += 1;
+        return {
+          environments: [
+            {
+              environmentId: "env-personal",
+              ownerKind: "user" as const,
+              ownerId: "user-me",
+              roomId: "room-personal",
+              label: "Personal",
+              effectiveRole: "owner" as const,
+              kind: "personal" as const,
+              hostCount: 1,
+              providerHandle: null,
+            },
+          ],
+        };
       },
-    });
+      "environment.configuration.mcpServers.list": () => {
+        mcpAsked += 1;
+        return { servers: [] };
+      },
+      "environment.configuration.skills.list": () => {
+        skillsAsked += 1;
+        return {
+          outcome: "listed" as const,
+          revision: null,
+          policyRevision: null,
+          skills: [],
+          deletedBundled: [],
+        };
+      },
+    };
+    const { client } = buildEnvironmentClient({ hostId: HOST_ID, handlers });
+    const harness = mountTeamPage(personalPoolSource(), handlers);
     recordNegotiatedHostManifest(HOST_ID, {
       "environment.status": { major: 1, minor: 1 },
     });
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false, gcTime: 0 } },
-    });
     render(
-      <QueryClientProvider client={queryClient}>
+      <harness.Wrapper>
         <PersonalReaders client={client} />
-      </QueryClientProvider>,
+      </harness.Wrapper>,
     );
     await waitFor(() => {
       expect(screen.getByTestId("revision").textContent).toBe("1");
@@ -130,7 +132,7 @@ describe("a Personal revision change", () => {
       receivedRevision: 2,
       appliedRevision: 2,
     });
-    await queryClient.invalidateQueries({
+    await harness.queryClient.invalidateQueries({
       queryKey: hostQueryKeys.methodScope(HOST_ID, "environment.status"),
     });
 

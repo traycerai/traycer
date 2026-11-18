@@ -86,6 +86,7 @@ export async function deregisterHostViaHttp(
           Authorization: `Bearer ${bearerToken}`,
           Accept: "application/json",
         },
+        redirect: "manual",
         signal: abort.signal,
       }),
       abort.signal,

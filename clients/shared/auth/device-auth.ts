@@ -317,6 +317,7 @@ export async function pollDeviceToken(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ device_code: deviceCode, client_id: clientId }),
+        redirect: "manual",
         signal: request.signal,
       }),
       request.signal,

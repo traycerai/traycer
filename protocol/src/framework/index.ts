@@ -221,6 +221,10 @@ export {
   hostRestartIntentSchema,
 } from "./ws-protocol";
 
+export type { HostDoorReason, HostDoorReasonReading } from "./door-reason";
+
+export { HOST_DOOR_REASONS, readDoorReason } from "./door-reason";
+
 // ---- Client handshake identity + compatibility epoch --------------------- //
 
 export type {

@@ -50,7 +50,6 @@ import type {
  * The renderer never spawns the CLI directly; this bridge is the only seam.
  */
 export interface HostManagementBridgeSurface {
-  readonly invalidateLocalTeamAdmission?: (hostId: string) => Promise<void>;
   getHostControllerStatus(): Promise<HostControllerStatus>;
   convergeReady(force: boolean): Promise<MutationOutcome<ConvergeReadyOk>>;
   applyStaged(
@@ -169,11 +168,6 @@ export function buildHostManagementBridge(): HostManagementBridgeSurface {
     clearRemoval: () =>
       ipcRenderer.invoke(
         RunnerHostInvoke.traycerHostRemovalClear,
-      ) as Promise<void>,
-    invalidateLocalTeamAdmission: (hostId) =>
-      ipcRenderer.invoke(
-        RunnerHostInvoke.invalidateLocalTeamAdmission,
-        hostId,
       ) as Promise<void>,
     restartHost: () =>
       ipcRenderer.invoke(

@@ -41,6 +41,16 @@ function jsonResponse(body: unknown, status: number | undefined): Response {
   });
 }
 
+function opaqueRedirectResponse(): Response {
+  const response = new Response(null);
+  Object.defineProperties(response, {
+    type: { value: "opaqueredirect" },
+    status: { value: 0 },
+    ok: { value: false },
+  });
+  return response;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -76,6 +86,7 @@ describe("environment invitation authn requests", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]?.url).toBe(LIST_URL);
     expect(requests[0]?.init?.method).toBe("GET");
+    expect(requests[0]?.init?.redirect).toBe("manual");
     const headers = new Headers(requests[0]?.init?.headers);
     expect(headers.get("Authorization")).toBe(`Bearer ${BEARER}`);
     expect(headers.get("x-traycer-invite-acceptance")).toBe("explicit");
@@ -98,6 +109,7 @@ describe("environment invitation authn requests", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]?.url).toBe(ACCEPT_URL);
     expect(requests[0]?.init?.method).toBe("POST");
+    expect(requests[0]?.init?.redirect).toBe("manual");
     expect(requests[0]?.init?.body).toBe(
       JSON.stringify({ environmentId: "env-beta" }),
     );
@@ -106,6 +118,38 @@ describe("environment invitation authn requests", () => {
     expect(headers.get("Content-Type")).toBe("application/json");
     expect(headers.get("x-traycer-invite-acceptance")).toBe("explicit");
   });
+
+  it.each([
+    [
+      "listing",
+      () => fetchEnvironmentInvitations(AUTHN_BASE_URL, BEARER, null),
+      "Couldn't reach team invitations. Try again.",
+    ],
+    [
+      "accepting",
+      () => acceptEnvironmentInvitation(AUTHN_BASE_URL, BEARER, "env-beta"),
+      "Couldn't accept this invitation. Try again.",
+    ],
+  ] as const)(
+    "treats a 3xx and an opaque redirect as non-success when %s",
+    async (_operation, request, error) => {
+      for (const response of [
+        () =>
+          new Response(null, {
+            status: 302,
+            headers: { Location: `${AUTHN_BASE_URL}/redirect-target` },
+          }),
+        opaqueRedirectResponse,
+      ]) {
+        const requests = stubFetch(response);
+
+        await expect(request()).rejects.toThrow(error);
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.init?.redirect).toBe("manual");
+        vi.restoreAllMocks();
+      }
+    },
+  );
 
   it("bounds authorization and server errors without exposing response bodies", async () => {
     stubFetch(() => new Response("private server detail", { status: 403 }));

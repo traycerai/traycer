@@ -101,7 +101,6 @@ describe("hook saves from released clients", () => {
 
     expect(upgraded).toEqual({
       hooks: [COMMAND_HOOK],
-      executableWriteGrant: null,
       configurationRevision: null,
     });
     expect(notificationHooksSaveRequestSchema.safeParse(upgraded).success).toBe(
@@ -121,7 +120,7 @@ describe("hook saves from released clients", () => {
     });
   });
 
-  it("keeps a save@2 grant and still supplies no revision", () => {
+  it("carries a frozen save@2 request to the current line with no revision", () => {
     const v2 = notificationHooksSaveRequestSchemaV20.parse({
       hooks: [COMMAND_HOOK],
       executableWriteGrant: "grant-token",
@@ -132,13 +131,12 @@ describe("hook saves from released clients", () => {
 
     expect(upgraded).toEqual({
       hooks: [COMMAND_HOOK],
-      executableWriteGrant: "grant-token",
       configurationRevision: null,
     });
   });
 
   it("never lets a direct latest caller leave the revision out or send an empty one", () => {
-    const base = { hooks: [COMMAND_HOOK], executableWriteGrant: null };
+    const base = { hooks: [COMMAND_HOOK] };
 
     expect(notificationHooksSaveRequestSchema.safeParse(base).success).toBe(
       false,
@@ -160,7 +158,6 @@ describe("hook saves from released clients", () => {
   it("drops the revision when a current client saves to a released host", () => {
     const request = notificationHooksSaveRequestSchema.parse({
       hooks: [COMMAND_HOOK],
-      executableWriteGrant: "grant-token",
       configurationRevision: "rev-7",
     });
     const toV2 = required(saveLine[3].downgradePathsFromLatest[2]);
@@ -171,7 +168,7 @@ describe("hook saves from released clients", () => {
 
     expect(v2).toEqual({
       ok: true,
-      value: { hooks: [COMMAND_HOOK], executableWriteGrant: "grant-token" },
+      value: { hooks: [COMMAND_HOOK], executableWriteGrant: null },
     });
     expect(v1).toEqual({ ok: true, value: { hooks: [COMMAND_HOOK] } });
     // Both released request schemas are strict: a stray revision would refuse.

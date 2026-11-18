@@ -1,3 +1,4 @@
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
 import {
   useMutation,
   useQueryClient,
@@ -14,7 +15,7 @@ import type {
 import type { HostRpcRegistry } from "@/lib/host";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { hostQueryKeys, terminalMutationKeys } from "@/lib/query-keys";
-import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import { withHostMutationErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import {
   fetchIsolatedTerminalList,
   publishExactTerminalListSnapshot,
@@ -43,7 +44,7 @@ export function useTerminalCreate(
     withHostMutationLifecycleBoundary("terminal.create", {
       mutationKey: terminalMutationKeys.create(),
       mutationFn: (variables) =>
-        withHostQueryErrorBoundary("terminal.create", () => {
+        withHostMutationErrorBoundary("terminal.create", () => {
           if (client === null) {
             return Promise.reject(
               new HostRpcErrorCtor({
@@ -69,6 +70,7 @@ export function useTerminalCreate(
         });
       },
       onError: async (error, variables, ctx) => {
+        if (error instanceof HostBelowMinimumError) return;
         if (ctx !== undefined && ctx.hostId !== null && client !== null) {
           try {
             const snapshot = await fetchIsolatedTerminalList({
