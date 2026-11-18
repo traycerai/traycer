@@ -17,6 +17,7 @@ import type {
   BotMemory,
   BotMemoryChange,
 } from "@traycer/protocol/host/bot/schemas";
+import { scriptedRequestContext } from "@/components/bots/__tests__/bot-memory-account-scripts";
 import {
   __resetBotMemorySessionsForTesting,
   useBotMemory,
@@ -29,17 +30,46 @@ const ENVIRONMENT_ID = "env-1";
 
 const mocks = vi.hoisted(() => ({
   client: null as FakeStreamClient | null,
+  userId: "user-1",
 }));
 
-vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
-  useHostStreamClientFor: () => mocks.client,
-}));
+// The binding is the signed-in user's, as the hook requires of it (T352).
+vi.mock("@/hooks/host/use-host-stream-client-for", async () => {
+  const { MEMORY_TARGET } =
+    await import("@/components/bots/__tests__/bot-memory-account-scripts");
+  const { remoteAwareOwnerIdentityKey } =
+    await import("@/lib/host/transport-key");
+  return {
+    useHostStreamClientBindingFor: () =>
+      mocks.client === null
+        ? null
+        : {
+            client: mocks.client,
+            transportKey: remoteAwareOwnerIdentityKey(
+              MEMORY_TARGET,
+              mocks.userId,
+            ),
+            pin: () => undefined,
+            unpin: () => undefined,
+          },
+  };
+});
+vi.mock("@/lib/host", async (importOriginal) => {
+  const { scriptedRequestContext } =
+    await import("@/components/bots/__tests__/bot-memory-account-scripts");
+  return {
+    ...(await importOriginal<typeof import("@/lib/host")>()),
+    useHostClient: () => scriptedRequestContext,
+  };
+});
 vi.mock("@/lib/host/stream-auth-revalidator", () => ({
   useStreamAuthRevalidator: () => null,
 }));
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => null,
-}));
+vi.mock("@/hooks/host/use-host-directory-entry", async () => {
+  const { MEMORY_TARGET } =
+    await import("@/components/bots/__tests__/bot-memory-account-scripts");
+  return { useHostDirectoryEntry: () => MEMORY_TARGET };
+});
 
 const CHANGES: ReadonlyArray<BotMemoryChange> = [
   {
@@ -114,6 +144,7 @@ async function readingAfterSnapshot(
 
 beforeEach(() => {
   __resetBotMemorySessionsForTesting();
+  scriptedRequestContext.set(mocks.userId);
   const client = new FakeStreamClient(true);
   client.methodSupport = "supported";
   mocks.client = client;
@@ -122,6 +153,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   __resetBotMemorySessionsForTesting();
+  scriptedRequestContext.set(null);
 });
 
 describe("useBotMemory changes by negotiated version", () => {

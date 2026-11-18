@@ -1,0 +1,319 @@
+/**
+ * The window's music controls through the real wiring: the real
+ * `TopLevelTabHost` mount for every kind that carries them, and the real
+ * `SoundtrackPageControlsScope` reading a real router's Settings overlay. Only
+ * the surface bodies behind the controls are stubbed.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { use, type ReactNode } from "react";
+import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  createMemoryHistory,
+  useRouterState,
+  createRootRoute,
+  createRouter,
+  Outlet,
+  RouterProvider,
+} from "@tanstack/react-router";
+import { SoundtrackPageControlsScope } from "@/components/soundtrack/soundtrack-page-controls-scope";
+import { SoundtrackPlaybackControls } from "@/components/soundtrack/soundtrack-playback-controls";
+import { Dialog as DialogPrimitive } from "radix-ui";
+import { TracyPlaybackSlot } from "@/components/bots/tracy-playback-slot";
+import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
+import { SystemTabModalSurface } from "@/components/layout/dialogs/system-tab-modal-host";
+import { LayoutOverrideContext } from "@/lib/layout-overrides";
+import { systemTabOverlaySearchSchema } from "@/lib/system-tab-overlay-search";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { useTabsStore } from "@/stores/tabs/store";
+import type { TabRef } from "@/stores/tabs/types";
+
+vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
+  soundtrackOffered: () => true,
+}));
+
+vi.mock("@/components/settings/settings-modal-content", () => ({
+  SettingsModalContent: () => <div data-testid="settings-body-stub" />,
+}));
+vi.mock("@/components/epics/history-modal-content", () => ({
+  HistoryModalContent: () => <div data-testid="history-body-stub" />,
+}));
+
+// The Tracy body stands for the lazy surface: it suspends while a test holds
+// its promise, and once loaded draws a header with the title row's slot.
+const tracySurface = vi.hoisted(() => ({
+  held: null as Promise<void> | null,
+}));
+
+function TracyBodyStub(): ReactNode {
+  if (tracySurface.held !== null) use(tracySurface.held);
+  return (
+    <header data-testid="tracy-body-header">
+      <TracyPlaybackSlot />
+    </header>
+  );
+}
+
+// The bodies are what these tests are not about; the mount around them is.
+vi.mock("@/stores/tabs/registry", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/stores/tabs/registry")>();
+  return {
+    ...actual,
+    tabSurfaceDescriptor: (kind: string) => ({
+      render: () =>
+        kind === "tracy" ? (
+          <TracyBodyStub />
+        ) : (
+          <div data-testid="surface-body-stub" />
+        ),
+    }),
+  };
+});
+
+const DRAFT: TabRef = { kind: "draft", id: "draft-a" };
+const SETTINGS: TabRef = { kind: "settings", id: "settings" };
+const HISTORY: TabRef = { kind: "history", id: "history" };
+
+function groups(): HTMLElement[] {
+  return screen.queryAllByRole("group", { name: "Music playback" });
+}
+
+function setItems(
+  refs: readonly TabRef[],
+  active: string | null,
+  split: {
+    readonly left: TabRef;
+    readonly right: TabRef;
+    readonly focused: "left" | "right";
+  } | null,
+): void {
+  useTabsStore.setState((state) => ({
+    ...state,
+    systemTabs: {
+      history: refs.includes(HISTORY)
+        ? { id: "history", kind: "history", name: "History", lastPath: null }
+        : null,
+      settings: refs.includes(SETTINGS)
+        ? { id: "settings", kind: "settings", name: "Settings", lastPath: null }
+        : null,
+    },
+    items:
+      split === null
+        ? refs.map((ref) => ({
+            kind: "tab" as const,
+            id: `tab:${ref.kind}:${ref.id}`,
+            ref,
+          }))
+        : [
+            {
+              kind: "split" as const,
+              id: "pair",
+              left: { kind: "tab" as const, ref: split.left },
+              right: { kind: "tab" as const, ref: split.right },
+              focusedSide: split.focused,
+              routeBackingSide: split.focused,
+              leftRatio: 0.5,
+            },
+          ],
+    activeItemId: active,
+    stripOrder: [...refs],
+  }));
+}
+
+beforeEach(() => {
+  window.localStorage.clear();
+  useTabsStore.setState(useTabsStore.getInitialState(), true);
+  useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+  useLandingDraftStore.getState().createDraftWithId(DRAFT.id, null);
+  useTracySurfaceStore.getState().openSurface("tracy-host");
+  useSettingsStore.setState(useSettingsStore.getInitialState(), true);
+  useSettingsStore.setState({
+    soundtrackEnabled: true,
+    soundtrackPlaybackControls: true,
+  });
+});
+
+afterEach(() => {
+  tracySurface.held = null;
+  vi.useRealTimers();
+  cleanup();
+  useTabsStore.setState(useTabsStore.getInitialState(), true);
+  useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+  useTracySurfaceStore.setState(useTracySurfaceStore.getInitialState(), true);
+  vi.restoreAllMocks();
+});
+
+describe("the controls in the top-level surfaces", () => {
+  it.each([
+    ["a draft", DRAFT],
+    ["Settings", SETTINGS],
+  ])("draws one group on %s", (_name, ref) => {
+    setItems([ref], `tab:${ref.kind}:${ref.id}`, null);
+
+    render(<TopLevelTabHost />);
+
+    expect(groups()).toHaveLength(1);
+  });
+
+  it("draws one group on Tracy, in its surface's header once loaded", () => {
+    const tracy: TabRef = { kind: "tracy", id: "tracy" };
+    setItems([tracy], `tab:${tracy.kind}:${tracy.id}`, null);
+
+    render(<TopLevelTabHost />);
+
+    expect(groups()).toHaveLength(1);
+    expect(screen.getByTestId("tracy-body-header").contains(groups()[0])).toBe(
+      true,
+    );
+  });
+
+  it("draws one group on Tracy in the reserved title row while its surface is loading, and one in the surface's header after", async () => {
+    vi.useFakeTimers();
+    let release: () => void = () => undefined;
+    tracySurface.held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tracy: TabRef = { kind: "tracy", id: "tracy" };
+    setItems([tracy], `tab:${tracy.kind}:${tracy.id}`, null);
+
+    render(<TopLevelTabHost />);
+
+    expect(screen.queryByTestId("tracy-body-header")).toBeNull();
+    expect(groups()).toHaveLength(1);
+    expect(
+      screen.getByTestId("bot-channel-opening-header").contains(groups()[0]),
+    ).toBe(true);
+
+    await act(async () => {
+      release();
+      await tracySurface.held;
+      // React holds a fallback back for a moment before it reveals content.
+      vi.advanceTimersByTime(1_000);
+    });
+
+    expect(screen.queryByTestId("bot-channel-opening-header")).toBeNull();
+    expect(groups()).toHaveLength(1);
+    expect(screen.getByTestId("tracy-body-header").contains(groups()[0])).toBe(
+      true,
+    );
+  });
+
+  it("draws none on History", () => {
+    setItems([HISTORY], `tab:${HISTORY.kind}:${HISTORY.id}`, null);
+
+    render(<TopLevelTabHost />);
+
+    expect(groups()).toHaveLength(0);
+  });
+
+  it("draws one group on Home when no tab is open", () => {
+    setItems([], null, null);
+
+    render(
+      <LayoutOverrideContext
+        value={{ values: { homeTab: { shown: "shown" } } }}
+      >
+        <TopLevelTabHost />
+      </LayoutOverrideContext>,
+    );
+
+    expect(groups()).toHaveLength(1);
+  });
+
+  it("draws the one group on the focused side of a split, and moves it with focus", () => {
+    setItems([DRAFT, SETTINGS], "pair", {
+      left: DRAFT,
+      right: SETTINGS,
+      focused: "left",
+    });
+    const { rerender } = render(<TopLevelTabHost />);
+    expect(groups()).toHaveLength(1);
+    const surface = (ref: TabRef): HTMLElement =>
+      screen.getByTestId(`top-level-surface-${ref.kind}-${ref.id}`);
+    expect(surface(DRAFT).contains(groups()[0])).toBe(true);
+
+    act(() => {
+      setItems([DRAFT, SETTINGS], "pair", {
+        left: DRAFT,
+        right: SETTINGS,
+        focused: "right",
+      });
+    });
+    rerender(<TopLevelTabHost />);
+
+    expect(groups()).toHaveLength(1);
+    expect(surface(SETTINGS).contains(groups()[0])).toBe(true);
+  });
+});
+
+describe("the controls under a real router's Settings overlay", () => {
+  function ModalSlot() {
+    const open = useRouterState({
+      select: (state) => state.location.search.settingsOverlay === true,
+    });
+    return (
+      <>
+        {open ? (
+          <DialogPrimitive.Root open>
+            <SystemTabModalSurface
+              active={{ kind: "settings", section: null }}
+              editingTheme={false}
+              onClose={() => undefined}
+              onPromote={() => undefined}
+            />
+          </DialogPrimitive.Root>
+        ) : null}
+      </>
+    );
+  }
+
+  async function openApp() {
+    const root = createRootRoute({
+      validateSearch: systemTabOverlaySearchSchema,
+      component: () => (
+        <SoundtrackPageControlsScope>
+          <div data-testid="page">
+            <SoundtrackPlaybackControls placement="surface" />
+          </div>
+          <ModalSlot />
+          <Outlet />
+        </SoundtrackPageControlsScope>
+      ),
+    });
+    const router = createRouter({
+      routeTree: root,
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+    await act(async () => {
+      render(<RouterProvider router={router} />);
+      await router.load();
+    });
+    return router;
+  }
+
+  it("draws the page's group alone, and the modal's alone once the overlay opens, and back", async () => {
+    const router = await openApp();
+    const page = screen.getByTestId("page");
+    expect(groups()).toHaveLength(1);
+    expect(page.querySelector('[role="group"]')).not.toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await act(async () => {
+      await router.navigate({ to: "/", search: { settingsOverlay: true } });
+    });
+    expect(groups()).toHaveLength(1);
+    expect(page.querySelector('[role="group"]')).toBeNull();
+    // The dialog portals out of the router tree; its group is in its title bar.
+    const header = screen.getByRole("dialog").querySelector("header");
+    expect(header?.querySelector('[role="group"]')).not.toBeNull();
+
+    await act(async () => {
+      await router.navigate({ to: "/", search: {} });
+    });
+    expect(groups()).toHaveLength(1);
+    expect(page.querySelector('[role="group"]')).not.toBeNull();
+  });
+});

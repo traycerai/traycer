@@ -35,7 +35,6 @@ SettingsLayout
         ├── LayoutSettingsPanel
         ├── OpeningBehaviorPanel
         ├── ProvidersSettingsPanel
-        ├── NotificationsSettingsPanel
         ├── AgentsSettingsPanel
         ├── FallbackSettingsPanel
         ├── KeybindingsSettingsPanel
@@ -77,7 +76,7 @@ content, not by taste.
 
 - **Stacked groups** (`settings-group.tsx`) is the default: named groups of
   rows down one scroll, everything on the page visible at once. General,
-  Browser, Sounds, Opening behavior and most others.
+  Browser, Alerts, Opening behavior and most others.
 - **The rail** (`settings-master-detail.tsx`) is for a page that is a
   collection of like things (Providers) or too long to scan in one scroll
   (Layout, Appearance). It shows one area at a time, so it costs a click per
@@ -248,10 +247,12 @@ predicates; it never imports the assembled index or the search consumer.
   `null` for a rendered card, `"Providers"` for that page's region groups.
 - **Availability composes for containment only.** A row's effective
   `availableWhen` is its own AND its group's. The merged groups (General ▸
-  Agents, Browser ▸ Agents, Alerts ▸ Notifications) are drawn in every shell,
-  so each gated row in them carries its own predicate (Agent roles, OS
-  notifications, Push notifications). A contribution target is not a
-  container: contributing never changes the target's availability.
+  Agents, Browser ▸ Agents) are drawn in every shell, so each gated row in
+  them carries its own predicate (Agent roles). Alerts ▸ System is drawn only
+  where one of its rows is (`isAlertsSystemGroupAvailable`), and each row
+  still carries its own predicate (OS notifications, Push notifications). A
+  contribution target is not a container: contributing never changes the
+  target's availability.
 - **`status` replaces the static description.** `SettingsRow` takes
   an optional `status?: ReactNode`, selected by `!== undefined` — omitted and
   `undefined` are the same, never truthiness, never `status ?? description`,
@@ -287,8 +288,8 @@ predicates; it never imports the assembled index or the search consumer.
 - Shared rendering components take definitions through typed props:
   `LogDetailGroup` takes its page's `group` (anchored on App Diagnostics,
   folded into the page on host Diagnostics), each `LogLevelControl` carries
-  its `row`, and the chime / severity / link-kind rows are keyed members of
-  their owning collection.
+  its `row`, and the Alerts kind rows and the link-kind rows are keyed
+  members of their owning collection.
 - `MOD_ENTER_LABEL` lives in `general-settings.definitions.ts`: the steering
   row's label and description are built from it there, and the panel imports
   it for the switch's accessible name, so the result and the row print the
@@ -482,12 +483,11 @@ different answers:
   is registered with `hostScope: "connecting"`, so the executor has proved the
   anchor lands while the host has no usable client.
 - **Gated on the HOST RUNTIME** (Website sessions, which also needs a bound
-  host runtime and a successful first read of the browser bridge; host
-  Notifications' two groups, which the page's scope gate conceals while the
-  host connects or is unreachable and drops for a vanished host; and every
-  Fallback group, behind the same kind of scope gate and rendered only once
-  the host answers the policy read) — not entries either: they contribute to
-  the General, host Notifications and Fallback page entries.
+  host runtime and a successful first read of the browser bridge; and every
+  Fallback group, behind a scope gate that conceals it while the host
+  connects or is unreachable and drops it for a vanished host, rendered only
+  once the host answers the policy read) — not entries either: they
+  contribute to the General and Fallback page entries.
 
 Bespoke pages are indexed at page/region level for the same reason: their
 content exists only once a host answers an RPC.
@@ -704,10 +704,9 @@ Supporting pieces, all viewport-agnostic where possible:
   Rows that are two columns from their own markup rather than through
   `SettingsRow` - the Shell panel's program and startup-flags rows,
   Diagnostics' memory and log-detail rows, the host identity/updates rows, the
-  worktree branch-prefix row, the Skills header and the notification-hook rows
-  - apply it directly. Without a floor the control keeps its intrinsic width
-    and the label takes what is left, which on a phone is a sliver: a two-word
-    label breaks one word per line.
+  worktree branch-prefix row and the Skills header - apply it directly. Without a floor the control keeps its intrinsic width
+  and the label takes what is left, which on a phone is a sliver: a two-word
+  label breaks one word per line.
 - `settings-row.tsx` uses `flex-wrap` + a label `basis` so small controls
   (switches) stay inline while wide controls wrap below the label on narrow
   containers; `SETTINGS_ROW_STACK` raises that floor below `md` so the split
@@ -937,10 +936,11 @@ computer it sits under the host picker; if it follows you it sits under
 Personal; if it is about your account rather than your settings it sits under
 Account; the rest is the app itself.
 
-- **Application** - General, Appearance, Browser, Opening behavior, Sounds,
-  Alerts, Keybindings, Layout, Diagnostics.
-- **Account** - Sessions, Link mobile app, Usage, Credits, Notifications,
-  and Delete account on mobile. Read through the window's own host, never
+- **Application** - General, Appearance, Browser, Opening behavior, Sounds
+  (only in a build with a soundtrack), Alerts, Keybindings, Layout,
+  Diagnostics.
+- **Account** - Sessions, Link mobile app, Usage, Credits, and Delete
+  account on mobile. Read through the window's own host, never
   through the picker. The list is headed **Signed-in sessions**, with "Browser,
   desktop, CLI, extension, and host access for this account." A row's heading
   is **This session** or **Session**. The client kind is an outline badge
@@ -1023,6 +1023,10 @@ Model routing, Variables and shells, Agent selection, Permissions and
 Notifications left the Host group; only their group did. Browser agent access
 moved out of Browser into its own section, `browser-agent-access`, and then
 into Permissions; agent definitions became the Agents page's Definitions tab.
+Notifications (`notifications`) is retired with notification hooks, the last
+thing it held: its route, a remembered section and a host's "hooks removed"
+row all open Alerts (`RETIRED_SECTION_REPLACEMENTS`), and it has no search
+entries. The hooks' wire methods stay registered for released peers.
 
 Sandboxes (`sandboxes`) names the environment once in its header. Editors see
 the shape, idle and removal controls with **Save defaults** on arrival; viewers
@@ -1955,14 +1959,16 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       bridge's `forgetLogins()` directly and therefore speaks for every host
       with a live browser stream; main owns both native destructive confirms.
 - `Sounds` (`panels/app-notifications-settings-panel.tsx`,
-  `/settings/app-notifications`): **Chimes**
-  (`panels/notification-chime-settings-section.tsx`), one dropdown per kind
-  of alert, untitled because the page is already named for it; and, in a build
-  with something to play, **Soundtrack**
-  (`panels/soundtrack-settings-section.tsx`): **Music**, the soundtrack's only
-  on and off switch (the palette's Soundtrack action flips the same setting);
-  **Playback controls**, drawn only while Music is on and off by default, which
-  puts previous, pause and next in a task's status row
+  `/settings/app-notifications`): **Soundtrack**
+  (`panels/soundtrack-settings-section.tsx`) and nothing else, so the page is
+  offered only in a build with something to play (`isSoundtrackRowAvailable`;
+  `visibleSettingsSections` withholds the section otherwise, and the mobile
+  app never offers it). Where it is withheld, its route and a remembered
+  section open Alerts (`RETIRED_SECTION_REPLACEMENTS`), where its chimes went;
+  the id is not retired. **Music** is the soundtrack's only on and off switch
+  (the palette's Soundtrack action flips the same setting); **Playback
+  controls**, drawn only while Music is on and off by default, puts previous,
+  pause and next in a task's status row
   (`epic-canvas/panels/epic-playback-controls.tsx`), the only place the window's
   chrome carries the soundtrack; then its volume and what it follows, which stay
   editable while it is off. Pause is a setting (`soundtrackPaused`), so it holds
@@ -1976,17 +1982,37 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   it off. The switch is disabled until this window holds a session, which a
   launch that kept the pause does not until Play, and the line under it counts
   the audio time, holding through a pause, then names the saved session with
-  **Show in folder**. The id still says notifications: the OS and push rows moved
-  to Alerts, and ids do not change.
-- `Alerts` (`panels/alerts-settings-panel.tsx`, `/settings/alerts`): one
-  group, **Notifications** (anchor `alerts-notifications`), where the alerts
-  themselves are configured. **OS notifications** on a desktop with the
-  system-settings bridge (`system-notification-settings-section.tsx`),
-  **Push notifications** and its four severity switches in the phone app
-  (`push-permission-section.tsx`; no "on this device" qualifier, since
-  "device" is the UI word for a host), and **Notification events**, a
-  pointer to the selected host's Notifications page, in every shell. It was
-  the Sounds page's second group; it moved because push is not a sound.
+  **Show in folder**. The id still says notifications: the chimes, and the OS
+  and push rows before them, moved to Alerts, and ids do not change.
+- `Alerts` (`panels/alerts-settings-panel.tsx`, `/settings/alerts`): what
+  interrupts the person on THIS device. One table
+  (`alerts-notification-kinds-section.tsx`, anchor `alerts-notifications`),
+  a row per kind - Needs action, Failure, Done, Info, each with its own
+  anchor - and columns Kind / Notify / Chime. **Notify** is
+  `notificationNotify` in the settings store, kept by this app and never by a
+  host (on by default except Info). It governs the in-app toast, the OS
+  notification request and the chime together: the display path asks
+  `NotificationDisplayTarget.notifies` before any of them
+  (`lib/notifications/notification-display.ts`, fed by
+  `useNotificationNotifies`), and a kind that is off is settled there with its
+  display receipt taken, so turning it on later never replays it. It never
+  touches the row: the bell still lists it and the unread count and tab
+  markers still count it. An app-local row reaches another window only
+  through the desktop's foreground relay, so a refused one is still sent,
+  marked `inboxOnly`: main relays it to a focused window, raises no OS
+  notification with none focused, and the receiving window merges the row
+  without a toast or chime. **Chime** is the per-kind picker that was on
+  Sounds (`notification-chime-select.tsx`), same stored value
+  (`notificationChimeSounds`). In the phone app the switch column is **Push**:
+  the per-phone push mute (`usePushSeveritySwitches`), and there is no
+  separate in-app switch - the same muted set also gates the toast while the
+  app is in front, except while push is not on or the set has not loaded, when
+  every kind shows. Then **System** (`alerts-system`), drawn only where it has
+  a row: **OS notifications** on a desktop with the system-settings bridge
+  (`system-notification-settings-section.tsx`), **Push notifications** in the
+  phone app (`push-permission-section.tsx`; no "on this device" qualifier,
+  since "device" is the UI word for a host). On the phone System comes first,
+  because its row says whether the Push switches can move.
 - `Opening behavior` (`panels/opening-behavior-panel.tsx`,
   `/settings/opening-behavior`): link routing (Open links and per-link-type
   choices), general tile placement and per-type overrides
@@ -4393,47 +4419,6 @@ window`, recorded in the type as `coverage.browsersAreMountedOnly` -
       credential does not change which CLIs are installed, and re-probing every
       harness is the fan-out `useRefreshHarnessCatalog` keeps behind an explicit
       user action.
-- `Notifications` Two `SettingsGroup` cards. A design pass
-  (`settings-related-panels-core-flows` artifact) replaced the old one-column
-  severity×channel matrix with a compact policy card, and gave the hooks
-  manager below it the remaining height.
-  - **`"In-app notifications"`** (the `· Current host` qualifier is gone - the
-    sidebar names the host now, and the old suffix qualified the one fact the
-    screen refused to resolve): three rows, one per severity
-    - `Needs action`, `Failure`, `Done` (`info` has no row) - each a single
-      `Switch` gating durable host-row creation before anything reaches the bell
-      feed, unread count, tab indicators, or notification hooks. Collaboration
-      and app-local notifications stay independent. Backed by
-      `host.notifications.getConfig` / `setConfig` through host-scoped TanStack
-      Query hooks. The wire contract still carries a full severity×channel
-      matrix (including an `email`/SMTP channel that is never surfaced here,
-      round-tripped untouched via a `leaveUnchanged` password sentinel) - this
-      panel only renders and toggles the `renderer` channel; a real multi-
-      channel UI is deliberately deferred, not an oversight (the artifact notes
-      a channel-by-severity matrix "is reserved for a future surface with
-      multiple user-configurable channels").
-  - **`"Notification hooks"`** (`notification-hooks-section.tsx`): a toolbar
-    (hook count, a copy-config-path chip, Refresh, Add hook) over a row list
-    that owns the remaining height (`fillHeight` on the shell +
-    `min-h-0 flex-1` down the tree - only the row list scrolls, the toolbar
-    stays pinned). The config-path chip consumes the toolbar width left after
-    the count and actions, truncating only when that real remaining width is
-    exhausted. The no-hooks state fills and centers within the list viewport.
-    Each row shows name, a Script/HTTP type badge, destination,
-    severity filter (or "Every severity"), latest test result, an inline
-    enabled `Switch`, and inline **Test / Edit / Delete** buttons (not a row
-    action menu) - Delete confirms via `ConfirmDestructiveDialog`. Edit/Add
-    open the pre-existing hook editor dialog (`notification-hook-editor-
-dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
-    States: a loading spinner; a neutral "unavailable, reconnect" message when
-    the host is unreachable; the query's own error message; an empty state
-    with its own "Add hook" plus the toolbar's; and, when the hooks file
-    itself fails to parse, the row list is replaced by the parse error with
-    editing disabled while the config-path copy chip stays available (the
-    invalid file is never overwritten). A running test spins only on the
-    tested row, but the Test button on every OTHER row is also disabled while
-    any one test is in flight (the mutation is global, not per-row) - worth
-    knowing if this ever reads as a bug report.
 - `Permissions` (section id `permissions`, route `/settings/permissions`,
   `panels/permissions-settings-panel.tsx`) How much an agent may do on its own,
   and who reviews the rest; on Personal its subtitle reads "What your agents
@@ -6007,7 +5992,7 @@ wrap`). Each row names the account its first usable match runs on, the
   one line on what the page gives, one on what moving adds, and Move to
   Personal, which opens the move sheet. Later storage rows go here too.
   - **The storage policy** (`panels/storage-policy-section.tsx`,
-    `data-testid="storage-policy"`), two groups:
+    `data-testid="storage-policy"`), three groups:
     - **Tasks you haven't used lately**, a card of two rows:
       - **Chats**, a switch: "Keep them in the cloud instead of on disk."
       - **When**, a select: "When to clean up a task nobody has used."
@@ -6018,17 +6003,23 @@ wrap`). Each row names the account its first usable match runs on, the
       - **When**, a select: "Counted from the chat's last activity." Options
         "Never", "After 4 hours", "After 1 day", "After 7 days", "After 30
         days". It is independent of Chats, so the switch never disables it.
+        Under the card, while Chats is on: "A chat comes back when an agent
+        continues it."
+    - **File edit snapshots**, a card of one row:
+      - **When**, a select: "Counted from the chat's last activity. Older
+        edits may lose Undo and diffs." Options "After 7 days", "After 30
+        days", "After 90 days", "Never", in that order. It is independent of
+        Chats, so the switch never disables it.
     - A stored window that is not one of the options is listed too, so the
       select shows what is in force: "After N days" for idle tasks, and for
       archived chats "After N hours" below 24 or when it is not a whole
       number of days, else "After N days" ("After 1 hour", "After 1 day"
       for one).
     - Each select's accessible name adds its group ("Archived chats: When"),
-      since both rows read "When".
+      since every window row reads "When".
     - A line under the groups says what applies: "Applies on every host in
-      this environment. A chat comes back when an agent continues it." It
-      shows while Chats is on, and there is no line while it is off.
-  - It is the configuration's `storage_policy` item (key `storage`, value
+      this environment." It always shows, Chats on or off.
+  - The first two groups are the configuration's `storage_policy` item (key `storage`, value
     `{ chats, idleTaskDays, archivedChatHours }`, the idle window
     in whole days and the archived-chat window in whole hours, each or
     `null`; `hooks/environment/use-storage-policy.ts`), read through the pool
@@ -6039,27 +6030,51 @@ wrap`). Each row names the account its first usable match runs on, the
     Never, because the hosts then clean up nothing. A value saved while the
     page still had an Artifacts switch carries `artifacts`; it reads as any
     other value, and a save drops the key.
-  - Every control writes the whole value through
+  - File edit snapshots is the configuration's `snapshot_policy` item (key
+    `snapshots`, not per OS, value `{ quietChatDays }`: 7, 30 or 90 days, or
+    `null` for Never), read in the same request as the storage policy. **No
+    item reads as After 7 days.** An item whose value does not parse reads as
+    Never, because the hosts then remove no snapshot.
+  - Every control writes its item's whole value through
     `environment.configuration.items.put` with the revision it read (`null`
     creates the item), so a concurrent edit of one field cannot lose
-    another. While the write is pending, every control shows the value being
-    saved, is disabled, and the changed control has a spinner beside it. A
+    another. While a write is pending, every control shows the value being
+    saved, is disabled, and the changed control has a spinner beside it.
+    Once the write is saved, its item's controls keep that value, disabled,
+    with the spinner, until the read reports the item at the saved revision
+    or a later one; the other item's controls are free again. An older
+    revision, no item or no data keeps the value. A hold lasts at most the
+    configuration read bound (15 seconds). Then the controls show the read,
+    and the section asks again for exactly the re-read a successful save asks
+    for (`invalidateConfigurationReads`, same arguments): the environment's
+    items reads on every host, plus the environment list and that
+    environment's host list.
+  - The page mounts the section once per environment pick: in
+    `PersonalPageFrame` Personal and a team are different frames, so a switch
+    between them remounts by element type, and a team's `CloudPageFrame` and a
+    cloud-read page's `ConfigurationSourceBoundary` are keyed by the
+    environment, so picking another environment starts the section over. A hold or a save
+    in flight does not carry across a switch: on return the row shows what
+    the read says. That is a stated limit, and a rare one: it takes a switch
+    away and back within the few seconds of a save. A
     refused write drops back to the value read, and the shared mutation's
     toast says why. A stale or refused outcome shows
     `ConfigurationWriteFeedback` under the groups. A viewer of a team
     configuration sees every control disabled. A failed read says so on the
-    Chats row, with Retry.
+    Chats row, with Retry; both items come from that one read. An account
+    service that does not know `snapshot_policy` refuses the write, which
+    drops back like any refused write.
   - The section draws nothing on a host that does not advertise the item
     write (`useHostSupportsMethod`, asked of the host the write goes
     through). It is keyed by the viewer, like the auto-archive row, so a
     pending save never outlives an account switch.
-  - The item changes nothing a host reports (`UNREPORTED_ITEM_KINDS`), so
-    the page carries no status chip, like Sandboxes. Search folds both groups
-    and every row into the Storage page entry (`contributesTo: "page"`): they
+  - Neither item changes anything a host reports (`UNREPORTED_ITEM_KINDS`),
+    so the page carries no status chip, like Sandboxes. Search folds every
+    group and row into the Storage page entry (`contributesTo: "page"`): they
     are gated on the host, which no search shell can decide, so none is an
-    anchored entry and none has a search fixture. The two "When" rows share
-    that one entry, whose page shows both, and their keywords keep "idle" and
-    "archived" apart.
+    anchored entry and none has a search fixture. The "When" rows share that
+    one entry, whose page shows them all, and their keywords keep "idle",
+    "archived" and "snapshots" apart.
 - `Keybindings` Keyboard shortcut customization.
 - `Shell` Shell binary + args used for every terminal PTY
   (`TerminalSessionManager` reads the effective config per spawn, file-watched,

@@ -21,7 +21,12 @@ import type {
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { buildQueuedMessageOrderKey } from "@/components/chat/queued-message-reorder-dnd";
-import { QueuedMessagePanel } from "@/components/chat/queued-message-surface";
+import {
+  QueuedMessagePanel,
+  QUEUED_MESSAGE_PAUSED_LABEL,
+  QUEUED_MESSAGE_QUEUED_LABEL,
+  QUEUED_MESSAGE_STEER_LABEL,
+} from "@/components/chat/queued-message-surface";
 import * as copy from "@/components/chat/fallback/fallback-copy";
 import { QUEUE_PAUSED_AFTER_ERROR_TOOLTIP } from "@/components/chat/fallback/fallback-copy";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -456,7 +461,9 @@ describe("<QueuedMessagePanel />", () => {
     expect(toolbar.className).toContain("float-right");
     expect(toolbar.className).not.toContain("border-border/60");
     expect(toolbar.className).not.toContain("shadow-lg");
-    expect(within(toolbar).getByText("Waiting for provider")).not.toBeNull();
+    expect(
+      within(toolbar).getByText(QUEUED_MESSAGE_STEER_LABEL),
+    ).not.toBeNull();
   });
 
   it("offers an un-stage control for a safe-point steer still waiting", () => {
@@ -513,7 +520,9 @@ describe("<QueuedMessagePanel />", () => {
       within(row).queryByRole("button", { name: "Cancel steer" }),
     ).toBeNull();
     const toolbar = within(row).getByTestId("queued-message-row-toolbar");
-    expect(within(toolbar).getByText("Restart pending")).not.toBeNull();
+    expect(
+      within(toolbar).getByText(QUEUED_MESSAGE_STEER_LABEL),
+    ).not.toBeNull();
   });
 
   it("caps each queued prompt preview at three text lines", () => {
@@ -577,7 +586,7 @@ describe("<QueuedMessagePanel />", () => {
     expect(screen.getAllByTestId("queued-message-row")).toHaveLength(3);
     expect(screen.getAllByTestId("queued-message-drag-handle")).toHaveLength(3);
     expect(screen.getByText("Frozen steering prompt")).not.toBeNull();
-    expect(screen.getByText("Waiting for provider")).not.toBeNull();
+    expect(screen.getByText(QUEUED_MESSAGE_STEER_LABEL)).not.toBeNull();
 
     const frozenRow = screen.getAllByTestId("queued-message-row")[1];
     expect(within(frozenRow).queryByRole("button")).toBeNull();
@@ -603,7 +612,7 @@ describe("<QueuedMessagePanel />", () => {
 
     expect(screen.getAllByTestId("queued-message-row")).toHaveLength(1);
     expect(screen.getByText("Attachment prompt")).not.toBeNull();
-    expect(screen.getByText("Sending to host")).not.toBeNull();
+    expect(screen.getByTestId("queued-message-in-flight-mark")).not.toBeNull();
     expect(
       within(screen.getByTestId("queued-message-row")).queryByRole("button"),
     ).toBeNull();
@@ -922,10 +931,12 @@ describe("<QueuedMessagePanel />", () => {
     });
 
     const managedRow = screen.getByTestId("queued-message-row");
-    expect(within(managedRow).getByText("Paused")).not.toBeNull();
+    expect(
+      within(managedRow).getByText(QUEUED_MESSAGE_PAUSED_LABEL),
+    ).not.toBeNull();
   });
 
-  it("labels a pending same-turn delivery as aimed at the running turn", () => {
+  it("labels a pending same-turn delivery Steer and keeps its cancel lever open", () => {
     renderPanel({
       queue: queueState([
         {
@@ -940,10 +951,28 @@ describe("<QueuedMessagePanel />", () => {
     });
 
     const managedRow = screen.getByTestId("queued-message-row");
-    expect(within(managedRow).getByText("Will deliver")).not.toBeNull();
+    expect(
+      within(managedRow).getByText(QUEUED_MESSAGE_STEER_LABEL),
+    ).not.toBeNull();
     // Not yet at the handover: the cancel lever is still open.
     expect(
       within(managedRow).queryByRole("button", { name: /cancel/i }),
+    ).not.toBeNull();
+  });
+
+  it("labels a next-turn delivery as Queued", () => {
+    renderPanel({
+      queue: queueState([
+        managedCommandQueuedItem("queue-managed", "bun test"),
+      ]),
+      readOnly: false,
+      canAct: true,
+      onReorder: null,
+    });
+
+    const managedRow = screen.getByTestId("queued-message-row");
+    expect(
+      within(managedRow).getByText(QUEUED_MESSAGE_QUEUED_LABEL),
     ).not.toBeNull();
   });
 
@@ -964,7 +993,9 @@ describe("<QueuedMessagePanel />", () => {
     // turn. The label is what tells the user why the controls went away -
     // without it the row locks silently.
     const managedRow = screen.getByTestId("queued-message-row");
-    expect(within(managedRow).getByText("Delivering")).not.toBeNull();
+    expect(
+      within(managedRow).getByText(QUEUED_MESSAGE_STEER_LABEL),
+    ).not.toBeNull();
     expect(managedRow.getAttribute("aria-busy")).toBe("true");
     expect(
       within(managedRow).queryByRole("button", { name: /cancel/i }),
@@ -1071,10 +1102,12 @@ describe("<QueuedMessagePanel />", () => {
     const forwardRow = screen.getByTestId("queued-message-row");
     // Same literal "Paused" the managed-command item's paused test above
     // asserts - the host-authored kinds share the delivery vocabulary.
-    expect(within(forwardRow).getByText("Paused")).not.toBeNull();
+    expect(
+      within(forwardRow).getByText(QUEUED_MESSAGE_PAUSED_LABEL),
+    ).not.toBeNull();
   });
 
-  it("labels a steering port-forward item Delivering and closes its cancel lever, matching the managed-command item", () => {
+  it("labels a steering port-forward item Steer and closes its cancel lever, matching the managed-command item", () => {
     renderPanel({
       queue: queueState([
         {
@@ -1088,7 +1121,9 @@ describe("<QueuedMessagePanel />", () => {
     });
 
     const forwardRow = screen.getByTestId("queued-message-row");
-    expect(within(forwardRow).getByText("Delivering")).not.toBeNull();
+    expect(
+      within(forwardRow).getByText(QUEUED_MESSAGE_STEER_LABEL),
+    ).not.toBeNull();
     expect(forwardRow.getAttribute("aria-busy")).toBe("true");
     expect(
       within(forwardRow).queryByRole("button", { name: /cancel|dismiss/i }),
@@ -1188,10 +1223,12 @@ describe("<QueuedMessagePanel />", () => {
     });
 
     const checkinRow = screen.getByTestId("queued-message-row");
-    expect(within(checkinRow).getByText("Paused")).not.toBeNull();
+    expect(
+      within(checkinRow).getByText(QUEUED_MESSAGE_PAUSED_LABEL),
+    ).not.toBeNull();
   });
 
-  it("labels a steering task-checkin item Delivering and closes its dismiss lever, matching the managed-command item", () => {
+  it("labels a steering task-checkin item Steer and closes its dismiss lever, matching the managed-command item", () => {
     renderPanel({
       queue: queueState([
         {
@@ -1205,7 +1242,9 @@ describe("<QueuedMessagePanel />", () => {
     });
 
     const checkinRow = screen.getByTestId("queued-message-row");
-    expect(within(checkinRow).getByText("Delivering")).not.toBeNull();
+    expect(
+      within(checkinRow).getByText(QUEUED_MESSAGE_STEER_LABEL),
+    ).not.toBeNull();
     expect(checkinRow.getAttribute("aria-busy")).toBe("true");
     expect(
       within(checkinRow).queryByRole("button", { name: /cancel|dismiss/i }),
@@ -1376,11 +1415,13 @@ describe("<QueuedMessagePanel />", () => {
     });
 
     expect(
-      within(screen.getByTestId("queued-message-row")).getByText("Paused"),
+      within(screen.getByTestId("queued-message-row")).getByText(
+        QUEUED_MESSAGE_PAUSED_LABEL,
+      ),
     ).not.toBeNull();
   });
 
-  it("labels a steering task-overdue item Delivering and closes its dismiss lever", () => {
+  it("labels a steering task-overdue item Steer and closes its dismiss lever", () => {
     renderPanel({
       queue: queueState([
         {
@@ -1394,7 +1435,9 @@ describe("<QueuedMessagePanel />", () => {
     });
 
     const overdueRow = screen.getByTestId("queued-message-row");
-    expect(within(overdueRow).getByText("Delivering")).not.toBeNull();
+    expect(
+      within(overdueRow).getByText(QUEUED_MESSAGE_STEER_LABEL),
+    ).not.toBeNull();
     expect(overdueRow.getAttribute("aria-busy")).toBe("true");
     expect(
       within(overdueRow).queryByRole("button", { name: /cancel|dismiss/i }),
@@ -1546,7 +1589,7 @@ describe("<QueuedMessagePanel />", () => {
     ).toBeNull();
   });
 
-  it("labels a steering memory-curation item Delivering and closes its dismiss lever", () => {
+  it("labels a steering memory-curation item Steer and closes its dismiss lever", () => {
     renderPanel({
       queue: queueState([
         {
@@ -1560,7 +1603,9 @@ describe("<QueuedMessagePanel />", () => {
     });
 
     const memoryRow = screen.getByTestId("queued-message-row");
-    expect(within(memoryRow).getByText("Delivering")).not.toBeNull();
+    expect(
+      within(memoryRow).getByText(QUEUED_MESSAGE_STEER_LABEL),
+    ).not.toBeNull();
     expect(
       within(memoryRow).queryByRole("button", { name: /cancel|dismiss/i }),
     ).toBeNull();
@@ -1589,7 +1634,7 @@ describe("<QueuedMessagePanel />", () => {
     renderPanel({
       queue: queueState([
         {
-          ...queuedItem("queue-user", "User follow-up", "pending"),
+          ...queuedItem("queue-user", "User follow-up", "steer_requested"),
           delivery: "same_turn",
         },
         agentQueuedItem("queue-agent", "Agent response"),
@@ -1601,12 +1646,12 @@ describe("<QueuedMessagePanel />", () => {
 
     const userRow = screen.getAllByTestId("queued-message-row")[0];
     const agentRow = screen.getAllByTestId("queued-message-row")[1];
-    // The user's own same-turn follow-up keeps the "Can steer" affordance...
-    expect(within(userRow).getByText("Can steer")).not.toBeNull();
-    // ...while the received A2A response is never labelled as user-steerable;
-    // it only shows that it will auto-steer in.
-    expect(within(agentRow).queryByText("Can steer")).toBeNull();
-    expect(within(agentRow).getByText("Will steer")).not.toBeNull();
+    expect(
+      within(userRow).getByText(QUEUED_MESSAGE_STEER_LABEL),
+    ).not.toBeNull();
+    expect(
+      within(agentRow).getByText(QUEUED_MESSAGE_STEER_LABEL),
+    ).not.toBeNull();
   });
 
   describe("queue fallback reason and Steer now availability", () => {
@@ -1696,6 +1741,7 @@ describe("<QueuedMessagePanel />", () => {
 
       const row = screen.getByTestId("queued-message-row");
       expect(within(row).getByText("Fallback prompt")).not.toBeNull();
+      expect(within(row).getByText(QUEUED_MESSAGE_QUEUED_LABEL)).not.toBeNull();
       expect(within(row).getByText(reason)).not.toBeNull();
     });
 
@@ -1822,7 +1868,7 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
   it("turn_error says the failed-turn sentence", () => {
     renderHeld("turn_error");
 
-    expect(badge().textContent).toBe("Paused after an error");
+    expect(badge().textContent).toBe(QUEUED_MESSAGE_PAUSED_LABEL);
     expect(tooltipTextNear(badge())).toBe(QUEUE_PAUSED_AFTER_ERROR_TOOLTIP);
     expect(tooltipTextNear(badge())).toBe(ERROR_LITERAL);
     expect(badge().tabIndex).toBe(0);
@@ -1831,7 +1877,7 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
   it("routing says it is held by routing, whatever state the traversal is in", () => {
     renderHeld("routing");
 
-    expect(badge().textContent).toBe("Paused after an error");
+    expect(badge().textContent).toBe(QUEUED_MESSAGE_PAUSED_LABEL);
     expect(tooltipTextNear(badge())).toBe(copy.QUEUE_PAUSED_BY_ROUTING_TOOLTIP);
     expect(tooltipTextNear(badge())).toBe(ROUTING_LITERAL);
     expect(badge().tabIndex).toBe(0);
@@ -1840,7 +1886,7 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
   it("an older host (no pausedReason key) keeps a plain 'Paused' with no tooltip", () => {
     renderHeld(undefined);
 
-    expect(badge().textContent).toBe("Paused");
+    expect(badge().textContent).toBe(QUEUED_MESSAGE_PAUSED_LABEL);
     expect(tooltipTextNear(badge())).toBeNull();
     expect(badge().hasAttribute("tabindex")).toBe(false);
   });
@@ -1853,7 +1899,7 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
     (_name, reason, tooltip) => {
       renderPanel(heldInput(reason, true));
 
-      expect(badge().textContent).toBe("Paused after an error");
+      expect(badge().textContent).toBe(QUEUED_MESSAGE_PAUSED_LABEL);
       expect(tooltipTextNear(badge())).toBe(tooltip);
     },
   );
@@ -1878,7 +1924,7 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
       });
 
       const row = screen.getByTestId("queued-message-row");
-      expect(badge().textContent).toBe("Paused after an error");
+      expect(badge().textContent).toBe(QUEUED_MESSAGE_PAUSED_LABEL);
       expect(within(row).queryByText(LEGACY_HOLD)).toBeNull();
       expect(row.textContent).not.toContain("tries a fallback");
     },
@@ -1898,7 +1944,7 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
       },
     });
 
-    expect(badge().textContent).toBe("Paused");
+    expect(badge().textContent).toBe(QUEUED_MESSAGE_PAUSED_LABEL);
     expect(
       within(screen.getByTestId("queued-message-row")).getByText(LEGACY_HOLD),
     ).not.toBeNull();
@@ -1912,7 +1958,7 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
   ])("keeps a plain 'Paused' with no tooltip for %s", (_name, reason) => {
     renderHeld(reason);
 
-    expect(badge().textContent).toBe("Paused");
+    expect(badge().textContent).toBe(QUEUED_MESSAGE_PAUSED_LABEL);
     expect(tooltipTextNear(badge())).toBeNull();
     expect(badge().hasAttribute("tabindex")).toBe(false);
   });
@@ -1934,10 +1980,10 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
       onReorder: null,
     });
 
-    expect(badge().textContent).toBe("Paused after an error");
+    expect(badge().textContent).toBe(QUEUED_MESSAGE_PAUSED_LABEL);
   });
 
-  // Clutter cuts, 2026-09-27: under a "Paused after an error" pill the line is
+  // Clutter cuts, 2026-09-27: under a Paused pill the line is
   // dropped for the host's two QUEUE-WIDE pause sentences, the errored-turn one
   // and the routing-hold one, because the pill (and its tooltip) or the routing
   // card already says them. Every row-specific reason is still drawn (a
@@ -1973,13 +2019,13 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
       };
     }
 
-    it("is absent under a 'Paused after an error' pill, which keeps its tooltip", () => {
+    it("is absent under a Paused pill, which keeps its tooltip", () => {
       const row = renderReasonRow(
         pausedQueue("turn_error"),
         promptWithReason("paused", REASON),
       );
 
-      expect(badge().textContent).toBe("Paused after an error");
+      expect(badge().textContent).toBe(QUEUED_MESSAGE_PAUSED_LABEL);
       expect(tooltipTextNear(badge())).toBe(TOOLTIP);
       expect(within(row).queryByText(REASON)).toBeNull();
       expect(row.textContent).not.toContain("Queue paused because");
@@ -1991,12 +2037,12 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
         promptWithReason("paused", `  ${REASON}  `),
       );
 
-      expect(badge().textContent).toBe("Paused after an error");
+      expect(badge().textContent).toBe(QUEUED_MESSAGE_PAUSED_LABEL);
       expect(within(row).queryByText(REASON)).toBeNull();
       expect(row.textContent).not.toContain("Queue paused because");
     });
 
-    it("is drawn under a 'Paused after an error' pill when a routing restamp was rejected", () => {
+    it("is drawn under a Paused pill when a routing restamp was rejected", () => {
       const restampReason =
         "Queue paused: this message's settings are not supported on the provider the chat switched to, so it was left on the previous one. Resume it to run it anyway.";
       const row = renderReasonRow(
@@ -2004,11 +2050,11 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
         promptWithReason("paused", restampReason),
       );
 
-      expect(badge().textContent).toBe("Paused after an error");
+      expect(badge().textContent).toBe(QUEUED_MESSAGE_PAUSED_LABEL);
       expect(within(row).getByText(restampReason)).not.toBeNull();
     });
 
-    it("is drawn under a 'Paused after an error' pill for a leftover steer's reason", () => {
+    it("is drawn under a Paused pill for a leftover steer's reason", () => {
       const steerReason =
         "The turn ended before the provider confirmed this follow-up was delivered. Resume to retry.";
       const row = renderReasonRow(
@@ -2016,17 +2062,17 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
         promptWithReason("paused", steerReason),
       );
 
-      expect(badge().textContent).toBe("Paused after an error");
+      expect(badge().textContent).toBe(QUEUED_MESSAGE_PAUSED_LABEL);
       expect(within(row).getByText(steerReason)).not.toBeNull();
     });
 
-    it("is absent for the queue-wide routing-hold sentence under a 'Paused after an error' pill", () => {
+    it("is absent for the queue-wide routing-hold sentence under a Paused pill", () => {
       const row = renderReasonRow(
         pausedQueue("routing"),
         promptWithReason("paused", ROUTING_HOLD),
       );
 
-      expect(badge().textContent).toBe("Paused after an error");
+      expect(badge().textContent).toBe(QUEUED_MESSAGE_PAUSED_LABEL);
       expect(within(row).queryByText(ROUTING_HOLD)).toBeNull();
       expect(row.textContent).not.toContain("routing recovers");
     });
@@ -2037,7 +2083,7 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
         promptWithReason("paused", `  ${ROUTING_HOLD}  `),
       );
 
-      expect(badge().textContent).toBe("Paused after an error");
+      expect(badge().textContent).toBe(QUEUED_MESSAGE_PAUSED_LABEL);
       expect(within(row).queryByText(ROUTING_HOLD)).toBeNull();
       expect(row.textContent).not.toContain("routing recovers");
     });
@@ -2048,7 +2094,7 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
         promptWithReason("paused", ROUTING_HOLD),
       );
 
-      expect(badge().textContent).toBe("Paused");
+      expect(badge().textContent).toBe(QUEUED_MESSAGE_PAUSED_LABEL);
       expect(within(row).getByText(ROUTING_HOLD)).not.toBeNull();
     });
 
@@ -2058,7 +2104,7 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
         promptWithReason("paused", REASON),
       );
 
-      expect(badge().textContent).toBe("Paused");
+      expect(badge().textContent).toBe(QUEUED_MESSAGE_PAUSED_LABEL);
       expect(within(row).getByText(REASON)).not.toBeNull();
     });
 
@@ -2068,7 +2114,7 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
         promptWithReason("fallback", REASON),
       );
 
-      expect(badge().textContent).toBe("After turn");
+      expect(badge().textContent).toBe(QUEUED_MESSAGE_QUEUED_LABEL);
       expect(within(row).getByText(REASON)).not.toBeNull();
     });
 
@@ -2103,8 +2149,9 @@ describe("<QueuedMessagePanel /> paused pill by pausedReason", () => {
     });
 
     const row = screen.getByTestId("queued-message-row");
-    expect(within(row).queryByText("Paused after an error")).toBeNull();
-    expect(within(row).queryByText("Paused")).toBeNull();
+    expect(
+      within(row).getByTestId("queued-message-status-badge").textContent,
+    ).toBe(QUEUED_MESSAGE_QUEUED_LABEL);
   });
 });
 

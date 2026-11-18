@@ -13,7 +13,7 @@ export function HtmlArtifactFrame(props: {
   readonly menuItems?: ReactNode;
 }) {
   return (
-    <ArtifactExpansion title={props.title}>
+    <ArtifactExpansion title={props.title} commentsInline>
       <ArtifactPagesFrame
         source={props.source}
         title={props.title}

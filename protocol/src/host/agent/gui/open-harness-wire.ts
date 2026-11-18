@@ -137,6 +137,7 @@ export {
   openContentBlockSchema,
   openHarnessIdSchema,
   openMessageSchema,
+  openMessageSchemaPreConversationImages,
   openMessageSchemaPreFeedbackDraft,
   openMessageSchemaPreNotApplied,
   openMessageSchemaPreCanvas,

@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  tabRefKey,
+  type SplitSide,
+  type StripItem,
+} from "@/stores/tabs/layout";
+import {
   groupEntriesBySection,
   type StripSection,
   type StripSectionEntry,
@@ -102,6 +107,130 @@ export function useStripSectionHolds(
       ),
     [pointer, focus],
   );
+}
+
+function sectionOfItem(
+  sections: ReadonlyArray<StripSectionGroup>,
+  itemId: string,
+): StripSection | null {
+  return (
+    sections.find((group) =>
+      group.entries.some(
+        (entry) => entry.kind === "tabs" && entry.itemId === itemId,
+      ),
+    )?.section ?? null
+  );
+}
+
+/**
+ * The current item and the tab on screen in it, a pair's focused member. The
+ * tab is what was opened: swapping a pair's sides opens nothing, and neither
+ * does closing its other member, though that gives the row a new item id.
+ */
+interface StripOpening {
+  readonly itemId: string;
+  readonly focusedTab: string | null;
+}
+
+function focusedSideOf(item: StripItem): SplitSide {
+  return item.kind === "split" ? item[item.focusedSide] : item;
+}
+
+function openingOf(
+  layoutItems: ReadonlyArray<StripItem>,
+  activeItemId: string | null,
+): StripOpening | null {
+  if (activeItemId === null) return null;
+  const item = layoutItems.find((entry) => entry.id === activeItemId);
+  const focused = item === undefined ? null : focusedSideOf(item);
+  return {
+    itemId: activeItemId,
+    focusedTab: focused?.kind === "tab" ? tabRefKey(focused.ref) : null,
+  };
+}
+
+interface OpenedHoldState {
+  readonly sections: ReadonlyArray<StripSectionGroup>;
+  readonly opening: StripOpening | null;
+  readonly hold: StripSectionHold | null;
+}
+
+/** Whether the same tab is on screen; by item where no tab is known. */
+function sameOpened(a: StripOpening | null, b: StripOpening): boolean {
+  if (a === null) return false;
+  return a.focusedTab === null && b.focusedTab === null
+    ? a.itemId === b.itemId
+    : a.focusedTab === b.focusedTab;
+}
+
+/**
+ * Where an item's row was drawn when the person opened it in this render,
+ * which a read landing in the same render has not changed yet. Opening a
+ * pair's other member is an opening too, and the pair's row is one row.
+ * `null` for an item with no row before this render.
+ */
+function drawnWhenOpened(
+  prev: OpenedHoldState,
+  itemId: string,
+  holds: ReadonlyArray<StripSectionHold>,
+): StripSection | null {
+  return (
+    holds.find((held) => held.itemId === itemId)?.section ??
+    (prev.hold?.itemId === itemId ? prev.hold.section : null) ??
+    sectionOfItem(prev.sections, itemId)
+  );
+}
+
+function openedHoldOf(
+  prev: OpenedHoldState,
+  sections: ReadonlyArray<StripSectionGroup>,
+  opening: StripOpening | null,
+  holds: ReadonlyArray<StripSectionHold>,
+): StripSectionHold | null {
+  if (opening === null) return null;
+  const { itemId } = opening;
+  const now = sectionOfItem(sections, itemId);
+  if (now !== "to-review" && now !== "idle") return null;
+  if (sameOpened(prev.opening, opening)) {
+    const { hold } = prev;
+    return hold === null || hold.itemId === itemId ? hold : { ...hold, itemId };
+  }
+  const opened = drawnWhenOpened(prev, itemId, holds) ?? now;
+  return opened === "to-review" ? { itemId, section: "to-review" } : null;
+}
+
+/**
+ * The current task's row, held in To review when the person opened it from
+ * there. Opening a task reads it, which would send its row down to Idle, out
+ * from where the person just clicked and often out of view. It stays until
+ * they open another task, or until this one starts working or needs them,
+ * which is a move its own state makes.
+ */
+export function useOpenedSectionHold(
+  sections: ReadonlyArray<StripSectionGroup>,
+  layoutItems: ReadonlyArray<StripItem>,
+  activeItemId: string | null,
+  holds: ReadonlyArray<StripSectionHold>,
+): StripSectionHold | null {
+  const opening = openingOf(layoutItems, activeItemId);
+  // No hold at mount: the task current then was not opened from anywhere.
+  const [state, setState] = useState<OpenedHoldState>({
+    sections,
+    opening,
+    hold: null,
+  });
+  if (
+    state.sections !== sections ||
+    state.opening?.itemId !== opening?.itemId ||
+    state.opening?.focusedTab !== opening?.focusedTab
+  ) {
+    setState({
+      sections,
+      opening,
+      hold: openedHoldOf(state, sections, opening, holds),
+    });
+  }
+  return state.hold;
 }
 
 /**

@@ -10,7 +10,7 @@ import {
 } from "@/lib/history-search";
 
 const state = vi.hoisted(() => {
-  const view: OrganizationView = {
+  let view: OrganizationView = {
     catalog: [],
     groups: {
       version: "0",
@@ -26,23 +26,29 @@ const state = vi.hoisted(() => {
     pending: [],
     failures: [],
   };
-  return {
-    organization: {
-      supported: true,
-      userId: "user-1",
-      view,
-      client: {},
-      register: vi.fn(
-        (_key: string, _taskIds: readonly string[]) => () => undefined,
-      ),
-      openDialog: vi.fn(),
-      command: vi.fn(() => Promise.resolve()),
-      refresh: vi.fn(() => Promise.resolve()),
+  const organization = {
+    supported: true,
+    userId: "user-1",
+    readView: () => view,
+    subscribeView: () => () => undefined,
+    client: {},
+    register: vi.fn(
+      (_key: string, _taskIds: readonly string[]) => () => undefined,
+    ),
+    openDialog: vi.fn(),
+    command: vi.fn(() => Promise.resolve()),
+    refresh: vi.fn(() => Promise.resolve()),
+  };
+  const facets = {
+    organizationFacets: {
+      labelNames: ["Imported", "Review", "Automation"],
     },
-    facets: {
-      organizationFacets: {
-        labelNames: ["Imported", "Review", "Automation"],
-      },
+  };
+  return {
+    organization,
+    facets,
+    setView: (next: OrganizationView) => {
+      view = next;
     },
   };
 });
@@ -50,9 +56,15 @@ const state = vi.hoisted(() => {
 vi.mock("@/hooks/organization/organization-context", async (load) => {
   const actual =
     await load<typeof import("@/hooks/organization/organization-context")>();
+  const { organizationViewHookOverrides } =
+    await import("@/__tests__/organization-view-source");
   return {
     ...actual,
     useOrganization: () => state.organization,
+    ...organizationViewHookOverrides(
+      () => state.organization.readView(),
+      actual.taskOrganization,
+    ),
   };
 });
 
@@ -78,10 +90,10 @@ function renderFilters(
 
 afterEach(() => {
   cleanup();
-  state.organization.view = {
-    ...state.organization.view,
+  state.setView({
+    ...state.organization.readView(),
     groups: {
-      ...state.organization.view.groups,
+      ...state.organization.readView().groups,
       groups: [
         {
           groupId: "group-1",
@@ -91,7 +103,7 @@ afterEach(() => {
         },
       ],
     },
-  };
+  });
 });
 
 describe("organization history filters", () => {

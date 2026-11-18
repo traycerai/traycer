@@ -2,13 +2,11 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -27,6 +25,7 @@ import {
 } from "../credentials-mutation";
 import { queryPidStartFingerprint } from "../credentials-lock";
 import { writeSidecarState } from "../credentials-wal";
+import { createCaseWorkDir, endCaseWorkDir } from "./credentials-run-root";
 
 // Reload shared-worker modules so the lock path binds this file’s fs/promises mock.
 vi.hoisted(() => {
@@ -190,7 +189,7 @@ describe("credentials mutation store", () => {
   });
 
   beforeEach(() => {
-    workDir = mkdtempSync(join(tmpdir(), "traycer-cred-mut-test-"));
+    workDir = createCaseWorkDir("traycer-cred-mut-test-");
     credentialsPath = join(workDir, "credentials");
     metaPath = join(workDir, "credentials.meta.json");
     // The lock lives in its own subdir so the commit-failure tests can freeze
@@ -208,8 +207,7 @@ describe("credentials mutation store", () => {
     timerSpies.length = 0;
     for (const store of stores) store.dispose();
     stores.length = 0;
-    chmodSync(workDir, 0o700);
-    rmSync(workDir, { recursive: true, force: true });
+    endCaseWorkDir(workDir);
   });
 
   async function seedSignedIn(store: CredentialsMutationStore): Promise<void> {
@@ -596,7 +594,15 @@ describe("credentials mutation store", () => {
     it.skipIf(!canForceCommitFailure)(
       "a failed conditional delete stays quarantined until a drain lands it",
       async () => {
-        const store = makeStore(refreshStub(rotateOk).fn);
+        // The failed delete arms the store's own retry drain, which takes the
+        // same lock as the drains below. It is parked so that only this
+        // case's drains run.
+        const held = holdContinuationRetries(PRODUCTION_CONTINUATION_RETRY_MS);
+        const store = makeStoreTimed(
+          refreshStub(rotateOk).fn,
+          500,
+          PRODUCTION_CONTINUATION_RETRY_MS,
+        );
         await seedSignedIn(store);
         const qPath = quarantinePath(credentialsPath);
         // Pre-armed record (exactly as the register-before-attempt leaves
@@ -608,6 +614,7 @@ describe("credentials mutation store", () => {
         chmodSync(workDir, 0o500);
         const failed = await store.signOutIfToken(CREDS.token, null);
         expect(failed.outcome).toBe("commit-failed");
+        expect(held.heldCount()).toBe(1);
         // Still durable, still suppressed, drain still failing.
         expect(await readCredentialsFile(credentialsPath)).toEqual(CREDS);
         expect(await store.read()).toBeNull();

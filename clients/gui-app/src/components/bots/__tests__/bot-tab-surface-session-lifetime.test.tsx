@@ -11,7 +11,7 @@
  * runs the real sandbox reads and create over a scripted control plane.
  * The three views and the bot's session view are replaced by stubs
  * that expose their props, so what the surface PASSES them is what is
- * asserted. The tab strip's Activity count reads the real
+ * asserted. The Activity rows and compact-header count use the real
  * `useBotActiveTasks` over the real agent-activity store and the real
  * notification-indicator hooks (the host answers `indicatorState`).
  */
@@ -1400,9 +1400,11 @@ describe("<BotTabSurface /> channel lifetime", () => {
     mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
     const view = render(surface());
     useTracySurfaceStore.getState().selectChannel(OTHER_BOT_ID);
-    useBotDraftsStore
-      .getState()
-      .typeThreadBox(OTHER_BOT_ID, "post-1", "unsent", null);
+    useBotDraftsStore.getState().typeThreadBox(OTHER_BOT_ID, "post-1", {
+      text: "unsent",
+      content: null,
+      held: [],
+    });
     view.rerender(surfaceFor(OTHER_BOT_ID));
     expect(useTracySurfaceStore.getState().visitedBotIds).toEqual([
       BOT_ID,

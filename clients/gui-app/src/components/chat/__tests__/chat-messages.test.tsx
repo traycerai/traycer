@@ -3196,6 +3196,7 @@ describe("ChatMessages scroll policy", () => {
       openAnnouncementThread: () => undefined,
       threadAnchorKinds: [],
       chooseOption: null,
+      reply: null,
       questions: null,
       failedRequest: null,
       failedRecovery: null,
@@ -3840,6 +3841,35 @@ describe("ChatMessages scroll policy", () => {
       expect(
         Math.abs((atSettle.scrollTop ?? 0) - expectedRowScrollTop(targetIndex)),
       ).toBeLessThanOrEqual(1);
+    });
+
+    it("lands a boundary request on the row it names and paints no highlight on it", async () => {
+      const messages = makeCompletedTranscript(30);
+      const target = messages[10];
+      const atSettle: { highlighted: number | null } = { highlighted: null };
+      const onScrollRequestSettled = vi.fn(() => {
+        atSettle.highlighted = document.querySelectorAll(
+          "[data-navigation-highlighted]",
+        ).length;
+      });
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: "scroll-req-boundary-no-highlight",
+        onScrollRequestSettled,
+      });
+      await settleLegendList();
+
+      rerenderWith({
+        scrollRequest: { kind: "boundary", rowId: target.id, requestId: 51 },
+      });
+
+      await waitFor(() => {
+        expect(onScrollRequestSettled).toHaveBeenCalledWith(51, "landed");
+      });
+      expect(atSettle.highlighted).toBe(0);
+      expect(
+        document.querySelector("[data-navigation-highlighted]"),
+      ).toBeNull();
     });
 
     it("does not let a mounted sibling part satisfy a missing later-part landing", async () => {

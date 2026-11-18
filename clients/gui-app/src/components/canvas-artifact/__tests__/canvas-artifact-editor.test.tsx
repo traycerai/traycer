@@ -1967,6 +1967,149 @@ describe("CanvasArtifactEditor wheel settling", () => {
       expect(flow.setViewport).not.toHaveBeenCalled();
     });
   });
+
+  describe("a finger pinch", () => {
+    // INITIAL_VIEW is { x: 60, y: 100, zoom: 0.6 }.
+    const PINCH_OUT = { x: 40, y: 90, zoom: 0.8 };
+    const PINCH_WIDER = { x: 20, y: 80, zoom: 1 };
+    // Zoomed out and panned right: FAR is on screen and nearest the centre.
+    const TOWARDS_FAR = { x: -300, y: 0, zoom: 0.5 };
+
+    // xyflow reports a touch move with the browser's own TouchEvent.
+    function pinchTo(viewport: FlowViewport): void {
+      act(() => {
+        flow.onMove?.(new TouchEvent("touchmove"), viewport);
+      });
+    }
+    function liftFingers(viewport: FlowViewport): void {
+      act(() => {
+        flow.onMoveEnd?.(new TouchEvent("touchend"), viewport);
+      });
+    }
+    function zoomLayer(): HTMLElement {
+      const element = screen.getByRole("group", {
+        name: "Canvas pane",
+      }).parentElement;
+      if (element === null) throw new Error("could not find the zoom layer");
+      return element;
+    }
+
+    it("keeps the viewport React Flow is given until the fingers have been quiet for 120ms, and shows the zoom on the layer meanwhile", () => {
+      mountWheelEditor();
+
+      pinchTo(PINCH_OUT);
+      applyWheelFrame();
+      pinchTo(PINCH_WIDER);
+      applyWheelFrame();
+
+      expect(zoomLayer().style.transform).toMatch(/scale\(/);
+      expect(flow.viewport).toEqual({ x: 60, y: 100, zoom: 0.6 });
+      expect(flow.setViewport).not.toHaveBeenCalled();
+
+      act(() => {
+        vi.advanceTimersByTime(103);
+      });
+      expect(flow.viewport).toEqual({ x: 60, y: 100, zoom: 0.6 });
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(flow.setViewport).toHaveBeenCalledOnce();
+      expect(flow.viewport).toEqual(PINCH_WIDER);
+      expect(zoomLayer().style.transform).toBe("");
+    });
+
+    it("keeps a pinch that has stopped changing the zoom on the layer, and a lift of the fingers does not draw it", () => {
+      mountWheelEditor();
+
+      pinchTo(PINCH_OUT);
+      liftFingers({ ...PINCH_OUT, x: 30 });
+      applyWheelFrame();
+
+      expect(flow.viewport).toEqual({ x: 60, y: 100, zoom: 0.6 });
+      expect(zoomLayer().style.transform).toMatch(/scale\(/);
+
+      settleZoomGesture();
+      expect(flow.viewport).toEqual({ ...PINCH_OUT, x: 30 });
+    });
+
+    it("picks the live boards once the pinch has been quiet for 200ms, not on each move or on the lift", () => {
+      const { sourceForBoard } = mountWheelEditor();
+
+      pinchTo({ x: -100, y: 50, zoom: 0.55 });
+      applyWheelFrame();
+      pinchTo(TOWARDS_FAR);
+      applyWheelFrame();
+      liftFingers(TOWARDS_FAR);
+      expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+
+      // The redraw at 120ms does not pick them either.
+      settleZoomGesture();
+      expect(flow.viewport).toEqual(TOWARDS_FAR);
+      expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+
+      act(() => {
+        vi.advanceTimersByTime(79);
+      });
+      expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(sourceForBoard).toHaveBeenCalledWith(FAR);
+    });
+
+    it("picks the live boards where a one-finger pan ended when it follows the pinch before the settle", () => {
+      const { sourceForBoard } = mountWheelEditor();
+      const pinched = { x: 300, y: 100, zoom: 0.5 };
+
+      pinchTo(pinched);
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(flow.viewport).toEqual(pinched);
+
+      // Same zoom, no pinch held: the pan goes straight to the viewport.
+      pinchTo(TOWARDS_FAR);
+      liftFingers(TOWARDS_FAR);
+      expect(flow.viewport).toEqual(TOWARDS_FAR);
+      act(() => {
+        vi.advanceTimersByTime(49);
+      });
+      expect(sourceForBoard).not.toHaveBeenCalledWith(FAR);
+
+      // The settle runs 200ms after the pinch's last move.
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(sourceForBoard).toHaveBeenCalledWith(FAR);
+    });
+
+    it("hands a one-finger pan, with the zoom unchanged and no pinch held, straight to the viewport", () => {
+      const { sourceForBoard } = mountWheelEditor();
+      const panned = { x: -300, y: 100, zoom: 0.6 };
+
+      pinchTo(panned);
+
+      expect(flow.viewport).toEqual(panned);
+      expect(zoomLayer().style.transform).toBe("");
+      expect(flow.setViewport).not.toHaveBeenCalled();
+
+      // A pan is settled by its own end, as before.
+      liftFingers(panned);
+      expect(sourceForBoard).toHaveBeenCalledWith(FAR);
+    });
+
+    it("hands a mouse move that changes the zoom straight to the viewport", () => {
+      mountWheelEditor();
+
+      act(() => {
+        flow.onMove?.(new MouseEvent("mousemove"), PINCH_OUT);
+      });
+
+      expect(flow.viewport).toEqual(PINCH_OUT);
+      expect(zoomLayer().style.transform).toBe("");
+    });
+  });
 });
 
 describe("CanvasArtifactEditor zoom gestures", () => {

@@ -102,6 +102,9 @@ export function createRecordingStreamClient(): RecordingStreamClient {
       onStatusChange(handler): void {
         statusHandler = handler;
       },
+      hasSentOpenRequest(): boolean {
+        return false;
+      },
       requestReconnect(): void {
         reconnects += 1;
       },

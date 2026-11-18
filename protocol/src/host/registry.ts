@@ -676,7 +676,9 @@ import {
 import {
   hostAgentCreateFromRemoteSenderV10,
   hostAgentCreateFromRemoteSenderV11,
+  hostAgentCreateFromRemoteSenderV12,
   hostAgentCreateFromRemoteSenderUpgradeV10ToV11,
+  hostAgentCreateFromRemoteSenderUpgradeV11ToV12,
   hostFileCopyCancelV10,
   hostFileCopyStartV10,
   hostFileCopyStatusV10,
@@ -722,6 +724,8 @@ import {
   botConversationSendUpgradeV13ToV14,
   botConversationSendV15,
   botConversationSendUpgradeV14ToV15,
+  botConversationSendV16,
+  botConversationSendUpgradeV15ToV16,
   botThreadListV10,
   botThreadListV11,
   botThreadListV12,
@@ -981,6 +985,7 @@ import {
   epicReadCloudChatPartV10,
   epicReadCloudChatPayloadV10,
   epicResolveCloudChatHeadV10,
+  epicGetChatTitleV10,
   epicListTasksV10,
   epicListTasksV11,
   epicListTasksV12,
@@ -1264,7 +1269,6 @@ import {
   hostNotificationsClearAllUpgradeV10ToV11,
   hostNotificationsClearAllV11,
   hostNotificationsGetConfig,
-  hostNotificationsGetLongTurnAlert,
   hostNotificationsIndicatorStateUpgradeV10ToV11,
   hostNotificationsIndicatorStateUpgradeV11ToV12,
   hostNotificationsIndicatorStateV10,
@@ -1292,7 +1296,6 @@ import {
   hostNotificationsMarkRead,
   hostNotificationsResolve,
   hostNotificationsSetConfig,
-  hostNotificationsSetLongTurnAlert,
   hostNotificationsFeedSubscribeV10,
   hostNotificationsFeedSubscribeV11,
   hostNotificationsFeedSubscribeV12,
@@ -7839,32 +7842,6 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  "host.notifications.getLongTurnAlert": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostNotificationsGetLongTurnAlert,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "host.notifications.setLongTurnAlert": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: hostNotificationsSetLongTurnAlert,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
   "host.notifications.markRead": {
     degrade: { kind: "unsupported" },
     1: {
@@ -9876,7 +9853,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.conversation.send": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 5,
+      latestMinor: 6,
       versions: {
         0: {
           contract: botConversationSendV10,
@@ -9910,6 +9887,12 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         5: {
           contract: botConversationSendV15,
           upgradeFromPreviousVersion: botConversationSendUpgradeV14ToV15,
+        },
+        // @1.6 names the message a member chose to reply to (`replyTo`,
+        // T166).
+        6: {
+          contract: botConversationSendV16,
+          upgradeFromPreviousVersion: botConversationSendUpgradeV15ToV16,
         },
       },
       downgradePathsFromLatest: {},
@@ -10709,6 +10692,19 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: epicResolveCloudChatHeadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+    degrade: { kind: "unsupported" },
+  },
+  "epic.getChatTitle": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: epicGetChatTitleV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -12007,7 +12003,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "host.agent.createFromRemoteSender": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: hostAgentCreateFromRemoteSenderV10,
@@ -12017,6 +12013,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           contract: hostAgentCreateFromRemoteSenderV11,
           upgradeFromPreviousVersion:
             hostAgentCreateFromRemoteSenderUpgradeV10ToV11,
+        },
+        2: {
+          contract: hostAgentCreateFromRemoteSenderV12,
+          upgradeFromPreviousVersion:
+            hostAgentCreateFromRemoteSenderUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},

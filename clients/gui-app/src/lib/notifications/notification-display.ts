@@ -15,6 +15,7 @@ import type {
 import { createElement } from "react";
 import { toast } from "sonner";
 import {
+  APP_LOCAL_NOTIFICATION_SEVERITY,
   rowFromAppLocalEntry,
   rowFromCloudFeedRow,
   rowFromHostEntry,
@@ -58,6 +59,12 @@ export interface NotificationDisplayTarget {
   readonly showNotification: NotificationShow;
   readonly playChime: (eventType: NotificationChimeEventType) => void;
   readonly onToastClick: (row: MergedNotificationRow) => void;
+  /**
+   * Whether this device lets a kind interrupt (Settings → Alerts). A kind it
+   * refuses gets no OS notification request, no toast and no chime; the row
+   * itself is untouched, so it still lists in the bell and counts as unread.
+   */
+  readonly notifies: (eventType: NotificationChimeEventType) => boolean;
 }
 
 interface NativeNotificationDisplayOptions {
@@ -106,14 +113,28 @@ export function displayForwardedForegroundNotification(
   target: {
     readonly playChime: (eventType: NotificationChimeEventType) => void;
     readonly onToastClick: (payload: unknown) => void;
+    readonly notifies: (eventType: NotificationChimeEventType) => boolean;
   },
 ): void {
-  const eligible = eligibleForegroundDisplay(display);
+  const eligible = eligibleForegroundDisplay(display, target.notifies);
   if (eligible === null) return;
   const parsed =
     eligible.payload === null
       ? null
       : parseNotificationActivationPayload(eligible.payload);
+  // An app-local relay names its kind by being one: every app-local row has
+  // the same severity, and its payload (null for a host error) says nothing.
+  const chimeEventType =
+    eligible.foregroundAppLocal !== null
+      ? APP_LOCAL_NOTIFICATION_SEVERITY
+      : (notificationChimeEventTypeForSeverities(
+          eligible.feedOccurrences?.map(
+            (occurrence) => occurrence.chimeEventType,
+          ) ?? [],
+        ) ?? (parsed?.kind === "v1" ? parsed.envelope.chimeEventType : "done"));
+  // A feed relay's occurrences were already narrowed to the kinds this device
+  // shows; this settles a relay that carries none.
+  if (!target.notifies(chimeEventType)) return;
   const actionable = eligible.payload !== null;
   const title = actionable
     ? createElement(
@@ -144,17 +165,12 @@ export function displayForwardedForegroundNotification(
     description: actionable ? undefined : eligible.body,
     id: eligible.replaceKey ?? undefined,
   });
-  target.playChime(
-    notificationChimeEventTypeForSeverities(
-      eligible.feedOccurrences?.map(
-        (occurrence) => occurrence.chimeEventType,
-      ) ?? [],
-    ) ?? (parsed?.kind === "v1" ? parsed.envelope.chimeEventType : "done"),
-  );
+  target.playChime(chimeEventType);
 }
 
 function eligibleForegroundDisplay(
   display: NotificationForegroundDisplay,
+  notifies: (eventType: NotificationChimeEventType) => boolean,
 ): NotificationForegroundDisplay | null {
   const parsed =
     display.payload === null
@@ -169,7 +185,11 @@ function eligibleForegroundDisplay(
     if (!feedOccurrenceMatchesAccount(occurrence)) return false;
     if (feedDisplayReceipts.has(occurrence.key)) return false;
     if (feedOccurrenceIsFocused(occurrence)) return false;
-    return claimFeedOccurrence(occurrence.key);
+    // Claimed before the Notify check, so a kind turned on later never
+    // replays an occurrence that arrived while it was off.
+    return (
+      claimFeedOccurrence(occurrence.key) && notifies(occurrence.chimeEventType)
+    );
   });
   const projection = projectNotificationFeedDisplay(fresh);
   return projection === null ? null : { ...display, ...projection };
@@ -316,8 +336,16 @@ async function displayNotificationRowsAwaitNative(
   target: NotificationDisplayTarget,
   options: NativeNotificationDisplayOptions,
 ): Promise<void> {
-  if (rows.length === 0) return;
-  const content = buildNotificationToastContent(rows);
+  // An app-local row of a kind this device refuses still goes to the shell,
+  // marked inbox-only: another Traycer window in front learns of it only
+  // through that relay, and Notify off must not take it out of that window's
+  // bell. It shows nothing here and the shell raises nothing for it.
+  const inboxOnly = options.foregroundAppLocal?.inboxOnly === true;
+  const shown = inboxOnly
+    ? rows
+    : rows.filter((row) => target.notifies(chimeEventTypeForRows([row])));
+  if (shown.length === 0) return;
+  const content = buildNotificationToastContent(shown);
   const nativePayload =
     content.payload === null
       ? null
@@ -343,8 +371,13 @@ async function displayNotificationRowsAwaitNative(
       foregroundAppLocal: options.foregroundAppLocal,
     });
   } catch (error) {
-    renderNotificationToast(content, target, "focused");
+    if (!inboxOnly) renderNotificationToast(content, target, "focused");
     throw error;
+  }
+  if (inboxOnly) {
+    // Awaited so a failed relay rejects and the caller retries it later.
+    await nativeDisplay;
+    return;
   }
   const renderChimed = renderNotificationToast(content, target, "focused");
   const outcome = await nativeDisplay;
@@ -497,7 +530,9 @@ export async function displayHostChannelEmission(
     ) {
       continue;
     }
-    rows.push(rowFromHostEntry(entry));
+    const row = rowFromHostEntry(entry);
+    if (settledAsRefused(row, key, target)) continue;
+    rows.push(row);
     kept.push({ key, entry });
   }
   await displayOnceBotNamesSettle(
@@ -515,6 +550,23 @@ export async function displayHostChannelEmission(
       ),
     target,
   );
+}
+
+/**
+ * Whether this device refuses the row's kind, settling the occurrence if so.
+ * Decided on arrival, before anything waits: a batch with a bot's row waits
+ * for the bot directory, and a kind turned on during that wait must not
+ * replay an occurrence that arrived while it was off. `displayFeedOccurrences`
+ * asks again after the wait, for a kind turned off during it.
+ */
+function settledAsRefused(
+  row: MergedNotificationRow,
+  key: string,
+  target: NotificationDisplayTarget,
+): boolean {
+  if (target.notifies(chimeEventTypeForRows([row]))) return false;
+  claimFeedOccurrence(key);
+  return true;
 }
 
 /**
@@ -589,6 +641,7 @@ export async function displayCloudSnapshotArrivals(
       continue;
     }
     const row = rowFromCloudFeedRow(entry);
+    if (settledAsRefused(row, key, target)) continue;
     deliveries.push(
       displayOnceBotNamesSettle(
         [row],
@@ -674,7 +727,12 @@ async function displayFeedOccurrences(
       return false;
     }
     seen.add(occurrence.key);
-    return true;
+    if (target.notifies(occurrence.chimeEventType)) return true;
+    // Settled without reaching the shell. The receipt is taken like a shown
+    // occurrence's, so turning the kind on later never replays this one, and
+    // a host or cloud copy still in flight finds it taken.
+    claimFeedOccurrence(occurrence.key);
+    return false;
   });
   const display = projectNotificationFeedDisplay(ready);
   if (display === null) return;
@@ -759,19 +817,31 @@ async function submitFeedDisplay(
   }
 }
 
+/**
+ * `inboxOnly` is the caller's decision, made once per version: the row's kind
+ * does not interrupt on this device, so it is sent only for a focused sibling
+ * window's bell, with nothing shown or sounded here.
+ */
 export function displayAppLocalNotification(
   entry: AppLocalNotificationEntry,
   target: NotificationDisplayTarget,
-  deliveryKey: string,
-  userId: string,
+  delivery: {
+    readonly deliveryKey: string;
+    readonly userId: string;
+    readonly inboxOnly: boolean;
+  },
 ): Promise<void> {
   return displayNotificationRowsAwaitNative(
     [rowFromAppLocalEntry(entry)],
     target,
     {
-      deliveryKey,
+      deliveryKey: delivery.deliveryKey,
       originHostId: entry.originHostId ?? null,
-      foregroundAppLocal: { userId, entry },
+      foregroundAppLocal: {
+        userId: delivery.userId,
+        entry,
+        inboxOnly: delivery.inboxOnly,
+      },
     },
   );
 }
@@ -793,13 +863,20 @@ interface NotificationToastContent {
   readonly chimeEventType: NotificationChimeEventType;
 }
 
+function chimeEventTypeForRows(
+  rows: ReadonlyArray<MergedNotificationRow>,
+): NotificationChimeEventType {
+  return (
+    notificationChimeEventTypeForSeverities(rows.map((row) => row.severity)) ??
+    "done"
+  );
+}
+
 function buildNotificationToastContent(
   rows: ReadonlyArray<MergedNotificationRow>,
 ): NotificationToastContent {
   const first = rows[0];
-  const chimeEventType =
-    notificationChimeEventTypeForSeverities(rows.map((row) => row.severity)) ??
-    "done";
+  const chimeEventType = chimeEventTypeForRows(rows);
   if (rows.length === 1) {
     return {
       title: standaloneBotName(

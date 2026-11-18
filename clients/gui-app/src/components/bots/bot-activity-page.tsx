@@ -1,7 +1,10 @@
 import {
   useCallback,
   useContext,
+  useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -9,6 +12,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
 import type { TaskContextResult } from "@traycer/protocol/host/epic/unary-schemas";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotSessionOpen } from "@/stores/bots/bot-open-thread-store";
 import type {
   BotInputNeeded,
   BotNotificationSubscription,
@@ -26,9 +30,10 @@ import {
   type ChatDescendantStatusRollup,
 } from "@/components/epic-canvas/sidebar/use-chat-archive-hidden-ids";
 import { useChatRowOpenRef } from "@/components/epic-canvas/sidebar/use-chat-row-open-ref";
-import type { BotSessionOpen } from "@/stores/bots/bot-open-thread-store";
+import { usePaneFocusProbe } from "@/components/epic-tabs/pane-visibility-context";
 import { BotActivityDetails } from "@/components/bots/bot-activity-details";
 import { BotTaskControls } from "@/components/bots/bot-task-actions";
+import { TaskFocusBoundary } from "@/components/bots/task-focus-boundary";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
 import {
@@ -47,10 +52,7 @@ import {
   agentActivityTiers,
   type AgentActivityTier,
 } from "@/lib/agent-activity";
-import {
-  isPeriodicTask,
-  type BotActiveTask,
-} from "@/lib/bots/bot-activity-model";
+import type { BotActiveTask } from "@/lib/bots/bot-activity-model";
 import {
   botActivityMemberName,
   type BotMemberResolver,
@@ -86,6 +88,21 @@ import {
   type NotificationIndicatorState,
 } from "@/stores/notifications/notification-indicator-state";
 
+function reportingFocusSurface(target: HTMLElement): "menu" | "dialog" | null {
+  if (target.closest('[role="menu"]')) return "menu";
+  if (target.closest('[role="dialog"]')) return "dialog";
+  return null;
+}
+
+function taskRowFor(
+  activity: HTMLElement,
+  taskId: string,
+): HTMLElement | undefined {
+  return Array.from(
+    activity.querySelectorAll<HTMLElement>("[data-task-id]"),
+  ).find((element) => element.dataset.taskId === taskId);
+}
+
 const NO_WAITING: ReadonlyArray<BotInputNeeded> = [];
 const NO_FOCUS = {
   focusedAt: undefined,
@@ -118,6 +135,87 @@ export function BotActivityPage(props: {
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
 }): ReactNode {
   const { botId, hostId, boundHere, active, resolveMember } = props;
+  const activityRef = useRef<HTMLElement>(null);
+  const lastTaskFocus = useRef<{
+    taskId: string;
+    target: HTMLElement;
+    reportingSurface: "menu" | "dialog" | null;
+    reportingTrigger: HTMLButtonElement | null;
+  } | null>(null);
+  const rememberTaskFocus = useCallback(
+    (taskId: string, target: EventTarget): void => {
+      if (target instanceof HTMLElement) {
+        const activity = activityRef.current;
+        const reportingSurface = reportingFocusSurface(target);
+        const row =
+          activity === null ? undefined : taskRowFor(activity, taskId);
+        lastTaskFocus.current = {
+          taskId,
+          target,
+          reportingSurface,
+          reportingTrigger:
+            reportingSurface === null
+              ? null
+              : (row?.querySelector<HTMLButtonElement>(
+                  '[aria-label="Reporting actions"]',
+                ) ?? null),
+        };
+      }
+    },
+    [],
+  );
+  useEffect(() => {
+    const clearFocusOwner = (): void => {
+      lastTaskFocus.current = null;
+    };
+    document.addEventListener("focusin", clearFocusOwner, true);
+    return () => document.removeEventListener("focusin", clearFocusOwner, true);
+  }, []);
+  const captureTaskFocus = useCallback((): void => {
+    const owner = lastTaskFocus.current;
+    if (
+      owner !== null &&
+      owner.target.isConnected &&
+      document.activeElement !== owner.target
+    )
+      lastTaskFocus.current = null;
+  }, []);
+  const isPaneFocused = usePaneFocusProbe();
+  const restoreTaskFocus = useCallback((): void => {
+    const previous = lastTaskFocus.current;
+    const activity = activityRef.current;
+    if (previous === null || activity === null || previous.target.isConnected)
+      return;
+    if (document.activeElement !== document.body) return;
+    if (!isPaneFocused()) {
+      lastTaskFocus.current = null;
+      return;
+    }
+    const row = taskRowFor(activity, previous.taskId);
+    const reportingTrigger =
+      previous.reportingSurface !== null
+        ? row?.querySelector<HTMLButtonElement>(
+            '[aria-label="Reporting actions"]',
+          )
+        : null;
+    if (
+      previous.reportingSurface === "menu" &&
+      reportingTrigger &&
+      reportingTrigger === previous.reportingTrigger
+    )
+      return;
+    const target =
+      reportingTrigger ??
+      row?.querySelector<HTMLButtonElement>(
+        '[data-testid="bot-activity-task-open"]',
+      ) ??
+      activity;
+    lastTaskFocus.current = null;
+    target.focus();
+  }, [isPaneFocused]);
+  useLayoutEffect(() => {
+    restoreTaskFocus();
+  });
   const viewer = useAuthStore((s) => s.profile);
   const nameOf = useCallback(
     (memberId: string): string =>
@@ -160,6 +258,8 @@ export function BotActivityPage(props: {
   const heading = "Tasks";
   return (
     <section
+      ref={activityRef}
+      tabIndex={-1}
       aria-label={heading}
       className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-4"
       data-testid="bot-activity-page"
@@ -194,6 +294,9 @@ export function BotActivityPage(props: {
                 boundHere={boundHere}
                 nameOf={nameOf}
                 entry={entry}
+                onTaskFocus={rememberTaskFocus}
+                onBeforeTaskChange={captureTaskFocus}
+                onReportingRemoved={restoreTaskFocus}
                 indicator={active.indicatorOf(entry.task.taskId)}
                 title={
                   contexts.tasksById.get(entry.task.taskId)?.epic?.light
@@ -228,14 +331,15 @@ export function BotActivityPage(props: {
         </button>
       ) : null}
       <BotActivityDetails
+        roomFresh={props.roomFresh}
+        trunkChatId={props.trunkChatId}
+        threads={props.threads}
+        onOpenSession={props.onOpenSession}
         subscriptions={
           !props.roomFresh && props.notificationSubscriptions?.length === 0
             ? null
             : props.notificationSubscriptions
         }
-        trunkChatId={props.trunkChatId}
-        threads={props.threads}
-        onOpenSession={props.onOpenSession}
       />
     </section>
   );
@@ -430,6 +534,9 @@ type ActiveTaskRowProps = {
   readonly boundHere: boolean;
   readonly nameOf: (userId: string) => string;
   readonly entry: BotActiveTask;
+  readonly onTaskFocus: (taskId: string, target: EventTarget) => void;
+  readonly onBeforeTaskChange: () => void;
+  readonly onReportingRemoved: () => void;
   /** What the task's agents hold unread, together. */
   readonly indicator: NotificationIndicatorState;
   readonly title: string | null;
@@ -465,13 +572,23 @@ function ActiveTaskRow(props: ActiveTaskRowProps): ReactNode {
     [agents, taskId],
   );
   return (
-    <ChatIndicatorHostScopes
-      freshnessMode="activity"
-      scopes={scopes}
-      chatEpicIds={chatEpicIds}
+    <TaskFocusBoundary
+      beforeChange={props.onBeforeTaskChange}
+      afterChange={props.onReportingRemoved}
     >
-      <ActiveTaskRowBody {...props} agents={agents} />
-    </ChatIndicatorHostScopes>
+      <ChatIndicatorHostScopes
+        freshnessMode="activity"
+        scopes={scopes}
+        chatEpicIds={chatEpicIds}
+      >
+        <TaskFocusBoundary
+          beforeChange={props.onBeforeTaskChange}
+          afterChange={props.onReportingRemoved}
+        >
+          <ActiveTaskRowBody {...props} agents={agents} />
+        </TaskFocusBoundary>
+      </ChatIndicatorHostScopes>
+    </TaskFocusBoundary>
   );
 }
 
@@ -522,6 +639,7 @@ function ActiveTaskRowBody(
         task.state === "ended" ? "bot-activity-ended-task" : "bot-activity-task"
       }
       data-task-id={taskId}
+      onFocusCapture={(event) => props.onTaskFocus(taskId, event.target)}
       data-band={entry.band}
       className="flex flex-col gap-0.5"
     >
@@ -563,26 +681,31 @@ function ActiveTaskRowBody(
             threads={props.threads}
           />
         </button>
-      </div>
-      <div className="flex flex-col gap-0.5 pl-7.5">
         <BotTaskControls
           botId={botId}
           hostId={hostId}
           task={task}
           boundHere={boundHere}
           nameOf={nameOf}
+          onBeforeTaskChange={props.onBeforeTaskChange}
+          onReportingRemoved={props.onReportingRemoved}
         />
       </div>
-      {expanded && agents !== null ? (
-        <TaskAgentRows
-          taskId={taskId}
-          agents={agents}
-          agentStates={agentStates}
-          tiers={tiers}
-          inputNeeded={inputNeeded}
-          waitingFresh={task.inputNeeded !== null}
-        />
-      ) : null}
+      <TaskFocusBoundary
+        beforeChange={props.onBeforeTaskChange}
+        afterChange={props.onReportingRemoved}
+      >
+        {expanded && agents !== null ? (
+          <TaskAgentRows
+            taskId={taskId}
+            agents={agents}
+            agentStates={agentStates}
+            tiers={tiers}
+            inputNeeded={inputNeeded}
+            waitingFresh={task.inputNeeded !== null}
+          />
+        ) : null}
+      </TaskFocusBoundary>
     </div>
   );
 }
@@ -641,7 +764,6 @@ function TaskRowSummary(props: {
       ? null
       : props.rollup;
   const inputNeeded = task.inputNeeded ?? NO_WAITING;
-  const interval = describeTaskInterval(task);
   return (
     <>
       <span className="flex min-w-0 items-center gap-2">
@@ -649,11 +771,6 @@ function TaskRowSummary(props: {
         <span className="min-w-0 flex-1 truncate text-ui-sm text-foreground">
           {activityTaskTitle(props.title, props.titleState)}
         </span>
-        {interval === null ? null : (
-          <Badge variant="muted" size="xs" data-testid="bot-activity-every">
-            {interval}
-          </Badge>
-        )}
         {inputNeeded.length === 0 ? null : (
           <Badge
             variant="warning"
@@ -674,11 +791,7 @@ function TaskRowSummary(props: {
         data-testid="bot-activity-task-line"
       >
         <TaskSummaryWords entry={entry} rollup={rollup} />
-        {isPeriodicTask(task) && task.nextAt !== null ? (
-          <span className="tabular-nums">
-            next check-in {formatAbsoluteDateTime(task.nextAt)}
-          </span>
-        ) : null}
+        <TaskReportingSchedule task={task} />
         {props.agentsReadable || entry.band === "unknown" ? null : (
           <TaskHostOffline
             task={task}
@@ -692,6 +805,26 @@ function TaskRowSummary(props: {
           threads={props.threads}
         />
       </span>
+    </>
+  );
+}
+
+function TaskReportingSchedule(props: {
+  readonly task: BotTaskEntry;
+}): ReactNode {
+  const { task } = props;
+  const interval = describeTaskInterval(task);
+  if (interval === null) return null;
+  return (
+    <>
+      <span data-testid="bot-activity-every">
+        {task.pause === null ? `Reports ${interval}` : "Reports paused"}
+      </span>
+      {task.pause === null && task.nextAt !== null ? (
+        <span className="tabular-nums">
+          next check-in {formatAbsoluteDateTime(task.nextAt)}
+        </span>
+      ) : null}
     </>
   );
 }
@@ -740,7 +873,7 @@ function TaskSummaryWords(props: {
   if (task.state !== "ended") return words;
   let reason = "Tracking ended";
   if (task.endedReason === "completed") reason = "Check-in completed";
-  else if (task.endedReason === "by-bot") reason = "Tracking stopped";
+  else if (task.endedReason === "by-bot") reason = "Reporting ended";
   const needsAttention =
     inputNeeded.length > 0 ||
     rollup?.kind === "failure" ||

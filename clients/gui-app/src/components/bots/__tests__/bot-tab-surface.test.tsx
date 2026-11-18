@@ -11,9 +11,11 @@
  * runs the real sandbox reads and create over a scripted control plane.
  * The three views and the bot's session view are replaced by stubs
  * that expose their props, so what the surface PASSES them is what is
- * asserted. The tab strip's Activity count reads the real
+ * asserted. The Activity rows and compact-header count use the real
  * `useBotActiveTasks` over the real agent-activity store and the real
  * notification-indicator hooks (the host answers `indicatorState`).
+ * The surface under the phone app header and beside the bots column, and the
+ * one music group, are in `bot-tab-surface-header.test.tsx`.
  */
 import {
   botListChangedMock,
@@ -40,23 +42,11 @@ import {
   tabHostProviderMock,
   tabNavigationMock,
 } from "./bot-tab-surface-mocks";
-import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
-import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
-import { useBotActivity } from "@/hooks/bots/use-bot-activity";
-
 import {
   useVoiceSessionStore,
   type VoiceSessionDriver,
 } from "@/stores/voice/voice-session-store";
-import { KEYBOARD_FOCUS_OWNER_PROPS } from "@/hooks/ui/use-keyboard-focus-layout";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
-import {
-  holdScreenLandscape,
-  IPHONE_17,
-  lowerNativeKeyboard,
-  raiseNativeKeyboard,
-  restoreKeyboardEnvironment,
-} from "../../../../__tests__/short-keyboard-viewport-harness";
 
 import {
   installShellForm,
@@ -65,41 +55,36 @@ import {
   SHELL_WIDTH_TWO_TILES,
   type ShellFormHarness,
 } from "../../../../__tests__/mobile-level2-form-harness";
-import { StrictMode, useContext, type ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
-import userEvent, { type UserEvent } from "@testing-library/user-event";
+import type { ReactNode } from "react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { act, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BotOpenPausedReason } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotAppearance,
+  BotOpenPausedReason,
+} from "@traycer/protocol/host/bot/schemas";
 import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-schemas";
 
-import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
-import type { BotChannelLanding } from "@/components/bots/bot-channel-view";
-import { botColorAt } from "@/lib/providers/profile-accent-color";
 import { readFocusedHostNotificationPresence } from "@/lib/notifications/notification-presence";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeOpenableNodeRef } from "@/stores/epics/canvas/types";
-import type { BotOpenSession } from "@/components/bots/bot-session-view";
-import type {
-  BotOpenMemory,
-  BotOpenThread,
-  BotTurnOpen,
-} from "@/stores/bots/bot-open-thread-store";
 import {
-  BOT,
   answer,
   BOT_ID,
   BOUND_HOST,
-  endBotTabSurfaceCase,
   NEEDS_HOST_SETUP,
   OTHER_BOT_ID,
-  resetBotTabSurfaceMocks,
   setUpNewTeam,
   SETUP_BOT_ID,
   snapshot,
   TAB_HOST,
 } from "./bot-tab-surface-harness";
 
+vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
+  soundtrackOffered: () => true,
+}));
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
 }));
@@ -195,250 +180,33 @@ vi.mock(
 );
 vi.mock("@/hooks/bots/use-environment-list-query", () => environmentListMock);
 vi.mock("@/hooks/bots/use-bot-mutations", () => botMutationsMock);
-vi.mock("@/components/bots/bot-channel-sidebar", () => ({
-  BotChannelSidebar: (props: {
-    activeBotId: string | null;
-    hostId: string;
-    threadsView: {
-      shown: boolean;
-      onShow: () => void;
-      onLeave: () => void;
-    } | null;
-    onChannelOpened: () => void;
-  }) => (
-    <div
-      data-testid="stub-sidebar"
-      data-active-bot-id={props.activeBotId ?? "none"}
-      data-host-id={props.hostId}
-      data-threads-shown={String(props.threadsView?.shown ?? "none")}
-    >
-      <button
-        type="button"
-        data-testid="stub-sidebar-pick"
-        onClick={props.onChannelOpened}
-      />
-      <button
-        type="button"
-        data-testid="stub-sidebar-threads"
-        onClick={props.threadsView?.onShow}
-      />
-      <button
-        type="button"
-        data-testid="stub-sidebar-own-channel"
-        onClick={props.threadsView?.onLeave}
-      />
-    </div>
-  ),
-}));
-/** What the tab hands its content to mention (`BotMentionsContext`), as the stub channel sees it. */
-function MentionsProbe(): ReactNode {
-  const mentionable = useContext(BotMentionsContext);
-  if (mentionable === null) return null;
-  return (
-    <output
-      data-testid="stub-mentionable"
-      data-bots={
-        mentionable.bots === null
-          ? "unread"
-          : mentionable.bots.map((target) => target.name).join("|")
-      }
-      data-tasks={mentionable.tasks.map((target) => target.name).join("|")}
-    />
-  );
-}
-
-/** The channel's real typing line, over the bot's real activity reading. */
-function ReplyingStripProbe(props: {
-  botId: string;
-  botTitle: string;
-}): ReactNode {
-  return (
-    <BotReplyingStrip
-      botTitle={props.botTitle}
-      activity={useBotActivity(props.botId)?.trunk ?? null}
-      turn={null}
-      testId="stub-replying-strip"
-    />
-  );
-}
-
-vi.mock("@/components/bots/bot-channel-view", () => ({
-  BotChannelView: (props: {
-    botId: string;
-    hostId: string;
-    boundHostId: string | null;
-    botTitle: string;
-    appConversationChatId: string | null;
-    openThread: BotOpenThread | null;
-    landOn: BotChannelLanding | null;
-    trunkChatId: string;
-    openMemory: BotOpenMemory | null;
-    onOpenMemory: (open: BotOpenMemory | null) => void;
-    onOpenTurn: BotTurnOpen;
-    resolveMember: (
-      userId: string,
-    ) => { displayName: string | null; avatarUrl: string | null } | null;
-    setupHistory: ReactNode;
-    tiles: number | null;
-  }) => (
-    <div
-      data-testid="stub-channel"
-      data-tiles={String(props.tiles)}
-      data-host-id={props.hostId}
-      data-bound-host-id={props.boundHostId ?? "none"}
-      data-bot-title={props.botTitle}
-      data-app-conversation-chat-id={props.appConversationChatId ?? "none"}
-      data-open-thread={props.openThread?.anchorMessageId ?? "none"}
-      data-land-on={props.landOn?.messageId ?? "none"}
-      data-land-on-thread={props.landOn?.threadId ?? "none"}
-      data-open-memory={String(props.openMemory !== null)}
-      data-trunk-chat-id={props.trunkChatId}
-      data-teammate-name={
-        props.resolveMember("user-teammate")?.displayName ?? "unresolved"
-      }
-    >
-      <button
-        type="button"
-        data-testid="stub-channel-open-memory"
-        onClick={() => props.onOpenMemory({ back: null, focus: null })}
-      />
-      <button
-        type="button"
-        data-testid="stub-channel-open-turn"
-        onClick={() => props.onOpenTurn(REPLY_TURN, null)}
-      />
-      {props.setupHistory}
-      <MentionsProbe />
-      <ReplyingStripProbe botId={props.botId} botTitle={props.botTitle} />
-      {/* The two boxes' places in the real view: the channel's own, and one
-          inside the thread panel, which the header tells apart by its marker. */}
-      <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
-        <textarea aria-label="Channel box" />
-      </div>
-      <section data-bot-thread-panel="">
-        <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
-          <textarea aria-label="Thread box" />
-        </div>
-      </section>
-    </div>
-  ),
-}));
-// The session view is driven in `bot-session-view.test.tsx`; here, what the
-// tab hands it and what its links do to the tab.
-vi.mock("@/components/bots/bot-session-view", () => ({
-  BotSessionView: (props: {
-    session: BotOpenSession;
-    onClose: () => void;
-    onOpenChannel: (messageId: string | null) => void;
-    onOpenThread: (threadId: string, messageId: string | null) => void;
-  }) => (
-    <div
-      data-testid="stub-session"
-      data-chat-id={props.session.chatId}
-      data-thread-id={props.session.threadId ?? "none"}
-      data-land-on={props.session.landOn?.messageId ?? "none"}
-      data-visit={String(props.session.landOn?.visit ?? "none")}
-    >
-      <button
-        type="button"
-        data-testid="stub-session-back"
-        onClick={props.onClose}
-      />
-      <button
-        type="button"
-        data-testid="stub-session-channel"
-        onClick={() => props.onOpenChannel(null)}
-      />
-      <button
-        type="button"
-        data-testid="stub-session-post"
-        onClick={() => props.onOpenChannel("post-1")}
-      />
-      <button
-        type="button"
-        data-testid="stub-session-thread"
-        onClick={() => props.onOpenThread("thread-1", null)}
-      />
-      <button
-        type="button"
-        data-testid="stub-session-thread-post"
-        onClick={() => props.onOpenThread("thread-1", "thread-reply-9")}
-      />
-    </div>
-  ),
-}));
-// The Activity page takes whether this host runs the bot, and the list the
-// tab's count is read from: its rows are what the page would draw.
-vi.mock("@/components/bots/bot-activity-page", () => ({
-  BotActivityPage: (props: {
-    boundHere: boolean;
-    active: { rows: ReadonlyArray<{ task: { taskId: string } }> };
-  }) => (
-    <div
-      data-testid="stub-activity"
-      data-is-this-host={String(props.boundHere)}
-      data-row-ids={props.active.rows.map((row) => row.task.taskId).join(",")}
-    />
-  ),
-}));
-vi.mock("@/components/bots/bot-threads-view", () => ({
-  BotThreadsView: (props: {
-    hostId: string;
-    channelTitle: string;
-    onBack: () => void;
-  }) => (
-    <div
-      data-testid="stub-threads"
-      data-host-id={props.hostId}
-      data-channel-title={props.channelTitle}
-    >
-      <button
-        type="button"
-        data-testid="stub-threads-back"
-        onClick={props.onBack}
-      />
-    </div>
-  ),
-}));
+vi.mock(
+  "@/components/bots/bot-channel-sidebar",
+  () => import("./bot-tab-surface-view-stubs"),
+);
+vi.mock(
+  "@/components/bots/bot-channel-view",
+  () => import("./bot-tab-surface-view-stubs"),
+);
+vi.mock(
+  "@/components/bots/bot-session-view",
+  () => import("./bot-tab-surface-view-stubs"),
+);
+vi.mock(
+  "@/components/bots/bot-activity-page",
+  () => import("./bot-tab-surface-view-stubs"),
+);
+vi.mock(
+  "@/components/bots/bot-threads-view",
+  () => import("./bot-tab-surface-view-stubs"),
+);
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => botThreadListQueryMock);
-// The panel takes the bot, whether its environment is a person's own, its
-// channel, its environment's bots and how to close, and nothing else: no prop
-// says which host serves the tab, so no control can be gated on it. The stub lists the props it was given.
-vi.mock("@/components/bots/bot-settings-panel", () => ({
-  BotChannelSettingsPanel: (props: {
-    personal: boolean;
-    channelId: string | null;
-    onClose: () => void;
-    onDeleted: () => void;
-  }) => (
-    <div
-      data-testid="stub-settings"
-      data-personal={String(props.personal)}
-      data-channel-id={props.channelId ?? "none"}
-    >
-      <button
-        type="button"
-        data-testid="stub-settings-close"
-        onClick={props.onClose}
-      />
-      <button
-        type="button"
-        data-testid="stub-settings-deleted"
-        onClick={props.onDeleted}
-      />
-    </div>
-  ),
-}));
+vi.mock(
+  "@/components/bots/bot-settings-panel",
+  () => import("./bot-tab-surface-view-stubs"),
+);
 
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
-import {
-  PaneSurfaceActivityContext,
-  PaneVisibilityContext,
-} from "@/components/epic-tabs/pane-visibility-context";
-import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
-import { MobileBotHeaderSlotProvider } from "@/components/layout/header/mobile-bot-header-slot";
-import { tabItemId } from "@/stores/tabs/layout";
-import { useTabsStore } from "@/stores/tabs/store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
 
@@ -448,35 +216,14 @@ import {
   type BotRail,
 } from "@/stores/bots/bot-open-thread-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  installBotTabSurfaceCaseLifecycle,
+  queryClient,
+  surface,
+  surfaceFor,
+} from "./bot-tab-surface-render";
 
-/** The trunk's turn behind a reply in the channel. */
-const REPLY_TURN: BotTurnRef = {
-  chatId: "trunk-1",
-  turnIds: ["turn-reply"],
-  userMessageId: "prompt-reply",
-  threadId: null,
-  startedAt: 1_000,
-  endedAt: 2_000,
-  summary: null,
-  messageIds: ["reply-1"],
-  requestIds: [],
-};
-
-let queryClient = new QueryClient();
-
-function surfaceFor(botId: string | null): ReactNode {
-  return (
-    <StrictMode>
-      <QueryClientProvider client={queryClient}>
-        <BotTabSurface botId={botId} hostId={TAB_HOST} />
-      </QueryClientProvider>
-    </StrictMode>
-  );
-}
-
-function surface(): ReactNode {
-  return surfaceFor(BOT_ID);
-}
+installBotTabSurfaceCaseLifecycle();
 
 /** The surface outside StrictMode, for a case that counts its mount's opens. */
 function unstrictSurface(): ReactNode {
@@ -504,17 +251,6 @@ function expectNoMachineWording(container: HTMLElement): void {
 function isKept(botId: string): boolean {
   return useBotDraftsStore.getState().threadBoxes[botId] !== undefined;
 }
-
-beforeEach(() => {
-  queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  resetBotTabSurfaceMocks();
-});
-
-afterEach(() => {
-  endBotTabSurfaceCase(queryClient);
-});
 
 describe("<BotTabSurface /> on a host without bot.open", () => {
   it("asks about bot.open on the tab's own host", () => {
@@ -1903,72 +1639,33 @@ describe("<BotTabSurface /> focused notification presence", () => {
   });
 });
 describe("<BotTabSurface /> channel background", () => {
-  const TINT_CLASS = "bg-(--channel-tint)/10";
-
-  function header(): HTMLElement {
-    return screen.getByTestId("bot-channel-header");
-  }
-
-  function chooseBackground(background: number | null): void {
-    mocks.state.listAppearance = new Map([
-      [BOT_ID, { mark: null, color: null, background }],
-    ]);
-  }
+  /** What a channel's tint leaves on a page: its variable, its marker and its class. */
+  const TINT =
+    '[data-channel-background], [style*="channel-tint"], [class*="channel-tint"]';
 
   afterEach(() => {
     document.documentElement.classList.remove("dark");
   });
 
   it.each([false, true])(
-    "tints the header with the chosen colour at one low opacity (dark: %s)",
+    "keeps the page's own colour in the header and everywhere else though the host still delivers the bot a background (dark: %s)",
     (dark) => {
       document.documentElement.classList.toggle("dark", dark);
-      chooseBackground(7);
+      const deliveredLook: BotAppearance & { readonly background: number } = {
+        mark: null,
+        color: null,
+        background: 7,
+      };
+      mocks.state.listAppearance = new Map([[BOT_ID, deliveredLook]]);
       render(surface());
 
-      expect(header().classList.contains(TINT_CLASS)).toBe(true);
-      expect(header().getAttribute("data-channel-background")).toBe("7");
-      expect(header().style.getPropertyValue("--channel-tint")).toBe(
-        botColorAt(7),
-      );
+      const header = screen.getByTestId("bot-channel-header");
+      expect(header.hasAttribute("data-channel-background")).toBe(false);
+      expect(header.style.getPropertyValue("--channel-tint")).toBe("");
+      expect(header.className).not.toContain("channel-tint");
+      expect(document.body.querySelector(TINT)).toBeNull();
     },
   );
-
-  it("tints neither the bot column nor the composer nor the thread panel", () => {
-    chooseBackground(7);
-    render(surface());
-
-    for (const region of [
-      screen.getByTestId("stub-sidebar"),
-      screen.getByTestId("stub-channel"),
-    ]) {
-      expect(region.hasAttribute("data-channel-background")).toBe(false);
-      expect(region.querySelector(`[data-channel-background]`)).toBeNull();
-      expect(region.classList.contains(TINT_CLASS)).toBe(false);
-    }
-    expect(
-      screen
-        .getByRole("textbox", { name: "Channel box" })
-        .closest(`.${CSS.escape(TINT_CLASS)}`),
-    ).toBeNull();
-    expect(
-      screen
-        .getByRole("textbox", { name: "Thread box" })
-        .closest(`.${CSS.escape(TINT_CLASS)}`),
-    ).toBeNull();
-  });
-
-  it.each([
-    ["names no appearance", null],
-    ["chose none", "none"],
-  ] as const)("keeps the page's own header when the bot %s", (_name, how) => {
-    if (how === "none") chooseBackground(null);
-    render(surface());
-
-    expect(header().classList.contains(TINT_CLASS)).toBe(false);
-    expect(header().hasAttribute("data-channel-background")).toBe(false);
-    expect(header().style.getPropertyValue("--channel-tint")).toBe("");
-  });
 });
 
 describe("<BotTabSurface /> header mascot while the bot replies", () => {
@@ -2063,477 +1760,5 @@ describe("<BotTabSurface /> header mascot while the bot replies", () => {
 
     expect(parked).not.toEqual(idle);
     expect(mascotPaths(headerAvatar())).toEqual(parked);
-  });
-});
-
-const TRACY_REF = { kind: "tracy", id: "tracy" } as const;
-const SETTINGS_REF = { kind: "settings", id: "settings" } as const;
-
-/** Focus the Tracy tab, or another, through the layout the header resolves from. */
-function focusTab(ref: typeof TRACY_REF | typeof SETTINGS_REF): void {
-  const id = tabItemId(ref);
-  useTabsStore.setState({
-    items: [
-      { kind: "tab", id: tabItemId(TRACY_REF), ref: TRACY_REF },
-      { kind: "tab", id: tabItemId(SETTINGS_REF), ref: SETTINGS_REF },
-    ],
-    activeItemId: id,
-    stripOrder: [TRACY_REF, SETTINGS_REF],
-  });
-}
-
-/** The surface under the real phone header, as the shell stacks them. */
-function surfaceUnderHeader(botId: string | null): ReactNode {
-  return (
-    <StrictMode>
-      <QueryClientProvider client={queryClient}>
-        <MobileBotHeaderSlotProvider>
-          <MobileAppHeader />
-          <BotTabSurface botId={botId} hostId={TAB_HOST} />
-        </MobileBotHeaderSlotProvider>
-      </QueryClientProvider>
-    </StrictMode>
-  );
-}
-
-function headerPicker(): HTMLElement | null {
-  return within(screen.getByTestId("app-header")).queryByTestId(
-    "bot-channel-picker-trigger",
-  );
-}
-
-function channelPicker(): HTMLElement | null {
-  return within(screen.getByTestId("bot-channel-header")).queryByTestId(
-    "bot-channel-picker-trigger",
-  );
-}
-
-describe("<BotTabSurface /> under the compact app header", () => {
-  let shell: ShellFormHarness;
-  beforeEach(() => {
-    shell = installShellForm(SHELL_WIDTH_MENU);
-    focusTab(TRACY_REF);
-  });
-  afterEach(() => {
-    shell.dispose();
-    useTabsStore.setState(useTabsStore.getInitialState(), true);
-  });
-
-  it("puts the bot's name in the app-header row beside the menu, and draws no second identity row in the channel", () => {
-    render(surfaceUnderHeader(BOT_ID));
-
-    const header = screen.getByTestId("app-header");
-    expect(within(header).getByTestId("mobile-nav-trigger")).toBeTruthy();
-    expect(headerPicker()?.textContent).toContain("Release Bot");
-    expect(channelPicker()).toBeNull();
-    expect(
-      within(screen.getByTestId("bot-channel-header")).queryByTestId(
-        "bot-tab-title",
-      ),
-    ).toBeNull();
-    expect(screen.getByTestId("bot-tab-avatar")).toBeTruthy();
-  });
-
-  it("opens the bot picker from the header title, and a pick or Threads closes it with the header kept", async () => {
-    const user = userEvent.setup();
-    render(surfaceUnderHeader(BOT_ID));
-
-    const trigger = headerPicker();
-    if (trigger === null) throw new Error("no picker in the app header");
-    await user.click(trigger);
-    const picker = await screen.findByTestId("bot-channel-picker");
-    await user.click(within(picker).getByTestId("stub-sidebar-pick"));
-    await waitFor(() => {
-      expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
-    });
-    expect(headerPicker()).not.toBeNull();
-
-    await user.click(trigger);
-    await user.click(
-      within(await screen.findByTestId("bot-channel-picker")).getByTestId(
-        "stub-sidebar-threads",
-      ),
-    );
-    await waitFor(() => {
-      expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
-    });
-    expect(screen.getByTestId("stub-threads")).toBeTruthy();
-  });
-
-  // `BotThreadsView` is a stub in this suite: only identity leakage is checked here.
-  it("keeps the bot picker in the header while a session shows, and Back returns to the same channel", async () => {
-    const user = userEvent.setup();
-    render(surfaceUnderHeader(BOT_ID));
-
-    await user.click(screen.getByTestId("stub-channel-open-turn"));
-    expect(screen.getByTestId("stub-session")).toBeTruthy();
-    expect(screen.queryByTestId("stub-channel")).toBeNull();
-
-    const trigger = headerPicker();
-    if (trigger === null) throw new Error("no picker in the app header");
-    expect(trigger.textContent).toContain("Release Bot");
-    await user.click(trigger);
-    expect(
-      within(await screen.findByTestId("bot-channel-picker")).getByTestId(
-        "stub-sidebar",
-      ).dataset.activeBotId,
-    ).toBe(BOT_ID);
-    await user.keyboard("{Escape}");
-    await waitFor(() => {
-      expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
-    });
-
-    await user.click(screen.getByTestId("stub-session-back"));
-
-    expect(screen.queryByTestId("stub-session")).toBeNull();
-    expect(screen.getByTestId("stub-channel").dataset.botTitle).toBe(
-      "Release Bot",
-    );
-    expect(headerPicker()?.textContent).toContain("Release Bot");
-    expect(
-      screen.getByTestId("bot-tab-view-messages").getAttribute("aria-selected"),
-    ).toBe("true");
-  });
-
-  it("does not leave the prior bot's name in the header once Threads replaces the channel", async () => {
-    const user = userEvent.setup();
-    render(surfaceUnderHeader(BOT_ID));
-    const trigger = headerPicker();
-    if (trigger === null) throw new Error("no picker in the app header");
-    await user.click(trigger);
-    await user.click(
-      within(await screen.findByTestId("bot-channel-picker")).getByTestId(
-        "stub-sidebar-threads",
-      ),
-    );
-    await screen.findByTestId("stub-threads");
-
-    expect(
-      within(screen.getByTestId("app-header")).queryByText("Release Bot"),
-    ).toBeNull();
-  });
-
-  it("hides the tab list and moves Messages, Activity and Channel settings into the Channel actions menu, with the picture kept", async () => {
-    const user = userEvent.setup();
-    render(surfaceUnderHeader(BOT_ID));
-
-    // The list stays mounted for the panels' tab relationships, hidden.
-    for (const id of ["bot-tab-view-messages", "bot-tab-view-activity"]) {
-      expect(screen.getByTestId(id).closest("[hidden]")).not.toBeNull();
-    }
-    expect(screen.queryByRole("tab", { name: "Messages" })).toBeNull();
-    expect(screen.queryByRole("tab", { name: "Activity" })).toBeNull();
-    expect(screen.getByTestId("bot-tab-avatar")).toBeTruthy();
-
-    await user.click(screen.getByRole("button", { name: /^Channel actions/ }));
-    await user.click(
-      await screen.findByRole("menuitemradio", { name: /^Activity/ }),
-    );
-    expect(screen.getByTestId("stub-activity")).toBeTruthy();
-    expect(screen.queryByTestId("stub-channel")).toBeNull();
-
-    await user.click(screen.getByRole("button", { name: /^Channel actions/ }));
-    await user.click(
-      await screen.findByRole("menuitemradio", { name: /^Messages/ }),
-    );
-    expect(screen.getByTestId("stub-channel")).toBeTruthy();
-
-    await user.click(screen.getByRole("button", { name: /^Channel actions/ }));
-    await user.click(
-      within(await screen.findByRole("menu")).getByText(/settings/i),
-    );
-    expect(screen.getByTestId("stub-settings")).toBeTruthy();
-  });
-
-  it("is absent on another focused tab while the surface stays mounted, and returns with the draft intact", async () => {
-    const user = userEvent.setup();
-    render(surfaceUnderHeader(BOT_ID));
-    await user.type(screen.getByLabelText("Channel box"), "unsent words");
-    const channel = screen.getByTestId("stub-channel");
-
-    act(() => focusTab(SETTINGS_REF));
-    expect(headerPicker()).toBeNull();
-    expect(
-      within(screen.getByTestId("app-header")).queryByText("Release Bot"),
-    ).toBeNull();
-
-    act(() => focusTab(TRACY_REF));
-    expect(headerPicker()?.textContent).toContain("Release Bot");
-    expect(screen.getByTestId("stub-channel")).toBe(channel);
-    expect(
-      screen.getByLabelText<HTMLTextAreaElement>("Channel box").value,
-    ).toBe("unsent words");
-  });
-
-  describe("two shells in one document", () => {
-    const OTHER_SNAPSHOT = {
-      ...snapshot(),
-      bot: { ...BOT, botId: OTHER_BOT_ID, title: "Other Bot" },
-    };
-
-    beforeEach(() => {
-      mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
-      vi.spyOn(
-        botSubscriptionMock,
-        "useBotSubscriptionForHost",
-      ).mockImplementation((input) => {
-        mocks.subscribed.push(input.botId);
-        return {
-          snapshot:
-            input.botId === OTHER_BOT_ID
-              ? OTHER_SNAPSHOT
-              : mocks.state.snapshot,
-          snapshotFresh: true,
-          deleted: mocks.state.deleted,
-          error: mocks.state.error,
-          isPending: false,
-          resubscribe: mocks.resubscribe,
-        };
-      });
-    });
-    afterEach(() => {
-      vi.mocked(botSubscriptionMock.useBotSubscriptionForHost).mockRestore();
-    });
-
-    function shells(surfaceInA: boolean, surfaceInB: boolean): ReactNode {
-      return (
-        <QueryClientProvider client={queryClient}>
-          <div data-testid="shell-a">
-            <MobileBotHeaderSlotProvider>
-              <MobileAppHeader />
-              {surfaceInA ? (
-                <BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />
-              ) : null}
-            </MobileBotHeaderSlotProvider>
-          </div>
-          <div data-testid="shell-b">
-            <MobileBotHeaderSlotProvider>
-              <MobileAppHeader />
-              {surfaceInB ? (
-                <BotTabSurface botId={OTHER_BOT_ID} hostId={TAB_HOST} />
-              ) : null}
-            </MobileBotHeaderSlotProvider>
-          </div>
-        </QueryClientProvider>
-      );
-    }
-
-    function pickerIn(shell: string): HTMLElement | null {
-      return within(
-        within(screen.getByTestId(shell)).getByTestId("app-header"),
-      ).queryByTestId("bot-channel-picker-trigger");
-    }
-
-    /** The bot a shell's picker lists as current, opened and closed again. */
-    async function currentBotOf(
-      user: UserEvent,
-      shell: string,
-    ): Promise<string | undefined> {
-      const trigger = pickerIn(shell);
-      if (trigger === null) throw new Error(`no picker in ${shell}'s header`);
-      await user.click(trigger);
-      const current = within(
-        await screen.findByTestId("bot-channel-picker"),
-      ).getByTestId("stub-sidebar").dataset.activeBotId;
-      await user.keyboard("{Escape}");
-      await waitFor(() => {
-        expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
-      });
-      return current;
-    }
-
-    it("shows each shell its own bot, in the title and in the picker", async () => {
-      const user = userEvent.setup();
-      render(shells(true, true));
-
-      expect(pickerIn("shell-a")?.textContent).toContain("Release Bot");
-      expect(pickerIn("shell-a")?.textContent).not.toContain("Other Bot");
-      expect(pickerIn("shell-b")?.textContent).toContain("Other Bot");
-      expect(pickerIn("shell-b")?.textContent).not.toContain("Release Bot");
-      expect(await currentBotOf(user, "shell-a")).toBe(BOT_ID);
-      expect(await currentBotOf(user, "shell-b")).toBe(OTHER_BOT_ID);
-    });
-
-    it("takes only one shell's title away when that shell's surface unmounts", async () => {
-      const user = userEvent.setup();
-      const view = render(shells(true, true));
-
-      view.rerender(shells(false, true));
-
-      expect(pickerIn("shell-a")).toBeNull();
-      expect(pickerIn("shell-b")?.textContent).toContain("Other Bot");
-      expect(await currentBotOf(user, "shell-b")).toBe(OTHER_BOT_ID);
-    });
-  });
-
-  describe("split panes under one shared header", () => {
-    interface PaneState {
-      readonly visible: boolean;
-      readonly focused: boolean;
-    }
-    const FOCUSED: PaneState = { visible: true, focused: true };
-    const KEPT_BEHIND: PaneState = { visible: true, focused: false };
-    const HIDDEN: PaneState = { visible: false, focused: true };
-
-    function pane(id: string, botId: string, state: PaneState): ReactNode {
-      return (
-        <div data-testid={id}>
-          <PaneVisibilityContext.Provider value={state.visible}>
-            <PaneSurfaceActivityContext.Provider value={state}>
-              <BotTabSurface botId={botId} hostId={TAB_HOST} />
-            </PaneSurfaceActivityContext.Provider>
-          </PaneVisibilityContext.Provider>
-        </div>
-      );
-    }
-
-    function splitPanes(a: PaneState, b: PaneState): ReactNode {
-      return (
-        <QueryClientProvider client={queryClient}>
-          <MobileBotHeaderSlotProvider>
-            <MobileAppHeader />
-            {pane("pane-a", BOT_ID, a)}
-            {pane("pane-b", OTHER_BOT_ID, b)}
-          </MobileBotHeaderSlotProvider>
-        </QueryClientProvider>
-      );
-    }
-
-    /** The bot the header's picker lists as current, which names the pane that owns the header. */
-    async function headerOwner(user: UserEvent): Promise<string | undefined> {
-      const trigger = headerPicker();
-      if (trigger === null) throw new Error("no picker in the app header");
-      await user.click(trigger);
-      const owner = within(
-        await screen.findByTestId("bot-channel-picker"),
-      ).getByTestId("stub-sidebar").dataset.activeBotId;
-      await user.keyboard("{Escape}");
-      await waitFor(() => {
-        expect(screen.queryByTestId("bot-channel-picker")).toBeNull();
-      });
-      return owner;
-    }
-
-    it("puts no title in the header from a pane kept behind or one that is not visible", () => {
-      const view = render(splitPanes(KEPT_BEHIND, KEPT_BEHIND));
-      expect(headerPicker()).toBeNull();
-
-      view.rerender(splitPanes(HIDDEN, KEPT_BEHIND));
-      expect(headerPicker()).toBeNull();
-    });
-
-    it("hands the header to the pane that takes the focus, and keeps both panes' content", async () => {
-      const user = userEvent.setup();
-      const view = render(splitPanes(FOCUSED, KEPT_BEHIND));
-      const channelA = within(screen.getByTestId("pane-a")).getByTestId(
-        "stub-channel",
-      );
-      const channelB = within(screen.getByTestId("pane-b")).getByTestId(
-        "stub-channel",
-      );
-      await user.type(
-        within(screen.getByTestId("pane-b")).getByLabelText("Channel box"),
-        "partner draft",
-      );
-      expect(await headerOwner(user)).toBe(BOT_ID);
-
-      view.rerender(splitPanes(KEPT_BEHIND, FOCUSED));
-
-      expect(await headerOwner(user)).toBe(OTHER_BOT_ID);
-      expect(
-        within(screen.getByTestId("pane-a")).getByTestId("stub-channel"),
-      ).toBe(channelA);
-      expect(
-        within(screen.getByTestId("pane-b")).getByTestId("stub-channel"),
-      ).toBe(channelB);
-      expect(
-        within(
-          screen.getByTestId("pane-b"),
-        ).getByLabelText<HTMLTextAreaElement>("Channel box").value,
-      ).toBe("partner draft");
-    });
-  });
-
-  it("draws no title in the header outside the installed app, where the channel keeps its own", () => {
-    setPhoneLayoutOnly(false);
-    render(surfaceUnderHeader(BOT_ID));
-
-    expect(headerPicker()).toBeNull();
-    expect(
-      within(screen.getByTestId("app-header")).queryByText("Release Bot"),
-    ).toBeNull();
-    expect(
-      within(screen.getByTestId("bot-channel-header")).getByTestId(
-        "bot-tab-title",
-      ).textContent,
-    ).toContain("Release Bot");
-  });
-});
-
-describe("<BotTabSurface /> beside the bots column under the app header", () => {
-  let shell: ShellFormHarness;
-  beforeEach(() => {
-    shell = installShellForm(SHELL_WIDTH_COLUMN_256);
-    focusTab(TRACY_REF);
-  });
-  afterEach(() => {
-    shell.dispose();
-    useTabsStore.setState(useTabsStore.getInitialState(), true);
-  });
-
-  it("keeps the channel's own tabs, Search and settings buttons, and gives the app header no bot name and no Channel actions menu", () => {
-    render(surfaceUnderHeader(BOT_ID));
-
-    expect(screen.getByTestId("bot-channel-sidebar-pane").style.width).toBe(
-      "256px",
-    );
-    for (const name of ["Messages", "Activity"]) {
-      const tab = screen.getByRole("tab", { name });
-      expect(tab.closest("[hidden]")).toBeNull();
-    }
-    expect(screen.getByTestId("bot-channel-search-open")).toBeTruthy();
-    expect(screen.getByTestId("bot-channel-settings-open")).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: /^Channel actions/ }),
-    ).toBeNull();
-    expect(headerPicker()).toBeNull();
-    expect(
-      within(screen.getByTestId("app-header")).queryByText("Release Bot"),
-    ).toBeNull();
-    expect(screen.getByTestId("bot-tab-title").textContent).toContain(
-      "Release Bot",
-    );
-  });
-});
-
-describe("<BotTabSurface /> under the app header on a short viewport with the keyboard up", () => {
-  beforeEach(() => {
-    setPhoneLayoutOnly(true);
-    holdScreenLandscape();
-    raiseNativeKeyboard(IPHONE_17);
-    focusTab(TRACY_REF);
-  });
-  afterEach(() => {
-    setPhoneLayoutOnly(false);
-    restoreKeyboardEnvironment();
-    useTabsStore.setState(useTabsStore.getInitialState(), true);
-  });
-
-  it("gives the whole app header up while a field the focus layout serves has the focus, and restores it with the keyboard down", () => {
-    render(
-      <>
-        {surfaceUnderHeader(BOT_ID)}
-        <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
-          <textarea aria-label="Owner box" />
-        </div>
-      </>,
-    );
-    expect(screen.getByTestId("app-header").hidden).toBe(false);
-
-    act(() => screen.getByLabelText("Owner box").focus());
-    expect(screen.getByTestId("app-header").hidden).toBe(true);
-
-    lowerNativeKeyboard();
-    expect(screen.getByTestId("app-header").hidden).toBe(false);
   });
 });

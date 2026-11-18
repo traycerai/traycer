@@ -16,6 +16,7 @@ import {
   type AppLogFields,
   type AppLogValue,
 } from "@/lib/logger";
+import { registerBotLifetimeClient } from "@/lib/bots/bot-lifetime";
 import { CloudEpicTasksRequestContextTimeoutError } from "@/lib/cloud-epic-tasks-query/request-context-timeout-error";
 import { CloudEpicTasksVerdictWithdrawnError } from "@/lib/cloud-epic-tasks-query/verdict-withdrawn-error";
 import { installConditionPollEpisodeCoordinator } from "@/lib/query/condition-poll-episode-coordinator";
@@ -118,6 +119,7 @@ export function createAppQueryClient(): QueryClient {
   });
   worktreeQuerySuccessOrderFor(client);
   installConditionPollEpisodeCoordinator(client);
+  registerBotLifetimeClient(client);
   return client;
 }
 

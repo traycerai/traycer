@@ -2575,6 +2575,11 @@ export const chatSyncSchemaSurfaceBaseline = {
                               "answers"
                             ],
                             "additionalProperties": false
+                          },
+                          "repliesTo": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 255
                           }
                         },
                         "required": [
@@ -5608,6 +5613,38 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                           },
                                                           "postedAt": {
                                                             "type": "number"
+                                                          },
+                                                          "images": {
+                                                            "default": [],
+                                                            "type": "array",
+                                                            "items": {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "attachmentHash": {
+                                                                  "type": "string",
+                                                                  "pattern": "^[0-9a-f]{64}$"
+                                                                },
+                                                                "mediaType": {
+                                                                  "type": "string",
+                                                                  "enum": [
+                                                                    "image/png",
+                                                                    "image/jpeg",
+                                                                    "image/gif",
+                                                                    "image/webp",
+                                                                    "image/svg+xml"
+                                                                  ]
+                                                                },
+                                                                "fileName": {
+                                                                  "type": "string"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "attachmentHash",
+                                                                "mediaType",
+                                                                "fileName"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            }
                                                           }
                                                         },
                                                         "required": [
@@ -5615,7 +5652,8 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                           "messageId",
                                                           "requestId",
                                                           "senderUserId",
-                                                          "postedAt"
+                                                          "postedAt",
+                                                          "images"
                                                         ],
                                                         "additionalProperties": false
                                                       },

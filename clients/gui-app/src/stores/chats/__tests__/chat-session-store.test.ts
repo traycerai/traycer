@@ -347,6 +347,9 @@ class ProtocolMockStreamSession implements IStreamSession {
     return this.negotiatedSchemaVersion;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {
     // No-op: reconnect is owned by the real StreamSession.
   }

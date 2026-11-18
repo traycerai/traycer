@@ -3,7 +3,6 @@ import {
   type HostNotificationOutcome,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import {
-  HOST_NOTIFICATION_LONG_TURN_REASON,
   deriveHostNotificationStoppedReason,
   parseHostOperationCommonPayload,
   parseKnownHostNotificationPayloadForKind,
@@ -51,14 +50,13 @@ export function formatHostNotificationPresentation(
       const context = notificationContext(agentName, title);
       const reason = known === null ? null : knownStoppedReason(known);
       const providerId = known === null ? null : knownProviderId(known);
-      const backgroundWorkRunning =
-        known === null ? false : knownBackgroundWorkRunning(known);
+      const pending = known === null ? "none" : knownAgentStoppedPending(known);
       const unverified = known === null ? false : knownUnverified(known);
       const status = agentStoppedStatus(
         entry.outcome,
         reason,
         providerId,
-        backgroundWorkRunning,
+        pending,
         unverified,
       );
       return {
@@ -1004,14 +1002,21 @@ function agentStoppedStatus(
   outcome: HostNotificationOutcome,
   reason: string | null,
   providerId: ProviderId | null,
-  backgroundWorkRunning: boolean,
+  pending: AgentStoppedPending,
   unverified: boolean,
 ): string {
   if (outcome === "errored") {
     return agentStoppedFailureStatus(reason, providerId);
   }
   if (outcome === "stopped") return "Stopped";
-  if (backgroundWorkRunning) return "Background work running";
+  switch (pending) {
+    case "own_work":
+      return "Replied, still working";
+    case "agent_reply":
+      return "Replied, waiting on another agent";
+    case "none":
+      break;
+  }
   if (unverified) return "Paused, not verified";
   return "Done";
 }
@@ -1054,13 +1059,17 @@ function knownUnverified(payload: HostNotificationKnownPayload): boolean {
   }
 }
 
-function knownBackgroundWorkRunning(
+/** What a completed agent's row is still waiting on, if anything. */
+type AgentStoppedPending = "none" | "own_work" | "agent_reply";
+
+function knownAgentStoppedPending(
   payload: HostNotificationKnownPayload,
-): boolean {
+): AgentStoppedPending {
   switch (payload.kind) {
     case "chat":
     case "epic":
-      return payload.backgroundWorkRunning === true;
+      if (payload.backgroundWorkRunning !== true) return "none";
+      return payload.awaitingAgentReply === true ? "agent_reply" : "own_work";
     case "agent_stalled":
     case "approval":
     case "interview":
@@ -1090,7 +1099,7 @@ function knownBackgroundWorkRunning(
     case "sandbox_notice":
     case "readonly_access_retired":
     case "notification_hooks_removed":
-      return false;
+      return "none";
   }
 }
 
@@ -1266,9 +1275,6 @@ function agentStalledStatus(
     // an older host simply renders the generic status below.
     case "fallback_pending":
       return "Trying a fallback provider";
-    // Open text as well: a client that predates this arm reads "Stalled".
-    case HOST_NOTIFICATION_LONG_TURN_REASON:
-      return "Running longer than the time you set";
     default:
       return "Stalled";
   }

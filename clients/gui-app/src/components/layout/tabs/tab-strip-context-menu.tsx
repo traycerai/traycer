@@ -47,6 +47,12 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import type { HeaderTab } from "@/stores/tabs/types";
+import { readTabStripLayout } from "@/stores/tabs/store";
+import {
+  tabsDrawnAfter,
+  useCloseTabsAfter,
+} from "@/components/layout/dialogs/use-close-tab-flow";
+import { useTabStripPlacement } from "./use-tab-strip-placement";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { isPreservedOrphanEpic } from "./preserved-orphan-epic";
 import {
@@ -424,6 +430,7 @@ export function TabContextMenuContent(
         <X />
         Close Other Tabs
       </ContextMenuItem>
+      <CloseTabsAfterMenuItem tab={tab} />
       <ContextMenuSeparator />
       <ContextMenuItem
         disabled={!recovery.available}
@@ -442,6 +449,29 @@ export function TabContextMenuContent(
         )}
       </ContextMenuItem>
     </ContextMenuContent>
+  );
+}
+
+/**
+ * Closes the tabs drawn after this one. Named for the way the strip runs on
+ * screen, so it reads "Below" wherever the tabs are a vertical list. Its own
+ * component so the strip is only read while the menu is open: the content is
+ * not mounted otherwise.
+ */
+function CloseTabsAfterMenuItem(props: { readonly tab: HeaderTab }): ReactNode {
+  const { tab } = props;
+  const closeTabsAfter = useCloseTabsAfter();
+  const placement = useTabStripPlacement();
+  const hasTabsAfter = tabsDrawnAfter(tab, readTabStripLayout()).length > 0;
+  return (
+    <ContextMenuItem
+      disabled={!hasTabsAfter}
+      onSelect={() => closeTabsAfter(tab)}
+      data-testid={`tab-close-after-${tab.kind}-${tab.id}`}
+    >
+      <X />
+      {placement === "top" ? "Close Tabs to the Right" : "Close Tabs Below"}
+    </ContextMenuItem>
   );
 }
 

@@ -59,6 +59,9 @@ function makeSessionWithInjector(negotiated: SchemaVersion): {
       statusHandler = handler;
     },
     sendClientFrame() {},
+    hasSentOpenRequest(): boolean {
+      return false;
+    },
     requestReconnect() {},
     // Matches the version `makeTypedStreamClient` negotiates below: this
     // suite drives frames through a session that has already handshaken, so

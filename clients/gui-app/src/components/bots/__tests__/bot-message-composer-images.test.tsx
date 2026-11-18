@@ -51,6 +51,7 @@ import * as botBoxContent from "@/lib/bots/bot-box-content";
 import {
   boxInput,
   boxText,
+  NO_BOT_REPLY,
   typeInto,
 } from "@/components/bots/__tests__/bot-box-test-support";
 
@@ -200,7 +201,11 @@ function Box(props: {
         }}
         seed={props.keepDraft ? kept.seed : null}
         keptDraft={props.keepDraft ? kept.keptDraft : null}
+        hold={props.keepDraft ? kept.hold : null}
         quote={null}
+        reply={NO_BOT_REPLY}
+        moved={null}
+        notice={null}
         onSent={onSent}
       />
     </RunnerHostContext>
@@ -818,6 +823,7 @@ describe("<BotMessageComposer /> a send that fails", () => {
         requestId: "request-failed",
         text: editText,
         content: botBoxContentOf(editText, () => "Ann"),
+        held: [],
       },
     });
     pasteFiles(imageFile("shot.png", "image/png"));

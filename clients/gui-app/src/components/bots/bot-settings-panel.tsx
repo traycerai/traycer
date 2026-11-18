@@ -57,6 +57,8 @@ import {
 } from "@/components/bots/bot-settings-group";
 import { BotSlackSettings } from "@/components/bots/bot-slack-settings";
 import { BotAppearanceSettings } from "@/components/bots/bot-appearance-settings";
+import { BotCallVoiceSettings } from "@/components/bots/bot-call-voice-settings";
+import { useVoiceAvailabilityQuery } from "@/hooks/voice/use-voice-availability-query";
 import {
   BotMemoryContext,
   type BotMemoryAccess,
@@ -74,6 +76,8 @@ const BOT_TITLE_MAX = 500;
  *   channel's background, who manages it and who may message it, how a
  *   personal bot answers posts, and a team's members;
  * - Model: the harness, model, effort and profile the bot runs on;
+ * - Voice: the voice calls speak in on this device, for every bot (the
+ *   device's setting, not the bot's), where the deployment offers voice;
  * - Notifications: what the bell raises for this channel;
  * - Bots in this channel: the team's bots;
  * - Slack: the bot's own Slack app, from its manifest to its install, on
@@ -157,6 +161,7 @@ export function BotChannelSettingsPanel(props: {
           {personal ? null : <BotTeamMembers />}
         </SettingsGroup>
         <BotRunSettingsForm bot={bot} />
+        <BotCallVoiceGroup />
         {channelId === null ? null : (
           <BotNotificationsSection botId={bot.botId} channelId={channelId} />
         )}
@@ -168,6 +173,31 @@ export function BotChannelSettingsPanel(props: {
         <BotDeleteSection bot={bot} onDeleted={props.onDeleted} />
       </div>
     </aside>
+  );
+}
+
+/**
+ * The voice calls speak in on this device, from the voices the deployment
+ * offers; not drawn where the deployment offers no voice at all.
+ */
+function BotCallVoiceGroup(): ReactNode {
+  const availability = useVoiceAvailabilityQuery(true);
+  if (availability.isPending) {
+    return <BotCallVoiceSettings catalogue={{ kind: "loading" }} />;
+  }
+  if (availability.isError) {
+    return <BotCallVoiceSettings catalogue={{ kind: "failed" }} />;
+  }
+  const { available, voiceSelection } = availability.data;
+  if (!available) return null;
+  return (
+    <BotCallVoiceSettings
+      catalogue={
+        voiceSelection === null
+          ? { kind: "unsupported" }
+          : { kind: "ready", catalogue: voiceSelection }
+      }
+    />
   );
 }
 
