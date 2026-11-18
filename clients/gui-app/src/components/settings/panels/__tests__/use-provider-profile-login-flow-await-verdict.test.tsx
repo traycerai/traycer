@@ -437,7 +437,7 @@ describe("useProviderProfileLoginFlow - an await that ends without a verdict", (
   });
 
   it.each<ProviderProfileLoginFlowMode>(["create", "reauth"])(
-    "%s mode ends on the host's own line when the host refuses the sign-in as environment-managed, with no provider refusal",
+    "%s mode ends on the host's own line when the host refuses the sign-in as environment-managed",
     async (mode) => {
       vi.spyOn(appLogger, "warn").mockImplementation(() => {});
       renderFlow({

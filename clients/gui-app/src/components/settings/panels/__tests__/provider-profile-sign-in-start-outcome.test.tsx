@@ -726,7 +726,7 @@ describe("the add-profile dialog when the provider refuses the sign-in", () => {
     });
   });
 
-  it("reports the host's sentence as the failed attempt, marked as the host's, when the host refuses the account as environment-managed", async () => {
+  it("reports the host's sentence as a host-marked failed attempt when the host refuses the account as environment-managed", async () => {
     refuseAwaitAsEnvironmentManaged();
     const onFailedAttempt = vi.fn<(attempt: unknown) => void>();
     renderAntigravityAddDialog(onFailedAttempt);
