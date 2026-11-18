@@ -485,6 +485,92 @@ test.describe("the stage around a zoom gesture", () => {
   });
 });
 
+test.describe("a two-finger pinch on the canvas", () => {
+  // d3-zoom binds its touch listeners only on a touch-capable page.
+  test.use({ hasTouch: true });
+
+  test("scales the drawn canvas while the fingers are down, and gives React Flow the zoom once they are quiet", async ({
+    page,
+  }) => {
+    await open(page);
+    const pane = page.getByRole("application", { name: "Canvas workspace" });
+    const paneBox = await pane.boundingBox();
+    if (paneBox === null) throw new Error("the canvas pane has no box");
+    const viewport = page.locator(".react-flow__viewport");
+    // The layer around React Flow is the one the pinch scales.
+    const zoomLayer = page.locator(".react-flow").locator("xpath=..");
+    const viewportScale = (): Promise<number> =>
+      viewport.evaluate((element) => new DOMMatrix(element.style.transform).a);
+    const layerTransform = (): Promise<string> =>
+      zoomLayer.evaluate((element) => element.style.transform);
+
+    const viewportBefore = await viewport.evaluate(
+      (element) => element.style.transform,
+    );
+    const scaleBefore = await viewportScale();
+    // Each time the layer is drawn, the page notes what React Flow had drawn
+    // under it. A read from here instead would race the quiet that ends the
+    // gesture: on a loaded runner the zoom can be drawn before the read lands.
+    const layerPaints = await page.evaluateHandle(() => {
+      const layer = document.querySelector(".react-flow")?.parentElement;
+      const drawn = document.querySelector<HTMLElement>(
+        ".react-flow__viewport",
+      );
+      if (layer === null || layer === undefined || drawn === null)
+        throw new Error("the canvas has no zoom layer");
+      const paints: { layer: string; viewport: string }[] = [];
+      new MutationObserver(() =>
+        paints.push({
+          layer: layer.style.transform,
+          viewport: drawn.style.transform,
+        }),
+      ).observe(layer, { attributes: true, attributeFilter: ["style"] });
+      return paints;
+    });
+    const firstScaledPaint = async (): Promise<string | null> =>
+      (await layerPaints.jsonValue()).find((paint) =>
+        paint.layer.includes("scale("),
+      )?.viewport ?? null;
+
+    // Empty canvas below both boards.
+    const centre = { x: paneBox.x + 240, y: paneBox.y + paneBox.height - 60 };
+    const startHalfGap = 40;
+    const endHalfGap = 100;
+    const steps = 8;
+    const touches = (halfGap: number) => [
+      { x: centre.x - halfGap, y: centre.y, id: 1 },
+      { x: centre.x + halfGap, y: centre.y, id: 2 },
+    ];
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: touches(startHalfGap),
+    });
+    for (let step = 1; step <= steps; step += 1) {
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: touches(
+          startHalfGap + ((endHalfGap - startHalfGap) * step) / steps,
+        ),
+      });
+      await nextFrames(page, 1);
+    }
+
+    // The pinch was drawn by scaling the layer, over the viewport React Flow
+    // already had: it had been handed nothing new.
+    await expect.poll(firstScaledPaint).toBe(viewportBefore);
+
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchEnd",
+      touchPoints: [],
+    });
+    await expect.poll(layerTransform).toBe("");
+    const grewBy = (await viewportScale()) / scaleBefore;
+    expect(grewBy).toBeGreaterThan((endHalfGap / startHalfGap) * 0.9);
+    expect(grewBy).toBeLessThan((endHalfGap / startHalfGap) * 1.1);
+  });
+});
+
 // The fixture seeds one element thread on each of boards A and B
 // (`data-tid="name"`), a local-homed epic (no cloud verdict needed) with an
 // open records lane carrying both threads, and a negotiated

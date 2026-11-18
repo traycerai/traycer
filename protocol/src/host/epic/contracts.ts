@@ -98,6 +98,7 @@ import {
   getTaskContextsResponseSchemaPre13,
   isFoundTaskContext,
   listTasksRequestSchema,
+  listTasksRequestSchemaPre110,
   listTasksRequestSchemaPre16,
   listTasksRequestSchemaV11,
   listTasksRequestSchemaPre13,
@@ -179,6 +180,8 @@ import {
   listTaskHostsResponseSchema,
 } from "@traycer/protocol/host/task-host-summary";
 import {
+  getChatTitleRequestSchema,
+  getChatTitleResponseSchema,
   listCloudChatPayloadsRequestSchema,
   listCloudChatPayloadsResponseSchema,
   listCloudChatsRequestSchema,
@@ -413,7 +416,7 @@ export const epicListTasksUpgradeV14ToV15 = defineUpgradePath<
 export const epicListTasksV16 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 6 } as const,
-  requestSchema: listTasksRequestSchema,
+  requestSchema: listTasksRequestSchemaPre110,
   responseSchema: listTasksResponseSchemaPre17,
 });
 
@@ -435,7 +438,7 @@ export const epicListTasksUpgradeV15ToV16 = defineUpgradePath<
 export const epicListTasksV17 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 7 } as const,
-  requestSchema: listTasksRequestSchema,
+  requestSchema: listTasksRequestSchemaPre110,
   responseSchema: listTasksResponseSchemaPre18,
 });
 
@@ -453,7 +456,7 @@ export const epicListTasksUpgradeV16ToV17 = defineUpgradePath<
 export const epicListTasksV18 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 8 } as const,
-  requestSchema: listTasksRequestSchema,
+  requestSchema: listTasksRequestSchemaPre110,
   responseSchema: listTasksResponseSchemaPre19,
 });
 
@@ -473,7 +476,7 @@ export const epicListTasksUpgradeV17ToV18 = defineUpgradePath<
 export const epicListTasksV19 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 9 } as const,
-  requestSchema: listTasksRequestSchema,
+  requestSchema: listTasksRequestSchemaPre110,
   responseSchema: listTasksResponseSchema,
 });
 
@@ -483,6 +486,26 @@ export const epicListTasksUpgradeV18ToV19 = defineUpgradePath<
 >({
   from: epicListTasksV18.schemaVersion,
   to: epicListTasksV19.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+// `created-desc` is request value growth only. A 1.9 host would reject the
+// value at parse, so the client refuses to project it onto an older minor
+// (`DOWNGRADE_UNSUPPORTED`) and the History menu offers it only from 1.10.
+export const epicListTasksV110 = defineRpcContract({
+  method: "epic.listTasks",
+  schemaVersion: { major: 1, minor: 10 } as const,
+  requestSchema: listTasksRequestSchema,
+  responseSchema: listTasksResponseSchema,
+});
+
+export const epicListTasksUpgradeV19ToV110 = defineUpgradePath<
+  typeof epicListTasksV19,
+  typeof epicListTasksV110
+>({
+  from: epicListTasksV19.schemaVersion,
+  to: epicListTasksV110.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -1803,6 +1826,16 @@ export const epicResolveCloudChatHeadV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: resolveCloudChatHeadRequestSchema,
   responseSchema: resolveCloudChatHeadResponseSchema,
+});
+
+// The title a reference to a chat is drawn with, read by task and chat id.
+// Its own optional method: a peer without it answers `E_HOST_UNSUPPORTED` and
+// the reference keeps the text it was written with.
+export const epicGetChatTitleV10 = defineRpcContract({
+  method: "epic.getChatTitle",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: getChatTitleRequestSchema,
+  responseSchema: getChatTitleResponseSchema,
 });
 
 export const epicReadCloudChatPartV10 = defineRpcContract({

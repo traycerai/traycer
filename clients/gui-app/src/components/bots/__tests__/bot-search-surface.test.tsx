@@ -6,6 +6,7 @@
  * beside the results are in `bot-search-surface-states.test.tsx`.
  * The clock is a fake one, so the debounce is crossed by advancing it.
  */
+import "./bot-search-surface-stubs";
 import {
   mocks,
   TAB_HOST,
@@ -16,6 +17,7 @@ import {
   lastAsked,
   settle,
   typeIntoPanel,
+  searchAllBots,
   panel,
   pickFilter,
   thread,
@@ -24,7 +26,9 @@ import {
   transcriptOf,
   installSearchSurfaceLifecycle,
 } from "./bot-search-surface-support";
-import { Surface } from "./bot-search-surface-view";
+import { Surface as UnthemedSurface } from "./bot-search-surface-view";
+import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
+import type { ReactNode } from "react";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS } from "@/components/chat/chat-navigation-highlight";
@@ -50,6 +54,17 @@ import {
 
 installSearchSurfaceLifecycle();
 
+/** The surface under the resolved theme the app's provider supplies to the picker's sheet. */
+function Surface(): ReactNode {
+  return (
+    <ResolvedThemeContext.Provider
+      value={{ resolvedTheme: "dark", themePreset: "neutral" }}
+    >
+      <UnthemedSurface />
+    </ResolvedThemeContext.Provider>
+  );
+}
+
 /** ⌘F, as the keybinding and the menu route it. */
 function pressFind(): boolean {
   let handled = false;
@@ -60,41 +75,13 @@ function pressFind(): boolean {
 }
 
 describe("opening the search", () => {
-  it("opens from the column's box on the channel in view with All bots, carrying what was typed", async () => {
-    render(<Surface />);
-
-    fireEvent.change(screen.getByTestId("bot-column-search"), {
-      target: { value: "release" },
-    });
-    await settle();
-
-    expect(panel()).toBeTruthy();
-    expect(screen.queryByTestId("bot-search-scope-chip")).toBeNull();
-    const input = screen.getByTestId("bot-search-input");
-    expect(input).toHaveProperty("value", "release");
-    expect(document.activeElement).toBe(input);
-    expect(lastAsked()).toEqual({
-      hostId: TAB_HOST,
-      request: {
-        scope: { kind: "all" },
-        query: "release",
-        mode: "ranked",
-        sort: "relevance",
-        from: "anyone",
-        since: null,
-        where: "both",
-        cursor: null,
-        limit: 20,
-      },
-    });
-  });
-
   it("opens from the header's button on this bot, as the chip says, and asks the bot's own host", async () => {
     render(<Surface />);
 
     fireEvent.click(
       screen.getByRole("button", { name: "Search in Release Bot" }),
     );
+    expect(document.activeElement).toBe(screen.getByTestId("bot-search-input"));
     await typeIntoPanel("release");
 
     expect(screen.getByTestId("bot-search-scope-chip").textContent).toBe(
@@ -119,7 +106,7 @@ describe("opening the search", () => {
     fireEvent.click(screen.getByTestId("bot-search-close"));
     expect(screen.queryByTestId("bot-search-panel")).toBeNull();
     act(() => {
-      screen.getByTestId("bot-column-search").focus();
+      screen.getByRole("button", { name: "Search in Release Bot" }).focus();
     });
 
     expect(pressFind()).toBe(true);
@@ -143,11 +130,10 @@ describe("opening the search", () => {
     expect(screen.queryByTestId("bot-search-panel")).toBeNull();
   });
 
-  it("offers neither the box, the button nor ⌘F on a host without the search", () => {
+  it("offers neither the header's button nor ⌘F on a host without the search", () => {
     mocks.state.searchSupported = false;
     render(<Surface />);
 
-    expect(screen.queryByTestId("bot-column-search")).toBeNull();
     expect(screen.queryByTestId("bot-channel-search-open")).toBeNull();
     expect(pressFind()).toBe(false);
     expect(screen.queryByTestId("bot-search-panel")).toBeNull();
@@ -261,7 +247,10 @@ describe("before a query of two characters", () => {
 
   it("sets a filter from each of the Narrow to chips", async () => {
     render(<Surface />);
-    fireEvent.click(screen.getByTestId("bot-column-search"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Search in Release Bot" }),
+    );
+    fireEvent.click(screen.getByTestId("bot-search-scope-remove"));
     const chips = {
       bot: screen.getByTestId("bot-search-narrow-bot"),
       me: screen.getByTestId("bot-search-narrow-me"),
@@ -332,10 +321,7 @@ describe("jumping to a result", () => {
 
   async function openWithResults(query: string): Promise<void> {
     render(<Surface />);
-    fireEvent.change(screen.getByTestId("bot-column-search"), {
-      target: { value: query },
-    });
-    await settle();
+    await searchAllBots(query);
   }
 
   it("lands the channel on a post and marks the words it matched for as long as the landing ring lasts", async () => {
@@ -764,10 +750,7 @@ describe("a result's row", () => {
       }),
     );
     render(<Surface />);
-    fireEvent.change(screen.getByTestId("bot-column-search"), {
-      target: { value: "release" },
-    });
-    await settle();
+    await searchAllBots("release");
 
     const [botRow, memberRow, ownRow, goneRow] = hitRows();
     const sender = (row: HTMLElement): string | null | undefined =>
@@ -810,10 +793,7 @@ describe("a result's row", () => {
       }),
     );
     render(<Surface />);
-    fireEvent.change(screen.getByTestId("bot-column-search"), {
-      target: { value: "release" },
-    });
-    await settle();
+    await searchAllBots("release");
 
     const [botRow, memberRow] = hitRows();
     const botNames = (row: HTMLElement): Array<string | undefined> =>

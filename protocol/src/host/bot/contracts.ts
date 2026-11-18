@@ -217,9 +217,9 @@ export const botUpdateReplyModeV10 = defineRpcContract({
 });
 
 /**
- * `bot.updateAppearance@1.0` (T147): the bot's icon, its colour and its
- * channel's background, each kept, set or cleared. Same optional posture as
- * the namespace: a host without it offers none of the three.
+ * `bot.updateAppearance@1.0` (T147): the bot's icon, its colour and what it
+ * wears, each kept, set or cleared. Same optional posture as the namespace: a
+ * host without it offers none of them.
  */
 export const botUpdateAppearanceV10 = defineRpcContract({
   method: "bot.updateAppearance",

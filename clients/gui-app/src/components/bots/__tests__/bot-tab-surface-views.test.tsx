@@ -11,7 +11,7 @@
  * runs the real sandbox reads and create over a scripted control plane.
  * The three views and the bot's session view are replaced by stubs
  * that expose their props, so what the surface PASSES them is what is
- * asserted. The tab strip's Activity count reads the real
+ * asserted. The Activity rows and compact-header count use the real
  * `useBotActiveTasks` over the real agent-activity store and the real
  * notification-indicator hooks (the host answers `indicatorState`).
  */
@@ -39,6 +39,8 @@ import {
   tabHostProviderMock,
   tabNavigationMock,
 } from "./bot-tab-surface-mocks";
+import { usePublishPresentedBotConversation } from "@/hooks/notifications/use-publish-presented-bot-conversation";
+import { readFocusedHostNotificationPresenceEntity } from "@/lib/notifications/notification-presence";
 import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
 import { useBotMentionCompletion } from "@/components/bots/bot-mention-completion";
 import { ComposerPromptEditor } from "@/components/chat/composer/composer-prompt-editor";
@@ -53,7 +55,15 @@ import { StrictMode, useContext, useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 
 import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
@@ -88,6 +98,18 @@ vi.mock(
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
+}));
+vi.mock("@/providers/use-resolved-theme", () => ({
+  useResolvedTheme: () => ({ resolvedTheme: "dark", themePreset: "neutral" }),
+}));
+vi.mock("@/components/layout/header/rate-limit-icon", () => ({
+  RateLimitIconButton: () => null,
+}));
+vi.mock("@/components/resources/resource-monitor-popover", () => ({
+  ResourceMonitorPopover: () => null,
+}));
+vi.mock("@/components/notifications/mobile-notifications-button", () => ({
+  MobileNotificationsButton: () => null,
 }));
 vi.mock("@/lib/tab-navigation", async (importOriginal) =>
   tabNavigationMock(
@@ -285,65 +307,61 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     openMemory: BotOpenMemory | null;
     onOpenMemory: (open: BotOpenMemory | null) => void;
     onOpenTurn: BotTurnOpen;
-    onOpenSession: BotSessionOpen;
     resolveMember: (
       userId: string,
     ) => { displayName: string | null; avatarUrl: string | null } | null;
     setupHistory: ReactNode;
     tiles: number | null;
-  }) => (
-    <div
-      data-testid="stub-channel"
-      data-tiles={String(props.tiles)}
-      data-host-id={props.hostId}
-      data-bound-host-id={props.boundHostId ?? "none"}
-      data-bot-title={props.botTitle}
-      data-app-conversation-chat-id={props.appConversationChatId ?? "none"}
-      data-open-thread={props.openThread?.anchorMessageId ?? "none"}
-      data-land-on={props.landOn?.messageId ?? "none"}
-      data-land-on-thread={props.landOn?.threadId ?? "none"}
-      data-open-memory={String(props.openMemory !== null)}
-      data-trunk-chat-id={props.trunkChatId}
-      data-teammate-name={
-        props.resolveMember("user-teammate")?.displayName ?? "unresolved"
-      }
-    >
-      <button
-        type="button"
-        data-testid="stub-channel-open-memory"
-        onClick={() => props.onOpenMemory({ back: null })}
-      />
-      <button
-        type="button"
-        data-testid="stub-channel-open-turn"
-        onClick={() => props.onOpenTurn(REPLY_TURN, null)}
-      />
-      <button
-        type="button"
-        data-testid="stub-channel-open-thread-session"
-        onClick={() =>
-          props.onOpenSession({
-            chatId: "session-thread-1",
-            threadId: "thread-1",
-            messageId: null,
-            sendPostId: null,
-          })
+  }) => {
+    // The real publisher, so the tab surface's own mount and unmount of this
+    // view is what the presence follows.
+    usePublishPresentedBotConversation(
+      props.botId,
+      null,
+      props.appConversationChatId,
+    );
+    return (
+      <div
+        data-testid="stub-channel"
+        data-tiles={String(props.tiles)}
+        data-host-id={props.hostId}
+        data-bound-host-id={props.boundHostId ?? "none"}
+        data-bot-title={props.botTitle}
+        data-app-conversation-chat-id={props.appConversationChatId ?? "none"}
+        data-open-thread={props.openThread?.anchorMessageId ?? "none"}
+        data-land-on={props.landOn?.messageId ?? "none"}
+        data-land-on-thread={props.landOn?.threadId ?? "none"}
+        data-open-memory={String(props.openMemory !== null)}
+        data-trunk-chat-id={props.trunkChatId}
+        data-teammate-name={
+          props.resolveMember("user-teammate")?.displayName ?? "unresolved"
         }
-      />
-      {props.setupHistory}
-      <MentionsProbe />
-      {/* The two boxes' places in the real view: the channel's own, and one
+      >
+        <button
+          type="button"
+          data-testid="stub-channel-open-memory"
+          onClick={() => props.onOpenMemory({ back: null })}
+        />
+        <button
+          type="button"
+          data-testid="stub-channel-open-turn"
+          onClick={() => props.onOpenTurn(REPLY_TURN, null)}
+        />
+        {props.setupHistory}
+        <MentionsProbe />
+        {/* The two boxes' places in the real view: the channel's own, and one
           inside the thread panel, which the header tells apart by its marker. */}
-      <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
-        <textarea aria-label="Channel box" />
-      </div>
-      <section data-bot-thread-panel="">
         <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
-          <textarea aria-label="Thread box" />
+          <textarea aria-label="Channel box" />
         </div>
-      </section>
-    </div>
-  ),
+        <section data-bot-thread-panel="">
+          <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
+            <textarea aria-label="Thread box" />
+          </div>
+        </section>
+      </div>
+    );
+  },
 }));
 // The session view is driven in `bot-session-view.test.tsx`; here, what the
 // tab hands it and what its links do to the tab.
@@ -468,6 +486,15 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
 }));
 
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
+import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
+import { MobileBotHeaderSlotProvider } from "@/components/layout/header/mobile-bot-header-slot";
+import { tabItemId } from "@/stores/tabs/layout";
+import { useTabsStore } from "@/stores/tabs/store";
+import {
+  installShellForm,
+  SHELL_WIDTH_MENU,
+  type ShellFormHarness,
+} from "../../../../__tests__/mobile-level2-form-harness";
 
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 
@@ -517,15 +544,28 @@ beforeEach(() => {
 });
 
 /** The Activity count over a cloud feed that is connected with its snapshot, so a quiet seen task has been proved quiet by every source. */
-function renderOverCloudFeed(): void {
+function renderInCloudFeed(children: ReactNode): void {
   useCloudNotificationsStore.setState({
     hasSnapshot: true,
     connectionState: "connected",
   });
   render(
     <NotificationFeedModeContext.Provider value="cloud">
-      {surface()}
+      {children}
     </NotificationFeedModeContext.Provider>,
+  );
+}
+
+function renderOverCloudFeed(): void {
+  renderInCloudFeed(surface());
+}
+
+function renderOverCloudFeedUnderHeader(): void {
+  renderInCloudFeed(
+    <MobileBotHeaderSlotProvider>
+      <MobileAppHeader />
+      {surface()}
+    </MobileBotHeaderSlotProvider>,
   );
 }
 
@@ -871,6 +911,33 @@ describe("<BotTabSurface /> views", () => {
     expect(screen.queryByTestId("bot-tab-activity-count")).toBeNull();
   });
 
+  it("presents the channel to the notification presence on Messages, nothing on Activity, and the channel again on return", async () => {
+    const user = userEvent.setup();
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    onTestFinished(() => hasFocus.mockRestore());
+    render(surface());
+    const channelId = screen
+      .getByTestId("stub-channel")
+      .getAttribute("data-app-conversation-chat-id");
+    if (channelId === null || channelId === "none")
+      throw new Error("the bot has no channel conversation");
+
+    expect(readFocusedHostNotificationPresenceEntity()).toEqual({
+      epicId: BOT_ID,
+      chatId: channelId,
+    });
+
+    await user.click(activityTab());
+    expect(screen.queryByTestId("stub-channel")).toBeNull();
+    expect(readFocusedHostNotificationPresenceEntity()).toBeNull();
+
+    await user.click(screen.getByTestId("bot-tab-view-messages"));
+    expect(readFocusedHostNotificationPresenceEntity()).toEqual({
+      epicId: BOT_ID,
+      chatId: channelId,
+    });
+  });
+
   /** The tab's words as a sighted person reads them: no screen-reader text. */
   function visibleTabText(): string {
     const copy = activityTab().cloneNode(true);
@@ -880,7 +947,7 @@ describe("<BotTabSurface /> views", () => {
     return copy.textContent;
   }
 
-  it("rule 6: counts the rows the Activity list shows, one number and no words, whatever puts a task there", async () => {
+  it("rule 6: lists every row whatever puts a task there, and the tab carries no count", async () => {
     const user = userEvent.setup();
     useAuthStore.setState({
       status: "signed-in",
@@ -947,15 +1014,10 @@ describe("<BotTabSurface /> views", () => {
       .dataset.rowIds?.split(",");
     expect(shown).toHaveLength(4);
     expect(shown).not.toContain("task-quiet");
-    const badge = within(activityTab()).getByTestId("bot-tab-activity-count");
-    expect(badge.textContent).toContain(String(shown?.length));
-    expect(visibleTabText()).toBe(`Activity${String(shown?.length)}`);
-    // jsdom joins the name's parts without the spaces a browser puts in.
-    expect(
-      screen.getByRole("tab", {
-        name: new RegExp(`^Activity\\s*${String(shown?.length)}\\s*active$`),
-      }),
-    ).toBe(activityTab());
+    expect(screen.queryByTestId("bot-tab-activity-count")).toBeNull();
+    expect(visibleTabText()).toBe("Activity");
+    expect(screen.getByRole("tab", { name: "Activity" })).toBe(activityTab());
+    expect(activityTab().textContent).not.toMatch(/\d|active/);
     expect(screen.queryByRole("tab", { name: /unread/ })).toBeNull();
   });
 
@@ -1042,7 +1104,7 @@ describe("<BotTabSurface /> views", () => {
     async (_way, testId) => {
       const user = userEvent.setup();
       render(surface());
-      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+      await user.click(screen.getByTestId("stub-channel-open-turn"));
       expect(screen.getByTestId("stub-session")).toBeTruthy();
       await user.click(screen.getByTestId("stub-sidebar-threads"));
 
@@ -1121,5 +1183,105 @@ describe("<BotTabSurface /> views", () => {
       screen.getByTestId("stub-sidebar").getAttribute("data-threads-shown"),
     ).toBe("false");
     expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+  });
+});
+
+function signInAda(): void {
+  useAuthStore.setState({
+    status: "signed-in",
+    profile: {
+      userId: "user-ada",
+      userName: "Ada",
+      email: "ada@example.com",
+    },
+    contextMetadata: { userId: "user-ada", username: "ada" },
+  });
+}
+
+describe("the Channel actions trigger's active count in the compact header", () => {
+  let shell: ShellFormHarness;
+  beforeEach(() => {
+    shell = installShellForm(SHELL_WIDTH_MENU);
+    const tracy = { kind: "tracy", id: "tracy" } as const;
+    useTabsStore.setState({
+      items: [{ kind: "tab", id: tabItemId(tracy), ref: tracy }],
+      activeItemId: tabItemId(tracy),
+      stripOrder: [tracy],
+    });
+  });
+  afterEach(() => {
+    shell.dispose();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+  });
+
+  it("shows the active count on the closed trigger and names it by prefix, matching what the Activity list shows", async () => {
+    const user = userEvent.setup();
+    signInAda();
+    await admitBotDrafts();
+    mocks.state.snapshot = {
+      ...snapshot(),
+      tasks: [
+        { ...trackingTask("task-working"), cadence: { kind: "on-completion" } },
+        trackingTask("task-periodic"),
+      ],
+    };
+    __setAgentActivityPlaneAnsweringForTests();
+    __setAgentActivityStateForTests(
+      { "task-working": { working: ["agent-1"], turn: ["agent-1"] } },
+      "cloud",
+      "connected",
+    );
+    renderOverCloudFeedUnderHeader();
+
+    const trigger = screen.getByRole("button", { name: /^Channel actions/ });
+    const badge = within(trigger).getByTestId(
+      "bot-channel-actions-activity-count",
+    );
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    await user.click(trigger);
+    await user.click(
+      await screen.findByRole("menuitemradio", { name: /^Activity/ }),
+    );
+    const count = screen
+      .getByTestId("stub-activity")
+      .dataset.rowIds?.split(",").length;
+    expect(count).toBeGreaterThan(0);
+    expect(badge.textContent).toContain(String(count));
+    expect(
+      within(
+        screen.getByRole("button", {
+          name: new RegExp(`^Channel actions,?\\s*${String(count)}\\s*active`),
+        }),
+      ).getByTestId("bot-channel-actions-activity-count"),
+    ).toBeTruthy();
+  });
+
+  it("draws no count and the plain name when no task is active", async () => {
+    signInAda();
+    await admitBotDrafts();
+    mocks.state.snapshot = {
+      ...snapshot(),
+      tasks: [
+        {
+          ...trackingTask("task-quiet"),
+          cadence: { kind: "none" },
+          state: "ended",
+          endedReason: "completed",
+          lastCheckinAt: 1_000,
+          inputNeeded: [],
+        },
+      ],
+    };
+    __setAgentActivityPlaneAnsweringForTests();
+    __setAgentActivityStateForTests({}, "cloud", "connected");
+    renderOverCloudFeedUnderHeader();
+
+    expect(
+      screen.queryByTestId("bot-channel-actions-activity-count"),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Channel actions" }),
+    ).toBeTruthy();
   });
 });

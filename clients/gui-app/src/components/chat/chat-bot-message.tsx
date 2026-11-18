@@ -668,7 +668,9 @@ function BotRow(props: {
           }
         />
       )}
-      {receipt === null ? null : <TurnReceiptLine receipt={receipt} />}
+      {presentation.replyReceipt === null ? null : (
+        <TurnReceiptSlot receipt={receipt} />
+      )}
       {replyInThread === null || !threadStarted(threadLine) ? null : (
         <ThreadLine
           line={threadLine}
@@ -802,6 +804,8 @@ interface MovedAnswer {
   readonly question: string;
   readonly answer: string;
   readonly settlement: QuestionCardSettlement;
+  /** Who settled it: the member's user id; `null` for the asker. */
+  readonly settledBy: string | null;
 }
 
 /**
@@ -912,9 +916,10 @@ function BotQuestionCard(props: {
       const moved = taken
         .flatMap(([key, draft]): ReadonlyArray<MovedAnswer> => {
           const entry = byKey.get(key);
-          if (entry === undefined) return [];
+          const settled = entry?.item.settlement ?? null;
+          if (entry === undefined || settled === null) return [];
           const settlement = botQuestionCardSettlement(
-            entry.item.settlement,
+            settled,
             memberName,
             viewerUserId,
           );
@@ -927,21 +932,23 @@ function BotQuestionCard(props: {
                   question: entry.item.text,
                   answer: own,
                   settlement,
+                  settledBy:
+                    settled.by.kind === "person" ? settled.by.userId : null,
                 },
               ];
         })
         .sort((a, b) => a.index - b.index);
-      let latest: MovedAnswer | null = null;
-      for (const item of moved) {
-        if (latest === null || item.settlement.at > latest.settlement.at) {
-          latest = item;
-        }
-      }
-      if (latest === null) return null;
+      if (moved.length === 0) return null;
+      const first = moved[0];
+      // Settled by more than one, the line credits none of them with what
+      // the others did.
+      const oneSettler = moved.every(
+        (item) => item.settledBy === first.settledBy,
+      );
       return {
         block: questionCardMovedBlock(moved, question.questions.length > 1),
         notice: questionCardMovedLine(
-          latest.settlement.by,
+          oneSettler ? first.settlement.by : null,
           questionCardMovedHow(moved.map((item) => item.settlement)),
           botTitle,
           moved.length,
@@ -1580,6 +1587,30 @@ function TurnReceiptLine(props: {
       </span>
       <ChevronRight aria-hidden="true" className="size-3 shrink-0" />
     </button>
+  );
+}
+
+/**
+ * The line a bot's row keeps for its receipt wherever the surface draws
+ * receipts. The turn behind a row is named by the host after the row has
+ * drawn, so the row holds the line's height from its first paint and the
+ * receipt fills it without moving the rows under it. A row no turn wrote
+ * keeps the line empty.
+ */
+function TurnReceiptSlot(props: {
+  readonly receipt: ChatBotTurnReceipt | null;
+}): ReactElement {
+  if (props.receipt !== null) {
+    return <TurnReceiptLine receipt={props.receipt} />;
+  }
+  return (
+    <div
+      aria-hidden="true"
+      data-testid="bot-turn-receipt-slot"
+      className="py-0.5 text-ui-xs"
+    >
+      {"\u00A0"}
+    </div>
   );
 }
 

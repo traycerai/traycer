@@ -27,6 +27,7 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { VoiceCallAuthority } from "@/lib/auth/auth-service";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { useHostMutation } from "@/hooks/host/use-host-query";
@@ -157,7 +158,7 @@ export function useBotUpdateReplyModeMutation(
 }
 
 /**
- * The bot's icon, colour, what it wears or its channel background, each key
+ * The bot's icon, colour or what it wears, each key
  * left out kept and each `null` cleared. No toast, and no list read of its
  * own: `useBotLookSaver` sends these in order and keeps the lists.
  */
@@ -278,6 +279,12 @@ export interface BotCallSendVariables {
   readonly hostId: string;
   /** The account signed in when the call started; `null` owns no call. */
   readonly account: string | null;
+  /**
+   * The sign-in session the call was started under, by value: when set, the
+   * send leaves only while it is still the one signed in. `null` checks no
+   * session.
+   */
+  readonly authority: VoiceCallAuthority | null;
   readonly request: BotConversationSendRequest;
 }
 
@@ -286,11 +293,13 @@ export interface BotCallSendVariables {
  * to a host the hook follows: a call's last words still go to its own host
  * after another call has started on a different one.
  *
- * A send leaves only under the account whose call it is. The check runs in
- * the client resolver, in the same synchronous step as the dispatch (no
- * `prepareRequest` stands between them), against the request context that
- * dispatch carries; a switch after it aborts the captured authority in
- * HostClient. Any other account, or none, refuses the send.
+ * A send leaves only under the account whose call it is, and, when the send
+ * names the call's sign-in session, only while that session is still the one
+ * signed in. Both checks run in the client resolver, in the same synchronous
+ * step as the dispatch (no `prepareRequest` stands between them), so after
+ * anything Query awaits before it; a switch after it aborts the captured
+ * authority in HostClient. Any other account, or none, or a session that is
+ * gone, refuses the send.
  */
 export function useBotCallSendMutation(): UseMutationResult<
   BotConversationSendResponse,
@@ -314,6 +323,13 @@ export function useBotCallSendMutation(): UseMutationResult<
           client.getRequestContextUserId() !== variables.account)
       ) {
         throw new Error("The call's account is no longer signed in.");
+      }
+      if (
+        variables.authority !== null &&
+        (binding === null ||
+          !binding.auth.isVoiceCallAuthorityLive(variables.authority))
+      ) {
+        throw new Error("The call's sign-in session is no longer signed in.");
       }
       return client;
     },

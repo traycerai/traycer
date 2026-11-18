@@ -143,6 +143,9 @@ export class FakeStreamSession implements IStreamSession {
     this.statusHandler = handler;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {
     // The fake never owns a socket, so there is nothing to re-dial.
   }

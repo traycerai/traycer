@@ -13,7 +13,6 @@ import {
 import { Paperclip, Reply, SendHorizontal, X } from "lucide-react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import {
-  BOT_CONVERSATION_ATTACHMENT_MEDIA_TYPES,
   BOT_CONVERSATION_IMAGES_ONLY_TEXT,
   type BotConversationAttachment,
   type BotConversationSendDelivery,
@@ -51,6 +50,20 @@ import {
   BotSendFailedNotice,
 } from "@/components/bots/bot-channel-notices";
 import { useBotMentionCompletion } from "@/components/bots/bot-mention-completion";
+import { CallVoiceNotice } from "@/components/layout/voice/call-voice-notice";
+import {
+  BOX_PICKER_ACCEPT,
+  botDropNoticeId,
+  liveBoxDropTarget,
+  useHeldDropDrain,
+  useHoldingDropTarget,
+  type BotBoxHold,
+} from "@/components/bots/bot-box-drops";
+import { DROPS_WAIT_FOR_DRAFT_IMAGES } from "@/components/bots/bot-drop-lines";
+import {
+  useComposerDropScopeTarget,
+  type ComposerDropTarget,
+} from "@/components/chat/composer/composer-drop-scope";
 import {
   ComposerCallButton,
   ComposerCallCaptions,
@@ -79,6 +92,7 @@ import {
   botBoxWire,
   EMPTY_BOT_BOX,
 } from "@/lib/bots/bot-box-content";
+import type { ComposerEditorIncarnation } from "@/lib/composer/composer-editor-incarnation";
 import {
   collectImageAtoms,
   type ComposerImageAtom,
@@ -127,9 +141,6 @@ function noop(): void {}
 function NO_PASTED_IMAGE_BYTES(): boolean {
   return false;
 }
-
-/** The platform picker offers only the images a message can carry. */
-const BOX_PICKER_ACCEPT = BOT_CONVERSATION_ATTACHMENT_MEDIA_TYPES.join(",");
 
 /**
  * The box's Attach, where it takes images: a picked image goes where a paste
@@ -221,7 +232,10 @@ const BOX_ONE_ROW = {
  * its picker's sources: `@` lists what the bot's environment can name, and each
  * name is a chip that the send writes as its token. Images dropped on the box
  * or pasted into it sit in a strip above it, and go back with the rest of the
- * editor's document wherever a failed send does. The host serving the tab has
+ * editor's document wherever a failed send does. Inside a pane that is one drop
+ * zone (`useComposerDropScope`) the box takes a file dropped anywhere on the
+ * pane; files held for it while it read its draft (`hold`, T386) land once
+ * its editor holds what it loaded, after the restored images. The host serving the tab has
  * to take them: one below `bot.conversation.send@1.4` is
  * offered none. A bot whose host has not said it takes them keeps them in the
  * strip and says so: Send carries the text alone (`BotImageReach`).
@@ -338,6 +352,8 @@ export function BotMessageComposer(props: {
   readonly moved: BotComposerCarry | null;
   /** What the box says under it about question cards' answers; `null` for nothing. */
   readonly notice: BotComposerNotice | null;
+  /** Files held for the box while it read its draft (T386); `null` where none can be. */
+  readonly hold: BotBoxHold | null;
   /**
    * The host accepted `text`, what the box sent; not called once the box
    * is gone. Answers whether the owner says the send's delivery itself, where the
@@ -370,6 +386,7 @@ export function BotMessageComposer(props: {
     reply,
     moved,
     notice,
+    hold,
     onSent,
   } = props;
   const client = useTabHostClient();
@@ -388,6 +405,8 @@ export function BotMessageComposer(props: {
     setContent,
     loadBox,
     onEditorReady,
+    loadedEditor,
+    holdsLoad,
     takenQuoteId,
     held,
     seedsLoaded,
@@ -405,6 +424,13 @@ export function BotMessageComposer(props: {
   const imageCount = imageAtoms.length;
   const takesImages = imageReach !== "none";
   const paste = useBotBoxImageIngest(editorRef);
+  useHeldDropDrain({
+    hold,
+    loadedEditor,
+    holdsLoad,
+    takesImages,
+    attachHeldTransfer: paste.attachHeldTransfer,
+  });
   useEffect(() => {
     if (edit !== null) editorRef.current?.focusAtEnd("reveal-caret");
   }, [edit]);
@@ -550,16 +576,24 @@ export function BotMessageComposer(props: {
         },
       );
   };
-  // The box's drop target, for a host that takes images.
-  const dropTarget = takesImages
-    ? {
+  const noticeId =
+    hold?.noticeId ??
+    botDropNoticeId(botId, threadId ?? announcementId ?? conversationId);
+  // The box's drop target: handed to the pane around it, else its frame's.
+  const drop = useComposerDropScopeTarget(
+    liveBoxDropTarget({
+      callBarShown: call.barShown,
+      takesImages,
+      ingest: {
         onDragEnter: paste.onDragEnter,
         onDragLeave: paste.onDragLeave,
         onDragOver: paste.onDragOver,
         onDrop: paste.onDrop,
-      }
-    : undefined;
-  const dropping = takesImages ? paste.dragOverlayVariant : null;
+        overlayVariant: paste.dragOverlayVariant,
+      },
+      noticeId,
+    }),
+  );
   const ingestPasted = useCallback(
     (images: ReadonlyArray<PastedComposerImage>) =>
       pastedImagesVerdict({
@@ -599,6 +633,7 @@ export function BotMessageComposer(props: {
         submit();
       }}
     >
+      {call.barShown ? <CallVoiceNotice /> : null}
       <ComposerCallCaptions shown={call.barShown} testId={testId} />
       <div
         ref={frameRef}
@@ -606,11 +641,9 @@ export function BotMessageComposer(props: {
           "relative rounded-lg border border-border bg-background transition-colors focus-within:border-ring",
           box.frame,
         )}
-        {...dropTarget}
+        {...dropZoneProps(drop)}
       >
-        {dropping === null ? null : (
-          <ComposerDropOverlay {...FILE_DROP_OVERLAY_CONTENT[dropping]} />
-        )}
+        <DropOverlay target={drop} />
         <ComposerCallSwap shown={call.barShown} testId={testId}>
           {mentions.menu}
           <ReplyStrip
@@ -780,33 +813,163 @@ export function BotMessageComposerUnavailable(props: {
   readonly testId: string;
 }): ReactNode {
   const { testId } = props;
-  const inputId = useId();
   const reasonId = useId();
+  return (
+    <InertBotBox
+      placeholder={props.placeholder}
+      label={props.label}
+      value=""
+      describedBy={reasonId}
+      testId={testId}
+      drop={null}
+      attach={null}
+      top={null}
+      below={
+        <p
+          id={reasonId}
+          className="px-1 text-ui-xs text-muted-foreground"
+          data-testid={`${testId}-reason`}
+        >
+          {props.reason}
+        </p>
+      }
+    />
+  );
+}
+
+/**
+ * A box whose kept draft names images still being read back (T186): drawn as
+ * the box is, holding the draft's text and the message it replies to, with
+ * nothing to type and nothing to send until they are, and the draft can be
+ * discarded instead. Images whose read never ends hold this box only, never
+ * the tab. A reply chosen or cancelled meanwhile shows here (T166).
+ *
+ * A file dropped on it, or on the pane around it, or picked with its Attach
+ * (`attach`, which opens the picker of the box's slot), is held for the box
+ * and lands once the box is there (`reading.hold`, T386), and a line says so
+ * while anything is held. Where the bot's host takes no images it refuses
+ * them as the box does, and Attach stays off.
+ */
+export function BotMessageComposerReading(props: {
+  readonly placeholder: string;
+  /** The accessible name of the box. */
+  readonly label: string;
+  readonly reading: BotComposerReading;
+  /** Whether the bot's host takes the reply, as the box's `reply.reach`. */
+  readonly replyReach: BotReplyReach;
+  /** What the box does with images. */
+  readonly imageReach: BotImageReach;
+  /** Opens the box slot's picker. */
+  readonly attach: () => void;
+  readonly testId: string;
+}): ReactNode {
+  const { testId, reading } = props;
+  const lineId = useId();
+  const takesImages = props.imageReach !== "none";
+  const holding = useHoldingDropTarget(reading.hold, takesImages);
+  const drop = useComposerDropScopeTarget(holding);
+  return (
+    <InertBotBox
+      placeholder={props.placeholder}
+      label={props.label}
+      value={reading.text}
+      describedBy={lineId}
+      testId={testId}
+      drop={drop}
+      attach={takesImages ? props.attach : null}
+      top={
+        <ReplyStrip
+          target={props.replyReach === "none" ? null : reading.replyTo}
+          heldBack={props.replyReach === "held-back"}
+          testId={`${testId}-reply`}
+          onCancel={reading.cancelReply}
+        />
+      }
+      below={
+        <div className="flex flex-col gap-1 px-1 text-ui-xs text-muted-foreground">
+          <div className="flex items-center gap-2">
+            <p
+              id={lineId}
+              className="min-w-0 flex-1"
+              data-testid={`${testId}-reading`}
+            >
+              This draft&apos;s images are still loading.
+            </p>
+            <Button
+              type="button"
+              variant="link"
+              size="xs"
+              onClick={reading.discard}
+              data-testid={`${testId}-discard`}
+            >
+              Discard draft
+            </Button>
+          </div>
+          {reading.hold.batches.length === 0 ? null : (
+            <p role="status" data-testid={`${testId}-held`}>
+              {DROPS_WAIT_FOR_DRAFT_IMAGES}
+            </p>
+          )}
+        </div>
+      }
+    />
+  );
+}
+
+/**
+ * The box with `top` and `value` in it, nothing to type into and nothing to
+ * send, and `below` under it. Its frame takes drops as `drop` says, where no
+ * pane does; `null` leaves them to what is around it. Attach opens `attach`,
+ * and is off where that is `null`.
+ */
+function InertBotBox(props: {
+  readonly placeholder: string;
+  readonly label: string;
+  readonly value: string;
+  /** The id of what `below` says about the box. */
+  readonly describedBy: string;
+  readonly drop: ComposerDropTarget | null;
+  readonly attach: (() => void) | null;
+  readonly top: ReactNode;
+  readonly below: ReactNode;
+  readonly testId: string;
+}): ReactNode {
+  const { testId, drop, attach } = props;
+  const inputId = useId();
   return (
     <div
       className="flex shrink-0 flex-col gap-1 px-4 pt-1 pb-3"
       data-testid={testId}
     >
-      <div className="flex flex-col rounded-lg border border-border bg-background">
+      <div
+        className="relative flex flex-col rounded-lg border border-border bg-background"
+        {...(drop === null ? {} : dropZoneProps(drop))}
+      >
+        {drop === null ? null : <DropOverlay target={drop} />}
+        {props.top}
         <label htmlFor={inputId} className="sr-only">
           {props.label}
         </label>
         <Textarea
           id={inputId}
-          value=""
+          value={props.value}
           variant="bare"
           size="sm"
           rows={1}
           placeholder={props.placeholder}
           disabled
           readOnly
-          aria-describedby={reasonId}
+          aria-describedby={props.describedBy}
           className="max-h-60 min-h-10"
           data-testid={`${testId}-input`}
         />
         <div className="flex items-center justify-end gap-2 px-2 pb-1.5">
           <div className="mr-auto flex">
-            <BoxAttachButton testId={testId} disabled onClick={undefined} />
+            <BoxAttachButton
+              testId={testId}
+              disabled={attach === null}
+              onClick={attach ?? undefined}
+            />
           </div>
           <Button
             type="button"
@@ -819,15 +982,30 @@ export function BotMessageComposerUnavailable(props: {
           </Button>
         </div>
       </div>
-      <p
-        id={reasonId}
-        className="px-1 text-ui-xs text-muted-foreground"
-        data-testid={`${testId}-reason`}
-      >
-        {props.reason}
-      </p>
+      {props.below}
     </div>
   );
+}
+
+/** A drop target's handlers, for the element it is on, without its overlay. */
+function dropZoneProps(
+  target: ComposerDropTarget,
+): Omit<ComposerDropTarget, "overlayVariant"> {
+  return {
+    onDragEnter: target.onDragEnter,
+    onDragLeave: target.onDragLeave,
+    onDragOver: target.onDragOver,
+    onDrop: target.onDrop,
+  };
+}
+
+/** The overlay a drop target shows over its element; none while no file is dragged over it. */
+function DropOverlay(props: {
+  readonly target: ComposerDropTarget;
+}): ReactNode {
+  const { overlayVariant } = props.target;
+  if (overlayVariant === null) return null;
+  return <ComposerDropOverlay {...FILE_DROP_OVERLAY_CONTENT[overlayVariant]} />;
 }
 
 function canSendBotBox(args: {
@@ -898,6 +1076,17 @@ function useBotBoxDocument(
     contentHeld: ReadonlyArray<number>,
   ) => void;
   readonly onEditorReady: () => void;
+  /**
+   * The editor that took what the box loaded, or nothing where it loaded
+   * none: `null` until one has.
+   */
+  readonly loadedEditor: ComposerEditorIncarnation | null;
+  /**
+   * Whether the editor in the box now is that one: false the moment it
+   * leaves, as when a call takes the field, and until the editor that
+   * comes back has taken the box's load.
+   */
+  readonly holdsLoad: () => boolean;
   readonly takenQuoteId: number | null;
   readonly held: ReadonlyArray<number>;
   /** How many seeds put a draft from outside the box in it. */
@@ -993,16 +1182,32 @@ function useBotBoxDocument(
   useLayoutEffect(() => {
     contentRef.current = content;
   }, [content]);
-  // Anything loaded before the editor could take it.
+  const [loadedEditor, setLoadedEditor] =
+    useState<ComposerEditorIncarnation | null>(null);
+  const loadedEditorRef = useRef<ComposerEditorIncarnation | null>(null);
+  // Anything loaded before the editor could take it. Runs for each editor
+  // the box mounts, so the one back after a call takes the draft again.
   const onEditorReady = useCallback(() => {
-    if (contentRef.current === EMPTY_BOT_BOX) return;
-    editorRef.current?.syncContent(contentRef.current, START_OF_BOX);
+    const editor = editorRef.current;
+    if (editor === null) return;
+    if (contentRef.current !== EMPTY_BOT_BOX) {
+      editor.syncContent(contentRef.current, START_OF_BOX);
+    }
+    const incarnation = editor.getEditorIncarnation();
+    loadedEditorRef.current = incarnation;
+    setLoadedEditor(incarnation);
+  }, [editorRef]);
+  const holdsLoad = useCallback((): boolean => {
+    const incarnation = editorRef.current?.getEditorIncarnation() ?? null;
+    return incarnation !== null && incarnation === loadedEditorRef.current;
   }, [editorRef]);
   return {
     content,
     setContent,
     loadBox,
     onEditorReady,
+    loadedEditor,
+    holdsLoad,
     takenQuoteId,
     held,
     seedsLoaded,
@@ -1350,6 +1555,20 @@ export type BotComposerCarry = {
 export type BotComposerNotice = BotBoxNotice & {
   readonly clear: () => void;
   readonly clearFailure: () => void;
+};
+
+/**
+ * A box whose kept draft names images still being read back (T186): the
+ * draft's text and the message it replies to, dropping the draft, images,
+ * reply and all, and cancelling the reply alone (T166).
+ */
+export type BotComposerReading = {
+  readonly text: string;
+  readonly replyTo: BotReplyTarget | null;
+  readonly discard: () => void;
+  readonly cancelReply: () => void;
+  /** What is dropped or picked on the box meanwhile, held for it (T386). */
+  readonly hold: BotBoxHold;
 };
 
 /** A failed message loaded into the box to be edited and sent again. */

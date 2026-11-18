@@ -12,11 +12,21 @@
 // is that the real hook supplies the real flag, and that a surface actually
 // renders - or does not - because of it.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { SelectionKernelSnapshot } from "@traycer-clients/shared/host-selection/selection-evidence-kernel";
+import type { FleetRefreshOutcome } from "@traycer-clients/shared/platform/runner-host";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { HostDirectoryService } from "@/lib/host/host-directory-service";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
 import {
@@ -50,6 +60,7 @@ vi.mock("@/hooks/host/use-host-provisioning-progress", () => ({
 const mocks = vi.hoisted(() => ({
   directory: null as {
     hasConcludedDiscovery(): boolean;
+    hasFailedDiscovery(): boolean;
     getLocalHostId(): string | null;
     onChange(listener: () => void): { dispose: () => void };
   } | null,
@@ -81,10 +92,15 @@ const REMOTE_HOST_ID = "remote-host";
  */
 class FakeDirectory {
   private concluded = false;
+  private failed = false;
   private readonly listeners = new Set<() => void>();
 
   hasConcludedDiscovery(): boolean {
     return this.concluded;
+  }
+
+  hasFailedDiscovery(): boolean {
+    return this.failed;
   }
 
   /**
@@ -111,6 +127,7 @@ class FakeDirectory {
    */
   settle(): void {
     this.concluded = true;
+    this.failed = false;
     this.emit();
   }
 
@@ -124,12 +141,14 @@ class FakeDirectory {
    */
   concludeByFailedFetch(): void {
     this.concluded = true;
+    this.failed = true;
     this.emit();
   }
 
   /** A `signed-out` outcome, or the foreign-identity drop: the answer is withdrawn. */
   withdraw(): void {
     this.concluded = false;
+    this.failed = false;
     this.emit();
   }
 
@@ -198,8 +217,8 @@ function applySnapshot(overrides: Partial<SelectionKernelSnapshot>): void {
   });
 }
 
-function renderNarrator(): void {
-  const runnerHost = new MockRunnerHost({
+function makeShell(): MockRunnerHost {
+  return new MockRunnerHost({
     signInUrl: "https://auth.traycer.invalid/sign-in",
     authnBaseUrl: "http://localhost:5005",
     localHost: null,
@@ -211,13 +230,23 @@ function renderNarrator(): void {
     hasLocalHost: false,
     traycerCli: null,
   });
+}
+
+function renderNarrator(
+  runnerHost: MockRunnerHost,
+  refreshDirectory: () => void,
+): void {
+  const controller: HostReadinessController = {
+    ...LAUNCH_CONTROLLER,
+    defaultHostPresentation: { ...EMPTY_PRESENTATION, refreshDirectory },
+  };
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   render(
     <QueryClientProvider client={client}>
       <RunnerHostProvider runnerHost={runnerHost}>
-        <HostReadinessControllerContext.Provider value={LAUNCH_CONTROLLER}>
+        <HostReadinessControllerContext.Provider value={controller}>
           <WindowHostModalHost bypassed={false} />
         </HostReadinessControllerContext.Provider>
       </RunnerHostProvider>
@@ -298,7 +327,7 @@ describe("the narrator across the launch, on a shell with no local host", () => 
     // The launch frame: the kernel has attached, and its lease list is empty
     // because nothing has asked the registry yet.
     applySnapshot({ attached: true, effectiveHostId: null, leases: [] });
-    renderNarrator();
+    renderNarrator(makeShell(), () => undefined);
 
     // THE FIX: no failure card over an unanswered fleet.
     await waitFor(() => {
@@ -317,7 +346,7 @@ describe("the narrator across the launch, on a shell with no local host", () => 
     expect(screen.getByText("No host is available")).toBeTruthy();
   });
 
-  it("a FAILED fetch carries all the way to the card, with the offline recovery on it", async () => {
+  it("a FAILED fetch carries all the way to the card as a host list that could not be loaded, with Retry", async () => {
     // THE WIRING, end to end, which no other case covers. The service's rule
     // (a failed fetch concludes), the hook's re-read on emit, and the arm's
     // reading of that flag each have their own test - but a green chain can
@@ -330,7 +359,7 @@ describe("the narrator across the launch, on a shell with no local host", () => 
     // this card off screen for the entire outage, and the user with no Retry.
     const directory = directoryUnderTest();
     applySnapshot({ attached: true, effectiveHostId: null, leases: [] });
-    renderNarrator();
+    renderNarrator(makeShell(), () => undefined);
 
     await waitFor(() => {
       expect(narratorSurface()).toBeNull();
@@ -343,10 +372,10 @@ describe("the narrator across the launch, on a shell with no local host", () => 
     await waitFor(() => {
       expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
     });
-    expect(screen.getByText("No host is available")).toBeTruthy();
-    // The RECOVERY, not just the words: ∅ is a settled failure by definition,
-    // so this arm owes the user an action. On a shell that cannot manage a
-    // host that action is re-reading the registry.
+    expect(screen.getByText("Couldn't load your hosts")).toBeTruthy();
+    expect(screen.queryByText("No host is available")).toBeNull();
+    // The RECOVERY, not just the words: a failed read owes the user an
+    // action, and re-reading the registry is it.
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
@@ -366,11 +395,117 @@ describe("the narrator across the launch, on a shell with no local host", () => 
         },
       ],
     });
-    renderNarrator();
+    renderNarrator(makeShell(), () => undefined);
 
     await waitFor(() => {
       expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
     });
     expect(screen.queryByText("No host is available")).toBeNull();
+  });
+});
+
+/**
+ * The same narrator over a REAL `HostDirectoryService`, whose registry read
+ * succeeds and names a host while the fleet read the listing triggers does not.
+ * The authority holds no lease (∅) because that fleet never reached it.
+ */
+describe("the narrator when the fleet refresh a listing triggers is unavailable", () => {
+  const listedHost: HostDirectoryEntry = {
+    hostId: "listed-host-id",
+    label: "Listed Host",
+    kind: "remote",
+    websocketUrl: "wss://relay.traycer.invalid/attach",
+    version: "0.0.0-mock",
+    transportDialability: "dialable",
+  };
+
+  const directories: HostDirectoryService[] = [];
+
+  afterEach(() => {
+    for (const directory of directories.splice(0)) directory.dispose();
+  });
+
+  async function startedDirectory(
+    runnerHost: MockRunnerHost,
+  ): Promise<HostDirectoryService> {
+    const directory = new HostDirectoryService({
+      onRegistryPollTick: null,
+      authContextId: null,
+      credentialGeneration: null,
+      runnerHost,
+      localHostIdSeeder: null,
+      remoteFetcher: () =>
+        Promise.resolve({ kind: "hosts", entries: [listedHost] }),
+    });
+    directories.push(directory);
+    await directory.startSeeded();
+    mocks.directory = directory;
+    return directory;
+  }
+
+  it("narrates a host list that could not be loaded, not an offline fleet", async () => {
+    const shell = makeShell();
+    vi.spyOn(shell, "refreshHostFleet").mockResolvedValue({
+      kind: "unavailable",
+    });
+    const directory = await startedDirectory(shell);
+    applySnapshot({ attached: true, effectiveHostId: null, leases: [] });
+    renderNarrator(shell, () => undefined);
+
+    await act(async () => {
+      await directory.refresh();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Couldn't load your hosts")).toBeTruthy();
+    });
+    expect(screen.queryByText("No host is available")).toBeNull();
+  });
+
+  it("Retry re-requests the fleet, and the failure card goes once it publishes", async () => {
+    const shell = makeShell();
+    const outcomes: FleetRefreshOutcome[] = [];
+    const refreshHostFleet = vi
+      .spyOn(shell, "refreshHostFleet")
+      .mockImplementation(() => {
+        if (outcomes.length === 0) {
+          outcomes.push({ kind: "unavailable" });
+          return Promise.resolve({ kind: "unavailable" });
+        }
+        // The published fleet reaches the authority, which now has a lease.
+        applySnapshot({
+          attached: true,
+          effectiveHostId: listedHost.hostId,
+          targetHostId: listedHost.hostId,
+          leases: [{ hostId: listedHost.hostId, status: "ready", dead: null }],
+        });
+        return Promise.resolve({ kind: "published" });
+      });
+    const directory = await startedDirectory(shell);
+    applySnapshot({ attached: true, effectiveHostId: null, leases: [] });
+    renderNarrator(shell, () => {
+      void directory.refresh();
+    });
+
+    await act(async () => {
+      await directory.refresh();
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Couldn't load your hosts")).toBeTruthy();
+    });
+    expect(refreshHostFleet).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => {
+      expect(refreshHostFleet).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(directory.hasFailedDiscovery()).toBe(false);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Couldn't load your hosts")).toBeNull();
+    });
+    expect(narratorSurface()).toBeNull();
   });
 });

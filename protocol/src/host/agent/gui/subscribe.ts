@@ -9294,7 +9294,14 @@ export const chatSubscribeV143 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeV142.clientFrameSchema,
 });
 
-/** Optional provider dispatch provenance on durable event carriers. */
+/**
+ * Optional provider dispatch provenance on durable event carriers.
+ *
+ * A resume divider's trigger's `conversationMessage` may carry `images`, the
+ * images a bot conversation delivery carried. Defaulted `[]`, so a peer below
+ * 1.44 drops it on decode and draws the divider it always did; `1.43` binds
+ * the rows without it (`openMessageSchemaPreConversationImages`).
+ */
 export const chatSubscribeV144 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 44 } as const,

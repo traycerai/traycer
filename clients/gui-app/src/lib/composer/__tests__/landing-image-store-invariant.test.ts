@@ -14,6 +14,7 @@
  * then, against the database through a connection of its own.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { UseStore } from "idb-keyval";
 import {
   deleteDatabaseWhenClosed,
   installFreshIndexedDb,
@@ -61,6 +62,29 @@ type StepKind =
   | "settle";
 
 const IMAGES_DB = "traycer-gui-app:default:landing-images";
+
+/** The writes of a measured size, which the store starts and nobody awaits: each ends with its own transaction. */
+const sizeWrites = vi.hoisted(() => ({
+  pending: [] as Array<Promise<unknown>>,
+}));
+
+vi.mock("idb-keyval", async (importOriginal) => {
+  const real = await importOriginal<typeof import("idb-keyval")>();
+  return {
+    ...real,
+    set: (
+      key: IDBValidKey,
+      value: unknown,
+      store: UseStore | undefined,
+    ): Promise<void> => {
+      const written = real.set(key, value, store);
+      if (typeof value === "number") {
+        sizeWrites.pending.push(written.catch(() => undefined));
+      }
+      return written;
+    },
+  };
+});
 
 /** Three images with distinct bytes. 0 and 1 are rooted, as a draft names them; 2 never is. */
 const IMAGES: ReadonlyArray<ImageBytes> = [
@@ -224,8 +248,10 @@ async function settle(walk: Walk, step: number): Promise<void> {
     await Promise.allSettled(ending);
   }
   walk.settling = false;
-  // The size writes nobody awaits.
-  await turns(5);
+  // The size writes nobody awaits, each as its own transaction ends.
+  while (sizeWrites.pending.length > 0) {
+    await Promise.allSettled(sizeWrites.pending.splice(0));
+  }
   await check(walk, step);
 }
 
@@ -326,6 +352,7 @@ function pick(random: () => number): StepKind {
 }
 
 async function walkSeed(seed: number): Promise<string[]> {
+  sizeWrites.pending.length = 0;
   installFreshIndexedDb();
   const window = await loadWindow();
   await window.awaitLandingImageSizes();

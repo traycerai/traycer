@@ -297,14 +297,18 @@ function movedDid(how: QuestionCardMovedHow, moved: number): string {
 /**
  * What the box says under it once `moved` of the member's answers went
  * there: who settled the questions first, said once, and that the answers
- * are in the person's message box, unsent.
+ * are in the person's message box, unsent. Where more than one settled them
+ * (`by` `null`), nobody is named: none of them did all of it.
  */
 export function questionCardMovedLine(
-  by: QuestionCardSettlement["by"],
+  by: QuestionCardSettlement["by"] | null,
   how: QuestionCardMovedHow,
   asker: string,
   moved: number,
 ): string {
+  if (by === null) {
+    return "These questions were settled first. Your answers are in your message box, not sent.";
+  }
   const did = movedDid(how, moved);
   if (by.kind === "person" && by.viewer) {
     const what = moved === 1 ? "This answer is" : "These answers are";

@@ -747,6 +747,7 @@ interface TaskProjection {
   readonly id: string;
   readonly taskType: "epic" | "phase";
   readonly title: string;
+  readonly createdAt: number;
   readonly updatedAt: number;
   readonly createdBy: string;
   readonly repoIdentifiers: readonly TaskRepoIdentifier[];
@@ -761,6 +762,7 @@ function taskProjection(task: TaskLight): TaskProjection | null {
       id: epic.id,
       taskType: "epic",
       title: epic.title,
+      createdAt: epic.createdAt,
       updatedAt: epic.updatedAt,
       createdBy: epic.createdBy,
       repoIdentifiers: taskRepoIdentifiers(task),
@@ -774,6 +776,7 @@ function taskProjection(task: TaskLight): TaskProjection | null {
     id: phase.id,
     taskType: "phase",
     title: phase.title,
+    createdAt: phase.createdAt,
     updatedAt: phase.updatedAt,
     createdBy: phase.createdBy,
     repoIdentifiers: taskRepoIdentifiers(task),
@@ -828,6 +831,9 @@ function compareTaskLights(
   if (sort === "oldest") {
     return compareByOldest(leftProjection, rightProjection);
   }
+  if (sort === "created-desc") {
+    return compareByCreated(leftProjection, rightProjection);
+  }
   if (sort === "relevance" && query !== null) {
     return (
       relevanceScore(leftProjection, query) -
@@ -841,6 +847,14 @@ function compareTaskLights(
 function compareByRecent(left: TaskProjection, right: TaskProjection): number {
   if (left.updatedAt > right.updatedAt) return -1;
   if (left.updatedAt < right.updatedAt) return 1;
+  if (left.id > right.id) return -1;
+  if (left.id < right.id) return 1;
+  return 0;
+}
+
+function compareByCreated(left: TaskProjection, right: TaskProjection): number {
+  if (left.createdAt > right.createdAt) return -1;
+  if (left.createdAt < right.createdAt) return 1;
   if (left.id > right.id) return -1;
   if (left.id < right.id) return 1;
   return 0;

@@ -37,9 +37,11 @@ import {
   runSandboxVerbViaHttp,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
+  isVoiceName,
   voiceSessionsAvailabilityViaHttp,
   voiceSessionsEndViaHttp,
   voiceSessionsMintViaHttp,
+  type VoiceSelectionPolicy,
   type VoiceSessionIndicator,
   type VoiceSessionMintRequest,
 } from "@traycer-clients/shared/host-client/voice-sessions";
@@ -122,7 +124,23 @@ function voiceSessionMintRequestOf(value: unknown): VoiceSessionMintRequest {
   const input: unknown = Reflect.get(value, "input");
   assertString(offerSdp, "mintVoiceSession.request.offerSdp");
   assertString(input, "mintVoiceSession.request.input");
-  return { offerSdp, input };
+  // Absent reads as null: a renderer that names no voice sends none.
+  const voice: unknown = Reflect.get(value, "voice") ?? null;
+  const voicePolicy: unknown = Reflect.get(value, "voicePolicy") ?? null;
+  if (voice !== null && !isVoiceName(voice)) {
+    throw new Error("mintVoiceSession.request.voice is not a voice name");
+  }
+  if (voicePolicy !== null && !isVoiceSelectionPolicy(voicePolicy)) {
+    throw new Error("mintVoiceSession.request.voicePolicy is not a policy");
+  }
+  if (voicePolicy === "exact" && voice === null) {
+    throw new Error("mintVoiceSession.request: the exact policy names a voice");
+  }
+  return { offerSdp, input, voice, voicePolicy };
+}
+
+function isVoiceSelectionPolicy(value: unknown): value is VoiceSelectionPolicy {
+  return value === "fallback" || value === "exact";
 }
 
 /** The renderer's voice indicator, checked field by field. */

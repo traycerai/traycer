@@ -85,6 +85,12 @@ export default defineConfig({
   },
   test: {
     sequence: { setupFiles: "list" },
+    globalSetup: [
+      path.resolve(
+        __dirname,
+        "./src/config/__tests__/credentials-run-root.global-setup.ts",
+      ),
+    ],
     setupFiles: [
       resolveTestSetup(
         import.meta.dirname,

@@ -15,7 +15,8 @@ const state = vi.hoisted(() => ({
   organization: {
     supported: true,
     userId: "user-1",
-    view: undefined,
+    readView: () => undefined,
+    subscribeView: () => () => undefined,
     register: () => () => undefined,
     openDialog: () => undefined,
     command: () => Promise.resolve(),
@@ -40,6 +41,7 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     taskType: "epic",
     title: "Imported task",
     initialUserPrompt: "",
+    createdAtMs: 1_700_000_000_000,
     updatedAtMs: 1_700_000_000_000,
     updatedLabel: "about 2 hours ago",
     updatedBucket: "today",

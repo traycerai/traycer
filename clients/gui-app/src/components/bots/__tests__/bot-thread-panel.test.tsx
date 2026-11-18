@@ -85,9 +85,15 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
   hostClientLocating,
+  memberPost,
   turnRef,
   turnsAskedFor,
 } from "@/components/bots/__tests__/bot-turn-test-support";
+import {
+  expectPlainLineOutsideQuote,
+  PLAIN_LINE,
+  QUOTE_LINE,
+} from "@/components/bots/__tests__/bot-channel-rows-test-support";
 import {
   sessionTargetOfTurn,
   type BotTurnOpen,
@@ -120,6 +126,7 @@ import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-sto
 type ThreadTranscriptState = Pick<
   ChatSessionState,
   | "snapshotLoaded"
+  | "fatalClose"
   | "messages"
   | "events"
   | "transcriptRowContext"
@@ -163,6 +170,8 @@ const mocks = vi.hoisted(() => ({
     held: false,
     listeners: new Set<() => void>(),
   },
+  /** The person's read cursors as the host answers them: none behind anything unless a case says so. */
+  read: { cursors: {}, latest: {} },
 }));
 
 vi.mock(
@@ -207,6 +216,12 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
   useBotActivity: () => activityStore((state) => state.activity),
 }));
+vi.mock("@/hooks/bots/use-bot-read-cursor", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/bots/use-bot-read-cursor")
+  >()),
+  useBotReadCursors: () => ({ data: mocks.read }),
+}));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
 }));
@@ -249,11 +264,24 @@ vi.mock("@/components/chat/chat-messages", async () => {
     ChatMessages: (props: {
       messages: ReadonlyArray<ChatMessageModel>;
       instanceId: string;
+      scrollRequest?: {
+        kind?: string;
+        messageId?: string;
+        rowId?: string;
+      } | null;
     }) => {
       const header = use(ChatTimelineHeaderContext);
       return (
         <Providers tileInstanceId={props.instanceId}>
-          <div data-testid="chat-messages-stub">
+          <div
+            data-testid="chat-messages-stub"
+            data-scroll-to={props.scrollRequest?.messageId ?? ""}
+            data-boundary-to={
+              props.scrollRequest?.kind === "boundary"
+                ? (props.scrollRequest.rowId ?? "")
+                : ""
+            }
+          >
             {header}
             {props.messages.length === 0 && header === null ? (
               <ChatEmptyState />
@@ -385,6 +413,7 @@ function createThreadStore(
 ): UseBoundStore<StoreApi<ThreadTranscriptState>> {
   return create<ThreadTranscriptState>()(() => ({
     snapshotLoaded: true,
+    fatalClose: null,
     messages,
     events: [],
     transcriptRowContext: {},
@@ -519,6 +548,21 @@ function mountPanel(
   return render(panelTree(thread));
 }
 
+/** The panel as the bot's surface draws it, under that bot's identity. */
+function mountPanelInBotSurface(
+  thread: BotThreadPanelThread,
+  messages: ReadonlyArray<Message>,
+): RenderResult {
+  stageSessions(messages);
+  return render(
+    <BotIdentityContext
+      value={{ botId: BOT_ID, title: "Release Bot", owner: null }}
+    >
+      {panelTree(thread)}
+    </BotIdentityContext>,
+  );
+}
+
 /** The thread's session over `messages`, and the channel's over `channelMessages`. */
 function stageSessions(messages: ReadonlyArray<Message>): void {
   mocks.handle = {
@@ -560,7 +604,6 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
                 onClose={vi.fn()}
                 onEditPost={onEditPost}
                 onOpenTurn={onOpenTurn}
-                onOpenSession={vi.fn()}
                 landOn={panelLanding}
                 quote={null}
               />
@@ -588,6 +631,7 @@ beforeEach(() => {
   sent = [];
   panelSent = null;
   panelLanding = null;
+  mocks.read = { cursors: {}, latest: {} };
   panelTasks = [];
   panelReplyReach = "none";
   panelOrigin = null;
@@ -1571,7 +1615,7 @@ describe("<BotThreadPanel /> the anchor", () => {
   });
 
   it("still draws the bot's picture in the replying strip while the bot replies in the thread", () => {
-    mountPanel(listed("user-teammate"), []);
+    mountPanelInBotSurface(listed("user-teammate"), []);
 
     act(() => {
       activityStore.setState({
@@ -1673,7 +1717,7 @@ describe("<BotThreadPanel /> the anchor", () => {
 
   it("draws a bot's own announcement in the bot's frame, with no request badge", () => {
     channelMessages = [announcement("anchor-1", "Ship the release today?")];
-    mountPanel(listed(null), []);
+    mountPanelInBotSurface(listed(null), []);
 
     const anchor = screen.getByTestId("bot-thread-anchor");
     expect(within(anchor).getByText("Release Bot")).toBeTruthy();
@@ -1754,8 +1798,11 @@ describe("<BotThreadPanel /> Reply on a row of the thread", () => {
     (reach) => {
       panelReplyReach = reach;
       mountPanel(listed("user-teammate"), [botReply(null)]);
+      const row = within(screen.getByTestId("chat-messages-stub")).getByTestId(
+        "bot-reply-row",
+      );
 
-      expect(screen.queryByTestId("bot-message-reply")).toBeNull();
+      expect(within(row).queryByTestId("bot-message-reply")).toBeNull();
     },
   );
 });
@@ -2383,32 +2430,29 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
   });
 });
 
-describe("<BotThreadPanel /> the thread's tasks", () => {
-  function task(
-    taskId: string,
-    overrides: Partial<BotTaskEntry>,
-  ): BotTaskEntry {
-    return {
-      taskId,
-      cadence: { kind: "on-completion" },
-      lastCheckinAt: null,
-      lastCheckin: null,
-      nextAt: null,
-      state: "tracking",
-      endedReason: null,
-      createdByUserId: null,
-      spun: true,
-      label: null,
-      originRequestId: null,
-      createdByChatId: THREAD_ID,
-      inputNeeded: null,
-      pause: null,
-      stop: null,
-      runRequest: null,
-      ...overrides,
-    };
-  }
+function task(taskId: string, overrides: Partial<BotTaskEntry>): BotTaskEntry {
+  return {
+    taskId,
+    cadence: { kind: "on-completion" },
+    lastCheckinAt: null,
+    lastCheckin: null,
+    nextAt: null,
+    state: "tracking",
+    endedReason: null,
+    createdByUserId: null,
+    spun: true,
+    label: null,
+    originRequestId: null,
+    createdByChatId: THREAD_ID,
+    inputNeeded: null,
+    pause: null,
+    stop: null,
+    runRequest: null,
+    ...overrides,
+  };
+}
 
+describe("<BotThreadPanel /> the thread's tasks", () => {
   it("lists only the tasks this thread set up, each with the message it was set up for and no link out", () => {
     // The thread hangs off a member's post, whose row id its request names.
     const postId = conversationRequestMessageId("req-1");
@@ -2521,6 +2565,7 @@ describe("<BotThreadPanel /> on a short viewport under the keyboard", () => {
 
   it("becomes one row while its box has the focus, keeps the draft and the focused field, and restores with the keyboard down", async () => {
     const user = userEvent.setup();
+    panelTasks = [task("task-watch", { originRequestId: "req-1" })];
     mountPanel(listed("user-teammate"), [botReply(null)]);
     const box = boxInput("Reply in the thread");
     expect(composerForm().getAttribute("data-box-form")).toBe("full");
@@ -2534,7 +2579,7 @@ describe("<BotThreadPanel /> on a short viewport under the keyboard", () => {
     await user.click(box);
     typeInto(box, "Not yet");
     expect(composerForm().getAttribute("data-box-form")).toBe("one-row");
-    expect(shown("bot-thread-session")).toBe(false);
+    expect(shown("bot-thread-tasks")).toBe(false);
     expect(shown("bot-thread-close")).toBe(true);
     expect(shown("bot-thread-composer-send")).toBe(true);
     expect(boxInput("Reply in the thread")).toBe(box);
@@ -2543,7 +2588,7 @@ describe("<BotThreadPanel /> on a short viewport under the keyboard", () => {
 
     lowerNativeKeyboard();
     expect(composerForm().getAttribute("data-box-form")).toBe("full");
-    expect(shown("bot-thread-session")).toBe(true);
+    expect(shown("bot-thread-tasks")).toBe(true);
   });
 });
 
@@ -2712,5 +2757,211 @@ describe("<BotThreadPanel /> a reply that names the post the thread opens on", (
     for (const token of CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME.split(" ")) {
       expect(opening.classList.contains(token)).toBe(true);
     }
+  });
+});
+
+describe("<BotThreadPanel /> a member's quote above a plain line, stored in two paragraphs", () => {
+  function quoteThenPlainLine(messageId: string): Message {
+    return memberPost({
+      messageId,
+      requestId: `req-${messageId}`,
+      lines: [QUOTE_LINE, PLAIN_LINE],
+      timestamp: 1_000,
+      resolvedBy: null,
+    });
+  }
+
+  it("keeps the plain line out of the quote in a member's reply", () => {
+    mountPanel(listed("user-teammate"), [quoteThenPlainLine("reply-1")]);
+
+    const row = within(screen.getByTestId("bot-thread-replies"))
+      .getByText("implementation not confirmed started.", { exact: false })
+      .closest<HTMLElement>('[data-testid="bot-member-row"]');
+    if (row === null) throw new Error("the reply is not drawn as a member row");
+    expectPlainLineOutsideQuote(row);
+  });
+
+  it("keeps the plain line out of the quote in the post the thread opens on", () => {
+    channelMessages = [quoteThenPlainLine("anchor-1")];
+    mountPanel(listed("user-teammate"), []);
+
+    expectPlainLineOutsideQuote(screen.getByTestId("bot-thread-anchor"));
+  });
+});
+
+describe("<BotThreadPanel /> a reply box whose stored draft names images still being read (T186)", () => {
+  afterEach(() => {
+    useBotDraftsStore.setState({ boxesReading: {} });
+  });
+
+  it("shows the stored text in a reply box that cannot be edited or sent until the person discards it, and then gives an empty reply box", async () => {
+    const user = userEvent.setup();
+    channelMessages = [announcement("anchor-1", "Ship the release today?")];
+    useBotDraftsStore.setState({
+      boxesReading: {
+        [BOT_ID]: { "anchor-1": { text: "Stored reply", replyTo: null } },
+      },
+    });
+    mountPanel(listed("user-teammate"), []);
+
+    const input = screen.getByTestId("bot-thread-composer-input");
+    expect(input).toHaveProperty("value", "Stored reply");
+    expect(input).toHaveProperty("disabled", true);
+    expect(input).toHaveProperty("readOnly", true);
+    expect(screen.getByTestId("bot-thread-composer-send")).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByTestId("bot-thread-composer-reading")).toBeTruthy();
+
+    await user.click(screen.getByTestId("bot-thread-composer-discard"));
+
+    expect(useBotDraftsStore.getState().boxesReading).toEqual({});
+    expect(screen.queryByTestId("bot-thread-composer-reading")).toBeNull();
+    expect(textOf(boxInput("Reply in the thread"))).toBe("");
+  });
+
+  describe("with a reply chosen while it waits (T166)", () => {
+    const REPLYING_TO = {
+      messageId: "message-1",
+      author: "Sam",
+      line: "Ship it on Friday",
+    };
+
+    function mountWaiting(reach: BotReplyReach): void {
+      panelReplyReach = reach;
+      channelMessages = [announcement("anchor-1", "Ship the release today?")];
+      useBotDraftsStore.setState({
+        boxesReading: {
+          [BOT_ID]: {
+            "anchor-1": { text: "Stored reply", replyTo: REPLYING_TO },
+          },
+        },
+      });
+      mountPanel(listed("user-teammate"), []);
+    }
+
+    it("shows the reply the box waits under, and cancelling it clears it from the waiting box", async () => {
+      const user = userEvent.setup();
+      mountWaiting("delivered");
+
+      expect(
+        screen.getByTestId("bot-thread-composer-reply-author").textContent,
+      ).toBe("Sam");
+      expect(
+        screen.getByTestId("bot-thread-composer-reply-line").textContent,
+      ).toBe("Ship it on Friday");
+
+      await user.click(screen.getByTestId("bot-thread-composer-reply-cancel"));
+
+      expect(screen.queryByTestId("bot-thread-composer-reply")).toBeNull();
+      expect(screen.getByTestId("bot-thread-composer-reading")).toBeTruthy();
+      expect(
+        useBotDraftsStore.getState().boxesReading[BOT_ID]?.["anchor-1"],
+      ).toEqual({ text: "Stored reply", replyTo: null });
+    });
+
+    it("shows no reply where the bot's host takes none", () => {
+      mountWaiting("none");
+
+      expect(screen.getByTestId("bot-thread-composer-reading")).toBeTruthy();
+      expect(screen.queryByTestId("bot-thread-composer-reply")).toBeNull();
+    });
+  });
+});
+
+describe("<BotThreadPanel /> the split panel's unread boundary", () => {
+  /** A reply of the bot's in the thread, at `at`. */
+  function threadReply(
+    messageId: string,
+    text: string,
+    at: number,
+  ): Extract<Message, { role: "assistant" }> {
+    return { ...announcement(messageId, text), timestamp: at, startedAt: at };
+  }
+
+  const REPLIES: ReadonlyArray<Message> = [
+    threadReply("reply-read", "Already read reply", 2_000),
+    threadReply("reply-new-1", "First new reply", 3_000),
+    threadReply("reply-new-2", "Second new reply", 4_000),
+  ];
+
+  function readBehindTwoReplies(): void {
+    mocks.read = {
+      cursors: { [THREAD_ID]: { messageId: "reply-read", seq: 2_000 } },
+      latest: { [THREAD_ID]: { messageId: "reply-new-2", seq: 4_000 } },
+    };
+  }
+
+  function boundaryTarget(): string {
+    return (
+      screen
+        .getByTestId("chat-messages-stub")
+        .getAttribute("data-boundary-to") ?? ""
+    );
+  }
+
+  it("opens on the New divider above the first unread reply, by a boundary request and not a message request", async () => {
+    readBehindTwoReplies();
+    mountPanel(listed(null), REPLIES);
+
+    await waitFor(() => {
+      expect(document.querySelectorAll("[data-unread-divider]")).toHaveLength(
+        1,
+      );
+    });
+    const divider = document.querySelector("[data-unread-divider]");
+    expect(divider?.nextElementSibling?.textContent).toContain(
+      "First new reply",
+    );
+    const rowBelow =
+      divider?.nextElementSibling?.getAttribute("data-bot-read-row");
+    expect(rowBelow).toBeTruthy();
+    expect(boundaryTarget()).toBe(rowBelow);
+    expect(
+      screen.getByTestId("chat-messages-stub").getAttribute("data-scroll-to"),
+    ).toBe("");
+  });
+
+  it("opens on the New divider above a merged row that holds the cursor's record and a newer unread one", async () => {
+    mocks.read = {
+      cursors: { [THREAD_ID]: { messageId: "turn-a1", seq: 3_000 } },
+      latest: { [THREAD_ID]: { messageId: "turn-a2", seq: 4_000 } },
+    };
+    mountPanel(listed(null), [
+      threadReply("reply-read", "Already read reply", 2_000),
+      { ...threadReply("turn-a1", "Merged part one", 3_000), turnId: "turn-1" },
+      { ...threadReply("turn-a2", "Merged part two", 4_000), turnId: "turn-1" },
+    ]);
+
+    await waitFor(() => {
+      expect(document.querySelectorAll("[data-unread-divider]")).toHaveLength(
+        1,
+      );
+    });
+    const divider = document.querySelector("[data-unread-divider]");
+    expect(divider?.nextElementSibling?.textContent).toContain(
+      "Merged part two",
+    );
+    const rowBelow =
+      divider?.nextElementSibling?.getAttribute("data-bot-read-row");
+    expect(rowBelow).toBeTruthy();
+    expect(boundaryTarget()).toBe(rowBelow);
+    expect(
+      screen.getByTestId("chat-messages-stub").getAttribute("data-scroll-to"),
+    ).toBe("");
+  });
+
+  it("lands on the message a permalink names and requests no boundary, though the replies are unread", async () => {
+    readBehindTwoReplies();
+    panelLanding = { messageId: "reply-new-2", sendPostId: null, visit: 1 };
+    mountPanel(listed(null), REPLIES);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("chat-messages-stub").getAttribute("data-scroll-to"),
+      ).toBe("assistant:ts:4000");
+    });
+    expect(boundaryTarget()).toBe("");
   });
 });

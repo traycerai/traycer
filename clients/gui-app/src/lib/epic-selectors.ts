@@ -2572,6 +2572,19 @@ export function useEpicTreeNode(id: string): TreeNode | null {
   });
 }
 
+/**
+ * A node's title in the open epic's tree, `null` when the tree has no such
+ * node or there is no open epic: the read for a surface that also mounts
+ * outside an `<EpicSessionProvider>`, as a bot tab does.
+ */
+export function useMaybeEpicTreeNodeTitle(id: string): string | null {
+  return useMaybeEpicStore(
+    (s) =>
+      Object.hasOwn(s.tree.nodeById, id) ? s.tree.nodeById[id].title : null,
+    null,
+  );
+}
+
 export function useEpicAgentRoleClaims(agentId: string): readonly RoleClaim[] {
   const enabled = useAgentRolesEnabled();
   const claims = useEpicStore((s) =>

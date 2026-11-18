@@ -127,6 +127,7 @@ function Harness(props: {
           onEditResume={() => undefined}
           seed={kept.seed}
           keptDraft={kept.keptDraft}
+          hold={kept.hold}
           quote={null}
           reply={props.reply}
           moved={kept.moved}

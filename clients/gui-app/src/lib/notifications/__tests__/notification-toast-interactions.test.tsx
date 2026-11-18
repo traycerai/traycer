@@ -92,6 +92,7 @@ describe("notification toast interactions", () => {
           ),
           playChime: vi.fn(),
           onToastClick,
+          notifies: () => true,
         },
         null,
       );
@@ -122,7 +123,12 @@ describe("notification toast interactions", () => {
     act(() => {
       displayNotificationRows(
         [BOT_NOTIFICATION],
-        { showNotification, playChime: vi.fn(), onToastClick: vi.fn() },
+        {
+          showNotification,
+          playChime: vi.fn(),
+          onToastClick: vi.fn(),
+          notifies: () => true,
+        },
         null,
       );
     });
@@ -147,6 +153,7 @@ describe("notification toast interactions", () => {
           ),
           playChime: vi.fn(),
           onToastClick: vi.fn(),
+          notifies: () => true,
         },
         null,
       );
@@ -168,6 +175,7 @@ describe("notification toast interactions", () => {
           ),
           playChime: vi.fn(),
           onToastClick,
+          notifies: () => true,
         },
         null,
       );
