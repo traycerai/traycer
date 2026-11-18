@@ -55,6 +55,18 @@ async function expectTwoTileMenu(page: Page): Promise<void> {
   await expect(page.locator(COLUMN)).toHaveCount(0);
 }
 
+/**
+ * The one-tile form with the rail open: the rail takes the pane on its own, the
+ * channel stays mounted but hidden, the column draws, and there is no picker
+ * trigger.
+ */
+async function expectOneTileColumn(page: Page): Promise<void> {
+  await expect(page.locator(RAIL)).toBeVisible();
+  await expect(page.locator(CHANNEL)).toBeHidden();
+  await expect(page.locator(COLUMN)).toBeVisible();
+  await expect(page.locator(TRIGGER)).toHaveCount(0);
+}
+
 function openAndFollow(page: Page): Promise<SurfaceEntry> {
   return followSurface(page, { surface: PICKER, trigger: TRIGGER });
 }
@@ -126,8 +138,8 @@ test("on a 1024 by 768 device with side insets the picker rests across everythin
   const insets: Insets = { top: 24, left: 59, right: 34 };
   await openPage(page, size, "collapsed");
   await setInsets(page, insets);
-  // The form is the two-tile menu only with the insets taken off the width
-  // (931 here), so it is read again after the shell asks for them.
+  // The insets reach the shell by a resize. With them off the width (931) the
+  // form is still the two-tile menu; the case below is the one they change.
   await page.evaluate(() => window.dispatchEvent(new Event("resize")));
   await expect
     .poll(() =>
@@ -155,20 +167,46 @@ test("on a 1024 by 768 device with the expanded strip the picker rests across th
   expectRestsAcross(entry, size, NO_INSETS, size.height);
 });
 
+// The fixture draws no strip, so the expanded preference shows only in the width
+// rule: the expanded strip is 240, so two tiles need 1008. At 1007 the expanded
+// strip gives one tile, where the collapsed strip (828) gives two. A page that
+// ignored `?strip=expanded` would show the two-tile menu here.
+test("with the expanded strip one pixel under 1008 is the one-tile form", async ({
+  page,
+}) => {
+  await openPage(page, { width: 1007, height: 768 }, "expanded");
+
+  await expectOneTileColumn(page);
+});
+
+// 860 is two tiles on the collapsed strip. Insets of 20 and 13 leave 827, which
+// is not, but only once the shell has asked for them again: it reads them once
+// and again on a resize. The page is two-tile first, so the form changing is
+// what the case shows.
+test("insets that bring the content width to 827 change the form to one tile", async ({
+  page,
+}) => {
+  await openPage(page, { width: 860, height: 600 }, "collapsed");
+  await expectTwoTileMenu(page);
+
+  const insets: Insets = { top: 0, left: 20, right: 13 };
+  await setInsets(page, insets);
+  await page.evaluate(() => window.dispatchEvent(new Event("resize")));
+
+  await expectOneTileColumn(page);
+});
+
 // One pixel under the boundary the same page, with the same rail open, is the
-// one-tile form: the rail takes the pane on its own, the column draws, and there
-// is no picker trigger to measure. The channel stays mounted but hidden: with a
-// tile count from the installed app's placement that is `channelBesideRailClass`
-// answering "hidden" for one tile (the column drawing, which only the installed
-// form does, shows the count is not null). The rail being drawn is what shows it
-// was set, so the case cannot pass on a page where the rail never opened.
+// one-tile form. The channel is hidden by `channelBesideRailClass` answering
+// "hidden" for one tile, which needs a tile count from the installed app's
+// placement (the container-query branch would hide it at this width as well, so
+// the column drawing, which only the installed form does, is what shows the
+// count is not null). The rail being drawn is what shows it was set, so the case
+// cannot pass on a page where the rail never opened.
 test("one pixel under the boundary the rail does not make the form two-tile", async ({
   page,
 }) => {
   await openPage(page, { width: 827, height: 600 }, "collapsed");
 
-  await expect(page.locator(RAIL)).toBeVisible();
-  await expect(page.locator(CHANNEL)).toBeHidden();
-  await expect(page.locator(COLUMN)).toBeVisible();
-  await expect(page.locator(TRIGGER)).toHaveCount(0);
+  await expectOneTileColumn(page);
 });
