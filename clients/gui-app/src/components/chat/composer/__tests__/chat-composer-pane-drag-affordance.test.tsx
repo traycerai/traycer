@@ -341,8 +341,11 @@ beforeEach(() => {
 
 afterEach(async () => {
   cleanup();
-  await runTimersUntilQuiet();
-  vi.useRealTimers();
+  try {
+    await runTimersUntilQuiet();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 function composerElement(restingSandbox: RestingChatSandbox | null) {

@@ -222,20 +222,23 @@ beforeEach(() => {
 
 afterEach(async () => {
   cleanup();
-  await runTimersUntilQuiet();
-  window.getSelection()?.removeAllRanges();
-  notices.mockRestore();
-  refusals.mockRestore();
-  vi.restoreAllMocks();
-  useSettingsStore.setState(useSettingsStore.getInitialState(), true);
-  useBotDraftsStore.setState(useBotDraftsStore.getInitialState(), true);
-  useBotOpenThreadStore.setState({ byBotId: {} });
-  mocks.sessions = {};
-  mocks.threads = [];
-  mocks.threadListFailed = false;
-  mocks.client = null;
-  mocks.activity = null;
-  resetBotFailedRequestSupport();
+  try {
+    await runTimersUntilQuiet();
+  } finally {
+    window.getSelection()?.removeAllRanges();
+    notices.mockRestore();
+    refusals.mockRestore();
+    vi.restoreAllMocks();
+    useSettingsStore.setState(useSettingsStore.getInitialState(), true);
+    useBotDraftsStore.setState(useBotDraftsStore.getInitialState(), true);
+    useBotOpenThreadStore.setState({ byBotId: {} });
+    mocks.sessions = {};
+    mocks.threads = [];
+    mocks.threadListFailed = false;
+    mocks.client = null;
+    mocks.activity = null;
+    resetBotFailedRequestSupport();
+  }
 });
 
 function channelSection(): HTMLElement {

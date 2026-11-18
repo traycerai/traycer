@@ -59,6 +59,7 @@ import {
 } from "@/stores/layout/layout-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { runTimersUntilQuiet } from "@/components/chat/composer/__tests__/editor-timer-support";
 import { mocks, pane, type BotScript } from "./bot-threads-view-state";
 import { PaneGate } from "./bot-threads-view-pane-gate";
 
@@ -556,6 +557,12 @@ export function drawnReplies(threadId: string): string[] {
 /** Element's own scrollIntoView before a case replaced it, read by key. */
 let originalScrollIntoView: PropertyDescriptor | undefined;
 
+/**
+ * Whether the running case's teardown lets the editors it mounted be destroyed
+ * before the clock goes; set by `drainEditorTimersAtTeardown`.
+ */
+let drainsEditorTimers = false;
+
 export function installBotThreadsViewCaseLifecycle(): void {
   beforeEach(() => {
     originalScrollIntoView = Object.getOwnPropertyDescriptor(
@@ -604,19 +611,36 @@ export function installBotThreadsViewCaseLifecycle(): void {
     });
   });
 
-  afterEach(() => {
-    cleanup();
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-    if (originalScrollIntoView === undefined) {
-      Reflect.deleteProperty(Element.prototype, "scrollIntoView");
-    } else {
-      Object.defineProperty(
-        Element.prototype,
-        "scrollIntoView",
-        originalScrollIntoView,
-      );
+  afterEach(async () => {
+    try {
+      cleanup();
+      if (drainsEditorTimers) await runTimersUntilQuiet();
+    } finally {
+      drainsEditorTimers = false;
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+      if (originalScrollIntoView === undefined) {
+        Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+      } else {
+        Object.defineProperty(
+          Element.prototype,
+          "scrollIntoView",
+          originalScrollIntoView,
+        );
+      }
+      resetBotFailedRequestSupport();
     }
-    resetBotFailedRequestSupport();
+  });
+}
+
+/**
+ * Opts a file's cases into waiting for the editors they mounted to be
+ * destroyed in teardown: after the unmount, the pending timers run until none
+ * is left, and a case that leaves one fails. Called beside
+ * `installBotThreadsViewCaseLifecycle()`; the lifecycle's restores run either way.
+ */
+export function drainEditorTimersAtTeardown(): void {
+  beforeEach(() => {
+    drainsEditorTimers = true;
   });
 }

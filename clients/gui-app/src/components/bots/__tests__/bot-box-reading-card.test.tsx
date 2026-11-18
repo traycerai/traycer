@@ -12,7 +12,7 @@ import {
   botMentionHostClientMock,
   emptyBotMentionHostListsMock,
 } from "@/components/bots/__tests__/bot-mention-host-test-support";
-import { act, cleanup, within } from "@testing-library/react";
+import { act, within } from "@testing-library/react";
 import { toast } from "sonner";
 import {
   afterEach,
@@ -29,7 +29,6 @@ import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import { DROPS_WAIT_FOR_DRAFT_IMAGES } from "@/components/bots/bot-drop-lines";
 import { FILE_DROP_OVERLAY_CONTENT } from "@/components/home/composer/composer-drop-overlay-content";
 import { BOT_CONVERSATION_IMAGES_VERSION } from "@/hooks/bots/use-bot-send-version";
-import { runTimersUntilQuiet } from "@/components/chat/composer/__tests__/editor-timer-support";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { resetLandingImageBudgetReservationsForTesting } from "@/lib/composer/landing-image-budget";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
@@ -57,6 +56,7 @@ import { mocks } from "./bot-threads-view-state";
 import {
   card,
   FOLLOWING,
+  drainEditorTimersAtTeardown,
   installBotThreadsViewCaseLifecycle,
   mount,
   intersectTarget,
@@ -205,6 +205,7 @@ vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
 }));
 
 installBotThreadsViewCaseLifecycle();
+drainEditorTimersAtTeardown();
 
 const IMAGES_TITLE = FILE_DROP_OVERLAY_CONTENT.images.title;
 const HELD = "bot-thread-composer-held";
@@ -222,9 +223,7 @@ beforeEach(() => {
   notices = spyOnNotices();
 });
 
-afterEach(async () => {
-  cleanup();
-  await runTimersUntilQuiet();
+afterEach(() => {
   notices.mockRestore();
   useBotDraftsStore.setState({ boxesReading: {} });
 });
