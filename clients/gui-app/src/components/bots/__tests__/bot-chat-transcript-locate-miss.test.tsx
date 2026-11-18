@@ -12,6 +12,7 @@ import { act, cleanup, render, waitFor } from "@testing-library/react";
 import {
   QueryClient,
   QueryClientProvider,
+  matchQuery,
   queryOptions,
   useQuery,
 } from "@tanstack/react-query";
@@ -45,6 +46,8 @@ const mocks = vi.hoisted(() => ({
   /** What `chat.locateRow` answers, per ask. */
   locate: null as (() => Promise<ChatLocateRowResponse>) | null,
   asked: 0,
+  /** The first part of every `chat.locateRow` query key, which scopes what the helpers wait on. */
+  locateRowKey: "locate-row",
   /** The params of each `chat.locateRow` read, in the order they were asked. */
   locateParams: [] as object[],
   /** Renders of the hook's host that have committed, whichever read they carry. */
@@ -90,7 +93,7 @@ vi.mock("@/hooks/host/use-host-query", async (importOriginal) => {
       const result = useQuery(
         queryOptions<ChatLocateRowResponse, HostRpcError>({
           queryKey: [
-            "locate-row",
+            mocks.locateRowKey,
             args.method,
             JSON.stringify(args.params),
             args.cacheKeyIdentity ?? null,
@@ -173,6 +176,8 @@ let store: UseBoundStore<StoreApi<LandingState>>;
 let landing: MissLanding | null = null;
 let paneVisible = true;
 let queryClient = new QueryClient();
+/** Every `chat.locateRow` query, whatever its params: what the helpers wait on. */
+const locateReads = queryOptions({ queryKey: [mocks.locateRowKey] });
 /** Reads of the locate entry that have ended, in success or in error. */
 let locateReadsEnded = 0;
 
@@ -190,6 +195,7 @@ function mountTranscript(): { readonly rerender: () => void } {
   queryClient.getQueryCache().subscribe((event) => {
     if (
       event.type === "updated" &&
+      matchQuery(locateReads, event.query) &&
       (event.action.type === "success" || event.action.type === "error")
     ) {
       locateReadsEnded += 1;
@@ -249,13 +255,13 @@ function flashing(messageId: string): boolean {
 }
 
 /**
- * The host's read has ended and no other is in flight: the locate read is the
- * only one this client ever runs.
+ * A locate read has ended and none is in flight. Only locate queries are
+ * counted, so any other read on the client neither satisfies nor delays this.
  */
 async function readEnded(): Promise<void> {
   await waitFor(() => {
     expect(locateReadsEnded).toBeGreaterThan(0);
-    expect(queryClient.isFetching()).toBe(0);
+    expect(queryClient.isFetching(locateReads)).toBe(0);
   });
 }
 

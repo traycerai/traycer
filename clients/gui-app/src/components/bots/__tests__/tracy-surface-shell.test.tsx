@@ -1388,6 +1388,7 @@ describe("the Tracy surface shell", () => {
       const mounted = await waitingOnRelease(SurfaceHost);
 
       fireEvent.click(row("bot-triage"));
+      expect(keptState("bot-release").landing).toBe(false);
       await shownChannel("bot-triage");
       act(() =>
         setThreadList("bot-release", {
@@ -1399,11 +1400,7 @@ describe("the Tracy surface shell", () => {
       fireEvent.click(row("bot-release"));
 
       const channel = await shownChannel("bot-release");
-      await waitFor(() => {
-        expect(keptState("bot-release").landing).toBe(false);
-      });
       expect(landedOn(channel)).toEqual({ open: "none", row: "none" });
-      expect(keptState("bot-release").landing).toBe(false);
       expect(toast.error).not.toHaveBeenCalled();
 
       act(() => {
@@ -1431,6 +1428,7 @@ describe("the Tracy surface shell", () => {
 
       await act(() => mounted.navigate({ to: "/home" }));
       await act(() => mounted.navigate(tracyRoute("bot-release")));
+      expect(keptState("bot-release").landing).toBe(false);
       act(() =>
         setThreadList("bot-release", {
           threads: [THREAD],
@@ -1440,11 +1438,7 @@ describe("the Tracy surface shell", () => {
       );
 
       const channel = await shownChannel("bot-release");
-      await waitFor(() => {
-        expect(keptState("bot-release").landing).toBe(false);
-      });
       expect(landedOn(channel)).toEqual({ open: "none", row: "none" });
-      expect(keptState("bot-release").landing).toBe(false);
       expect(toast.error).not.toHaveBeenCalled();
     });
 

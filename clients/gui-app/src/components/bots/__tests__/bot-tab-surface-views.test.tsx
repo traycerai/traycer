@@ -1471,6 +1471,50 @@ describe("a landing on a thread's message while the tab reads its thread list", 
       expect(toast.error).toHaveBeenCalledTimes(1);
     });
 
+    describe("on a host that names no conversation for the channel", () => {
+      beforeEach(() => {
+        mocks.state.snapshot = {
+          ...snapshot(),
+          bot: { ...BOT, appConversationChatId: null },
+        };
+      });
+
+      it("lands the exact message of a thread the settled list carries with its post", () => {
+        const view = listBeingRead(false);
+        const movesBefore = useTracyPlaceStore.getState().automaticMoves;
+        requestThreadLanding("thread-1", "reply-9");
+        expect(spent()).toBe(false);
+
+        answer([threadOf(MAIN, true)], false);
+        view.rerender();
+
+        expect(landedOn()).toEqual({
+          row: "reply-9",
+          thread: "thread-1",
+          open: "post-7",
+        });
+        expect(spent()).toBe(true);
+        expect(useTracyPlaceStore.getState().automaticMoves).toBe(
+          movesBefore + 1,
+        );
+        expect(toast.error).not.toHaveBeenCalled();
+      });
+
+      it("still lands nothing, and says so once, for a thread whose post is gone", () => {
+        const view = listBeingRead(false);
+        const movesBefore = useTracyPlaceStore.getState().automaticMoves;
+        requestThreadLanding("thread-1", "reply-9");
+
+        answer([threadOf(MAIN, false)], false);
+        view.rerender();
+
+        expect(spent()).toBe(true);
+        expect(landedOn()).toEqual(NOWHERE);
+        expect(useTracyPlaceStore.getState().automaticMoves).toBe(movesBefore);
+        expect(toast.error).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it("opens a thread itself, naming no message, from a held list at once, though a read is in flight and the thread belongs to another conversation", () => {
       mocks.state.threads = [threadOf("conversation-other", true)];
       mocks.state.threadsFetching = true;

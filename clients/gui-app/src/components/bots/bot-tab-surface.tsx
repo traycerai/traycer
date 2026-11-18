@@ -1480,7 +1480,8 @@ function threadListMayStillAnswer(list: ThreadListReading): boolean {
 /**
  * Whether the settled list names `threadId` as a thread this channel can
  * open: one with its post still in the channel, hanging off this channel's
- * own conversation.
+ * own conversation. A host that names no channel (it predates the field)
+ * leaves no conversation to compare, and the list's own word stands.
  */
 function threadOpensInChannel(
   list: ThreadListReading,
@@ -1493,8 +1494,8 @@ function threadOpensInChannel(
   return (
     thread !== undefined &&
     thread.anchor !== null &&
-    list.channelChatId !== null &&
-    thread.conversationId === list.channelChatId
+    (list.channelChatId === null ||
+      thread.conversationId === list.channelChatId)
   );
 }
 
