@@ -41,6 +41,8 @@ export interface MoveRerun {
   readonly planKey: readonly unknown[] | undefined;
   /** False from a Retry until the move it started waits for the person again. */
   readonly planReadable: boolean;
+  /** A Retry's re-run went on with the accepted move instead of asking again. */
+  readonly resumed: boolean;
   /** The move stopped: a stopped move refuses every plan until it runs again. */
   readonly stopped: boolean;
   readonly pending: boolean;
@@ -66,6 +68,13 @@ export function useMoveRerun(
     planReadable:
       attemptId === null ||
       (status.data !== null && moveAwaitsConsent(status.data)),
+    // Asked only of a stopped move, so any read after it that neither waits
+    // for the person nor has stopped is the move going on, or already done.
+    resumed:
+      attemptId !== null &&
+      status.data !== null &&
+      !moveAwaitsConsent(status.data) &&
+      !moveHasStopped(status.data),
     stopped: retryable && status.data !== null && moveHasStopped(status.data),
     pending: retry.isPending,
     rerun: (started) => {

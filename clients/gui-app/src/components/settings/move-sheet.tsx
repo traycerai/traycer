@@ -1,4 +1,4 @@
-import { Fragment, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import {
   GUIDE_DIFFERS_NOTE,
@@ -155,6 +155,15 @@ function MoveSheetBody(props: {
     "Couldn't start the move.",
   );
   const openProgress = useMoveProgressDialogStore((state) => state.openDialog);
+  const { onClose } = props;
+  // A re-run that resumes the accepted move asks nothing: the move's progress
+  // takes over, as after Accept.
+  const { resumed } = rerun;
+  useEffect(() => {
+    if (!resumed) return;
+    onClose();
+    openProgress(target);
+  }, [resumed, onClose, openProgress, target]);
   // `null` takes a Moves row's choice back: it moves as planned.
   const choose = (key: string, choice: MoveKeyChoice | null): void => {
     setChoices((current) => {
