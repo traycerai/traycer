@@ -31,6 +31,8 @@ interface Fixture {
    * the mount is the whole answer, with nothing to wait for. */
   readonly fetching: () => number;
   readonly refetch: () => Promise<void>;
+  /** The app client retries a failed read once after a real delay. */
+  readonly disableRetries: () => void;
 }
 
 function createFixture(recoverMissing: boolean): Fixture {
@@ -80,6 +82,13 @@ function createFixtureAnswering(
     refetch: async () => {
       await queryClient.refetchQueries();
     },
+    disableRetries: () => {
+      const defaults = queryClient.getDefaultOptions();
+      queryClient.setDefaultOptions({
+        ...defaults,
+        queries: { ...defaults.queries, retry: false },
+      });
+    },
   };
 }
 
@@ -119,6 +128,7 @@ describe("useHostRecoversMissingFolders", () => {
       if (failing) throw new Error("config unreadable");
       return { agentCreate: "allow", recoverMissing: true };
     });
+    fixture.disableRetries();
     const result = mount(fixture, true);
     await waitFor(() => {
       expect(result.current).toBe(true);
