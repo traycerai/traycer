@@ -64,6 +64,8 @@ import {
   type BotComposerEdit,
   type BotComposerQuote,
 } from "@/components/bots/bot-message-composer";
+import { useHeldDropPicker } from "@/components/bots/bot-box-drops";
+import { useComposerDropScope } from "@/components/chat/composer/composer-drop-scope";
 import type { QuoteTextSnapshot } from "@/components/chat/quote/append-quote-to-draft";
 import { clearBrowserSelection } from "@/components/chat/quote/quote-snapshot-into-draft";
 import {
@@ -432,7 +434,12 @@ export function BotChannelView(props: {
     moved: channelMoved,
     notice: channelNotice,
     reading: channelReading,
+    hold: channelHold,
   } = useKeptBoxDraft(botId, channelId);
+  // The channel is one drop zone for its box (T386), and the box's slot keeps
+  // the picker its reading view opens, so a pick outlives the read.
+  const channelDrop = useComposerDropScope();
+  const channelPicker = useHeldDropPicker(channelHold);
 
   const {
     supported: threadListSupported,
@@ -912,86 +919,100 @@ export function BotChannelView(props: {
               data-testid="bot-channel"
               data-conversation-id={channel.conversationId}
               className={cn(
-                "min-h-0 min-w-0 flex-1 flex-col",
+                "relative min-h-0 min-w-0 flex-1 flex-col",
                 railOpen ? channelBesideRailClass(tiles) : "flex",
               )}
+              {...channelDrop.zoneProps}
             >
-              <div
-                data-testid="bot-channel-messages"
-                className="flex min-h-0 flex-1 flex-col"
-              >
-                <ChannelSearchBack
-                  botId={botId}
-                  shown={search.showing}
-                  on="channel"
-                />
-                <BotVisitPresenceContext value={channelShown}>
-                  <BotReadPresenceContext value={presentedChannelId !== null}>
-                    <BotExchangeLinesContext value={exchangeLines.channel}>
-                      <BotChatTranscript
-                        botId={botId}
-                        chatId={channel.conversationId}
-                        hostId={hostId}
-                        title={botTitle}
-                        instanceId={`bot-channel:${botId}`}
-                        surface={surface}
-                        resolveMember={resolveMember}
-                        showConnecting
-                        header={null}
-                        landOn={landing}
-                        flow={null}
-                      />
-                    </BotExchangeLinesContext>
-                  </BotReadPresenceContext>
-                </BotVisitPresenceContext>
-              </div>
-              <BotReplyingStrip
-                botTitle={botTitle}
-                activity={trunkReply}
-                turn={trunkReplyTurn}
-                testId="bot-channel-replying"
-              />
-              <BotRoutingCard
-                botId={botId}
-                hostId={hostId}
-                sessionChatId={trunkChatId}
-              />
-              {channelReading === null ? (
-                <BotMessageComposer
-                  // Its draft is the conversation's, kept by it (`channelKeptDraft`).
-                  key={channel.conversationId}
-                  botId={botId}
-                  botTitle={botTitle}
-                  conversationId={channel.conversationId}
-                  threadId={null}
-                  announcementId={null}
-                  sendable
-                  imageReach={imageReach}
-                  placeholder={`Message ${botTitle}`}
-                  label={`Message ${botTitle}`}
-                  testId="bot-channel-composer"
-                  failure={sendFailure}
-                  edit={edit}
-                  onEditEnd={endEdit}
-                  onEditResume={setEdit}
-                  seed={channelSeed}
-                  keptDraft={channelKeptDraft}
-                  quote={quoteFor(null)}
-                  reply={{ reach: replyReach, chosen: replyChosen }}
-                  moved={channelMoved}
-                  notice={channelNotice}
-                  onSent={openPostedThread}
-                />
-              ) : (
-                <BotMessageComposerReading
-                  key={channel.conversationId}
-                  placeholder={`Message ${botTitle}`}
-                  label={`Message ${botTitle}`}
-                  reading={channelReading}
-                  replyReach={replyReach}
-                  testId="bot-channel-composer"
-                />
+              {channelDrop.provide(
+                <>
+                  <div
+                    data-testid="bot-channel-messages"
+                    className="flex min-h-0 flex-1 flex-col"
+                  >
+                    <ChannelSearchBack
+                      botId={botId}
+                      shown={search.showing}
+                      on="channel"
+                    />
+                    <BotVisitPresenceContext value={channelShown}>
+                      <BotReadPresenceContext
+                        value={presentedChannelId !== null}
+                      >
+                        <BotExchangeLinesContext value={exchangeLines.channel}>
+                          <BotChatTranscript
+                            botId={botId}
+                            chatId={channel.conversationId}
+                            hostId={hostId}
+                            title={botTitle}
+                            instanceId={`bot-channel:${botId}`}
+                            surface={surface}
+                            resolveMember={resolveMember}
+                            showConnecting
+                            header={null}
+                            landOn={landing}
+                            flow={null}
+                          />
+                        </BotExchangeLinesContext>
+                      </BotReadPresenceContext>
+                    </BotVisitPresenceContext>
+                  </div>
+                  <BotReplyingStrip
+                    botTitle={botTitle}
+                    activity={trunkReply}
+                    turn={trunkReplyTurn}
+                    testId="bot-channel-replying"
+                  />
+                  <BotRoutingCard
+                    botId={botId}
+                    hostId={hostId}
+                    sessionChatId={trunkChatId}
+                  />
+                  {channelReading === null ? (
+                    <BotMessageComposer
+                      // Its draft is the conversation's, kept by it (`channelKeptDraft`).
+                      key={channel.conversationId}
+                      botId={botId}
+                      botTitle={botTitle}
+                      conversationId={channel.conversationId}
+                      threadId={null}
+                      announcementId={null}
+                      sendable
+                      imageReach={imageReach}
+                      placeholder={`Message ${botTitle}`}
+                      label={`Message ${botTitle}`}
+                      testId="bot-channel-composer"
+                      failure={sendFailure}
+                      edit={edit}
+                      onEditEnd={endEdit}
+                      onEditResume={setEdit}
+                      seed={channelSeed}
+                      keptDraft={channelKeptDraft}
+                      quote={quoteFor(null)}
+                      reply={{ reach: replyReach, chosen: replyChosen }}
+                      moved={channelMoved}
+                      notice={channelNotice}
+                      hold={channelHold}
+                      onSent={openPostedThread}
+                    />
+                  ) : (
+                    <BotMessageComposerReading
+                      key={channel.conversationId}
+                      placeholder={`Message ${botTitle}`}
+                      label={`Message ${botTitle}`}
+                      reading={channelReading}
+                      replyReach={replyReach}
+                      imageReach={imageReach}
+                      attach={channelPicker.open}
+                      testId="bot-channel-composer"
+                    />
+                  )}
+                  <span hidden data-testid="bot-channel-composer-picker">
+                    {channelPicker.input}
+                  </span>
+                </>,
               )}
+              {channelDrop.overlay}
             </section>
             <ChannelMemoryPane
               tiles={tiles}

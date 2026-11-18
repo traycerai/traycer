@@ -504,7 +504,7 @@ function ThreadPanel(props: {
       botId="bot-1"
       hostId={HOST_ID}
       boundHostId={HOST_ID}
-      imageReach="none"
+      imageReach={params.get("images") === "delivered" ? "delivered" : "none"}
       answerReach="each"
       replyReach="none"
       botTitle="Release Bot"

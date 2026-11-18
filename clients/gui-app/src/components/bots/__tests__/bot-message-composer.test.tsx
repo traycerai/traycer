@@ -167,6 +167,7 @@ function composer(
         onEditResume={onEditResume}
         seed={null}
         keptDraft={null}
+        hold={null}
         quote={quote}
         reply={NO_BOT_REPLY}
         moved={null}
@@ -224,6 +225,7 @@ function Harness(props: {
         }}
         seed={props.keepDraft ? kept.seed : null}
         keptDraft={props.keepDraft ? kept.keptDraft : null}
+        hold={props.keepDraft ? kept.hold : null}
         quote={null}
         reply={NO_BOT_REPLY}
         moved={null}

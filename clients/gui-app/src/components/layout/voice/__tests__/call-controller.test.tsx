@@ -3203,6 +3203,7 @@ describe("a call dialled from a message box", () => {
             onEditResume={() => undefined}
             seed={null}
             keptDraft={null}
+            hold={null}
             quote={null}
             reply={NO_BOT_REPLY}
             moved={null}

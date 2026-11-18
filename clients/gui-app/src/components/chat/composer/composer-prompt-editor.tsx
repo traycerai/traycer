@@ -54,7 +54,9 @@ import {
 } from "./editor/extensions/slash-command-extension";
 import {
   insertPathSpansCommand,
+  appendImageAttachmentsCommand,
   insertImageAttachmentsCommand,
+  type ImageAttachmentPlace,
   type PathInsertionCommit,
 } from "@/hooks/composer/use-composer-paste";
 import type {
@@ -169,8 +171,13 @@ export interface ComposerPromptEditorHandle {
     content: JsonContent,
     selection: { readonly from: number; readonly to: number } | null,
   ) => void;
+  /**
+   * Inserts image attachments at the caret, or at the end of the document
+   * with the selection left where it is (`at`).
+   */
   readonly insertImageAttachments: (
     attrs: ReadonlyArray<ImageAttachmentAttrs>,
+    at: ImageAttachmentPlace,
   ) => void;
   /** Insert an existing @-mention attachment at the preserved caret. */
   readonly insertMentionAttachment: (mention: MentionAttachment) => boolean;
@@ -724,8 +731,12 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
   );
 
   const insertImageAttachments = useCallback(
-    (attrs: ReadonlyArray<ImageAttachmentAttrs>) => {
+    (attrs: ReadonlyArray<ImageAttachmentAttrs>, at: ImageAttachmentPlace) => {
       if (editor === null) return;
+      if (at === "end") {
+        appendImageAttachmentsCommand(editor, attrs);
+        return;
+      }
       insertImageAttachmentsCommand(
         editor,
         attrs,
