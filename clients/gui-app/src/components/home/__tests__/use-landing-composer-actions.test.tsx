@@ -2257,6 +2257,12 @@ describe("useLandingComposerActions", () => {
       expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
     });
     expect(landingMocks.navigate).not.toHaveBeenCalled();
+    // The draft had no tab to replace, so the sent text must not stay a draft.
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === draftId),
+    ).toBe(false);
     expect(toast.info).toHaveBeenCalledWith("Epic created in the background.");
     queryClient.clear();
   });
@@ -3025,6 +3031,54 @@ describe("useLandingComposerActions", () => {
       left: { kind: "tab", ref: { kind: "epic" } },
       right: { kind: "tab", ref: refB },
     });
+    queryClient.clear();
+  });
+
+  it("removes a terminal-agent draft that has no tab in the strip once its epic opens", async () => {
+    setWorkspace("/tmp/terminal-orphan", "terminal-orphan");
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraftWithId("terminal-orphan", null);
+    useTabsStore.setState({
+      items: [],
+      activeItemId: null,
+      systemTabs: { history: null, settings: null },
+      stripOrder: [],
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.selectTerminalAgent({
+        launch: {
+          harnessId: "claude",
+          model: null,
+          reasoningEffort: null,
+          terminalAgentArgs: "",
+          profileId: null,
+        },
+        draftId,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
+        settled: null,
+      });
+    });
+    await waitFor(() => {
+      expect(landingMocks.createTerminalAgent).toHaveBeenCalledTimes(1);
+    });
+
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === draftId),
+    ).toBe(false);
     queryClient.clear();
   });
 

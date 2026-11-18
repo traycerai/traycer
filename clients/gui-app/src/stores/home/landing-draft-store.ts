@@ -214,12 +214,23 @@ interface LandingDraftStoreState {
   readonly drafts: ReadonlyArray<LandingDraftTab>;
   readonly activeDraftId: string | null;
   /**
-   * Returns an active draft id. Desktop/browser: always creates a fresh
-   * draft and sets it active. In the INSTALLED MOBILE APP (`isMobileApp()`),
-   * returns the newest existing draft instead - the phone has one stable
-   * composer.
+   * The draft THIS device's "New task" comes back to: the one it last minted
+   * there or opened by hand. Never moved by a mirrored row, so a draft open
+   * on another device is not it. Read only by the installed mobile app
+   * (`resumableLandingDraftId`), whose one composer has no tab strip to pick
+   * a draft from; it may name a row since closed or removed, which reads as
+   * none.
+   */
+  readonly resumeDraftId: string | null;
+  /**
+   * Mints a fresh draft, sets it active and returns its id, on every shell:
+   * its callers fill the draft they are handed, so it is never an existing
+   * one. The mobile app's "New task" resumes a draft through
+   * `resumableLandingDraftId` instead.
    */
   createDraft: (settings: ChatRunSettings | null) => string;
+  /** Name `id` as the draft this device's "New task" comes back to. */
+  setResumeDraft: (id: string) => void;
   /**
    * Coordinator-only stable-id source creation (restore/sync, landing
    * null-draft mount key stability) - explicit ids always mint, on every
@@ -672,14 +683,33 @@ function isUnseededLandingDraft(draft: LandingDraftTab): boolean {
 }
 
 /**
- * Newest OPEN landing draft, for the installed mobile app's single stable
- * composer: an id-less "new draft" activation reuses this instead of minting
- * (see `createDraft`). `null` when no open draft exists. A closed draft is
+ * The existing draft an id-less "new draft" activation lands on instead of
+ * minting, `null` when there is none. In the installed mobile app that is
+ * this device's own draft (`resumeDraftId`) while it is still open, whatever
+ * its content: the phone has ONE stable composer and no tab strip to close a
+ * second draft tab, and every open draft mirrored from another device is an
+ * open row here too, so the newest of those is not what the person was
+ * typing on this one. Keyed on the PRODUCT flag, never the viewport (see
+ * `@/lib/mobile-app`): a responsively-narrow desktop browser keeps normal
+ * multi-draft behavior. Elsewhere
+ * it is the newest open draft, which the tab strip shows. A closed draft is
  * retained-but-hidden (see `closeDraft`) and is never resurrected implicitly;
  * it comes back only through `openDraft`.
  */
-export function newestLandingDraftId(): string | null {
-  return newestDraft(useLandingDraftStore.getState().drafts);
+export function resumableLandingDraftId(): string | null {
+  const state = useLandingDraftStore.getState();
+  return isMobileApp() ? openResumeDraft(state) : newestDraft(state.drafts);
+}
+
+function openResumeDraft(state: {
+  readonly drafts: ReadonlyArray<LandingDraftTab>;
+  readonly resumeDraftId: string | null;
+}): string | null {
+  const id = state.resumeDraftId;
+  return id !== null &&
+    state.drafts.some((draft) => draft.id === id && isOpenLandingDraft(draft))
+    ? id
+    : null;
 }
 
 function newestDraft(drafts: ReadonlyArray<LandingDraftTab>): string | null {
@@ -701,24 +731,12 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
     (set, get) => ({
       drafts: [],
       activeDraftId: null,
+      resumeDraftId: null,
 
-      createDraft: (settings) => {
-        // The installed mobile app has ONE stable composer: its header has
-        // no tab strip, so a second draft tab could never be closed. "New
-        // task" therefore lands back on the existing draft - whatever its
-        // content - instead of minting another. Keyed on the PRODUCT flag,
-        // never the viewport (see `@/lib/mobile-app`): a responsively-narrow
-        // desktop browser keeps normal multi-draft behavior. Explicit-id
-        // creation (`createDraftWithId`) is a restore/sync path and always
-        // mints exactly that draft.
-        if (isMobileApp()) {
-          const existing = newestDraft(get().drafts);
-          if (existing !== null) {
-            set({ activeDraftId: existing });
-            return existing;
-          }
-        }
-        return get().createDraftWithId(uuidv4(), settings);
+      createDraft: (settings) => get().createDraftWithId(uuidv4(), settings),
+
+      setResumeDraft: (id) => {
+        set({ resumeDraftId: id });
       },
 
       createDraftWithId: (id, settings) => {
@@ -806,6 +824,8 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           drafts: [...uniqueLandingDrafts(state.drafts), next],
           activeDraftId:
             state.activeDraftId === sourceId ? nextId : state.activeDraftId,
+          resumeDraftId:
+            state.resumeDraftId === sourceId ? nextId : state.resumeDraftId,
         }));
         notifyDraftLocalEdit(nextId);
         return true;
@@ -923,7 +943,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         // not handed back still closed.
         draftRuntimeRegistry.reopen(id);
         if (!draft.closed) {
-          set({ activeDraftId: id });
+          set({ activeDraftId: id, resumeDraftId: id });
           return;
         }
         // Reopening a replica is local view state, like closing one: looking
@@ -941,6 +961,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
               : d,
           ),
           activeDraftId: id,
+          resumeDraftId: id,
         }));
         if (!local) {
           notifyDraftLocalEdit(id);
@@ -1152,6 +1173,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           ...stripBase64ImageNodesWithSelection(draft.content, draft.selection),
         })),
         activeDraftId: state.activeDraftId,
+        resumeDraftId: state.resumeDraftId,
       }),
       // Sanitize the localStorage payload on rehydration the same way
       // `readProjectedDrafts` sanitizes the desktop projection, so a legacy tab
@@ -1170,6 +1192,10 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
             persisted.activeDraftId,
             drafts,
           ),
+          resumeDraftId:
+            typeof persisted.resumeDraftId === "string"
+              ? persisted.resumeDraftId
+              : null,
         };
       },
     },
