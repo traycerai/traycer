@@ -1,3 +1,7 @@
+import {
+  botNotificationMessage,
+  type BotNotificationMessage,
+} from "@/lib/notifications/notification-groups";
 import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -122,6 +126,7 @@ export type MergedNotificationSource =
   | "cloud";
 
 export interface MergedNotificationRow {
+  readonly botMessage?: BotNotificationMessage | null;
   readonly feedId: string;
   readonly source: MergedNotificationSource;
   readonly sourceId: string;
@@ -491,7 +496,7 @@ function comparePartitionedAttentionOrder(
 ): number {
   const tierDelta = compareAttentionTiers(left.tier, right.tier);
   if (tierDelta !== 0) return tierDelta;
-  return compareRecentOrder(left.row, right.row);
+  return compareRecentNotificationOrder(left.row, right.row);
 }
 
 /**
@@ -501,7 +506,7 @@ function comparePartitionedAttentionOrder(
  * stale local-lane row above every fresh cloud row, which read as
  * "notifications stopped".
  */
-function compareRecentOrder(
+export function compareRecentNotificationOrder(
   left: MergedNotificationRow,
   right: MergedNotificationRow,
 ): number {
@@ -543,7 +548,7 @@ export function useRecentNotificationIds(): ReadonlyArray<string> {
         )
         .filter((row) => categories.has(row.category))
         .filter((row) => !unreadOnly || row.readAt === null)
-        .sort(compareRecentOrder)
+        .sort(compareRecentNotificationOrder)
         .map((row) => row.feedId),
     [rows, unreadOnly, categories],
   );
@@ -2118,6 +2123,7 @@ function rowFromHostEntryForOrigin(
     secrets: secretsNotificationDetail(entry.kind, entry.payload),
     botAnswer: isBotAttention(entry),
     botAuthorUserId: botConversationAuthorUserId(entry),
+    botMessage: botNotificationMessage(entry),
     hostKind: entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -2208,6 +2214,7 @@ export function rowFromCloudFeedRow(
     secrets: secretsNotificationDetail(row.entry.kind, row.entry.payload),
     botAnswer: isBotAttention(row.entry),
     botAuthorUserId: botConversationAuthorUserId(row.entry),
+    botMessage: botNotificationMessage(row.entry),
     hostKind: row.entry.kind,
     appLocalKind: null,
     globalEntry: null,

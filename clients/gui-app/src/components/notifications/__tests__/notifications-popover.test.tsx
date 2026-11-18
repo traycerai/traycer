@@ -62,12 +62,21 @@ import type {
   HostNotificationEntry,
   HostNotificationEntryV23,
   HostNotificationsCloudFeedRow,
+  HostNotificationsCloudFeedRowV18,
 } from "@traycer/protocol/host/notifications/contracts";
 import { ALL_NOTIFICATION_CATEGORIES } from "@/lib/notifications/notification-category";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { toast } from "sonner";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
+
+import {
+  bodyOf,
+  showsCount,
+  botMember,
+  entries,
+  rowShowing,
+} from "@/components/notifications/__tests__/notification-bot-members-test-support";
 
 const reconnectEngine = createHostReconnectEngine();
 
@@ -3240,5 +3249,127 @@ describe("NotificationsPopover", () => {
 
     await screen.findByTestId("notification-entry");
     expect(screen.queryByTestId("needs-you-group")).toBeNull();
+  });
+
+  describe("reply notifications of different feeds, accounts and host generations", () => {
+    function cloudBotRow(
+      entry: HostNotificationFeedEntry,
+    ): HostNotificationsCloudFeedRowV18 {
+      return {
+        entryId: entry.id,
+        originHostId: mockLocalHostEntry.hostId,
+        coalesceKey: `bot:${entry.id}`,
+        entry,
+        presentation: { epicTitle: "Tracy", chatTitle: "Thread" },
+      };
+    }
+
+    function applyCloudRows(
+      rows: ReadonlyArray<HostNotificationFeedEntry>,
+    ): void {
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: rows.map(cloudBotRow),
+        summary: {
+          totalCount: rows.length,
+          unreadCount: rows.length,
+          attentionCount: 0,
+        },
+        version: 1,
+      });
+    }
+
+    function applyHostRows(
+      rows: ReadonlyArray<HostNotificationFeedEntry>,
+    ): void {
+      useHostNotificationsStore.getState().applySnapshot({
+        attention: { entries: [], nextCursor: null },
+        recent: { entries: rows, nextCursor: null },
+        summary: { unreadCount: rows.length, attentionCount: 0 },
+      });
+    }
+
+    function renderCenter(): void {
+      const captured: TargetCapture = {
+        epicId: null,
+        tabId: null,
+        focusArtifactId: null,
+        focusThreadId: null,
+      };
+      renderRouter(buildRouterWithCapture(captured, () => undefined).router);
+    }
+
+    it("never folds a cloud row into the host's rows of the same bot and thread", async () => {
+      notificationFeedMode.value = "cloud";
+      applyHostRows([
+        botMember("h2", 300, "host reply two", { threadId: "thread-a" }),
+        botMember("h1", 200, "host reply one", { threadId: "thread-a" }),
+      ]);
+      applyCloudRows([
+        botMember("c1", 250, "cloud reply", { threadId: "thread-a" }),
+      ]);
+      renderCenter();
+      await screen.findAllByTestId("notification-entry");
+
+      expect(entries()).toHaveLength(2);
+      const cloud = rowShowing("cloud reply");
+      expect(bodyOf(cloud)).not.toContain("host reply");
+      expect(showsCount(rowShowing("host reply two"), 2)).toBe(true);
+    });
+
+    it("leaves nothing of the previous account in a group when another account's feed lands", async () => {
+      notificationFeedMode.value = "cloud";
+      applyCloudRows([
+        botMember("a2", 300, "first account reply two", {
+          threadId: "thread-a",
+        }),
+        botMember("a1", 200, "first account reply one", {
+          threadId: "thread-a",
+        }),
+      ]);
+      renderCenter();
+      await screen.findAllByTestId("notification-entry");
+
+      act(() => {
+        useCloudNotificationsStore.getState().reset();
+        useCloudNotificationsStore.setState({ accountId: "user-other" });
+        applyCloudRows([
+          botMember("b1", 400, "second account reply", {
+            threadId: "thread-a",
+          }),
+        ]);
+      });
+
+      await waitFor(() => {
+        expect(entries()).toHaveLength(1);
+      });
+      expect(bodyOf(entries()[0])).toContain("second account reply");
+      expect(bodyOf(entries()[0])).not.toContain("first account");
+      expect(showsCount(entries()[0], 2)).toBe(false);
+    });
+
+    it("counts only the members of the host's current snapshot when a new snapshot replaces the old one", async () => {
+      applyHostRows([
+        botMember("h3", 300, "old generation three", { threadId: "thread-a" }),
+        botMember("h2", 200, "old generation two", { threadId: "thread-a" }),
+        botMember("h1", 100, "old generation one", { threadId: "thread-a" }),
+      ]);
+      renderCenter();
+      await screen.findAllByTestId("notification-entry");
+
+      act(() => {
+        applyHostRows([
+          botMember("h4", 400, "new generation reply", {
+            threadId: "thread-a",
+          }),
+        ]);
+      });
+
+      await waitFor(() => {
+        expect(entries()).toHaveLength(1);
+      });
+      expect(bodyOf(entries()[0])).toContain("new generation reply");
+      expect(bodyOf(entries()[0])).not.toContain("old generation");
+      expect(showsCount(entries()[0], 3)).toBe(false);
+    });
   });
 });

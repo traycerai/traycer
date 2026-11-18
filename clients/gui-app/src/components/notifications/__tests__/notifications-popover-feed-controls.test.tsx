@@ -29,6 +29,7 @@ import {
 } from "@/stores/notifications/app-local-notifications-store";
 import {
   __resetHostNotificationsStoreForTests,
+  type HostNotificationFeedEntry,
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
 import {
@@ -54,6 +55,18 @@ import type {
 import { ALL_NOTIFICATION_CATEGORIES } from "@/lib/notifications/notification-category";
 import { useNotificationCenterGeometry } from "@/hooks/notifications/use-notification-center-geometry";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+
+import {
+  OTHER_BOT,
+  bodyOf,
+  showsCount,
+  botMember,
+  channelPost,
+  entries,
+  hasUnreadRail,
+  legacyVerdict,
+  rowShowing,
+} from "@/components/notifications/__tests__/notification-bot-members-test-support";
 
 const reconnectEngine = createHostReconnectEngine();
 
@@ -263,7 +276,7 @@ function attentionCursor(
 }
 
 function applyHostSnapshot(input: {
-  readonly entries: ReadonlyArray<HostNotificationEntry>;
+  readonly entries: ReadonlyArray<HostNotificationFeedEntry>;
   readonly summary: {
     readonly unreadCount: number;
     readonly attentionCount: number;
@@ -2176,6 +2189,390 @@ describe("NotificationsPopover feed controls (T05)", () => {
       expect(focusedRowId()).toBeUndefined();
       fireEvent.keyDown(shell, { key: "ArrowDown", altKey: true });
       expect(focusedRowId()).toBeUndefined();
+    });
+  });
+
+  describe("reply notifications fold by thread or channel", () => {
+    function loadFeed(
+      entries: ReadonlyArray<HostNotificationFeedEntry>,
+      unread: number,
+    ): void {
+      applyHostSnapshot({
+        entries,
+        summary: { unreadCount: unread, attentionCount: 0 },
+        recentCursor: null,
+        attentionCursor: null,
+      });
+    }
+
+    it("shows the replies of one thread as one row with the newest reply's preview and their number", async () => {
+      loadFeed(
+        [
+          botMember("m3", 300, "gamma newest", { threadId: "thread-a" }),
+          botMember("m2", 200, "beta middle", { threadId: "thread-a" }),
+          botMember("m1", 100, "alpha oldest", { threadId: "thread-a" }),
+        ],
+        3,
+      );
+      renderPopover();
+      await screen.findAllByTestId("notification-entry");
+
+      expect(entries()).toHaveLength(1);
+      expect(bodyOf(entries()[0])).toContain("gamma newest");
+      expect(bodyOf(entries()[0])).not.toContain("beta middle");
+      expect(bodyOf(entries()[0])).not.toContain("alpha oldest");
+      expect(showsCount(entries()[0], 3)).toBe(true);
+    });
+
+    it("shows the unthreaded posts of one channel as one row, apart from another channel, another bot with the same ids, and a thread of that channel", async () => {
+      loadFeed(
+        [
+          channelPost("c3", 600, "post three", {}),
+          channelPost("o1", 550, "other channel post", {
+            conversationId: "conversation-side",
+          }),
+          channelPost("b1", 540, "other bot post", { botId: OTHER_BOT }),
+          botMember("t1", 530, "thread reply", { threadId: "thread-a" }),
+          channelPost("c2", 520, "post two", {}),
+          channelPost("c1", 510, "post one", {}),
+        ],
+        6,
+      );
+      renderPopover();
+      await screen.findAllByTestId("notification-entry");
+
+      expect(entries()).toHaveLength(4);
+      const channel = rowShowing("post three");
+      expect(bodyOf(channel)).not.toContain("post two");
+      expect(bodyOf(channel)).not.toContain("thread reply");
+      expect(showsCount(channel, 3)).toBe(true);
+      expect(rowShowing("other channel post")).not.toBe(channel);
+      expect(rowShowing("other bot post")).not.toBe(channel);
+      expect(rowShowing("thread reply")).not.toBe(channel);
+    });
+
+    it("keeps an action, a question, a failure, an unknown event and a mismatched operation as rows of their own beside the folded replies", async () => {
+      loadFeed(
+        [
+          botMember("r3", 900, "reply two newest", { threadId: "thread-a" }),
+          botMember("forged", 800, "forged action", {
+            threadId: "thread-a",
+            severity: "needs_action",
+          }),
+          botMember("ask", 700, "a question", {
+            threadId: "thread-a",
+            event: "question",
+          }),
+          botMember("fail", 600, "a failure", {
+            threadId: "thread-a",
+            event: "failure",
+            severity: "failure",
+            outcome: "errored",
+          }),
+          botMember("odd", 500, "an unknown kind", {
+            threadId: "thread-a",
+            event: "mystery",
+            operation: "bot.mystery",
+          }),
+          botMember("mismatch", 400, "operation of another event", {
+            threadId: "thread-a",
+            operation: "bot.post",
+          }),
+          botMember("r1", 300, "reply one oldest", { threadId: "thread-a" }),
+        ],
+        7,
+      );
+      renderPopover();
+      await screen.findAllByTestId("notification-entry");
+
+      expect(entries()).toHaveLength(6);
+      const group = rowShowing("reply two newest");
+      expect(bodyOf(group)).not.toContain("reply one oldest");
+      expect(showsCount(group, 2)).toBe(true);
+      for (const text of [
+        "forged action",
+        "a question",
+        "a failure",
+        "an unknown kind",
+        "operation of another event",
+      ]) {
+        expect(rowShowing(text)).not.toBe(group);
+      }
+    });
+
+    it("folds a legacy thread verdict and a direct answer into their thread, and announcements into their channel", async () => {
+      loadFeed(
+        [
+          botMember("v1", 500, "answer in the thread", {
+            threadId: "thread-a",
+            event: "directAnswer",
+          }),
+          legacyVerdict("lv", 450, "verdict in the thread"),
+          botMember("a1", 300, "announced in the channel", {
+            event: "announcement",
+            severity: "info",
+          }),
+          botMember("a2", 200, "announced again", {
+            event: "announcement",
+            severity: "info",
+          }),
+          botMember("r1", 100, "reply in the thread", { threadId: "thread-a" }),
+        ],
+        5,
+      );
+      renderPopover();
+      await screen.findAllByTestId("notification-entry");
+
+      expect(entries()).toHaveLength(2);
+      const thread = rowShowing("answer in the thread");
+      expect(showsCount(thread, 3)).toBe(true);
+      expect(thread).not.toBe(rowShowing("announced in the channel"));
+    });
+
+    it("shows a group unread when only an older member is unread, though its newest reply is read", async () => {
+      loadFeed(
+        [
+          botMember("m3", 300, "gamma newest", {
+            threadId: "thread-a",
+            readAt: 400,
+          }),
+          botMember("m2", 200, "beta middle", {
+            threadId: "thread-a",
+            readAt: 400,
+          }),
+          botMember("m1", 100, "alpha oldest", { threadId: "thread-a" }),
+          botMember("n2", 90, "other newest", {
+            threadId: "thread-b",
+            readAt: 400,
+          }),
+          botMember("n1", 80, "other older", {
+            threadId: "thread-b",
+            readAt: 400,
+          }),
+        ],
+        1,
+      );
+      renderPopover();
+      await screen.findAllByTestId("notification-entry");
+
+      expect(entries()).toHaveLength(2);
+      expect(hasUnreadRail(rowShowing("gamma newest"))).toBe(true);
+      expect(hasUnreadRail(rowShowing("other newest"))).toBe(false);
+    });
+
+    it("folds before Unread only filters, so a group with one unread member keeps its newest preview and read members never split it", async () => {
+      loadFeed(
+        [
+          channelPost("c3", 300, "post three newest", { readAt: 400 }),
+          channelPost("c2", 200, "post two", { readAt: 400 }),
+          channelPost("c1", 100, "post one oldest", {}),
+        ],
+        1,
+      );
+      renderPopover();
+      await screen.findAllByTestId("notification-entry");
+      act(() => {
+        useNotificationsPopoverStore.setState({
+          unreadOnly: true,
+          categories: ALL_NOTIFICATION_CATEGORIES,
+        });
+      });
+
+      await waitFor(() => {
+        expect(entries()).toHaveLength(1);
+      });
+      expect(bodyOf(entries()[0])).toContain("post three newest");
+      expect(bodyOf(entries()[0])).not.toContain("post one oldest");
+      expect(hasUnreadRail(entries()[0])).toBe(true);
+    });
+
+    it("counts a message once when two feed rows carry it, and still folds them with the others", async () => {
+      loadFeed(
+        [
+          botMember("d3", 300, "second message", {
+            threadId: "thread-a",
+            messageId: "message-2",
+          }),
+          botMember("d2", 200, "first message again", {
+            threadId: "thread-a",
+            messageId: "message-1",
+          }),
+          botMember("d1", 100, "first message", {
+            threadId: "thread-a",
+            messageId: "message-1",
+          }),
+        ],
+        3,
+      );
+      renderPopover();
+      await screen.findAllByTestId("notification-entry");
+
+      expect(entries()).toHaveLength(1);
+      expect(showsCount(entries()[0], 2)).toBe(true);
+      expect(showsCount(entries()[0], 3)).toBe(false);
+    });
+
+    it("previews the member created last whatever order the rows arrived in, and keeps one row, the same element, as a newer reply arrives", async () => {
+      loadFeed(
+        [
+          botMember("m3", 300, "gamma newest", { threadId: "thread-a" }),
+          botMember("m1", 100, "alpha oldest", { threadId: "thread-a" }),
+        ],
+        2,
+      );
+      renderPopover();
+      await screen.findAllByTestId("notification-entry");
+      const row = entries()[0];
+      expect(entries()).toHaveLength(1);
+
+      act(() => {
+        useHostNotificationsStore
+          .getState()
+          .applyUpsertFrame(
+            botMember("m2", 200, "beta arrives last", { threadId: "thread-a" }),
+            [],
+            { unreadCount: 3, attentionCount: 0 },
+          );
+      });
+      expect(entries()).toHaveLength(1);
+      expect(bodyOf(entries()[0])).toContain("gamma newest");
+      expect(showsCount(entries()[0], 3)).toBe(true);
+
+      act(() => {
+        useHostNotificationsStore.getState().applyUpsertFrame(
+          botMember("m4", 400, "delta newest of all", {
+            threadId: "thread-a",
+          }),
+          [],
+          { unreadCount: 4, attentionCount: 0 },
+        );
+      });
+      expect(entries()).toHaveLength(1);
+      expect(entries()[0]).toBe(row);
+      expect(bodyOf(entries()[0])).toContain("delta newest of all");
+      expect(showsCount(entries()[0], 4)).toBe(true);
+    });
+
+    it("grows a read group's count and turns it unread when an older page brings an unread member, and the group does not stay read", async () => {
+      const cursor = chronologicalCursor(200, "m2");
+      applyHostSnapshot({
+        entries: [
+          botMember("m3", 300, "gamma newest", {
+            threadId: "thread-a",
+            readAt: 500,
+          }),
+          botMember("m2", 200, "beta middle", {
+            threadId: "thread-a",
+            readAt: 500,
+          }),
+        ],
+        summary: { unreadCount: 0, attentionCount: 0 },
+        recentCursor: cursor,
+        attentionCursor: null,
+      });
+      renderPopover();
+      await screen.findAllByTestId("notification-entry");
+      expect(entries()).toHaveLength(1);
+      expect(showsCount(entries()[0], 2)).toBe(true);
+      expect(hasUnreadRail(entries()[0])).toBe(false);
+
+      const state = useHostNotificationsStore.getState();
+      act(() => {
+        state.mergeRecentPage(
+          [botMember("m1", 100, "alpha older page", { threadId: "thread-a" })],
+          null,
+          {
+            snapshotEpoch: state.snapshotEpoch,
+            liveLifecycleRevision: state.liveLifecycleRevision,
+            cursor,
+          },
+        );
+      });
+
+      await waitFor(() => {
+        expect(showsCount(entries()[0], 3)).toBe(true);
+      });
+      expect(entries()).toHaveLength(1);
+      expect(hasUnreadRail(entries()[0])).toBe(true);
+    });
+
+    it("still counts a reply arriving in a group the reader has on screen as one new notification while they are scrolled away", async () => {
+      loadFeed(
+        [
+          channelPost("c2", 200, "post two", {}),
+          channelPost("c1", 100, "post one", {}),
+        ],
+        2,
+      );
+      renderPopover();
+      await screen.findAllByTestId("notification-entry");
+      setScrollTop(screen.getByTestId("notifications-feed-scrollport"), 80);
+
+      act(() => {
+        useHostNotificationsStore
+          .getState()
+          .applyUpsertFrame(channelPost("c3", 300, "post three", {}), [], {
+            unreadCount: 3,
+            attentionCount: 0,
+          });
+      });
+
+      expect(
+        (await screen.findByTestId("notifications-new-arrivals")).textContent,
+      ).toBe("1 new notification");
+    });
+
+    it("keeps the reader's place by one row's height when a row arrives above, whatever rows below it are folded", async () => {
+      // Every rendered row is 100px tall and stands where the DOM puts it,
+      // measured from the first render on, as the anchor captures its row then.
+      getBoundingClientRectSpy = vi
+        .spyOn(Element.prototype, "getBoundingClientRect")
+        .mockImplementation(function rectOf(this: Element) {
+          if (!(this instanceof HTMLElement)) return makeDomRect(0, 0);
+          if (this.dataset.testid === "notifications-feed-scrollport") {
+            return makeDomRect(300, 400);
+          }
+          const scrollport = this.closest(
+            '[data-testid="notifications-feed-scrollport"]',
+          );
+          if (
+            this.dataset.notificationId === undefined ||
+            scrollport === null
+          ) {
+            return makeDomRect(0, 0);
+          }
+          const rows = Array.from(
+            scrollport.querySelectorAll("[data-notification-id]"),
+          );
+          const top = rows.indexOf(this) * 100 - scrollport.scrollTop;
+          return { ...makeDomRect(300, 100), top, bottom: top + 100, y: top };
+        });
+      loadFeed(
+        [
+          hostDone("top", 400, null),
+          channelPost("c2", 300, "post two", {}),
+          channelPost("c1", 200, "post one", {}),
+          hostDone("bottom", 100, null),
+        ],
+        4,
+      );
+      renderPopover();
+      await screen.findAllByTestId("notification-entry");
+      const scrollport = screen.getByTestId("notifications-feed-scrollport");
+      setScrollTop(scrollport, 150);
+
+      act(() => {
+        useHostNotificationsStore
+          .getState()
+          .applyUpsertFrame(hostDone("fresh", 500, null), [], {
+            unreadCount: 5,
+            attentionCount: 0,
+          });
+      });
+
+      await waitFor(() => {
+        expect(scrollport.scrollTop).toBe(250);
+      });
     });
   });
 });

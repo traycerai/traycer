@@ -1,4 +1,9 @@
 import {
+  NotificationPresentationContext,
+  useNotificationPresentation,
+} from "@/components/notifications/notification-presentation-context";
+import { useNotificationFeedPresentation } from "@/stores/notifications/notification-feed-presentation";
+import {
   useCallback,
   useEffect,
   useMemo,
@@ -60,11 +65,9 @@ import {
   type MergedNotificationRow,
   useAttentionNotificationIds,
   useMergedNotificationOccurrenceEntries,
-  useMergedNotificationRow,
   useMergedNotificationUnreadCount,
   useMergedNotificationsActions,
   useNotificationCenterHostState,
-  useRecentNotificationIds,
   useShownHostNotificationUnreadCount,
 } from "@/stores/notifications/merged-notifications";
 import {
@@ -324,9 +327,15 @@ export function NotificationsPopover(
   const allNeedsYouItems = useNeedsYouItems();
   const needsYouItems = inbox ? allNeedsYouItems : NO_NEEDS_YOU_ITEMS;
   const allAttentionIds = useAttentionNotificationIds();
-  const allRecentIds = useRecentNotificationIds();
-  const attentionIds = useWithoutNeedsYouRows(allAttentionIds, needsYouItems);
-  const recentIds = useWithoutNeedsYouRows(allRecentIds, needsYouItems);
+  const presentation = useNotificationFeedPresentation();
+  const attentionIds = useWithoutNeedsYouRows(
+    presentation.attentionIds,
+    needsYouItems,
+  );
+  const recentIds = useWithoutNeedsYouRows(
+    presentation.recentIds,
+    needsYouItems,
+  );
   const unreadCount = useMergedNotificationUnreadCount();
   const appLocalUnreadCount = useAppLocalNotificationUnreadCount();
   // The cloud-independent planes, read for the Mark-all gate: the merged
@@ -459,9 +468,15 @@ export function NotificationsPopover(
   const visibleOccurrenceKeys = useMemo(
     () =>
       orderedFeedIds
-        .map((feedId) => occurrenceKeyByFeedId.get(feedId))
+        .flatMap((key) =>
+          (
+            presentation.byKey
+              .get(key)
+              ?.members.map((member) => member.feedId) ?? [key]
+          ).map((feedId) => occurrenceKeyByFeedId.get(feedId)),
+        )
         .filter((key): key is string => key !== undefined),
-    [orderedFeedIds, occurrenceKeyByFeedId],
+    [orderedFeedIds, occurrenceKeyByFeedId, presentation.byKey],
   );
   const { newCount: newArrivalCount, reveal: revealArrivals } =
     useNotificationCenterArrivals({
@@ -603,136 +618,141 @@ export function NotificationsPopover(
     : actions.hasHostLoadError;
 
   return (
-    <TooltipProvider delayDuration={300}>
-      {/* `data-notification-center` marks this surface for code that must ask
+    <NotificationPresentationContext value={presentation.byKey}>
+      <TooltipProvider delayDuration={300}>
+        {/* `data-notification-center` marks this surface for code that must ask
           "is focus inside the center right now?" without reaching for the
           shell ref (the keybinding chord's toggle-close, in
           `notifications-bell.tsx`). */}
-      <div
-        ref={shellRef}
-        style={shellStyle}
-        className={cn(
-          "flex min-w-0 flex-col gap-0 overflow-hidden",
-          chrome.shellClassName,
-        )}
-        data-notification-center=""
-        data-testid="notifications-popover"
-      >
-        <NotificationsPopoverHeader
-          title={chrome.title}
-          headingRef={headingRef}
-          unreadOnly={unreadOnly}
-          categories={categories}
-          onUnreadOnlyChange={handleUnreadOnlyChange}
-          onToggleCategory={handleToggleCategory}
-          onFilterMenuOpenChange={onFilterMenuOpenChange}
-          onFilterPointerDownOutside={handleFilterPointerDownOutside}
-          onMarkAllRead={handleMarkAllRead}
-          isMarkAllReadDisabled={isMarkAllReadDisabled({
-            unreadCount,
-            loadedHostAttentionCount,
-            hostUnreadCount,
-            appLocalUnreadCount,
-            globalUnreadCount,
-            hasActiveHost: notificationHostId !== null,
-            cloudConnectionState: cloudPresentationState,
-          })}
-          showClearAll={feedMode === "cloud" || feedMode === "local"}
-          isClearAllDisabled={isClearAllDisabled({
+        <div
+          ref={shellRef}
+          style={shellStyle}
+          className={cn(
+            "flex min-w-0 flex-col gap-0 overflow-hidden",
+            chrome.shellClassName,
+          )}
+          data-notification-center=""
+          data-testid="notifications-popover"
+        >
+          <NotificationsPopoverHeader
+            title={chrome.title}
+            headingRef={headingRef}
+            unreadOnly={unreadOnly}
+            categories={categories}
+            onUnreadOnlyChange={handleUnreadOnlyChange}
+            onToggleCategory={handleToggleCategory}
+            onFilterMenuOpenChange={onFilterMenuOpenChange}
+            onFilterPointerDownOutside={handleFilterPointerDownOutside}
+            onMarkAllRead={handleMarkAllRead}
+            isMarkAllReadDisabled={isMarkAllReadDisabled({
+              unreadCount,
+              loadedHostAttentionCount,
+              hostUnreadCount,
+              appLocalUnreadCount,
+              globalUnreadCount,
+              hasActiveHost: notificationHostId !== null,
+              cloudConnectionState: cloudPresentationState,
+            })}
+            showClearAll={feedMode === "cloud" || feedMode === "local"}
+            isClearAllDisabled={isClearAllDisabled({
+              feedMode,
+              cloudHasSnapshot,
+              cloudConnectionState,
+              cloudTotalCount,
+              hasActiveHost: notificationHostId !== null,
+              hasLoadedHostNotifications,
+              hasRendererLocalRows,
+            })}
+            onClearAll={handleClearAll}
+            onOpenSettings={handleOpenSettings}
+            subtitle={notificationsSubtitle(feedMode, {
+              isPartial: hostState.isPartial,
+              hostLabel: hostState.hostLabel,
+              notificationsSupport,
+            })}
+          />
+
+          <OriginUnavailableBanner />
+          <NotificationFeedStatusBanner
+            isEmpty={isEmpty}
+            presentation={feedStatus}
+          />
+
+          <div
+            ref={feedScrollRef}
+            className="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]"
+            data-testid="notifications-feed-scrollport"
+          >
+            {newArrivalCount > 0 && (
+              <button
+                type="button"
+                onClick={revealNewArrivals}
+                data-testid="notifications-new-arrivals"
+                className="sticky top-2 z-30 mx-auto mb-1 block w-max rounded-full border border-border bg-popover px-2.5 py-1 text-ui-xs font-medium text-foreground shadow-sm"
+              >
+                {newArrivalCount} new notification
+                {newArrivalCount === 1 ? "" : "s"}
+              </button>
+            )}
+            <NotificationsFeedContent
+              isEmpty={isEmpty}
+              presentation={feedStatus}
+            >
+              <NotificationsFeedSections
+                needsYou={
+                  needsYouItems.length === 0 ? null : (
+                    <NeedsYouGroup
+                      items={needsYouItems}
+                      onActivate={handleActivate}
+                    />
+                  )
+                }
+                attentionLabel={chrome.attentionLabel}
+                attentionIds={attentionIds}
+                recentIds={recentIds}
+                canLoadMoreAttention={actions.canLoadMoreAttention}
+                isLoadingMoreAttention={actions.isLoadingMoreAttention}
+                hasAttentionLoadError={actions.hasAttentionLoadError}
+                isRecentFilteredEmpty={isRecentFilteredEmpty}
+                onLoadMoreAttention={() => actions.loadMoreAttention()}
+                onActivate={handleActivate}
+                onAcknowledge={handleAcknowledge}
+                onResetFilters={resetFilters}
+              />
+            </NotificationsFeedContent>
+          </div>
+
+          {canLoadOlder ? (
+            <footer className="shrink-0 border-t border-border/60 p-2">
+              <LoadMoreButton
+                label="Load older activity"
+                isLoading={isLoadingOlder}
+                hasError={loadOlderError}
+                onClick={() => loadOlder()}
+                testId="notifications-load-older"
+              />
+            </footer>
+          ) : null}
+        </div>
+        <ConfirmDestructiveDialog
+          blockedReason={null}
+          open={clearAllConfirmOpen}
+          onOpenChange={setClearAllConfirmOpen}
+          title="Clear all notifications?"
+          description={clearAllConfirmDescription({
             feedMode,
             cloudHasSnapshot,
             cloudConnectionState,
             cloudTotalCount,
-            hasActiveHost: notificationHostId !== null,
-            hasLoadedHostNotifications,
-            hasRendererLocalRows,
+            hasRetainedHostRows,
           })}
-          onClearAll={handleClearAll}
-          onOpenSettings={handleOpenSettings}
-          subtitle={notificationsSubtitle(feedMode, {
-            isPartial: hostState.isPartial,
-            hostLabel: hostState.hostLabel,
-            notificationsSupport,
-          })}
+          cascadeSummary={null}
+          actionLabel="Clear all"
+          isPending={false}
+          onConfirm={handleConfirmClearAll}
         />
-
-        <OriginUnavailableBanner />
-        <NotificationFeedStatusBanner
-          isEmpty={isEmpty}
-          presentation={feedStatus}
-        />
-
-        <div
-          ref={feedScrollRef}
-          className="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]"
-          data-testid="notifications-feed-scrollport"
-        >
-          {newArrivalCount > 0 && (
-            <button
-              type="button"
-              onClick={revealNewArrivals}
-              data-testid="notifications-new-arrivals"
-              className="sticky top-2 z-30 mx-auto mb-1 block w-max rounded-full border border-border bg-popover px-2.5 py-1 text-ui-xs font-medium text-foreground shadow-sm"
-            >
-              {newArrivalCount} new notification
-              {newArrivalCount === 1 ? "" : "s"}
-            </button>
-          )}
-          <NotificationsFeedContent isEmpty={isEmpty} presentation={feedStatus}>
-            <NotificationsFeedSections
-              needsYou={
-                needsYouItems.length === 0 ? null : (
-                  <NeedsYouGroup
-                    items={needsYouItems}
-                    onActivate={handleActivate}
-                  />
-                )
-              }
-              attentionLabel={chrome.attentionLabel}
-              attentionIds={attentionIds}
-              recentIds={recentIds}
-              canLoadMoreAttention={actions.canLoadMoreAttention}
-              isLoadingMoreAttention={actions.isLoadingMoreAttention}
-              hasAttentionLoadError={actions.hasAttentionLoadError}
-              isRecentFilteredEmpty={isRecentFilteredEmpty}
-              onLoadMoreAttention={() => actions.loadMoreAttention()}
-              onActivate={handleActivate}
-              onAcknowledge={handleAcknowledge}
-              onResetFilters={resetFilters}
-            />
-          </NotificationsFeedContent>
-        </div>
-
-        {canLoadOlder ? (
-          <footer className="shrink-0 border-t border-border/60 p-2">
-            <LoadMoreButton
-              label="Load older activity"
-              isLoading={isLoadingOlder}
-              hasError={loadOlderError}
-              onClick={() => loadOlder()}
-              testId="notifications-load-older"
-            />
-          </footer>
-        ) : null}
-      </div>
-      <ConfirmDestructiveDialog
-        blockedReason={null}
-        open={clearAllConfirmOpen}
-        onOpenChange={setClearAllConfirmOpen}
-        title="Clear all notifications?"
-        description={clearAllConfirmDescription({
-          feedMode,
-          cloudHasSnapshot,
-          cloudConnectionState,
-          cloudTotalCount,
-          hasRetainedHostRows,
-        })}
-        cascadeSummary={null}
-        actionLabel="Clear all"
-        isPending={false}
-        onConfirm={handleConfirmClearAll}
-      />
-    </TooltipProvider>
+      </TooltipProvider>
+    </NotificationPresentationContext>
   );
 }
 
@@ -1207,8 +1227,9 @@ interface RecentRowProps {
 }
 
 function RecentRow(props: RecentRowProps): ReactNode {
-  const row = useMergedNotificationRow(props.feedId);
-  const previousRow = useMergedNotificationRow(props.previousFeedId ?? "");
+  const row = useNotificationPresentation(props.feedId)?.row ?? null;
+  const previousRow =
+    useNotificationPresentation(props.previousFeedId ?? "")?.row ?? null;
   if (row === null) return null;
   const group = temporalGroupForTimestamp(row.createdAt, props.now);
   const previousGroup =

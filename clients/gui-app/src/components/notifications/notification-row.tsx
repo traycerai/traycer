@@ -1,3 +1,9 @@
+import { useNotificationPresentation } from "@/components/notifications/notification-presentation-context";
+import {
+  notificationGroupCount,
+  notificationGroupTitle,
+  type NotificationPresentation,
+} from "@/lib/notifications/notification-groups";
 import type { KeyboardEvent, ReactNode } from "react";
 import { m, useReducedMotion } from "motion/react";
 import {
@@ -41,10 +47,7 @@ import { notificationPayloadRequiresOriginHost } from "@/hooks/notifications/use
 import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
-import {
-  type MergedNotificationRow,
-  useMergedNotificationRow,
-} from "@/stores/notifications/merged-notifications";
+import { type MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import {
   type NotificationEvent,
   NOTIFICATION_EVENT_TYPES,
@@ -155,7 +158,8 @@ function rowMotionProps(options: {
  * padding.
  */
 export function NotificationRow(props: NotificationRowProps): ReactNode {
-  const row = useMergedNotificationRow(props.feedId);
+  const presentation = useNotificationPresentation(props.feedId);
+  const row = presentation?.row ?? null;
   // Hooks must remain unconditional while an exact-removal frame makes this
   // row disappear between renders; the empty-id fallback is what keeps the
   // two origin-host subscriptions below callable for a vanished row.
@@ -181,7 +185,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
   const Icon = glyph.icon;
 
   const motionProps = rowMotionProps({
-    feedId: row.feedId,
+    feedId: props.feedId,
     shouldReduceMotion,
   });
 
@@ -224,7 +228,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       onKeyDown={onRowKeyDown}
       className="relative flex items-start gap-2.5 border-b border-border/60 py-2.5 pr-4 pl-6 outline-none last:border-b-0 hover:bg-foreground/6 focus-visible:bg-foreground/6 focus-visible:ring-1 focus-visible:ring-ring/50 focus-visible:ring-inset has-[:focus-visible]:bg-foreground/6 active:press-scrim pointer-coarse:touch-chrome"
       data-testid="notification-entry"
-      data-notification-id={row.feedId}
+      data-notification-id={props.feedId}
       data-notification-read={isRead ? "true" : "false"}
       data-notification-severity={row.severity}
       data-notification-origin-state={
@@ -263,6 +267,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       >
         <NotificationRowMain
           row={row}
+          group={presentation?.group ?? null}
           isRead={isRead}
           isNavigable={isNavigable}
           originUnavailability={originUnavailability}
@@ -361,6 +366,7 @@ function notificationRowInlineControls(
 
 function NotificationRowMain(props: {
   readonly row: MergedNotificationRow;
+  readonly group: NotificationPresentation["group"];
   readonly isRead: boolean;
   readonly isNavigable: boolean;
   readonly originUnavailability: HostUnavailability | null;
@@ -371,11 +377,22 @@ function NotificationRowMain(props: {
     props.row.title,
   );
   const body = (
-    <NotificationRowBody
-      title={title}
-      body={props.row.body}
-      isRead={props.isRead}
-    />
+    <>
+      <NotificationRowBody
+        title={
+          props.group === null
+            ? title
+            : `${title} · ${notificationGroupTitle(props.group.kind)}`
+        }
+        body={props.row.body}
+        isRead={props.isRead}
+      />
+      {props.group === null ? null : (
+        <span className="mt-1 block text-ui-xs text-muted-foreground">
+          {notificationGroupCount(props.group)}
+        </span>
+      )}
+    </>
   );
 
   if (props.isNavigable && props.originUnavailability === null) {

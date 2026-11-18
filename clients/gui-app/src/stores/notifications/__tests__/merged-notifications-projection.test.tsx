@@ -58,6 +58,8 @@ import {
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
 
+import { botMember } from "@/components/notifications/__tests__/notification-bot-members-test-support";
+
 const reconnectEngine = createHostReconnectEngine();
 
 const notificationFeedModeRef = vi.hoisted(() => ({
@@ -1536,5 +1538,57 @@ describe("row category and resolvedAt projection fields", () => {
 
     const { result } = renderHook(() => useMergedNotificationIds());
     expect(result.current).toEqual([]);
+  });
+});
+
+describe("raw projection of a bot thread's reply notifications", () => {
+  beforeEach(() => {
+    __resetHostNotificationsStoreForTests();
+    __resetAppLocalNotificationsStoreForTests();
+    __resetNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
+    notificationFeedModeRef.value = "local";
+    resetPopoverFilters();
+    activeHostIdRef.value = mockLocalHostEntry.hostId;
+    directoryRef.value = {
+      findById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    };
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("keeps every reply its own row, count and bell attention, whatever the feed shows of them", () => {
+    applyHostSnapshot(
+      [
+        botMember("m3", 300, "third", { threadId: "thread-a" }),
+        botMember("m2", 200, "second", { threadId: "thread-a" }),
+        botMember("m1", 100, "first", { threadId: "thread-a" }),
+      ],
+      { unreadCount: 3, attentionCount: 3 },
+    );
+
+    const { result } = renderHook(() => ({
+      unread: useMergedNotificationUnreadCount(),
+      bell: useNotificationBellState(),
+      attention: useAttentionNotificationIds(),
+      recent: useRecentNotificationIds(),
+      ids: useMergedNotificationIds(),
+    }));
+
+    expect(result.current.unread).toBe(3);
+    expect(result.current.bell).toEqual({ kind: "attention", count: 3 });
+    expect(result.current.attention).toEqual([
+      hostFeedId("m3"),
+      hostFeedId("m2"),
+      hostFeedId("m1"),
+    ]);
+    expect(result.current.recent).toEqual([]);
+    expect(new Set(result.current.ids)).toEqual(
+      new Set([hostFeedId("m3"), hostFeedId("m2"), hostFeedId("m1")]),
+    );
   });
 });
