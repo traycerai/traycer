@@ -78,6 +78,8 @@ if (params.get("phone") === "true") setPhoneLayoutOnly(true);
 
 declare global {
   interface Window {
+    /** The thread's post goes from the channel: the host's next thread list names no anchor for it. */
+    __postGone?: (threadId: string) => void;
     /** Delivers the snapshot of a chat named in `?gate=`, which the page withheld until now. */
     __releaseChat?: (chatId: string) => void;
   }
@@ -528,6 +530,12 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 });
 
+const postsGone = new Set<string>();
+window.__postGone = (threadId) => {
+  postsGone.add(threadId);
+  void queryClient.invalidateQueries();
+};
+
 let requestCounter = 0;
 const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
   new MockHostMessenger<HostRpcRegistry>({
@@ -595,7 +603,9 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         legacyMembers: [],
       }),
       "bot.thread.list": (request) => {
-        const threads = THREADS[request.botId] ?? [];
+        const threads = (THREADS[request.botId] ?? []).map((thread) =>
+          postsGone.has(thread.threadId) ? { ...thread, anchor: null } : thread,
+        );
         return {
           threads: [...threads],
           trunkCostUsd: null,

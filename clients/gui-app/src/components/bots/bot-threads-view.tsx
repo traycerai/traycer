@@ -21,6 +21,12 @@ import type { EnvironmentMember } from "@traycer/protocol/host/environment/contr
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { BotUnreadBanner } from "@/components/bots/bot-unread-banner";
+import { refusingDropTarget } from "@/components/bots/bot-box-drops";
+import { DROP_AFTER_POST_GONE } from "@/components/bots/bot-drop-lines";
+import {
+  useComposerDropScope,
+  useComposerDropScopeTarget,
+} from "@/components/chat/composer/composer-drop-scope";
 import { useBotMarkRepresentedRead } from "@/hooks/bots/use-bot-mark-represented-read";
 import { NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
@@ -504,38 +510,70 @@ function ThreadCard(props: {
     thread.threadId,
     anchor?.messageId ?? null,
   );
+  // The card is one drop zone for its box once it draws in full (T386). Until
+  // then nothing claims it, so a file dropped there is refused; a card whose
+  // post is gone never gets a box, and says why.
+  const drop = useComposerDropScope();
   return (
     <li
       ref={setCard}
-      className="flex min-w-0 flex-col rounded-lg border border-border/60 bg-card pb-1"
+      className="relative flex min-w-0 flex-col rounded-lg border border-border/60 bg-card pb-1"
       data-testid="bot-thread-card"
       data-thread-card=""
       data-thread-id={thread.threadId}
       data-bot-id={bot.botId}
       data-full={near && openThread !== null ? "true" : "false"}
+      {...drop.zoneProps}
     >
-      <ThreadChannelLine
-        entry={entry}
-        resolveMember={directory.resolve}
-        unreadCount={unreadCount}
-        onShowPost={showPost}
-        onOpenThread={openThread}
-      />
-      {near && anchor !== null && openThread !== null ? (
-        <FullThread
-          hostId={hostId}
-          entry={entry}
-          originMessageId={anchor.messageId}
-          members={directory.members}
-          resolveMember={directory.resolve}
-          unread={unread}
-          onShowPost={showPost}
-        />
-      ) : (
-        <ThreadSummary hostId={hostId} entry={entry} />
+      {drop.provide(
+        <>
+          {anchor === null ? (
+            <PostGoneDropClaim threadId={thread.threadId} />
+          ) : null}
+          <ThreadChannelLine
+            entry={entry}
+            resolveMember={directory.resolve}
+            unreadCount={unreadCount}
+            onShowPost={showPost}
+            onOpenThread={openThread}
+          />
+          {near && anchor !== null && openThread !== null ? (
+            <FullThread
+              hostId={hostId}
+              entry={entry}
+              originMessageId={anchor.messageId}
+              members={directory.members}
+              resolveMember={directory.resolve}
+              unread={unread}
+              onShowPost={showPost}
+            />
+          ) : (
+            <ThreadSummary hostId={hostId} entry={entry} />
+          )}
+        </>,
       )}
+      {drop.overlay}
     </li>
   );
+}
+
+/**
+ * Claims a card's zone where its post is gone from the channel: such a card
+ * never gets a box, so a file dropped on it is refused, with that said, and a
+ * dragged file shows no overlay.
+ */
+function PostGoneDropClaim(props: { readonly threadId: string }): ReactNode {
+  const { threadId } = props;
+  const target = useMemo(
+    () =>
+      refusingDropTarget(
+        DROP_AFTER_POST_GONE,
+        `bot-drop:post-gone:${threadId}`,
+      ),
+    [threadId],
+  );
+  useComposerDropScopeTarget(target);
+  return null;
 }
 
 /**

@@ -29,6 +29,8 @@ import {
   type BotComposerEdit,
   type BotComposerQuote,
 } from "@/components/bots/bot-message-composer";
+import { useHeldDropPicker } from "@/components/bots/bot-box-drops";
+import { useComposerDropScope } from "@/components/chat/composer/composer-drop-scope";
 import {
   useBotSendFailure,
   type BotSendFailure,
@@ -233,6 +235,9 @@ export function BotThreadPanel(props: {
   // scroll region and the box's one row: what it hides stays mounted.
   const [panel, setPanel] = useState<HTMLElement | null>(null);
   const focusLayout = useKeyboardFocusLayoutWithin(panel);
+  // The panel is one drop zone for its box (T386); a thread with no box
+  // claims none, so a file dropped there is refused.
+  const drop = useComposerDropScope();
   return (
     <section
       ref={setPanel}
@@ -241,61 +246,69 @@ export function BotThreadPanel(props: {
       data-bot-thread-panel=""
       data-thread-id={threadId ?? undefined}
       data-focus-layout={focusLayout ? "" : undefined}
-      className="group/thread-panel flex min-h-0 flex-1 flex-col"
+      className="group/thread-panel relative flex min-h-0 flex-1 flex-col"
+      {...drop.zoneProps}
     >
-      <header
-        className={cn(
-          "flex shrink-0 items-center gap-2 border-b border-border/60 px-4",
-          focusLayout ? "min-h-11" : "py-2.5",
-        )}
-      >
-        <div className="flex min-w-0 flex-1 items-baseline gap-2">
-          <h2 className="text-ui-md font-semibold text-foreground">Thread</h2>
-          <span
-            className="flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground"
-            data-testid="bot-thread-channel"
+      {drop.provide(
+        <>
+          <header
+            className={cn(
+              "flex shrink-0 items-center gap-2 border-b border-border/60 px-4",
+              focusLayout ? "min-h-11" : "py-2.5",
+            )}
           >
-            <span aria-hidden="true">·</span>
-            <span className="truncate">{botTitle}</span>
-          </span>
-        </div>
-        <div hidden={focusLayout} className="contents">
+            <div className="flex min-w-0 flex-1 items-baseline gap-2">
+              <h2 className="text-ui-md font-semibold text-foreground">
+                Thread
+              </h2>
+              <span
+                className="flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground"
+                data-testid="bot-thread-channel"
+              >
+                <span aria-hidden="true">·</span>
+                <span className="truncate">{botTitle}</span>
+              </span>
+            </div>
+            <div hidden={focusLayout} className="contents">
+              {threadId === null ? null : (
+                <BotThreadFollowControl
+                  botId={props.botId}
+                  hostId={props.hostId}
+                  threadId={threadId}
+                  postedByViewer={postedByViewer}
+                />
+              )}
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Close thread"
+              data-testid="bot-thread-close"
+              onClick={onClose}
+            >
+              <X aria-hidden="true" />
+            </Button>
+          </header>
           {threadId === null ? null : (
-            <BotThreadFollowControl
-              botId={props.botId}
-              hostId={props.hostId}
-              threadId={threadId}
-              postedByViewer={postedByViewer}
-            />
+            <div hidden={focusLayout} className="contents">
+              <ThreadTasks
+                botId={props.botId}
+                hostId={props.hostId}
+                threadId={threadId}
+                thread={thread}
+                tasks={props.tasks}
+              />
+            </div>
           )}
-        </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Close thread"
-          data-testid="bot-thread-close"
-          onClick={onClose}
-        >
-          <X aria-hidden="true" />
-        </Button>
-      </header>
-      {threadId === null ? null : (
-        <div hidden={focusLayout} className="contents">
-          <ThreadTasks
-            botId={props.botId}
-            hostId={props.hostId}
-            threadId={threadId}
-            thread={thread}
-            tasks={props.tasks}
+          <ThreadPanelBody
+            {...props}
+            sendFailure={sendFailure}
+            layout={PANEL_LAYOUT}
           />
-        </div>
+        </>,
       )}
-      <ThreadPanelBody
-        {...props}
-        sendFailure={sendFailure}
-        layout={PANEL_LAYOUT}
-      />
+      {drop.overlay}
     </section>
   );
 }
@@ -747,10 +760,13 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
   // Stable across what the box does to this component's own state, so typing
   // does not hand the replies' list a new header on every key.
   const origin = useMemo(() => <ThreadOrigin {...props} />, [props]);
-  const { seed, keptDraft, moved, notice, reading } = useKeptBoxDraft(
+  const { seed, keptDraft, moved, notice, reading, hold } = useKeptBoxDraft(
     botId,
     originMessageId,
   );
+  // The box's slot keeps the picker its reading view opens, so a pick
+  // outlives the read.
+  const picker = useHeldDropPicker(hold);
   // Reply on a row of the thread names it in this box; none while the box
   // edits a failed message, whose send replaces it and replies to nothing.
   const { setReplyTarget } = useBotDraftActions();
@@ -832,6 +848,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
           reply={{ reach: replyReach, chosen: replyChosen }}
           moved={moved}
           notice={notice}
+          hold={hold}
           onSent={keepOpenThread}
         />
       ) : (
@@ -840,9 +857,14 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
           label={edit === null ? box.label : IN_THREAD_LABEL}
           reading={reading}
           replyReach={replyReach}
+          imageReach={props.imageReach}
+          attach={picker.open}
           testId="bot-thread-composer"
         />
       )}
+      <span hidden data-testid="bot-thread-composer-picker">
+        {picker.input}
+      </span>
     </>
   );
 }

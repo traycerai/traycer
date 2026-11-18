@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import { BOT_CONVERSATION_ATTACHMENTS_MAX } from "@traycer/protocol/host/bot/conversation-schemas";
 import {
   botBoxDraftCleared,
   botBoxDraftsForgotten,
@@ -207,6 +208,25 @@ export interface BotUnsentMessage {
   readonly replyTo: BotReplyTarget | null;
 }
 
+/**
+ * Files dropped or picked onto a box while it read its draft's images (T386),
+ * waiting for its editor. `claim` is the box's take of them while it prepares
+ * and inserts them: `null` while none has taken them.
+ */
+export interface BotHeldDrop {
+  readonly id: number;
+  readonly files: ReadonlyArray<File>;
+  readonly fileUrlPaths: ReadonlyArray<string>;
+  readonly claim: number | null;
+}
+
+/** A held batch's entries: its files, then its file references. */
+function heldEntryCount(
+  drop: Pick<BotHeldDrop, "files" | "fileUrlPaths">,
+): number {
+  return drop.files.length + drop.fileUrlPaths.length;
+}
+
 /** A lookup misses for a bot or key with nothing kept. */
 type ByBot<T> = Readonly<
   Partial<Record<string, Readonly<Partial<Record<string, T>>>>>
@@ -263,6 +283,19 @@ interface BotDraftsState {
    * box, never the tab or another box.
    */
   readonly boxesReading: ByBot<BotReadingBox>;
+  /**
+   * Files held for a box that was still reading its draft's images when they
+   * were dropped or picked, in drop order, keyed as `threadBoxes`; never
+   * stored. The box takes them into its editor one batch at a time once it is
+   * ready (`claimDrop`). An account's retirement drops them all, and
+   * forgetting a bot drops its own.
+   */
+  readonly boxDrops: ByBot<ReadonlyArray<BotHeldDrop>>;
+  /**
+   * Bumped for a bot each time it is forgotten: files picked through a picker
+   * opened on one of its boxes before then are held nowhere (`holdDrop`).
+   */
+  readonly dropEpochs: Readonly<Partial<Record<string, number>>>;
   /** Keeps a card's draft; `null` drops it, and any failure's word of it. */
   readonly setAnswer: (
     botId: string,
@@ -329,6 +362,46 @@ interface BotDraftsState {
    * (`boxesReading`), images and all: the box is empty from then on.
    */
   readonly discardReadingBox: (botId: string, key: string) => void;
+  /**
+   * Holds a drop's or a pick's entries for that box, files first, as many as
+   * fit under a message's image count with the entries held for it already,
+   * taken or not; how many it held. `null` where the bot was forgotten since
+   * `epoch` was read (`dropEpochs`): nothing is held then, and nothing is
+   * refused.
+   */
+  readonly holdDrop: (
+    botId: string,
+    key: string,
+    epoch: number,
+    transfer: Pick<BotHeldDrop, "files" | "fileUrlPaths">,
+  ) => number | null;
+  /**
+   * Takes the first batch held for that box, under a new claim, where none
+   * holds it; `null` where nothing is held or the first batch is taken. Only
+   * the first is ever taken, so batches land in drop order.
+   */
+  readonly claimDrop: (botId: string, key: string) => BotHeldDrop | null;
+  /** Whether that batch is still held for that box under `claim`. */
+  readonly dropClaimHolds: (
+    botId: string,
+    key: string,
+    id: number,
+    claim: number,
+  ) => boolean;
+  /** That batch landed or was refused: it is held no more. */
+  readonly settleDrop: (
+    botId: string,
+    key: string,
+    id: number,
+    claim: number,
+  ) => void;
+  /** None of that batch landed: it waits to be taken again. */
+  readonly releaseDrop: (
+    botId: string,
+    key: string,
+    id: number,
+    claim: number,
+  ) => void;
   /** Drops every draft of the bot: it is gone. */
   readonly forgetBot: (botId: string) => void;
   /**
@@ -361,6 +434,11 @@ export type BotDraftActions = Pick<
   | "setReplyTarget"
   | "offerUnsent"
   | "discardReadingBox"
+  | "holdDrop"
+  | "claimDrop"
+  | "dropClaimHolds"
+  | "settleDrop"
+  | "releaseDrop"
 >;
 
 /** Which question of which bot row a card draft answers. */
@@ -498,6 +576,15 @@ const PERSIST_OPTIONS = basePersistOptions(botBoxDraftsKey(null));
 
 /** Numbers each move of card answers into a box, so the box adds each once. */
 let carryCount = 0;
+
+/** Numbers each batch held for a box (`holdDrop`). */
+let heldDropCount = 0;
+
+/**
+ * Numbers each take of a held batch (`claimDrop`), so a take that ended can
+ * neither settle nor release a batch taken again since.
+ */
+let dropClaimCount = 0;
 
 /** The carries without the moves `held` for that box; `null` where it holds none of them. */
 function carriesWithout(
@@ -791,6 +878,8 @@ export const useBotDraftsStore = create<BotDraftsState>()(
       owner: null,
       ownDraftsRead: true,
       boxesReading: {},
+      boxDrops: {},
+      dropEpochs: {},
       setAnswer: (botId, key, draft) =>
         set((state) => {
           const answers = withEntry(state.answers, botId, key, draft);
@@ -932,6 +1021,81 @@ export const useBotDraftsStore = create<BotDraftsState>()(
           boxesReading: withEntry(state.boxesReading, botId, key, null),
         }));
       },
+      holdDrop: (botId, key, epoch, transfer) => {
+        const state = get();
+        if ((state.dropEpochs[botId] ?? 0) !== epoch) return null;
+        const held = state.boxDrops[botId]?.[key] ?? [];
+        const room = Math.max(
+          0,
+          BOT_CONVERSATION_ATTACHMENTS_MAX -
+            held.reduce((count, drop) => count + heldEntryCount(drop), 0),
+        );
+        const files = transfer.files.slice(0, room);
+        const fileUrlPaths = transfer.fileUrlPaths.slice(
+          0,
+          room - files.length,
+        );
+        const taken = files.length + fileUrlPaths.length;
+        if (taken === 0) return 0;
+        heldDropCount += 1;
+        set({
+          boxDrops: withEntry(state.boxDrops, botId, key, [
+            ...held,
+            { id: heldDropCount, files, fileUrlPaths, claim: null },
+          ]),
+        });
+        return taken;
+      },
+      claimDrop: (botId, key) => {
+        const state = get();
+        const held = state.boxDrops[botId]?.[key] ?? [];
+        if (held.length === 0) return null;
+        const [first, ...rest] = held;
+        if (first.claim !== null) return null;
+        dropClaimCount += 1;
+        const claimed: BotHeldDrop = { ...first, claim: dropClaimCount };
+        set({
+          boxDrops: withEntry(state.boxDrops, botId, key, [claimed, ...rest]),
+        });
+        return claimed;
+      },
+      dropClaimHolds: (botId, key, id, claim) =>
+        (get().boxDrops[botId]?.[key] ?? []).some(
+          (drop) => drop.id === id && drop.claim === claim,
+        ),
+      settleDrop: (botId, key, id, claim) =>
+        set((state) => {
+          const held = state.boxDrops[botId]?.[key] ?? [];
+          const rest = held.filter(
+            (drop) => drop.id !== id || drop.claim !== claim,
+          );
+          if (rest.length === held.length) return state;
+          return {
+            boxDrops: withEntry(
+              state.boxDrops,
+              botId,
+              key,
+              rest.length === 0 ? null : rest,
+            ),
+          };
+        }),
+      releaseDrop: (botId, key, id, claim) =>
+        set((state) => {
+          const held = state.boxDrops[botId]?.[key] ?? [];
+          if (!held.some((drop) => drop.id === id && drop.claim === claim)) {
+            return state;
+          }
+          return {
+            boxDrops: withEntry(
+              state.boxDrops,
+              botId,
+              key,
+              held.map((drop) =>
+                drop.id === id ? { ...drop, claim: null } : drop,
+              ),
+            ),
+          };
+        }),
       forgetBot: (botId) => {
         noteBoxChange(botId, null);
         botBoxDraftsForgotten(botId);
@@ -943,6 +1107,11 @@ export const useBotDraftsStore = create<BotDraftsState>()(
           draftMoves: withoutBot(state.draftMoves, botId),
           boxNotices: withoutBot(state.boxNotices, botId),
           boxesReading: withoutBot(state.boxesReading, botId),
+          boxDrops: withoutBot(state.boxDrops, botId),
+          dropEpochs: {
+            ...state.dropEpochs,
+            [botId]: (state.dropEpochs[botId] ?? 0) + 1,
+          },
         }));
       },
       closeBot: (botId) =>
@@ -1003,6 +1172,7 @@ export const useBotDraftsStore = create<BotDraftsState>()(
           draftMoves: {},
           boxNotices: {},
           boxesReading: {},
+          boxDrops: {},
           generation: state.generation + 1,
           owner,
           // One without an account id has no drafts of its own to read.
@@ -1327,6 +1497,17 @@ function draftActionsOf(generation: number): BotDraftActions {
     },
     discardReadingBox: (botId, key) => {
       live()?.discardReadingBox(botId, key);
+    },
+    holdDrop: (botId, key, epoch, transfer) =>
+      live()?.holdDrop(botId, key, epoch, transfer) ?? null,
+    claimDrop: (botId, key) => live()?.claimDrop(botId, key) ?? null,
+    dropClaimHolds: (botId, key, id, claim) =>
+      live()?.dropClaimHolds(botId, key, id, claim) ?? false,
+    settleDrop: (botId, key, id, claim) => {
+      live()?.settleDrop(botId, key, id, claim);
+    },
+    releaseDrop: (botId, key, id, claim) => {
+      live()?.releaseDrop(botId, key, id, claim);
     },
   };
 }
