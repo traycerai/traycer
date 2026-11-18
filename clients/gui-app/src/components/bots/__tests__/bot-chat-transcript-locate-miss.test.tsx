@@ -34,7 +34,7 @@ import {
 } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
-import type { StoreApi, UseBoundStore } from "zustand";
+import { create, type StoreApi, type UseBoundStore } from "zustand";
 import {
   afterEach,
   beforeEach,
@@ -46,8 +46,12 @@ import {
   type Mock,
 } from "vitest";
 import type { ChatLocateRowResponse } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import type { BotReadCursorReadResponse } from "@traycer/protocol/host/bot/schemas";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import type {
+  ChatSessionState,
+  ChatSessionStoreHandle,
+} from "@/stores/chats/chat-session-store";
 import {
   BOT_ID,
   CHAT_ID,
@@ -68,6 +72,10 @@ const mocks = vi.hoisted(() => ({
   locateParams: [] as object[],
   /** Renders of the hook's host that have committed, whichever read they carry. */
   commits: 0,
+  /** What the unread boundary reads of the bot's read cursors; `undefined` where the host keeps none. */
+  readCursors: undefined as BotReadCursorReadResponse | undefined,
+  /** Run by a passive effect the reading component declares after the unread boundary's own. */
+  atEffects: null as (() => void) | null,
   /** The commit count when the transcript first rendered with a settled `chat.locateRow` read (success or error, nothing in flight). */
   settledAt: null as number | null,
 }));
@@ -87,6 +95,37 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessCatalogForClient: () => ({ harnesses: [] }),
 }));
+vi.mock("@/hooks/bots/use-bot-read-cursor", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/bots/use-bot-read-cursor")
+  >()),
+  useBotReadCursors: () =>
+    mocks.readCursors === undefined ? null : { data: mocks.readCursors },
+}));
+// The reading component calls this hook after the unread boundary's: its
+// effect, added here, runs after the boundary's in the same flush.
+vi.mock(
+  "@/hooks/bots/use-bot-mark-represented-read",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/bots/use-bot-mark-represented-read")
+      >();
+    const { useEffect: useProbeEffect } = await import("react");
+    return {
+      ...actual,
+      useBotMarkRepresentedRead: (
+        ...args: Parameters<typeof actual.useBotMarkRepresentedRead>
+      ) => {
+        const result = actual.useBotMarkRepresentedRead(...args);
+        useProbeEffect(() => {
+          mocks.atEffects?.();
+        });
+        return result;
+      },
+    };
+  },
+);
 vi.mock("@/hooks/bots/use-bot-turn-locate-query", () => ({
   useBotTurnLocateQuery: () => ({ data: undefined }),
 }));
@@ -179,6 +218,25 @@ const THREAD_SURFACE: BotTranscriptSurface = {
   opening: { messageId: "post-1", conversationId: "channel-1", show: vi.fn() },
 };
 
+/** The channel's own surface, whose unread banner is the control that navigates to the unread boundary. */
+const CHANNEL_SURFACE: BotTranscriptSurface = {
+  kind: "channel",
+  threadLine: () => null,
+  openThread: null,
+  openAnnouncementThread: null,
+  threadAnchorKinds: [],
+  chooseOption: null,
+  reply: null,
+  answerQuestion: null,
+  answerQuestions: null,
+  questionBox: null,
+  failedRequest: () => null,
+  openTurn: null,
+  sessionChatId: null,
+  intro: { botTitle: "Release Bot", directive: null },
+  history: null,
+};
+
 /** A message the transcript has not hydrated: the second of the conversation's two. */
 const TARGET = "other-1";
 const WINDOW_EPOCH = 0;
@@ -191,9 +249,12 @@ const FOUND_ROW: ChatLocateRowResponse = {
 const ABSENT_ROW: ChatLocateRowResponse = { found: false };
 
 let requestTranscriptOrdinal: Mock<(ordinal: number | null) => void>;
-let store: UseBoundStore<StoreApi<LandingState>>;
+/** What the transcript reads of a session that is open: the landing store's state, and no fatal close. */
+type ReadingState = LandingState & Pick<ChatSessionState, "fatalClose">;
+let store: UseBoundStore<StoreApi<ReadingState>>;
 let landing: MissLanding | null = null;
 let paneVisible = true;
+let surfaceUnderTest: BotTranscriptSurface = THREAD_SURFACE;
 /** What the next mount draws above the list, inside the transcript's own replies context. */
 let listHeader: ReactNode = null;
 let queryClient = new QueryClient();
@@ -225,6 +286,14 @@ function AtCommit(props: { readonly children: ReactNode }): ReactNode {
   return props.children;
 }
 
+/** Fires `deadline` once, in the passive flush of the next commit of the reading component, after the unread boundary's effect. */
+function atTheNextEffects(deadline: () => void): void {
+  mocks.atEffects = () => {
+    mocks.atEffects = null;
+    deadline();
+  };
+}
+
 /** Fires `deadline` once, in the layout phase of the next commit. */
 function atTheNextCommit(deadline: () => void): void {
   atCommit = () => {
@@ -234,7 +303,13 @@ function atTheNextCommit(deadline: () => void): void {
 }
 
 function mountTranscript(): { readonly rerender: () => void } {
-  store = createLandingStore([resolvedUserMessage()], requestTranscriptOrdinal);
+  store = create<ReadingState>()(() => ({
+    ...createLandingStore(
+      [resolvedUserMessage()],
+      requestTranscriptOrdinal,
+    ).getState(),
+    fatalClose: null,
+  }));
   mocks.handle = { store } as ChatSessionStoreHandle;
   queryClient = new QueryClient();
   queryClient.getQueryCache().subscribe((event) => {
@@ -258,7 +333,7 @@ function mountTranscript(): { readonly rerender: () => void } {
                 hostId="host-1"
                 title="Release Bot"
                 instanceId="bot-thread:test"
-                surface={THREAD_SURFACE}
+                surface={surfaceUnderTest}
                 resolveMember={UNRESOLVED_BOT_MEMBERS}
                 showConnecting
                 header={listHeader}
@@ -376,6 +451,9 @@ beforeEach(() => {
   paneVisible = true;
   listHeader = null;
   atCommit = null;
+  mocks.atEffects = null;
+  surfaceUnderTest = THREAD_SURFACE;
+  mocks.readCursors = undefined;
   mocks.asked = 0;
   mocks.locateParams = [];
   mocks.commits = 0;
@@ -1127,6 +1205,57 @@ describe("a pending jump whose deadline falls between an end made in an event an
       expect(flashing(TARGET)).toBe(true);
     });
     expect(toast.error).not.toHaveBeenCalled();
+  });
+});
+
+describe("a notification's pending jump, and a navigation to the unread boundary", () => {
+  /** The channel opened with the bot's newest row unread, a notification's jump located and waiting for its row. */
+  async function jumpWaitingInAnUnreadChannel(): Promise<void> {
+    surfaceUnderTest = CHANNEL_SURFACE;
+    mocks.readCursors = {
+      cursors: {},
+      latest: { [CHAT_ID]: { messageId: "ask-1", seq: 1_000 } },
+    };
+    mocks.locate = () => Promise.resolve(FOUND_ROW);
+    const view = mountTranscript();
+    await settleLegendList();
+    askNotification(view);
+    await answered();
+    expect(lastOrdinalRequested()).toBe(FOUND_ORDINAL);
+    await advanceToJumpAge(TRANSCRIPT_JUMP_TTL_MS - 1);
+  }
+
+  function pressUnreadBanner(): void {
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Unread messages" }));
+    });
+  }
+
+  it("ends the jump: the row arriving afterwards is not scrolled to", async () => {
+    await jumpWaitingInAnUnreadChannel();
+
+    pressUnreadBanner();
+    await waitFor(() => {
+      expect(lastOrdinalRequested()).toBeNull();
+    });
+    await rowArrives();
+
+    expect(flashing(TARGET)).toBe(false);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("is not said of when the bound falls due between the navigation's write and its commit", async () => {
+    await jumpWaitingInAnUnreadChannel();
+
+    atTheNextEffects(() => vi.advanceTimersByTime(1));
+    pressUnreadBanner();
+    await waitFor(() => {
+      expect(lastOrdinalRequested()).toBeNull();
+    });
+    await rowArrives();
+
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(flashing(TARGET)).toBe(false);
   });
 });
 
