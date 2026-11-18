@@ -509,8 +509,7 @@ function answerSignInWith(awaitAnswer: {
   );
 }
 
-const ENVIRONMENT_MANAGED_LINE =
-  "This account is managed by your environment — sign in there.";
+const ENVIRONMENT_MANAGED_LINE = "Managed by your environment — sign in there.";
 
 /**
  * The host starts the sign-in, then refuses `awaitLogin` because the

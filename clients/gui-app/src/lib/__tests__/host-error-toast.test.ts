@@ -199,12 +199,12 @@ describe("toastFromHostError", () => {
     toastFromHostError(
       makeError(
         "environment-managed",
-        "This account is managed by your environment — sign in there.",
+        "Managed by your environment — sign in there.",
       ),
       "Couldn't confirm sign-in.",
     );
     expect(toast.error).toHaveBeenCalledWith(
-      "This account is managed by your environment — sign in there.",
+      "Managed by your environment — sign in there.",
     );
   });
 
