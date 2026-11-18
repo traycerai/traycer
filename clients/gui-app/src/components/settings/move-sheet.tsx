@@ -33,6 +33,8 @@ import { TeamReadFailed } from "@/components/settings/environment/team-read-fail
 import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
 import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
 import { moveRowLabel } from "@/components/settings/personal/personal-page-status";
+import { useMoveRerun } from "@/components/settings/move/use-move-rerun";
+import type { PersonalForMove } from "@traycer-clients/shared/environment/personal-for-move";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -123,8 +125,9 @@ function MoveSheetBody(props: {
   // the person's own sign-in; the plan waits for that read.
   const personalRead = usePersonalForMoveQuery(supported === true);
   const personalItems = personalRead.data ?? null;
+  const rerun = useMoveRerun(client, target.hostId);
   const plan = useHostQuery<HostRpcRegistry, "environment.move.plan">({
-    cacheKeyIdentity: undefined,
+    cacheKeyIdentity: rerun.planKey,
     client,
     method: "environment.move.plan",
     params: {
@@ -132,10 +135,12 @@ function MoveSheetBody(props: {
       personal: personalItems,
     },
     options: {
-      enabled:
-        supported === true &&
-        personal.environmentId !== null &&
-        personalRead.data !== undefined,
+      enabled: planAsked(
+        supported,
+        personal.environmentId,
+        personalRead.data,
+        rerun.planReadable,
+      ),
       refetchOnWindowFocus: false,
     },
   });
@@ -193,6 +198,13 @@ function MoveSheetBody(props: {
   // read again: rows read now give the plan a new request, which it reads by
   // itself; a read that fails again asks the same plan again.
   const retryPlan = (): void => {
+    if (rerun.stopped) {
+      rerun.rerun(() => {
+        setChoices(new Map());
+        setNotAwaiting(false);
+      });
+      return;
+    }
     if (personalRead.data !== null) {
       void plan.refetch().catch(ignoreError);
       return;
@@ -207,7 +219,7 @@ function MoveSheetBody(props: {
     .map((host) => host.name);
   // Who the settings reach is said, and the plan offered, only once the
   // host list has answered: an unread list is not "no other computer".
-  const shownPlan = planOnceReachKnown(runningPersonal, plan.data);
+  const shownPlan = planOnceReachKnown(runningPersonal, plan.data, plan.isError);
   const environmentId = personal.environmentId;
   const versionDiffers = disclosureDiffers(shownPlan);
   return (
@@ -240,9 +252,7 @@ function MoveSheetBody(props: {
             className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground"
           >
             <span className="min-w-0">{plan.error.message}</span>
-            <Button type="button" size="sm" variant="ghost" onClick={retryPlan}>
-              Retry
-            </Button>
+            <PlanRetryButton pending={rerun.pending} onRetry={retryPlan} />
           </div>
         ) : null}
         <HostListReadFailed running={runningPersonal} />
@@ -346,12 +356,59 @@ function MoveAcceptButton(props: {
   );
 }
 
-/** The plan, once the host list has answered: its lines name where it reaches. */
+/**
+ * The plan, once the host list has answered: its lines name where it reaches.
+ * A refused read keeps the last plan in the cache, which is not the plan the
+ * computer would move now.
+ */
 function planOnceReachKnown(
   running: HostsRunningConfiguration,
   plan: MovePlan | undefined,
+  refused: boolean,
 ): MovePlan | null {
-  return running.state === "ready" && plan !== undefined ? plan : null;
+  return running.state === "ready" && plan !== undefined && !refused
+    ? plan
+    : null;
+}
+
+function planAsked(
+  supported: boolean | null,
+  environmentId: string | null,
+  personal: PersonalForMove | null | undefined,
+  readable: boolean,
+): boolean {
+  return (
+    supported === true &&
+    environmentId !== null &&
+    personal !== undefined &&
+    readable
+  );
+}
+
+/** The refused plan's Retry; busy while a stopped move is started again. */
+function PlanRetryButton(props: {
+  readonly pending: boolean;
+  readonly onRetry: () => void;
+}): ReactNode {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      disabled={props.pending}
+      onClick={props.onRetry}
+    >
+      Retry
+      {props.pending ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+          tone="muted"
+        />
+      ) : null}
+    </Button>
+  );
 }
 
 /** The host list could not be read, so nothing says where the move reaches. */

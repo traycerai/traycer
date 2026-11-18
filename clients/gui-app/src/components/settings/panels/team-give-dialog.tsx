@@ -134,9 +134,11 @@ export function TeamGiveDialog(props: {
   const startError = start.isError ? start.error.message : null;
   const ownershipNotConfirmed =
     originAttempt !== null && ownership.data === "not_confirmed";
+  // A refused read keeps the last plan in the cache; it is not confirmed again.
+  const shownPlan = plan.isError ? undefined : plan.data;
   const versionDiffers =
-    plan.data !== undefined &&
-    plan.data.disclosureVersion !== TEAM_TRANSFER_DISCLOSURE_VERSION;
+    shownPlan !== undefined &&
+    shownPlan.disclosureVersion !== TEAM_TRANSFER_DISCLOSURE_VERSION;
   return (
     <Dialog
       open
@@ -186,9 +188,9 @@ export function TeamGiveDialog(props: {
           {versionDiffers ? null : (
             <Button
               type="button"
-              disabled={giving || plan.data === undefined}
+              disabled={giving || shownPlan === undefined}
               onClick={() => {
-                if (plan.data !== undefined) confirm(plan.data.planHash);
+                if (shownPlan !== undefined) confirm(shownPlan.planHash);
               }}
             >
               {giving ? (

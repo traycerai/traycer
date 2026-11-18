@@ -9,6 +9,7 @@ import {
   MOVE_DIAGNOSTICS_FILE_NAME,
   moveDiagnosticsExport,
 } from "@/components/settings/move/move-diagnostics-export";
+import { useMoveRetryMutation } from "@/components/settings/move/use-move-rerun";
 import {
   moveProgressText,
   moveStoppedText,
@@ -16,7 +17,6 @@ import {
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { readsHostBindingsFromPool } from "@/hooks/bots/use-host-environment-bindings-query";
-import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { saveBlobToDisk } from "@/lib/files/save-blob-to-disk";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -100,12 +100,7 @@ export function MoveRetryButton(props: {
 }): ReactNode {
   const retryable =
     useHostMethodSupport(props.hostId, "environment.setup.retry") === true;
-  const retry = useHostScopedMutationForClient(props.client, {
-    method: "environment.setup.retry",
-    mutationKey: environmentMutationKeys.setupRetry(),
-    errorMessage: "Couldn't retry the move.",
-    invalidateMethods: ["environment.status", "environment.setup.attempts"],
-  });
+  const retry = useMoveRetryMutation(props.client);
   if (!retryable) return null;
   return (
     <Button

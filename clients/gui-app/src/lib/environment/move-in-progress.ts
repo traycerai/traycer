@@ -36,6 +36,28 @@ export function moveIsPastTheAccept(
   );
 }
 
+/** Accepted, and stalled or failed: it waits for its Retry. */
+export function moveHasStopped(status: EnvironmentStatusResponseV11): boolean {
+  const setup = status.setup;
+  return (
+    setup !== null &&
+    moveIsPastTheAccept(status) &&
+    MOVE_STOPPED_REASONS[setup.state] !== undefined
+  );
+}
+
+/** Waiting for the person's `Move to Personal`. */
+export function moveAwaitsConsent(
+  status: EnvironmentStatusResponseV11,
+): boolean {
+  const setup = status.setup;
+  return (
+    setup !== null &&
+    setup.stage === "moving_settings" &&
+    setup.state === "awaiting_consent"
+  );
+}
+
 /** Accepted, and neither finished nor stopped: items are moving right now. */
 export function moveIsRunning(status: EnvironmentStatusResponseV11): boolean {
   const setup = status.setup;
