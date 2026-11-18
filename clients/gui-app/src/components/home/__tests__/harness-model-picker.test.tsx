@@ -2902,14 +2902,10 @@ describe("<HarnessModelPicker />", () => {
     ]);
     const claude = providerCliStateWithProfiles({
       providerId: "claude-code",
-      profiles: claudeProfilesForDropdown().map((profile) =>
-        profile.kind === "ambient"
-          ? {
-              ...profile,
-              auth: { ...profile.auth, status: "unauthenticated" },
-            }
-          : profile,
-      ),
+      profiles: claudeProfilesForDropdown().map((profile) => ({
+        ...profile,
+        auth: { ...profile.auth, status: "unauthenticated" },
+      })),
     });
     queryMock.providerStates = [
       {
