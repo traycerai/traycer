@@ -201,7 +201,9 @@ describe("the place a rail contributes", () => {
   });
 
   it("is the memory over the thread it displaced", () => {
-    expect(tracyPlaceRailOf({ kind: "memory", back: thread })).toEqual({
+    expect(
+      tracyPlaceRailOf({ kind: "memory", back: thread, focus: null }),
+    ).toEqual({
       thread: placeThread,
       memory: true,
       exchangePeerBotId: null,
@@ -209,7 +211,9 @@ describe("the place a rail contributes", () => {
   });
 
   it("is the memory alone when it displaced nothing", () => {
-    expect(tracyPlaceRailOf({ kind: "memory", back: null })).toEqual({
+    expect(
+      tracyPlaceRailOf({ kind: "memory", back: null, focus: null }),
+    ).toEqual({
       thread: null,
       memory: true,
       exchangePeerBotId: null,
@@ -220,7 +224,7 @@ describe("the place a rail contributes", () => {
     const rail: BotRail = {
       kind: "exchange",
       peerBotId: "bot-peer",
-      back: { kind: "memory", back: thread },
+      back: { kind: "memory", back: thread, focus: null },
     };
     expect(tracyPlaceRailOf(rail)).toEqual({
       thread: placeThread,
@@ -249,7 +253,7 @@ describe("the place a rail contributes", () => {
     expect(
       tracyPlaceRailOf({
         kind: "search",
-        back: { kind: "memory", back: null },
+        back: { kind: "memory", back: null, focus: null },
         showing: { kind: "channel" },
       }),
     ).toEqual({ thread: null, memory: true, exchangePeerBotId: null });
@@ -334,6 +338,7 @@ describe("the rail a place names", () => {
       back: {
         kind: "memory",
         back: openThread("m-1", { announcement: true, sent: SENT }),
+        focus: null,
       },
     };
     const rail = railOfTracyPlace(
@@ -389,6 +394,7 @@ describe("the rail a place names", () => {
       back: {
         kind: "memory",
         back: { ...placeThread, sent: SENT },
+        focus: null,
       },
     });
   });
@@ -399,7 +405,7 @@ describe("the rail a place names", () => {
         { thread: null, memory: true, exchangePeerBotId: null },
         null,
       ),
-    ).toEqual({ kind: "memory", back: null });
+    ).toEqual({ kind: "memory", back: null, focus: null });
     expect(
       railOfTracyPlace(
         { thread: null, memory: false, exchangePeerBotId: "bot-peer" },

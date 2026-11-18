@@ -27,6 +27,7 @@ import type { HostRequester } from "@traycer-clients/shared/host-client/host-cli
 import type { HostCommunicationGraphCloudFeedEvent } from "@traycer/protocol/host/epic/communication-graph";
 import {
   botRecordSchema,
+  type BotMemoryChange,
   type BotRecord,
 } from "@traycer/protocol/host/bot/schemas";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
@@ -152,24 +153,26 @@ vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatMessage } = await import("@/components/chat/chat-message");
   const { BotExchangeLinesContext } =
     await import("@/components/chat/bot-exchange-lines-context");
-  const { createBotExchangeLineCollator } =
-    await import("@/stores/chats/transcript-exchange-lines");
+  const { createBotLineCollator } =
+    await import("@/stores/chats/transcript-bot-lines");
   const { transcriptListRows } =
     await import("@/stores/chats/transcript-list-rows");
   const noBackgroundToolBlockIds: ReadonlySet<string> = new Set();
+  const NO_CHANGES: ReadonlyArray<BotMemoryChange> = [];
   return {
     ChatMessages: (props: {
       messages: ReadonlyArray<ChatMessageModel>;
       instanceId: string;
     }) => {
-      const [collateExchangeLines] = useState(createBotExchangeLineCollator);
-      const rows = collateExchangeLines(
+      const [collate] = useState(createBotLineCollator);
+      const rows = collate(
         transcriptListRows({
           window: null,
           rendered: props.messages,
           splitLongTurns: false,
         }),
         use(BotExchangeLinesContext)?.exchanges ?? [],
+        NO_CHANGES,
       );
       return (
         <Providers tileInstanceId={props.instanceId}>

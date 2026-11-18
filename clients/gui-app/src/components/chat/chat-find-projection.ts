@@ -818,7 +818,8 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
       // has no text a find hit could be painted onto.
       return [];
     case "bot-exchanges":
-      // A summary of messages that live in the bot's feed, not in this
+    case "bot-memory-changes":
+      // A summary of what lives in the bot's feed or its memory, not in this
       // transcript: not something find searches.
       return [];
     case "setup-card":

@@ -120,6 +120,7 @@ function alwaysDrawnSegment(segment: MessageSegment): boolean {
     case "auto-judge-unattended-denial":
     case "auto-judge-notice":
     case "bot-exchanges":
+    case "bot-memory-changes":
       // Synthesized `role: "system"` rows only; an assistant turn's renderer
       // draws nothing for them.
       return false;

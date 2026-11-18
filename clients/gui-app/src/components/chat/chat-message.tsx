@@ -20,6 +20,7 @@ import { AutoJudgeUnattendedDenialSegment } from "./segments/auto-judge-unattend
 import type { InterviewDeliveryRetryAction } from "./segments/interview-delivery-retry-action";
 import { SetupCardSegment } from "./segments/setup-card-segment";
 import { BotExchangeLineSegment } from "./segments/bot-exchange-line-segment";
+import { BotMemoryLineSegment } from "./segments/bot-memory-line-segment";
 import type { NextStepActionHandler } from "./segments/next-steps-action-group";
 import type { TranscriptRowPart } from "@/stores/chats/assistant-turn-parts";
 
@@ -183,6 +184,15 @@ function renderSpecialSegment(segment: MessageSegment): ReactElement | null {
       <BotExchangeLineSegment
         id={segment.id}
         pairs={segment.pairs}
+        lastAt={segment.lastAt}
+      />
+    );
+  }
+  if (segment.kind === "bot-memory-changes") {
+    return (
+      <BotMemoryLineSegment
+        id={segment.id}
+        groups={segment.groups}
         lastAt={segment.lastAt}
       />
     );

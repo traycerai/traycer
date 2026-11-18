@@ -224,6 +224,7 @@ function memoryOf(entries: readonly BotMemoryEntry[]): BotMemory {
     entries: [...entries],
     own: { entries: entries.length, chars: 100, ceiling: 8_000 },
     shared: { entries: 0, chars: 0, ceiling: 8_000 },
+    changes: [],
   };
 }
 
@@ -313,7 +314,7 @@ function mount(extra: ReactNode): void {
 function mountAsAccountA(extra: ReactNode): void {
   useBotOpenThreadStore
     .getState()
-    .setRail(BOT_ID, { kind: "memory", back: null });
+    .setRail(BOT_ID, { kind: "memory", back: null, focus: null });
   signInAs("account-a");
   holdBinding(clientA, "account-a");
   mount(extra);

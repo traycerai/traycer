@@ -57,6 +57,7 @@ import type {
   WorkflowMeta,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { ParsedTaskTodo } from "@traycer/protocol/host/agent/gui/task-todo-tools";
+import type { BotMemoryLineGroup } from "@/lib/bots/bot-memory-lines";
 
 export type {
   DiffSource,
@@ -571,7 +572,7 @@ export type MessageSegment =
       /**
        * A run of a bot's messages with other bots, drawn as one line between
        * a bot channel's rows (Tracy Bots, decision 174). Synthesized by
-       * `createBotExchangeLineCollator` from the bot's Communication Graph feed, never
+       * `createBotLineCollator` from the bot's Communication Graph feed, never
        * persisted: one entry per other bot, in the order the run first
        * reached it, with how many messages of the run it took part in.
        */
@@ -580,6 +581,20 @@ export type MessageSegment =
         readonly count: number;
       }>;
       /** When the run's last message was sent. */
+      lastAt: number;
+    }
+  | {
+      id: string;
+      kind: "bot-memory-changes";
+      /**
+       * A run of a bot's changes to the memory it reads, drawn as one line
+       * between the rows of the conversation that made them (Tracy Bots
+       * T373). Synthesized by `createBotLineCollator` from the bot's
+       * memory reading, never persisted: one group per memory, in the order
+       * the run first touched it.
+       */
+      groups: ReadonlyArray<BotMemoryLineGroup>;
+      /** When the run's last change was made. */
       lastAt: number;
     }
   | {

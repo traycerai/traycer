@@ -144,7 +144,7 @@ export function BotChannelView(props: {
       <button
         type="button"
         data-testid="stub-channel-open-memory"
-        onClick={() => props.onOpenMemory({ back: null })}
+        onClick={() => props.onOpenMemory({ back: null, focus: null })}
       />
       <button
         type="button"

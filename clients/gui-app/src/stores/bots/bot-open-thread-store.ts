@@ -86,12 +86,22 @@ export function sessionTargetOfTurn(
 }
 
 /**
- * What the bot knows, open in the rail: read-only, and the
- * thread it displaced, which its back button restores (`null` when it
- * displaced none).
+ * The memory and entries a line of memory changes names (Tracy Bots T373),
+ * which the memory pane opens on and marks.
+ */
+export interface BotMemoryFocus {
+  readonly memory: "own" | "shared";
+  readonly entryIds: ReadonlyArray<string>;
+}
+
+/**
+ * What the bot knows, open in the rail: read-only, the thread it displaced,
+ * which its back button restores (`null` when it displaced none), and the
+ * entries a line opened it on (`null` when no line did).
  */
 export interface BotOpenMemory {
   readonly back: BotOpenThread | null;
+  readonly focus: BotMemoryFocus | null;
 }
 
 /**
@@ -140,18 +150,24 @@ export type BotRail =
   | ({ readonly kind: "search" } & BotOpenSearch);
 
 /**
- * The memory opened over what the rail holds (the bot's profile card): it
- * takes the one slot and keeps for its back button the thread it displaces,
- * or the one the memory, a pair's log or a search already there displaced.
+ * The memory opened over what the rail holds (the bot's profile card, or a
+ * line of memory changes with its `focus`): it takes the one slot and keeps
+ * for its back button the thread it displaces, or the one the memory, a
+ * pair's log or a search already there displaced.
  */
-export function memoryRailOver(rail: BotRail | null): BotRail {
-  if (rail === null) return { kind: "memory", back: null };
-  if (rail.kind === "thread") return { kind: "memory", back: threadOf(rail) };
-  if (rail.kind === "memory") return { kind: "memory", back: rail.back };
-  if (rail.kind === "search" && rail.showing.kind === "thread") {
-    return { kind: "memory", back: rail.showing.thread };
+export function memoryRailOver(
+  rail: BotRail | null,
+  focus: BotMemoryFocus | null,
+): BotRail {
+  if (rail === null) return { kind: "memory", back: null, focus };
+  if (rail.kind === "thread") {
+    return { kind: "memory", back: threadOf(rail), focus };
   }
-  return memoryRailOver(rail.back);
+  if (rail.kind === "memory") return { kind: "memory", back: rail.back, focus };
+  if (rail.kind === "search" && rail.showing.kind === "thread") {
+    return { kind: "memory", back: rail.showing.thread, focus };
+  }
+  return memoryRailOver(rail.back, focus);
 }
 
 /**

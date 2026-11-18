@@ -241,7 +241,7 @@ function BotUsageWithMemory(props: {
             count={count}
             onOpen={() => {
               onClose();
-              access.open();
+              access.open(null);
             }}
           />
         )

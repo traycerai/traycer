@@ -82,8 +82,10 @@ import {
 } from "@/components/chat/chat-turn-minimap-logic";
 import { ChatBotPresentationContext } from "@/components/chat/chat-bot-presentation-context";
 import { BotExchangeLinesContext } from "@/components/chat/bot-exchange-lines-context";
-import { createBotExchangeLineCollator } from "@/stores/chats/transcript-exchange-lines";
+import { createBotLineCollator } from "@/stores/chats/transcript-bot-lines";
 import type { BotExchange } from "@/lib/bots/bot-exchanges";
+import { BotMemoryLinesContext } from "@/components/chat/bot-memory-lines-context";
+import type { BotMemoryChange } from "@traycer/protocol/host/bot/schemas";
 import { useStopReadingOnNewReply } from "@/hooks/ui/use-read-aloud";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { buildChatActivityTimeline } from "@/components/chat/chat-activity-groups";
@@ -379,6 +381,7 @@ export const CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS = 2_600;
 const CHAT_TIMELINE_NAVIGATION_LANDING_EPSILON_PX = 1;
 
 const NO_EXCHANGES: ReadonlyArray<BotExchange> = [];
+const NO_CHANGES: ReadonlyArray<BotMemoryChange> = [];
 /** Bounded retry count for the settle/re-issue loop (at most 2-3) - the
  *  upper end, since the field bug this fixes needed
  *  multiple manual pill re-clicks to converge and the goal is to absorb that
@@ -2226,25 +2229,29 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // split differently from the list would name rows the list never built.
   const splitLongTurns = !botChannel;
 
-  // A bot's channel or thread draws its bot's messages with other bots as
-  // lines between its rows (Tracy Bots, decision 174).
+  // A bot's channel or thread draws its bot's messages with other bots
+  // (Tracy Bots, decision 174) and its changes to its memory (T373) as lines
+  // between its rows, both kinds in one pass so each closes the other's runs.
   // The collator remembers its last placement, so a streamed token re-reads
-  // no message and rebuilds no line.
+  // nothing and rebuilds no line.
   const exchanges = use(BotExchangeLinesContext)?.exchanges ?? NO_EXCHANGES;
-  const [collateExchangeLines] = useState(createBotExchangeLineCollator);
+  const memoryChanges = use(BotMemoryLinesContext)?.changes ?? NO_CHANGES;
+  const [collateBotLines] = useState(createBotLineCollator);
   const listRows = useMemo(
     () =>
-      collateExchangeLines(
+      collateBotLines(
         transcriptListRows({
           window: transcriptWindow,
           rendered: messages,
           splitLongTurns,
         }),
         exchanges,
+        memoryChanges,
       ),
     [
-      collateExchangeLines,
+      collateBotLines,
       exchanges,
+      memoryChanges,
       splitLongTurns,
       transcriptWindow,
       messages,
