@@ -49,6 +49,7 @@ import {
 } from "@/components/chat/__tests__/legend-list-test-environment";
 import { FILE_DROP_OVERLAY_CONTENT } from "@/components/home/composer/composer-drop-overlay-content";
 import { BOT_CONVERSATION_IMAGES_VERSION } from "@/hooks/bots/use-bot-send-version";
+import { runTimersUntilQuiet } from "@/components/chat/composer/__tests__/editor-timer-support";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { resetLandingImageBudgetReservationsForTesting } from "@/lib/composer/landing-image-budget";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -219,8 +220,9 @@ beforeEach(() => {
   refusals = vi.spyOn(toast, "error");
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  await runTimersUntilQuiet();
   window.getSelection()?.removeAllRanges();
   notices.mockRestore();
   refusals.mockRestore();

@@ -9,7 +9,7 @@ import {
   botMentionHostClientMock,
   emptyBotMentionHostListsMock,
 } from "@/components/bots/__tests__/bot-mention-host-test-support";
-import { act, screen, within } from "@testing-library/react";
+import { act, cleanup, screen, within } from "@testing-library/react";
 import { toast } from "sonner";
 import {
   afterEach,
@@ -26,6 +26,7 @@ import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import { DROP_AFTER_POST_GONE } from "@/components/bots/bot-drop-lines";
 import { FILE_DROP_OVERLAY_CONTENT } from "@/components/home/composer/composer-drop-overlay-content";
 import { BOT_CONVERSATION_IMAGES_VERSION } from "@/hooks/bots/use-bot-send-version";
+import { runTimersUntilQuiet } from "@/components/chat/composer/__tests__/editor-timer-support";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { resetLandingImageBudgetReservationsForTesting } from "@/lib/composer/landing-image-budget";
 import { negotiateBotSend } from "@/components/bots/__tests__/bot-failed-request-test-support";
@@ -283,7 +284,9 @@ beforeEach(() => {
   refusals = vi.spyOn(toast, "error");
 });
 
-afterEach(() => {
+afterEach(async () => {
+  cleanup();
+  await runTimersUntilQuiet();
   notices.mockRestore();
   refusals.mockRestore();
 });

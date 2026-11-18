@@ -34,6 +34,7 @@ import {
   harnessRow,
   providerRow,
 } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
+import { runTimersUntilQuiet } from "@/components/chat/composer/__tests__/editor-timer-support";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 
 const answers = vi.hoisted(() => ({
@@ -338,8 +339,9 @@ beforeEach(() => {
   fileDrops.readNativeClipboardFilePaths.mockResolvedValue([]);
 });
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  await runTimersUntilQuiet();
   vi.useRealTimers();
 });
 
@@ -421,23 +423,6 @@ async function mountedEditor(): Promise<HTMLElement> {
     });
   }
   throw new Error("the composer's editor did not mount");
-}
-
-/**
- * Runs the pending timers until none is left. The editor's own one-shot timers
- * (prosemirror-view's 20 ms selection check and `DOMObserver` flush, TipTap's
- * 1 ms `scheduleDestroy` and its 0 ms core timer) run out in two runs; zero
- * left means nothing scheduled can raise the overlay afterwards. The five runs
- * are a fail-only guard: only the count reaching zero decides a pass.
- */
-async function runTimersUntilQuiet(): Promise<void> {
-  for (let run = 1; run <= 5; run += 1) {
-    await act(async () => {
-      await vi.runOnlyPendingTimersAsync();
-    });
-    if (vi.getTimerCount() === 0) return;
-  }
-  throw new Error(`${String(vi.getTimerCount())} timers are still pending`);
 }
 
 function overlayShown(): boolean {
