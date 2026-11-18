@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import type { HostRpcRegistry } from "@/lib/host";
 import {
   useHostScopeFor,
   WINDOW_HOST_SELECTION,
@@ -167,8 +167,7 @@ function PersonalPageChip(props: {
   readonly section: SettingsSectionId;
 }): ReactNode {
   const scope = useHostScopeFor(WINDOW_HOST_SELECTION);
-  const client = useHostClient();
-  const environmentId = useDetailsEnvironmentId(client);
+  const environmentId = useDetailsEnvironmentId();
   const queryClient = useQueryClient();
   const running = useHostsRunningPersonal(true);
   const { statuses, versions } = usePersonalComputers(true);

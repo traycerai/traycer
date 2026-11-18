@@ -151,6 +151,31 @@ describe("scopedArtifactCountFromMessage", () => {
     // Only the artifact with an actual change is counted.
     expect(scopedArtifactCountFromMessage(messages, events, "u1")).toBe(1);
   });
+
+  it("counts an html artifact's tagged files as one artifact, within a turn and across turns", () => {
+    const messages = [userMessage("u1"), userMessage("u2")];
+    const pageFile = (fileName: string): TurnCheckpointManifestEntry => ({
+      ...entry({
+        filePath: `/repo/artifacts/page/${fileName}`,
+        beforeHash: "x",
+        afterHash: "y",
+      }),
+      artifact: { artifactId: "page-1", kind: "html", title: "Page" },
+    });
+    const events = [
+      checkpointEvent(
+        "u1",
+        manifest("turn-1", [
+          pageFile("index.html"),
+          pageFile("app.css"),
+          pageFile("app.js"),
+        ]),
+      ),
+      checkpointEvent("u2", manifest("turn-2", [pageFile("about.html")])),
+    ] satisfies ChatEvent[];
+
+    expect(scopedArtifactCountFromMessage(messages, events, "u1")).toBe(1);
+  });
 });
 
 describe("resolveRevertScope", () => {

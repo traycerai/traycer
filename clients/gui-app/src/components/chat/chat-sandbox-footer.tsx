@@ -14,11 +14,7 @@ import type {
   RestingChatSandbox,
 } from "@/lib/sandboxes/chat-sandbox-state";
 import { useSampledNow } from "@/lib/relative-time";
-import {
-  costLine,
-  RESTING_STORAGE_CLAUSE,
-  SHARED_USE_CLAUSE,
-} from "@/lib/sandboxes/sandbox-strings";
+import { costLine } from "@/lib/sandboxes/sandbox-strings";
 import { openSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 import {
   sandboxFrozenCause,
@@ -26,7 +22,6 @@ import {
 } from "@/lib/sandboxes/sandbox-row-lines";
 import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
 import { useOpenLink } from "@/lib/links/open-link";
-import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
  * The resolver's footer line under a chat: a resting sandbox whose
@@ -53,9 +48,6 @@ export function ChatSandboxFooter(props: {
     <p className="shrink-0 border-t border-border px-4 py-2 text-ui-sm text-muted-foreground">
       {sandbox.displayName} {wake}
       {price}
-      {state.wakeChangesPayer
-        ? ` ${RESTING_STORAGE_CLAUSE} ${SHARED_USE_CLAUSE}`
-        : ""}
     </p>
   );
 }
@@ -64,7 +56,6 @@ function FrozenSandboxFooter(props: {
   readonly state: RestingChatSandbox;
 }): ReactNode {
   const { sandbox, configuration } = props.state;
-  const viewer = useAuthStore((state) => state.profile?.userId ?? null);
   const verb = useSandboxVerb(sandbox.id);
   const operation = useSandboxOperation(sandbox.id);
   const pending = operation?.kind === "pending";
@@ -87,7 +78,7 @@ function FrozenSandboxFooter(props: {
         {hostSandboxStateWord(sandbox.state)} · {HOST_FROZEN_WORD}
       </p>
       <p className="min-w-0 w-full wrap-anywhere">
-        {sandboxFrozenCause(sandbox, pageConfiguration, viewer)}
+        {sandboxFrozenCause(pageConfiguration)}
       </p>
       {removal === null ? null : (
         <p className="min-w-0 w-full wrap-anywhere">{removal}</p>

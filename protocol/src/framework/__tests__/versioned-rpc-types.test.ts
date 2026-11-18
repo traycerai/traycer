@@ -726,4 +726,9 @@ describe("RPC_ERROR_CODES / isRpcErrorCode", () => {
   it("isRpcErrorCode still narrows unknown codes to false", () => {
     expect(isRpcErrorCode("E_TOTALLY_MADE_UP")).toBe(false);
   });
+
+  it("recognizes environment-managed, the refusal of a sign-in of an account the environment holds", () => {
+    expect(RPC_ERROR_CODES).toContain("environment-managed");
+    expect(isRpcErrorCode("environment-managed")).toBe(true);
+  });
 });

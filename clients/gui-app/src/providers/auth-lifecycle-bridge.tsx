@@ -16,7 +16,6 @@ import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { closeSandboxDetails } from "@/stores/sandboxes/sandbox-details-store";
 import { resetSandboxesPage } from "@/stores/sandboxes/sandboxes-page-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
-import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dialog-store";
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { dismissRetainedDraftToasts } from "@/lib/toast/retained-draft-toasts";
 import { retireOnboardingReminder } from "@/lib/toast/onboarding-reminder-toast";
@@ -133,10 +132,6 @@ export function EpicSessionLifecycleBridge(
       // otherwise see A's sandbox id in the drawer and A's team on the page.
       closeSandboxDetails();
       resetSandboxesPage();
-      // The provider Link dialog's target names one of the outgoing account's
-      // profiles; left set, account B's Providers would mount A's dialog and
-      // send A's profile id through B's host.
-      useProviderLinkDialogStore.getState().close();
       // A last-copy draft toast is minted with NO duration, and the app-level
       // `<Toaster />` is mounted outside this tree - so it is the one piece of
       // renderer state that survives everything disposed above and keeps the

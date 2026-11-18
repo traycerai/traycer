@@ -17,7 +17,11 @@ import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 // button pull in so this test only needs a QueryClient, not a bound host.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => null };
+  return {
+    ...actual,
+    useHostClient: () => null,
+    useAuthService: () => ({ setProfileRecordEnabled: vi.fn() }),
+  };
 });
 // The stub above is not sufficient on its own: it replaces `@/lib/host`, but
 // the pinned-client chain also reads `useHostClient` from `@/lib/host/runtime`,
@@ -42,8 +46,8 @@ vi.mock("@/hooks/providers/use-rename-provider-profile-mutation", () => ({
     error: null,
   }),
 }));
-vi.mock("@/hooks/providers/use-recolor-provider-profile-mutation", () => ({
-  useRecolorProviderProfile: () => ({
+vi.mock("@/hooks/providers/use-account-profile-recolor", () => ({
+  useAccountProfileRecolorForClient: () => ({
     mutate: vi.fn(),
     isPending: false,
     error: null,
@@ -166,6 +170,7 @@ describe("<ProviderProfileScopedSection /> sign-in failure report action", () =>
       failedAttempt: {
         providerId: "opencode",
         message: "secret-token-should-never-render",
+        hostSentence: false,
       },
     });
 
@@ -180,6 +185,7 @@ describe("<ProviderProfileScopedSection /> sign-in failure report action", () =>
       failedAttempt: {
         providerId: "opencode",
         message: "secret-token-should-never-render",
+        hostSentence: false,
       },
     });
 
@@ -200,6 +206,20 @@ describe("<ProviderProfileScopedSection /> sign-in failure report action", () =>
     const context = useDesktopDialogStore.getState().reportIssueContext;
     expect(JSON.stringify(context)).not.toContain("secret-token");
     expect(JSON.stringify(context)).not.toContain("opencode");
+  });
+
+  it("shows the host's own sentence in place of the generic line when the host sent one, keeping Retry", () => {
+    renderSection({
+      failedAttempt: {
+        providerId: "opencode",
+        message: "Managed by your environment — sign in there.",
+        hostSentence: true,
+      },
+    });
+
+    screen.getByText("Managed by your environment — sign in there.");
+    expect(screen.queryByText(/Sign-in did not finish for/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   it("renders no failure banner (and no report action) when there is no failed attempt", () => {

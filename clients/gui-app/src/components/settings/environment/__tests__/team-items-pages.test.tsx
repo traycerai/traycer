@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -13,7 +14,6 @@ import { TeamProviders } from "@/components/settings/environment/team-providers"
 import { TeamSkillsPage } from "@/components/settings/environment/team-skills";
 import { TeamPermissions } from "@/components/settings/environment/team-permissions";
 import { BrowserAgentAccessGroup } from "@/components/settings/panels/browser-agent-access-group";
-import { TeamMcpServers } from "@/components/settings/environment/team-mcp-servers";
 import { TeamVariablesAndShells } from "@/components/settings/environment/team-variables-and-shells";
 import { SettingsSectionContext } from "@/components/settings/settings-section-context";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
@@ -24,6 +24,8 @@ import {
   mountTeamPage,
   personalPoolSource,
   poolSource,
+  rejectNextTeamEnvironmentItemPut,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
 } from "./team-configuration-test-support";
@@ -31,6 +33,7 @@ import {
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -179,6 +182,7 @@ describe("TeamVariablesAndShells", () => {
           path: "/bin/zsh",
           args: ["-l"],
           synthesised: false,
+          entries: [],
         }),
       });
       const user = userEvent.setup();
@@ -558,16 +562,19 @@ describe("TeamVariablesAndShells", () => {
         "value",
         "/bin/zsh",
       );
-      const reads = harness.paramsOf("environment.configuration.items").length;
+      const shellReads = () =>
+        harness.cloudRequests.filter(
+          (request) =>
+            new URL(request.url).searchParams.get("kind") === "shell",
+        );
+      const reads = shellReads().length;
       await user.click(screen.getByRole("button", { name: "Retry" }));
       expect(
         await screen.findByText(
           "Saved, but latest settings haven't refreshed.",
         ),
       ).toBeTruthy();
-      expect(harness.paramsOf("environment.configuration.items")).toHaveLength(
-        reads + 1,
-      );
+      expect(shellReads()).toHaveLength(reads + 1);
       expect(
         harness.paramsOf("environment.configuration.items.put"),
       ).toHaveLength(1);
@@ -697,7 +704,12 @@ describe("TeamVariablesAndShells", () => {
         "disabled",
         true,
       );
-      const reads = harness.paramsOf("environment.configuration.items").length;
+      const shellReads = () =>
+        harness.cloudRequests.filter(
+          (request) =>
+            new URL(request.url).searchParams.get("kind") === "shell",
+        );
+      const reads = shellReads().length;
       items = [{ ...shellItem, revision: 4 }];
       await user.click(screen.getByRole("button", { name: "Retry" }));
       expect(
@@ -717,9 +729,7 @@ describe("TeamVariablesAndShells", () => {
           false,
         );
       });
-      expect(harness.paramsOf("environment.configuration.items")).toHaveLength(
-        reads + 2,
-      );
+      expect(shellReads()).toHaveLength(reads + 2);
       expect(
         harness.paramsOf("environment.configuration.items.delete"),
       ).toEqual([
@@ -801,6 +811,207 @@ describe("TeamVariablesAndShells", () => {
       ).toMatchObject({ revision: 4 });
       expect(screen.queryByText(/(?:Saved|Removed)[.,]/)).toBeNull();
     });
+
+    it("keeps shell Save at the last-told revision through a quiet newer read", async () => {
+      let current = shellItem;
+      let puts = 0;
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items: [current] }),
+        "environment.configuration.items.put": () => {
+          puts += 1;
+          if (puts === 1) {
+            current = {
+              ...shellItem,
+              revision: 4,
+              value: { path: "/bin/bash", args: [] },
+            };
+            return {
+              outcome: "conflict",
+              current: { revision: 4, changedBy: "Grace", changedAt: 2 },
+            };
+          }
+          if (puts === 2) {
+            current = {
+              ...shellItem,
+              revision: 5,
+              value: { path: "/bin/fish", args: [] },
+            };
+            return {
+              outcome: "conflict",
+              current: { revision: 5, changedBy: "Grace", changedAt: 3 },
+            };
+          }
+          current = {
+            ...shellItem,
+            revision: 6,
+            value: { path: "/bin/zsh", args: [] },
+          };
+          return { outcome: "saved", revision: 6 };
+        },
+        "environment.host.list": () => ({ hosts: [] }),
+      });
+      const user = userEvent.setup();
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+      await typeNewPath(user);
+      expect(
+        await screen.findByText("Changed by Grace a moment ago"),
+      ).toBeTruthy();
+      const reads = harness.paramsOf("environment.configuration.items").length;
+      current = {
+        ...shellItem,
+        revision: 5,
+        value: { path: "/bin/fish", args: [] },
+      };
+      await act(async () => {
+        await harness.queryClient.refetchQueries();
+      });
+      expect(
+        harness.paramsOf("environment.configuration.items").length,
+      ).toBeGreaterThan(reads);
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
+        expect.objectContaining({
+          revision: 3,
+          value: { path: "/bin/zsh", args: [] },
+        }),
+      ]);
+      expect(screen.getByLabelText("Shell path")).toHaveProperty(
+        "value",
+        "/bin/zsh",
+      );
+      await waitFor(() => {
+        expect(
+          within(shellEditor()).getByRole("button", { name: "Save" }),
+        ).toHaveProperty("disabled", false);
+      });
+      await user.click(
+        within(shellEditor()).getByRole("button", { name: "Save" }),
+      );
+      await waitFor(() => {
+        expect(harness.paramsOf("environment.configuration.items.put")).toEqual(
+          [
+            expect.objectContaining({ revision: 3 }),
+            expect.objectContaining({ revision: 4 }),
+          ],
+        );
+        expect(screen.getByLabelText("Shell path")).toHaveProperty(
+          "disabled",
+          false,
+        );
+      });
+      await user.click(
+        within(shellEditor()).getByRole("button", { name: "Save" }),
+      );
+      await waitFor(() => {
+        expect(harness.paramsOf("environment.configuration.items.put")).toEqual(
+          [
+            expect.objectContaining({ revision: 3 }),
+            expect.objectContaining({ revision: 4 }),
+            expect.objectContaining({ revision: 5 }),
+          ],
+        );
+        expect(screen.getByLabelText("Shell path")).toHaveProperty(
+          "disabled",
+          false,
+        );
+      });
+    });
+
+    it("retries a transport-failed shell Save at the revision named by the conflict", async () => {
+      let current = { ...shellItem, revision: 1 };
+      let puts = 0;
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.configuration.items": () => ({ items: [current] }),
+        "environment.configuration.items.put": () => {
+          puts += 1;
+          if (puts === 1) {
+            current = {
+              ...shellItem,
+              revision: 2,
+              value: { path: "/bin/fish", args: [] },
+            };
+            return {
+              outcome: "conflict",
+              current: { revision: 2, changedBy: "Grace", changedAt: 2 },
+            };
+          }
+          current = {
+            ...shellItem,
+            revision: 3,
+            value: { path: "/bin/zsh", args: [] },
+          };
+          return { outcome: "saved", revision: 3 };
+        },
+        "environment.host.list": () => ({ hosts: [] }),
+      });
+      const user = userEvent.setup();
+      render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+      await screen.findByLabelText("Shell path");
+      const failedRequests = rejectNextTeamEnvironmentItemPut(harness, "shell");
+      await typeNewPath(user);
+      expect(failedRequests).toHaveLength(1);
+      expect(failedRequests[0]?.method).toBe("PUT");
+      expect(failedRequests[0]?.body).toMatchObject({ revision: 1 });
+      expect(await screen.findByRole("alert")).toHaveProperty(
+        "textContent",
+        "Connect to manage settings.",
+      );
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual(
+        [],
+      );
+
+      const reads = harness.paramsOf("environment.configuration.items").length;
+      current = {
+        ...shellItem,
+        revision: 2,
+        value: { path: "/bin/fish", args: [] },
+      };
+      await act(async () => {
+        await harness.queryClient.refetchQueries();
+      });
+      expect(
+        harness.paramsOf("environment.configuration.items").length,
+      ).toBeGreaterThan(reads);
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual(
+        [],
+      );
+      expect(screen.getByLabelText("Shell path")).toHaveProperty(
+        "value",
+        "/bin/zsh",
+      );
+
+      await waitFor(() => {
+        expect(
+          within(shellEditor()).getByRole("button", { name: "Save" }),
+        ).toHaveProperty("disabled", false);
+      });
+      await user.click(
+        within(shellEditor()).getByRole("button", { name: "Save" }),
+      );
+      await waitFor(() => {
+        expect(harness.paramsOf("environment.configuration.items.put")).toEqual(
+          [expect.objectContaining({ revision: 1 })],
+        );
+        expect(screen.getByLabelText("Shell path")).toHaveProperty(
+          "disabled",
+          false,
+        );
+      });
+      await user.click(
+        within(shellEditor()).getByRole("button", { name: "Save" }),
+      );
+      await waitFor(() => {
+        expect(harness.paramsOf("environment.configuration.items.put")).toEqual(
+          [
+            expect.objectContaining({ revision: 1 }),
+            expect.objectContaining({ revision: 2 }),
+          ],
+        );
+        expect(screen.getByLabelText("Shell path")).toHaveProperty(
+          "disabled",
+          false,
+        );
+      });
+    });
   });
 
   it("says live values need a host while the team has none", async () => {
@@ -876,124 +1087,6 @@ describe("TeamVariablesAndShells", () => {
   });
 });
 
-describe("TeamMcpServers", () => {
-  const server = (
-    revision: number,
-    enabled: boolean,
-  ): EnvironmentConfigurationItem =>
-    configurationItem({
-      kind: "mcp_server",
-      key: "github",
-      value: {
-        mcpServerId: "srv-1",
-        toolToggles: { claude: { search: enabled } },
-      },
-      revision,
-    });
-
-  it("names the team in the subtitle", async () => {
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.configuration.items": () => ({ items: [] }),
-      "environment.list": () => ({
-        environments: [
-          {
-            environmentId: "env-a",
-            ownerKind: "organization" as const,
-            ownerId: "team-a",
-            roomId: "room-a",
-            label: "Acme",
-            effectiveRole: "editor" as const,
-            kind: "team" as const,
-            hostCount: 1,
-            providerHandle: "handle-a",
-          },
-        ],
-      }),
-    });
-    render(<TeamMcpServers />, { wrapper: harness.Wrapper });
-
-    await expectSentence(
-      "Tools agents can call. Acme's servers reach every provider on its hosts.",
-      "Acme",
-      true,
-    );
-  });
-
-  it("toggles a tool against the displayed revision for an editor", async () => {
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.configuration.items": () => ({ items: [server(5, true)] }),
-      "environment.configuration.items.put": () => ({
-        outcome: "saved",
-        revision: 6,
-      }),
-    });
-    render(<TeamMcpServers />, { wrapper: harness.Wrapper });
-
-    await userEvent.click(
-      await screen.findByRole("switch", { name: "github claude search" }),
-    );
-    expect(harness.paramsOf("environment.configuration.items.put")).toEqual([
-      {
-        environmentId: "env-a",
-        kind: "mcp_server",
-        key: "github",
-        os: null,
-        value: {
-          mcpServerId: "srv-1",
-          toolToggles: { claude: { search: false } },
-        },
-        revision: 5,
-      },
-    ]);
-  });
-
-  it("says the team has no MCP servers when the read lists none", async () => {
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.configuration.items": () => ({ items: [] }),
-    });
-    render(<TeamMcpServers />, { wrapper: harness.Wrapper });
-
-    expect(await screen.findByText("No MCP servers.")).toBeTruthy();
-  });
-
-  it("shows a viewer On/Off with no switches", async () => {
-    const harness = mountTeamPage(poolSource("viewer"), {
-      "environment.configuration.items": () => ({ items: [server(5, true)] }),
-    });
-    render(<TeamMcpServers />, { wrapper: harness.Wrapper });
-
-    expect(await screen.findByText("On")).toBeTruthy();
-    expect(screen.queryByRole("switch")).toBeNull();
-  });
-
-  it("rereads the current toggle and shows who changed it after a conflict", async () => {
-    let current = server(5, true);
-    const harness = mountTeamPage(poolSource("editor"), {
-      "environment.configuration.items": () => ({ items: [current] }),
-      "environment.configuration.items.put": () => {
-        current = server(6, false);
-        return {
-          outcome: "conflict",
-          current: { revision: 6, changedBy: "Grace", changedAt: 2 },
-        };
-      },
-    });
-    render(<TeamMcpServers />, { wrapper: harness.Wrapper });
-
-    await userEvent.click(
-      await screen.findByRole("switch", { name: "github claude search" }),
-    );
-    expect(
-      await screen.findByText("Changed by Grace a moment ago"),
-    ).toBeTruthy();
-    await waitFor(() => {
-      expect(
-        screen.getByRole("switch", { name: "github claude search" }),
-      ).toHaveProperty("ariaChecked", "false");
-    });
-  });
-});
-
 describe("Environment page subtitles", () => {
   const environments = {
     environments: [
@@ -1044,15 +1137,6 @@ describe("Environment page subtitles", () => {
       personalSplit: false,
     },
     {
-      pageName: "MCP servers",
-      page: <TeamMcpServers key="m" />,
-      team: "Tools agents can call. Acme's servers reach every provider on its hosts.",
-      personal:
-        "Tools agents can call. Personal's servers reach every provider on every computer and sandbox running Personal.",
-      teamSplit: true,
-      personalSplit: false,
-    },
-    {
       pageName: "Skills",
       page: <TeamSkillsPage key="s" />,
       team: "Instructions agents follow for a kind of task. Acme's skills reach every provider on its hosts.",
@@ -1094,28 +1178,6 @@ describe("Environment page subtitles", () => {
   );
 
   it.each([
-    {
-      pageTitle: "MCP servers",
-      section: "mcp-servers",
-      page: <TeamMcpServers key="mcp" />,
-      source: poolSource("editor"),
-      pick: { kind: "team", environmentId: "env-a" },
-      environmentName: "Acme",
-      sentence:
-        "Tools agents can call. Acme's servers reach every provider on its hosts.",
-      split: true,
-    },
-    {
-      pageTitle: "MCP servers",
-      section: "mcp-servers",
-      page: <TeamMcpServers key="mcp-personal" />,
-      source: personalPoolSource(),
-      pick: { kind: "personal" },
-      environmentName: "Personal",
-      sentence:
-        "Tools agents can call. Personal's servers reach every provider on every computer and sandbox running Personal.",
-      split: false,
-    },
     {
       pageTitle: "Skills",
       section: "skills",

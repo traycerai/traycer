@@ -86,6 +86,10 @@ export const openEpicKey = (identity: string | null, epicId: string): string =>
 export const githubMentionFiltersKey = (identity: string | null): string =>
   scopedPersistKey(STORE_KEYS.githubMentionFilters, scopeBucket(identity));
 
+// Identity-scoped, so this account applies only its own holds; wiped on sign-out.
+export const settingsSaveMemoryKey = (identity: string | null): string =>
+  scopedPersistKey(STORE_KEYS.settingsSaveMemory, scopeBucket(identity));
+
 // What each bot channel's and thread's box holds unsent, by account. A box can
 // hold a member's private answer to a team bot's question, moved there when a
 // teammate answered first, so another account signed in on this profile never
@@ -265,6 +269,11 @@ export const PERSIST_STORES = [
     kind: "scoped",
   },
   { camelName: "readingPosition", leaf: "reading-position", kind: "scoped" },
+  {
+    camelName: "settingsSaveMemory",
+    leaf: "settings-save-memory",
+    kind: "scoped",
+  },
   // What each bot channel's and thread's message box holds unsent, by
   // account (`botBoxDraftsKey`), kept on this device across closing Tracy and
   // restarting (`bot-drafts-store.ts`). Image bytes live in the composer image
@@ -515,6 +524,12 @@ export const PERSIST_STORES = [
   {
     camelName: "teamContinueCautionSeen",
     leaf: "team-continue-caution-seen",
+    kind: "static",
+  },
+  // Each claim notice is shown once per device.
+  {
+    camelName: "claimNoticesTold",
+    leaf: "claim-notices-told",
     kind: "static",
   },
   // The Tracy surface: whether it is open, the host it is bound to and its

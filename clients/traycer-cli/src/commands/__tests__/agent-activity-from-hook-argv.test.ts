@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { callHostRpcFastFail } from "../../internal/host-rpc";
+import { callAgentHostRpcFastFail } from "../../internal/host-rpc";
 import type { CommandContext, CommandFn } from "../../runner/runner";
 import {
   restoreAgentIdentityEnv,
@@ -14,7 +14,7 @@ vi.mock("../../internal/host-rpc", async () => {
   >("../../internal/host-rpc");
   return {
     ...actual,
-    callHostRpcFastFail: vi.fn(),
+    callAgentHostRpcFastFail: vi.fn(),
   };
 });
 
@@ -35,7 +35,7 @@ vi.mock("../../runner/runner", async (importOriginal) => {
 
 import { buildProgram } from "../../index";
 
-const rpcMock = vi.mocked(callHostRpcFastFail);
+const rpcMock = vi.mocked(callAgentHostRpcFastFail);
 
 beforeEach(() => {
   vi.clearAllMocks();

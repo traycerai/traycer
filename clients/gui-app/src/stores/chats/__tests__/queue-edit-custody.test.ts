@@ -123,6 +123,7 @@ function record(
     edit: "pending",
     followUp: "pending",
     followUpReason: null,
+    followUpCode: null,
     contentReturned: false,
     dispatchedAt: 0,
     ...overrides,
@@ -207,6 +208,7 @@ describe("foldQueueEditAck", () => {
       clientActionId: EDIT_ACTION_ID,
       status: "rejected",
       reason: "The queued prompt is no longer pending.",
+      code: null,
     });
     expect(first.settlements).toEqual([
       {
@@ -216,6 +218,7 @@ describe("foldQueueEditAck", () => {
         wireContent: EDITED,
         cause: "refused",
         hostReason: "The queued prompt is no longer pending.",
+        hostCode: null,
       },
     ]);
     expect(first.records[EDIT_ACTION_ID]?.contentReturned).toBe(true);
@@ -226,6 +229,7 @@ describe("foldQueueEditAck", () => {
       clientActionId: FOLLOW_UP_ACTION_ID,
       status: "rejected",
       reason: "The queued prompt is no longer pending.",
+      code: null,
     });
     expect(second.settlements).toEqual([]);
     expect(second.records).toEqual({});
@@ -236,6 +240,7 @@ describe("foldQueueEditAck", () => {
       clientActionId: EDIT_ACTION_ID,
       status: "accepted",
       reason: null,
+      code: null,
     });
     expect(afterEdit.settlements).toEqual([]);
     expect(afterEdit.records[EDIT_ACTION_ID]?.edit).toBe("accepted");
@@ -244,6 +249,7 @@ describe("foldQueueEditAck", () => {
       clientActionId: FOLLOW_UP_ACTION_ID,
       status: "rejected",
       reason: "Steering is unavailable.",
+      code: null,
     });
     expect(afterFollowUp.settlements).toEqual([
       {
@@ -254,20 +260,43 @@ describe("foldQueueEditAck", () => {
         requestedChanges: [],
         refused: true,
         hostReason: "Steering is unavailable.",
+        hostCode: null,
       },
     ]);
     expect(afterFollowUp.records).toEqual({});
   });
 
+  it("keeps the edit refusal code on its returned-text settlement", () => {
+    const refused = foldQueueEditAck(recordsOf(record({}, "save")), {
+      clientActionId: EDIT_ACTION_ID,
+      status: "rejected",
+      reason: "That profile no longer exists. Choose a profile.",
+      code: "removed-by-person",
+    });
+
+    expect(refused.settlements).toHaveLength(1);
+    expect(refused.settlements[0]).toMatchObject({
+      kind: "content_returned",
+      hostReason: "That profile no longer exists. Choose a profile.",
+      hostCode: "removed-by-person",
+    });
+  });
+
   it("carries the record's requested changes onto the partial (finding 6, addendum)", () => {
     const accepted = foldQueueEditAck(
       recordsOf(record({ requestedChanges: ["model gpt-x"] }, "save")),
-      { clientActionId: EDIT_ACTION_ID, status: "accepted", reason: null },
+      {
+        clientActionId: EDIT_ACTION_ID,
+        status: "accepted",
+        reason: null,
+        code: null,
+      },
     );
     const fold = foldQueueEditAck(accepted.records, {
       clientActionId: FOLLOW_UP_ACTION_ID,
       status: "rejected",
       reason: "no",
+      code: null,
     });
     expect(fold.settlements).toHaveLength(1);
     expect(fold.settlements[0]).toMatchObject({
@@ -281,6 +310,7 @@ describe("foldQueueEditAck", () => {
       clientActionId: FOLLOW_UP_ACTION_ID,
       status: "rejected",
       reason: "Settings are locked.",
+      code: "removed-by-person",
     });
     // Nothing to say yet: the text's own answer is still to come.
     expect(afterFollowUp.settlements).toEqual([]);
@@ -288,11 +318,15 @@ describe("foldQueueEditAck", () => {
     expect(afterFollowUp.records[EDIT_ACTION_ID]?.followUpReason).toBe(
       "Settings are locked.",
     );
+    expect(afterFollowUp.records[EDIT_ACTION_ID]?.followUpCode).toBe(
+      "removed-by-person",
+    );
 
     const afterEdit = foldQueueEditAck(afterFollowUp.records, {
       clientActionId: EDIT_ACTION_ID,
       status: "accepted",
       reason: null,
+      code: null,
     });
     expect(afterEdit.settlements).toEqual([
       {
@@ -303,6 +337,7 @@ describe("foldQueueEditAck", () => {
         requestedChanges: [],
         refused: true,
         hostReason: "Settings are locked.",
+        hostCode: "removed-by-person",
       },
     ]);
     expect(afterEdit.records).toEqual({});
@@ -313,12 +348,14 @@ describe("foldQueueEditAck", () => {
       clientActionId: EDIT_ACTION_ID,
       status: "accepted",
       reason: null,
+      code: null,
     });
     expect(Object.keys(afterEdit.records)).toEqual([EDIT_ACTION_ID]);
     const afterBoth = foldQueueEditAck(afterEdit.records, {
       clientActionId: FOLLOW_UP_ACTION_ID,
       status: "accepted",
       reason: null,
+      code: null,
     });
     expect(afterBoth.settlements).toEqual([]);
     expect(afterBoth.records).toEqual({});
@@ -330,6 +367,7 @@ describe("foldQueueEditAck", () => {
       clientActionId: "unrelated-action",
       status: "rejected",
       reason: "nope",
+      code: null,
     });
     expect(fold.records).toBe(records);
     expect(fold.settlements).toEqual([]);
@@ -385,6 +423,7 @@ describe("a refused follow-up that asked for nothing (followUpIsNoOp)", () => {
       clientActionId: EDIT_ACTION_ID,
       status: "accepted",
       reason: null,
+      code: null,
     });
     // The edit alone does not finish the record (the path ran).
     expect(Object.keys(afterEdit.records)).toEqual([EDIT_ACTION_ID]);
@@ -394,6 +433,7 @@ describe("a refused follow-up that asked for nothing (followUpIsNoOp)", () => {
       clientActionId: FOLLOW_UP_ACTION_ID,
       status: "rejected",
       reason: "The queued prompt is no longer pending.",
+      code: null,
     });
     expect(afterFollowUp.settlements).toEqual([]);
     expect(afterFollowUp.records).toEqual({});
@@ -404,6 +444,7 @@ describe("a refused follow-up that asked for nothing (followUpIsNoOp)", () => {
       clientActionId: FOLLOW_UP_ACTION_ID,
       status: "rejected",
       reason: "The queued prompt is no longer pending.",
+      code: null,
     });
     expect(Object.keys(afterFollowUp.records)).toEqual([EDIT_ACTION_ID]);
     expect(afterFollowUp.settlements).toEqual([]);
@@ -412,6 +453,7 @@ describe("a refused follow-up that asked for nothing (followUpIsNoOp)", () => {
       clientActionId: EDIT_ACTION_ID,
       status: "accepted",
       reason: null,
+      code: null,
     });
     expect(afterEdit.settlements).toEqual([]);
     expect(afterEdit.records).toEqual({});
@@ -421,12 +463,18 @@ describe("a refused follow-up that asked for nothing (followUpIsNoOp)", () => {
     // Also pinned, in a steer variant, by "settles a partial exactly once…".
     const afterEdit = foldQueueEditAck(
       recordsOf(record({ followUpIsNoOp: false }, "save")),
-      { clientActionId: EDIT_ACTION_ID, status: "accepted", reason: null },
+      {
+        clientActionId: EDIT_ACTION_ID,
+        status: "accepted",
+        reason: null,
+        code: null,
+      },
     );
     const afterFollowUp = foldQueueEditAck(afterEdit.records, {
       clientActionId: FOLLOW_UP_ACTION_ID,
       status: "rejected",
       reason: "The queued prompt is no longer pending.",
+      code: null,
     });
     expect(afterFollowUp.settlements).toHaveLength(1);
     expect(afterFollowUp.settlements[0]).toMatchObject({
@@ -441,11 +489,13 @@ describe("a refused follow-up that asked for nothing (followUpIsNoOp)", () => {
       clientActionId: EDIT_ACTION_ID,
       status: "rejected",
       reason: "gone",
+      code: null,
     });
     const afterFollowUp = foldQueueEditAck(afterEdit.records, {
       clientActionId: FOLLOW_UP_ACTION_ID,
       status: "rejected",
       reason: "gone",
+      code: null,
     });
     const kinds = [...afterEdit.settlements, ...afterFollowUp.settlements].map(
       (entry) => entry.kind,
@@ -467,7 +517,12 @@ describe("follow_up_alone (edit refused, follow-up applied)", () => {
   it("emits content_returned on the edit refusal and exactly one follow_up_alone on the follow-up's acceptance, then drops the record", () => {
     const first = foldQueueEditAck(
       recordsOf(record({ requestedChanges: CHANGES }, "save")),
-      { clientActionId: EDIT_ACTION_ID, status: "rejected", reason: "gone" },
+      {
+        clientActionId: EDIT_ACTION_ID,
+        status: "rejected",
+        reason: "gone",
+        code: null,
+      },
     );
     expect(first.settlements).toHaveLength(1);
     expect(first.settlements[0]).toMatchObject({ kind: "content_returned" });
@@ -476,6 +531,7 @@ describe("follow_up_alone (edit refused, follow-up applied)", () => {
       clientActionId: FOLLOW_UP_ACTION_ID,
       status: "accepted",
       reason: null,
+      code: null,
     });
     expect(second.settlements).toEqual([ALONE]);
     expect(second.records).toEqual({});
@@ -488,6 +544,7 @@ describe("follow_up_alone (edit refused, follow-up applied)", () => {
         clientActionId: FOLLOW_UP_ACTION_ID,
         status: "accepted",
         reason: null,
+        code: null,
       },
     );
     expect(first.settlements).toEqual([]);
@@ -496,6 +553,7 @@ describe("follow_up_alone (edit refused, follow-up applied)", () => {
       clientActionId: EDIT_ACTION_ID,
       status: "rejected",
       reason: "gone",
+      code: null,
     });
     expect(second.settlements.map((entry) => entry.kind)).toEqual([
       "content_returned",
@@ -508,12 +566,18 @@ describe("follow_up_alone (edit refused, follow-up applied)", () => {
   it("emits no follow_up_alone when the follow-up was a no-op", () => {
     const first = foldQueueEditAck(
       recordsOf(record({ followUpIsNoOp: true }, "save")),
-      { clientActionId: EDIT_ACTION_ID, status: "rejected", reason: "gone" },
+      {
+        clientActionId: EDIT_ACTION_ID,
+        status: "rejected",
+        reason: "gone",
+        code: null,
+      },
     );
     const second = foldQueueEditAck(first.records, {
       clientActionId: FOLLOW_UP_ACTION_ID,
       status: "accepted",
       reason: null,
+      code: null,
     });
     // The record was answered (it is gone) and said nothing more.
     expect(second.records).toEqual({});
@@ -525,11 +589,13 @@ describe("follow_up_alone (edit refused, follow-up applied)", () => {
       clientActionId: EDIT_ACTION_ID,
       status: "rejected",
       reason: "gone",
+      code: null,
     });
     const second = foldQueueEditAck(first.records, {
       clientActionId: FOLLOW_UP_ACTION_ID,
       status: "rejected",
       reason: "gone",
+      code: null,
     });
     expect(first.settlements).toHaveLength(1);
     expect(second.settlements).toEqual([]);
@@ -644,6 +710,7 @@ describe("second-frame evidence kept while the text is unknown", () => {
         followUpApplied: true,
         followUpRefused: false,
         hostReason: null,
+        hostCode: null,
       },
     ]);
     expect(second.records).toEqual({});
@@ -766,6 +833,7 @@ describe("saved after return with a follow-up the host refused", () => {
       clientActionId: FOLLOW_UP_ACTION_ID,
       status: "rejected",
       reason: "The queued prompt is already being submitted.",
+      code: null,
     });
     expect(refused.settlements).toEqual([]);
 
@@ -796,6 +864,7 @@ describe("saved after return with a follow-up the host refused", () => {
         followUpApplied: false,
         followUpRefused: true,
         hostReason: "The queued prompt is already being submitted.",
+        hostCode: null,
       },
     ]);
     expect(saved.records).toEqual({});
@@ -881,6 +950,7 @@ describe("accountForQueueEdits", () => {
         wireContent: EDITED,
         cause: "unconfirmed",
         hostReason: null,
+        hostCode: null,
       },
     ]);
     const kept = fold.records[EDIT_ACTION_ID];
@@ -915,6 +985,7 @@ describe("accountForQueueEdits", () => {
         followUpApplied: true,
         followUpRefused: false,
         hostReason: null,
+        hostCode: null,
       },
     ]);
     expect(review.records).toEqual({});
@@ -977,6 +1048,7 @@ describe("accountForQueueEdits", () => {
           followUpApplied: false,
           followUpRefused: false,
           hostReason: null,
+          hostCode: null,
         },
       ]);
       expect(review.records).toEqual({});
@@ -1039,6 +1111,7 @@ describe("accountForQueueEdits", () => {
           wireContent: EDITED,
           cause: "not_applied",
           hostReason: null,
+          hostCode: null,
         },
       ]);
       expect(fold.records).toEqual({});
@@ -1066,6 +1139,7 @@ describe("accountForQueueEdits", () => {
           requestedChanges: [],
           refused: false,
           hostReason: null,
+          hostCode: null,
         },
       ]);
       expect(fold.records).toEqual({});
@@ -1170,6 +1244,7 @@ describe("accountForQueueEdits", () => {
           requestedChanges: [],
           refused: false,
           hostReason: null,
+          hostCode: null,
         },
       ]);
       expect(fold.records).toEqual({});

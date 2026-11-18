@@ -1,5 +1,11 @@
 import "../../../../../__tests__/test-browser-apis";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import {
   afterEach,
   beforeAll,
@@ -13,21 +19,25 @@ import type {
   EnvironmentDescriptorV11,
   EnvironmentHostRecordV12,
 } from "@traycer/protocol/host/environment/contracts";
-import { POOL_HOST_ID } from "@traycer-clients/shared/host-client/host-directory";
 import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { hostScopeFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { PageChip } from "@/components/settings/personal/page-chip";
+import { SecretsHeaderDetails } from "@/components/settings/secrets/secrets-header-details";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
+import { environmentCloudQueryKey } from "@/hooks/environment/use-environment-cloud";
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   hostIdsOf,
   mountTeamPageOnPoolBuild,
   personalPoolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
   teamHostBoundary,
@@ -62,6 +72,7 @@ vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -118,10 +129,12 @@ afterEach(() => {
   cleanup();
   resetTeamPageHarness();
   useSelectionAuthorityStore.getState().reset();
+  useSettingsEnvironmentPickStore.setState({ pick: null });
+  useAuthStore.setState({ contextMetadata: null });
 });
 
 describe("Personal page chip on a build with a server pool", () => {
-  it("reads the Personal environment and running hosts from the pool with no active host", async () => {
+  it("reads the Personal environment and running hosts from authn with no active host", async () => {
     const poolHost = listed("pool-personal-runner", "Personal runner");
     const harness = mountTeamPageOnPoolBuild(personalPoolSource(), {
       "environment.list": () => ({ environments: [personal] }),
@@ -136,14 +149,12 @@ describe("Personal page chip on a build with a server pool", () => {
       ),
       "user-me",
     ];
-    const poolKey = [
-      ...hostQueryKeys.method<HostRpcRegistry, "environment.host.list">(
-        POOL_HOST_ID,
-        "environment.host.list",
-        { environmentId: "env-personal" },
-      ),
+    const authnKey = environmentCloudQueryKey(
+      "environment.host.list",
+      { environmentId: "env-personal" },
       "user-me",
-    ];
+      [],
+    );
     const decoyHosts = [listed("caller-decoy", "Caller decoy")];
     harness.queryClient.setQueryDefaults(decoyKey, { gcTime: 60_000 });
     harness.queryClient.setQueryData(decoyKey, { hosts: decoyHosts });
@@ -161,23 +172,108 @@ describe("Personal page chip on a build with a server pool", () => {
     );
 
     await waitFor(() => {
-      expect(hostIdsOf(harness, "environment.list")).not.toHaveLength(0);
-      expect(hostIdsOf(harness, "environment.host.list")).not.toHaveLength(0);
+      expect(harness.paramsOf("environment.list")).not.toHaveLength(0);
+      expect(harness.paramsOf("environment.host.list")).not.toHaveLength(0);
       expect(screen.getByTestId("chip").textContent).toBe(
         "✓ On Personal runner",
       );
     });
-    expect(new Set(hostIdsOf(harness, "environment.list"))).toEqual(
-      new Set([POOL_HOST_ID]),
-    );
-    expect(new Set(hostIdsOf(harness, "environment.host.list"))).toEqual(
-      new Set([POOL_HOST_ID]),
-    );
+    expect(hostIdsOf(harness, "environment.list")).toEqual([]);
+    expect(hostIdsOf(harness, "environment.host.list")).toEqual([]);
     expect(harness.queryClient.getQueryData(decoyKey)).toEqual({
       hosts: decoyHosts,
     });
-    expect(harness.queryClient.getQueryData(poolKey)).toEqual({
+    expect(harness.queryClient.getQueryData(authnKey)).toEqual({
       hosts: [poolHost],
     });
+  });
+
+  it("loads Personal hosts for the Secrets drawer on a Local pick and counts only sandboxes", async () => {
+    const computer = listed("computer-1", "dev-box");
+    const sandbox: EnvironmentHostRecordV12 = {
+      ...listed("sandbox-1", "worker"),
+      kind: "sandbox",
+    };
+    const harness = mountTeamPageOnPoolBuild(personalPoolSource(), {
+      "environment.list": () => ({ environments: [personal] }),
+      "environment.host.list": () => ({ hosts: [computer, sandbox] }),
+      "environment.history": () => ({
+        readerScope: "full",
+        entries: [],
+        hostStates: [
+          {
+            hostId: "computer-1",
+            hostName: "dev-box",
+            state: "applied",
+            reason: null,
+            at: 1,
+            lastReportedAt: 1,
+          },
+          {
+            hostId: "sandbox-1",
+            hostName: "worker",
+            state: "applied",
+            reason: null,
+            at: 1,
+            lastReportedAt: 1,
+          },
+        ],
+      }),
+      "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+    });
+    useAuthStore.setState({
+      contextMetadata: { userId: "user-me", username: "me" },
+    });
+    useSettingsEnvironmentPickStore.setState({
+      pick: {
+        kind: "local",
+        hostId: mockLocalHostEntry.hostId,
+        hostName: "Mac",
+      },
+    });
+
+    render(<SecretsHeaderDetails />, { wrapper: harness.Wrapper });
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.host.list")).toEqual([
+        { environmentId: "env-personal" },
+      ]);
+    });
+    expect(hostIdsOf(harness, "environment.host.list")).toEqual([]);
+    fireEvent.click(await screen.findByRole("button", { name: "Details" }));
+
+    expect(await screen.findByText("Applied on 1 host")).toBeTruthy();
+    expect(screen.getByText("worker")).toBeTruthy();
+    expect(screen.queryByText("dev-box")).toBeNull();
+  });
+
+  it("uses one Personal host-list request for the chip and Secrets header", async () => {
+    const harness = mountTeamPageOnPoolBuild(personalPoolSource(), {
+      "environment.list": () => ({ environments: [personal] }),
+      "environment.host.list": () => ({ hosts: [] }),
+    });
+    useAuthStore.setState({
+      contextMetadata: { userId: "user-me", username: "me" },
+    });
+    useSettingsEnvironmentPickStore.setState({ pick: PERSONAL_PICK });
+
+    render(
+      <>
+        <PageChip section="secrets" pick={PERSONAL_PICK} />
+        <SecretsHeaderDetails />
+      </>,
+      { wrapper: harness.Wrapper },
+    );
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Not on any computer or sandbox",
+      }),
+    ).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Details" })).toBeTruthy();
+    expect(hostIdsOf(harness, "environment.host.list")).toEqual([]);
+    expect(harness.paramsOf("environment.host.list")).toEqual([
+      { environmentId: "env-personal" },
+    ]);
   });
 });

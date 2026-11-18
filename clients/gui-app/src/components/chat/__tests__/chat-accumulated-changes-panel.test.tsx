@@ -366,6 +366,110 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
     expect(screen.getByTestId("revert-artifacts-checkbox")).not.toBeNull();
     expect(dialog.textContent).not.toMatch(/also revert \d+ artifact/i);
   });
+
+  describe("with three files of one canvas", () => {
+    const canvasPaths = [
+      "/repo/artifacts/board/canvas.json",
+      "/repo/artifacts/board/notes.md",
+      "/repo/artifacts/board/assets/logo.svg",
+    ];
+    const canvasChanges = canvasPaths.map((filePath, index) => ({
+      ...fileChange(filePath),
+      artifact: { artifactId: "c1", kind: "canvas", title: "Board" },
+      counts: { additions: index + 1, deletions: 1 },
+    })) satisfies ReadonlyArray<AccumulatedChangeRow>;
+
+    function renderCanvasPanel(accumulatedSetComplete: boolean) {
+      const restore = {
+        ...baseRestore(canvasChanges, null),
+        accumulatedSetComplete,
+      };
+      render(
+        <TooltipProvider delayDuration={0}>
+          <ChatDiffTargetContext.Provider value={null}>
+            <ChatAccumulatedChangesPanel
+              restore={restore}
+              separated={false}
+              scrollRegionMaxHeightClass="max-h-96"
+            />
+          </ChatDiffTargetContext.Provider>
+        </TooltipProvider>,
+      );
+      fireEvent.click(summary());
+      return restore;
+    }
+
+    it("shows one row with the summed counts that expands to its files", () => {
+      renderCanvasPanel(true);
+
+      const toggle = screen.getByRole("button", { name: "Show changed files" });
+      expect(screen.getByText("3 files")).not.toBeNull();
+      expect(screen.getByText("Board")).not.toBeNull();
+      expect(toggle.parentElement?.textContent).toBe(
+        "Updated·Board3 files+6−3",
+      );
+      expect(
+        screen.queryAllByRole("button", { name: /^Undo changes to \// }),
+      ).toHaveLength(0);
+
+      fireEvent.click(toggle);
+
+      expect(
+        screen.getByRole("button", { name: "Hide changed files" }),
+      ).not.toBeNull();
+      for (const filePath of canvasPaths) {
+        expect(
+          screen.getByRole("button", { name: `Undo changes to ${filePath}` }),
+        ).not.toBeNull();
+      }
+    });
+
+    it("reverts every file of the artifact from its own Undo", () => {
+      const restore = renderCanvasPanel(true);
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Undo changes to Board" }),
+      );
+
+      expect(restore.revertFileChanges).toHaveBeenCalledTimes(1);
+      expect(restore.revertFileChanges).toHaveBeenCalledWith(
+        null,
+        canvasPaths,
+        true,
+      );
+    });
+
+    it("disables the artifact's Undo, not a file's, while the list is still loading", () => {
+      renderCanvasPanel(false);
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Show changed files" }),
+      );
+
+      expect(
+        screen
+          .getByRole("button", { name: "Undo changes to Board" })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+      expect(
+        screen
+          .getByRole("button", {
+            name: `Undo changes to ${canvasPaths[0]}`,
+          })
+          .hasAttribute("disabled"),
+      ).toBe(false);
+    });
+
+    it("counts the artifact once in the Undo all opt-out", () => {
+      renderCanvasPanel(true);
+
+      fireEvent.click(screen.getByRole("button", { name: "Undo all changes" }));
+
+      expect(screen.getByTestId("undo-all-dialog").textContent).toContain(
+        "Also revert 1 artifact",
+      );
+    });
+  });
 });
 
 // Layout ▸ Composer folding (L-142): while this section's pill is the open

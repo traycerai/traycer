@@ -32,6 +32,10 @@ import { useBotMarkRepresentedRead } from "@/hooks/bots/use-bot-mark-represented
 import { NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { BotIdentityContext } from "@/components/bots/bot-identity-context";
+import {
+  BotMayChangeContext,
+  readerMayChangeBot,
+} from "@/hooks/bots/use-reader-may-change-bot";
 import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotSurfaceCardsContext } from "@/components/bots/bot-surface-card-context";
@@ -73,7 +77,6 @@ import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query
 import { useEnvironmentMemberDirectory } from "@/hooks/bots/use-environment-members-query";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import {
@@ -502,14 +505,7 @@ function ThreadCard(props: {
       latched ? { afterMessageId, visit: unreadVisit } : null,
     [afterMessageId, latched, unreadVisit],
   );
-  const client = useTabHostClient();
-  const membersSupported =
-    useHostMethodSupport(hostId, "environment.members") === true;
-  const directory = useEnvironmentMemberDirectory(
-    client,
-    bot.environmentId,
-    membersSupported,
-  );
+  const directory = useEnvironmentMemberDirectory(bot.environmentId, true);
   const [card, setCard] = useState<HTMLElement | null>(null);
   const near = useCardNear(card, scroller);
   const anchor = thread.anchor;
@@ -1034,7 +1030,7 @@ function ThreadCardScope(props: {
 }): ReactNode {
   const { bot, hostId, tasks, surfaceActions, members, resolveMember } = props;
   const client = useTabHostClient();
-  const environments = useEnvironmentListQuery(client, true);
+  const environments = useEnvironmentListQuery(true);
   const environment =
     environments.data?.environments.find(
       (candidate) => candidate.environmentId === bot.environmentId,
@@ -1064,9 +1060,13 @@ function ThreadCardScope(props: {
   return (
     <BotMentionsContext value={mentioned}>
       <BotIdentityContext value={identity}>
-        <BotSurfaceCardsContext.Provider value={surfaceCards}>
-          {props.children}
-        </BotSurfaceCardsContext.Provider>
+        <BotMayChangeContext
+          value={readerMayChangeBot(environments.data, bot.environmentId)}
+        >
+          <BotSurfaceCardsContext.Provider value={surfaceCards}>
+            {props.children}
+          </BotSurfaceCardsContext.Provider>
+        </BotMayChangeContext>
       </BotIdentityContext>
     </BotMentionsContext>
   );

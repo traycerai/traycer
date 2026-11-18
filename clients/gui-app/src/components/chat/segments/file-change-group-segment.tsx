@@ -11,17 +11,20 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { useChatRestoreContext } from "@/components/chat/use-chat-restore-context";
 import type {
-  ArtifactChangeRow as ArtifactChangeRowModel,
+  ArtifactChangeEntry,
   FileChangeSegment as FileChangeSegmentModel,
 } from "@/stores/composer/chat-store";
-import { ArtifactChangeRow } from "./artifact-change-row";
+import {
+  ArtifactBundleChangeRow,
+  ArtifactChangeRow,
+} from "./artifact-change-row";
 import { FileChangeSegment } from "./file-change-segment";
 import { RestoreCheckpointDialog } from "./restore-checkpoint-dialog";
 import { SegmentCard } from "./segment-card";
 
 interface FileChangeGroupSegmentProps {
   files: ReadonlyArray<FileChangeSegmentModel>;
-  artifacts: ReadonlyArray<ArtifactChangeRowModel>;
+  artifacts: ReadonlyArray<ArtifactChangeEntry>;
   checkpointManifest: TurnCheckpointManifest | null;
   hasLaterOverlappingChanges: boolean;
   findUnitId: string | null;
@@ -133,12 +136,19 @@ export function FileChangeGroupSegment(props: FileChangeGroupSegmentProps) {
           initiallyOpen={false}
         />
       ))}
-      {artifacts.map((artifact) => (
-        <ArtifactChangeRow
-          key={`artifact:${artifact.artifactId ?? artifact.filePath}`}
-          row={artifact}
-        />
-      ))}
+      {artifacts.map((artifact) =>
+        artifact.kind === "single" ? (
+          <ArtifactChangeRow
+            key={`artifact:${artifact.item.artifactId ?? artifact.item.filePath}`}
+            row={artifact.item}
+          />
+        ) : (
+          <ArtifactBundleChangeRow
+            key={`artifact:${artifact.artifactId}`}
+            bundle={artifact}
+          />
+        ),
+      )}
     </div>
   );
 

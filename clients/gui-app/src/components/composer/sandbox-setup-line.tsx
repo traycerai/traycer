@@ -5,6 +5,7 @@ import { AlertCircle, Check, ChevronDown, ChevronRight } from "lucide-react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useConfigurationBillingUrl } from "@/hooks/sandboxes/use-configuration-billing-url";
+import { useOffersAddCredits } from "@/hooks/sandboxes/use-team-billing-admin";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { formatStopwatch } from "@/lib/format-duration";
@@ -321,6 +322,7 @@ function SandboxRefusalLine(props: {
   const configuration = props.stage.target.configuration;
   const billingUrl = useConfigurationBillingUrl(configuration);
   const openLink = useOpenLink();
+  const offersAddCredits = useOffersAddCredits(configuration);
   let sentence: string;
   let remedies: ReactNode;
   switch (failure.kind) {
@@ -336,11 +338,13 @@ function SandboxRefusalLine(props: {
       );
       remedies = (
         <>
-          <LineButton
-            label={ADD_CREDITS_LINK}
-            testId="sandbox-refusal-add-credits"
-            onClick={() => void openLink(billingUrl, "account", null)}
-          />
+          {offersAddCredits ? (
+            <LineButton
+              label={ADD_CREDITS_LINK}
+              testId="sandbox-refusal-add-credits"
+              onClick={() => void openLink(billingUrl, "account", null)}
+            />
+          ) : null}
           {props.facts.smallerShapeAffordable ? (
             <LineButton
               label={CHOOSE_A_SMALLER_SHAPE}

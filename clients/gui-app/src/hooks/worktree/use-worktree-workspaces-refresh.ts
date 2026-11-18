@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   CancelledError,
   useQueryClient,
@@ -97,6 +104,10 @@ export function useWorktreeWorkspacesRefresh(args: {
 }): WorktreeWorkspacesRefresh {
   const queryClient = useQueryClient();
   const { client, workspacePaths, summaries } = args;
+  const latestClientRef = useRef(client);
+  useLayoutEffect(() => {
+    latestClientRef.current = client;
+  }, [client]);
   // Footer failure state: set on a real (non-cancelled) settle error; cleared
   // when the user retries. Distinct from the toast path, which still fires.
   const [verifyFailed, setVerifyFailed] = useState(false);
@@ -140,7 +151,7 @@ export function useWorktreeWorkspacesRefresh(args: {
       isHostFollowUp: boolean,
     ): Promise<boolean> => {
       if (isHostFollowUp) return false;
-      const latestHostId = client?.getActiveHostId() ?? null;
+      const latestHostId = latestClientRef.current?.getActiveHostId() ?? null;
       if (latestHostId === startedUnderHostId) return false;
       const forceAgain = mutateAsyncRef.current;
       const latestPaths = latestWorkspacePathsRef.current;
@@ -169,7 +180,7 @@ export function useWorktreeWorkspacesRefresh(args: {
       }
       return true;
     },
-    [client],
+    [],
   );
   const refreshMutation = useHostMutation<
     HostRpcRegistry,
@@ -260,7 +271,7 @@ export function useWorktreeWorkspacesRefresh(args: {
         ) {
           return;
         }
-        const latestHostId = client?.getActiveHostId() ?? null;
+        const latestHostId = latestClientRef.current?.getActiveHostId() ?? null;
         const latestPaths = latestWorkspacePathsRef.current;
         if (
           latestHostId === context.hostId &&

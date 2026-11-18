@@ -27,7 +27,15 @@ vi.mock("@/lib/settings-navigation", () => ({
 }));
 
 const hostBindingMock = vi.hoisted(
-  (): { current: { readonly hostClient: unknown } | null } => ({
+  (): {
+    current: {
+      readonly hostClient: unknown;
+      readonly auth: {
+        readonly environmentCloud: () => EnvironmentCloud;
+        readonly listEnvironments: () => Promise<EnvironmentDirectoryResult>;
+      } | null;
+    } | null;
+  } => ({
     current: null,
   }),
 );
@@ -36,10 +44,16 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return {
     ...actual,
     useHostBinding: () => hostBindingMock.current,
-    // Add a secret, which a key-shaped value is refused for, reads the client.
     useHostClient: () => hostBindingMock.current?.hostClient,
   };
 });
+
+const sandboxCredentialRefusal = vi.hoisted(() => ({
+  current: null as string | null,
+}));
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => sandboxCredentialRefusal.current,
+}));
 
 /** What the pending SET label's host count reads: controlled per test. */
 const hostsRunningPersonalMock = vi.hoisted(
@@ -74,7 +88,11 @@ vi.mock(
 );
 
 import { act, type ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  queryOptions,
+} from "@tanstack/react-query";
 import {
   cleanup,
   fireEvent,
@@ -86,9 +104,18 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ABANDONED_SAVE_MESSAGE,
+  abandonedSaveError,
+  saveTransportFailure,
+} from "@/lib/environment/__tests__/settings-save-failure-fixtures";
+import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  hostRpcServingTierHostId,
+  readProcessHostRpcTierPlan,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
 import type {
   ConfigEnvLocalOverrideClearRequest,
   ConfigEnvLocalOverrideResponse,
@@ -97,6 +124,14 @@ import type {
   LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import type { HostRpcRegistry } from "@/lib/host";
+import {
+  createFakeEnvironmentAuthn,
+  type FakeEnvironmentAuthn,
+} from "@/components/settings/environment/__tests__/environment-authn-test-support";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
 import { HeldValueHostRuntime } from "@/components/settings/personal/__tests__/held-value-host-runtime";
 import { PersonalPageFrame } from "@/components/settings/personal/personal-page-frame";
@@ -106,11 +141,10 @@ import {
 } from "@/lib/environment/__tests__/environment-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { isRecord } from "@/lib/editor/prosemirror-json";
+import { queryKeys } from "@/lib/query-keys";
 import type { EnvOverrideValue } from "../env-override-editor";
-import {
-  ProviderEnvOverridesSection,
-  type ProviderKeyHome,
-} from "../provider-env-overrides-section";
+import { ProviderEnvOverridesSection } from "../provider-env-overrides-section";
 import {
   RETIRED_PROVIDER_VARIABLES,
   RETIRED_SECRET_ROW_FIELDS,
@@ -120,20 +154,36 @@ const mocks = vi.hoisted(() => ({
   setOverrideMutate: vi.fn<(variables: unknown) => Promise<void>>(() =>
     Promise.resolve(),
   ),
+  setOverrideVariables: vi.fn<(variables: SetOverrideVariables) => void>(),
   deleteOverrideMutate: vi.fn<(variables: unknown) => Promise<void>>(() =>
     Promise.resolve(),
   ),
-  /** What `useHostCredentialRefusal` answers; `null` is a host that takes env overrides. */
-  credentialRefusal: null as string | null,
 }));
+
+type SetOverrideVariables = {
+  readonly providerId: string;
+  readonly key: string;
+};
 
 vi.mock(
   "@/hooks/providers/use-providers-set-env-override-mutation",
   async () => {
     const { useMutation } = await import("@tanstack/react-query");
     return {
-      useProvidersSetEnvOverride: () =>
-        useMutation({ mutationFn: mocks.setOverrideMutate }),
+      useProvidersSetEnvOverride: (
+        readValue: () => string | null,
+        clearValueInput: () => void,
+      ) =>
+        useMutation<void, Error, SetOverrideVariables>({
+          mutationFn: async (variables) => {
+            mocks.setOverrideVariables(variables);
+            await mocks.setOverrideMutate({
+              ...variables,
+              value: readValue(),
+            });
+          },
+          onSettled: () => clearValueInput(),
+        }),
     };
   },
 );
@@ -156,20 +206,56 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   useCloudChatViewerId: () => "user-me",
 }));
 
-vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
-  useHostCredentialRefusal: () => mocks.credentialRefusal,
-}));
-
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
+  sandboxCredentialRefusal.current = null;
+  fakeAuthn?.restore();
+  fakeAuthn = null;
   vi.clearAllMocks();
-  mocks.credentialRefusal = null;
   hostsRunningPersonalMock.current = { hosts: [], state: "ready" };
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
+
+function expectSetOverrideTargetVariables(providerId: string): void {
+  const call = mocks.setOverrideVariables.mock.calls.at(-1);
+  if (call === undefined)
+    throw new Error("Expected an environment override dispatch.");
+  const variables = call[0];
+  expect({
+    keys: Object.keys(variables).sort(),
+    providerId: variables.providerId,
+  }).toEqual({
+    keys: ["key", "providerId"],
+    providerId,
+  });
+}
+
+type OutgoingSetOverrideRequest = {
+  readonly providerId: string;
+  readonly key: string;
+  readonly value: string;
+};
+
+function outgoingSetOverrideMatches(
+  actual: unknown,
+  expected: OutgoingSetOverrideRequest,
+): boolean {
+  if (!isRecord(actual)) return false;
+  const actualKeys = Object.keys(actual).sort();
+  const expectedKeys = ["key", "providerId", "value"];
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every((key, index) => key === expectedKeys[index]) &&
+    actual.providerId === expected.providerId &&
+    actual.key === expected.key &&
+    actual.value === expected.value
+  );
+}
+
+let fakeAuthn: FakeEnvironmentAuthn | null = null;
 
 /** The bare section reads and writes through the query client the app provides. */
 function withQueryClient(children: ReactNode): ReactNode {
@@ -195,7 +281,6 @@ function renderSection(input: {
     withQueryClient(
       <ProviderEnvOverridesSection
         providerId={input.providerId}
-        keyHome={null}
         overrides={[]}
         envOverrideScope={input.envOverrideScope}
       />,
@@ -274,15 +359,12 @@ describe("ProviderEnvOverridesSection — envOverrideScope copy (F1)", () => {
   });
 });
 
-describe("ProviderEnvOverridesSection on a host that takes no credentials", () => {
-  const REFUSAL = "Sandboxes don't take sign-ins";
-
+describe("ProviderEnvOverridesSection on a sandbox host", () => {
   function renderWithOverride(): void {
     render(
       withQueryClient(
         <ProviderEnvOverridesSection
           providerId="cursor"
-          keyHome={null}
           overrides={[
             { key: "CURSOR_BASE_URL", value: "https://example.invalid" },
           ]}
@@ -292,38 +374,24 @@ describe("ProviderEnvOverridesSection on a host that takes no credentials", () =
     );
   }
 
-  it("disables the whole editor, shows the refusal, and sends nothing", () => {
-    mocks.credentialRefusal = REFUSAL;
-    renderWithOverride();
-
-    expect(screen.getByTestId("credential-refusal").textContent).toBe(REFUSAL);
-    expect(
-      screen
-        .getByRole("button", { name: "Add a variable" })
-        .hasAttribute("disabled"),
-    ).toBe(true);
-    expect(
-      screen
-        .getByLabelText("Name for CURSOR_BASE_URL")
-        .hasAttribute("disabled"),
-    ).toBe(true);
-    expect(
-      screen
-        .getByRole("button", { name: "Remove CURSOR_BASE_URL" })
-        .hasAttribute("disabled"),
-    ).toBe(true);
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Remove CURSOR_BASE_URL" }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
-
-    expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
-    expect(mocks.deleteOverrideMutate).not.toHaveBeenCalled();
-    expect(screen.queryByLabelText("New variable name")).toBeNull();
-  });
-
-  it("control: on a host that takes overrides the editor is live and shows no refusal", () => {
+  it("keeps the editor live and saves a credential-shaped variable", async () => {
+    scopeOverrides.current = {
+      host: hostScopeOptionFixture({
+        hostId: "host-sandbox",
+        isLocalMachine: false,
+        kind: "sandbox",
+        sandbox: {
+          state: null,
+          frozen: false,
+          summary: null,
+          teamOwned: false,
+          ownerKind: "unknown",
+        },
+      }),
+      hostId: "host-sandbox",
+      status: "ready",
+    };
+    sandboxCredentialRefusal.current = "Sandboxes don't take sign-ins";
     renderWithOverride();
 
     expect(screen.queryByTestId("credential-refusal")).toBeNull();
@@ -337,6 +405,25 @@ describe("ProviderEnvOverridesSection on a host that takes no credentials", () =
         .getByLabelText("Name for CURSOR_BASE_URL")
         .hasAttribute("disabled"),
     ).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
+    fireEvent.change(screen.getByLabelText("New variable name"), {
+      target: { value: "CURSOR_API_KEY" },
+    });
+    fireEvent.change(screen.getByLabelText("New variable value"), {
+      target: { value: "sk-cursor" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+
+    await waitFor(() =>
+      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
+    );
+    expect(mocks.setOverrideMutate.mock.calls[0]?.[0]).toEqual({
+      providerId: "cursor",
+      key: "CURSOR_API_KEY",
+      value: "sk-cursor",
+    });
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 });
 
@@ -371,50 +458,52 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     review: readonly EnvironmentReviewEntry[],
     facts: HostFacts,
     section: ReactNode,
+    suppliedQueryClient: QueryClient | undefined,
   ): RenderResult {
-    const { client } = buildEnvironmentClient({
-      hostId: HOST_ID,
-      handlers: {
-        "environment.status": () => environmentStatusFixture({}),
-        "environment.localOverrides": () => ({
-          overrides: [...facts.localOverrides],
-        }),
-        "config.env.localOverride.clear": clearOverride,
-        "environment.list": () => ({
-          environments: [
-            {
-              environmentId: "env-personal",
-              ownerKind: "user" as const,
-              ownerId: "user-me",
-              roomId: "room-personal",
-              label: "Personal",
-              effectiveRole: "owner" as const,
-              kind: "personal" as const,
-              hostCount: 1,
-              providerHandle: null,
-            },
-          ],
-        }),
-        "environment.secrets.list": () => ({
-          secrets: [...facts.secrets],
-          removed: [],
-        }),
-        "environment.review": () => ({
-          // The `@1.2` facts each row carries, none of them known here.
-          entries: review.map((entry) => ({
-            command: null,
-            event: null,
-            description: null,
-            harness: null,
-            value: null,
-            ...entry,
-          })),
-          shownAt: null,
-          acknowledgedAt: null,
-          evidence: { version: null, at: null },
-        }),
-      },
-    });
+    const environmentList = {
+      environments: [
+        {
+          environmentId: "env-personal",
+          ownerKind: "user" as const,
+          ownerId: "user-me",
+          roomId: "room-personal",
+          label: "Personal",
+          effectiveRole: "owner" as const,
+          kind: "personal" as const,
+          hostCount: 1,
+          providerHandle: null,
+        },
+      ],
+    };
+    const handlers: MockHandlerMap<HostRpcRegistry> = {
+      "environment.status": () => environmentStatusFixture({}),
+      "environment.localOverrides": () => ({
+        overrides: [...facts.localOverrides],
+      }),
+      "config.env.localOverride.clear": clearOverride,
+      "environment.list": () => environmentList,
+      "environment.secrets.list": () => ({
+        secrets: [...facts.secrets],
+        removed: [],
+      }),
+      "environment.review": () => ({
+        // The `@1.2` facts each row carries, none of them known here.
+        entries: review.map((entry) => ({
+          command: null,
+          event: null,
+          description: null,
+          harness: null,
+          value: null,
+          ...entry,
+        })),
+        shownAt: null,
+        acknowledgedAt: null,
+        evidence: { version: null, at: null },
+      }),
+    };
+    const { client } = buildEnvironmentClient({ hostId: HOST_ID, handlers });
+    const authn = createFakeEnvironmentAuthn(handlers);
+    fakeAuthn = authn;
     // On the Personal pick the page keeps this host's pages once it knows the
     // host's environment.status version and that the host runs Personal.
     recordNegotiatedHostManifest(HOST_ID, {
@@ -431,15 +520,21 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       status: "ready",
       client,
     };
-    hostBindingMock.current = { hostClient: client };
+    hostBindingMock.current = {
+      hostClient: client,
+      auth: {
+        environmentCloud: () => authn.cloud,
+        listEnvironments: () =>
+          Promise.resolve({ kind: "ok" as const, list: environmentList }),
+      },
+    };
+    const queryClient =
+      suppliedQueryClient ??
+      new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
     return render(
-      <QueryClientProvider
-        client={
-          new QueryClient({
-            defaultOptions: { queries: { retry: false, gcTime: 0 } },
-          })
-        }
-      >
+      <QueryClientProvider client={queryClient}>
         <HeldValueHostRuntime>
           <PersonalPageFrame section="providers">{section}</PersonalPageFrame>
         </HeldValueHostRuntime>
@@ -450,7 +545,6 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   /** A provider's Env tab on the Personal page, with or without a key tab. */
   function renderProviderEnvTab(
     providerId: ProviderCliState["providerId"],
-    keyHome: ProviderKeyHome | null,
     overrides: readonly EnvOverrideValue[],
   ): RenderResult {
     return mountOnPersonalPage(
@@ -458,10 +552,10 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       NO_FACTS,
       <ProviderEnvOverridesSection
         providerId={providerId}
-        keyHome={keyHome}
         overrides={overrides}
         envOverrideScope="harness-and-native-config"
       />,
+      undefined,
     );
   }
 
@@ -479,78 +573,61 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   }
 
   it.each([
-    {
-      providerId: "cursor",
-      name: "Cursor",
-      variable: "CURSOR_API_KEY",
-      label: "Account",
-    },
-    {
-      providerId: "amp",
-      name: "Amp",
-      variable: "AMP_API_KEY",
-      label: "Account",
-    },
+    { providerId: "cursor", variable: "CURSOR_API_KEY" },
+    { providerId: "amp", variable: "AMP_API_KEY" },
   ] as const)(
-    "refuses $name's own key variable with a pointer to $label, clears the value and stores nothing",
-    async ({ providerId, name, variable, label }) => {
-      const open = vi.fn<() => void>();
-      renderProviderEnvTab(providerId, { label, open }, []);
+    "saves $variable through the editor",
+    async ({ providerId, variable }) => {
+      renderProviderEnvTab(providerId, []);
 
       await typeVariable(variable, HELD_VALUE);
 
-      const line = await screen.findByTestId("env-key-refusal");
-      expect(line.textContent).toBe(
-        `This is ${name}'s key. Set it on ${name}'s ${label}.`,
+      await waitFor(() =>
+        expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
       );
-      expect(screen.getByLabelText("New variable value")).toBe(
-        screen.getByDisplayValue(""),
-      );
-      expect(document.body.textContent).not.toContain(HELD_VALUE);
-      expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
-      expect(open).not.toHaveBeenCalled();
-
-      fireEvent.click(
-        within(line).getByRole("button", { name: `${name}'s ${label}` }),
-      );
-
-      expect(open).toHaveBeenCalledTimes(1);
-      expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
-      expect(screen.queryByLabelText("New variable name")).toBeNull();
+      expect(mocks.setOverrideMutate.mock.calls[0]?.[0]).toEqual({
+        providerId,
+        key: variable,
+        value: HELD_VALUE,
+      });
+      expect(screen.queryByTestId("env-key-refusal")).toBeNull();
     },
   );
 
-  it("still sends any other key-shaped name to Add a secret, with the value kept", async () => {
-    const open = vi.fn<() => void>();
-    renderProviderEnvTab("kiro", { label: "Account", open }, []);
+  it("saves any other key-shaped name through the editor", async () => {
+    renderProviderEnvTab("kiro", []);
 
     await typeVariable("NOTES", HELD_VALUE);
 
-    expect((await screen.findByTestId("env-key-refusal")).textContent).toBe(
-      "This looks like a key. Add it as a secret.",
+    await waitFor(() =>
+      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
     );
-    expect(screen.getByDisplayValue(HELD_VALUE)).toBeTruthy();
-    expect(open).not.toHaveBeenCalled();
-    expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
+    expect(mocks.setOverrideMutate.mock.calls[0]?.[0]).toEqual({
+      providerId: "kiro",
+      key: "NOTES",
+      value: HELD_VALUE,
+    });
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 
-  it("uses the generic line for the provider's own key variable when it has no key tab", async () => {
-    renderProviderEnvTab("kiro", null, []);
+  it("saves the provider's own key variable when it has no key tab", async () => {
+    renderProviderEnvTab("kiro", []);
 
     await typeVariable("KIRO_API_KEY", HELD_VALUE);
 
-    expect((await screen.findByTestId("env-key-refusal")).textContent).toBe(
-      "This looks like a key. Add it as a secret.",
+    await waitFor(() =>
+      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
     );
-    expect(screen.getByDisplayValue(HELD_VALUE)).toBeTruthy();
-    expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
+    expect(mocks.setOverrideMutate.mock.calls[0]?.[0]).toEqual({
+      providerId: "kiro",
+      key: "KIRO_API_KEY",
+      value: HELD_VALUE,
+    });
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 
-  it("masks a saved key-shaped own key variable, points it at the key tab, and leaves it saved", async () => {
-    const open = vi.fn<() => void>();
-    renderProviderEnvTab("kiro", { label: "Account", open }, [
-      { key: "KIRO_API_KEY", value: HELD_VALUE },
-    ]);
+  it("masks a saved key-shaped own key variable and leaves it saved", async () => {
+    renderProviderEnvTab("kiro", [{ key: "KIRO_API_KEY", value: HELD_VALUE }]);
 
     const row = await screen.findByTestId("env-masked-row");
     expect(within(row).getByTestId("env-masked-value").textContent).toBe(
@@ -561,48 +638,30 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     expect(screen.queryByLabelText("Name for KIRO_API_KEY")).toBeNull();
     expect(screen.queryByDisplayValue(HELD_VALUE)).toBeNull();
     expect(document.body.textContent).not.toContain(HELD_VALUE);
-    const line = within(row).getByTestId("env-key-refusal");
-    expect(line.textContent).toBe(
-      "This is Kiro's key. Set it on Kiro's Account.",
-    );
-
-    fireEvent.click(
-      within(line).getByRole("button", { name: "Kiro's Account" }),
-    );
-
-    expect(open).toHaveBeenCalledTimes(1);
+    expect(within(row).queryByTestId("env-key-refusal")).toBeNull();
     expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
     expect(mocks.deleteOverrideMutate).not.toHaveBeenCalled();
   });
 
-  it("masks a saved key-shaped value on a provider with no key tab and carries it into Add a secret, deleting nothing", async () => {
-    renderProviderEnvTab("claude-code", null, [
+  it("masks a saved key-shaped value and leaves it saved", async () => {
+    renderProviderEnvTab("claude-code", [
       { key: "ANTHROPIC_API_KEY", value: HELD_VALUE },
     ]);
 
     const row = await screen.findByTestId("env-masked-row");
+    expect(within(row).getByTestId("env-masked-value").textContent).toBe(
+      "••••••••",
+    );
     expect(screen.queryByDisplayValue(HELD_VALUE)).toBeNull();
     expect(screen.queryByLabelText("Value for ANTHROPIC_API_KEY")).toBeNull();
-    const line = within(row).getByTestId("env-key-refusal");
-    expect(line.textContent).toBe("This looks like a key. Add it as a secret.");
-
-    fireEvent.click(
-      within(line).getByRole("button", { name: "Add it as a secret." }),
-    );
-
-    const dialog = await screen.findByTestId("add-secret-dialog");
-    expect(
-      within(dialog).getByTestId<HTMLInputElement>("secret-form-name").value,
-    ).toBe("ANTHROPIC_API_KEY");
-    expect(
-      within(dialog).getByTestId<HTMLInputElement>("secret-form-value").value,
-    ).toBe(HELD_VALUE);
+    expect(within(row).queryByTestId("env-key-refusal")).toBeNull();
+    expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
     expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
     expect(mocks.deleteOverrideMutate).not.toHaveBeenCalled();
   });
 
   it("keeps an ordinary saved value editable, with no masked row", async () => {
-    renderProviderEnvTab("kiro", null, [
+    renderProviderEnvTab("kiro", [
       { key: "KIRO_BASE_URL", value: "https://example.invalid" },
     ]);
 
@@ -612,9 +671,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
   });
 
   it("removes a masked row by its key", async () => {
-    renderProviderEnvTab("kiro", null, [
-      { key: "KIRO_API_KEY", value: HELD_VALUE },
-    ]);
+    renderProviderEnvTab("kiro", [{ key: "KIRO_API_KEY", value: HELD_VALUE }]);
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Remove KIRO_API_KEY" }),
@@ -629,8 +686,8 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     });
   });
 
-  it("refuses a key-shaped value typed on the provider's Env tab, stores nothing, and hands it to Add a secret", async () => {
-    renderProviderEnvTab("cursor", null, []);
+  it("saves a key-shaped value typed on the provider's Env tab", async () => {
+    renderProviderEnvTab("cursor", []);
     fireEvent.click(
       await screen.findByRole("button", { name: "Add a variable" }),
     );
@@ -642,23 +699,16 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     });
     fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
 
-    expect((await screen.findByTestId("env-key-refusal")).textContent).toBe(
-      "This looks like a key. Add it as a secret.",
+    await waitFor(() =>
+      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
     );
-    expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Add it as a secret." }),
-    );
-
-    const dialog = await screen.findByTestId("add-secret-dialog");
-    expect(
-      within(dialog).getByTestId<HTMLInputElement>("secret-form-name").value,
-    ).toBe("NOTES");
-    expect(
-      within(dialog).getByTestId<HTMLInputElement>("secret-form-value").value,
-    ).toBe(HELD_VALUE);
-    expect(mocks.setOverrideMutate).not.toHaveBeenCalled();
+    expect(mocks.setOverrideMutate.mock.calls[0]?.[0]).toEqual({
+      providerId: "cursor",
+      key: "NOTES",
+      value: HELD_VALUE,
+    });
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
+    expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
   });
 
   const OWN_URL = "https://own.example.invalid";
@@ -685,10 +735,10 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       facts,
       <ProviderEnvOverridesSection
         providerId="claude-code"
-        keyHome={null}
         overrides={overrides}
         envOverrideScope="harness-and-native-config"
       />,
+      undefined,
     );
   }
 
@@ -719,12 +769,16 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     await waitFor(() =>
       expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
     );
-    expect(mocks.setOverrideMutate.mock.calls[0]?.[0]).toEqual({
-      providerId: "claude-code",
-      key: "ANTHROPIC_BASE_URL",
-      value: OWN_URL,
-      executableWriteGrant: null,
-    });
+    expectSetOverrideTargetVariables("claude-code");
+    const outgoingSetCall = mocks.setOverrideMutate.mock.calls.at(0);
+    expect(
+      outgoingSetCall !== undefined &&
+        outgoingSetOverrideMatches(outgoingSetCall[0], {
+          providerId: "claude-code",
+          key: "ANTHROPIC_BASE_URL",
+          value: OWN_URL,
+        }),
+    ).toBe(true);
     // The clear RPC follows the save's resolved promise.
     await waitFor(() => expect(clearOverride).toHaveBeenCalledTimes(1));
     expect(clearOverride).toHaveBeenCalledWith({
@@ -755,6 +809,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     await waitFor(() =>
       expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
     );
+    expectSetOverrideTargetVariables("claude-code");
     expect(clearOverride).not.toHaveBeenCalled();
 
     view.unmount();
@@ -788,6 +843,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     await waitFor(() =>
       expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
     );
+    expectSetOverrideTargetVariables("claude-code");
     if (rejectSave === undefined) throw new Error("save did not start");
     await act(async () => {
       rejectSave?.(new Error("save failed"));
@@ -795,6 +851,29 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     });
 
     expect(clearOverride).not.toHaveBeenCalled();
+  });
+
+  it("hides an abandoned provider-variable save but reports a transport failure", async () => {
+    mocks.setOverrideMutate.mockRejectedValueOnce(
+      abandonedSaveError("providers.setEnvOverride"),
+    );
+    renderProviderEnvTab("cursor", []);
+    await typeVariable("NODE_ENV", "production");
+
+    await waitFor(() => {
+      expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1);
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", {
+          name: "Apply variable",
+        }).disabled,
+      ).toBe(false);
+    });
+    expect(screen.queryByText(ABANDONED_SAVE_MESSAGE)).toBeNull();
+
+    const transportFailure = saveTransportFailure("providers.setEnvOverride");
+    mocks.setOverrideMutate.mockRejectedValueOnce(transportFailure);
+    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+    expect(await screen.findByText(transportFailure.message)).toBeTruthy();
   });
 
   it("deletes the old provider variable after a renamed save resolves, even if the section unmounts", async () => {
@@ -805,7 +884,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
           resolveSave = resolve;
         }),
     );
-    const view = renderProviderEnvTab("cursor", null, [
+    const view = renderProviderEnvTab("cursor", [
       { key: "CURSOR_BASE_URL", value: "https://example.invalid" },
     ]);
     const nameField = await screen.findByLabelText("Name for CURSOR_BASE_URL");
@@ -817,6 +896,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     await waitFor(() =>
       expect(mocks.setOverrideMutate).toHaveBeenCalledTimes(1),
     );
+    expectSetOverrideTargetVariables("cursor");
     // Reset the still-mounted draft so row cleanup doesn't submit the same
     // rename a second time while the first save remains in flight.
     fireEvent.change(nameField, {
@@ -856,35 +936,34 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
     };
 
     // Nothing binds a secret to a name in one provider's env, so a saved
-    // key-shaped value there is this provider's own value and gets the key
-    // refusal — whether or not a Personal secret of that name exists.
+    // key-shaped value there stays this provider's own masked value —
+    // whether or not a Personal secret of that name exists.
     it.each([
       ["with no secret of that name", []],
       ["with a secret of that name", [secretSettingIt]],
     ] as const)(
-      "masks and refuses a saved key-shaped value %s",
+      "masks a saved key-shaped value %s",
       async (_label, secrets) => {
         renderClaudeEnvTab({ localOverrides: [], secrets }, TOKEN_ROW);
 
         const row = await screen.findByTestId("env-masked-row");
-        expect(within(row).getByTestId("env-key-refusal")).toBeTruthy();
-        expect(screen.queryByTestId("env-claimed-row")).toBeNull();
+        expect(within(row).getByTestId("env-masked-value").textContent).toBe(
+          "••••••••",
+        );
+        expect(within(row).queryByTestId("env-key-refusal")).toBeNull();
         expect(document.body.textContent).not.toContain(HELD_VALUE);
       },
     );
 
-    describe("a saved variable that shadows a Personal secret's own binding without being claimed", () => {
+    describe("a provider variable whose name is declared by a Personal secret", () => {
       const SHADOW_KEY = "ENV_R2_S3_CLAIM";
-      // `name` is deliberately NOT `SHADOW_KEY`: the note must read the
-      // secret's actual name from its binding (`variables`), never assume
-      // the key and the secret's display name coincide.
       const secretBoundGlobally: EnvironmentSecretV12 = {
         ...RETIRED_SECRET_ROW_FIELDS,
         providerVariables: [...RETIRED_PROVIDER_VARIABLES],
         secretId: "sec-shadow",
         name: "R2 access",
         kind: "api_key",
-        protocol: null,
+        protocol: "https",
         destinations: [],
         currentVersionId: "ver-shadow",
         revoked: false,
@@ -892,46 +971,47 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         variables: [SHADOW_KEY],
       };
 
-      it("notes that the provider gets this value instead of the secret, with a link to Secrets", async () => {
-        renderClaudeEnvTab(
+      it("does not show a note about the secret", async () => {
+        const queryClient = new QueryClient({
+          defaultOptions: { queries: { retry: false, gcTime: 0 } },
+        });
+        const servingHostId = hostRpcServingTierHostId(
+          "environment.secrets.list",
+          HOST_ID,
+          readProcessHostRpcTierPlan(),
+          null,
+        );
+        const secretsListOptions = queryOptions({
+          queryKey: [
+            ...queryKeys.hostMethod(servingHostId, "environment.secrets.list", {
+              environmentId: "env-personal",
+            }),
+            "user-me",
+          ],
+          queryFn: () =>
+            Promise.resolve({
+              secrets: [] as EnvironmentSecretV12[],
+              removed: [],
+            }),
+        });
+        queryClient.setQueryData(secretsListOptions.queryKey, {
+          secrets: [secretBoundGlobally],
+          removed: [],
+        });
+        mountOnPersonalPage(
+          [],
           { localOverrides: [], secrets: [secretBoundGlobally] },
-          [{ key: SHADOW_KEY, value: "r2-override" }],
+          <ProviderEnvOverridesSection
+            providerId="claude-code"
+            overrides={[{ key: SHADOW_KEY, value: "r2-override" }]}
+            envOverrideScope="harness-and-native-config"
+          />,
+          queryClient,
         );
 
-        const note = await screen.findByTestId("env-row-note");
-        expect(note.textContent).toBe(
-          `Claude Code gets this value instead of the secret R2 access · Secrets`,
-        );
-        expect(screen.queryByTestId("env-claimed-row")).toBeNull();
-        expect(screen.getByLabelText(`Value for ${SHADOW_KEY}`)).toBeTruthy();
-
-        fireEvent.click(within(note).getByRole("button", { name: "Secrets" }));
-        expect(navigation.toSection).toHaveBeenCalledWith("secrets");
-      });
-
-      it("control: an explicit Unset of the same name gets no shadow note - it receives no value from anything", async () => {
-        renderClaudeEnvTab(
-          { localOverrides: [], secrets: [secretBoundGlobally] },
-          [{ key: SHADOW_KEY, value: null }],
-        );
-
-        await screen.findByLabelText(`Value for ${SHADOW_KEY}`);
-        expect(screen.queryByTestId("env-row-note")).toBeNull();
-      });
-
-      it("control: a secret merely named the same, bound to nothing, is not a shadow - its display name is not a binding", async () => {
-        const unboundSecretNamedTheSame: EnvironmentSecretV12 = {
-          ...secretBoundGlobally,
-          secretId: "sec-unbound",
-          name: SHADOW_KEY,
-          variables: [],
-        };
-        renderClaudeEnvTab(
-          { localOverrides: [], secrets: [unboundSecretNamedTheSame] },
-          [{ key: SHADOW_KEY, value: "r2-override" }],
-        );
-
-        await screen.findByLabelText(`Value for ${SHADOW_KEY}`);
+        expect(
+          await screen.findByLabelText(`Value for ${SHADOW_KEY}`),
+        ).toBeTruthy();
         expect(screen.queryByTestId("env-row-note")).toBeNull();
       });
     });
@@ -954,7 +1034,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
           state: "ready",
         };
         pendingSetOverride();
-        renderProviderEnvTab("cursor", null, []);
+        renderProviderEnvTab("cursor", []);
         await typeVariable("CURSOR_BASE_URL", "https://example.invalid");
 
         expect(screen.getByRole("status").textContent).toBe(
@@ -971,7 +1051,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         async ({ state }) => {
           hostsRunningPersonalMock.current = { hosts: [], state };
           pendingSetOverride();
-          renderProviderEnvTab("cursor", null, []);
+          renderProviderEnvTab("cursor", []);
           await typeVariable("CURSOR_BASE_URL", "https://example.invalid");
 
           expect(screen.getByRole("status").textContent).toBe(
@@ -988,7 +1068,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
           thisComputerUnread: true,
         };
         pendingSetOverride();
-        renderProviderEnvTab("cursor", null, []);
+        renderProviderEnvTab("cursor", []);
         await typeVariable("CURSOR_BASE_URL", "https://example.invalid");
 
         expect(screen.getByRole("status").textContent).toBe(
@@ -1002,14 +1082,14 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
       useSettingsEnvironmentPickStore.setState({
         pick: { kind: "local", hostId: "host-a", hostName: "dev-box" },
       });
-      renderProviderEnvTab("cursor", null, []);
+      renderProviderEnvTab("cursor", []);
       await screen.findByRole("button", { name: "Add a variable" });
 
       expect(useHostsRunningPersonalSpy).toHaveBeenLastCalledWith(false);
     });
 
     it("control: a configuration row (not Local) does ask for the read", async () => {
-      renderProviderEnvTab("cursor", null, []);
+      renderProviderEnvTab("cursor", []);
       await screen.findByRole("button", { name: "Add a variable" });
 
       expect(useHostsRunningPersonalSpy).toHaveBeenLastCalledWith(true);

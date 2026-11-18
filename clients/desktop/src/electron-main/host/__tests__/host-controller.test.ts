@@ -15275,3 +15275,184 @@ describe("host start over a terminal-started host", () => {
     expect((await controller.getStatus()).mutation).toBeNull();
   });
 });
+
+describe("manual Update now selects the carried archive", () => {
+  function writeCarriedDescriptor(version: string): void {
+    const cliDir = join(workHome, "bundled-cli");
+    mkdirSync(cliDir, { recursive: true });
+    const cliPath = join(cliDir, "traycer");
+    writeFileSync(cliPath, "");
+    const arch =
+      process.platform === "win32" && process.arch === "arm64"
+        ? "x64"
+        : process.arch;
+    writeFileSync(
+      join(cliDir, `host-runtime-${process.platform}-${arch}.descriptor.json`),
+      JSON.stringify({ version }),
+    );
+    vi.mocked(resolveBundledCliPath).mockResolvedValue(cliPath);
+  }
+
+  function ready(version: string) {
+    return {
+      ready: true as const,
+      version,
+      pid: 1,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready" as const,
+    };
+  }
+
+  function streamed() {
+    return vi.mocked(streamBundledTraycerCliJson).mock.calls;
+  }
+
+  function commands(name: "ensure" | "apply" | "download") {
+    return streamed().filter(
+      (call) => call[0].args[0] === "host" && call[0].args[1] === name,
+    );
+  }
+
+  function assertNoHostDial(): void {
+    for (const call of streamed()) {
+      expect(call[0].args.join(" ")).not.toMatch(/wss?:\/\//);
+      expect(call[0].env).toBeNull();
+    }
+    for (const call of vi.mocked(runBundledTraycerCliJson).mock.calls) {
+      expect(call[0].join(" ")).not.toMatch(/wss?:\/\//);
+    }
+  }
+
+  const ENSURE_1_6 = {
+    installed: true,
+    running: true,
+    version: "1.6.0",
+    runtimeVersion: "1.6.0",
+    action: "installed" as const,
+  };
+
+  it("installs the carried 1.6.0 while the registry latest is still 1.5.4, and launch does not", async () => {
+    writeInstallRecord("production", {
+      version: "1.5.4",
+      runtimeVersion: "1.5.4",
+    });
+    writeCarriedDescriptor("1.6.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.5.4", ["1.5.4"]),
+    );
+    vi.mocked(waitForHostReady).mockResolvedValue(ready("1.6.0"));
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args[1] === "download") return { data: {} };
+      if (opts.args[1] === "ensure") return { data: ENSURE_1_6 };
+      throw new Error(`unexpected CLI stream: ${opts.args.join(" ")}`);
+    });
+
+    const outcome = await newController("production").applyStaged(
+      "manual",
+      false,
+    );
+
+    expect(outcome).toEqual({
+      kind: "ok",
+      value: {
+        applied: true,
+        appliedVersion: "1.6.0",
+        runningActivated: true,
+      },
+    });
+    expect(commands("ensure")).toHaveLength(1);
+    expect(commands("ensure")[0]?.[0].args).toEqual([
+      "host",
+      "ensure",
+      "--lifecycle-origin",
+      "desktop",
+    ]);
+    expect(commands("apply")).toHaveLength(0);
+    assertNoHostDial();
+
+    vi.mocked(streamBundledTraycerCliJson).mockClear();
+    vi.mocked(runBundledTraycerCliJson).mockClear();
+    writePidMetadata("production", { version: "1.5.4", pid: process.pid });
+    const launch = await newController("production").applyStaged(
+      "launch",
+      false,
+    );
+
+    expect(launch).toEqual({
+      kind: "ok",
+      value: {
+        appliedVersion: "1.5.4",
+        runningActivated: true,
+        applied: false,
+      },
+    });
+    expect(commands("ensure")).toHaveLength(0);
+    expect(commands("apply")).toHaveLength(0);
+    assertNoHostDial();
+  });
+
+  it("installs the carried archive when an older stage exists, and launch still applies with --respect-hold", async () => {
+    writeInstallRecord("production", {
+      version: "1.5.4",
+      runtimeVersion: "1.5.4",
+    });
+    writeStagedRecord("production", "1.5.4", "1.5.4");
+    writeCarriedDescriptor("1.6.0");
+    vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+      availableSnapshotFixture("1.5.4", ["1.5.4"]),
+    );
+    vi.mocked(waitForHostReady).mockResolvedValue(ready("1.6.0"));
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args[1] === "download") return { data: {} };
+      if (opts.args[1] === "ensure") return { data: ENSURE_1_6 };
+      throw new Error(`unexpected CLI stream: ${opts.args.join(" ")}`);
+    });
+
+    const outcome = await newController("production").applyStaged(
+      "manual",
+      false,
+    );
+
+    expect(outcome).toEqual({
+      kind: "ok",
+      value: {
+        applied: true,
+        appliedVersion: "1.6.0",
+        runningActivated: true,
+      },
+    });
+    expect(commands("ensure")).toHaveLength(1);
+    expect(commands("ensure")[0]?.[0].args).not.toContain("--keep-installed");
+    expect(commands("ensure")[0]?.[0].args).not.toContain("--respect-hold");
+    expect(commands("ensure")[0]?.[0].args).toContain("--lifecycle-origin");
+    expect(commands("apply")).toHaveLength(0);
+    assertNoHostDial();
+
+    vi.mocked(streamBundledTraycerCliJson).mockClear();
+    vi.mocked(waitForHostReady).mockResolvedValue(ready("1.5.4"));
+    vi.mocked(streamBundledTraycerCliJson).mockImplementation(async (opts) => {
+      if (opts.args[1] === "download") return { data: {} };
+      if (opts.args[1] === "apply") {
+        return {
+          data: {
+            outcome: "applied",
+            record: { version: "1.5.4", runtimeVersion: "1.5.4" },
+            runningActivated: true,
+            installGeneration: null,
+          },
+        };
+      }
+      throw new Error(`unexpected CLI stream: ${opts.args.join(" ")}`);
+    });
+    const launch = await newController("production").applyStaged(
+      "launch",
+      false,
+    );
+
+    expect(launch.kind).toBe("ok");
+    expect(commands("ensure")).toHaveLength(0);
+    expect(commands("apply")).toHaveLength(1);
+    expect(commands("apply")[0]?.[0].args).toContain("--respect-hold");
+    assertNoHostDial();
+  });
+});

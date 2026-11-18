@@ -1,4 +1,6 @@
 import type { Disposable } from "../platform/uri-callback";
+import { liveRemoteSessionHostIds } from "../host-transport/remote/active-remote-sessions";
+import { forgetHostTokensOnSignOut } from "../auth/host-token-sign-out";
 import type { IRunnerHost } from "../platform/runner-host";
 import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import type {
@@ -45,8 +47,15 @@ export interface IHostDirectoryService {
 
 export interface HostRuntimeOptions<Registry extends VersionedRpcRegistry> {
   readonly runnerHost: IRunnerHost;
+  /** `delayed`: authn could not be reached; the host keeps its held token until a later renewal. */
+  readonly onHostTokenRenewal: (hostId: string, delayed: boolean) => void;
   readonly registry: Registry;
   readonly messenger: IHostMessenger<Registry>;
+  /**
+   * `null` only when `messenger` already sends once per call. Required so a shell
+   * cannot silently retry a call promised to go out once.
+   */
+  readonly singleAttemptMessenger: IHostMessenger<Registry> | null;
   /**
    * Client `RequestContextProvider` boundary. The runtime threads
    * `provider.current()` into `HostClient` on `start()` and rebinds on
@@ -127,9 +136,15 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
   private bearerRotationUnsubscribe: (() => void) | null = null;
   private cloudVerdictUnsubscribe: (() => void) | null = null;
   private sessionVerifiedUnsubscribe: (() => void) | null = null;
+  private localHostId: string | null = null;
+  private readonly onHostTokenRenewal: (
+    hostId: string,
+    delayed: boolean,
+  ) => void;
 
   constructor(options: HostRuntimeOptions<Registry>) {
     this.runnerHost = options.runnerHost;
+    this.onHostTokenRenewal = options.onHostTokenRenewal;
     this.requestContextProvider = options.requestContextProvider;
     this.directory = options.directory;
     this.connectionRegistry = options.connectionRegistry;
@@ -148,6 +163,8 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
     this.hostClient = new HostClient<Registry>({
       registry: options.registry,
       messenger: options.messenger,
+      singleAttemptMessenger:
+        options.singleAttemptMessenger ?? options.messenger,
       invalidator: options.invalidator,
       authorityRegistry: this.authorityRegistry,
       schedulingPolicy: options.schedulingPolicy,
@@ -234,6 +251,7 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
         // credential had just legitimately filled.
         this.directory.invalidateInFlightRefresh();
         this.hostClient.notifyBearerRotated();
+        this.renewHostTokens();
       });
 
     // A session that has just been CONFIRMED by the account's servers, with the
@@ -259,9 +277,51 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
       });
 
     this.disposables.push(
-      this.runnerHost.onLocalHostChange(() => {
+      this.runnerHost.onLocalHostChange((snapshot) => {
+        this.localHostId = snapshot?.hostId ?? null;
         void this.directory.refresh();
       }),
+    );
+    const stopHostTokenChanges = this.runnerHost.hostTokens.subscribe(() => {
+      this.hostClient.notifyBearerRotated();
+    });
+    this.disposables.push({ dispose: stopHostTokenChanges });
+    // A mint, adoption or state write for a person that began before their era
+    // advanced is dropped here, whichever process answers it.
+    const provider = this.requestContextProvider;
+    const stopForgetting = forgetHostTokensOnSignOut(
+      {
+        current: () =>
+          Promise.resolve(provider.current()?.identity.userId ?? null),
+        onChange: (listener) =>
+          provider.onChange((ctx) => {
+            listener(ctx?.identity.userId ?? null);
+          }),
+      },
+      this.runnerHost.hostTokens,
+    );
+    this.disposables.push({ dispose: stopForgetting });
+  }
+
+  // Only this computer's host and hosts with a live connection; any other host's
+  // token is minted when it is next opened.
+  private renewHostTokens(): void {
+    const userId = this.requestContextProvider.current()?.identity.userId;
+    if (userId === undefined) return;
+    const hostIds = [...liveRemoteSessionHostIds(userId)];
+    if (this.localHostId !== null) hostIds.push(this.localHostId);
+    if (hostIds.length === 0) return;
+    const tokens = this.runnerHost.hostTokens;
+    const era = tokens.era(userId);
+    void tokens.renew(userId, hostIds).then(
+      (renewal) => {
+        // A renewal answered after this person left raises nothing for the
+        // next one.
+        if (renewal.kind !== "renewed" || tokens.era(userId) !== era) return;
+        for (const hostId of new Set(hostIds))
+          this.onHostTokenRenewal(hostId, renewal.delayed.includes(hostId));
+      },
+      () => undefined,
     );
   }
 

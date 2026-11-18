@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderWithQueryClient } from "@/components/composer/__tests__/composer-query-wrapper";
 import { AddCreditsLink } from "@/components/composer/consequences-block";
 import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -25,7 +26,9 @@ const POOL: StageConfiguration = {
 };
 
 function openAddCredits(configuration: StageConfiguration): void {
-  render(<AddCreditsLink configuration={configuration} testId="add-credits" />);
+  renderWithQueryClient(
+    <AddCreditsLink configuration={configuration} testId="add-credits" />,
+  );
   fireEvent.click(screen.getByTestId("add-credits"));
 }
 
@@ -39,28 +42,18 @@ describe("<AddCreditsLink />", () => {
     useAuthStore.setState({ shareableTeams: [] });
   });
 
-  it("opens a team's billing page when the team is among the shareable teams", () => {
+  it("draws no link for a team's member who is not its Admin, and never the Personal top-up", () => {
     useAuthStore.setState({
       shareableTeams: [
         { teamId: "team-pool", slug: "pool-e2e-fixture", avatarUrl: null },
       ],
     });
-
-    openAddCredits(POOL);
-
-    expect(mocks.openLink).toHaveBeenCalledWith(
-      "https://platform.example.dev/team/pool-e2e-fixture/billing",
-      "account",
+    renderWithQueryClient(
+      <AddCreditsLink configuration={POOL} testId="add-credits" />,
     );
-  });
 
-  it("opens the same team page for a team the list does not hold, never the Personal top-up", () => {
-    openAddCredits(POOL);
-
-    expect(mocks.openLink).toHaveBeenCalledWith(
-      "https://platform.example.dev/team/pool-e2e-fixture/billing",
-      "account",
-    );
+    expect(screen.queryByTestId("add-credits")).toBeNull();
+    expect(mocks.openLink).not.toHaveBeenCalled();
   });
 
   it("opens the person's own billing page for Personal", () => {

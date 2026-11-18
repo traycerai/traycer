@@ -20,10 +20,12 @@ const checkpointArtifactKindSchema = getRecordSchema(
 );
 
 /**
- * Tags a manifest entry whose `filePath` is a Traycer artifact `index.md`. The
- * presence of this tag (non-null) is what marks an entry as an artifact change:
- * the renderer shows it as a titled artifact row (click → open / diff) instead
- * of a raw file path, and the bulk-revert opt-out filters on it. Resolved at
+ * Tags a manifest entry whose `filePath` belongs to a Traycer artifact: a
+ * markdown artifact's `index.md`, a file artifact, or any file inside an HTML
+ * or canvas folder, which all carry that folder's tag. The presence of this tag
+ * (non-null) is what marks an entry as an artifact change: the renderer shows
+ * one titled artifact row (click → open / diff) instead of raw file paths, and
+ * the bulk-revert opt-out filters on it. Resolved at
  * turn-end manifest finalization via the storage mapping; `artifactId`/`kind`/
  * `title` are all null when the id is not yet minted (a just-created artifact
  * whose EpicFileSync ingest has not completed) - the entry is still an artifact
@@ -55,7 +57,7 @@ export const turnCheckpointManifestEntrySchema = lazySchema(() =>
     afterHash: z.string().nullable(),
     undoable: z.boolean(),
     reason: z.string().nullable(),
-    // Present + non-null ⇒ this entry is an artifact `index.md` change. Optional
+    // Present + non-null ⇒ this entry is an artifact change. Optional
     // (`.nullish()`) so manifests persisted before artifacts entered the
     // checkpoint flow parse cleanly (the field is absent → undefined → "not an
     // artifact"), and so the many manifest-entry constructors don't each have to

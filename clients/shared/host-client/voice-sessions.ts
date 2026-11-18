@@ -269,6 +269,8 @@ async function call(
         },
         body,
         signal: abort.signal,
+        // The bearer rides in a header: never follow a redirect.
+        redirect: "manual",
       }),
       abort.signal,
     );

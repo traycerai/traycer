@@ -3,6 +3,7 @@ import type { CommandFn, CommandResult } from "../runner/runner";
 import { clearDiskChatPartCache } from "../store/chat-part-cache";
 import { runWithCliStore, withCommitRetry } from "../store/credentials-store";
 import { cliChatPartCacheDir } from "../store/paths";
+import { forgetCliHostTokens } from "../internal/cli-host-tokens";
 
 // Runner-aware `traycer logout`. JSON mode emits exactly one terminal
 // NDJSON `result` event; human mode prints a single human line.
@@ -22,11 +23,17 @@ import { cliChatPartCacheDir } from "../store/paths";
 // the old best-effort path that reported "Not logged in." even when the file was
 // still on disk.
 export const logoutCommand: CommandFn = async (ctx): Promise<CommandResult> => {
-  const { hadSession, signOut } = await runWithCliStore(async (store) => {
-    const before = await store.read();
-    const outcome = await withCommitRetry(() => store.signOut(null), null);
-    return { hadSession: before !== null, signOut: outcome };
-  });
+  const { hadSession, signedOutUserId, signOut } = await runWithCliStore(
+    async (store) => {
+      const before = await store.read();
+      const outcome = await withCommitRetry(() => store.signOut(null), null);
+      return {
+        hadSession: before !== null,
+        signedOutUserId: before?.user.id ?? null,
+        signOut: outcome,
+      };
+    },
+  );
   if (signOut.outcome !== "deleted") {
     // `lock-busy` (another traycer process holds the credentials lock) or
     // `commit-failed`. Neither can claim signed-out - but neither can claim
@@ -44,6 +51,11 @@ export const logoutCommand: CommandFn = async (ctx): Promise<CommandResult> => {
       exitCode: 1,
     });
   }
+  // The person's host-only tokens leave with their sign-in. A failure leaves
+  // tokens no host-bound command can use without that sign-in, and the next
+  // sign-in of another account removes them; it does not undo the sign-out.
+  if (signedOutUserId !== null)
+    await forgetCliHostTokens(signedOutUserId).catch(() => undefined);
   // Published chat bytes do not survive leaving the account.
   //
   // The store is shared across environments and signed-in users on purpose - an

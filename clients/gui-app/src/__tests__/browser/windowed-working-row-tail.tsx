@@ -87,6 +87,7 @@ export function Fixture() {
           taskId="windowed-working-row-tail"
           epicId="windowed-working-row-tail"
           hostId={null}
+          payerHostId={null}
           messages={MESSAGES}
           transcriptWindow={WINDOWS[phase]}
           onVisibleOrdinalRangeChange={() => undefined}

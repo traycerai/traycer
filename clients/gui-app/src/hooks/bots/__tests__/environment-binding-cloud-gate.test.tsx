@@ -21,9 +21,8 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { EnvironmentHostBinding } from "@traycer/protocol/host/environment/contracts";
-import type { EnvironmentStatusResponseV12 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentHostRead } from "@/hooks/bots/use-environment-host-read-query";
-import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { useEnvironmentHostReadQuery } from "@/hooks/bots/use-environment-host-read-query";
 import { useTeamComputerClaim } from "@/hooks/auth/use-team-computers";
@@ -42,11 +41,11 @@ const OTHER_HOST = "host-10";
 const POOL_ENTRY = poolHostDirectoryEntry("wss://pool.test/rpc");
 interface DeferredStatusAnswer {
   readonly kind: "deferred_status";
-  readonly promise: Promise<EnvironmentStatusResponseV12>;
-  readonly resolve: (answer: EnvironmentStatusResponseV12) => void;
+  readonly promise: Promise<EnvironmentStatusResponseV13>;
+  readonly resolve: (answer: EnvironmentStatusResponseV13) => void;
 }
-type StatusAnswer = EnvironmentStatusResponseV12 | Error | DeferredStatusAnswer;
-let statusAnswer: EnvironmentStatusResponseV12 | Error =
+type StatusAnswer = EnvironmentStatusResponseV13 | Error | DeferredStatusAnswer;
+let statusAnswer: EnvironmentStatusResponseV13 | Error =
   environmentStatusFixture({});
 let statusAnswers: ReadonlyArray<StatusAnswer> = [];
 let bindingAnswers: ReadonlyArray<EnvironmentHostBinding | Error> = [];
@@ -79,12 +78,12 @@ const bindingRef = vi.hoisted(() => ({
     };
   } | null,
 }));
-const invalidateLocalTeamAdmissionAfterClaim = vi.hoisted(() =>
-  vi.fn<(hostId: string, runnerHost: IRunnerHost) => Promise<void>>(),
+const noteHostMembershipChanged = vi.hoisted(() =>
+  vi.fn<(hostId: string) => void>(),
 );
 
-vi.mock("@/lib/host/app-local-open-auth", () => ({
-  invalidateLocalTeamAdmissionAfterClaim,
+vi.mock("@/lib/host/local-admission-invalidation", () => ({
+  noteHostMembershipChanged,
 }));
 
 vi.mock("@/lib/host", async (importOriginal) => ({
@@ -136,9 +135,9 @@ const OTHER_BINDING: EnvironmentHostBinding = {
 };
 
 function deferredStatusAnswer(): DeferredStatusAnswer {
-  let resolveAnswer: (answer: EnvironmentStatusResponseV12) => void = () =>
+  let resolveAnswer: (answer: EnvironmentStatusResponseV13) => void = () =>
     undefined;
-  const promise = new Promise<EnvironmentStatusResponseV12>((resolve) => {
+  const promise = new Promise<EnvironmentStatusResponseV13>((resolve) => {
     resolveAnswer = resolve;
   });
   return {
@@ -271,8 +270,7 @@ describe("environment.binding.read in a pool build", () => {
     bindingAnswers = [];
     otherManifest = "advertises_status";
     connectable.hostIds = [];
-    invalidateLocalTeamAdmissionAfterClaim.mockReset();
-    invalidateLocalTeamAdmissionAfterClaim.mockResolvedValue(undefined);
+    noteHostMembershipChanged.mockReset();
   });
 
   afterEach(() => {
@@ -581,10 +579,7 @@ describe("environment.binding.read in a pool build", () => {
       TARGET_HOST,
       "env-team",
     );
-    expect(invalidateLocalTeamAdmissionAfterClaim).toHaveBeenCalledWith(
-      TARGET_HOST,
-      fixture.runnerHost,
-    );
+    expect(noteHostMembershipChanged).toHaveBeenCalledWith(TARGET_HOST);
     expect(fixture.reads).toEqual([TARGET_HOST, TARGET_HOST]);
   });
 });

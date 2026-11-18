@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
-import {
-  listTeamComputersViaHttp,
-  setEnvironmentBotHostViaHttp,
-  type TeamComputer,
-} from "../team-computers";
+import { listTeamComputersViaHttp, type TeamComputer } from "../team-computers";
 
 const BASE = "https://authn.example.test";
 const BEARER = "member-session-token";
@@ -16,6 +12,16 @@ function jsonResponse(status: number, body: unknown): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+function opaqueRedirectResponse(): Response {
+  const response = new Response(null);
+  Object.defineProperties(response, {
+    type: { value: "opaqueredirect" },
+    status: { value: 0 },
+    ok: { value: false },
+  });
+  return response;
 }
 
 function stubFetch(
@@ -49,7 +55,6 @@ function computer(overrides: Partial<TeamComputer>): TeamComputer {
     hostName: "Studio",
     hostKind: "personal",
     sharingGeneration: SHARING_GENERATION,
-    holdsBotSlot: false,
     purgePending: false,
     ...overrides,
   };
@@ -68,6 +73,7 @@ describe("listTeamComputersViaHttp", () => {
       hostName: "Studio",
       hostKind: "personal",
       sharingGeneration: SHARING_GENERATION,
+      holdsBotSlot: true,
       purgePending: false,
       futureProjectionField: "ignored",
     };
@@ -121,6 +127,30 @@ describe("listTeamComputersViaHttp", () => {
     },
   );
 
+  it.each([
+    [
+      "a 3xx response",
+      () =>
+        new Response(null, {
+          status: 302,
+          headers: { Location: `${BASE}/redirect-target` },
+        }),
+    ],
+    ["an opaque redirect", opaqueRedirectResponse],
+  ] as const)(
+    "treats %s as a non-success without following it",
+    async (_label, response) => {
+      const fetchMock = stubFetch(async () => response());
+
+      await expect(
+        listTeamComputersViaHttp(BASE, BEARER, ENVIRONMENT_ID),
+      ).resolves.toEqual({ kind: "network-error" });
+
+      const { init } = onlyCall(fetchMock);
+      expect(init.redirect).toBe("manual");
+    },
+  );
+
   it("collapses malformed JSON to network-error", async () => {
     stubFetch(
       async () => new Response("private malformed response", { status: 200 }),
@@ -138,83 +168,4 @@ describe("listTeamComputersViaHttp", () => {
       listTeamComputersViaHttp(BASE, BEARER, ENVIRONMENT_ID),
     ).resolves.toEqual({ kind: "network-error" });
   });
-});
-
-describe("setEnvironmentBotHostViaHttp", () => {
-  it("PUTs the selected host and sharing generation, then validates the bound host", async () => {
-    const fetchMock = stubFetch(async () =>
-      jsonResponse(200, {
-        ...computer({ holdsBotSlot: true }),
-        futureField: "ignored",
-      }),
-    );
-
-    await expect(
-      setEnvironmentBotHostViaHttp(
-        BASE,
-        BEARER,
-        ENVIRONMENT_ID,
-        HOST_ID,
-        SHARING_GENERATION,
-      ),
-    ).resolves.toEqual({
-      kind: "ok",
-      host: computer({ holdsBotSlot: true }),
-    });
-
-    const { url, init } = onlyCall(fetchMock);
-    expect(url).toBe(`${BASE}/api/v3/environments/${ENVIRONMENT_ID}/bot-host`);
-    expect(init.method).toBe("PUT");
-    expect(headerOf(init, "Authorization")).toBe(`Bearer ${BEARER}`);
-    expect(headerOf(init, "Content-Type")).toBe("application/json");
-    expect(JSON.parse(String(init.body))).toEqual({
-      hostId: HOST_ID,
-      sharingGeneration: SHARING_GENERATION,
-    });
-  });
-
-  it.each([
-    ["another host", computer({ hostId: "host-other", holdsBotSlot: true })],
-    [
-      "another environment",
-      computer({ environmentId: "env-other", holdsBotSlot: true }),
-    ],
-    ["a host that does not hold the slot", computer({ holdsBotSlot: false })],
-  ] as const)("rejects a successful response with %s", async (_case, host) => {
-    stubFetch(async () => jsonResponse(200, host));
-
-    await expect(
-      setEnvironmentBotHostViaHttp(
-        BASE,
-        BEARER,
-        ENVIRONMENT_ID,
-        HOST_ID,
-        SHARING_GENERATION,
-      ),
-    ).resolves.toEqual({ kind: "network-error" });
-  });
-
-  it.each([
-    [401, { kind: "unauthorized" }],
-    [403, { kind: "forbidden" }],
-    [404, { kind: "not-found" }],
-    [409, { kind: "conflict" }],
-  ] as const)(
-    "maps HTTP %i to the structured result",
-    async (status, result) => {
-      stubFetch(
-        async () => new Response("private response detail", { status }),
-      );
-
-      await expect(
-        setEnvironmentBotHostViaHttp(
-          BASE,
-          BEARER,
-          ENVIRONMENT_ID,
-          HOST_ID,
-          SHARING_GENERATION,
-        ),
-      ).resolves.toEqual(result);
-    },
-  );
 });
