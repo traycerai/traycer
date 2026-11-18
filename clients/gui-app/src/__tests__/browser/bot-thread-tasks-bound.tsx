@@ -29,7 +29,10 @@ import {
   type BotThreadPanelThread,
 } from "@/components/bots/bot-thread-panel";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
-import { startPendingSend } from "@/lib/bots/bot-pending-send";
+import {
+  startPendingSend,
+  type BotPendingSendStart,
+} from "@/lib/bots/bot-pending-send";
 import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 import {
   settlePendingSend,
@@ -102,6 +105,9 @@ import "@/index.css";
  * saying whether the host wrote it, so the post the thread opens on shows the
  * channel's unconfirmed mark and Retry (the held send is the window's, made once
  * the fixture's account is signed in).
+ *
+ * `?pending=long-reply` holds, under the `posted` thread, a reply of forty
+ * paragraphs the host has not confirmed: the panel's held-replies column.
  *
  * The quote spec adds `?quote=box`: the fixture plays the channel's part for
  * a quote, as `BotChannelView` does for a thread's panel, and `?post=paragraphs`,
@@ -349,7 +355,7 @@ function panelThread(): BotThreadPanelThread {
     case "posted":
       return {
         kind: "posted",
-        threadId: THREAD_ID,
+        threadId: sentPost?.threadId ?? THREAD_ID,
         retry: null,
         sendable: true,
       };
@@ -391,30 +397,7 @@ const PENDING_TEXT = "Is the release train still leaving at noon?";
  * lifetime that sign-in starts.
  */
 function holdUncertainSend(): void {
-  const started = startPendingSend({
-    request: {
-      botId: "bot-1",
-      conversationId: "channel-1",
-      text: PENDING_TEXT,
-      threadId: null,
-      announcementId: null,
-      redeliver: null,
-      supersedes: null,
-      answer: null,
-    },
-    authority: { hostId: HOST_ID, hostEpoch: 1 },
-    senderUserId: VIEWER_ID,
-    sentAs: { lifetime: currentBotLifetime(), account: VIEWER_ID },
-    text: PENDING_TEXT,
-    content: {
-      type: "doc",
-      content: [
-        { type: "paragraph", content: [{ type: "text", text: PENDING_TEXT }] },
-      ],
-    },
-    images: [],
-    release: noop,
-  });
+  const started = holdSend(PENDING_TEXT, null);
   settlePendingSend(started.messageId, "uncertain");
   originMessageId = started.messageId;
   sentPost = {
@@ -428,19 +411,60 @@ function holdUncertainSend(): void {
   };
 }
 
+/** A reply of many paragraphs, held under the listed-less thread (`?pending=long-reply`). */
+const LONG_REPLY_TEXT = Array.from(
+  { length: 40 },
+  (_, index) => `Held reply paragraph ${String(index)}.`,
+).join("\n");
+
+function holdLongReply(): void {
+  const started = holdSend(LONG_REPLY_TEXT, THREAD_ID);
+  settlePendingSend(started.messageId, "uncertain");
+}
+
+function holdSend(text: string, threadId: string | null): BotPendingSendStart {
+  return startPendingSend({
+    request: {
+      botId: "bot-1",
+      conversationId: "channel-1",
+      text,
+      threadId,
+      announcementId: null,
+      redeliver: null,
+      supersedes: null,
+      answer: null,
+    },
+    authority: { hostId: HOST_ID, hostEpoch: 1 },
+    senderUserId: VIEWER_ID,
+    sentAs: { lifetime: currentBotLifetime(), account: VIEWER_ID },
+    text,
+    content: {
+      type: "doc",
+      content: text.split("\n").map((line) => ({
+        type: "paragraph",
+        content: [{ type: "text", text: line }],
+      })),
+    },
+    images: [],
+    release: noop,
+  });
+}
+
 /** Holds the uncertain send before the pane draws, where the case asks for one. */
 function PendingSeed(props: {
   readonly children: ReactNode;
 }): ReactElement | null {
-  const wanted = params.get("pending") === "uncertain";
+  const pending = params.get("pending");
+  const wanted = pending === "uncertain" || pending === "long-reply";
   const authStatus = useAuthStore((state) => state.status);
   const held = useBotPendingSendsStore(
     (state) => Object.keys(state.entries).length > 0,
   );
   useEffect(() => {
     if (!wanted || held || authStatus !== "signed-in") return;
-    holdUncertainSend();
-  }, [authStatus, held, wanted]);
+    if (pending === "long-reply") holdLongReply();
+    else holdUncertainSend();
+  }, [authStatus, held, pending, wanted]);
   return !wanted || held ? <>{props.children}</> : null;
 }
 

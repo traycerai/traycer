@@ -199,3 +199,52 @@ test.describe("a thread opened at Send, its send unconfirmed", () => {
     await expect(origin.getByRole("button", { name: "Retry" })).toBeVisible();
   });
 });
+
+// A held reply under a thread the list does not have yet is drawn in its own
+// column. A long one must scroll there, not push the box out of the pane.
+test.describe("a long held reply, in the panel layout", () => {
+  test.use({ viewport: { width: 390, height: 700 } });
+  const HELD = '[data-testid="bot-thread-held-replies"]';
+
+  test("the held column scrolls and the box stays inside the panel", async ({
+    page,
+  }) => {
+    await page.goto(
+      `${fixture("bot-thread-tasks-bound")}?thread=posted&pending=long-reply`,
+    );
+    const held = page.locator(HELD);
+    await expect(held).toBeVisible();
+    await nextFrames(page, 2);
+
+    const column = await held.evaluate((node) => ({
+      scrollHeight: node.scrollHeight,
+      clientHeight: node.clientHeight,
+      overflowY: getComputedStyle(node).overflowY,
+    }));
+    expect
+      .soft(
+        column.scrollHeight - column.clientHeight,
+        `the held column scrolls: scrollHeight ${String(column.scrollHeight)} over clientHeight ${String(column.clientHeight)}`,
+      )
+      .toBeGreaterThan(1);
+    expect
+      .soft(column.overflowY, "the held column's overflow-y is auto")
+      .toBe("auto");
+
+    const panel = await page.locator(PANEL).boundingBox();
+    const composer = await page.locator(COMPOSER).boundingBox();
+    if (panel === null || composer === null) throw new Error("no box");
+    expect
+      .soft(
+        {
+          top: composer.y >= panel.y - 0.5,
+          bottom: composer.y + composer.height <= panel.y + panel.height + 0.5,
+        },
+        `the reply box lies inside the panel (box ${String(composer.y)}..${String(composer.y + composer.height)}, panel ${String(panel.y)}..${String(panel.y + panel.height)})`,
+      )
+      .toEqual({ top: true, bottom: true });
+    await expect
+      .soft(page.locator(COMPOSER), "the reply box is fully in the viewport")
+      .toBeInViewport({ ratio: 1 });
+  });
+});

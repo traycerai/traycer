@@ -69,6 +69,7 @@ import {
   USER_A,
   endCase,
   heldRail,
+  watchThreadRail,
   mountSurfaceOnRouteAs,
   mountSurfaceOnRouteAtEntry,
   type PlaceRoute,
@@ -328,14 +329,19 @@ function routeNamesNoThread({ history }: PlaceRoute): void {
  * thread and changed nothing, and Back lands on the Send's entry with the rail
  * restored, `sent` null.
  */
-async function backOntoRefusedThread(route: PlaceRoute): Promise<void> {
+async function backOntoRefusedThread(
+  route: PlaceRoute,
+): Promise<() => boolean> {
   await sendHeld();
   await routeNames(route, "thread");
+  expect(heldRail()?.kind, "no thread rail to close").toBe("thread");
   fireEvent.click(screen.getByTestId("bot-thread-close"));
   await waitFor(() => expect(heldRail()).toBeNull());
   await waitFor(() => routeNamesNoThread(route));
   await refuseFirstAttempt();
+  const sawThread = watchThreadRail();
   await stepBack(route);
+  return sawThread;
 }
 
 function loading(): HTMLElement | null {
@@ -350,6 +356,7 @@ describe("a refusal of the first attempt closes the thread opened at Send", () =
     await sendHeld();
     await routeNames(route, "thread");
     expect(route.history.length).toBe(before + 1);
+    expect(heldRail()?.kind, "no thread rail to close").toBe("thread");
 
     await refuseFirstAttempt();
     await waitFor(() => expect(heldRail()).toBeNull());
@@ -366,10 +373,11 @@ describe("a restored place whose post the host never had", () => {
   it("closes its rail over the entry once the locate says the row is absent, and Back does not bring it back (Back)", async () => {
     const route = await mountSurfaceOnRouteAs(USER_A, queryClient);
     scene.locate = ABSENT;
-    await backOntoRefusedThread(route);
+    const sawThread = await backOntoRefusedThread(route);
     const length = route.history.length;
 
     await waitFor(() => expect(heldRail()).toBeNull());
+    expect(sawThread(), "Back restored no thread rail to close").toBe(true);
     expect(loading(), "the thread kept loading forever").toBeNull();
     expect(
       route.history.length,
@@ -389,11 +397,13 @@ describe("a restored place whose post the host never had", () => {
     resetBotTabSurfaceMocks();
     startCase(NONCE_HOST, [EARLIER_POST], "thread");
     scene.locate = ABSENT;
+    const sawThread = watchThreadRail();
 
     const route = await mountSurfaceOnRouteAtEntry(USER_A, queryClient, entry);
     const length = route.history.length;
 
     await waitFor(() => expect(heldRail()).toBeNull());
+    expect(sawThread(), "the reload opened no thread rail to close").toBe(true);
     expect(loading(), "the thread kept loading forever").toBeNull();
     expect(
       route.history.length,
@@ -465,8 +475,10 @@ describe("a restored place whose post the host never had", () => {
     resetBotTabSurfaceMocks();
     startCase(NONCE_HOST, [EARLIER_POST], "thread");
     scene.locate = ABSENT;
+    const sawThread = watchThreadRail();
     const route = await mountSurfaceOnRouteAtEntry(USER_A, queryClient, entry);
     await waitFor(() => expect(heldRail()).toBeNull());
+    expect(sawThread(), "the reload opened no thread rail to close").toBe(true);
 
     // The send that was in flight at the reload succeeded: its row arrives.
     act(() => {

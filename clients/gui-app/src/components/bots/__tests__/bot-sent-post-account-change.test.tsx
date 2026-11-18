@@ -512,17 +512,24 @@ describe("a route entry naming A's thread anchor, stepped onto", () => {
    * A sends, so the thread opens, then opens the memory over it: the route
    * (the real place route, over a memory history) holds an entry for each.
    */
-  async function aHasThreadThenMemoryOnRoute(): Promise<PlaceRoute> {
+  async function aHasThreadThenMemoryOnRoute(): Promise<{
+    readonly route: PlaceRoute;
+    /** The anchor of the thread A's send opened, which the first route entry names. */
+    readonly anchorMessageId: string;
+  }> {
     const route = await mountSurfaceOnRouteAs(USER_A, queryClient);
     await sendFromBox(false);
     await routeNames(route, "thread");
+    const opened = heldRail();
+    if (opened?.kind !== "thread") throw new Error("A's send opened no thread");
+    const { anchorMessageId } = opened;
     act(() =>
       useBotOpenThreadStore
         .getState()
         .setRail(BOT_ID, memoryRailOver(heldRail()), currentBotLifetime()),
     );
     await routeNames(route, "memory");
-    return route;
+    return { route, anchorMessageId };
   }
 
   /** A step back, as the person's back button makes it, onto an entry that names A's thread. */
@@ -538,21 +545,26 @@ describe("a route entry naming A's thread anchor, stepped onto", () => {
   }
 
   it("restores the place for B with none of A's post", async () => {
-    const route = await aHasThreadThenMemoryOnRoute();
+    const { route, anchorMessageId } = await aHasThreadThenMemoryOnRoute();
     await changeAccount(USER_B);
     const mark = markProbes();
 
     await stepBack(route);
 
     expectNoneOfA(mark);
+    const rail = heldRail();
     expect(
-      heldRail(),
+      rail?.kind,
       "B's arrival on the anchor did not open its thread",
-    ).not.toBeNull();
+    ).toBe("thread");
+    expect(
+      rail?.kind === "thread" && rail.anchorMessageId,
+      "B's thread is not the one anchored where the route entry named",
+    ).toBe(anchorMessageId);
   });
 
   it("CONTROL: keeps the post it was sent with when the same account steps back onto its thread", async () => {
-    const route = await aHasThreadThenMemoryOnRoute();
+    const { route } = await aHasThreadThenMemoryOnRoute();
 
     await stepBack(route);
 
@@ -626,6 +638,7 @@ describe("A's late callbacks, once B is signed in", () => {
       ),
     );
     expect(heldRail()?.kind, "B's thread did not open").toBe("thread");
+    const opened = heldRail();
 
     await act(async () => {
       firstSend().reject(notWrittenRefusal("refused"));
@@ -633,9 +646,9 @@ describe("A's late callbacks, once B is signed in", () => {
     });
 
     expect(
-      heldRail()?.kind,
-      "A's late refusal closed the thread B opened",
-    ).toBe("thread");
+      heldRail(),
+      "A's late refusal changed the thread B opened",
+    ).toStrictEqual(opened);
   });
 
   // Red today only through the leak (A's text is still in B's rail): the late

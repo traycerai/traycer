@@ -58,6 +58,7 @@ import {
 import {
   authorityMovedRefusal,
   sendNonceOf,
+  lostAfterDispatch,
   storedRowOfSend,
   unmarkedRefusal,
 } from "@/components/bots/__tests__/bot-send-identity-test-support";
@@ -71,7 +72,10 @@ import type {
   BotConversationSendRequest,
   BotSendAuthority,
 } from "@traycer/protocol/host/bot/conversation-schemas";
-import { rebindUnreachableTracySurface } from "@/stores/bots/tracy-surface-store";
+import {
+  rebindUnreachableTracySurface,
+  useTracySurfaceStore,
+} from "@/stores/bots/tracy-surface-store";
 import { useBotPendingSendsStore } from "@/stores/bots/bot-pending-sends-store";
 import {
   EARLIER_POST,
@@ -548,6 +552,10 @@ describe("a held send when the tab is rebound to another host", () => {
       rowsOf(TEXT_A),
       `the held send was not drawn: ${pageDescription()}`,
     ).toHaveLength(1);
+    expect(
+      useTracySurfaceStore.getState().hostId,
+      "the surface was not bound to the tab's host before the rebind",
+    ).toBe(TAB_HOST);
 
     act(() => {
       rebindUnreachableTracySurface(
@@ -556,6 +564,10 @@ describe("a held send when the tab is rebound to another host", () => {
       );
     });
 
+    expect(
+      useTracySurfaceStore.getState().hostId,
+      "the surface did not move to the other host",
+    ).toBe(OTHER_TAB_HOST);
     expect(
       rowsOf(TEXT_A),
       `the held send vanished when the tab was rebound: ${pageDescription()}`,
@@ -780,7 +792,7 @@ describe("Retry of an unconfirmed send after the host refused an attempt as move
     await pressRetry("the retry at the original binding");
 
     await act(async () => {
-      heldHost().sends[1].reject(unmarkedRefusal("timed out"));
+      heldHost().sends[1].reject(lostAfterDispatch("timed out"));
       await Promise.resolve();
     });
 
@@ -795,7 +807,7 @@ describe("Retry of an unconfirmed send after the host refused an attempt as move
     await pressRetry("the same host at epoch 2");
 
     await act(async () => {
-      heldHost().sends[1].reject(unmarkedRefusal("timed out"));
+      heldHost().sends[1].reject(lostAfterDispatch("timed out"));
       await Promise.resolve();
     });
 

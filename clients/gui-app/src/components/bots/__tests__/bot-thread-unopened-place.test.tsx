@@ -488,6 +488,7 @@ describe("a restored place naming a post the bot answered in the channel", () =>
     await routeNames(route, "thread");
     const rail = heldRail();
     const anchor = rail?.kind === "thread" ? rail.anchorMessageId : "";
+    expect(rail?.kind, "no thread rail to close").toBe("thread");
     fireEvent.click(screen.getByTestId("bot-thread-close"));
     await waitFor(() => expect(heldRail()).toBeNull());
     setChannel(directPost(anchor, TEXT_A));
@@ -634,6 +635,8 @@ describe("a thread opened at Send whose post the host then stores", () => {
 
   it("removes the thread, over the Send's entry, when the stored row is a post the bot answered in the channel", async () => {
     const { route, anchor, length } = await uncertainSend();
+
+    expect(heldRail()?.kind, "no thread rail to remove").toBe("thread");
 
     act(() => setChannel(directPost(anchor, TEXT_A)));
 

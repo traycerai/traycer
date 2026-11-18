@@ -356,7 +356,8 @@ describe("a member's own send in the channel's windowed list, drawn before its h
     };
     const drawn = theRow("unconfirmed at the press");
     expect(drawn.textContent).toMatch(/Not confirmed/);
-    expect(retryOf("unconfirmed at the press").disabled).toBe(false);
+    const retryAtPress = retryOf("unconfirmed at the press");
+    expect(retryAtPress.disabled).toBe(false);
 
     act(() => {
       indexNamesAppendedRow(session, IDS, {
@@ -369,8 +370,13 @@ describe("a member's own send in the channel's windowed list, drawn before its h
 
     expect(theRow("unconfirmed, index named the row")).toBe(drawn);
     expect(drawn.textContent).toMatch(/Not confirmed/);
+    const retryAfterIndex = retryOf("unconfirmed, index named the row");
     expect(
-      retryOf("unconfirmed, index named the row").disabled,
+      retryAfterIndex,
+      "Retry was replaced when the index named the row",
+    ).toBe(retryAtPress);
+    expect(
+      retryAfterIndex.disabled,
       "Retry changed state when the index named the row",
     ).toBe(false);
 
@@ -385,6 +391,12 @@ describe("a member's own send in the channel's windowed list, drawn before its h
 
     expect(rowsSaying(TEXT)).toHaveLength(1);
     expect(screen.queryAllByText(/Not confirmed/)).toHaveLength(0);
+    expect(
+      within(theRow("after the live record"))
+        .getByRole("time")
+        .getAttribute("datetime"),
+      "the row does not show the host's timestamp",
+    ).toBe(new Date(HOST_STORED_AT).toISOString());
   });
 });
 
@@ -667,6 +679,7 @@ describe("an ordinary chat's optimistic message in the same windowed list (no bo
       messageAccepted(session, IDS, {
         ...EARLIER,
         messageId,
+        sender: { type: "user", userId: VIEWER_USER_ID },
         message: { ...EARLIER.message, content: paragraph(TEXT) },
         timestamp: HOST_STORED_AT,
       });

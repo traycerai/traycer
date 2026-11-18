@@ -1125,6 +1125,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
  * its transcript draws them in their place.
  */
 function UnlistedThreadReplies(props: {
+  readonly layout: BotThreadLayout;
   readonly botId: string;
   readonly threadId: string;
   /** What a held reply is offered again under. */
@@ -1152,7 +1153,15 @@ function UnlistedThreadReplies(props: {
   const presentation = heldReplyPresentation(botTitle);
   return (
     <ChatBotPendingSendsContext value={pendingSendOf}>
-      <div className="flex flex-col px-2" data-testid="bot-thread-held-replies">
+      <div
+        className={cn(
+          "flex flex-col px-2",
+          // In the panel the column scrolls itself, as the stored replies do,
+          // so a long held reply leaves the box in the pane.
+          props.layout.kind === "panel" && "min-h-0 overflow-y-auto",
+        )}
+        data-testid="bot-thread-held-replies"
+      >
         {held.map((send) => (
           <ChatBotMessage
             key={send.row.messageId}
@@ -1504,6 +1513,7 @@ function KnownThread(
       <ThreadListReadFailure notice={retry} hostId={hostId} />
       {listed === null ? (
         <UnlistedThreadReplies
+          layout={layout}
           botId={botId}
           threadId={threadId}
           sendBinding={sendBinding}

@@ -384,6 +384,10 @@ describe("a thread opened at Send, held under an overlay when the host answers",
         await routeNames(route, position.fragment);
       }
       const length = route.history.length;
+      expect(
+        route.history.location.search,
+        "the route did not name the thread before the host answered",
+      ).toContain("thread");
 
       await act(async () => {
         answer();
@@ -544,6 +548,10 @@ describe("a place restored over a thread removed in place", () => {
       await routeNames(route, "thread");
       setRail(over(heldRail()));
       await routeNames(route, fragment);
+      expect(
+        route.history.location.search,
+        "the route did not name the thread before the host answered",
+      ).toContain("thread");
       await act(async () => {
         firstSend().reject(notWrittenRefusal("refused"));
         await Promise.resolve();
@@ -594,6 +602,10 @@ describe("a place restored after the bot answered in the channel while the memor
       sent?.kind === "thread" ? sent.anchorMessageId : "no thread";
     setRail(memoryRailOver(sent));
     await routeNames(route, "memory");
+    expect(
+      route.history.location.search,
+      "the route did not name the thread before the host answered",
+    ).toContain("thread");
     // The bot answered in the channel: the post's row exists, in other words
     // than the person typed.
     act(() => {

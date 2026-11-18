@@ -276,6 +276,26 @@ async function sendLeftOrSettled(): Promise<void> {
   );
 }
 
+/**
+ * The Retry attempt has settled: no mutation is pending any more, which the
+ * mutation cache announces. A request that reaches the host first is the
+ * other end; `nextSend` is taken before the press so it cannot be missed.
+ */
+function mutationsSettled(): Promise<void> {
+  return new Promise((resolve) => {
+    const cache = queryClient.getMutationCache();
+    const unsubscribe = cache.subscribe(() => {
+      if (queryClient.isMutating() > 0) return;
+      unsubscribe();
+      resolve();
+    });
+    if (queryClient.isMutating() === 0) {
+      unsubscribe();
+      resolve();
+    }
+  });
+}
+
 describe("a send pressed under one account while another signs in", () => {
   it("sends nothing carrying A's text or nonce when the account changed before the first send left", async () => {
     await mountSurfaceAs(USER_A, queryClient);
@@ -356,11 +376,12 @@ describe("a send pressed under one account while another signs in", () => {
     ).toHaveLength(1);
     const retry = screen.getByRole("button", { name: "Retry" });
 
+    const retryArrived = heldHost().nextSend();
     const started = pressThenSwitch(
       () => fireEvent.click(retry),
       () => switchAccount(USER_B),
     );
-    await sendLeftOrSettled();
+    await Promise.race([retryArrived, mutationsSettled()]);
 
     expect(
       started.attemptsOut,
@@ -379,12 +400,14 @@ describe("a send pressed under one account while another signs in", () => {
   it("CONTROL: sends exactly one request carrying the exact request when the account does not change", async () => {
     await mountSurfaceAs(USER_A, queryClient);
 
+    const arrived = heldHost().nextSend();
     pressSend(TEXT_A);
     expect(
       Object.keys(useBotPendingSendsStore.getState().entries),
       "Send drew no pending row: the box did not take the send",
     ).toHaveLength(1);
-    await waitFor(() => expect(heldHost().sends).toHaveLength(1));
+    await arrived;
+    expect(heldHost().sends).toHaveLength(1);
 
     expect(sendRequestsLogged()).toEqual([firstSend().request]);
     expect(firstSend().request).toMatchObject({

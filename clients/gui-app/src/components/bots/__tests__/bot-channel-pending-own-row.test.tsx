@@ -29,7 +29,15 @@ import {
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import {
   HostClient,
   type HostRequester,
@@ -58,6 +66,13 @@ import {
   signInViewer,
   VIEWER_USER_ID,
 } from "@/components/bots/__tests__/bot-failed-request-test-support";
+import {
+  FakeIntersectionObserver,
+  foregroundWindow,
+  seeEverythingDrawn,
+} from "@/components/bots/__tests__/bot-read-observer-test-support";
+import { recordNegotiatedHostManifest } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { BotReadCursorReadResponse } from "@traycer/protocol/host/bot/schemas";
 import {
   boxInput,
   textOf,
@@ -277,6 +292,8 @@ interface HeldSend {
 let sends: HeldSend[];
 /** Every read-cursor write the host was asked for. */
 let cursorWrites: ReadonlyArray<unknown>;
+/** What the host's read cursors answer: where the person has read to, and each conversation's newest row. */
+let cursorRead: BotReadCursorReadResponse;
 let channelStore: UseBoundStore<StoreApi<ChannelTranscriptState>>;
 
 function createChannelStore(
@@ -284,6 +301,7 @@ function createChannelStore(
 ): UseBoundStore<StoreApi<ChannelTranscriptState>> {
   return create<ChannelTranscriptState>()(() => ({
     snapshotLoaded: true,
+    fatalClose: null,
     messages,
     events: [],
     transcriptRowContext: {},
@@ -316,6 +334,7 @@ function holdingHostClient(): HostRequester<HostRpcRegistry> {
     registry: hostRpcRegistry,
     requestId: () => "request-1",
     handlers: {
+      "bot.readCursor.read": () => Promise.resolve(cursorRead),
       "bot.readCursor.advance": (params) => {
         cursorWrites = [...cursorWrites, params];
         return Promise.resolve({
@@ -531,6 +550,7 @@ beforeEach(() => {
   strictWindow = true;
   sends = [];
   cursorWrites = [];
+  cursorRead = { cursors: {}, latest: {} };
   mocks.threadAnchors = null;
   mocks.client = holdingHostClient();
   negotiateBotSend(HOST_ID, { major: 1, minor: 7 });
@@ -799,15 +819,72 @@ describe("<BotChannelView /> where the pending row sits", () => {
     expect(rows[2]).toContain("Late from Tess");
   });
 
-  it("asks the host for no read-cursor write while it is pending", async () => {
-    mountChannel("direct");
-    await screen.findByRole("group", { name: "Message Release Bot" });
+  describe("read cursor", () => {
+    const EARLIER_POSITION = { messageId: "post-earlier", seq: 500 };
 
-    pressSend(TEXT);
-    await waitFor(() => expect(sends).toHaveLength(1));
+    /** The host answers the person's cursors, so the channel's reading is on. */
+    function readingOn(read: BotReadCursorReadResponse): void {
+      FakeIntersectionObserver.all = [];
+      vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+      onTestFinished(() => {
+        vi.unstubAllGlobals();
+      });
+      foregroundWindow();
+      cursorRead = read;
+      recordNegotiatedHostManifest(HOST_ID, {
+        "bot.conversation.send": { major: 1, minor: 7 },
+        "bot.readCursor.read": { major: 1, minor: 0 },
+        "bot.readCursor.advance": { major: 1, minor: 0 },
+      });
+    }
 
-    expect(rowsSaying(TEXT)).toHaveLength(1);
-    expect(cursorWrites).toEqual([]);
+    it("control: a stored row the person looks at is read, and the host is asked", async () => {
+      readingOn({
+        cursors: {},
+        latest: { [CHANNEL_ID]: EARLIER_POSITION },
+      });
+      mountChannel("direct");
+      await screen.findByRole("group", { name: "Message Release Bot" });
+      await waitFor(() =>
+        expect(
+          document.querySelector('[data-bot-read-row="post-earlier"]'),
+        ).not.toBeNull(),
+      );
+
+      await seeEverythingDrawn();
+
+      await waitFor(() =>
+        expect(cursorWrites).toEqual([
+          expect.objectContaining({ botId: BOT_ID, ...EARLIER_POSITION }),
+        ]),
+      );
+    });
+
+    it("asks the host for no read-cursor write for a row that is still pending", async () => {
+      // The person has read to the earlier post; the host's newest row is a
+      // later one that is not drawn. Only a row drawn for the send is new.
+      readingOn({
+        cursors: { [CHANNEL_ID]: EARLIER_POSITION },
+        latest: { [CHANNEL_ID]: { messageId: "post-later", seq: 9_000 } },
+      });
+      mountChannel("direct");
+      await screen.findByRole("group", { name: "Message Release Bot" });
+      pressSend(TEXT);
+      await waitFor(() => expect(sends).toHaveLength(1));
+      await waitFor(() =>
+        expect(
+          [...document.querySelectorAll("[data-bot-read-row]")].some((row) =>
+            row.textContent.includes(TEXT),
+          ),
+        ).toBe(true),
+      );
+
+      // The dwell runs past READ_AFTER_MS on a fake clock, the send unresolved.
+      await seeEverythingDrawn();
+
+      expect(rowsSaying(TEXT)).toHaveLength(1);
+      expect(cursorWrites).toEqual([]);
+    });
   });
 });
 

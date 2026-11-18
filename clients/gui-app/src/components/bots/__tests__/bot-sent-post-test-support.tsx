@@ -32,7 +32,7 @@ import {
 } from "@tanstack/react-query";
 import { installBotReadReadability } from "@/lib/bots/bot-read-readability";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
-import { expect, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -654,6 +654,20 @@ export function sendStoresSnapshot(): string {
     useBotOpenThreadStore.getState().byBotId,
     useBotPendingSendsStore.getState().entries,
   ]);
+}
+
+/**
+ * Whether the bot's rail held a thread at any moment from now on, so a wait for
+ * the rail to be gone proves it was there to go: an absence that starts true
+ * would pass the wait on its first poll.
+ */
+export function watchThreadRail(): () => boolean {
+  let seen = heldRail()?.kind === "thread";
+  const stop = useBotOpenThreadStore.subscribe(() => {
+    if (heldRail()?.kind === "thread") seen = true;
+  });
+  onTestFinished(stop);
+  return () => seen;
 }
 
 /** What the bot's rail holds now, or `null`. */
