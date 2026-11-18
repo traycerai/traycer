@@ -283,7 +283,9 @@ function renderFlow(options: {
   readonly awaitLoginImpl: (
     variables: AwaitLoginVariables,
   ) => Promise<AwaitLoginResponse>;
-}): { readonly onFailed: Mock<(message: string, hostSentence: boolean) => void> } {
+}): {
+  readonly onFailed: Mock<(message: string, hostSentence: boolean) => void>;
+} {
   const onFailed = vi.fn<(message: string, hostSentence: boolean) => void>();
   render(<LoginFlowHarness {...options} onFailed={onFailed} />, {
     wrapper: queryClientWrapper(),
