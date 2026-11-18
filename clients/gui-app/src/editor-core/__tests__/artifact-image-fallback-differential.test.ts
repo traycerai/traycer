@@ -742,54 +742,129 @@ describe("an image node's source survives two writes and two ingests", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. Timing: no reader call, one pass
+// 6. Call growth: regex and String-method calls through the real serializer
 // ---------------------------------------------------------------------------
 
-describe("serializing a large body with a fallback in it is linear", () => {
+describe("serializing a body with a fallback in it: regex and String-method call growth is bounded", () => {
   const KIB = 1024;
-  const time = (content: JsonContent): number => {
-    const start = performance.now();
-    serialize(content);
-    return performance.now() - start;
-  };
-  // The best of a few runs, so one scheduling hiccup is not the measurement.
-  const best = (content: JsonContent): number =>
-    Math.min(time(content), time(content), time(content));
+  const LINE = "word ".repeat(200).slice(0, 999) + ".";
 
-  const paragraphs = (bytes: number): JsonContent => {
-    const line = "word ".repeat(200).slice(0, 999) + ".";
-    const blocks: JsonContent[] = [];
-    for (let size = 0; size < bytes; size += line.length) {
-      blocks.push(P(line));
+  const COUNTED_STRING_METHODS = [
+    "at",
+    "charAt",
+    "charCodeAt",
+    "codePointAt",
+    "endsWith",
+    "includes",
+    "indexOf",
+    "lastIndexOf",
+    "match",
+    "matchAll",
+    "replace",
+    "replaceAll",
+    "search",
+    "slice",
+    "split",
+    "startsWith",
+    "substring",
+  ] as const;
+
+  interface Patch {
+    readonly target: object;
+    readonly key: string;
+    readonly original: PropertyDescriptor;
+    readonly counted: PropertyDescriptor;
+  }
+
+  interface CallCounts {
+    readonly markdown: string;
+    readonly regexCalls: number;
+    readonly stringCalls: number;
+  }
+
+  // Counts `RegExp.prototype.exec` calls (the spec's RegExpExec reaches an
+  // overridden exec from test, replace, split and match with a RegExp) and
+  // invocations of COUNTED_STRING_METHODS, separately, over one real
+  // serialize. It cannot see work inside a single call (regex backtracking, or
+  // a slice, indexOf or exec over a growing string, so O(N) calls can still do
+  // O(N²) work), plain index loops, `+=` string building, flattening and GC,
+  // or constant factors. A string-pattern replace or split takes a native path
+  // with no exec, so only its invocation is counted. Patching changes V8's
+  // optimized paths, so this is not a timing measurement. A count of the form
+  // aN + b with b >= 0 satisfies count(4N) <= 4·count(N); passing the bound
+  // does not show that a count is linear.
+  const countCalls = (content: JsonContent): CallCounts => {
+    let regexCalls = 0;
+    let stringCalls = 0;
+    const patches: Patch[] = [];
+    const plan = (target: object, key: string, count: () => void): void => {
+      const original = Object.getOwnPropertyDescriptor(target, key);
+      const value: unknown = original?.value;
+      if (original === undefined || typeof value !== "function") {
+        throw new Error(`${key} is not a patchable function`);
+      }
+      patches.push({
+        target,
+        key,
+        original,
+        counted: {
+          ...original,
+          value: function (this: unknown, ...args: unknown[]): unknown {
+            count();
+            return Reflect.apply(value, this, args);
+          },
+        },
+      });
+    };
+    plan(RegExp.prototype, "exec", () => {
+      regexCalls += 1;
+    });
+    for (const method of COUNTED_STRING_METHODS) {
+      plan(String.prototype, method, () => {
+        stringCalls += 1;
+      });
     }
-    blocks.push(P(FALLBACK));
-    return doc(...blocks);
+    try {
+      for (const patch of patches) {
+        Object.defineProperty(patch.target, patch.key, patch.counted);
+      }
+      const markdown = serialize(content);
+      return { markdown, regexCalls, stringCalls };
+    } finally {
+      for (const patch of patches) {
+        Object.defineProperty(patch.target, patch.key, patch.original);
+      }
+    }
   };
+
+  const paragraphs = (count: number): JsonContent =>
+    doc(...Array.from({ length: count }, () => P(LINE)), P(FALLBACK));
   const backslashes = (bytes: number): JsonContent =>
     doc(P(BS.repeat(bytes)), P(FALLBACK));
 
-  function guard(small: JsonContent, large: JsonContent): void {
-    const smallTime = best(small);
-    // The 256 KiB bound first: a quadratic pass fails here, in seconds,
-    // rather than after the 1 MiB run.
-    expect(smallTime).toBeLessThan(2000);
-    const largeTime = best(large);
-    expect(largeTime).toBeLessThan(2000);
-    expect(largeTime).toBeLessThan(6 * smallTime + 50);
+  function expectBoundedGrowth(small: JsonContent, large: JsonContent): void {
+    const smallRun = countCalls(small);
+    const largeRun = countCalls(large);
+    expect(smallRun.regexCalls).toBeGreaterThan(0);
+    expect(smallRun.stringCalls).toBeGreaterThan(0);
+    expect(largeRun.regexCalls).toBeGreaterThan(smallRun.regexCalls);
+    expect(largeRun.stringCalls).toBeGreaterThan(smallRun.stringCalls);
+    expect(largeRun.markdown.endsWith(`\n\n${FALLBACK}`)).toBe(true);
+    expect(largeRun.regexCalls).toBeLessThanOrEqual(4 * smallRun.regexCalls);
+    expect(largeRun.stringCalls).toBeLessThanOrEqual(4 * smallRun.stringCalls);
   }
 
-  it("serializes 256 KiB and 1 MiB of 1000-character paragraphs plus one fallback", () => {
-    guard(paragraphs(256 * KIB), paragraphs(1024 * KIB));
+  it("bounds call growth from 16 to 64 paragraphs of 1000 characters plus one fallback", () => {
+    expectBoundedGrowth(paragraphs(16), paragraphs(64));
   });
 
-  it("serializes a 256 KiB line of backslashes plus one fallback", () => {
-    guard(backslashes(256 * KIB), backslashes(1024 * KIB));
+  it("bounds call growth from 4 KiB to 16 KiB of backslashes plus one fallback", () => {
+    expectBoundedGrowth(backslashes(4 * KIB), backslashes(16 * KIB));
   });
 
-  it("writes the fallback raw in the large body", () => {
-    expect(serialize(paragraphs(256 * KIB)).endsWith(`\n\n${FALLBACK}`)).toBe(
-      true,
-    );
+  it("writes the fallback raw at the end of a 256 KiB paragraph body", () => {
+    const body = paragraphs(Math.ceil((256 * KIB) / LINE.length));
+    expect(serialize(body).endsWith(`\n\n${FALLBACK}`)).toBe(true);
   });
 });
 
