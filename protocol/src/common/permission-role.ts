@@ -2,14 +2,16 @@ import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 
 /**
- * The retired view-only role, and the one place a decoded role becomes access.
+ * The view-only role, and the one place a decoded role becomes access.
  *
- * A person who can open a task can edit it. `viewer` is retired from every
- * grant, role selection and authorization; it survives in the decodable
- * vocabulary only (`permission-role`, documented there), so that legacy data
- * and released peers keep parsing. This module is the boundary between the two
+ * A person who can open a task can edit it. `viewer` is no longer offered by
+ * any role selection, but it stays in the decodable vocabulary
+ * (`permission-role`, documented there): stored grants and released peers
+ * still carry it, and it is never rewritten. It gives the access of `editor`
+ * - the owner's ruling of 19 Nov 2026, "It can stay as viewer but treated as
+ * editor on new versions". This module is the boundary between the two
  * vocabularies, and it is deliberately the only one: a reader that reaches for
- * the decoded value directly is a reader that can mistake a retired role for
+ * the decoded value directly is a reader that can mistake `viewer` for
  * read-only access.
  */
 
@@ -27,18 +29,20 @@ export const grantedPermissionRoleSchema = lazySchema(() =>
 export type GrantedPermissionRole = z.infer<typeof grantedPermissionRoleSchema>;
 
 /**
- * A decoded role as access: the retired role, an unknown role and no grant at
- * all are all `null`, which every caller already reads as no access.
+ * A decoded role as access: `viewer` is `editor`, and an unknown role and no
+ * grant at all are both `null`, which every caller already reads as no access.
  *
- * `null` is not "read-only". There is no read-only role left to return, which
- * is the point of routing every decode through here: a retired grant yields
- * nothing, and it can never be widened by a reader that forgot about it.
+ * `null` is not "read-only". There is no read-only role to return, which is
+ * the point of routing every decode through here: `viewer` gives an editor's
+ * access, and a value nothing recognises - one a newer writer invents - gives
+ * none.
  */
 export function grantedRole(role: string | null): GrantedPermissionRole | null {
   switch (role) {
     case "owner":
       return "owner";
     case "editor":
+    case "viewer":
       return "editor";
     default:
       return null;
