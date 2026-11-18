@@ -1080,10 +1080,12 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
       [
         "is not bound at a sharing generation",
         () => hostBinding("env-a", null),
+        "Couldn't sign out.",
       ],
       [
         "is bound to another environment",
         () => hostBinding("bound-environment", 3),
+        "This connection changed. Refresh and try again.",
       ],
       [
         "does not answer its binding",
@@ -1096,24 +1098,32 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
             fatalDetails: null,
           });
         },
+        "Couldn't sign out.",
       ],
-    ])("changes nothing when this computer %s", async (_state, binding) => {
-      fixture.hostBinding = binding;
-      fixture.authnAnswer = modelAuthn(liveFamily(SPEND_SCOPE_KEY));
-      const messenger = installOrderedSignOutClient();
-      renderDialog(unmappedBrokeredProfile(SPEND_SCOPED_IDENTITY));
+    ])(
+      "changes nothing when this computer %s",
+      async (_state, binding, toastTitle) => {
+        fixture.hostBinding = binding;
+        fixture.authnAnswer = modelAuthn(liveFamily(SPEND_SCOPE_KEY));
+        const messenger = installOrderedSignOutClient();
+        renderDialog(unmappedBrokeredProfile(SPEND_SCOPED_IDENTITY));
 
-      confirmSignOut();
+        confirmSignOut();
 
-      await waitFor(() =>
-        expect(storedToastTitles()).toContain(
-          "This connection changed. Refresh and try again.",
-        ),
-      );
-      expect(fixture.authnRequests).toEqual([]);
-      expect(signOuts(messenger)).toEqual([]);
-      expect(fixture.openChanges).toEqual([]);
-    });
+        await waitFor(() =>
+          expect(
+            storedToastTitles().filter(
+              (title) =>
+                title === "Couldn't sign out." ||
+                title === "This connection changed. Refresh and try again.",
+            ),
+          ).toEqual([toastTitle]),
+        );
+        expect(fixture.authnRequests).toEqual([]);
+        expect(signOuts(messenger)).toEqual([]);
+        expect(fixture.openChanges).toEqual([]);
+      },
+    );
 
     it("changes nothing when this computer's binding moves after a setup token's connection read", async () => {
       const answers = [
