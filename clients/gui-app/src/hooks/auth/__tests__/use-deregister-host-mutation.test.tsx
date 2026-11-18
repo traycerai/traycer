@@ -4,6 +4,7 @@ import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FleetRefreshOutcome } from "@traycer-clients/shared/platform/runner-host";
 import type { DeregisterHostFetchResult } from "@traycer-clients/shared/host-client/host-deregister-fetcher";
 import type { AuthService } from "@/lib/auth/auth-service";
 import type { HostDirectoryService } from "@/lib/host";
@@ -17,7 +18,7 @@ const refresh = vi.fn<() => Promise<readonly []>>();
 // Deliberately reached off the runner host, NOT the selection-authority
 // client - announcing "your copy is stale" must not widen the selection write
 // path this change narrowed.
-const refreshHostFleet = vi.fn<() => Promise<void>>();
+const refreshHostFleet = vi.fn<() => Promise<FleetRefreshOutcome>>();
 
 const auth = { deregisterHostFromAccount } as Pick<
   AuthService,
@@ -51,7 +52,7 @@ describe("useDeregisterHostFromAccount", () => {
     refresh.mockReset();
     refresh.mockResolvedValue([]);
     refreshHostFleet.mockReset();
-    refreshHostFleet.mockResolvedValue(undefined);
+    refreshHostFleet.mockResolvedValue({ kind: "published" });
     bindingRef.value = { auth, directory };
   });
 

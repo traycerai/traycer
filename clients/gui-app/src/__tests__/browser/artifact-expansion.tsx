@@ -106,7 +106,7 @@ export function ArtifactExpansionFixture(): ReactElement {
           not through the cascade. Mirrored here because a flat fixture cannot
           tell the two apart. */}
       <div className="h-[600px] w-full [contain:layout_paint_style]">
-        <ArtifactExpansion title="Report">
+        <ArtifactExpansion title="Report" commentsInline>
           <ArtifactPagesFrame
             source={{
               kind: "artifact",

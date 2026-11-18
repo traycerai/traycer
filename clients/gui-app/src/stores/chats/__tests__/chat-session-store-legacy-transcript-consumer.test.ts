@@ -94,6 +94,9 @@ class FakeChatWireSession implements IStreamSession {
     this.statusChangeHandler = handler;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {
     // No-op: this harness drives reconnection by mutating
     // `negotiatedVersion` directly, mirroring a real renegotiated session.

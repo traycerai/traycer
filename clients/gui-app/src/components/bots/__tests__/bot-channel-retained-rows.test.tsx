@@ -36,6 +36,7 @@ import type {
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
 import {
+  BOT_ID,
   CHANNEL_ID,
   POST_FIRST_LINE,
   POST_ID,
@@ -64,6 +65,12 @@ import {
   settleCursorAdvances,
   renderRealChannel,
 } from "@/components/bots/__tests__/bot-channel-cloud-harness";
+import {
+  FakeIntersectionObserver,
+  drawnRowHolding,
+  seeEverythingDrawn,
+  seeRow,
+} from "@/components/bots/__tests__/bot-read-observer-test-support";
 import {
   negotiateBotSend,
   resetBotFailedRequestSupport,
@@ -225,7 +232,52 @@ const CHANNEL_READ = "bot.conversation.list";
 const THREAD_READ = "bot.thread.list";
 const CURSOR_READ = "bot.readCursor.read";
 const REPLY_TEXT = "Which way should I go?";
+const NEWER_REPLY_ID = "thread-reply-2";
+const NEWER_REPLY_TEXT = "Or the other way?";
+const NEWER_POST_ID = "post-2";
+const NEWER_POST_LINE = "Is the nightly green too?";
 const THREAD_BOX = "Reply in the thread";
+
+const THREAD_REPLY_POSITION = { messageId: THREAD_REPLY_ID, seq: 2_000 };
+const NEWER_REPLY_POSITION = { messageId: NEWER_REPLY_ID, seq: 3_000 };
+const POST_POSITION = { messageId: POST_ID, seq: 1_000 };
+const NEWER_POST_POSITION = { messageId: NEWER_POST_ID, seq: 3_000 };
+
+/** The thread's session holding its reply and a newer one. */
+function withNewerThreadReply(): ChatSessionStoreHandle {
+  return scriptedSession(THREAD_ID, [
+    botReply({
+      messageId: THREAD_REPLY_ID,
+      text: REPLY_TEXT,
+      timestamp: 2_000,
+    }),
+    botReply({
+      messageId: NEWER_REPLY_ID,
+      text: NEWER_REPLY_TEXT,
+      timestamp: 3_000,
+    }),
+  ]).handle;
+}
+
+/** The channel's session holding its post and a newer one. */
+function withNewerPost(): ChatSessionStoreHandle {
+  return scriptedSession(CHANNEL_ID, [
+    memberPost({
+      messageId: POST_ID,
+      requestId: POST_REQUEST,
+      lines: [POST_FIRST_LINE],
+      timestamp: 1_000,
+      resolvedBy: null,
+    }),
+    memberPost({
+      messageId: NEWER_POST_ID,
+      requestId: "req-post-2",
+      lines: [NEWER_POST_LINE],
+      timestamp: 3_000,
+      resolvedBy: null,
+    }),
+  ]).handle;
+}
 
 type Failure = (method: string) => Error;
 
@@ -316,6 +368,8 @@ beforeEach(() => {
   mocks.sessions[THREAD_ID] = thread;
   mocks.sessions[THREAD_SESSION_ID] = thread;
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  FakeIntersectionObserver.all = [];
+  vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
 });
 
 afterEach(() => {
@@ -328,6 +382,7 @@ afterEach(() => {
   useAuthStore.setState({ contextMetadata: null });
   mocks.client = null;
   mocks.sessions = {};
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -371,10 +426,28 @@ describe("<BotChannelView /> rows after a refusal, then a failure that recovers"
   it.each(RECOVERABLE)(
     "draws no thread replies, no chip under the post and no cursor advance after FORBIDDEN then $name",
     async ({ error, kind }) => {
+      const thread = withNewerThreadReply();
+      mocks.sessions[THREAD_ID] = thread;
+      mocks.sessions[THREAD_SESSION_ID] = thread;
+      script.readCursor = () => ({
+        cursors: {},
+        latest: { [THREAD_ID]: { messageId: THREAD_REPLY_ID, seq: 2_000 } },
+      });
       mount({ openThread: THREAD_OPEN, tiles: null });
       const panel = await screen.findByTestId("bot-thread-panel");
       await within(panel).findByText(REPLY_TEXT);
       expect(screen.getByTestId("bot-thread-line")).toBeDefined();
+      // Control: a reply the person looks at is read.
+      await seeRow(drawnRowHolding(REPLY_TEXT));
+      await waitFor(() =>
+        expect(script.advances).toEqual([
+          {
+            botId: BOT_ID,
+            conversationId: THREAD_ID,
+            ...THREAD_REPLY_POSITION,
+          },
+        ]),
+      );
       script.threadList = () =>
         Promise.reject(REFUSED("FORBIDDEN")(THREAD_READ));
       await refetchRead(queryClient, THREAD_READ);
@@ -394,19 +467,26 @@ describe("<BotChannelView /> rows after a refusal, then a failure that recovers"
       const asked = script.advances.length;
       script.readCursor = () => ({
         cursors: {},
-        latest: { [THREAD_ID]: { messageId: "thread-newer", seq: 9 } },
+        latest: { [THREAD_ID]: NEWER_REPLY_POSITION },
       });
       await act(async () => {
         await queryClient.refetchQueries({
           queryKey: hostQueryKeys.methodScope(TAB_HOST_ID, CURSOR_READ),
         });
       });
+      // The person looks at whatever the screen shows.
+      await flushObservers();
+      await seeEverythingDrawn();
       await settleCursorAdvances(queryClient);
       expect(
         script.advances
           .slice(asked)
           .filter((ask) => ask.conversationId === THREAD_ID),
       ).toEqual([]);
+      expect(
+        panel.querySelector("[data-bot-read-row]"),
+        "no thread row is drawn for the person to see behind the failure",
+      ).toBeNull();
     },
   );
 
@@ -1034,4 +1114,123 @@ describe("<BotChannelView /> a thread's controls while its box waits", () => {
       ).toBe(false);
     },
   );
+});
+
+describe("<BotChannelView /> read cursors behind a channel that failed", () => {
+  const advancesOf = (conversationId: string) =>
+    script.advances.filter((ask) => ask.conversationId === conversationId);
+
+  async function recoverChannel(): Promise<void> {
+    script.conversationList = () => Promise.resolve(CHANNEL_LIST);
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await screen.findByTestId("bot-channel");
+  }
+
+  it("does not advance the channel's cursor over a newer row while the channel's failure is drawn, and does once the channel is back", async () => {
+    mocks.sessions[CHANNEL_ID] = withNewerPost();
+    script.readCursor = () => ({
+      cursors: {},
+      latest: { [CHANNEL_ID]: POST_POSITION },
+    });
+    mount({ openThread: null, tiles: null });
+    await screen.findByText(POST_FIRST_LINE);
+    // Control: a post the person looks at is read.
+    await seeRow(drawnRowHolding(POST_FIRST_LINE));
+    await waitFor(() =>
+      expect(script.advances).toEqual([
+        { botId: BOT_ID, conversationId: CHANNEL_ID, ...POST_POSITION },
+      ]),
+    );
+    script.conversationList = () =>
+      Promise.reject(hostFailure("FORBIDDEN", CHANNEL_READ));
+    await refetchRead(queryClient, CHANNEL_READ);
+    expect(screen.getByTestId("bot-channel-error")).toBeDefined();
+
+    // A newer row arrives; the person looks at whatever the screen shows.
+    script.readCursor = () => ({
+      cursors: { [CHANNEL_ID]: POST_POSITION },
+      latest: { [CHANNEL_ID]: NEWER_POST_POSITION },
+    });
+    await act(async () => {
+      await queryClient.refetchQueries({
+        queryKey: hostQueryKeys.methodScope(TAB_HOST_ID, CURSOR_READ),
+      });
+    });
+    await flushObservers();
+    await seeEverythingDrawn();
+    await settleCursorAdvances(queryClient);
+    expect(advancesOf(CHANNEL_ID).map((ask) => ask.seq)).toEqual([
+      POST_POSITION.seq,
+    ]);
+    expect(
+      document.querySelector("[data-bot-read-row]"),
+      "no row is drawn for the person to see behind the failure",
+    ).toBeNull();
+
+    await recoverChannel();
+    await seeRow(drawnRowHolding(NEWER_POST_LINE));
+
+    await waitFor(() =>
+      expect(advancesOf(CHANNEL_ID).map((ask) => ask.seq)).toEqual([
+        POST_POSITION.seq,
+        NEWER_POST_POSITION.seq,
+      ]),
+    );
+  });
+
+  it("does not advance the open thread's cursor while the channel's failure is drawn", async () => {
+    const thread = withNewerThreadReply();
+    mocks.sessions[THREAD_ID] = thread;
+    mocks.sessions[THREAD_SESSION_ID] = thread;
+    script.readCursor = () => ({
+      cursors: {},
+      latest: { [THREAD_ID]: THREAD_REPLY_POSITION },
+    });
+    mount({ openThread: THREAD_OPEN, tiles: null });
+    const panel = await screen.findByTestId("bot-thread-panel");
+    await within(panel).findByText(REPLY_TEXT);
+    // Control: a reply the person looks at is read.
+    await seeRow(drawnRowHolding(REPLY_TEXT));
+    await waitFor(() =>
+      expect(script.advances).toEqual([
+        { botId: BOT_ID, conversationId: THREAD_ID, ...THREAD_REPLY_POSITION },
+      ]),
+    );
+    script.conversationList = () =>
+      Promise.reject(hostFailure("FORBIDDEN", CHANNEL_READ));
+    await refetchRead(queryClient, CHANNEL_READ);
+    expect(screen.getByTestId("bot-channel-error")).toBeDefined();
+
+    // A newer reply arrives; the person looks at whatever the screen shows.
+    script.readCursor = () => ({
+      cursors: { [THREAD_ID]: THREAD_REPLY_POSITION },
+      latest: { [THREAD_ID]: NEWER_REPLY_POSITION },
+    });
+    await act(async () => {
+      await queryClient.refetchQueries({
+        queryKey: hostQueryKeys.methodScope(TAB_HOST_ID, CURSOR_READ),
+      });
+    });
+    await flushObservers();
+    await seeEverythingDrawn();
+    await settleCursorAdvances(queryClient);
+    expect(script.advances.map((ask) => ask.seq)).toEqual([
+      THREAD_REPLY_POSITION.seq,
+    ]);
+    expect(
+      document.querySelector("[data-bot-read-row]"),
+      "no row is drawn for the person to see behind the failure",
+    ).toBeNull();
+
+    await recoverChannel();
+    await seeRow(drawnRowHolding(NEWER_REPLY_TEXT));
+
+    // Beside an open thread the channel is not the one on screen.
+    await waitFor(() =>
+      expect(script.advances).toEqual([
+        { botId: BOT_ID, conversationId: THREAD_ID, ...THREAD_REPLY_POSITION },
+        { botId: BOT_ID, conversationId: THREAD_ID, ...NEWER_REPLY_POSITION },
+      ]),
+    );
+  });
 });

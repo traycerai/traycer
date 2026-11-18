@@ -181,7 +181,7 @@ function carriedSettings(frame: unknown): unknown {
 
 describe("chat.subscribe 1.41 registration", () => {
   it("binds chatSubscribeV141 above the frozen 1.40", () => {
-    expect(line.latestMinor).toBe(44);
+    expect(line.latestMinor).toBe(45);
     expect(line.versions[41].contract).toBe(chatSubscribeV141);
     expect(line.versions[40].contract).toBe(chatSubscribeV140);
     expect(chatSubscribeV141.schemaVersion).toEqual(V141);

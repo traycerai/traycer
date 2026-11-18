@@ -47,6 +47,11 @@ import {
   turnsAskedFor,
 } from "@/components/bots/__tests__/bot-turn-test-support";
 import { MountedKnowingChannel } from "@/components/bots/__tests__/bot-turn-channel-harness";
+import { holdBinding } from "@/components/bots/__tests__/bot-memory-account-scripts";
+import {
+  resetMemoryAccountScripts,
+  signInAs,
+} from "@/components/bots/__tests__/bot-memory-account-test-support";
 import { MockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-stream-test-fixtures";
 import { __resetBotMemorySessionsForTesting } from "@/hooks/bots/use-bot-memory";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -101,9 +106,19 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
 }));
-vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
-  useHostStreamClientFor: () => mocks.stream,
-}));
+vi.mock("@/hooks/host/use-host-stream-client-for", async () => {
+  const { streamClientBindingModule } =
+    await import("@/components/bots/__tests__/bot-memory-account-scripts");
+  return streamClientBindingModule;
+});
+vi.mock("@/lib/host", async (importOriginal) => {
+  const { scriptedRequestContext } =
+    await import("@/components/bots/__tests__/bot-memory-account-scripts");
+  return {
+    ...(await importOriginal<typeof import("@/lib/host")>()),
+    useHostClient: () => scriptedRequestContext,
+  };
+});
 vi.mock("@/lib/host/stream-auth-revalidator", () => ({
   useStreamAuthRevalidator: () => null,
 }));
@@ -113,9 +128,11 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
   >()),
   useHostMethodSupport: () => true,
 }));
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => null,
-}));
+vi.mock("@/hooks/host/use-host-directory-entry", async () => {
+  const { MEMORY_TARGET } =
+    await import("@/components/bots/__tests__/bot-memory-account-scripts");
+  return { useHostDirectoryEntry: () => MEMORY_TARGET };
+});
 vi.mock(
   "@/components/epic-tabs/pane-visibility-context",
   async (importOriginal) => ({
@@ -331,11 +348,14 @@ beforeEach(() => {
     [],
   );
   mocks.stream = new MemoryStreamClient();
+  signInAs("account-a");
+  holdBinding(mocks.stream, "account-a");
 });
 
 afterEach(() => {
   cleanup();
   __resetBotMemorySessionsForTesting();
+  resetMemoryAccountScripts();
   mocks.sessions = {};
   mocks.client = null;
   mocks.stream = null;
@@ -560,11 +580,13 @@ describe("what the bot knows, in the rail", () => {
     render(<MountedKnowingChannel />);
     const pane = await openPane(user, MEMORY);
 
-    expect(within(pane).getByRole("meter").getAttribute("aria-valuenow")).toBe(
-      "4",
-    );
+    expect(
+      within(pane)
+        .getByRole("meter", { name: "Release Bot's memory" })
+        .getAttribute("aria-valuenow"),
+    ).toBe("4");
     expect(within(pane).getByTestId("bot-memory-meter-line").textContent).toBe(
-      "Release Bot's own memories: 3, nearly empty (300 of 8,000 characters). When it's full, adds are refused until an entry is removed.",
+      "Release Bot's memory: 3, nearly empty (300 of 8,000 characters). When it's full, adds are refused until an entry is removed.",
     );
 
     sendMemory({
@@ -573,13 +595,15 @@ describe("what the bot knows, in the rail", () => {
     });
     await waitFor(() =>
       expect(
-        within(pane).getByRole("meter").getAttribute("aria-valuenow"),
+        within(pane)
+          .getByRole("meter", { name: "Release Bot's memory" })
+          .getAttribute("aria-valuenow"),
       ).toBe("45"),
     );
     expect(
       within(pane).getByTestId("bot-memory-meter-line").textContent,
     ).toMatch(
-      /^Release Bot's own memories: 3, about half full \(3,600 of 8,000 characters\)\. /,
+      /^Release Bot's memory: 3, about half full \(3,600 of 8,000 characters\)\. /,
     );
   });
 

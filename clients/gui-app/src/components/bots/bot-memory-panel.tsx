@@ -531,7 +531,7 @@ function MemoryMeter(props: {
     <div className="mt-auto flex flex-col gap-1.5 px-4 pt-4 pb-3">
       <div
         role="meter"
-        aria-label={`${botTitle}'s own memories`}
+        aria-label={`${botTitle}'s memory`}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={percent}
@@ -547,7 +547,7 @@ function MemoryMeter(props: {
         className="text-ui-xs text-muted-foreground"
         data-testid="bot-memory-meter-line"
       >
-        {`${botTitle}'s own memories: ${count} When it's full, adds are refused until an entry is removed.`}
+        {`${botTitle}'s memory: ${count} When it's full, adds are refused until an entry is removed.`}
       </p>
     </div>
   );

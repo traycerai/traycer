@@ -25,6 +25,7 @@ import {
   readWorktreeActivitySnapshot,
 } from "@/components/settings/panels/worktrees-enrichment-persistence";
 import { worktreeActivityCacheKey } from "@/lib/persist";
+import { invalidateWorktreeChangedCaches } from "@/lib/worktree/invalidate-worktree-changed-caches";
 
 // The enrichment hook reads/writes the warm-open snapshot in localStorage on
 // every mount now - a snapshot leaked by one test would seed the next test's
@@ -1107,6 +1108,69 @@ describe("useWorktreeActivityEnrichment (live fetch → cache → overlay)", () 
         await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
       });
       expect(requests).toHaveLength(11);
+    });
+
+    it("gives an exhausted path one probe per worktree.changed frame instead of a fresh budget", async () => {
+      vi.useFakeTimers();
+      const entriesByPath = new Map<string, WorktreeHostEntryV16>([
+        ["/wt/a", enrichedEntry("/wt/a", "feat-a")],
+      ]);
+      const requests: string[] = [];
+      const fixture = createFixture(
+        entriesByPath,
+        (path) => {
+          requests.push(path);
+        },
+        null,
+        createAppQueryClient(),
+      );
+      const { result } = renderHook(
+        () =>
+          useWorktreeActivityEnrichment(fixture.client, true, HOST_ID, [
+            "/wt/a",
+          ]),
+        { wrapper: fixture.Wrapper },
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
+      });
+      for (let window = 0; window < 16; window += 1) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(15_000);
+        });
+      }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
+      });
+      expect(requests).toHaveLength(10);
+      expect(result.current.erroredPaths).toEqual(new Set(["/wt/a"]));
+
+      // A root-scope frame must not renew an exhausted budget, or a
+      // permanently unresolvable row never settles while frames keep coming.
+      for (let frame = 1; frame <= 3; frame += 1) {
+        act(() => {
+          invalidateWorktreeChangedCaches(fixture.queryClient, HOST_ID, {
+            root: true,
+            worktreePaths: new Set(),
+          });
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(WORKTREE_BATCH_FLUSH_MS);
+        });
+        expect(requests).toHaveLength(10 + frame);
+
+        for (let window = 0; window < 8; window += 1) {
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(15_000);
+          });
+        }
+        expect(requests).toHaveLength(10 + frame);
+        expect(result.current.erroredPaths).toEqual(new Set(["/wt/a"]));
+      }
     });
 
     it("re-probes swept entries after a method-scope invalidation (refresh), still in bounded chunks", async () => {

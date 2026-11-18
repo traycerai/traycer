@@ -38,6 +38,7 @@ import {
 } from "@/stores/bots/__tests__/bot-box-draft-persist-support";
 import {
   boxInput,
+  NO_BOT_REPLY,
   typeInto,
 } from "@/components/bots/__tests__/bot-box-test-support";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
@@ -125,7 +126,11 @@ function Box(props: {
         onEditResume={() => undefined}
         seed={null}
         keptDraft={null}
+        hold={null}
         quote={null}
+        reply={NO_BOT_REPLY}
+        moved={null}
+        notice={null}
         onSent={() => false}
       />
     </BotTestRunnerHost>

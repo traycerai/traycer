@@ -2472,7 +2472,7 @@ describe("NotificationsPopover", () => {
     fireEvent.click(settings);
 
     expect(navigated).toBe(true);
-    expect(useSettingsSectionStore.getState().section).toBe("notifications");
+    expect(useSettingsSectionStore.getState().section).toBe("alerts");
     await waitFor(() => {
       expect(router.state.location.search).toMatchObject({
         settingsOverlay: true,

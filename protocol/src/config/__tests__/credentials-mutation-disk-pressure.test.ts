@@ -3,7 +3,6 @@ import type { FileHandle } from "node:fs/promises";
 import {
   existsSync,
   lstatSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -11,7 +10,6 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -27,8 +25,13 @@ import {
   type StoredCredentials,
 } from "../credentials";
 import { writeJsonFileAtomic } from "../credentials-fs";
+import {
+  acquireCredentialsLock,
+  type CredentialsLockHandle,
+} from "../credentials-lock";
 import { isCredentialsReserveComplete } from "../credentials-reserve";
 import { digestCredentials, writeSidecarState } from "../credentials-wal";
+import { createCaseWorkDir, endCaseWorkDir } from "./credentials-run-root";
 
 // Reload shared-worker modules so credential writes use this file’s filesystem mock.
 vi.hoisted(() => {
@@ -51,25 +54,66 @@ type Fault = {
 
 type ReserveGateOperation = "open" | "stat";
 
-const filesystemMock = vi.hoisted(() => {
+type ReserveStatGate = {
+  path: string;
+  operation: ReserveGateOperation;
+  entered: () => void;
+  skip: number;
+  wait: Promise<void>;
+};
+
+type WriteRecord = {
+  readonly path: string;
+  readonly options: Parameters<typeof fsPromises.writeFile>[2];
+};
+
+// Everything the filesystem mock records or arms for one case. The mock
+// resolves the case from the path of each call and keeps that object for the
+// whole operation, so a completion that lands after its case ended reaches
+// that case's own, no longer read, object and no later case's.
+type CaseMock = {
+  readonly directory: string;
+  readonly writes: WriteRecord[];
+  readonly lockPath: string;
+  readonly faults: Fault[];
+  onClearPressure: (() => void) | null;
+  onReserveWrite: (() => void) | null;
+  onReserveReadClose: (() => void) | null;
+  onSpaceCheckWrite: (() => void) | null;
+  onReserveLockRelease: (() => void) | null;
+  onReserveLockBusy: (() => void) | null;
+  onMutationLockBusy: (() => void) | null;
+  reserveLockLinkAttempts: number;
+  reserveLocksInFlight: number;
+  reserveStatGate: ReserveStatGate | null;
+  reserveAllocationAttempts: number;
+  reserveExclusiveOpenAttempts: number;
+  reserveHandleStats: number;
+  reserveSyncs: number;
+  reserveCloses: number;
+  reserveReadCloses: number;
+  reserveWritesInFlight: number;
+  mkdirCalls: number;
+  takeFault(operation: Fault["operation"], path: string): Fault | null;
+};
+
+function createCaseMock(directory: string): CaseMock {
   const faults: Fault[] = [];
   return {
+    directory,
+    writes: [],
+    lockPath: join(directory, "credentials.lock"),
     faults,
-    onReserveWrite: null as (() => void) | null,
-    onReserveReadClose: null as (() => void) | null,
-    onSpaceCheckWrite: null as (() => void) | null,
-    onReserveLockRelease: null as (() => void) | null,
-    onReserveLockBusy: null as (() => void) | null,
-    onMutationLockBusy: null as (() => void) | null,
+    onClearPressure: null,
+    onReserveWrite: null,
+    onReserveReadClose: null,
+    onSpaceCheckWrite: null,
+    onReserveLockRelease: null,
+    onReserveLockBusy: null,
+    onMutationLockBusy: null,
+    reserveLockLinkAttempts: 0,
     reserveLocksInFlight: 0,
-    lockPath: "",
-    reserveStatGate: null as {
-      path: string;
-      operation: ReserveGateOperation;
-      entered: () => void;
-      skip: number;
-      wait: Promise<void>;
-    } | null,
+    reserveStatGate: null,
     reserveAllocationAttempts: 0,
     reserveExclusiveOpenAttempts: 0,
     reserveHandleStats: 0,
@@ -78,7 +122,7 @@ const filesystemMock = vi.hoisted(() => {
     reserveReadCloses: 0,
     reserveWritesInFlight: 0,
     mkdirCalls: 0,
-    takeFault(operation: Fault["operation"], path: string): Fault | null {
+    takeFault(operation, path) {
       const fault = faults.find(
         (candidate) =>
           candidate.operation === operation &&
@@ -92,19 +136,36 @@ const filesystemMock = vi.hoisted(() => {
       return fault;
     },
   };
-});
+}
+
+// Every case's mock by its work directory. A case stays registered after it
+// ends: a late call under its directory then lands in its own object.
+const caseMocks = vi.hoisted(() => ({
+  byDirectory: new Map<string, CaseMock>(),
+}));
+
+// The mock of the case under test; test bodies read and arm it.
+let filesystemMock: CaseMock;
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   const syncFs = await import("node:fs");
+  const { sep } = await import("node:path");
+  const ownerOf = (path: string): CaseMock | null => {
+    for (const [directory, mock] of caseMocks.byDirectory) {
+      if (path === directory || path.startsWith(directory + sep)) return mock;
+    }
+    return null;
+  };
   const rejectFault = (code: string): Promise<never> =>
     Promise.reject(Object.assign(new Error(`simulated ${code}`), { code }));
   const readWithReserveGate = <T>(
+    mock: CaseMock,
     path: string,
     operation: ReserveGateOperation,
     read: () => Promise<T>,
   ): Promise<T> => {
-    const gate = filesystemMock.reserveStatGate;
+    const gate = mock.reserveStatGate;
     if (gate === null || path !== gate.path || operation !== gate.operation) {
       return read();
     }
@@ -112,7 +173,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       gate.skip -= 1;
       return read();
     }
-    filesystemMock.reserveStatGate = null;
+    mock.reserveStatGate = null;
     return read().then(
       (value) => {
         gate.entered();
@@ -128,21 +189,23 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     ...actual,
     open: vi.fn((...args: Parameters<typeof actual.open>) => {
       const path = String(args[0]);
+      const mock = ownerOf(path);
+      if (mock === null) return actual.open(...args);
       const isReserve = path.includes(".reserve.");
       const isReserveRead = isReserve && args[1] !== "wx";
       if (isReserve && args[1] === "wx") {
-        filesystemMock.reserveExclusiveOpenAttempts += 1;
+        mock.reserveExclusiveOpenAttempts += 1;
       }
       const opening = isReserveRead
-        ? readWithReserveGate(path, "open", () => actual.open(...args))
+        ? readWithReserveGate(mock, path, "open", () => actual.open(...args))
         : actual.open(...args);
       return opening.then((handle) => {
         const wrapped = new Proxy(handle, {
           get(target, property) {
             if (property === "stat") {
               return (...statArgs: Parameters<FileHandle["stat"]>) => {
-                if (isReserve) filesystemMock.reserveHandleStats += 1;
-                return readWithReserveGate(path, "stat", () =>
+                if (isReserve) mock.reserveHandleStats += 1;
+                return readWithReserveGate(mock, path, "stat", () =>
                   target.stat(...statArgs),
                 );
               };
@@ -150,21 +213,21 @@ vi.mock("node:fs/promises", async (importOriginal) => {
             if (property === "writeFile") {
               return (...writeArgs: Parameters<FileHandle["writeFile"]>) => {
                 if (!isReserve) return target.writeFile(...writeArgs);
-                filesystemMock.reserveAllocationAttempts += 1;
-                filesystemMock.reserveWritesInFlight += 1;
-                const fault = filesystemMock.takeFault("writeFile", path);
+                mock.reserveAllocationAttempts += 1;
+                mock.reserveWritesInFlight += 1;
+                const fault = mock.takeFault("writeFile", path);
                 const writing =
                   fault === null
                     ? target.writeFile(...writeArgs)
                     : rejectFault(fault.code);
                 return writing.then(
                   (value) => {
-                    filesystemMock.reserveWritesInFlight -= 1;
-                    filesystemMock.onReserveWrite?.();
+                    mock.reserveWritesInFlight -= 1;
+                    mock.onReserveWrite?.();
                     return value;
                   },
                   (error: unknown) => {
-                    filesystemMock.reserveWritesInFlight -= 1;
+                    mock.reserveWritesInFlight -= 1;
                     throw error;
                   },
                 );
@@ -172,21 +235,19 @@ vi.mock("node:fs/promises", async (importOriginal) => {
             }
             if (property === "sync") {
               return () => {
-                if (isReserve) filesystemMock.reserveSyncs += 1;
-                const fault = isReserve
-                  ? filesystemMock.takeFault("sync", path)
-                  : null;
+                if (isReserve) mock.reserveSyncs += 1;
+                const fault = isReserve ? mock.takeFault("sync", path) : null;
                 return fault === null ? target.sync() : rejectFault(fault.code);
               };
             }
             if (property === "close") {
               return () => {
-                if (isReserve) filesystemMock.reserveCloses += 1;
+                if (isReserve) mock.reserveCloses += 1;
                 const closing = target.close();
                 if (!isReserveRead) return closing;
                 return closing.then((value) => {
-                  filesystemMock.reserveReadCloses += 1;
-                  filesystemMock.onReserveReadClose?.();
+                  mock.reserveReadCloses += 1;
+                  mock.onReserveReadClose?.();
                   return value;
                 });
               };
@@ -199,26 +260,32 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       });
     }),
     mkdir: vi.fn((...args: Parameters<typeof actual.mkdir>) => {
-      filesystemMock.mkdirCalls += 1;
+      const mock = ownerOf(String(args[0]));
+      if (mock !== null) mock.mkdirCalls += 1;
       return actual.mkdir(...args);
     }),
     writeFile: vi.fn((...args: Parameters<typeof actual.writeFile>) => {
       const path = String(args[0]);
+      const mock = ownerOf(path);
+      if (mock === null) return actual.writeFile(...args);
+      mock.writes.push({ path, options: args[2] });
       if (path.includes(".space-check.")) {
-        filesystemMock.onSpaceCheckWrite?.();
+        mock.onSpaceCheckWrite?.();
       }
-      const fault = filesystemMock.takeFault("writeFile", path);
+      const fault = mock.takeFault("writeFile", path);
       if (fault !== null) return rejectFault(fault.code);
       return actual.writeFile(...args);
     }),
     link: vi.fn((...args: Parameters<typeof actual.link>) => {
       const destination = String(args[1]);
-      const fault = filesystemMock.takeFault("link", destination);
+      const mock = ownerOf(destination);
+      if (mock === null) return actual.link(...args);
+      const fault = mock.takeFault("link", destination);
       if (fault !== null) return rejectFault(fault.code);
       const source = String(args[0]);
       let isReserveLock = false;
       let isMutationLock = false;
-      if (destination === filesystemMock.lockPath) {
+      if (destination === mock.lockPath) {
         try {
           const content = JSON.parse(syncFs.readFileSync(source, "utf8")) as {
             reason?: unknown;
@@ -229,10 +296,11 @@ vi.mock("node:fs/promises", async (importOriginal) => {
           isReserveLock = false;
         }
       }
+      if (isReserveLock) mock.reserveLockLinkAttempts += 1;
       return actual
         .link(...args)
         .then((value) => {
-          if (isReserveLock) filesystemMock.reserveLocksInFlight += 1;
+          if (isReserveLock) mock.reserveLocksInFlight += 1;
           return value;
         })
         .catch((error: unknown) => {
@@ -242,16 +310,18 @@ vi.mock("node:fs/promises", async (importOriginal) => {
             "code" in error &&
             error.code === "EEXIST"
           ) {
-            if (isReserveLock) filesystemMock.onReserveLockBusy?.();
-            if (isMutationLock) filesystemMock.onMutationLockBusy?.();
+            if (isReserveLock) mock.onReserveLockBusy?.();
+            if (isMutationLock) mock.onMutationLockBusy?.();
           }
           throw error;
         });
     }),
     unlink: vi.fn((...args: Parameters<typeof actual.unlink>) => {
       const path = String(args[0]);
+      const mock = ownerOf(path);
+      if (mock === null) return actual.unlink(...args);
       let isReserveLock = false;
-      if (path === filesystemMock.lockPath) {
+      if (path === mock.lockPath) {
         try {
           const content = JSON.parse(syncFs.readFileSync(path, "utf8")) as {
             reason?: unknown;
@@ -263,18 +333,22 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       }
       return actual.unlink(...args).then((value) => {
         if (isReserveLock) {
-          filesystemMock.reserveLocksInFlight -= 1;
-          filesystemMock.onReserveLockRelease?.();
+          mock.reserveLocksInFlight -= 1;
+          mock.onReserveLockRelease?.();
         }
         return value;
       });
     }),
     rename: vi.fn((...args: Parameters<typeof actual.rename>) => {
-      const fault = filesystemMock.takeFault("rename", String(args[1]));
+      const mock = ownerOf(String(args[1]));
+      if (mock === null) return actual.rename(...args);
+      const fault = mock.takeFault("rename", String(args[1]));
       return fault === null ? actual.rename(...args) : rejectFault(fault.code);
     }),
     readFile: vi.fn((...args: Parameters<typeof actual.readFile>) => {
-      const fault = filesystemMock.takeFault("readFile", String(args[0]));
+      const mock = ownerOf(String(args[0]));
+      if (mock === null) return actual.readFile(...args);
+      const fault = mock.takeFault("readFile", String(args[0]));
       return fault === null
         ? actual.readFile(...args)
         : rejectFault(fault.code);
@@ -291,6 +365,41 @@ function fail(
   filesystemMock.faults.push({ operation, fragment, code, remaining: count });
 }
 
+const zeroed = {
+  reserveLocksInFlight: 0,
+  reserveAllocationAttempts: 0,
+  reserveExclusiveOpenAttempts: 0,
+  reserveHandleStats: 0,
+  reserveSyncs: 0,
+  reserveCloses: 0,
+  reserveReadCloses: 0,
+  reserveWritesInFlight: 0,
+  mkdirCalls: 0,
+};
+
+function reserveCounters(mock: typeof zeroed): typeof zeroed {
+  return {
+    reserveLocksInFlight: mock.reserveLocksInFlight,
+    reserveAllocationAttempts: mock.reserveAllocationAttempts,
+    reserveExclusiveOpenAttempts: mock.reserveExclusiveOpenAttempts,
+    reserveHandleStats: mock.reserveHandleStats,
+    reserveSyncs: mock.reserveSyncs,
+    reserveCloses: mock.reserveCloses,
+    reserveReadCloses: mock.reserveReadCloses,
+    reserveWritesInFlight: mock.reserveWritesInFlight,
+    mkdirCalls: mock.mkdirCalls,
+  };
+}
+
+function isFlushWrite(options: WriteRecord["options"]): boolean {
+  return (
+    options != null &&
+    typeof options === "object" &&
+    "flush" in options &&
+    options.flush === true
+  );
+}
+
 // The lock wait the desktop and CLI stores pass in production.
 const PRODUCTION_LOCK_WAIT_MS = 12_000;
 
@@ -300,27 +409,33 @@ describe("credentials store disk pressure", () => {
   let metaPath: string;
   let lockPath: string;
   const stores: CredentialsMutationStore[] = [];
-  const refreshCalls: string[] = [];
-  const pressures: string[] = [];
-  let onClearPressure: (() => void) | null = null;
+  const extraDirectories: string[] = [];
+  let refreshCalls: string[];
+  let pressures: string[];
+  let refreshOk: RefreshFn;
+  let restoreTimerSpies: (() => void) | null = null;
+  let testHolder: CredentialsLockHandle | null = null;
 
   function makeStore(refresh: RefreshFn): CredentialsMutationStore {
-    return makeStoreWaiting(refresh, 500);
+    return makeStoreWaiting(refresh, 500, 10);
   }
 
   function makeStoreWaiting(
     refresh: RefreshFn,
     lockWaitMs: number,
+    lockPollIntervalMs: number,
   ): CredentialsMutationStore {
+    const casePressures = pressures;
+    const caseMock = filesystemMock;
     const store = createCredentialsMutationStore({
       paths: { credentialsPath, metaPath, lockPath },
       onDiskPressure: (pressure) => {
-        pressures.push(pressure);
-        if (pressure === "clear") onClearPressure?.();
+        casePressures.push(pressure);
+        if (pressure === "clear") caseMock.onClearPressure?.();
       },
       refresh,
       lockWaitMs,
-      lockPollIntervalMs: 10,
+      lockPollIntervalMs,
       continuationRetryMs: 60_000,
     });
     stores.push(store);
@@ -328,14 +443,16 @@ describe("credentials store disk pressure", () => {
   }
 
   async function fillReserve(): Promise<void> {
+    const mock = filesystemMock;
+    const caseDirectory = workDir;
     const ready = (): boolean =>
-      filesystemMock.reserveLocksInFlight === 0 &&
-      filesystemMock.reserveWritesInFlight === 0 &&
+      mock.reserveLocksInFlight === 0 &&
+      mock.reserveWritesInFlight === 0 &&
       Array.from({ length: 16 }, (_, index) => {
         try {
           return (
-            statSync(join(workDir, `credentials.reserve.${index}`)).size ===
-            65_536
+            statSync(join(caseDirectory, `credentials.reserve.${index}`))
+              .size === 65_536
           );
         } catch {
           return false;
@@ -343,16 +460,16 @@ describe("credentials store disk pressure", () => {
       }).every(Boolean);
     if (ready()) return;
     await new Promise<void>((resolve) => {
-      filesystemMock.onReserveLockRelease = () => {
+      mock.onReserveLockRelease = () => {
         if (ready()) {
-          filesystemMock.onReserveLockRelease = null;
+          mock.onReserveLockRelease = null;
           resolve();
         }
       };
-      filesystemMock.onReserveWrite = () => {
+      mock.onReserveWrite = () => {
         if (ready()) {
-          filesystemMock.onReserveWrite = null;
-          filesystemMock.onReserveLockRelease = null;
+          mock.onReserveWrite = null;
+          mock.onReserveLockRelease = null;
           resolve();
         }
       };
@@ -360,13 +477,14 @@ describe("credentials store disk pressure", () => {
   }
 
   function waitForReserveReadCloses(expected: number): Promise<void> {
-    if (filesystemMock.reserveReadCloses >= expected) {
+    const mock = filesystemMock;
+    if (mock.reserveReadCloses >= expected) {
       return Promise.resolve();
     }
     return new Promise<void>((resolve) => {
-      filesystemMock.onReserveReadClose = () => {
-        if (filesystemMock.reserveReadCloses >= expected) {
-          filesystemMock.onReserveReadClose = null;
+      mock.onReserveReadClose = () => {
+        if (mock.reserveReadCloses >= expected) {
+          mock.onReserveReadClose = null;
           resolve();
         }
       };
@@ -381,15 +499,6 @@ describe("credentials store disk pressure", () => {
       setImmediate(resolve);
     });
   }
-
-  const refreshOk: RefreshFn = async ({ token }) => {
-    refreshCalls.push(token);
-    return {
-      kind: "refreshed",
-      token: `${token}-new`,
-      refreshToken: `${token}-refresh-new`,
-    };
-  };
 
   async function seed(store: CredentialsMutationStore): Promise<void> {
     expect((await store.signIn(CREDS, false, null)).outcome).toBe("applied");
@@ -407,50 +516,44 @@ describe("credentials store disk pressure", () => {
     });
   }
 
+  function beginCase(directory: string): CaseMock {
+    const mock = createCaseMock(directory);
+    caseMocks.byDirectory.set(directory, mock);
+    filesystemMock = mock;
+    const calls: string[] = [];
+    refreshCalls = calls;
+    pressures = [];
+    refreshOk = async ({ token }) => {
+      calls.push(token);
+      return {
+        kind: "refreshed",
+        token: `${token}-new`,
+        refreshToken: `${token}-refresh-new`,
+      };
+    };
+    return mock;
+  }
+
   beforeEach(() => {
-    workDir = mkdtempSync(join(tmpdir(), "traycer-cred-pressure-"));
+    workDir = createCaseWorkDir("traycer-cred-pressure-");
     credentialsPath = join(workDir, "credentials");
     metaPath = join(workDir, "credentials.meta.json");
     lockPath = join(workDir, "credentials.lock");
-    filesystemMock.lockPath = lockPath;
-    filesystemMock.faults.length = 0;
-    filesystemMock.onReserveWrite = null;
-    filesystemMock.onReserveReadClose = null;
-    filesystemMock.onSpaceCheckWrite = null;
-    filesystemMock.onReserveLockRelease = null;
-    filesystemMock.onReserveLockBusy = null;
-    filesystemMock.onMutationLockBusy = null;
-    filesystemMock.reserveStatGate = null;
-    filesystemMock.reserveLocksInFlight = 0;
-    filesystemMock.reserveWritesInFlight = 0;
-    filesystemMock.reserveAllocationAttempts = 0;
-    filesystemMock.reserveExclusiveOpenAttempts = 0;
-    filesystemMock.reserveHandleStats = 0;
-    filesystemMock.reserveSyncs = 0;
-    filesystemMock.reserveCloses = 0;
-    filesystemMock.reserveReadCloses = 0;
-    filesystemMock.mkdirCalls = 0;
+    beginCase(workDir);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const store of stores) store.dispose();
     stores.length = 0;
-    filesystemMock.faults.length = 0;
-    refreshCalls.length = 0;
-    pressures.length = 0;
-    onClearPressure = null;
-    filesystemMock.onReserveWrite = null;
-    filesystemMock.onReserveReadClose = null;
-    filesystemMock.onSpaceCheckWrite = null;
-    filesystemMock.onReserveLockRelease = null;
-    filesystemMock.onReserveLockBusy = null;
-    filesystemMock.onMutationLockBusy = null;
-    filesystemMock.reserveStatGate = null;
-    filesystemMock.reserveLocksInFlight = 0;
-    filesystemMock.reserveWritesInFlight = 0;
+    restoreTimerSpies?.();
+    restoreTimerSpies = null;
+    await testHolder?.release();
+    testHolder = null;
     vi.useRealTimers();
     vi.clearAllMocks();
-    rmSync(workDir, { recursive: true, force: true });
+    endCaseWorkDir(workDir);
+    for (const directory of extraDirectories) endCaseWorkDir(directory);
+    extraDirectories.length = 0;
   });
 
   it("creates private reserve files when the store starts", async () => {
@@ -479,14 +582,13 @@ describe("credentials store disk pressure", () => {
       );
     }
     const scanFinished = settleReserveScan(16);
-    const writeSpy = vi.mocked(fsPromises.writeFile);
-    writeSpy.mockClear();
+    filesystemMock.writes.length = 0;
 
     makeStore(refreshOk);
     await scanFinished;
 
     expect(filesystemMock.mkdirCalls).toBe(0);
-    expect(writeSpy).not.toHaveBeenCalled();
+    expect(filesystemMock.writes).toHaveLength(0);
     expect(filesystemMock.reserveAllocationAttempts).toBe(0);
     expect(filesystemMock.reserveExclusiveOpenAttempts).toBe(0);
   });
@@ -505,8 +607,7 @@ describe("credentials store disk pressure", () => {
     const reserveWrite = new Promise<void>((resolve) => {
       filesystemMock.onReserveWrite = resolve;
     });
-    const writeSpy = vi.mocked(fsPromises.writeFile);
-    writeSpy.mockClear();
+    filesystemMock.writes.length = 0;
 
     makeStore(refreshOk);
     await reserveWrite;
@@ -514,13 +615,14 @@ describe("credentials store disk pressure", () => {
 
     expect(statSync(join(workDir, "credentials.reserve.7")).size).toBe(65_536);
     expect(
-      writeSpy.mock.calls.filter((call) =>
-        String(call[0]).includes(".space-check."),
+      filesystemMock.writes.filter((write) =>
+        write.path.includes(".space-check."),
       ).length,
     ).toBe(1);
     expect(filesystemMock.reserveAllocationAttempts).toBe(1);
     expect(filesystemMock.reserveExclusiveOpenAttempts).toBe(2);
-    expect(filesystemMock.reserveHandleStats).toBe(17);
+    // Two scans of 16 pieces, plus the read inside the replacement.
+    expect(filesystemMock.reserveHandleStats).toBe(33);
   });
 
   it("cleans up a partial reserve piece when sync fails without failing sign-in", async () => {
@@ -541,7 +643,7 @@ describe("credentials store disk pressure", () => {
     await fillReserve();
   });
 
-  it("does not replace a full file installed after the reserve scan", async () => {
+  it("does not replace a full file installed after the reserve scan under the lock", async () => {
     for (let index = 0; index < 16; index += 1) {
       writeFileSync(
         join(workDir, `credentials.reserve.${index}`),
@@ -562,7 +664,8 @@ describe("credentials store disk pressure", () => {
       path: reservePath,
       operation: "stat",
       entered: statEntered,
-      skip: 0,
+      // The first scan runs before the lock; the second decides.
+      skip: 1,
       wait: statGate,
     };
     const reserveLockReleased = new Promise<void>((resolve) => {
@@ -578,11 +681,11 @@ describe("credentials store disk pressure", () => {
     expect(readFileSync(reservePath)).toEqual(Buffer.alloc(65_536, 0x71));
     expect(filesystemMock.reserveAllocationAttempts).toBe(0);
     expect(filesystemMock.reserveExclusiveOpenAttempts).toBe(1);
-    expect(filesystemMock.reserveHandleStats).toBe(17);
+    expect(filesystemMock.reserveHandleStats).toBe(33);
   });
 
   it.skipIf(process.platform === "win32")(
-    "does not follow a symlink installed after the reserve scan",
+    "does not follow a symlink installed after the reserve scan under the lock",
     async () => {
       for (let index = 0; index < 16; index += 1) {
         writeFileSync(
@@ -608,7 +711,8 @@ describe("credentials store disk pressure", () => {
         path: reservePath,
         operation: "stat",
         entered: statEntered,
-        skip: 0,
+        // The first scan runs before the lock; the second decides.
+        skip: 1,
         wait: statGate,
       };
       const reserveLockReleased = new Promise<void>((resolve) => {
@@ -773,6 +877,188 @@ describe("credentials store disk pressure", () => {
     );
   });
 
+  // Each call polls at an interval no other store uses, so the timer it
+  // identifies can only be this refill's. Stays above MIN_POLL_MS (25), which
+  // the lock code would otherwise raise it to.
+  let nextRefillPollMs = 40;
+
+  // Leaves the store's refill after a clean save with its scan done, the lock
+  // held by another holder, and the refill asleep between two lock attempts.
+  // `pollTimer` is that sleep's timer: the only waiter at that point is the
+  // refill. `clearedTimers` lists every handle passed to clearTimeout.
+  async function refillWaitsForHeldLock(): Promise<{
+    store: CredentialsMutationStore;
+    holder: CredentialsLockHandle;
+    pollTimer: unknown;
+    clearedTimers: unknown[];
+  }> {
+    const pollMs = nextRefillPollMs;
+    nextRefillPollMs += 1;
+    const store = makeStoreWaiting(refreshOk, 500, pollMs);
+    await seed(store);
+    rmSync(join(workDir, "credentials.reserve.15"));
+
+    let releaseScanRead: () => void = () => {};
+    let scanReadEntered: () => void = () => {};
+    const scanReadIsHeld = new Promise<void>((resolve) => {
+      scanReadEntered = resolve;
+    });
+    filesystemMock.reserveStatGate = {
+      path: join(workDir, "credentials.reserve.15"),
+      operation: "open",
+      entered: scanReadEntered,
+      skip: 0,
+      wait: new Promise<void>((resolve) => {
+        releaseScanRead = resolve;
+      }),
+    };
+    let firstBusy: () => void = () => {};
+    const reserveFillContended = new Promise<void>((resolve) => {
+      firstBusy = resolve;
+    });
+    filesystemMock.onReserveLockBusy = firstBusy;
+
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    const clearedTimers: unknown[] = [];
+    let pollTimer: unknown = null;
+    let pollSleepArmed: () => void = () => {};
+    const pollSleepIsArmed = new Promise<void>((resolve) => {
+      pollSleepArmed = resolve;
+    });
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((...args: Parameters<typeof setTimeout>) => {
+        const handle = realSetTimeout(...args);
+        if (args[1] === pollMs && pollTimer === null) {
+          pollTimer = handle;
+          pollSleepArmed();
+        }
+        return handle;
+      });
+    const clearTimeoutSpy = vi
+      .spyOn(globalThis, "clearTimeout")
+      .mockImplementation((handle: Parameters<typeof clearTimeout>[0]) => {
+        clearedTimers.push(handle);
+        realClearTimeout(handle);
+      });
+    restoreTimerSpies = () => {
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+    };
+
+    expect(
+      (await store.signIn({ ...CREDS, token: "second-token" }, false, null))
+        .outcome,
+    ).toBe("applied");
+    await scanReadIsHeld;
+    const held = await acquireCredentialsLock({
+      lockPath,
+      reason: "test holder",
+      waitMs: 0,
+      pollIntervalMs: 25,
+      signal: null,
+    });
+    if (!held.acquired) throw new Error("the test holder must get the lock");
+    testHolder = held.handle;
+    releaseScanRead();
+    await reserveFillContended;
+    await pollSleepIsArmed;
+    return { store, holder: held.handle, pollTimer, clearedTimers };
+  }
+
+  it("a refill that found the lock held happens once the lock is free", async () => {
+    const { holder } = await refillWaitsForHeldLock();
+    await holder.release();
+    await fillReserve();
+
+    expect(await isCredentialsReserveComplete(credentialsPath)).toBe(true);
+  });
+
+  it("a refill that waited fills the pieces the holder consumed while it waited", async () => {
+    const { holder } = await refillWaitsForHeldLock();
+    rmSync(join(workDir, "credentials.reserve.0"));
+    rmSync(join(workDir, "credentials.reserve.1"));
+    await holder.release();
+    await fillReserve();
+
+    expect(await isCredentialsReserveComplete(credentialsPath)).toBe(true);
+  });
+
+  it("a refill that waited does no probe write and no allocation when the reserve was filled meanwhile", async () => {
+    const { holder } = await refillWaitsForHeldLock();
+    writeFileSync(
+      join(workDir, "credentials.reserve.15"),
+      Buffer.alloc(65_536, 0x5a),
+      { mode: 0o600 },
+    );
+    const isProbeWrite = (record: WriteRecord): boolean =>
+      record.path.includes("credentials.space-check.");
+    const probesBeforeRelease =
+      filesystemMock.writes.filter(isProbeWrite).length;
+    const allocationsBeforeRelease = filesystemMock.reserveAllocationAttempts;
+    const refillFinished = new Promise<void>((resolve) => {
+      filesystemMock.onReserveLockRelease = resolve;
+    });
+    await holder.release();
+    await refillFinished;
+
+    expect(filesystemMock.writes.filter(isProbeWrite)).toHaveLength(
+      probesBeforeRelease,
+    );
+    expect(filesystemMock.reserveAllocationAttempts).toBe(
+      allocationsBeforeRelease,
+    );
+  });
+
+  it("a store's own write ends the wait of its refill, and that write's end refills", async () => {
+    const { store, holder, pollTimer, clearedTimers } =
+      await refillWaitsForHeldLock();
+    const reserveAttemptsAtWriteStart = filesystemMock.reserveLockLinkAttempts;
+    let writeFoundLockHeld: () => void = () => {};
+    const writeIsWaiting = new Promise<void>((resolve) => {
+      writeFoundLockHeld = resolve;
+    });
+    filesystemMock.onMutationLockBusy = writeFoundLockHeld;
+    const saving = store.signIn(
+      { ...CREDS, token: "third-token" },
+      false,
+      null,
+    );
+    // The sleep also clears its own timer when it fires, so only a check made
+    // before any turn passes shows that the write ended it.
+    expect(clearedTimers).toContain(pollTimer);
+    await writeIsWaiting;
+
+    expect(filesystemMock.reserveLockLinkAttempts).toBe(
+      reserveAttemptsAtWriteStart,
+    );
+    await holder.release();
+    expect((await saving).outcome).toBe("applied");
+    await fillReserve();
+    expect(await isCredentialsReserveComplete(credentialsPath)).toBe(true);
+  });
+
+  it("a store disposed while its refill waits for the lock allocates nothing and leaves no poll behind", async () => {
+    const { store, holder, pollTimer, clearedTimers } =
+      await refillWaitsForHeldLock();
+    const reserveAttemptsAtDispose = filesystemMock.reserveLockLinkAttempts;
+    const allocationsAtDispose = filesystemMock.reserveAllocationAttempts;
+    store.dispose();
+
+    expect(clearedTimers).toContain(pollTimer);
+    await holder.release();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(filesystemMock.reserveLockLinkAttempts).toBe(
+      reserveAttemptsAtDispose,
+    );
+    expect(filesystemMock.reserveAllocationAttempts).toBe(allocationsAtDispose);
+    expect(existsSync(join(workDir, "credentials.reserve.15"))).toBe(false);
+  });
+
   it("stops a same-store fill after an allocation stat held across sign-in", async () => {
     for (let index = 0; index < 16; index += 1) {
       writeFileSync(
@@ -799,7 +1085,7 @@ describe("credentials store disk pressure", () => {
     const mutationIsWaiting = new Promise<void>((resolve) => {
       filesystemMock.onMutationLockBusy = resolve;
     });
-    const store = makeStoreWaiting(refreshOk, PRODUCTION_LOCK_WAIT_MS);
+    const store = makeStoreWaiting(refreshOk, PRODUCTION_LOCK_WAIT_MS, 10);
     await statIsHeld;
     const signingIn = store.signIn(CREDS, false, null);
     await mutationIsWaiting;
@@ -1002,8 +1288,7 @@ describe("credentials store disk pressure", () => {
     await startupScan;
     expect((await store.signIn(CREDS, false, null)).outcome).toBe("applied");
     await waitForReserveReadCloses(32);
-    const writeSpy = vi.mocked(fsPromises.writeFile);
-    writeSpy.mockClear();
+    filesystemMock.writes.length = 0;
 
     const result = await rotate(store);
     filesystemMock.mkdirCalls = 0;
@@ -1012,8 +1297,8 @@ describe("credentials store disk pressure", () => {
     expect(filesystemMock.mkdirCalls).toBe(0);
     expect(result.outcome).toBe("applied");
     expect(
-      writeSpy.mock.calls.filter((call) =>
-        String(call[0]).includes(".space-check."),
+      filesystemMock.writes.filter((write) =>
+        write.path.includes(".space-check."),
       ).length,
     ).toBe(1);
     expect(filesystemMock.reserveAllocationAttempts).toBe(0);
@@ -1040,9 +1325,9 @@ describe("credentials store disk pressure", () => {
       await spendGate;
       return refreshOk(args);
     };
-    const storeA = makeStoreWaiting(heldRefresh, PRODUCTION_LOCK_WAIT_MS);
+    const storeA = makeStoreWaiting(heldRefresh, PRODUCTION_LOCK_WAIT_MS, 10);
     await seed(storeA);
-    const storeB = makeStoreWaiting(heldRefresh, PRODUCTION_LOCK_WAIT_MS);
+    const storeB = makeStoreWaiting(heldRefresh, PRODUCTION_LOCK_WAIT_MS, 10);
     fail("writeFile", ".space-check.", "ENOSPC", 2);
 
     const winning = rotate(storeA);
@@ -1113,7 +1398,7 @@ describe("credentials store disk pressure", () => {
     const store = makeStore(refreshOk);
     await seed(store);
     const clearEvent = new Promise<void>((resolve) => {
-      onClearPressure = resolve;
+      filesystemMock.onClearPressure = resolve;
     });
     fail("writeFile", "credentials.meta.json", "ENOSPC", 17);
     const first = await rotate(store);
@@ -1127,20 +1412,157 @@ describe("credentials store disk pressure", () => {
     expect(pressures).toEqual(["low", "clear"]);
   });
 
-  it("passes flush:true through both atomic writer seams", async () => {
+  it("completes a finished case's held rotate into its own state, not the next case's", async () => {
+    const first = filesystemMock;
+    const firstPressures = pressures;
+    const refreshHeld = Promise.withResolvers<void>();
+    const refreshRelease = Promise.withResolvers<void>();
+    const store = makeStore(async ({ token }) => {
+      refreshHeld.resolve();
+      await refreshRelease.promise;
+      return {
+        kind: "refreshed",
+        token: `${token}-new`,
+        refreshToken: `${token}-refresh-new`,
+      };
+    });
+    await seed(store);
+    const rotating = rotate(store);
+    await refreshHeld.promise;
+    store.dispose();
+    endCaseWorkDir(workDir);
+
+    const secondDirectory = createCaseWorkDir("traycer-cred-pressure-");
+    extraDirectories.push(secondDirectory);
+    const second = beginCase(secondDirectory);
+    const secondPressures = pressures;
+    fail("writeFile", "credentials.meta.json", "ENOSPC", 1);
+    let secondCallbacks = 0;
+    const secondCallback = (): void => {
+      secondCallbacks += 1;
+    };
+    second.onReserveWrite = secondCallback;
+    second.onSpaceCheckWrite = secondCallback;
+    second.onReserveLockRelease = secondCallback;
+    second.onReserveReadClose = secondCallback;
+
+    refreshRelease.resolve();
+    const result = await rotating;
+
+    expect(reserveCounters(second)).toEqual(zeroed);
+    expect(second.faults.map((fault) => fault.remaining)).toEqual([1]);
+    expect(secondCallbacks).toBe(0);
+    expect(secondPressures).toEqual([]);
+    expect(result.outcome).toBe("applied");
+    expect(result.diskPressure).toBe("clear");
+    expect(firstPressures).toEqual(["clear"]);
+    expect(first.mkdirCalls).toBeGreaterThan(0);
+  });
+
+  it("completes a finished case's held reserve read into its own state, not the next case's", async () => {
+    const first = filesystemMock;
+    writeFileSync(
+      join(workDir, "credentials.reserve.0"),
+      Buffer.alloc(65_536, 0x5a),
+      { mode: 0o600 },
+    );
+    const readHeld = Promise.withResolvers<void>();
+    const readRelease = Promise.withResolvers<void>();
+    first.reserveStatGate = {
+      path: join(workDir, "credentials.reserve.0"),
+      operation: "open",
+      entered: readHeld.resolve,
+      skip: 0,
+      wait: readRelease.promise,
+    };
+    const firstClosed = Promise.withResolvers<void>();
+    first.onReserveReadClose = firstClosed.resolve;
+    const store = makeStore(refreshOk);
+    await readHeld.promise;
+    store.dispose();
+    endCaseWorkDir(workDir);
+
+    const secondDirectory = createCaseWorkDir("traycer-cred-pressure-");
+    extraDirectories.push(secondDirectory);
+    const second = beginCase(secondDirectory);
+    fail("sync", "credentials.reserve.", "EIO", 1);
+    let secondCallbacks = 0;
+    const secondClosed = Promise.withResolvers<void>();
+    second.onReserveReadClose = () => {
+      secondCallbacks += 1;
+      secondClosed.resolve();
+    };
+
+    readRelease.resolve();
+    await Promise.race([firstClosed.promise, secondClosed.promise]);
+
+    expect(reserveCounters(second)).toEqual(zeroed);
+    expect(second.faults.map((fault) => fault.remaining)).toEqual([1]);
+    expect(secondCallbacks).toBe(0);
+    expect(reserveCounters(first)).toEqual({
+      ...zeroed,
+      reserveHandleStats: 1,
+      reserveCloses: 1,
+      reserveReadCloses: 1,
+    });
+  });
+
+  it("keeps a finished case's late writes out of the next case's write history", async () => {
+    const first = filesystemMock;
+    const refreshHeld = Promise.withResolvers<void>();
+    const refreshRelease = Promise.withResolvers<void>();
+    const store = makeStore(async ({ token }) => {
+      refreshHeld.resolve();
+      await refreshRelease.promise;
+      return {
+        kind: "refreshed",
+        token: `${token}-new`,
+        refreshToken: `${token}-refresh-new`,
+      };
+    });
+    await seed(store);
+    const rotating = rotate(store);
+    await refreshHeld.promise;
+    store.dispose();
+    endCaseWorkDir(workDir);
+    const writesBeforeRelease = first.writes.length;
+
+    const secondDirectory = createCaseWorkDir("traycer-cred-pressure-");
+    extraDirectories.push(secondDirectory);
+    const second = beginCase(secondDirectory);
     const writeSpy = vi.mocked(fsPromises.writeFile);
+    writeSpy.mockClear();
+
+    const thirdDirectory = createCaseWorkDir("traycer-cred-pressure-");
+    extraDirectories.push(thirdDirectory);
+    // Stands in for an earlier case's leftover job landing during this case.
+    const third = createCaseMock(thirdDirectory);
+    caseMocks.byDirectory.set(thirdDirectory, third);
+    const thirdPath = join(thirdDirectory, "leftover");
+    await fsPromises.writeFile(thirdPath, "leftover");
+
+    refreshRelease.resolve();
+    const result = await rotating;
+
+    const lateWrites = first.writes.slice(writesBeforeRelease);
+    expect(result.outcome).toBe("applied");
+    expect(lateWrites.some((write) => isFlushWrite(write.options))).toBe(true);
+    expect(writeSpy.mock.calls.map((call) => String(call[0]))).toEqual(
+      expect.arrayContaining([
+        thirdPath,
+        ...lateWrites.map((write) => write.path),
+      ]),
+    );
+    expect(third.writes.map((write) => write.path)).toEqual([thirdPath]);
+    expect(second.writes).toHaveLength(0);
+  });
+
+  it("passes flush:true through both atomic writer seams", async () => {
     await writeCredentialsFile(join(workDir, "credentials"), CREDS, 0);
     await writeJsonFileAtomic(join(workDir, "state.json"), { ok: true }, 0o600);
 
-    const options = writeSpy.mock.calls.map((call) => call[2]);
     expect(
-      options.filter(
-        (option) =>
-          option != null &&
-          typeof option === "object" &&
-          "flush" in option &&
-          option.flush === true,
-      ),
+      filesystemMock.writes.filter((write) => isFlushWrite(write.options)),
     ).toHaveLength(2);
   });
 });

@@ -6,6 +6,7 @@ import type {
   BotQuestion,
   BotQuestionAnswerSet,
   BotSurfaceReference,
+  BotFeedbackDraftProjection,
   ConversationRequest,
 } from "@traycer/protocol/persistence/epic/messages";
 import type {
@@ -845,10 +846,12 @@ export interface ChatMessage {
    * client. Absent on every other row.
    */
   surface?: BotSurfaceReference;
+  feedbackDraft?: BotFeedbackDraftProjection;
   /**
-   * The member's post a bot's direct reply answers, by its message id (Tracy
-   * Bots, reply mode `direct`), on the bot's row in its channel. Absent on
-   * every other row.
+   * The message a row answers, by its message id: on a bot's row, the
+   * member's post its direct reply answers (Tracy Bots, reply mode
+   * `direct`); on a member's row, the message they chose to reply to (T166).
+   * Absent on every other row.
    */
   repliesTo?: string;
   /**

@@ -11,7 +11,7 @@
  * runs the real sandbox reads and create over a scripted control plane.
  * The three views and the bot's session view are replaced by stubs
  * that expose their props, so what the surface PASSES them is what is
- * asserted. The tab strip's Activity count reads the real
+ * asserted. The Activity rows and compact-header count use the real
  * `useBotActiveTasks` over the real agent-activity store and the real
  * notification-indicator hooks (the host answers `indicatorState`).
  */
@@ -64,7 +64,16 @@ import {
   type RenderResult,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
+import { toast } from "sonner";
 
 import type {
   BotThreadSummary,
@@ -704,7 +713,9 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       expect(openThreadBeside()).toBe("none");
     });
 
-    it("is closed by a requested landing on a thread the list does not name", () => {
+    it("is kept open, and the landing refused and spent, when a requested landing names a message of a thread the settled list does not name", () => {
+      const toastError = vi.spyOn(toast, "error").mockReturnValue("toast");
+      onTestFinished(() => toastError.mockRestore());
       mocks.state.threads = [];
       useBotTabLandingStore.getState().request(BOT_ID, {
         kind: "thread",
@@ -713,7 +724,11 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       });
       render(surface());
 
-      expect(openThreadBeside()).toBe("none");
+      expect(openThreadBeside()).toBe("post-other");
+      expect(toastError).toHaveBeenCalledTimes(1);
+      expect(
+        Object.hasOwn(useBotTabLandingStore.getState().byBotId, BOT_ID),
+      ).toBe(false);
     });
   });
 
@@ -1400,9 +1415,11 @@ describe("<BotTabSurface /> channel lifetime", () => {
     mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
     const view = render(surface());
     useTracySurfaceStore.getState().selectChannel(OTHER_BOT_ID);
-    useBotDraftsStore
-      .getState()
-      .typeThreadBox(OTHER_BOT_ID, "post-1", "unsent", null);
+    useBotDraftsStore.getState().typeThreadBox(OTHER_BOT_ID, "post-1", {
+      text: "unsent",
+      content: null,
+      held: [],
+    });
     view.rerender(surfaceFor(OTHER_BOT_ID));
     expect(useTracySurfaceStore.getState().visitedBotIds).toEqual([
       BOT_ID,

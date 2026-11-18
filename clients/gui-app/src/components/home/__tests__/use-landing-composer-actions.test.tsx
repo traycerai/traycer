@@ -248,6 +248,7 @@ const imageStoreMocks = vi.hoisted(() => ({
 // here too, and a from-scratch factory that omits one makes vitest warn and the
 // importer read `undefined` at call time.
 vi.mock("@/lib/composer/landing-image-store", () => ({
+  onLandingImagesDeleted: vi.fn(),
   // The real digest: recovery verifies a fetched reply against the requested
   // hash before it consults the residency budget.
   sha256Hex: async (bytes: ImageBytes): Promise<string> => {
@@ -2256,7 +2257,70 @@ describe("useLandingComposerActions", () => {
       expect(useEpicCanvasStore.getState().openTabOrder).toHaveLength(1);
     });
     expect(landingMocks.navigate).not.toHaveBeenCalled();
+    // The draft had no tab to replace, so the sent text must not stay a draft.
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === draftId),
+    ).toBe(false);
     expect(toast.info).toHaveBeenCalledWith("Epic created in the background.");
+    queryClient.clear();
+  });
+
+  it("deletes a still-current draft's row when it has no tab to replace", async () => {
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraftWithId("draft-tabless", null);
+    useTabsStore.setState({
+      items: [],
+      activeItemId: null,
+      systemTabs: { history: null, settings: null },
+      stripOrder: [],
+    });
+    const createGate = deferred<unknown>();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create" ? createGate.promise : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
+        settled: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    createGate.resolve({ roomInfo: null });
+
+    await waitFor(() => {
+      expect(toast.info).toHaveBeenCalledWith(
+        "Epic created in the background.",
+      );
+    });
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === draftId),
+    ).toBe(false);
     queryClient.clear();
   });
 
@@ -3024,6 +3088,54 @@ describe("useLandingComposerActions", () => {
       left: { kind: "tab", ref: { kind: "epic" } },
       right: { kind: "tab", ref: refB },
     });
+    queryClient.clear();
+  });
+
+  it("removes a terminal-agent draft that has no tab in the strip once its epic opens", async () => {
+    setWorkspace("/tmp/terminal-orphan", "terminal-orphan");
+    const draftId = useLandingDraftStore
+      .getState()
+      .createDraftWithId("terminal-orphan", null);
+    useTabsStore.setState({
+      items: [],
+      activeItemId: null,
+      systemTabs: { history: null, settings: null },
+      stripOrder: [],
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.selectTerminalAgent({
+        launch: {
+          harnessId: "claude",
+          model: null,
+          reasoningEffort: null,
+          terminalAgentArgs: "",
+          profileId: null,
+        },
+        draftId,
+        owner: null,
+        teamSandboxHarnessBlocked: false,
+        settled: null,
+      });
+    });
+    await waitFor(() => {
+      expect(landingMocks.createTerminalAgent).toHaveBeenCalledTimes(1);
+    });
+
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === draftId),
+    ).toBe(false);
     queryClient.clear();
   });
 

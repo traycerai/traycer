@@ -650,14 +650,8 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "host.notifications.getConfig": { ...LATEST_SCHEDULING, poll: null },
-  "host.notifications.getLongTurnAlert": { ...LATEST_SCHEDULING, poll: null },
   // Setting notification configuration persists user intent.
   "host.notifications.setConfig": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
-  "host.notifications.setLongTurnAlert": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,
@@ -1576,6 +1570,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // one read per open, picked up by reopening.
   "epic.listCloudChats": { ...LATEST_SCHEDULING, poll: null },
   "epic.resolveCloudChatHead": { ...LATEST_SCHEDULING, poll: null },
+  "epic.getChatTitle": { ...LATEST_SCHEDULING, poll: null },
   // A sandbox's permanent end remains here after it leaves the live list.
   // A mounted task refreshes that fact even when no host can notify it.
   "epic.listTaskHosts": {

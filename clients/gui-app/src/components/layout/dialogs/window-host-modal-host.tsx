@@ -400,6 +400,11 @@ function resolveRetry(
   localLifecycle: boolean,
   settled: SettledFailure,
 ): ResolvedRetry {
+  // A failed read of the host list: re-reading it is the recovery, and it is
+  // always a failure, so there is no healthy start to keep Retry off for.
+  if (variant.kind === "host-list-unavailable") {
+    return { onRetry: presentation.refreshDirectory, pending: false };
+  }
   if (variant.kind !== "offline") return { onRetry: null, pending: false };
   // A healthy start in progress has nothing to retry. `cause === "cold-start"`
   // always resolves to `offline` by design, so before this gate every local

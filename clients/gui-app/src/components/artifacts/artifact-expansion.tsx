@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import {
   claimFullscreen,
   releaseFullscreen,
+  transcriptRowKeyOf,
   yieldFullscreen,
   type FullscreenClaim,
 } from "@/lib/sandbox/overlay-owner";
@@ -91,6 +92,13 @@ const NESTED_ESCAPE_OWNER = [
  */
 export function ArtifactExpansion(props: {
   readonly title: string;
+  /**
+   * Whether the comment draft shows while the surface is inline. A surface
+   * that takes comments only while raised keeps a draft that outlived the
+   * raise mounted and concealed until it rises again, the way a background
+   * pane keeps its own: inline, its transcript row would clip it.
+   */
+  readonly commentsInline: boolean;
   readonly children: ReactNode;
 }): ReactNode {
   const [expanded, setExpanded] = useState(false);
@@ -123,7 +131,7 @@ export function ArtifactExpansion(props: {
   const onScreen = paneVisible && tabSelected;
   const commentHostProps = usePanePortalHostPresentation(commentHost, {
     visible: paneVisible,
-    focused: paneFocused,
+    focused: paneFocused && (expanded || props.commentsInline),
   });
 
   const releaseClaim = (): void => {
@@ -149,7 +157,6 @@ export function ArtifactExpansion(props: {
   });
   const take = (): boolean => {
     if (claimRef.current !== null) return true;
-    const row = surface?.closest("[data-message-id]") ?? null;
     const claim: FullscreenClaim = {
       // A yield has already released the claim, so this only lowers the
       // surface - and it must not move focus, which belongs to whatever
@@ -158,13 +165,8 @@ export function ArtifactExpansion(props: {
         claimRef.current = null;
         setExpanded(false);
       },
-      // The LIST key, so a long turn drawn as several items pins the one this
-      // artifact sits in. A surface outside the transcript (a tile) has no row
-      // and pins nothing.
-      pinnedRowKey:
-        row?.getAttribute("data-row-key") ??
-        row?.getAttribute("data-message-id") ??
-        null,
+      // A surface outside the transcript (a tile) has no row and pins nothing.
+      pinnedRowKey: transcriptRowKeyOf(surface),
       // A nested dialog belongs to this surface - the comment draft, a confirm
       // raised from a control inside it - and must not end the expansion. Every
       // dialog outside it still does.
@@ -174,7 +176,7 @@ export function ArtifactExpansion(props: {
     claimRef.current = claim;
     return true;
   };
-  const expand = (): void => {
+  const expand = (): boolean => {
     // Asks whatever holds the top layer to give it up, as an app's Expand
     // does, and takes it in the SAME press: a surface the yield has lowered
     // does not read as a blocker of this one - an expanded artifact is a
@@ -189,9 +191,10 @@ export function ArtifactExpansion(props: {
     // inline, where its toggle is. Either way, never two raised at once.
     if (!take()) {
       yieldFullscreen();
-      if (!take()) return;
+      if (!take()) return false;
     }
     setExpanded(true);
+    return true;
   };
 
   // The phone's back gesture stands down while the surface is up, and its back
@@ -393,10 +396,11 @@ export function ArtifactExpansion(props: {
               {/* The comment draft and the mentions it raises, kept mounted
                   with what the reader typed and concealed with the pane they
                   belong to - the same rules as the pane's own portal host,
-                  which this surface cannot use. It is INSIDE the dialog, so a
-                  raised surface takes it into the top layer with it, and it
-                  sets no `display`, so the `hidden` attribute still wins over
-                  it.
+                  which this surface cannot use - and, without
+                  `commentsInline`, while the surface is inline. It is INSIDE
+                  the dialog, so a raised surface takes it into the top layer
+                  with it, and it sets no `display`, so the `hidden` attribute
+                  still wins over it.
 
                   It adds neither a box nor a containing block. What portals in
                   here is out of flow, but not all of it is `fixed`: the draft

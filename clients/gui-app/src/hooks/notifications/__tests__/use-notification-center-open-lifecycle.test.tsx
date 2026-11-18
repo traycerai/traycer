@@ -340,6 +340,7 @@ describe("useNotificationCenterOpenLifecycle", () => {
     expect(document.activeElement?.getAttribute("data-testid")).not.toBe(
       "notifications-bell",
     );
-    expect(useSettingsSectionStore.getState().section).toBe("notifications");
+    // The gear opens Alerts: which kinds interrupt is this device's setting.
+    expect(useSettingsSectionStore.getState().section).toBe("alerts");
   });
 });

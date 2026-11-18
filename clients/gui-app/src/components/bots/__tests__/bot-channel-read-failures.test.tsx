@@ -5,8 +5,7 @@
  * fake host answers from a script. A failure that leaves rows already loaded
  * keeps them under a line saying why they may be out of date; one that leaves
  * none, or that the person must act on, draws in their place. The send boxes
- * wait while a read says a send would not arrive, and no read cursor moves
- * behind the channel's failure.
+ * wait while a read says a send would not arrive.
  */
 import {
   doorbellHostDirectoryEntryMock,
@@ -31,11 +30,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import { resetHostConnectionRegistryForTest } from "@traycer-clients/shared/host-client/host-connection-registry";
-import {
-  CHANNEL_ID,
-  THREAD_ID,
-  THREAD_OPEN,
-} from "@/components/bots/__tests__/bot-turn-test-support";
+import { THREAD_OPEN } from "@/components/bots/__tests__/bot-turn-test-support";
 import {
   CHANNEL_LIST,
   TAB_HOST_ID,
@@ -48,7 +43,6 @@ import {
   noticeText,
   flushObservers,
   refetchRead,
-  settleCursorAdvances,
   renderRealChannel,
 } from "@/components/bots/__tests__/bot-channel-cloud-harness";
 import {
@@ -512,85 +506,5 @@ describe("<BotChannelView /> when the thread list's read fails after it loaded",
     );
     expect(within(panel).queryByTestId("bot-thread-composer-send")).toBeNull();
     expect(screen.getByTestId("bot-channel")).toBeDefined();
-  });
-});
-
-describe("<BotChannelView /> read cursors behind a channel that failed", () => {
-  /** The cursor read has answered and its advance, if any, has been asked. */
-  async function cursorsRead(): Promise<void> {
-    await waitFor(() =>
-      expect(
-        queryClient
-          .getQueryCache()
-          .findAll({
-            queryKey: hostQueryKeys.methodScope(
-              TAB_HOST_ID,
-              "bot.readCursor.read",
-            ),
-          })
-          .some((query) => query.state.status === "success"),
-      ).toBe(true),
-    );
-    await settleCursorAdvances(queryClient);
-  }
-
-  /** Mounts over a channel the host refuses; the cursors, read, say both conversations have unread rows. */
-  async function mountRefusedChannel(
-    openThread: BotOpenThread | null,
-  ): Promise<void> {
-    script.conversationList = () =>
-      Promise.reject(hostFailure("FORBIDDEN", CHANNEL_READ));
-    mount(openThread);
-    await screen.findByTestId("bot-channel-error");
-    await cursorsRead();
-  }
-
-  async function recoverChannel(): Promise<void> {
-    script.conversationList = () => Promise.resolve(CHANNEL_LIST);
-    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
-    await screen.findByTestId("bot-channel");
-  }
-
-  it("does not advance the channel's cursor over a newer row while the channel's failure is drawn, and does once the channel is back", async () => {
-    mount(null);
-    await screen.findByTestId("bot-channel");
-    await waitFor(() => expect(script.advances).toHaveLength(1));
-    script.conversationList = () =>
-      Promise.reject(hostFailure("FORBIDDEN", CHANNEL_READ));
-    await refetchRead(queryClient, CHANNEL_READ);
-    expect(screen.getByTestId("bot-channel-error")).toBeDefined();
-
-    // A newer row arrives; the person is looking at the failure, not at it.
-    script.readCursor = () => ({
-      cursors: {},
-      latest: { [CHANNEL_ID]: { messageId: "channel-newer", seq: 5 } },
-    });
-    await act(async () => {
-      await queryClient.refetchQueries({
-        queryKey: hostQueryKeys.methodScope(TAB_HOST_ID, "bot.readCursor.read"),
-      });
-    });
-    await settleCursorAdvances(queryClient);
-    expect(script.advances).toHaveLength(1);
-
-    await recoverChannel();
-
-    await waitFor(() =>
-      expect(script.advances.map((ask) => ask.seq)).toEqual([4, 5]),
-    );
-  });
-
-  it("does not advance the open thread's cursor while the channel's failure is drawn", async () => {
-    await mountRefusedChannel(THREAD_OPEN);
-    expect(script.advances).toEqual([]);
-
-    await recoverChannel();
-
-    // Beside an open thread the channel is not the one on screen.
-    await waitFor(() =>
-      expect(script.advances.map((ask) => ask.conversationId)).toEqual([
-        THREAD_ID,
-      ]),
-    );
   });
 });

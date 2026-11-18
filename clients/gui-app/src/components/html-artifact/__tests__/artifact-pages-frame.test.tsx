@@ -108,7 +108,7 @@ function renderPages(overrides: Partial<PagesOptions>) {
   const frame = (
     // The frame is not a surface on its own: every call site renders it inside
     // the expansion that raises it, and that is what its Expand toggle asks.
-    <ArtifactExpansion title="Report">
+    <ArtifactExpansion title="Report" commentsInline>
       <ArtifactPagesFrame
         source={{
           kind: "artifact",
