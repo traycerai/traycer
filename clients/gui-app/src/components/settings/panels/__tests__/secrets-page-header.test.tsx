@@ -44,11 +44,6 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   >()),
   useCloudChatViewerId: () => "user-me",
 }));
-// The configuration status chip reads the host runtime this suite does not
-// mount, and none of these cases is about it.
-vi.mock("@/components/settings/personal/page-chip", () => ({
-  PageChip: () => <span data-testid="page-chip" />,
-}));
 
 afterEach(() => {
   cleanup();
@@ -316,7 +311,7 @@ describe("the Secrets page header", () => {
     expect(document.body.textContent).not.toContain("does not resolve");
   });
 
-  it("puts Details in the header beside the chip, not in the page body", async () => {
+  it("puts Details in the header, not in the page body", async () => {
     renderPanel({
       secrets: [secret("OPENAI_API_KEY")],
       listError: { current: null },
@@ -331,10 +326,6 @@ describe("the Secrets page header", () => {
     if (details === undefined) throw new Error("the page has no Details");
     const header = details.closest("header");
     if (header === null) throw new Error("Details is not inside a header");
-    expect(within(header).getByTestId("page-chip")).toBeTruthy();
-    expect(details.parentElement).toBe(
-      within(header).getByTestId("page-chip").parentElement,
-    );
     // Each secret row carries its own Details; what the body must not repeat
     // is the page's own, which belongs to the header.
     expect(

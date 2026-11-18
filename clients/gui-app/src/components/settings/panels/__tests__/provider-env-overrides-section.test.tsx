@@ -81,7 +81,6 @@ vi.mock(
         ...hostsRunningPersonalMock.current,
         collisions: [],
         retry: () => {},
-        reread: () => {},
       };
     },
   }),
