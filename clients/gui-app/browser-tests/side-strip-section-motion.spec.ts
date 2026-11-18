@@ -271,6 +271,23 @@ test.describe("when another task is opened with the pointer in the list", () => 
     expect((await boxOf(row(page, "watcher"))).y).toBe(before.y);
   });
 
+  test("keeps a waiting row drawn in a folded section, and the clicked row where it was", async ({
+    page,
+  }) => {
+    await holdReleaseAboveWatcher(page);
+    await page.getByTestId("side-strip-section-to-review").click();
+    await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+    await expect(row(page, "migration")).toHaveCount(0);
+    const before = await boxOf(row(page, "watcher"));
+
+    await openWatcherWithPointerInList(page);
+    await nextFrames(page, 3);
+
+    await expect(row(page, "release")).toBeVisible();
+    expect(await laneOf(row(page, "release"))).toBe("to-review");
+    expect((await boxOf(row(page, "watcher"))).y).toBe(before.y);
+  });
+
   test("moves the previous row to its section once the pointer leaves the list", async ({
     page,
   }) => {

@@ -161,6 +161,7 @@ export function SideStripSections(props: {
             variant={variant}
             chip={group.section === stuck ? chip : null}
             memberOffsets={offsets}
+            waiting={released}
             controller={controller}
             handlers={handlers}
           />
@@ -191,10 +192,13 @@ function StripSectionRows(props: {
   readonly chip: ReactNode | null;
   /** Tabs drawn before each item, for its Alt-digit badge. */
   readonly memberOffsets: ReadonlyMap<string, number>;
+  /** The rows waiting where they were drawn, this section's among them. */
+  readonly waiting: ReadonlyArray<StripSectionHold>;
   readonly controller: TabStripController;
   readonly handlers: SideStripHandlers;
 }): ReactNode {
-  const { group, variant, memberOffsets, controller, handlers } = props;
+  const { group, variant, memberOffsets, waiting, controller, handlers } =
+    props;
   const rail = variant === "collapsed";
   const [folded] = useStripSectionFolded(group.section);
   const draggedItemId = useActiveHeaderTab()?.stripItemId ?? null;
@@ -202,15 +206,18 @@ function StripSectionRows(props: {
     (entry): entry is StripTabEntry => entry.kind === "tabs",
   );
   // A folded section keeps the current task's row, so the person still sees
-  // where they are; the header's count is still the whole section's. The rail
-  // has no header to fold from, so it draws every tile.
+  // where they are, and a row waiting in it, which would otherwise vanish from
+  // under the pointer; the header's count is still the whole section's. The
+  // rail has no header to fold from, so it draws every tile.
   let shown: ReadonlyArray<StripSectionEntry> = group.entries;
   if (rail) {
     shown = tabEntries;
   } else if (folded) {
     shown = group.entries.filter(
       (entry) =>
-        entry.kind === "tabs" && entry.itemId === controller.activeItemId,
+        entry.kind === "tabs" &&
+        (entry.itemId === controller.activeItemId ||
+          waiting.some((held) => held.itemId === entry.itemId)),
     );
   }
   // A tab dragged inside this section reorders among the tabs it draws, so its
