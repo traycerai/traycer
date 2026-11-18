@@ -12,6 +12,6 @@ export const DROP_WITHOUT_IMAGE_HOST =
 export const DROP_AFTER_POST_GONE =
   "This thread's post is gone from the channel, so files can't be added here.";
 
-/** Under a box still reading its draft's images, while files wait for it. */
+/** Under a box still reading its draft's images, while images held for it wait. */
 export const DROPS_WAIT_FOR_DRAFT_IMAGES =
-  "Files you drop or attach now are added once the draft's images load.";
+  "Images you drop or attach now are added once the draft's images load.";
