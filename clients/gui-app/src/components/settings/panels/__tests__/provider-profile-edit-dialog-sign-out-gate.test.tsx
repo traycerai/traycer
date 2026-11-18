@@ -366,7 +366,10 @@ function itemsAnswer(
   return json(200, {
     items:
       family.member && identity
-        ? [entry, itemRow(family, identity, MEMBER_PROFILE_ID, ENTRY_PROFILE_ID)]
+        ? [
+            entry,
+            itemRow(family, identity, MEMBER_PROFILE_ID, ENTRY_PROFILE_ID),
+          ]
         : [entry],
   });
 }
@@ -974,7 +977,10 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
 
     it("changes nothing when the entry is bound to another account", async () => {
       fixture.authnAnswer = modelAuthn(
-        liveFamily({ ...SPEND_SCOPE_KEY, accountId: "synthetic-other-account" }),
+        liveFamily({
+          ...SPEND_SCOPE_KEY,
+          accountId: "synthetic-other-account",
+        }),
       );
       const messenger = installOrderedSignOutClient();
       renderDialog(unmappedBrokeredProfile(SPEND_SCOPED_IDENTITY));
@@ -1094,26 +1100,23 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
           });
         },
       ],
-    ])(
-      "changes nothing when this computer %s",
-      async (_state, binding) => {
-        fixture.hostBinding = binding;
-        fixture.authnAnswer = modelAuthn(liveFamily(SPEND_SCOPE_KEY));
-        const messenger = installOrderedSignOutClient();
-        renderDialog(unmappedBrokeredProfile(SPEND_SCOPED_IDENTITY));
+    ])("changes nothing when this computer %s", async (_state, binding) => {
+      fixture.hostBinding = binding;
+      fixture.authnAnswer = modelAuthn(liveFamily(SPEND_SCOPE_KEY));
+      const messenger = installOrderedSignOutClient();
+      renderDialog(unmappedBrokeredProfile(SPEND_SCOPED_IDENTITY));
 
-        confirmSignOut();
+      confirmSignOut();
 
-        await waitFor(() =>
-          expect(storedToastTitles()).toContain(
-            "This connection changed. Refresh and try again.",
-          ),
-        );
-        expect(fixture.authnRequests).toEqual([]);
-        expect(signOuts(messenger)).toEqual([]);
-        expect(fixture.openChanges).toEqual([]);
-      },
-    );
+      await waitFor(() =>
+        expect(storedToastTitles()).toContain(
+          "This connection changed. Refresh and try again.",
+        ),
+      );
+      expect(fixture.authnRequests).toEqual([]);
+      expect(signOuts(messenger)).toEqual([]);
+      expect(fixture.openChanges).toEqual([]);
+    });
 
     it("changes nothing when this computer's binding moves after a setup token's connection read", async () => {
       const answers = [
@@ -1347,25 +1350,22 @@ describe("<ProfileEditDialog /> record sign-out and remove name the environment"
       scope: null,
       environmentName: "this environment",
     },
-  ])(
-    "titles Sign out with $name",
-    ({ row, scope, environmentName }) => {
-      fixture.listScope = scope;
-      fixture.environments = {
-        environments: [
-          environmentRow("env-personal", "user", "Personal"),
-          environmentRow("env-team", "organization", "Acme"),
-        ],
-      };
-      renderDialog(row);
+  ])("titles Sign out with $name", ({ row, scope, environmentName }) => {
+    fixture.listScope = scope;
+    fixture.environments = {
+      environments: [
+        environmentRow("env-personal", "user", "Personal"),
+        environmentRow("env-team", "organization", "Acme"),
+      ],
+    };
+    renderDialog(row);
 
-      fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
 
-      expect(
-        screen.getByText(/^Sign out of Work account in /).textContent,
-      ).toBe(`Sign out of Work account in ${environmentName}?`);
-    },
-  );
+    expect(screen.getByText(/^Sign out of Work account in /).textContent).toBe(
+      `Sign out of Work account in ${environmentName}?`,
+    );
+  });
 
   it("keeps the fallback for an environment the list cannot name, even on Personal", () => {
     fixture.listScope = "personal";
@@ -1374,9 +1374,9 @@ describe("<ProfileEditDialog /> record sign-out and remove name the environment"
 
     fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
 
-    expect(
-      screen.getByText(/^Sign out of Work account in /).textContent,
-    ).toBe("Sign out of Work account in this environment?");
+    expect(screen.getByText(/^Sign out of Work account in /).textContent).toBe(
+      "Sign out of Work account in this environment?",
+    );
   });
 
   it("names the same environment in the Remove body", () => {
