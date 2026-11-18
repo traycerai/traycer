@@ -1,10 +1,4 @@
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
@@ -68,6 +62,8 @@ import {
   PENDING,
   SOURCE,
   UNAVAILABLE_COPY,
+  until,
+  untilIdle,
 } from "./bot-feedback-draft-card-test-support";
 
 const PENDING_WITH_DIAGNOSTICS: ToolCallFeedbackDraftStamp = {
@@ -86,6 +82,7 @@ const requests: {
   preview: ChatFeedbackDraftPreviewRequest[];
 } = { decide: [], preview: [] };
 let requestCounter = 0;
+let queryClient: QueryClient;
 
 function buildSpine(): HostClient<HostRpcRegistry> {
   const spine = new HostClient<HostRpcRegistry>({
@@ -148,17 +145,10 @@ function buildSpine(): HostClient<HostRpcRegistry> {
   return spine;
 }
 
-async function settle(): Promise<void> {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(50);
-  });
-}
-
-/** One query client per mount, so a re-render is the same mount. */
+/** The test's query client, so a re-render is the same mount. */
 function renderCard(): {
   readonly rerender: (draft: ToolCallFeedbackDraftStamp) => void;
 } {
-  const queryClient = new QueryClient();
   // A fresh element each time: React skips an identical one.
   const tree = (draft: ToolCallFeedbackDraftStamp) => (
     <QueryClientProvider client={queryClient}>
@@ -183,6 +173,7 @@ function actionsOffered(): boolean {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  queryClient = new QueryClient();
   resetNegotiatedManifests();
   requestCounter = 0;
   requests.decide.length = 0;
@@ -203,21 +194,21 @@ describe("<BotFeedbackDraftCard /> when its source host leaves and returns", () 
   it("offers no action and no diagnostics View while the directory has no row for the source, and offers them again when the row returns in the same mount", async () => {
     world.entry = null;
     const view = renderCard();
-    await settle();
+    await until(() => expect(screen.getByText(UNAVAILABLE_COPY)).toBeTruthy());
 
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
     expect(screen.queryByRole("button", { name: "View" })).toBeNull();
-    expect(screen.getByText(UNAVAILABLE_COPY)).toBeTruthy();
+    await untilIdle(queryClient);
     expect(requests.decide).toHaveLength(0);
     expect(requests.preview).toHaveLength(0);
 
     world.entry = { ...mockLocalHostEntry, version: "0.0.1-mock" };
     view.rerender(PENDING_WITH_DIAGNOSTICS);
-    await settle();
+    await until(() => expect(actionsOffered()).toBe(true));
 
-    expect(actionsOffered()).toBe(true);
     expect(screen.queryByText(UNAVAILABLE_COPY)).toBeNull();
+    await untilIdle(queryClient);
     expect(requests.decide).toHaveLength(0);
   });
 
@@ -231,7 +222,9 @@ describe("<BotFeedbackDraftCard /> when its source host leaves and returns", () 
       const view = renderCard();
 
       fireEvent.click(screen.getByRole("button", { name: "Send" }));
-      await settle();
+      await until(() =>
+        expect(screen.queryByRole("button", { name: "Send" })).toBeNull(),
+      );
 
       expect(requests.decide).toHaveLength(1);
       const first = requests.decide[0];
@@ -239,20 +232,22 @@ describe("<BotFeedbackDraftCard /> when its source host leaves and returns", () 
         decision: "send",
         includeDiagnostics: true,
       });
-      expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
 
       // The source drops out of the directory: nothing to retry against.
       world.entry = null;
       view.rerender(PENDING_WITH_DIAGNOSTICS);
-      await settle();
-      expect(screen.queryByRole("button", { name: "Retry Send" })).toBeNull();
+      await until(() =>
+        expect(screen.queryByRole("button", { name: "Retry Send" })).toBeNull(),
+      );
       expect(screen.getByText(UNAVAILABLE_COPY)).toBeTruthy();
 
       // The source reconnects: a new incarnation of the same host.
       world.decideMode = "settles";
       world.entry = { ...mockLocalHostEntry, version: "0.0.1-mock" };
       view.rerender(PENDING_WITH_DIAGNOSTICS);
-      await settle();
+      await until(() =>
+        expect(screen.getByRole("button", { name: "Retry Send" })).toBeTruthy(),
+      );
 
       // Only the original intent: offering the other would change the decision
       // the uncertain first attempt may already have made.
@@ -264,16 +259,16 @@ describe("<BotFeedbackDraftCard /> when its source host leaves and returns", () 
       expect(screen.queryByRole("button", { name: "Retry Skip" })).toBeNull();
       expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
       expect(screen.queryByRole("button", { name: "View" })).toBeNull();
+      await untilIdle(queryClient);
       expect(requests.decide).toHaveLength(1);
 
       fireEvent.click(screen.getByRole("button", { name: "Retry Send" }));
-      await settle();
+      await until(() => expect(screen.getByText("Sent")).toBeTruthy());
 
       // The captured request, whole: same decision, same diagnostics choice,
       // same click identity.
       expect(requests.decide).toHaveLength(2);
       expect(requests.decide[1]).toEqual(first);
-      expect(screen.getByText("Sent")).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Retry Send" })).toBeNull();
     },
   );
@@ -285,11 +280,14 @@ describe("<BotFeedbackDraftCard /> when its source host leaves and returns", () 
     world.decideMode = "transport-fails";
     const view = renderCard();
     fireEvent.click(screen.getByRole("button", { name: clickName }));
-    await settle();
+    await until(() =>
+      expect(
+        screen.getByRole("button", { name: `Retry ${clickName}` }),
+      ).toBeTruthy(),
+    );
     world.decideMode = "settles";
     world.entry = { ...mockLocalHostEntry, version: "0.0.1-mock" };
     view.rerender(PENDING_WITH_DIAGNOSTICS);
-    await settle();
     return view;
   }
 
@@ -310,11 +308,10 @@ describe("<BotFeedbackDraftCard /> when its source host leaves and returns", () 
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Retry Skip" }));
-    await settle();
+    await until(() => expect(screen.getByText("Skipped")).toBeTruthy());
 
     expect(requests.decide).toHaveLength(2);
     expect(requests.decide[1]).toEqual(first);
-    expect(screen.getByText("Skipped")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Retry Skip" })).toBeNull();
   });
 
@@ -323,11 +320,13 @@ describe("<BotFeedbackDraftCard /> when its source host leaves and returns", () 
     expect(screen.getByRole("button", { name: "Retry Send" })).toBeTruthy();
 
     view.rerender({ ...PENDING_WITH_DIAGNOSTICS, state: "sent", decidedAt: 5 });
-    await settle();
+    await until(() =>
+      expect(screen.queryByRole("button", { name: "Retry Send" })).toBeNull(),
+    );
 
-    expect(screen.queryByRole("button", { name: "Retry Send" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Retry Skip" })).toBeNull();
     expect(screen.getByText("Sent")).toBeTruthy();
+    await untilIdle(queryClient);
     expect(requests.decide).toHaveLength(1);
   });
 
@@ -336,16 +335,14 @@ describe("<BotFeedbackDraftCard /> when its source host leaves and returns", () 
     world.decideMode = "pending";
 
     fireEvent.click(screen.getByRole("button", { name: "Retry Send" }));
-    await settle();
-
-    expect(requests.decide).toHaveLength(2);
+    await until(() => expect(requests.decide).toHaveLength(2));
     expect(
       screen
         .getByRole("button", { name: "Retry Send" })
         .hasAttribute("disabled"),
     ).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Retry Send" }));
-    await settle();
+    expect(queryClient.isMutating()).toBe(1);
     expect(requests.decide).toHaveLength(2);
   });
 });

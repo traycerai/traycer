@@ -95,6 +95,8 @@ import {
   PENDING,
   SOURCE,
   UNAVAILABLE_COPY,
+  until,
+  untilIdle,
 } from "./bot-feedback-draft-card-test-support";
 
 const requests: {
@@ -110,6 +112,7 @@ let advertisesFeedback = true;
 
 /** Whether the source host's `host.status` read fails at the transport. */
 let statusFails = false;
+let queryClient: QueryClient;
 
 function hostClient(
   entry: typeof mockLocalHostEntry,
@@ -158,9 +161,15 @@ function hostClient(
   return spine.createRequester(entry);
 }
 
-async function settle(): Promise<void> {
+/**
+ * The probe keeps the default query client's retry policy: three retries, at
+ * 1s, 2s and 4s. Past this, a probe that is going to fail has failed.
+ */
+const PROBE_RETRY_BUDGET_MS = 8_000;
+
+async function advancePastProbeRetryBudget(): Promise<void> {
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(PROBE_RETRY_BUDGET_MS);
   });
 }
 
@@ -170,9 +179,8 @@ function sendDisabled(): boolean | null {
   return button === null ? null : button.hasAttribute("disabled");
 }
 
-/** One query client per mount, so a re-render is the same mount. */
+/** The test's query client, so a re-render is the same mount. */
 function renderCard(): { readonly rerender: () => void } {
-  const queryClient = new QueryClient();
   // A fresh element each time: React skips an identical one.
   const tree = () => (
     <QueryClientProvider client={queryClient}>
@@ -185,6 +193,7 @@ function renderCard(): { readonly rerender: () => void } {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  queryClient = new QueryClient();
   resetNegotiatedManifests();
   requestCounter = 0;
   requests.sourceStatus = 0;
@@ -212,17 +221,15 @@ afterEach(() => {
 describe("<BotFeedbackDraftCard /> source capability", () => {
   it("learns an unseeded source host's methods by asking that host, then sends there", async () => {
     renderCard();
-    await settle();
+    await until(() => expect(sendDisabled()).toBe(false));
 
     expect(requests.sourceStatus).toBe(1);
     expect(requests.channelStatus).toBe(0);
     expect(requests.preview).toHaveLength(0);
-    expect(sendDisabled()).toBe(false);
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await settle();
+    await until(() => expect(requests.decide).toHaveLength(1));
 
-    expect(requests.decide).toHaveLength(1);
     expect(requests.decide[0]).toMatchObject({
       epicId: SOURCE.epicId,
       chatId: SOURCE.chatId,
@@ -237,9 +244,8 @@ describe("<BotFeedbackDraftCard /> source capability", () => {
       "host.status": { major: 1, minor: 0 },
     });
     const view = renderCard();
-    await settle();
+    await until(() => expect(requests.sourceStatus).toBe(1));
 
-    expect(requests.sourceStatus).toBe(1);
     expect(requests.channelStatus).toBe(0);
     expect(sendDisabled()).toBeNull();
 
@@ -248,26 +254,19 @@ describe("<BotFeedbackDraftCard /> source capability", () => {
     advertisesFeedback = true;
     boundary.sourceVersion = "0.0.1-mock";
     view.rerender();
-    await settle();
+    await until(() => expect(sendDisabled()).toBe(false));
 
     expect(requests.sourceStatus).toBe(2);
-    expect(sendDisabled()).toBe(false);
     expect(requests.decide).toHaveLength(0);
   });
 
   it("reports the draft unavailable, not an endless wait, when an unseeded source host's probe fails", async () => {
     statusFails = true;
     renderCard();
-    await settle();
-    // The probe keeps the query client's retry policy; let it run out.
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(8_000);
-    });
-    await settle();
+    await until(() => expect(screen.getByText(UNAVAILABLE_COPY)).toBeTruthy());
 
     expect(requests.sourceStatus).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
-    expect(screen.getByText(UNAVAILABLE_COPY)).toBeTruthy();
     expect(requests.decide).toHaveLength(0);
   });
 
@@ -277,7 +276,9 @@ describe("<BotFeedbackDraftCard /> source capability", () => {
       "host.status": { major: 1, minor: 0 },
     });
     renderCard();
-    await settle();
+    await until(() => expect(requests.sourceStatus).toBeGreaterThan(0));
+    await untilIdle(queryClient);
+    await advancePastProbeRetryBudget();
 
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(screen.queryByText(UNAVAILABLE_COPY)).toBeNull();
@@ -290,7 +291,8 @@ describe("<BotFeedbackDraftCard /> source capability", () => {
       ...FEEDBACK_METHODS,
     });
     renderCard();
-    await settle();
+    await untilIdle(queryClient);
+    await advancePastProbeRetryBudget();
 
     expect(requests.sourceStatus).toBe(0);
     expect(sendDisabled()).toBe(false);
@@ -298,10 +300,11 @@ describe("<BotFeedbackDraftCard /> source capability", () => {
 
   it("asks a host that answers with the methods once, not on every render", async () => {
     const view = renderCard();
-    await settle();
+    await until(() => expect(sendDisabled()).toBe(false));
     view.rerender();
     view.rerender();
-    await settle();
+    await untilIdle(queryClient);
+    await advancePastProbeRetryBudget();
 
     expect(requests.sourceStatus).toBe(1);
   });

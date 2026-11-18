@@ -69,6 +69,8 @@ import {
   PENDING,
   SOURCE,
   UNAVAILABLE_COPY,
+  until,
+  untilIdle,
   type Gate,
 } from "./bot-feedback-draft-card-test-support";
 
@@ -131,12 +133,6 @@ function buildSpine(): HostClient<HostRpcRegistry> {
   });
   built.setRequestContext(newContext());
   return built;
-}
-
-async function settle(): Promise<void> {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(50);
-  });
 }
 
 /** Another surface on the source draft: its own mutation and the shared state. */
@@ -230,8 +226,7 @@ describe("<BotFeedbackDraftCard /> over the shared decision store", () => {
     ).toBe(false);
 
     fireEvent.click(screen.getByRole("button", { name: "Probe send" }));
-    await settle();
-    expect(decideCalls).toHaveLength(1);
+    await until(() => expect(decideCalls).toHaveLength(1));
     expect(
       screen.getByRole("button", { name: "Send" }).hasAttribute("disabled"),
     ).toBe(true);
@@ -240,9 +235,8 @@ describe("<BotFeedbackDraftCard /> over the shared decision store", () => {
     ).toBe(true);
 
     decideGate.resolve({ kind: "settled", feedbackDraft: SENT });
-    await settle();
+    await until(() => expect(screen.getByText("Sent")).toBeTruthy());
 
-    expect(screen.getByText("Sent")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(decideCalls).toHaveLength(1);
   });
@@ -253,25 +247,22 @@ describe("<BotFeedbackDraftCard /> over the shared decision store", () => {
     expect(probeText("probe-settled")).toBe("none");
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await settle();
-    expect(probeText("probe-pending")).toBe("true");
+    await until(() => expect(probeText("probe-pending")).toBe("true"));
 
     decideGate.resolve({ kind: "settled", feedbackDraft: SENT });
-    await settle();
+    await until(() => expect(probeText("probe-settled")).toBe("sent"));
 
     expect(probeText("probe-pending")).toBe("false");
-    expect(probeText("probe-settled")).toBe("sent");
   });
 
   it("never settles the held decision when the projection turns terminal", async () => {
     const view = renderCard(PENDING, false);
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await settle();
+    await until(() => expect(decideCalls).toHaveLength(1));
     decideGate.resolve({ kind: "settled", feedbackDraft: SENT });
-    await settle();
+    await until(() => expect(screen.getByText("Sent")).toBeTruthy());
 
     view.rerender(SENT);
-    await settle();
 
     const entry = held(currentContext());
     expect(entry).toBeDefined();
@@ -281,12 +272,11 @@ describe("<BotFeedbackDraftCard /> over the shared decision store", () => {
   it("is not pending, and shows the terminal draft, once the projection is terminal with the decision still held", async () => {
     const view = renderCard(PENDING, true);
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await settle();
+    await until(() => expect(decideCalls).toHaveLength(1));
     decideGate.resolve({ kind: "settled", feedbackDraft: SENT });
-    await settle();
+    await until(() => expect(probeText("probe-settled")).toBe("sent"));
 
     view.rerender(SENT);
-    await settle();
 
     expect(held(currentContext())?.stamp).toEqual(SENT);
     expect(screen.getByText("Sent")).toBeTruthy();
@@ -310,7 +300,9 @@ describe("<BotFeedbackDraftCard /> across an account switch", () => {
     decideTransportFails = true;
     const view = renderCard(PENDING, false);
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await settle();
+    await until(() =>
+      expect(screen.getByRole("button", { name: "Retry Send" })).toBeTruthy(),
+    );
     decideTransportFails = false;
     return view;
   }
@@ -326,10 +318,12 @@ describe("<BotFeedbackDraftCard /> across an account switch", () => {
       // lands on the button the previous session drew.
       spine.setRequestContext(next());
       fireEvent.click(retry);
-      await settle();
+      await until(() =>
+        expect(screen.queryByRole("button", { name: "Retry Send" })).toBeNull(),
+      );
+      await untilIdle(queryClient);
 
       expect(decideCalls).toHaveLength(1);
-      expect(screen.queryByRole("button", { name: "Retry Send" })).toBeNull();
       expect(screen.queryByRole("button", { name: "Retry Skip" })).toBeNull();
     },
   );
@@ -340,12 +334,13 @@ describe("<BotFeedbackDraftCard /> across an account switch", () => {
       await failSend();
       expect(screen.getByRole("button", { name: "Retry Send" })).toBeTruthy();
 
-      await act(async () => {
+      act(() => {
         spine.setRequestContext(next());
-        await vi.advanceTimersByTimeAsync(50);
       });
+      await until(() =>
+        expect(screen.queryByRole("button", { name: "Retry Send" })).toBeNull(),
+      );
 
-      expect(screen.queryByRole("button", { name: "Retry Send" })).toBeNull();
       expect(decideCalls).toHaveLength(1);
     },
   );
@@ -354,14 +349,15 @@ describe("<BotFeedbackDraftCard /> across an account switch", () => {
     await failSend();
     const first = decideCalls[0];
 
-    await act(async () => {
+    act(() => {
       spine.setRequestContext(newContext());
-      await vi.advanceTimersByTimeAsync(50);
     });
+    await until(() =>
+      expect(screen.getByRole("button", { name: "Send" })).toBeTruthy(),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await settle();
+    await until(() => expect(decideCalls).toHaveLength(2));
 
-    expect(decideCalls).toHaveLength(2);
     expect(decideCalls[1].decision).toBe("send");
     expect(decideCalls[1].clientActionId).not.toBe(first.clientActionId);
   });
@@ -372,7 +368,13 @@ describe("<BotFeedbackDraftCard /> across an account switch", () => {
     expect(retry.querySelector('[aria-hidden="true"]')).toBeNull();
 
     fireEvent.click(retry);
-    await settle();
+    await until(() =>
+      expect(
+        screen
+          .getByRole("button", { name: "Retry Send" })
+          .hasAttribute("disabled"),
+      ).toBe(true),
+    );
 
     const pendingRetry = screen.getByRole("button", { name: "Retry Send" });
     expect(pendingRetry.hasAttribute("disabled")).toBe(true);
@@ -384,7 +386,13 @@ describe("<BotFeedbackDraftCard /> across an account switch", () => {
       code: "session-unavailable",
       feedbackDraft: null,
     });
-    await settle();
+    await until(() =>
+      expect(
+        screen
+          .getByRole("button", { name: "Retry Send" })
+          .hasAttribute("disabled"),
+      ).toBe(false),
+    );
 
     const failedRetry = screen.getByRole("button", { name: "Retry Send" });
     expect(failedRetry.hasAttribute("disabled")).toBe(false);
@@ -396,9 +404,8 @@ describe("<BotFeedbackDraftCard /> across an account switch", () => {
     const first = decideCalls[0];
 
     fireEvent.click(screen.getByRole("button", { name: "Retry Send" }));
-    await settle();
+    await until(() => expect(decideCalls).toHaveLength(2));
 
-    expect(decideCalls).toHaveLength(2);
     expect(decideCalls[1].clientActionId).toBe(first.clientActionId);
   });
 });
@@ -415,17 +422,17 @@ describe("<BotFeedbackDraftCard /> when the projection lags the decision", () =>
     ).toBe(false);
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await settle();
+    await until(() => expect(decideCalls).toHaveLength(1));
     decideGate.resolve({
       kind: "error",
       code: "already-decided",
       feedbackDraft: SENT,
     });
-    await settle();
+    await until(() => expect(screen.getByText("Sent")).toBeTruthy());
 
-    expect(screen.getByText("Sent")).toBeTruthy();
     expect(screen.queryByText(UNAVAILABLE_COPY)).toBeNull();
     expect(screen.queryByText(NOT_ALLOWED_COPY)).toBeNull();
+    await untilIdle(queryClient);
     expect(decideCalls).toHaveLength(1);
   });
 });
@@ -451,15 +458,14 @@ describe("<BotFeedbackDraftCard /> refusals", () => {
     expect(screen.getAllByRole("button", { name: "Send" })).toHaveLength(2);
 
     fireEvent.click(refused.getByRole("button", { name: "Send" }));
-    await settle();
+    await until(() => expect(decideCalls).toHaveLength(1));
     decideGate.resolve({
       kind: "error",
       code: "not-allowed",
       feedbackDraft: null,
     });
-    await settle();
+    await until(() => expect(refused.getByText(NOT_ALLOWED_COPY)).toBeTruthy());
 
-    expect(refused.getByText(NOT_ALLOWED_COPY)).toBeTruthy();
     expect(refused.queryByRole("button", { name: "Send" })).toBeNull();
     // The other card, on another block, still offers its actions, and the
     // shared state for the refused address carries no stamp and no pending.

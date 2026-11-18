@@ -1,10 +1,4 @@
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
@@ -70,6 +64,8 @@ import {
   PENDING,
   SOURCE,
   UNAVAILABLE_COPY,
+  until,
+  untilIdle,
   type Gate,
 } from "./bot-feedback-draft-card-test-support";
 
@@ -79,6 +75,7 @@ const previewCalls: ChatFeedbackDraftPreviewRequest[] = [];
 let decideGate: Gate<ChatFeedbackDraftDecideResponse>;
 /** The host never answers the decide: the transport fails after the send. */
 let decideTransportFails = false;
+let queryClient: QueryClient;
 
 /**
  * A requester pinned to the source host, as `useHostClientForHostId` hands the
@@ -128,16 +125,9 @@ function clientFor(): HostClient<HostRpcRegistry> {
   return spine.createRequester(mockLocalHostEntry);
 }
 
-/** Lets the fake clock and every queued promise run, as the host answers. */
-async function settle(): Promise<void> {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(50);
-  });
-}
-
 function renderCard(draft: ToolCallFeedbackDraftStamp): void {
   render(
-    <QueryClientProvider client={new QueryClient()}>
+    <QueryClientProvider client={queryClient}>
       <BotFeedbackDraftCard source={SOURCE} draft={draft} />
     </QueryClientProvider>,
   );
@@ -145,6 +135,7 @@ function renderCard(draft: ToolCallFeedbackDraftStamp): void {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  queryClient = new QueryClient();
   requestCounter = 0;
   decideCalls.length = 0;
   previewCalls.length = 0;
@@ -166,8 +157,7 @@ describe("<BotFeedbackDraftCard />", () => {
 
     expect(screen.getByText(PENDING.goal)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await settle();
-    expect(decideCalls).toHaveLength(1);
+    await until(() => expect(decideCalls).toHaveLength(1));
 
     const { clientActionId, ...request } = decideCalls[0];
     expect(request).toEqual({
@@ -188,8 +178,7 @@ describe("<BotFeedbackDraftCard />", () => {
       feedbackDraft: { ...PENDING, state: "sent", decidedAt: 5 },
     });
 
-    await settle();
-    expect(screen.getByText("Sent")).toBeTruthy();
+    await until(() => expect(screen.getByText("Sent")).toBeTruthy());
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
   });
 
@@ -197,8 +186,7 @@ describe("<BotFeedbackDraftCard />", () => {
     renderCard({ ...PENDING, suggestDiagnostics: true });
 
     fireEvent.click(screen.getByRole("button", { name: "Skip" }));
-    await settle();
-    expect(decideCalls).toHaveLength(1);
+    await until(() => expect(decideCalls).toHaveLength(1));
     decideGate.resolve({
       kind: "settled",
       feedbackDraft: { ...PENDING, state: "skipped", decidedAt: 5 },
@@ -208,8 +196,7 @@ describe("<BotFeedbackDraftCard />", () => {
       decision: "skip",
       includeDiagnostics: false,
     });
-    await settle();
-    expect(screen.getByText("Skipped")).toBeTruthy();
+    await until(() => expect(screen.getByText("Skipped")).toBeTruthy());
     expect(screen.queryByText("Sent")).toBeNull();
   });
 
@@ -219,8 +206,7 @@ describe("<BotFeedbackDraftCard />", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "View" }));
 
-    await settle();
-    expect(screen.getByText("[INFO] started")).toBeTruthy();
+    await until(() => expect(screen.getByText("[INFO] started")).toBeTruthy());
     expect(previewCalls).toEqual([
       { epicId: SOURCE.epicId, chatId: SOURCE.chatId, blockId: SOURCE.blockId },
     ]);
@@ -230,18 +216,19 @@ describe("<BotFeedbackDraftCard />", () => {
     renderCard(PENDING);
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await settle();
-    expect(decideCalls).toHaveLength(1);
+    await until(() => expect(decideCalls).toHaveLength(1));
     decideGate.resolve({
       kind: "error",
       code: "not-allowed",
       feedbackDraft: null,
     });
 
-    await settle();
-    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    await until(() =>
+      expect(screen.queryByRole("button", { name: "Send" })).toBeNull(),
+    );
     expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
     expect(screen.queryByText("Sent")).toBeNull();
+    await untilIdle(queryClient);
     expect(decideCalls).toHaveLength(1);
   });
 
@@ -250,14 +237,13 @@ describe("<BotFeedbackDraftCard />", () => {
     renderCard(PENDING);
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await settle();
+    await until(() => expect(screen.getByText(UNAVAILABLE_COPY)).toBeTruthy());
 
     expect(decideCalls).toHaveLength(1);
     expect(screen.queryByText("Sent")).toBeNull();
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
-    expect(screen.getByText(UNAVAILABLE_COPY)).toBeTruthy();
-    await settle();
+    await untilIdle(queryClient);
     expect(decideCalls).toHaveLength(1);
   });
 
@@ -265,38 +251,36 @@ describe("<BotFeedbackDraftCard />", () => {
     renderCard(PENDING);
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await settle();
-    expect(decideCalls).toHaveLength(1);
+    await until(() => expect(decideCalls).toHaveLength(1));
     decideGate.resolve({
       kind: "error",
       code: "session-unavailable",
       feedbackDraft: null,
     });
 
-    await settle();
+    await until(() => expect(screen.getByText(UNAVAILABLE_COPY)).toBeTruthy());
     expect(screen.queryByText("Sent")).toBeNull();
     expect(screen.queryByText("Skipped")).toBeNull();
     expect(screen.getByText(PENDING.goal)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
-    expect(screen.getByText(UNAVAILABLE_COPY)).toBeTruthy();
   });
 
   it("goes read-only with the unavailable copy when the source block no longer carries the draft", async () => {
     renderCard(PENDING);
 
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await settle();
+    await until(() => expect(decideCalls).toHaveLength(1));
     decideGate.resolve({
       kind: "error",
       code: "not-draft-block",
       feedbackDraft: null,
     });
-    await settle();
+    await until(() => expect(screen.getByText(UNAVAILABLE_COPY)).toBeTruthy());
 
     expect(screen.queryByText("Sent")).toBeNull();
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
-    expect(screen.getByText(UNAVAILABLE_COPY)).toBeTruthy();
+    await untilIdle(queryClient);
     expect(decideCalls).toHaveLength(1);
   });
 
