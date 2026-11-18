@@ -96,12 +96,13 @@ export function SideStripSections(props: {
     assigned,
     controller.layoutItems,
     controller.activeItemId,
-    heldOver.length === 0 ? holds : [...holds, ...heldOver],
+    heldOver.length === 0 ? holds : [...heldOver, ...holds],
   );
   const released = useReleasedSectionHolds(
     current,
     assigned,
     useStripPointerInside(scroller),
+    holds,
   );
   if (released !== heldOver) setHeldOver(released);
   // A row the person is on is held where it is drawn, over the current task's hold.

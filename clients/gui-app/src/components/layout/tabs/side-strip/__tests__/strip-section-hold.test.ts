@@ -481,6 +481,7 @@ describe("useReleasedSectionHolds", () => {
     readonly current: StripSectionHold | null;
     readonly sections: ReadonlyArray<StripSectionGroup>;
     readonly pointerInside: boolean;
+    readonly holds: ReadonlyArray<StripSectionHold>;
   }
 
   function released(input: Input) {
@@ -490,6 +491,7 @@ describe("useReleasedSectionHolds", () => {
           props.current,
           props.sections,
           props.pointerInside,
+          props.holds,
         ),
       { initialProps: input },
     );
@@ -507,6 +509,7 @@ describe("useReleasedSectionHolds", () => {
     current: HELD_A,
     sections: AT_REST,
     pointerInside: true,
+    holds: [],
   };
 
   it("is empty at mount", () => {
@@ -595,5 +598,32 @@ describe("useReleasedSectionHolds", () => {
 
     list.set({ pointerInside: false });
     expect(list.holds()).toEqual([]);
+  });
+
+  it("waits where a pointer or focus hold draws the row, not where the current hold says", () => {
+    const list = released({
+      ...openingA,
+      current: { itemId: ID_A, section: "needs-you" },
+      holds: [{ itemId: ID_A, section: "idle" }],
+    });
+
+    list.set({ current: HELD_B });
+
+    expect(list.holds()).toEqual([{ itemId: ID_A, section: "idle" }]);
+  });
+
+  it("waits where keyboard focus holds the row when the pointer holds it elsewhere", () => {
+    const list = released({
+      ...openingA,
+      current: { itemId: ID_A, section: "needs-you" },
+      holds: [
+        { itemId: ID_A, section: "idle" },
+        { itemId: ID_A, section: "to-review" },
+      ],
+    });
+
+    list.set({ current: HELD_B });
+
+    expect(list.holds()).toEqual([{ itemId: ID_A, section: "to-review" }]);
   });
 });

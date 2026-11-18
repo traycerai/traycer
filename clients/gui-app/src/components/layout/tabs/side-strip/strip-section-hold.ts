@@ -145,6 +145,18 @@ export function useStripPointerInside(scroller: HTMLElement | null): boolean {
   return inside;
 }
 
+/**
+ * The section the holds draw an item in, or `null` when none holds it. The
+ * last hold wins, as it does in `holdInPlace`, so pass them in the order it
+ * takes them: keyboard focus over the pointer, either over a waiting row.
+ */
+function heldSectionOf(
+  holds: ReadonlyArray<StripSectionHold>,
+  itemId: string,
+): StripSection | null {
+  return holds.filter((held) => held.itemId === itemId).at(-1)?.section ?? null;
+}
+
 function sectionOfItem(
   sections: ReadonlyArray<StripSectionGroup>,
   itemId: string,
@@ -211,7 +223,7 @@ function drawnWhenOpened(
   holds: ReadonlyArray<StripSectionHold>,
 ): StripSection | null {
   return (
-    holds.find((held) => held.itemId === itemId)?.section ??
+    heldSectionOf(holds, itemId) ??
     (prev.hold?.itemId === itemId ? prev.hold.section : null) ??
     sectionOfItem(prev.sections, itemId)
   );
@@ -285,16 +297,35 @@ interface ReleasedHoldState {
   readonly released: ReadonlyArray<StripSectionHold>;
 }
 
+/**
+ * The hold of the row where it is drawn: under the pointer or keyboard focus
+ * that is the section their hold keeps it in, which its hold as the current
+ * row may have risen past.
+ */
+function drawnHoldOf(
+  current: StripSectionHold,
+  holds: ReadonlyArray<StripSectionHold>,
+): StripSectionHold {
+  const drawn = heldSectionOf(holds, current.itemId);
+  return drawn === null || drawn === current.section
+    ? current
+    : { itemId: current.itemId, section: drawn };
+}
+
 function releasedHoldsOf(
   prev: ReleasedHoldState,
-  current: StripSectionHold | null,
-  sections: ReadonlyArray<StripSectionGroup>,
-  pointerInside: boolean,
+  now: {
+    readonly current: StripSectionHold | null;
+    readonly sections: ReadonlyArray<StripSectionGroup>;
+    readonly pointerInside: boolean;
+    readonly holds: ReadonlyArray<StripSectionHold>;
+  },
 ): ReadonlyArray<StripSectionHold> {
+  const { current, sections, pointerInside, holds } = now;
   if (!pointerInside) return NO_HOLDS;
   const left =
     prev.current !== null && prev.current.itemId !== current?.itemId
-      ? [prev.current]
+      ? [drawnHoldOf(prev.current, holds)]
       : [];
   // A row waits even where its own section is the one it is drawn in: a
   // folded section draws it only while it waits, and a wait that ended when
@@ -325,6 +356,7 @@ export function useReleasedSectionHolds(
   current: StripSectionHold | null,
   sections: ReadonlyArray<StripSectionGroup>,
   pointerInside: boolean,
+  holds: ReadonlyArray<StripSectionHold>,
 ): ReadonlyArray<StripSectionHold> {
   const [state, setState] = useState<ReleasedHoldState>({
     sections,
@@ -339,7 +371,12 @@ export function useReleasedSectionHolds(
     setState({
       sections,
       current,
-      released: releasedHoldsOf(state, current, sections, pointerInside),
+      released: releasedHoldsOf(state, {
+        current,
+        sections,
+        pointerInside,
+        holds,
+      }),
     });
   }
   return state.released;
