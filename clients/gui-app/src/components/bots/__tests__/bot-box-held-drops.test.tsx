@@ -54,6 +54,7 @@ import {
   READING,
   release,
   signInAs,
+  settleLong,
   until,
 } from "@/components/bots/__tests__/bot-drop-reading-support";
 import {
@@ -186,12 +187,6 @@ function newUser(): UserEvent {
   return userEvent.setup({
     advanceTimers: vi.advanceTimersByTime,
     applyAccept: false,
-  });
-}
-
-async function settleLong(): Promise<void> {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(5_000);
   });
 }
 

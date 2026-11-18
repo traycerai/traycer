@@ -107,3 +107,10 @@ export async function mountReading(imageCount: number): Promise<{
 export function release(hash: string): void {
   act(() => releaseImageReads(hash, new Uint8Array(PNG_BYTES)));
 }
+
+/** Lets the fake clock run past any read or conversion a misrouted drop would have started. */
+export async function settleLong(): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(5_000);
+  });
+}

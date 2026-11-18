@@ -54,15 +54,12 @@ import { CallVoiceNotice } from "@/components/layout/voice/call-voice-notice";
 import {
   BOX_PICKER_ACCEPT,
   botDropNoticeId,
-  refusingDropTarget,
+  liveBoxDropTarget,
   useHeldDropDrain,
   useHoldingDropTarget,
   type BotBoxHold,
 } from "@/components/bots/bot-box-drops";
-import {
-  DROP_WITHOUT_IMAGE_HOST,
-  DROPS_WAIT_FOR_DRAFT_IMAGES,
-} from "@/components/bots/bot-drop-lines";
+import { DROPS_WAIT_FOR_DRAFT_IMAGES } from "@/components/bots/bot-drop-lines";
 import {
   useComposerDropScopeTarget,
   type ComposerDropTarget,
@@ -584,15 +581,18 @@ export function BotMessageComposer(props: {
     botDropNoticeId(botId, threadId ?? announcementId ?? conversationId);
   // The box's drop target: handed to the pane around it, else its frame's.
   const drop = useComposerDropScopeTarget(
-    takesImages
-      ? {
-          onDragEnter: paste.onDragEnter,
-          onDragLeave: paste.onDragLeave,
-          onDragOver: paste.onDragOver,
-          onDrop: paste.onDrop,
-          overlayVariant: paste.dragOverlayVariant,
-        }
-      : refusingDropTarget(DROP_WITHOUT_IMAGE_HOST, noticeId),
+    liveBoxDropTarget({
+      callBarShown: call.barShown,
+      takesImages,
+      ingest: {
+        onDragEnter: paste.onDragEnter,
+        onDragLeave: paste.onDragLeave,
+        onDragOver: paste.onDragOver,
+        onDrop: paste.onDrop,
+        overlayVariant: paste.dragOverlayVariant,
+      },
+      noticeId,
+    }),
   );
   const ingestPasted = useCallback(
     (images: ReadonlyArray<PastedComposerImage>) =>

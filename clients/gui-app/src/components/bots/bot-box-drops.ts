@@ -93,6 +93,30 @@ export function refusingDropTarget(
 }
 
 /**
+ * The live box's drop target. While the call bar stands in its field's place
+ * (`callBarShown`, the value `ComposerCallSwap` draws it on) there is no editor
+ * for a file to land in, so the target refuses as the zone with no box does:
+ * no overlay, nothing said. Otherwise it is the box's own `ingest`, or the
+ * host's refusal where the bot's host takes no images.
+ */
+export function liveBoxDropTarget(box: {
+  readonly callBarShown: boolean;
+  readonly takesImages: boolean;
+  readonly ingest: ComposerDropTarget;
+  readonly noticeId: string;
+}): ComposerDropTarget {
+  if (box.callBarShown) return NO_FIELD_DROP_TARGET;
+  return box.takesImages
+    ? box.ingest
+    : refusingDropTarget(DROP_WITHOUT_IMAGE_HOST, box.noticeId);
+}
+
+const NO_FIELD_DROP_TARGET: ComposerDropTarget = {
+  ...REFUSING_DROP_ZONE_PROPS,
+  overlayVariant: null,
+};
+
+/**
  * A box still reading its draft's images, as a drop target: a file dragged
  * over it shows the overlay the box would, and a dropped file or file
  * reference is held for the box (`hold`). Where the bot's host takes no

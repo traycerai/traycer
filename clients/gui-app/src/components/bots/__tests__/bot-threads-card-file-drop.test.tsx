@@ -49,7 +49,10 @@ import {
   postRow,
 } from "./bot-channel-rows-test-support";
 import { installLegendListTestClock } from "@/components/chat/__tests__/legend-list-test-environment";
-import { until } from "@/components/bots/__tests__/bot-drop-reading-support";
+import {
+  settleLong,
+  until,
+} from "@/components/bots/__tests__/bot-drop-reading-support";
 import { mocks } from "./bot-threads-view-state";
 import {
   card,
@@ -251,13 +254,6 @@ async function revealFull(threadId: string): Promise<void> {
   await until(() =>
     expect(card(threadId).getAttribute("data-full")).toBe("true"),
   );
-}
-
-/** Lets the fake clock run past any read or conversion a misrouted drop would have started. */
-async function settleLong(): Promise<void> {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(5_000);
-  });
 }
 
 /** The images a card's own box holds, by file name. */
