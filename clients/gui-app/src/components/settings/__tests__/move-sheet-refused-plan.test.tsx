@@ -212,6 +212,8 @@ interface Harness {
   readonly planReads: () => number;
   readonly retries: () => number;
   readonly stages: () => number;
+  /** Holds every status read unanswered until the returned function is called. */
+  readonly holdStatusReads: () => () => void;
   readonly starts: EnvironmentMoveStartRequest[];
   readonly client: HostClient<HostRpcRegistry>;
 }
@@ -219,6 +221,7 @@ interface Harness {
 function mountComputer(computer: Computer): Harness {
   const starts: EnvironmentMoveStartRequest[] = [];
   let retries = 0;
+  let statusHold: Promise<void> | null = null;
   let answered: EnvironmentMovePlanResponseV20 | null = null;
   const { client, messenger } = buildEnvironmentClient({
     hostId: HOST_ID,
@@ -228,7 +231,10 @@ function mountComputer(computer: Computer): Harness {
         answered = computer.plan;
         return computer.plan;
       },
-      "environment.status": () => computer.status,
+      "environment.status": () =>
+        statusHold === null
+          ? computer.status
+          : statusHold.then(() => computer.status),
       "environment.setup.retry": () => {
         retries += 1;
         return { attemptId: "retry-attempt" };
@@ -308,6 +314,14 @@ function mountComputer(computer: Computer): Harness {
       messenger.calls.filter((call) => call.method === "environment.move.plan")
         .length,
     retries: () => retries,
+    holdStatusReads: () => {
+      const held = Promise.withResolvers<void>();
+      statusHold = held.promise;
+      return () => {
+        statusHold = null;
+        held.resolve();
+      };
+    },
     stages: () =>
       messenger.calls.filter((call) => call.method === "environment.move.stage")
         .length,
@@ -552,6 +566,40 @@ describe("<MoveSheet /> after a refused plan read", () => {
       expect(harness.starts).toEqual([]);
     },
   );
+
+  it("comes back to the refused line and its Retry when the re-run stops again before asking", async () => {
+    const harness = mountSheet({
+      plan: STALE_PLAN,
+      planFailure: null,
+      status: awaitingConsentStatus(),
+      servesRetry: true,
+    });
+    await settle();
+    harness.computer.status = stoppedStatus();
+    harness.computer.planFailure = NOT_AWAITING;
+    await rereadPlan(harness);
+    await deliverNextStatusRead();
+    const releaseStatusReads = harness.holdStatusReads();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+    expect(harness.retries()).toBe(1);
+    expect(screen.getByTestId("move-sheet-loading")).toBeTruthy();
+    expect(screen.queryByText(NOT_AWAITING.message)).toBeNull();
+
+    releaseStatusReads();
+    await settle();
+
+    expect(screen.getByText(NOT_AWAITING.message)).toBeTruthy();
+    expect(screen.queryByTestId("move-sheet-loading")).toBeNull();
+    expect(planIsDrawn()).toBe(false);
+    expect(acceptIsDisabled()).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+
+    expect(harness.retries()).toBe(2);
+  });
 
   it("keeps the plan refetch on a host without environment.setup.retry", async () => {
     const harness = mountSheet({

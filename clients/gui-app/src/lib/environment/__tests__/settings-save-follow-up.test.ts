@@ -263,20 +263,14 @@ function heldReview(item: Item): EnvironmentTransportAnswer {
   };
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((yes) => {
-    resolve = yes;
-  });
-  return { promise, resolve };
-}
-
 /** What the host's record and the network are doing; a test moves it mid-way. */
 interface Outside {
   receipt: Receipt;
   connected: boolean;
   failNextHoldsRead: boolean;
   failNextApply: boolean;
+  /** The status of each next apply answer, in order; the apply is taken once it is empty. */
+  applyStatuses: number[];
   readGate: Promise<void> | null;
 }
 
@@ -303,6 +297,7 @@ function createWorld(item: Item, receipt: Receipt): World {
     connected: true,
     failNextHoldsRead: false,
     failNextApply: false,
+    applyStatuses: [],
     readGate: null,
   };
   const reads: number[] = [];
@@ -328,6 +323,10 @@ function createWorld(item: Item, receipt: Receipt): World {
       applies.push(request);
       for (const waiter of waiters) {
         if (applies.length >= waiter.count) waiter.resolve();
+      }
+      const answered = outside.applyStatuses.shift();
+      if (answered !== undefined) {
+        return Promise.resolve({ status: answered, text: "" });
       }
       if (outside.failNextApply) {
         outside.failNextApply = false;
@@ -369,7 +368,7 @@ function createWorld(item: Item, receipt: Receipt): World {
     },
     applyPosted: (count) => {
       if (applies.length >= count) return Promise.resolve();
-      const arrival = deferred<void>();
+      const arrival = Promise.withResolvers<void>();
       waiters.push({ count, resolve: arrival.resolve });
       return arrival.promise;
     },
@@ -380,7 +379,7 @@ function recordsGone(): Promise<void> {
   const none = (): boolean =>
     Object.keys(useSettingsSaveMemoryStore.getState().records).length === 0;
   if (none()) return Promise.resolve();
-  const gone = deferred<void>();
+  const gone = Promise.withResolvers<void>();
   const unsubscribe = useSettingsSaveMemoryStore.subscribe(() => {
     if (none()) {
       unsubscribe();
@@ -392,6 +391,10 @@ function recordsGone(): Promise<void> {
 
 function recordCount(): number {
   return Object.keys(useSettingsSaveMemoryStore.getState().records).length;
+}
+
+function rememberedSave() {
+  return Object.values(useSettingsSaveMemoryStore.getState().records)[0];
 }
 
 function gapsOf(reads: readonly number[]): number[] {
@@ -544,6 +547,44 @@ describe("settings save follow-up reads", () => {
     expect(world.applies).toHaveLength(2);
   });
 
+  it("applies once authn takes it after the apply answered 503 again and again", async () => {
+    const world = createWorld(VARIABLE_PUT, "proposed");
+    world.outside.applyStatuses = [503, 503, 503];
+    const ticket = await world.save();
+    await world.coordinator.settle(ticket, true);
+    await world.applyPosted(1);
+
+    await vi.advanceTimersByTimeAsync(2 * SECOND);
+    await world.applyPosted(2);
+    await vi.advanceTimersByTimeAsync(4 * SECOND);
+    await world.applyPosted(3);
+    expect(rememberedSave().unanswered).toBeNull();
+    await vi.advanceTimersByTimeAsync(8 * SECOND);
+    await world.applyPosted(4);
+    await recordsGone();
+
+    expect(world.applies).toHaveLength(4);
+    expect(world.applied).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops applying a hold authn refused with 400 after two tries", async () => {
+    const world = createWorld(VARIABLE_PUT, "proposed");
+    world.outside.applyStatuses = [400, 400, 400, 400];
+    const ticket = await world.save();
+    await world.coordinator.settle(ticket, true);
+    await world.applyPosted(1);
+    await vi.advanceTimersByTimeAsync(2 * SECOND);
+    await world.applyPosted(2);
+
+    await vi.advanceTimersByTimeAsync(HOUR);
+
+    expect(world.applies).toHaveLength(2);
+    expect(rememberedSave().unanswered).toEqual({
+      revision: HELD_REVISION,
+      tries: 2,
+    });
+  });
+
   it("applies on the follow-up after the host was not connected", async () => {
     const world = createWorld(VARIABLE_PUT, "proposed");
     world.outside.connected = false;
@@ -636,6 +677,30 @@ describe("settings save follow-up bounds", () => {
     ]);
   });
 
+  it("does not push a new save's follow-up out to an older run's long wait", async () => {
+    const world = createWorld(VARIABLE_PUT, "queued");
+    const first = await world.save();
+    await world.coordinator.settle(first, true);
+    await fireFollowUps(8);
+    expect(gapsOf(world.reads).at(-1)).toBe(256 * SECOND);
+    const gate = Promise.withResolvers<void>();
+    world.outside.readGate = gate.promise;
+    await fireFollowUps(1);
+    const readsWithRunOut = world.reads.length;
+
+    const second = await world.save();
+    await world.coordinator.settle(second, false);
+    const savedAt = Date.now();
+    gate.resolve();
+    world.outside.receipt = "proposed";
+    await vi.advanceTimersByTimeAsync(2 * SECOND);
+    await world.applyPosted(1);
+    await recordsGone();
+
+    expect(world.reads[readsWithRunOut] - savedAt).toBe(2 * SECOND);
+    expect(world.applies).toHaveLength(1);
+  });
+
   it("reads no more after stop cancels the armed follow-up", async () => {
     const world = createWorld(VARIABLE_PUT, "queued");
     const ticket = await world.save();
@@ -651,7 +716,7 @@ describe("settings save follow-up bounds", () => {
     const world = createWorld(VARIABLE_PUT, "queued");
     const ticket = await world.save();
     await world.coordinator.settle(ticket, true);
-    const gate = deferred<void>();
+    const gate = Promise.withResolvers<void>();
     world.outside.readGate = gate.promise;
     await vi.advanceTimersByTimeAsync(2 * SECOND);
     expect(world.reads).toHaveLength(2);
@@ -663,7 +728,7 @@ describe("settings save follow-up bounds", () => {
     expect(world.reads).toHaveLength(2);
   });
 
-  it("reads nothing after stop for a save begun before it and answered after it", async () => {
+  it("reads once and arms nothing after stop for a save begun before it and answered after it", async () => {
     const world = createWorld(VARIABLE_PUT, "queued");
     const ticket = await world.save();
     world.coordinator.stop();
