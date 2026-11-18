@@ -214,7 +214,13 @@ async function rangeDrawn(page: Page, ordinal: number): Promise<void> {
 /**
  * Releases the held ranges on the first painted frame where a following list
  * sits off its strict bottom: a streamed reply has grown and the correction
- * has not yet run. Resolves with that view.
+ * has not yet run. The release is the probe's `releaseRanges`, called in the
+ * same frame callback that read the geometry, so the view it resolves with is
+ * the view at delivery: the host answers each range and the session store
+ * takes it in that call, with no timer or promise between. The list's own
+ * render of the arrived rows comes after the callback returns. The probe's
+ * type does not declare the member (it belongs to this fixture alone), so it
+ * is called by name.
  */
 function releaseOffTheBottom(
   page: Page,
@@ -234,10 +240,10 @@ function releaseOffTheBottom(
                 geometry.clientHeight -
                 geometry.scrollTop;
               if (fromEnd > 1) {
-                const release: unknown = Reflect.get(probe, "releaseRangesIn");
+                const release: unknown = Reflect.get(probe, "releaseRanges");
                 if (typeof release !== "function")
-                  throw new Error("no releaseRangesIn on the probe");
-                Reflect.apply(release, probe, [0]);
+                  throw new Error("no releaseRanges on the probe");
+                Reflect.apply(release, probe, []);
                 resolve({ fromEnd, mode });
                 return;
               }

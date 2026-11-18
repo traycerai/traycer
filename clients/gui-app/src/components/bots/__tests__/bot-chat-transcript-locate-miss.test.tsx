@@ -1050,12 +1050,13 @@ describe("a pending jump that waits for its row beyond the bound", () => {
  * deadline in its layout phase, and the two ends made in an event, with a
  * deadline in the same dispatch ahead of their commit. A deadline placed in a
  * landing's commit would show neither guard alone: the layout-phase cancel
- * and the ref that commit writes each stop it.
+ * and the ref that commit writes each stop it. The cancellation itself is
+ * guarded by the hide cases.
  */
 
-/** The bound's timer is cancelled when its jump lands: past the bound, a landed jump says nothing and the store is not asked again. */
+/** After a landing, nothing is said and the store is asked for nothing when the bound's time passes. */
 describe("a pending jump that landed before its bound", () => {
-  it("has its bound's timer cancelled: nothing is said and the store is asked for nothing at the bound", async () => {
+  it("says nothing and asks the store for nothing when the bound's time passes", async () => {
     mocks.locate = () => Promise.resolve(FOUND_ROW);
     const view = mountTranscript();
     await settleLegendList();

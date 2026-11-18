@@ -1425,6 +1425,10 @@ export function WindowedFixture(): ReactElement {
       releaseRangesIn: (ms: number): void => {
         window.setTimeout(() => host.releaseRanges(), ms);
       },
+      // Answers every held range in the caller's own task: the store has the
+      // rows before this returns, so a caller that sampled the list in the
+      // same task knows what it looked like at delivery.
+      releaseRanges: (): void => host.releaseRanges(),
       // What a surface holding a pending jump does: name the ordinal it
       // waits on, so the store plans its hydration, and clear it with `null`.
       holdOrdinal: (ordinal: number | null): void =>
