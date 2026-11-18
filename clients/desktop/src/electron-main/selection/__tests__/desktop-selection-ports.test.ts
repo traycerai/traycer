@@ -1707,6 +1707,64 @@ describe("DesktopHostFleetSource.refresh outcome", () => {
     fleet.dispose();
   });
 
+  it("after a switch admitted over a later mark, the new identity's next bearer read is adopted while pushes stay held to the previous identity's floor", async () => {
+    const { fleet, identity, authSession, registry, published, setNow } =
+      await userAWithPersonalPushAt300();
+
+    setNow(250);
+    setVerifiedSession(authSession, signedInSnapshot("user-b", "token-b"));
+    identity.set("user-b", 1);
+    await registry.started(1);
+    registry.calls[1]?.resolve({
+      kind: "ok",
+      response: {
+        hosts: [buildHostListItem("host-b"), buildTeamHostListItem("team-b")],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(snapshotHostIds(fleet)).toContain("host-b");
+    });
+
+    // B's own adopted time (250) orders B's reads: 260 is newer, although A's
+    // personal mark (300) is still above it.
+    setNow(260);
+    const next = fleet.refresh();
+    await registry.started(2);
+    registry.calls[2]?.resolve({
+      kind: "ok",
+      response: {
+        hosts: [
+          buildHostListItem("host-b"),
+          buildHostListItem("host-b-added"),
+          buildTeamHostListItem("team-b"),
+          buildTeamHostListItem("team-b-added"),
+        ],
+      },
+    });
+    await expect(next).resolves.toEqual({ kind: "published" });
+    expect(snapshotHostIds(fleet)).toEqual([
+      "host-b",
+      "host-b-added",
+      "local-host",
+      "team-b",
+      "team-b-added",
+    ]);
+
+    // A push read at 280 is newer than B's adopted 250/260 but older than the
+    // previous identity's 300: it is still not adopted or broadcast.
+    const publishedBefore = published.length;
+    const snapshotBefore = fleet.snapshot();
+    await fleet.acceptPushedRows({
+      response: { hosts: [buildHostListItem("host-b-pushed")] },
+      readAtMs: 280,
+      openedAtGeneration: 1,
+    });
+    expect(published).toHaveLength(publishedBefore);
+    expect(fleet.snapshot()).toBe(snapshotBefore);
+    expect(snapshotHostIds(fleet)).not.toContain("host-b-pushed");
+    fleet.dispose();
+  });
+
   it("keeps declining pushes older than the previous identity's marks, without a broadcast or a fleet read", async () => {
     const { fleet, identity, authSession, registry, published, setNow } =
       await userAWithPersonalPushAt300();

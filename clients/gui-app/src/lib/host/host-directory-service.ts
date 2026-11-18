@@ -1022,9 +1022,6 @@ export class HostDirectoryService implements IHostDirectoryService {
       );
       return this.snapshot();
     }
-    if (outcome.kind === "failed") {
-      return this.retainOrDropAfterFailedRefresh(era);
-    }
     // The ORDERING fence, completing the era fences above. A constructive
     // read issued under a superseded credential is still ALLOWED to commit -
     // it describes the right account's hosts, and discarding it outright
@@ -1043,6 +1040,12 @@ export class HostDirectoryService implements IHostDirectoryService {
         { outcome: outcome.kind },
       );
       return this.snapshot();
+    }
+    // After the ordering fence, so a FAILED read from an older credential
+    // generation that lands after a newer commit is discarded like any other
+    // stale result, rather than recording a failure over the newer success.
+    if (outcome.kind === "failed") {
+      return this.retainOrDropAfterFailedRefresh(era);
     }
     this.recordCommit(era, outcome.kind === "signed-out");
     // Captured BEFORE the overwrite: this is the only place that holds both

@@ -711,6 +711,46 @@ describe("HostDirectoryService - announcing a concluded listing against the flee
     expect(fleet.calls()).toBe(2);
   });
 
+  it("a failed registry read from an older credential generation that lands after a newer commit is discarded", async () => {
+    const host = makeHost(false, null);
+    let generation = 0;
+    let resolveOlderFetch: (outcome: RemoteHostFetchOutcome) => void = () => {
+      throw new Error("the older fetch has not started");
+    };
+    let fetches = 0;
+    const directory = makeDirectory({
+      authContextId: () => "user-1",
+      credentialGeneration: () => generation,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: () => {
+        fetches += 1;
+        if (fetches > 1) {
+          return Promise.resolve({ kind: "hosts", entries: [listedHost] });
+        }
+        return new Promise<RemoteHostFetchOutcome>((resolve) => {
+          resolveOlderFetch = resolve;
+        });
+      },
+    });
+    await directory.startSeeded();
+
+    const older = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fetches).toBe(1);
+    });
+    generation += 1;
+    await directory.refresh();
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+    expect(directory.hasFailedDiscovery()).toBe(false);
+
+    resolveOlderFetch({ kind: "failed" });
+    await older;
+
+    expect(directory.hasFailedDiscovery()).toBe(false);
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+  });
+
   it("a failed registry read after a good listing marks failure, and the next unchanged listing re-requests the fleet", async () => {
     const host = makeHost(true, null);
     const fleetRefresh = vi.spyOn(host, "refreshHostFleet");

@@ -38,11 +38,11 @@ import {
   type SelectionAuthorityClientTransport,
 } from "@traycer-clients/shared/host-selection/buffered-selection-authority-client";
 import type { AuthorityLog } from "@traycer-clients/shared/host-selection/selection-authority-engine";
-import type { FleetRefreshOutcome } from "@traycer-clients/shared/platform/runner-host";
 import {
   RunnerHostSync,
   SelectionAuthorityChannels,
 } from "../ipc-contracts/ipc-channels";
+import type { FleetRefreshOutcome } from "../ipc-contracts/selection-authority-ipc";
 import { readSyncNumber } from "./sync-bootstrap";
 
 /** No issued generation: main declined the sync read (unknown sender). */

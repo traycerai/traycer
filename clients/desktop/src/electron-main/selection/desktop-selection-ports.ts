@@ -331,8 +331,18 @@ export class DesktopHostFleetSource implements HostFleetSource {
    * fleet until the host's next read supersedes it.
    */
   private readonly watermarks: Record<RegistryScope, ScopeWatermark> = {
-    personal: { seq: 0, readAtMs: Number.NEGATIVE_INFINITY, generation: null },
-    team: { seq: 0, readAtMs: Number.NEGATIVE_INFINITY, generation: null },
+    personal: {
+      seq: 0,
+      readAtMs: Number.NEGATIVE_INFINITY,
+      replayFloorMs: Number.NEGATIVE_INFINITY,
+      generation: null,
+    },
+    team: {
+      seq: 0,
+      readAtMs: Number.NEGATIVE_INFINITY,
+      replayFloorMs: Number.NEGATIVE_INFINITY,
+      generation: null,
+    },
   };
   private readonly identitySubscription: SelectionSubscription;
   private readonly onHostChange: () => void;
@@ -667,13 +677,9 @@ export class DesktopHostFleetSource implements HostFleetSource {
    * This read's rows for `scope`, or null when it does not speak for the
    * scope or a newer read of the scope has already been adopted.
    *
-   * The read-time fence does not hold a BEARER read for the current identity
-   * against a mark another identity's adoption left: that read was made by
-   * this process with this identity's credential, so it is this identity's
-   * answer whatever the wall clock says, and declining it on a mark from an
-   * account the user has left (a clock that stepped back) would serve the new
-   * account nothing. Pushes keep the fence across the change - the reason it
-   * is retained at all.
+   * The read-time fence is {@link readTimeFence}: a push is held to every
+   * mark, the cross-account replay floor included; a bearer read for the
+   * current identity only to marks that identity's own adoptions set.
    */
   private admitScope(
     scope: RegistryScope,
@@ -686,11 +692,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
     const rows = scoped[scope];
     if (rows === null) return null;
     const watermark = this.watermarks[scope];
-    const markFromAnotherIdentity =
-      read.bearer &&
-      currentIdentity &&
-      watermark.generation !== read.generation;
-    if (!markFromAnotherIdentity && readAtMs < watermark.readAtMs) {
+    if (readAtMs < readTimeFence(watermark, read, currentIdentity)) {
       // An answer that observed the scope EARLIER than one already adopted.
       // Declined before the publish, not just before the adoption: the renderer
       // push is the display half of the same fact, and showing windows a fleet
@@ -877,7 +879,15 @@ export class DesktopHostFleetSource implements HostFleetSource {
       // whose rows are the ones this port is serving for the scope", so a
       // completion declined above - or one that never reached this method -
       // must not raise it and lock out the read that should win.
-      watermark.readAtMs = Math.max(watermark.readAtMs, readAtMs);
+      if (watermark.generation === generation) {
+        watermark.readAtMs = Math.max(watermark.readAtMs, readAtMs);
+      } else {
+        watermark.replayFloorMs = Math.max(
+          watermark.replayFloorMs,
+          watermark.readAtMs,
+        );
+        watermark.readAtMs = readAtMs;
+      }
       watermark.generation = generation;
       this.rows[scope] = scoped[scope] ?? [];
     }
@@ -997,6 +1007,31 @@ function registryScopeOf(row: HostListItem): RegistryScope {
   return row.owner?.kind === "team" ? "team" : "personal";
 }
 
+/**
+ * The read time a read must not be older than to be admitted for a scope.
+ *
+ * A BEARER read issued under the current identity is held only to the marks
+ * that identity's own adoptions set (`readAtMs` once the scope serves its
+ * generation, nothing before): this process made it with this identity's
+ * credential, so it is this identity's answer whatever the wall clock says,
+ * and a mark from an account the user has left (a clock that stepped back)
+ * must not decline it - or freeze the reads after it. A PUSH, and any read
+ * issued under an earlier identity, is held to every mark, the cross-account
+ * replay floor included: that is the reason the marks outlive the switch.
+ */
+function readTimeFence(
+  watermark: ScopeWatermark,
+  read: { readonly generation: number; readonly bearer: boolean },
+  currentIdentity: boolean,
+): number {
+  if (read.bearer && currentIdentity) {
+    return watermark.generation === read.generation
+      ? watermark.readAtMs
+      : Number.NEGATIVE_INFINITY;
+  }
+  return Math.max(watermark.readAtMs, watermark.replayFloorMs);
+}
+
 /** One read's rows per scope; null for a scope the read does not speak for. */
 type ScopedRows = Readonly<
   Record<RegistryScope, readonly HostListItem[] | null>
@@ -1004,7 +1039,17 @@ type ScopedRows = Readonly<
 
 interface ScopeWatermark {
   seq: number;
+  /** The newest read time adopted for this scope under `generation`. */
   readAtMs: number;
+  /**
+   * The newest read time adopted for this scope under any EARLIER
+   * generation: the cross-account replay floor. It fences pushes only - a host
+   * snapshot read in a departed account's era must not win after a switch -
+   * and never the current identity's own bearer reads, whose ordering is
+   * `readAtMs` alone. Kept apart so a clock that stepped back across a switch
+   * freezes neither: B's later reads order against B's own adopted time.
+   */
+  replayFloorMs: number;
   /**
    * The identity generation whose read this scope's served rows were adopted
    * under, or null before any adoption. The two fences above outlive an
