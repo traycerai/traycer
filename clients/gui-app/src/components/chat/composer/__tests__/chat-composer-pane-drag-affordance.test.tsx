@@ -13,7 +13,13 @@ import {
 } from "@/lib/composer/__tests__/file-drop-fixtures";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -313,6 +319,7 @@ const SETTINGS: ChatRunSettings = {
 let queryClient = new QueryClient();
 
 beforeEach(() => {
+  vi.useFakeTimers();
   installFreshIndexedDb();
   queryClient = new QueryClient();
   answers.harnesses = [harnessRow("traycer", {})];
@@ -333,6 +340,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
 });
 
 function composerElement(restingSandbox: RestingChatSandbox | null) {
@@ -399,6 +407,39 @@ function report(): ReportDrag {
   return { ...fileTransfer([pdfFile("report.pdf")]), dropEffect: "none" };
 }
 
+/**
+ * The composer's editor, once the fake clock has let it mount. The 40
+ * advances of 50 ms are a fail-only guard: they end a test whose editor never
+ * mounts with a named error, and decide no pass.
+ */
+async function mountedEditor(): Promise<HTMLElement> {
+  for (let step = 0; step < 40; step += 1) {
+    const editor = screen.queryByTestId("composer-editor");
+    if (editor !== null) return editor;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+  }
+  throw new Error("the composer's editor did not mount");
+}
+
+/**
+ * Runs the pending timers until none is left. The editor's own one-shot timers
+ * (prosemirror-view's 20 ms selection check and `DOMObserver` flush, TipTap's
+ * 1 ms `scheduleDestroy` and its 0 ms core timer) run out in two runs; zero
+ * left means nothing scheduled can raise the overlay afterwards. The five runs
+ * are a fail-only guard: only the count reaching zero decides a pass.
+ */
+async function runTimersUntilQuiet(): Promise<void> {
+  for (let run = 1; run <= 5; run += 1) {
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    if (vi.getTimerCount() === 0) return;
+  }
+  throw new Error(`${String(vi.getTimerCount())} timers are still pending`);
+}
+
 function overlayShown(): boolean {
   return OVERLAY_TITLES.some(
     (title) => screen.queryAllByText(title).length > 0,
@@ -416,7 +457,8 @@ describe("the agent composer's pane as a drag affordance", () => {
         <DropPane>{composerElement(null)}</DropPane>
       </QueryClientProvider>,
     );
-    await screen.findByTestId("composer-editor");
+    await mountedEditor();
+    await runTimersUntilQuiet();
 
     dragOverOn(screen.getByTestId("transcript"));
 
@@ -429,7 +471,8 @@ describe("the agent composer's pane as a drag affordance", () => {
         <DropPane>{composerElement(null)}</DropPane>
       </QueryClientProvider>,
     );
-    const editor = await screen.findByTestId("composer-editor");
+    const editor = await mountedEditor();
+    await runTimersUntilQuiet();
     dragOverOn(screen.getByTestId("transcript"));
 
     dragOverOn(editor);
@@ -445,11 +488,13 @@ describe("the agent composer's pane as a drag affordance", () => {
         <div data-testid="outside" />
       </QueryClientProvider>,
     );
-    await screen.findByTestId("composer-editor");
+    await mountedEditor();
+    await runTimersUntilQuiet();
     dragOverOn(screen.getByTestId("transcript"));
     expect(overlayShown()).toBe(true);
 
     dragOverOn(screen.getByTestId("outside"));
+    await runTimersUntilQuiet();
     expect(overlayShown()).toBe(false);
 
     dragOverOn(screen.getByTestId("transcript"));
@@ -457,6 +502,7 @@ describe("the agent composer's pane as a drag affordance", () => {
     fireEvent.drop(screen.getByTestId("transcript"), {
       dataTransfer: report(),
     });
+    await runTimersUntilQuiet();
     expect(overlayShown()).toBe(false);
   });
 
@@ -466,7 +512,8 @@ describe("the agent composer's pane as a drag affordance", () => {
         <DropPane>{composerElement(null)}</DropPane>
       </QueryClientProvider>,
     );
-    await screen.findByTestId("composer-editor");
+    await mountedEditor();
+    await runTimersUntilQuiet();
 
     fireEvent.dragOver(screen.getByTestId("transcript"), {
       dataTransfer: {
@@ -478,6 +525,7 @@ describe("the agent composer's pane as a drag affordance", () => {
       },
     });
 
+    await runTimersUntilQuiet();
     expect(overlayShown()).toBe(false);
   });
 });
