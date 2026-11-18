@@ -1,3 +1,4 @@
+import { ownValue } from "@/lib/own-value";
 /**
  * Display labels for the open-string and closed-enum fields on an event row.
  *
@@ -16,7 +17,7 @@ const NOTICE_REASON_LABELS: Readonly<Record<string, string>> = {
 
 export function commGraphNoticeReasonLabel(reason: string | null): string {
   if (reason === null) return "Notice";
-  return NOTICE_REASON_LABELS[reason] ?? reason;
+  return ownValue(NOTICE_REASON_LABELS, reason) ?? reason;
 }
 
 /**

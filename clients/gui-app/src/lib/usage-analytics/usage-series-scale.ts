@@ -1,3 +1,4 @@
+import { ownValue } from "@/lib/own-value";
 /**
  * Categorical color assignment for the per-day chart's harness/model
  * breakdown.
@@ -156,7 +157,7 @@ function allocateHarnessBrandColors(
   allocation: HarnessColorAllocation,
 ): void {
   for (const seriesKey of primary) {
-    const fixed = FIXED_HARNESS_COLOR[seriesKey];
+    const fixed = ownValue(FIXED_HARNESS_COLOR, seriesKey);
     if (fixed !== undefined) {
       reserveHarnessBrandColor(allocation, seriesKey, fixed);
     }
@@ -164,7 +165,7 @@ function allocateHarnessBrandColors(
 
   for (const seriesKey of primary) {
     if (allocation.colorByKey.has(seriesKey)) continue;
-    const preferred = PREFERRED_HARNESS_COLOR[seriesKey];
+    const preferred = ownValue(PREFERRED_HARNESS_COLOR, seriesKey);
     if (
       preferred !== undefined &&
       !preferred.reservedSlots.some((slot) =>
@@ -228,7 +229,7 @@ export function buildHarnessUsageSeriesScale(
   for (const seriesKey of primary) {
     if (allocation.colorByKey.has(seriesKey)) continue;
     const slot = findAvailableUsageSeriesSlot(
-      HARNESS_PREFERRED_SLOT[seriesKey],
+      ownValue(HARNESS_PREFERRED_SLOT, seriesKey),
       occupiedSlots,
       allocation.brandFamilyReservedSlots,
       allocation.exactColorReservedSlots,

@@ -16,6 +16,7 @@ import type {
   RetrospectivePageId,
   SharedInUseItem,
 } from "@/components/settings/move/retrospective-sheet";
+import { ownValue } from "@/lib/own-value";
 
 const ROOM_KINDS = new Set(["skill", "agent_selection_guide"]);
 
@@ -62,7 +63,7 @@ function pageForItem(item: EnvironmentItemStatus): RetrospectivePageId | null {
   if (item.kind === "secret") {
     return looksLikeApiKey(item.key) ? "providers" : "secrets";
   }
-  return KIND_PAGE[item.kind] ?? null;
+  return ownValue(KIND_PAGE, item.kind) ?? null;
 }
 
 function groupKey(

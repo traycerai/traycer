@@ -27,6 +27,7 @@ import {
   SANDBOX_CREATE_ENVIRONMENT_UNAVAILABLE_LINE,
   sandboxNotAMemberLine,
 } from "@/components/hosts/sandbox-create-model";
+import { ownValue } from "@/lib/own-value";
 
 /** Keep the control-plane refusal available to the row and its diagnostics. */
 export class SandboxOperationError extends Error {
@@ -136,7 +137,7 @@ export function sandboxFailureMessage(failure: SandboxControlFailure): string {
       return insufficientCreditCopy(failure);
     case SANDBOX_REFUSAL_CODE_SHAPE_NOT_OFFERED:
       return (
-        SHAPE_REASON_COPY[failure.reason ?? ""] ??
+        ownValue(SHAPE_REASON_COPY, failure.reason ?? "") ??
         "That size is outside what's offered."
       );
     // The server names the team and its admins; its sentence is the copy.
