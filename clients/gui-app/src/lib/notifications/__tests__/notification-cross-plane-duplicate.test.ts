@@ -106,6 +106,7 @@ describe("cross-plane duplicate notification dedup (host emission + cloud relay)
       ),
       playChime: vi.fn(),
       onToastClick: vi.fn(),
+      notifies: () => true,
     };
   }
 
@@ -273,6 +274,7 @@ describe("cross-plane duplicate notification dedup (host emission + cloud relay)
       ),
       playChime: vi.fn(),
       onToastClick: vi.fn(),
+      notifies: () => true,
     };
     await displayCloudSnapshotArrivals(
       [cloudRowFor(host, "durable-after-reload", originHostId)],
@@ -298,6 +300,7 @@ describe("cross-plane duplicate notification dedup (host emission + cloud relay)
       ),
       playChime: vi.fn(),
       onToastClick: vi.fn(),
+      notifies: () => true,
     };
 
     await displayHostChannelEmission([host], target, originHostId);
@@ -329,6 +332,7 @@ describe("cross-plane duplicate notification dedup (host emission + cloud relay)
       showNotification,
       playChime: vi.fn(),
       onToastClick: vi.fn(),
+      notifies: () => true,
     };
 
     await displayHostChannelEmission([host], target, originHostId);
@@ -361,6 +365,7 @@ describe("cross-plane duplicate notification dedup (host emission + cloud relay)
       showNotification,
       playChime: vi.fn(),
       onToastClick: vi.fn(),
+      notifies: () => true,
     };
 
     await displayCloudSnapshotArrivals(
@@ -386,6 +391,7 @@ describe("cross-plane duplicate notification dedup (host emission + cloud relay)
       showNotification: vi.fn(() => Promise.reject(new Error("ipc failure"))),
       playChime: vi.fn(),
       onToastClick: vi.fn(),
+      notifies: () => true,
     };
 
     // Focused, so the local fallback (gated on focus, never unconditional)
@@ -438,6 +444,7 @@ describe("cross-plane duplicate notification dedup (host emission + cloud relay)
       showNotification: hostShow,
       playChime: vi.fn(),
       onToastClick: vi.fn(),
+      notifies: () => true,
     };
 
     const hostCall = displayHostChannelEmission(
@@ -492,6 +499,7 @@ describe("cross-plane duplicate notification dedup (host emission + cloud relay)
       ),
       playChime: vi.fn(),
       onToastClick: vi.fn(),
+      notifies: () => true,
     };
 
     await displayHostChannelEmission([a, b], target, originHostId);
@@ -609,6 +617,7 @@ describe("cross-plane duplicate notification dedup (host emission + cloud relay)
       showNotification,
       playChime: vi.fn(),
       onToastClick: vi.fn(),
+      notifies: () => true,
     };
 
     const call = displayHostChannelEmission([host], target, originHostId);
@@ -655,6 +664,7 @@ describe("cross-plane duplicate notification dedup (host emission + cloud relay)
       showNotification: vi.fn(() => hostOutcome),
       playChime: vi.fn(),
       onToastClick: vi.fn(),
+      notifies: () => true,
     };
     const hostCall = displayHostChannelEmission(
       [host],

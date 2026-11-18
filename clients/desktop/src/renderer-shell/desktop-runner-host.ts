@@ -58,6 +58,7 @@ import type {
   IHostTray,
   IFileDropHost,
   FileSaveRequest,
+  FleetRefreshOutcome,
   IFileSaveHost,
   IHostLifecycleHost,
   IMigrationHost,
@@ -503,7 +504,7 @@ export interface DesktopPreloadBridge {
    * buffering, so the renderer only has to attach and subscribe.
    */
   selectionAuthority: SelectionAuthorityClient;
-  refreshSelectionFleet: () => Promise<void>;
+  refreshSelectionFleet: () => Promise<FleetRefreshOutcome>;
 }
 
 export interface DesktopFileDropsBridge {
@@ -986,7 +987,7 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly statusBarTap: null = null;
   readonly hostControllerStatus: DesktopHostControllerStatusBridge;
   readonly selectionAuthority: SelectionAuthorityClient;
-  private readonly refreshSelectionFleet: () => Promise<void>;
+  private readonly refreshSelectionFleet: () => Promise<FleetRefreshOutcome>;
   readonly deviceFlow: IDeviceFlowHost;
 
   private readonly bridge: DesktopPreloadBridge;
@@ -1174,7 +1175,7 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.requestMicrophoneAccess();
   }
 
-  refreshHostFleet(): Promise<void> {
+  refreshHostFleet(): Promise<FleetRefreshOutcome> {
     return this.refreshSelectionFleet();
   }
 

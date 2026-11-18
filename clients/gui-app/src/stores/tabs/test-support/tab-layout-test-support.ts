@@ -11,7 +11,11 @@ import type { TabRef } from "@/stores/tabs/types";
 export function resetStores(): void {
   useTabsStore.setState(useTabsStore.getInitialState(), true);
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
-  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  useLandingDraftStore.setState({
+    drafts: [],
+    activeDraftId: null,
+    resumeDraftId: null,
+  });
   __resetTabSyncCoordinatorForTesting();
 }
 

@@ -27,6 +27,7 @@ import {
   type ComposerPromptEditorHandle,
 } from "@/components/chat/composer/composer-prompt-editor";
 import { ChatComposerAttachmentsStrip } from "@/components/chat/composer/chat-composer-attachments-strip";
+import { REFUSING_DROP_ZONE_PROPS } from "@/components/chat/composer/composer-drop-scope";
 import { ComposerContentRenderer } from "@/components/chat/composer/content-renderer";
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
@@ -1056,7 +1057,7 @@ function InlineUserMessageEditor({
   );
 
   return (
-    <div ref={containerRef} className="w-full">
+    <div ref={containerRef} className="w-full" {...REFUSING_DROP_ZONE_PROPS}>
       <ComposerArea
         pickerStore={pickerStore}
         overlay={null}

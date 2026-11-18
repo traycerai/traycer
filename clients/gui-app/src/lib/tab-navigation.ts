@@ -43,14 +43,19 @@ import {
 } from "@/stores/epics/canvas/store";
 import {
   isOpenLandingDraft,
-  newestLandingDraftId,
+  resumableLandingDraftId,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import { tabRouteOptions } from "@/stores/tabs/registry";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { HOME_TAB_REF, isHomePath } from "@/stores/tabs/kinds/home";
 import { isTracySurfaceOpen, TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
-import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import {
+  retireTracyLandings,
+  tracyLandingsRetired,
+  tracySurfaceHostId,
+  useTracySurfaceStore,
+} from "@/stores/bots/tracy-surface-store";
 import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import {
   tabCommandCoordinator,
@@ -215,6 +220,39 @@ interface QueuedActivation {
   readonly intent: TabActivationIntent;
   readonly options: TabNavigationOptions | undefined;
   readonly tracyOrigin: StampedTracyOrigin | null;
+  readonly tracyAsk: TracyAsk | null;
+}
+
+/**
+ * What an opening of the Tracy surface was asked under while the tabs were
+ * hydrating. It runs once they are ready only if both still stand; otherwise
+ * it was asked of something the app no longer shows. The count moves each
+ * time the surface withdraws its landings (another account signs in, it
+ * moves to another host, it closes), so the surface coming back to the same
+ * host does not bring an opening's landing back. The host covers the writes
+ * that move the surface without withdrawing anything (`tracyLandingsRetired`
+ * names them).
+ */
+interface TracyAsk {
+  readonly landingsRetired: number;
+  readonly surfaceHostId: string | null;
+}
+
+function tracyAskOf(intent: TabActivationIntent): TracyAsk | null {
+  return intent.kind === "tracy"
+    ? {
+        landingsRetired: tracyLandingsRetired(),
+        surfaceHostId: tracySurfaceHostId(),
+      }
+    : null;
+}
+
+function tracyAskStands(ask: TracyAsk | null): boolean {
+  return (
+    ask === null ||
+    (ask.landingsRetired === tracyLandingsRetired() &&
+      ask.surfaceHostId === tracySurfaceHostId())
+  );
 }
 
 interface QueuedExternal {
@@ -794,7 +832,13 @@ export class TabNavigationController {
     const tracyOrigin = stampedTracyOriginOf(intent);
     if (!this.hydrationReady) {
       const superseded = this.queuedActivation;
-      this.queuedActivation = { navigate, intent, options, tracyOrigin };
+      this.queuedActivation = {
+        navigate,
+        intent,
+        options,
+        tracyOrigin,
+        tracyAsk: tracyAskOf(intent),
+      };
       this.notifyPendingListeners();
       superseded?.options?.onRejected?.(
         new Error("Another task was opened before this task could open."),
@@ -1030,12 +1074,19 @@ export class TabNavigationController {
     this.queuedActivation = null;
     if (queuedActivation !== null) {
       this.notifyPendingListeners();
-      const accepted = this.executeActivation(
-        queuedActivation.navigate,
-        queuedActivation.intent,
-        queuedActivation.options,
-        queuedActivation.tracyOrigin,
-      );
+      const stands = tracyAskStands(queuedActivation.tracyAsk);
+      // An opening that no longer stands takes its landing with it: the
+      // surface may still show that channel, which would spend it. Only one
+      // opening is ever held, so the count this raises refuses no other.
+      if (!stands) retireTracyLandings();
+      const accepted =
+        stands &&
+        this.executeActivation(
+          queuedActivation.navigate,
+          queuedActivation.intent,
+          queuedActivation.options,
+          queuedActivation.tracyOrigin,
+        );
       if (!accepted) {
         queuedActivation.options?.onRejected?.(
           new Error("The task could not be opened. Try again."),
@@ -2184,7 +2235,7 @@ export class TabNavigationController {
     }
     this.activateExternalTarget({
       kind: "draft",
-      draftId: newestLandingDraftId(),
+      draftId: resumableLandingDraftId(),
       // Same as `/draft/new`: a minted draft reads its settings from the
       // composer's placement, the host its folders come from.
       settings: null,

@@ -16,6 +16,7 @@ import type {
   BotAnnouncement,
   BotQuestion,
   BotSurfaceReference,
+  BotFeedbackDraftProjection,
 } from "@traycer/protocol/persistence/epic/messages";
 import type { BotSendReceipt } from "@traycer/protocol/persistence/epic/content-blocks";
 import type {
@@ -2394,6 +2395,7 @@ interface AssistantTurnAccumulator {
   question: BotQuestion | null;
   /** What in a task a bot's post points at, with its resolution; `null` on every other turn. */
   surface: BotSurfaceReference | null;
+  feedbackDraft: BotFeedbackDraftProjection | null;
   /** The member's post a bot's direct reply answers; `null` on every other turn. */
   repliesTo: string | null;
   imageResolutionsByBlockId: Map<
@@ -2918,6 +2920,7 @@ function renderPersistedAssistantMessageTurn(
     stoppedSignature(stopped),
     questionSignature(acc.question),
     surfaceSignature(acc.surface),
+    JSON.stringify(acc.feedbackDraft),
   ].join(":");
   const cached = turnCache.get(turnKey);
   if (cached !== undefined && cached.cacheKey === cacheKey) {
@@ -2974,6 +2977,8 @@ function mergeBotRowFields(
   existing.options = existing.options ?? message.options ?? null;
   existing.question = existing.question ?? message.question ?? null;
   existing.surface = existing.surface ?? message.surface ?? null;
+  existing.feedbackDraft =
+    existing.feedbackDraft ?? message.feedbackDraft ?? null;
   existing.repliesTo = existing.repliesTo ?? message.repliesTo ?? null;
 }
 
@@ -3050,6 +3055,7 @@ function addAssistantMessageToAccumulator(
     options: null,
     question: null,
     surface: null,
+    feedbackDraft: null,
     repliesTo: null,
     imageResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),
@@ -3464,17 +3470,26 @@ function renderAssistantTurnRows(
   );
   // Stamp the recovery-action anchor last: completion/run-state passes rebuild
   // row objects, so they must finish before its single owner is selected.
-  if (!plan.split)
-    return withManualRungAnchor(withTurnCompletion(visibleRows, input));
+  const completedRows = withTurnCompletion(
+    plan.split
+      ? attachRunStateToTrailingAssistantSlice(
+          visibleRows,
+          input,
+          plan,
+          rowIdByBlockId,
+        )
+      : visibleRows,
+    input,
+  );
+  const { feedbackDraft } = input.acc;
+  if (feedbackDraft === null) return withManualRungAnchor(completedRows);
+  const firstAssistantIndex = completedRows.findIndex(
+    (row) => row.role === "assistant",
+  );
+  // Select after hidden slices and trailing boundaries have been resolved.
   return withManualRungAnchor(
-    withTurnCompletion(
-      attachRunStateToTrailingAssistantSlice(
-        visibleRows,
-        input,
-        plan,
-        rowIdByBlockId,
-      ),
-      input,
+    completedRows.map((row, index) =>
+      index === firstAssistantIndex ? { ...row, feedbackDraft } : row,
     ),
   );
 }
@@ -4126,6 +4141,9 @@ function renderUserMessage(
     ...(message.questionAnswers === undefined
       ? {}
       : { questionAnswers: message.questionAnswers }),
+    ...(message.repliesTo === undefined
+      ? {}
+      : { repliesTo: message.repliesTo }),
     ...(message.message.kind === "slack"
       ? { slackMessage: message.message }
       : {}),
@@ -4240,6 +4258,7 @@ function renderLiveAssistant(
     options: null,
     question: null,
     surface: null,
+    feedbackDraft: null,
     repliesTo: null,
     imageResolutionsByBlockId: new Map(),
     generatedImageBlockIdByHash: new Map(),

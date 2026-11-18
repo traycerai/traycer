@@ -9,18 +9,17 @@
  * follows, read cursors and levels from the case's script. Only the channels'
  * and threads' sessions (rows are read from them), the notification
  * indicators, the tab navigation and the browser's IntersectionObserver are
- * replaced.
+ * replaced. The fixtures, the mounted tree and the per-case lifecycle are in
+ * `bot-threads-view-harness.tsx`.
  */
 import {
   botMentionHostClientMock,
   emptyBotMentionHostListsMock,
 } from "@/components/bots/__tests__/bot-mention-host-test-support";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
   fireEvent,
-  render,
   screen,
   waitFor,
   within,
@@ -35,68 +34,36 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
-import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
-import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import {
-  hostRpcRegistry,
-  type HostRpcRegistry,
-} from "@traycer/protocol/host/index";
-import type {
-  BotThreadAnchors,
-  BotThreadSummary,
-  BotTurnRef,
-} from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
   BotQuestionItem,
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
-import type {
-  BotNotificationLevel,
-  BotReadCursorReadResponse,
-  BotRecord,
-  BotThreadFollow,
-  BotThreadFollowSetRequest,
-} from "@traycer/protocol/host/bot/schemas";
 import {
   botQuestionsText,
   conversationRequestMessageId,
 } from "@traycer/protocol/persistence/epic/messages";
-import type {
-  ChatSessionState,
-  ChatSessionStoreHandle,
-} from "@/stores/chats/chat-session-store";
+import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
-import type {
-  TabActivationIntent,
-  TabNavigationIntent,
-} from "@/lib/tab-navigation/intents";
+import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import { expectArtifactOpenIntent } from "@/components/bots/__tests__/artifact-open-intent-support";
-import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
 import { CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME } from "@/components/chat/chat-navigation-highlight";
-import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
-import { MobileBotHeaderSlotProvider } from "@/components/layout/header/mobile-bot-header-slot";
 import { tabItemId } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
-  negotiateBotSend,
-  signInViewer,
-  resetBotFailedRequestSupport,
-} from "@/components/bots/__tests__/bot-failed-request-test-support";
+  answerDraftKey,
+  useBotDraftsStore,
+} from "@/stores/bots/bot-drafts-store";
 import {
   botReply,
   memberPost,
   turnRef,
-  turnsAskedFor,
 } from "@/components/bots/__tests__/bot-turn-test-support";
 import {
   chatSessionWithPosts,
   chatSessionWithThreadRows,
   postRow,
 } from "./bot-channel-rows-test-support";
+import { QueryClient } from "@tanstack/react-query";
 import * as Y from "yjs";
 import { createEpicSessionTestHarness } from "@/components/epic-canvas/__tests__/test-epic-session-harness";
 import {
@@ -113,49 +80,50 @@ import { answerArtifactObjectRead } from "@/lib/host/test-support/artifact-objec
 import { setArtifactFieldsInDocForTests } from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import { useBotThreadFoldStore } from "@/stores/bots/bot-thread-fold-store";
+import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
+import { useLayoutStore } from "@/stores/layout/layout-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import { mocks } from "./bot-threads-view-state";
+import {
+  FakeIntersectionObserver,
+  foregroundWindow,
+  intersectTarget,
+  observersOf,
+} from "@/components/bots/__tests__/bot-read-observer-test-support";
+import {
+  callThread,
+  card,
+  deliverReply,
+  drawnReplies,
+  FOLLOWING,
+  hydrateRepliesAt,
+  installBotThreadsViewCaseLifecycle,
+  listed,
+  mount,
+  mountBotBoundElsewhere,
+  queryClient,
+  readRow,
+  replyTexts,
+  revealFull,
+  screenReaderCount,
+  script,
+  setMountLevel2,
+  setMountUnderHeader,
+  summaryVisibleText,
+  TEAM,
+  thread,
+  TRACY,
+  windowedPlaceholders,
+  windowedSession,
+  withReplies,
+} from "./bot-threads-view-harness";
 
-/** What the host answers for one bot. */
-type BotScript = {
-  threads: BotThreadSummary[];
-  /** The rows the bot's bound host says it opens a thread under; `null` for a host that says none. */
-  threadAnchors: BotThreadAnchors | null;
-  follows: Record<string, BotThreadFollow>;
-  cursors: BotReadCursorReadResponse;
-  levels: Record<string, BotNotificationLevel>;
-};
-
-const mocks = vi.hoisted(() => ({
-  /** The host's answers by bot id. */
-  hosted: {} as Record<string, BotScript>,
-  /** The listed bots, in the column's order. */
-  bots: [] as BotRecord[],
-  /** Methods the host does not advertise. */
-  unsupported: new Set<string>(),
-  /** Each bot channel's posts by message id. */
-  posts: {} as Record<string, Record<string, string>>,
-  /** Each bot channel's session, where a case scripts its rows in full. */
-  channels: {} as Record<string, ChatSessionStoreHandle>,
-  /** Each thread's reply texts by thread id, in order; its session holds them. */
-  replies: {} as Record<string, string[]>,
-  /** A thread's rows by thread id, where a case scripts them in full. */
-  replyRows: {} as Record<string, Message[]>,
-  /** The turns `bot.turn.locate` knows. */
-  turns: [] as BotTurnRef[],
-  threadSessions: {} as Record<string, ChatSessionStoreHandle>,
-  advances: [] as unknown[],
-  /** Unread notifications by thread id, as the indicators read them. */
-  unread: {} as Record<string, number>,
-  writes: [] as BotThreadFollowSetRequest[],
-  /** Every read the host answered: its method and the params it was sent. */
-  reads: [] as Array<{ method: string; params: unknown }>,
-  client: null as HostClient<HostRpcRegistry> | null,
-  activateTabIntent: vi.fn<(intent: TabActivationIntent) => void>(),
-  /** How `bot.list` stands: answered, still being read, or failed. */
-  botList: "listed" as "listed" | "pending" | "failed",
-  refetchBots: vi.fn<() => Promise<unknown>>(),
-  back: vi.fn<() => void>(),
+vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
+  soundtrackOffered: () => true,
 }));
-
 vi.mock(
   "@/hooks/host/use-host-client-for-host-id",
   () => botMentionHostClientMock,
@@ -235,9 +203,12 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
     }
     if (Object.hasOwn(mocks.replies, chatId)) {
       mocks.threadSessions[chatId] ??= chatSessionWithThreadRows(
-        mocks.replies[chatId].map((text, index) =>
-          postRow(`${chatId}-reply-${String(index + 1)}`, text),
-        ),
+        // Each reply is written one second after the one before it, as the
+        // host's read positions name them.
+        mocks.replies[chatId].map((text, index) => ({
+          ...postRow(`${chatId}-reply-${String(index + 1)}`, text),
+          timestamp: (index + 1) * 1_000,
+        })),
       );
       return mocks.threadSessions[chatId];
     }
@@ -304,436 +275,7 @@ vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   useConnectableHostIds: () => ({ hostIds: ["host-1"], resolved: true }),
 }));
 
-import { BotThreadsView } from "@/components/bots/bot-threads-view";
-import { useBotThreadFoldStore } from "@/stores/bots/bot-thread-fold-store";
-import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
-import {
-  DEFAULT_LAYOUT_SNAPSHOT,
-  useLayoutStore,
-} from "@/stores/layout/layout-store";
-import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
-import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
-
-const TRACY = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
-const TEAM = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW";
-
-function bot(botId: string, title: string): BotRecord {
-  return {
-    botId,
-    environmentId: `env-${title}`,
-    createdByUserId: "user-1",
-    title,
-    harness: "claude",
-    model: "opus",
-    effort: null,
-    profile: null,
-    directive: null,
-    replyMode: "thread",
-    appConversationChatId: `channel-${botId}`,
-    trunkChatId: `trunk-${botId}`,
-    boundHostId: null,
-    hostEpoch: 0,
-    createdAt: 1_000,
-    archivedAt: null,
-  };
-}
-
-function thread(
-  botId: string,
-  threadId: string,
-  lastReplyAt: number | null,
-): BotThreadSummary {
-  return {
-    threadId,
-    conversationId: `channel-${botId}`,
-    sessionChatId: `session-${threadId}`,
-    anchor: {
-      messageId: conversationRequestMessageId(`req-${threadId}`),
-      requestId: `req-${threadId}`,
-      senderUserId: "user-1",
-      sentAt: 1_000,
-      resolvedAt: null,
-      excerpt: null,
-    },
-    replyCount: 2,
-    lastReplyAt,
-    openRequestCount: 0,
-    costUsd: null,
-  };
-}
-
-/** A thread a call opened. */
-function callThread(
-  botId: string,
-  threadId: string,
-  lastReplyAt: number | null,
-): BotThreadSummary {
-  return { ...thread(botId, threadId, lastReplyAt), kind: "call" };
-}
-
-function script(
-  threads: BotThreadSummary[],
-  follows: Record<string, BotThreadFollow>,
-): BotScript {
-  return {
-    threads,
-    threadAnchors: null,
-    follows,
-    cursors: { cursors: {}, latest: {} },
-    levels: {},
-  };
-}
-
-const FOLLOWING: BotThreadFollow = {
-  state: "following",
-  reason: "participated",
-};
-
-/** The installed app's form the next mount draws in; `null` where the container decides. */
-let mountLevel2: MobileLevel2Form | null = null;
-/** Whether the next mount draws the app header beside the view, which the view portals its picker into. */
-let mountUnderHeader = false;
-/** The last mount's query client, for a case that has the host read again. */
-let queryClient = new QueryClient();
-
-function mount(): void {
-  queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false, staleTime: 0, gcTime: Infinity },
-      mutations: { retry: false },
-    },
-  });
-  const spine = new HostClient<HostRpcRegistry>({
-    registry: hostRpcRegistry,
-    invalidator: { invalidateHostScope: () => {} },
-    findHostById: (hostId) =>
-      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
-    messenger: new MockHostMessenger<HostRpcRegistry>({
-      registry: hostRpcRegistry,
-      requestId: () => "req-1",
-      handlers: {
-        "bot.thread.list": (params) => {
-          mocks.reads.push({ method: "bot.thread.list", params });
-          const { threads, threadAnchors } = mocks.hosted[params.botId];
-          return {
-            threads,
-            trunkCostUsd: null,
-            threadAnchors,
-            nextCursor: null,
-            total: threads.length,
-          };
-        },
-        "bot.threadFollow.read": (params) => {
-          mocks.reads.push({ method: "bot.threadFollow.read", params });
-          return { follows: { ...mocks.hosted[params.botId].follows } };
-        },
-        "bot.threadFollow.set": (params) => {
-          mocks.writes.push(params);
-          const follow: BotThreadFollow = {
-            state: params.state,
-            reason: "manual",
-          };
-          mocks.hosted[params.botId].follows[params.threadId] = follow;
-          return { follow };
-        },
-        "bot.readCursor.advance": (params) => {
-          mocks.advances.push(params);
-          const cursor = { messageId: params.messageId, seq: params.seq };
-          const read = mocks.hosted[params.botId].cursors;
-          mocks.hosted[params.botId].cursors = {
-            ...read,
-            cursors: { ...read.cursors, [params.conversationId]: cursor },
-          };
-          return { cursor };
-        },
-        "bot.readCursor.read": (params) => {
-          mocks.reads.push({ method: "bot.readCursor.read", params });
-          return mocks.hosted[params.botId].cursors;
-        },
-        "bot.notificationLevel.read": (params) => {
-          mocks.reads.push({ method: "bot.notificationLevel.read", params });
-          return { levels: mocks.hosted[params.botId].levels };
-        },
-        "bot.turn.locate": (params) => turnsAskedFor(mocks.turns, params),
-      },
-    }),
-  });
-  spine.setRequestContext(
-    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
-  );
-  mocks.client = spine.createRequester(mockLocalHostEntry);
-  render(
-    <QueryClientProvider client={queryClient}>
-      <MobileBotHeaderSlotProvider>
-        {mountUnderHeader ? <MobileAppHeader /> : null}
-        <BotTestRunnerHost>
-          <TooltipProvider>
-            <ChatExpansionTestProviders tileInstanceId="tile-1">
-              <BotThreadsView
-                level2={mountLevel2}
-                hostId="host-1"
-                channelId={TRACY}
-                channelTitle="Tracy"
-                onBack={mocks.back}
-              />
-            </ChatExpansionTestProviders>
-          </TooltipProvider>
-        </BotTestRunnerHost>
-      </MobileBotHeaderSlotProvider>
-    </QueryClientProvider>,
-  );
-}
-
-function listed(): ReadonlyArray<string | null> {
-  return screen
-    .getAllByTestId("bot-thread-card")
-    .map((card) => card.getAttribute("data-thread-id"));
-}
-
-function card(threadId: string): HTMLElement {
-  const found = screen
-    .getAllByTestId("bot-thread-card")
-    .find((li) => li.getAttribute("data-thread-id") === threadId);
-  if (found === undefined) throw new Error(`no card for ${threadId}`);
-  return found;
-}
-
-/** What an IntersectionObserver was built with, and what it watches. */
-type ObserverOptions = { root: Element | null; rootMargin: string | undefined };
-type ObserverEntries = ReadonlyArray<{
-  target: Element;
-  isIntersecting: boolean;
-}>;
-
-/** A controllable IntersectionObserver: nothing fires until the case says so. */
-class FakeIntersectionObserver {
-  static all: FakeIntersectionObserver[] = [];
-  readonly targets = new Set<Element>();
-  readonly options: ObserverOptions;
-  constructor(
-    private readonly callback: (entries: ObserverEntries) => void,
-    init: IntersectionObserverInit | undefined,
-  ) {
-    this.options = {
-      root: init?.root instanceof Element ? init.root : null,
-      rootMargin: init?.rootMargin,
-    };
-    FakeIntersectionObserver.all.push(this);
-  }
-  observe(target: Element): void {
-    this.targets.add(target);
-  }
-  unobserve(target: Element): void {
-    this.targets.delete(target);
-  }
-  disconnect(): void {
-    this.targets.clear();
-  }
-  fire(entries: ObserverEntries): void {
-    this.callback(entries);
-  }
-}
-
-/** The observers watching `target`: the near one has a margin, the view one none. */
-function observersOf(
-  target: Element,
-  kind: "near" | "view",
-): FakeIntersectionObserver[] {
-  return FakeIntersectionObserver.all.filter(
-    (observer) =>
-      observer.targets.has(target) &&
-      (observer.options.rootMargin !== undefined) === (kind === "near"),
-  );
-}
-
-/** Tells the observers of `kind` on `target` that it is (not) intersecting. */
-function intersectTarget(
-  target: Element,
-  kind: "near" | "view",
-  isIntersecting: boolean,
-): void {
-  const observers = observersOf(target, kind);
-  expect(observers.length).toBeGreaterThan(0);
-  act(() => {
-    for (const observer of observers) {
-      observer.fire([{ target, isIntersecting }]);
-    }
-  });
-}
-
-/**
- * Reading needs a window the person is in; jsdom's own answer depends on which
- * cases ran before, so a case that reads says so itself.
- */
-function foregroundWindow(): void {
-  const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
-  onTestFinished(() => hasFocus.mockRestore());
-}
-
-/** The mark under the reply a full card's reading would acknowledge. */
-function readMark(threadId: string): HTMLElement {
-  return within(card(threadId)).getByTestId("bot-chat-transcript-mark");
-}
-
-/** Brings a card near the page's view and waits for its thread to draw. */
-async function revealFull(threadId: string): Promise<HTMLElement> {
-  intersectTarget(card(threadId), "near", true);
-  await waitFor(() =>
-    expect(card(threadId).getAttribute("data-full")).toBe("true"),
-  );
-  return card(threadId);
-}
-
-/** The thread's replies, `reply 1` to `reply count`, and the host's list saying so. */
-function withReplies(
-  botId: string,
-  threadId: string,
-  texts: string[],
-  lastReplyAt: number,
-): void {
-  mocks.replies[threadId] = texts;
-  mocks.hosted[botId].threads = mocks.hosted[botId].threads.map((summary) =>
-    summary.threadId === threadId
-      ? { ...summary, replyCount: texts.length, lastReplyAt }
-      : summary,
-  );
-}
-
-/** A reply arrives: the host's list counts `count`, and the thread's session holds its row. */
-async function deliverReply(threadId: string, count: number): Promise<void> {
-  mocks.hosted[TEAM].threads = mocks.hosted[TEAM].threads.map((summary) =>
-    summary.threadId === threadId
-      ? { ...summary, replyCount: count, lastReplyAt: 4_000 }
-      : summary,
-  );
-  const session = mocks.threadSessions[threadId].store;
-  act(() => {
-    session.setState({
-      messages: [
-        ...session.getState().messages,
-        postRow(`${threadId}-reply-${String(count)}`, `reply ${String(count)}`),
-      ],
-    });
-  });
-  await act(() => queryClient.invalidateQueries());
-}
-
-/** The count a card gives assistive technology, where it draws no divider. */
-function screenReaderCount(threadId: string): HTMLElement | null {
-  return within(card(threadId)).queryByTestId("bot-thread-reply-count-sr");
-}
-
-/** What a summary card shows a sighted reader: its text without the screen-reader count. */
-function summaryVisibleText(threadId: string): string {
-  const summary = within(card(threadId)).getByTestId("bot-thread-card-summary");
-  const clone = summary.cloneNode(true);
-  if (!(clone instanceof HTMLElement))
-    throw new Error("summary is not an element");
-  for (const hidden of clone.querySelectorAll(
-    '[data-testid="bot-thread-reply-count-sr"]',
-  )) {
-    hidden.remove();
-  }
-  return clone.textContent;
-}
-
-/**
- * The thread's session as a windowed transcript of `total` replies, none of
- * them hydrated: every reply is a placeholder.
- */
-function windowedPlaceholders(threadId: string, total: number): void {
-  const handle = chatSessionWithThreadRows([]);
-  const derived: NonNullable<ChatSessionState["transcriptDerived"]> = {
-    latestAssistantUsage: null,
-    pinnedTodo: null,
-    pinnedTaskTodoItems: [],
-    latestForkableAssistantMessageId: null,
-    restorableSetupInterruption: null,
-    interviewAnswerability: [],
-    latestAssistantAuthFailureTurnKey: null,
-    setupCardWindows: [],
-  };
-  handle.store.setState({
-    transcriptDerived: derived,
-    transcriptWindow: {
-      ...handle.store.getState().transcriptWindow,
-      rowCount: total,
-      spans: [],
-    },
-  });
-  mocks.threadSessions[threadId] = handle;
-}
-
-function replyTexts(count: number): string[] {
-  return Array.from(
-    { length: count },
-    (_, index) => `reply ${String(index + 1)}`,
-  );
-}
-
-/** The reply texts a card draws, in order. */
-function drawnReplies(threadId: string): string[] {
-  return within(card(threadId))
-    .queryAllByText(/^reply \d+$/)
-    .map((node) => node.textContent);
-}
-
-/** Element's own scrollIntoView before a case replaced it, read by key. */
-let originalScrollIntoView: PropertyDescriptor | undefined;
-
-beforeEach(() => {
-  originalScrollIntoView = Object.getOwnPropertyDescriptor(
-    Element.prototype,
-    "scrollIntoView",
-  );
-  vi.clearAllMocks();
-  mountLevel2 = null;
-  mountUnderHeader = false;
-  mocks.bots = [bot(TRACY, "Tracy"), bot(TEAM, "Team Tracy")];
-  mocks.botList = "listed";
-  mocks.refetchBots.mockResolvedValue(undefined);
-  mocks.hosted = {};
-  mocks.unsupported.clear();
-  mocks.posts = {};
-  mocks.channels = {};
-  mocks.unread = {};
-  mocks.writes = [];
-  mocks.reads = [];
-  mocks.replies = {};
-  mocks.replyRows = {};
-  mocks.turns = [];
-  mocks.threadSessions = {};
-  mocks.advances = [];
-  FakeIntersectionObserver.all = [];
-  vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
-  signInViewer("user-1");
-  useBotThreadFoldStore.setState({ unfolded: {} });
-  useBotTabLandingStore.setState({ byBotId: {} });
-  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
-  useSelectionAuthorityStore.setState({ effectiveHostId: "host-1" });
-  useTracySurfaceStore.setState({
-    open: false,
-    hostId: null,
-    botId: null,
-    visitedBotIds: [],
-  });
-});
-
-afterEach(() => {
-  cleanup();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-  if (originalScrollIntoView === undefined) {
-    Reflect.deleteProperty(Element.prototype, "scrollIntoView");
-  } else {
-    Object.defineProperty(
-      Element.prototype,
-      "scrollIntoView",
-      originalScrollIntoView,
-    );
-  }
-  resetBotFailedRequestSupport();
-});
+installBotThreadsViewCaseLifecycle();
 
 describe("<BotThreadsView />", () => {
   beforeEach(() => {
@@ -1261,47 +803,42 @@ describe("<BotThreadsView />", () => {
     foregroundWindow();
     mocks.hosted[TRACY] = script([], {});
     mocks.hosted[TEAM] = script(
-      [thread(TEAM, "team-a", 5_000), thread(TEAM, "team-b", 4_000)],
+      [thread(TEAM, "team-a", 2_000), thread(TEAM, "team-b", 2_000)],
       { "team-a": FOLLOWING, "team-b": FOLLOWING },
     );
     mocks.hosted[TEAM].cursors = {
       cursors: {
-        "team-a": { messageId: "m-0", seq: 1_000 },
-        "team-b": { messageId: "m-0", seq: 1_000 },
+        "team-a": { messageId: "team-a-reply-1", seq: 1_000 },
+        "team-b": { messageId: "team-b-reply-1", seq: 1_000 },
       },
       latest: {
-        "team-a": { messageId: "team-a-reply-2", seq: 5_000 },
-        "team-b": { messageId: "team-b-reply-2", seq: 4_000 },
+        "team-a": { messageId: "team-a-reply-2", seq: 2_000 },
+        "team-b": { messageId: "team-b-reply-2", seq: 2_000 },
       },
     };
-    withReplies(TEAM, "team-a", replyTexts(2), 5_000);
-    withReplies(TEAM, "team-b", replyTexts(2), 4_000);
+    withReplies(TEAM, "team-a", replyTexts(2), 2_000);
+    withReplies(TEAM, "team-b", replyTexts(2), 2_000);
     mount();
     await waitFor(() => expect(listed()).toEqual(["team-a", "team-b"]));
 
     // Both summaries come near together and draw their threads in full.
     await within(await revealFull("team-a")).findByText("reply 2");
     await within(await revealFull("team-b")).findByText("reply 2");
-    // The mark sits under the newest reply, watched in the page's view alone.
-    expect(readMark("team-a").getAttribute("data-mark-message-id")).toBe(
-      "team-a-reply-2",
+    // Each reply's own row is watched, by the page's view observer.
+    expect(observersOf(readRow("team-a", "reply 2"), "view")).not.toHaveLength(
+      0,
     );
-    expect(
-      observersOf(readMark("team-a"), "view").map((o) => o.options),
-    ).toEqual([
-      { root: screen.getByTestId("bot-threads-scroll"), rootMargin: undefined },
-    ]);
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    intersectTarget(readMark("team-a"), "view", true);
-    intersectTarget(readMark("team-b"), "view", true);
+    intersectTarget(readRow("team-a", "reply 2"), "view", true);
+    intersectTarget(readRow("team-b", "reply 2"), "view", true);
     // The card's read hold is a second.
     act(() => {
       vi.advanceTimersByTime(999);
     });
     expect(mocks.advances).toEqual([]);
     // The second card's newest reply leaves the view before the second is up.
-    intersectTarget(readMark("team-b"), "view", false);
+    intersectTarget(readRow("team-b", "reply 2"), "view", false);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2_000);
     });
@@ -1313,7 +850,7 @@ describe("<BotThreadsView />", () => {
           botId: TEAM,
           conversationId: "team-a",
           messageId: "team-a-reply-2",
-          seq: 5_000,
+          seq: 2_000,
         },
       ]),
     );
@@ -1322,17 +859,17 @@ describe("<BotThreadsView />", () => {
   it("acknowledges a newer reply only once it is drawn and has stayed in view itself, not on the strength of the reply seen before it", async () => {
     foregroundWindow();
     mocks.hosted[TEAM].cursors = {
-      cursors: { "team-new": { messageId: "team-new-reply-1", seq: 2_000 } },
-      latest: { "team-new": { messageId: "team-new-reply-2", seq: 3_000 } },
+      cursors: { "team-new": { messageId: "team-new-reply-1", seq: 1_000 } },
+      latest: { "team-new": { messageId: "team-new-reply-2", seq: 2_000 } },
     };
-    withReplies(TEAM, "team-new", replyTexts(2), 3_000);
+    withReplies(TEAM, "team-new", replyTexts(2), 2_000);
     mount();
     await waitFor(() => expect(listed()).toContain("team-new"));
     await within(await revealFull("team-new")).findByText("reply 2");
 
     // The tail is read.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    intersectTarget(readMark("team-new"), "view", true);
+    intersectTarget(readRow("team-new", "reply 2"), "view", true);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
@@ -1342,14 +879,9 @@ describe("<BotThreadsView />", () => {
     // The host names a newer reply the thread's session has not brought in.
     mocks.hosted[TEAM].cursors = {
       ...mocks.hosted[TEAM].cursors,
-      latest: { "team-new": { messageId: "team-new-reply-3", seq: 4_000 } },
+      latest: { "team-new": { messageId: "team-new-reply-3", seq: 3_000 } },
     };
     await act(() => queryClient.invalidateQueries());
-    await waitFor(() =>
-      expect(
-        within(card("team-new")).queryByTestId("bot-chat-transcript-mark"),
-      ).toBeNull(),
-    );
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2_000);
@@ -1363,16 +895,13 @@ describe("<BotThreadsView />", () => {
       session.setState({
         messages: [
           ...session.getState().messages,
-          postRow("team-new-reply-3", "reply 3"),
+          { ...postRow("team-new-reply-3", "reply 3"), timestamp: 3_000 },
         ],
       });
     });
     await within(card("team-new")).findByText("reply 3");
-    expect(readMark("team-new").getAttribute("data-mark-message-id")).toBe(
-      "team-new-reply-3",
-    );
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    intersectTarget(readMark("team-new"), "view", true);
+    intersectTarget(readRow("team-new", "reply 3"), "view", true);
     act(() => {
       vi.advanceTimersByTime(999);
     });
@@ -1387,7 +916,7 @@ describe("<BotThreadsView />", () => {
         botId: TEAM,
         conversationId: "team-new",
         messageId: "team-new-reply-3",
-        seq: 4_000,
+        seq: 3_000,
       }),
     );
     expect(mocks.advances).toHaveLength(2);
@@ -1400,8 +929,8 @@ describe("<BotThreadsView />", () => {
       "team-new": FOLLOWING,
     });
     mocks.hosted[TEAM].cursors = {
-      cursors: { "team-new": { messageId: "team-new-reply-1", seq: 2_000 } },
-      latest: { "team-new": { messageId: "team-new-reply-2", seq: 3_000 } },
+      cursors: { "team-new": { messageId: "team-new-reply-1", seq: 1_000 } },
+      latest: { "team-new": { messageId: "team-new-reply-2", seq: 2_000 } },
     };
     withReplies(TEAM, "team-new", replyTexts(2), 9_000);
     mount();
@@ -1413,14 +942,11 @@ describe("<BotThreadsView />", () => {
       "1 unread thread",
     );
     await within(await revealFull("team-new")).findByText("reply 2");
-    expect(readMark("team-new").getAttribute("data-mark-message-id")).toBe(
-      "team-new-reply-2",
-    );
 
     // The whole read runs on the fake clock: the cache write's notification
     // to the list is a zero-delay timer, lost if the clock is restored first.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    intersectTarget(readMark("team-new"), "view", true);
+    intersectTarget(readRow("team-new", "reply 2"), "view", true);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
@@ -1430,7 +956,7 @@ describe("<BotThreadsView />", () => {
           botId: TEAM,
           conversationId: "team-new",
           messageId: "team-new-reply-2",
-          seq: 3_000,
+          seq: 2_000,
         },
       ]),
     );
@@ -1446,7 +972,7 @@ describe("<BotThreadsView />", () => {
     // A row the host later names past that cursor is unread again.
     mocks.hosted[TEAM].cursors = {
       ...mocks.hosted[TEAM].cursors,
-      latest: { "team-new": { messageId: "team-new-reply-3", seq: 4_000 } },
+      latest: { "team-new": { messageId: "team-new-reply-3", seq: 3_000 } },
     };
     await act(() => queryClient.invalidateQueries());
     expect(
@@ -1455,6 +981,370 @@ describe("<BotThreadsView />", () => {
     expect(screen.getByTestId("bot-threads-unread-pill").textContent).toBe(
       "1 unread thread",
     );
+  });
+
+  describe("the unread banner's cross", () => {
+    const A_OLD = { messageId: "team-a-reply-1", seq: 1_000 };
+    const A_NEW = { messageId: "team-a-reply-2", seq: 2_000 };
+    const B_OLD = { messageId: "team-b-reply-1", seq: 1_000 };
+    const B_NEW = { messageId: "team-b-reply-2", seq: 3_000 };
+
+    function twoUnreadThreads(): void {
+      mocks.hosted[TRACY] = script([], {});
+      mocks.hosted[TEAM] = script(
+        [thread(TEAM, "team-a", 2_000), thread(TEAM, "team-b", 3_000)],
+        { "team-a": FOLLOWING, "team-b": FOLLOWING },
+      );
+      mocks.hosted[TEAM].cursors = {
+        cursors: { "team-a": A_OLD, "team-b": B_OLD },
+        latest: { "team-a": A_NEW, "team-b": B_NEW },
+      };
+      mocks.failNextAdvance = false;
+    }
+
+    function banner(): HTMLElement {
+      return screen.getByTestId("bot-unread-banner");
+    }
+
+    function crossBanner(): void {
+      fireEvent.click(
+        within(banner()).getByRole("button", { name: "Mark all read" }),
+      );
+    }
+
+    /** The host names a newer newest row for `threadId`, and the view reads it. */
+    async function land(
+      threadId: string,
+      row: { messageId: string; seq: number },
+    ): Promise<void> {
+      mocks.hosted[TEAM].cursors = {
+        ...mocks.hosted[TEAM].cursors,
+        latest: { ...mocks.hosted[TEAM].cursors.latest, [threadId]: row },
+      };
+      await act(() => queryClient.invalidateQueries());
+    }
+
+    it("marks every represented thread read at the newest row it had when clicked, though no card was in view, and the banner goes", async () => {
+      twoUnreadThreads();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      mount();
+      await vi.waitFor(() => expect(listed()).toEqual(["team-b", "team-a"]));
+      expect(
+        within(banner()).getByTestId("bot-threads-unread-pill").textContent,
+      ).toBe("2 unread threads");
+
+      crossBanner();
+
+      await vi.waitFor(() => expect(mocks.advances).toHaveLength(2));
+      expect(mocks.advances).toEqual(
+        expect.arrayContaining([
+          { botId: TEAM, conversationId: "team-a", ...A_NEW },
+          { botId: TEAM, conversationId: "team-b", ...B_NEW },
+        ]),
+      );
+      await vi.waitFor(() =>
+        expect(screen.queryByTestId("bot-unread-banner")).toBeNull(),
+      );
+    });
+
+    it("leaves a reply that lands after the click unread, and writes nothing more for it", async () => {
+      twoUnreadThreads();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      mount();
+      await vi.waitFor(() => expect(listed()).toEqual(["team-b", "team-a"]));
+      crossBanner();
+      await vi.waitFor(() =>
+        expect(screen.queryByTestId("bot-unread-banner")).toBeNull(),
+      );
+
+      await land("team-a", { messageId: "team-a-reply-3", seq: 4_000 });
+
+      await vi.waitFor(() =>
+        expect(
+          within(banner()).getByTestId("bot-threads-unread-pill").textContent,
+        ).toBe("1 unread thread"),
+      );
+      expect(mocks.advances).toHaveLength(2);
+    });
+
+    it("keeps the banner for a thread whose write failed, and sends that same captured boundary from the next click, not a newer one", async () => {
+      twoUnreadThreads();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      mount();
+      await vi.waitFor(() => expect(listed()).toEqual(["team-b", "team-a"]));
+      mocks.failNextAdvance = true;
+
+      crossBanner();
+      await vi.waitFor(() => expect(mocks.advances).toHaveLength(2));
+      const [failed] = mocks.advances;
+      await vi.waitFor(() =>
+        expect(
+          within(banner()).getByTestId("bot-threads-unread-pill").textContent,
+        ).toBe("1 unread thread"),
+      );
+
+      const failedThread = (failed as { conversationId: string })
+        .conversationId;
+      await land(failedThread, { messageId: "later", seq: 9_000 });
+      crossBanner();
+
+      await vi.waitFor(() => expect(mocks.advances).toHaveLength(3));
+      expect(mocks.advances.at(-1)).toEqual(failed);
+    });
+  });
+
+  it("does not read across a reply the transcript has not hydrated, though the newest reply and the one before it were shown, until that reply is drawn and shown too", async () => {
+    foregroundWindow();
+    mocks.hosted[TRACY] = script([], {});
+    mocks.hosted[TEAM] = script([thread(TEAM, "team-new", 3_000)], {
+      "team-new": FOLLOWING,
+    });
+    mocks.hosted[TEAM].cursors = {
+      cursors: { "team-new": { messageId: "team-new-reply-1", seq: 1_000 } },
+      latest: { "team-new": { messageId: "team-new-reply-3", seq: 3_000 } },
+    };
+    withReplies(TEAM, "team-new", replyTexts(3), 3_000);
+    // The window knows three rows; the middle one has no body yet.
+    windowedSession("team-new");
+    hydrateRepliesAt("team-new", 3, [0, 2]);
+    mount();
+    await waitFor(() => expect(listed()).toEqual(["team-new"]));
+    await within(await revealFull("team-new")).findByText("reply 3");
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    intersectTarget(readRow("team-new", "reply 3"), "view", true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(mocks.advances).toEqual([]);
+
+    // The middle reply arrives and is held for its own second.
+    hydrateRepliesAt("team-new", 3, [0, 1, 2]);
+    await vi.waitFor(() =>
+      expect(drawnReplies("team-new")).toContain("reply 2"),
+    );
+    intersectTarget(readRow("team-new", "reply 2"), "view", true);
+    intersectTarget(readRow("team-new", "reply 3"), "view", true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await vi.waitFor(() =>
+      expect(mocks.advances).toEqual([
+        {
+          botId: TEAM,
+          conversationId: "team-new",
+          messageId: "team-new-reply-3",
+          seq: 3_000,
+        },
+      ]),
+    );
+  });
+
+  it("drops only the hold of the card whose transcript scrolled, and leaves another card's hold running", async () => {
+    foregroundWindow();
+    mocks.hosted[TRACY] = script([], {});
+    mocks.hosted[TEAM] = script(
+      [thread(TEAM, "team-a", 2_000), thread(TEAM, "team-b", 2_000)],
+      { "team-a": FOLLOWING, "team-b": FOLLOWING },
+    );
+    mocks.hosted[TEAM].cursors = {
+      cursors: {
+        "team-a": { messageId: "team-a-reply-1", seq: 1_000 },
+        "team-b": { messageId: "team-b-reply-1", seq: 1_000 },
+      },
+      latest: {
+        "team-a": { messageId: "team-a-reply-2", seq: 2_000 },
+        "team-b": { messageId: "team-b-reply-2", seq: 2_000 },
+      },
+    };
+    withReplies(TEAM, "team-a", replyTexts(2), 2_000);
+    withReplies(TEAM, "team-b", replyTexts(2), 2_000);
+    mount();
+    await waitFor(() =>
+      expect(listed().toSorted()).toEqual(["team-a", "team-b"]),
+    );
+    await within(await revealFull("team-a")).findByText("reply 2");
+    await within(await revealFull("team-b")).findByText("reply 2");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    intersectTarget(readRow("team-a", "reply 2"), "view", true);
+    intersectTarget(readRow("team-b", "reply 2"), "view", true);
+
+    // Half way through both holds, card A's own transcript scrolls.
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    act(() => {
+      card("team-a").dispatchEvent(new Event("scroll"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    await vi.waitFor(() =>
+      expect(mocks.advances).toEqual([
+        {
+          botId: TEAM,
+          conversationId: "team-b",
+          messageId: "team-b-reply-2",
+          seq: 2_000,
+        },
+      ]),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(mocks.advances).toHaveLength(1);
+
+    // Held afresh, the scrolled card's reply is read too.
+    intersectTarget(readRow("team-a", "reply 2"), "view", true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    await vi.waitFor(() => expect(mocks.advances).toHaveLength(2));
+    expect(mocks.advances.at(-1)).toEqual({
+      botId: TEAM,
+      conversationId: "team-a",
+      messageId: "team-a-reply-2",
+      seq: 2_000,
+    });
+  });
+
+  it("unfolds the unread card the banner takes the person to, so its hidden unread replies can be read, and writes nothing for the click", async () => {
+    const user = userEvent.setup();
+    mocks.hosted[TRACY] = script([], {});
+    mocks.hosted[TEAM] = script([thread(TEAM, "team-new", 8_000)], {
+      "team-new": FOLLOWING,
+    });
+    mocks.hosted[TEAM].cursors = {
+      cursors: { "team-new": { messageId: "team-new-reply-1", seq: 1_000 } },
+      latest: { "team-new": { messageId: "team-new-reply-8", seq: 8_000 } },
+    };
+    withReplies(TEAM, "team-new", replyTexts(8), 8_000);
+    // jsdom has no scrollIntoView; afterEach puts the prototype back.
+    Element.prototype.scrollIntoView = function scrollIntoView() {};
+    mount();
+    await waitFor(() => expect(listed()).toEqual(["team-new"]));
+    const full = within(await revealFull("team-new"));
+    await full.findByTestId("bot-chat-transcript-unfold");
+    expect(drawnReplies("team-new")).toEqual(["reply 7", "reply 8"]);
+
+    await user.click(screen.getByTestId("bot-threads-unread-pill"));
+
+    await waitFor(() =>
+      expect(drawnReplies("team-new")).toEqual(replyTexts(8)),
+    );
+    expect(useBotThreadFoldStore.getState().unfolded).toEqual({
+      "team-new": true,
+    });
+    expect(mocks.advances).toEqual([]);
+  });
+
+  describe("reading in prefixes as rows are hydrated and shown", () => {
+    /** Four replies, the cursor on the first, the host's newest row the fourth. */
+    function fourRepliesBehind(): void {
+      foregroundWindow();
+      mocks.hosted[TRACY] = script([], {});
+      mocks.hosted[TEAM] = script([thread(TEAM, "team-new", 4_000)], {
+        "team-new": FOLLOWING,
+      });
+      mocks.hosted[TEAM].cursors = {
+        cursors: { "team-new": { messageId: "team-new-reply-1", seq: 1_000 } },
+        latest: { "team-new": { messageId: "team-new-reply-4", seq: 4_000 } },
+      };
+      withReplies(TEAM, "team-new", replyTexts(4), 4_000);
+      windowedSession("team-new");
+    }
+
+    async function showRows(...texts: string[]): Promise<void> {
+      for (const text of texts) {
+        intersectTarget(readRow("team-new", text), "view", true);
+      }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+    }
+
+    function wrote(...rows: Array<{ messageId: string; seq: number }>): void {
+      expect(mocks.advances).toEqual(
+        rows.map((row) => ({
+          botId: TEAM,
+          conversationId: "team-new",
+          ...row,
+        })),
+      );
+    }
+
+    it("reads the shown prefix though the newest reply is not loaded, to the last reply shown and never to the newest", async () => {
+      fourRepliesBehind();
+      hydrateRepliesAt("team-new", 4, [0, 1]);
+      mount();
+      await waitFor(() => expect(listed()).toEqual(["team-new"]));
+      await within(await revealFull("team-new")).findByText("reply 2");
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+      await showRows("reply 2");
+
+      await vi.waitFor(() =>
+        wrote({ messageId: "team-new-reply-2", seq: 2_000 }),
+      );
+    });
+
+    it("writes the prefix before a gap and nothing across it, and the rest once the gap is hydrated and shown", async () => {
+      fourRepliesBehind();
+      hydrateRepliesAt("team-new", 4, [0, 1, 3]);
+      mount();
+      await waitFor(() => expect(listed()).toEqual(["team-new"]));
+      await within(await revealFull("team-new")).findByText("reply 4");
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+      await showRows("reply 2", "reply 4");
+      await vi.waitFor(() =>
+        wrote({ messageId: "team-new-reply-2", seq: 2_000 }),
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      wrote({ messageId: "team-new-reply-2", seq: 2_000 });
+
+      hydrateRepliesAt("team-new", 4, [0, 1, 2, 3]);
+      await vi.waitFor(() =>
+        expect(drawnReplies("team-new")).toContain("reply 3"),
+      );
+      await showRows("reply 3", "reply 4");
+      await vi.waitFor(() =>
+        wrote(
+          { messageId: "team-new-reply-2", seq: 2_000 },
+          { messageId: "team-new-reply-4", seq: 4_000 },
+        ),
+      );
+    });
+
+    it("goes on from a prefix it has read after that history's bodies are evicted, without hydrating it again", async () => {
+      fourRepliesBehind();
+      hydrateRepliesAt("team-new", 4, [0, 1]);
+      mount();
+      await waitFor(() => expect(listed()).toEqual(["team-new"]));
+      await within(await revealFull("team-new")).findByText("reply 2");
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      await showRows("reply 2");
+      await vi.waitFor(() =>
+        wrote({ messageId: "team-new-reply-2", seq: 2_000 }),
+      );
+
+      // The window moves on: the read bodies are evicted, the newest two load.
+      hydrateRepliesAt("team-new", 4, [2, 3]);
+      await vi.waitFor(() =>
+        expect(drawnReplies("team-new")).toEqual(["reply 3", "reply 4"]),
+      );
+      await showRows("reply 3", "reply 4");
+
+      await vi.waitFor(() =>
+        wrote(
+          { messageId: "team-new-reply-2", seq: 2_000 },
+          { messageId: "team-new-reply-4", seq: 4_000 },
+        ),
+      );
+    });
   });
 
   it("opens a reply's turn from its receipt in a card, landed on the send that wrote the reply", async () => {
@@ -1634,8 +1524,6 @@ describe("<BotThreadsView />", () => {
 });
 
 describe("<BotThreadsView /> a card whose bot asks several questions at once", () => {
-  const BOUND_ELSEWHERE = "host-elsewhere";
-  const BOUND_EPOCH = 3;
   const DEPLOY: BotQuestionItem = {
     text: "Deploy to staging now or after the train?",
     options: ["Now", "After the train"],
@@ -1662,34 +1550,9 @@ describe("<BotThreadsView /> a card whose bot asks several questions at once", (
     };
   }
 
-  /**
-   * The Team bot runs on a host other than the tab's, which lists `kinds` in
-   * its thread list, and its thread holds the card; the tab's host
-   * negotiated `bot.conversation.send` at 1.5. Mounts the view.
-   */
+  /** The Team bot's thread holds the card; the tab's host negotiated 1.5. */
   function mountCardOfBotBoundElsewhere(kinds: readonly string[]): void {
-    negotiateBotSend("host-1", { major: 1, minor: 5 });
-    mocks.bots = [
-      bot(TRACY, "Tracy"),
-      {
-        ...bot(TEAM, "Team Tracy"),
-        boundHostId: BOUND_ELSEWHERE,
-        hostEpoch: BOUND_EPOCH,
-      },
-    ];
-    mocks.hosted[TEAM] = {
-      ...script([thread(TEAM, "team-new", 3_000)], {
-        "team-new": FOLLOWING,
-      }),
-      threadAnchors: {
-        hostId: BOUND_ELSEWHERE,
-        epoch: BOUND_EPOCH,
-        kinds: [...kinds],
-      },
-    };
-    mocks.hosted[TRACY] = script([], {});
-    mocks.replyRows["team-new"] = [askedBoth()];
-    mount();
+    mountBotBoundElsewhere({ minor: 5, kinds, rows: [askedBoth()] });
   }
 
   it("draws one Submit and the tally under the card, none under a question, when the bot's host lists answers and this host takes them", async () => {
@@ -1701,7 +1564,7 @@ describe("<BotThreadsView /> a card whose bot asks several questions at once", (
 
     expect(
       (await questionCard.findByTestId("question-card-tally")).textContent,
-    ).toBe("0 of 2 answered. Answer or skip each one to submit.");
+    ).toBe("0 of 2 answered. Answer at least one to submit.");
     expect(questionCard.getAllByTestId("question-card-submit")).toHaveLength(1);
     for (const item of questionCard.getAllByTestId("question-card-item")) {
       expect(within(item).queryByTestId("question-card-submit")).toBeNull();
@@ -1727,6 +1590,182 @@ describe("<BotThreadsView /> a card whose bot asks several questions at once", (
   });
 });
 
+describe("<BotThreadsView /> Reply on a row of a full thread", () => {
+  /** The first `bot.conversation.send` line that carries a reply. */
+  const REPLIES_MINOR = 6;
+  const REPLY_ROW = botReply({
+    messageId: "team-new-reply",
+    text: "Staging looks fine.",
+    timestamp: 3_000,
+  });
+
+  async function fullThread(): Promise<HTMLElement> {
+    await waitFor(() => expect(listed()).toContain("team-new"));
+    return revealFull("team-new");
+  }
+
+  it("offers Reply on a reply of the thread where the bot's host lists replies and this host takes them", async () => {
+    mountBotBoundElsewhere({
+      minor: REPLIES_MINOR,
+      kinds: ["answer", "message", "replies"],
+      rows: [REPLY_ROW],
+    });
+
+    const full = within(await fullThread());
+
+    expect(await full.findByRole("button", { name: "Reply" })).toBeTruthy();
+  });
+
+  it.each([
+    [
+      "the bot's host does not list replies",
+      REPLIES_MINOR,
+      ["answer", "message"],
+    ],
+    [
+      "this host negotiated bot.conversation.send below the line that carries a reply",
+      REPLIES_MINOR - 1,
+      ["answer", "message", "replies"],
+    ],
+  ])("offers no Reply on the thread where %s", async (_label, minor, kinds) => {
+    mountBotBoundElsewhere({ minor, kinds, rows: [REPLY_ROW] });
+
+    const full = within(await fullThread());
+
+    expect(await full.findByText("Staging looks fine.")).toBeTruthy();
+    expect(full.queryByRole("button", { name: "Reply" })).toBeNull();
+  });
+});
+
+describe("<BotThreadsView /> a thread opened on a channel question, drawn without the channel's transcript", () => {
+  const QUESTION_ID = "bot-question:req-q";
+  const HOLD_TEXT = "Anything to hold back from the train?";
+
+  function question(settled: boolean): Message {
+    const questions: BotQuestionItem[] = [
+      {
+        text: HOLD_TEXT,
+        options: [],
+        allowFreeText: true,
+        settlement: settled
+          ? {
+              answer: "Nothing",
+              skipped: false,
+              by: { kind: "person", userId: "user-teammate" },
+              at: 3_000,
+            }
+          : null,
+      },
+    ];
+    return {
+      ...botReply({
+        messageId: QUESTION_ID,
+        text: botQuestionsText(questions),
+        timestamp: 2_000,
+      }),
+      question: { requestId: "req-q", questions },
+    };
+  }
+
+  /** When the running case started, on the real clock, which the fake one leaves alone. */
+  let caseStartedAt = 0;
+  /** The running case's own timeout, as the runner holds it. */
+  let caseTimeout = 0;
+  beforeEach(({ task }) => {
+    caseStartedAt = performance.now();
+    caseTimeout = task.timeout;
+  });
+
+  /**
+   * The fake clock moves until `check` holds: what the view starts on a timer,
+   * and what the host's replies feed, finishes in it. Some of what it waits
+   * on runs on the real event loop, so the steps it takes are not countable:
+   * it gives up on the real clock instead, once another step would end past
+   * the case's own timeout, and throws the check's last error rather than
+   * leave the runner to time out.
+   */
+  async function untilOnFakeClock(check: () => void): Promise<void> {
+    const deadline = caseStartedAt + caseTimeout;
+    let last: unknown = null;
+    for (;;) {
+      const stepStartedAt = performance.now();
+      try {
+        check();
+        return;
+      } catch (error) {
+        last = error;
+      }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      if (performance.now() + (performance.now() - stepStartedAt) >= deadline) {
+        throw last;
+      }
+    }
+  }
+
+  it("moves nothing off the origin's card when a teammate settles the question: the draft stays kept, and the thread's box holds nothing and says nothing", async () => {
+    const summary = thread(TEAM, "team-new", 3_000);
+    const { anchor } = summary;
+    if (anchor === null) throw new Error("the thread has no anchor");
+    mocks.hosted[TEAM] = script(
+      [
+        {
+          ...summary,
+          anchor: {
+            messageId: QUESTION_ID,
+            requestId: anchor.requestId,
+            senderUserId: anchor.senderUserId,
+            sentAt: anchor.sentAt,
+            resolvedAt: anchor.resolvedAt,
+            excerpt: anchor.excerpt,
+          },
+        },
+      ],
+      { "team-new": FOLLOWING },
+    );
+    mocks.hosted[TRACY] = script([], {});
+    mocks.posts[TEAM] = {};
+    mocks.channels[TEAM] = chatSessionWithThreadRows([question(false)]);
+    withReplies(TEAM, "team-new", replyTexts(2), 3_000);
+    const key = answerDraftKey(QUESTION_ID, 0);
+    useBotDraftsStore.getState().setAnswer(TEAM, key, {
+      chosen: [],
+      typed: "Hold the migration",
+      sent: null,
+      unsureSince: null,
+      heldForSettlement: null,
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    mount();
+    await untilOnFakeClock(() => expect(listed()).toContain("team-new"));
+    intersectTarget(card("team-new"), "near", true);
+    await untilOnFakeClock(() =>
+      expect(card("team-new").getAttribute("data-full")).toBe("true"),
+    );
+    const full = within(card("team-new"));
+    await untilOnFakeClock(() => full.getByTestId("question-card"));
+    const originCard = full.getByTestId("question-card");
+    expect(
+      within(originCard).getByRole("textbox", { name: "Your answer" }),
+    ).toHaveProperty("value", "Hold the migration");
+
+    act(() =>
+      mocks.channels[TEAM].store.setState({ messages: [question(true)] }),
+    );
+
+    await untilOnFakeClock(() => full.getByTestId("question-card-item"));
+    const item = full.getByTestId("question-card-item");
+    expect(item.getAttribute("data-state")).toBe("settled");
+    expect(useBotDraftsStore.getState().answers[TEAM]?.[key]?.typed).toBe(
+      "Hold the migration",
+    );
+    expect(useBotDraftsStore.getState().boxCarries).toEqual({});
+    expect(useBotDraftsStore.getState().boxNotices).toEqual({});
+    expect(full.queryByTestId("bot-thread-composer-answers-moved")).toBeNull();
+  });
+});
+
 describe("<BotThreadsView /> header", () => {
   it("goes back to the tab's channel when Back to Tracy is clicked", async () => {
     const user = userEvent.setup();
@@ -1741,7 +1780,7 @@ describe("<BotThreadsView /> header", () => {
   });
 
   it("draws no back control beside a level 2 column, whose channel row is the way back", () => {
-    mountLevel2 = { column: 256 };
+    setMountLevel2({ column: 256 });
     mocks.hosted[TRACY] = script([], {});
     mocks.hosted[TEAM] = script([], {});
     mount();
@@ -1750,7 +1789,7 @@ describe("<BotThreadsView /> header", () => {
   });
 
   it("draws the back control at every width of the menu form", () => {
-    mountLevel2 = "menu";
+    setMountLevel2("menu");
     mocks.hosted[TRACY] = script([], {});
     mocks.hosted[TEAM] = script([], {});
     mount();
@@ -1773,8 +1812,8 @@ function focusTracy(): void {
 
 function mountUnderTracyHeader(level2: MobileLevel2Form | null): void {
   focusTracy();
-  mountUnderHeader = true;
-  mountLevel2 = level2;
+  setMountUnderHeader(true);
+  setMountLevel2(level2);
   mocks.hosted[TRACY] = script([], {});
   mocks.hosted[TEAM] = script([], {});
   mount();
@@ -1854,6 +1893,49 @@ describe("<BotThreadsView /> in the compact app header", () => {
 
     expect(screen.queryByRole("button", { name: /^Threads$/ })).toBeNull();
   });
+});
+
+describe("<BotThreadsView /> the tab's music group", () => {
+  const GROUP = { name: "Music playback" } as const;
+
+  beforeEach(() => {
+    mocks.hosted[TRACY] = script([], {});
+    mocks.hosted[TEAM] = script([], {});
+    useSettingsStore.setState({
+      soundtrackEnabled: true,
+      soundtrackPlaybackControls: true,
+    });
+  });
+  afterEach(() => {
+    useSettingsStore.setState(useSettingsStore.getInitialState(), true);
+  });
+
+  it("draws the one group in the desktop header's title row after the heading, and no row of its own", () => {
+    mount();
+
+    const view = screen.getByTestId("bot-threads-view");
+    // `getByRole` throws on a second group, as it does on none.
+    const group = screen.getByRole("group", GROUP);
+    const header = group.closest("header");
+    expect(header?.parentElement).toBe(view);
+    const heading = within(view).getByRole("heading", { name: "Threads" });
+    expect(header?.contains(heading)).toBe(true);
+    expect(
+      heading.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it.each(["menu", "bar"] as const)(
+    "gives the %s form no slot: the group is the tab's own row, outside the view",
+    (form) => {
+      setMountLevel2(form);
+      mount();
+
+      const view = screen.getByTestId("bot-threads-view");
+      expect(within(view).queryByTestId("tracy-playback-slot")).toBeNull();
+      expect(view.contains(screen.getByRole("group", GROUP))).toBe(false);
+    },
+  );
 });
 
 describe("<BotThreadsView /> before the bots are listed", () => {
@@ -2016,7 +2098,16 @@ describe("<BotThreadsView /> a thread card's live artifact", () => {
               target !== threadCard &&
               (target.contains(figure) || figure.contains(target)),
           )
-          .map((target) => ({ target, isIntersecting: true }));
+          .map((target) => {
+            // Whole in view, as `intersectTarget` reports a row.
+            const rect = new DOMRect(0, 0, 100, 100);
+            return {
+              target,
+              isIntersecting: true,
+              boundingClientRect: rect,
+              intersectionRect: rect,
+            };
+          });
         if (entries.length > 0) observer.fire(entries);
       }
     });

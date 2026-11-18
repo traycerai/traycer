@@ -93,7 +93,7 @@ function buildWorld() {
           teamOwned: false,
         })),
       );
-      return Promise.resolve();
+      return Promise.resolve({ kind: "published" as const });
     },
   });
 

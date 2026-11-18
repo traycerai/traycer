@@ -37,6 +37,11 @@ export type DesktopNotificationFeedSource =
 export interface DesktopNotificationForegroundAppLocal {
   readonly userId: string;
   readonly entry: unknown;
+  /**
+   * Relay to a focused window for its inbox only: never an OS notification,
+   * and the receiving renderer draws no toast for it.
+   */
+  readonly inboxOnly: boolean;
 }
 
 export interface DesktopNotificationForegroundDisplay {

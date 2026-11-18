@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  tabRefKey,
+  type SplitSide,
+  type StripItem,
+} from "@/stores/tabs/layout";
+import {
   groupEntriesBySection,
+  moreUrgentSection,
   type StripSection,
   type StripSectionEntry,
   type StripSectionGroup,
@@ -102,6 +108,138 @@ export function useStripSectionHolds(
       ),
     [pointer, focus],
   );
+}
+
+function sectionOfItem(
+  sections: ReadonlyArray<StripSectionGroup>,
+  itemId: string,
+): StripSection | null {
+  return (
+    sections.find((group) =>
+      group.entries.some(
+        (entry) => entry.kind === "tabs" && entry.itemId === itemId,
+      ),
+    )?.section ?? null
+  );
+}
+
+/**
+ * The current item and the tab on screen in it, a pair's focused member. The
+ * tab is what was opened: swapping a pair's sides opens nothing, and neither
+ * does closing its other member, though that gives the row a new item id.
+ */
+interface StripOpening {
+  readonly itemId: string;
+  readonly focusedTab: string | null;
+}
+
+function focusedSideOf(item: StripItem): SplitSide {
+  return item.kind === "split" ? item[item.focusedSide] : item;
+}
+
+function openingOf(
+  layoutItems: ReadonlyArray<StripItem>,
+  activeItemId: string | null,
+): StripOpening | null {
+  if (activeItemId === null) return null;
+  const item = layoutItems.find((entry) => entry.id === activeItemId);
+  const focused = item === undefined ? null : focusedSideOf(item);
+  return {
+    itemId: activeItemId,
+    focusedTab: focused?.kind === "tab" ? tabRefKey(focused.ref) : null,
+  };
+}
+
+interface CurrentHoldState {
+  readonly sections: ReadonlyArray<StripSectionGroup>;
+  readonly opening: StripOpening | null;
+  readonly hold: StripSectionHold | null;
+}
+
+/** Whether the same tab is on screen; by item where no tab is known. */
+function sameOpened(a: StripOpening | null, b: StripOpening): boolean {
+  if (a === null) return false;
+  return a.focusedTab === null && b.focusedTab === null
+    ? a.itemId === b.itemId
+    : a.focusedTab === b.focusedTab;
+}
+
+/**
+ * Where an item's row was drawn when the person opened it in this render,
+ * which a change landing in the same render has not moved yet. Opening a
+ * pair's other member is an opening too, and the pair's row is one row.
+ * `null` for an item with no row before this render.
+ */
+function drawnWhenOpened(
+  prev: CurrentHoldState,
+  itemId: string,
+  holds: ReadonlyArray<StripSectionHold>,
+): StripSection | null {
+  return (
+    holds.find((held) => held.itemId === itemId)?.section ??
+    (prev.hold?.itemId === itemId ? prev.hold.section : null) ??
+    sectionOfItem(prev.sections, itemId)
+  );
+}
+
+function currentHoldOf(
+  prev: CurrentHoldState,
+  sections: ReadonlyArray<StripSectionGroup>,
+  opening: StripOpening | null,
+  holds: ReadonlyArray<StripSectionHold>,
+): StripSectionHold | null {
+  if (opening === null) return null;
+  const { itemId } = opening;
+  const now = sectionOfItem(sections, itemId);
+  if (now === null) return null;
+  const floor = sameOpened(prev.opening, opening)
+    ? prev.hold?.section
+    : drawnWhenOpened(prev, itemId, holds);
+  const section = moreUrgentSection(floor ?? now, now);
+  return prev.hold?.itemId === itemId && prev.hold.section === section
+    ? prev.hold
+    : { itemId, section };
+}
+
+/**
+ * The current task's row, held in the most urgent section it has been drawn
+ * in since it became the current one: it rises with its state and never
+ * sinks. Opening a task reads it, and answering it ends its wait, either of
+ * which would send its row down the list, out from where the person clicked
+ * and often out of view. It stays until they open another task. A task that
+ * is current when the list mounts is held from the section it mounts in.
+ */
+export function useCurrentSectionHold(
+  sections: ReadonlyArray<StripSectionGroup>,
+  layoutItems: ReadonlyArray<StripItem>,
+  activeItemId: string | null,
+  holds: ReadonlyArray<StripSectionHold>,
+): StripSectionHold | null {
+  const opening = openingOf(layoutItems, activeItemId);
+  const [state, setState] = useState<CurrentHoldState>(() => {
+    const section =
+      opening === null ? null : sectionOfItem(sections, opening.itemId);
+    return {
+      sections,
+      opening,
+      hold:
+        opening === null || section === null
+          ? null
+          : { itemId: opening.itemId, section },
+    };
+  });
+  if (
+    state.sections !== sections ||
+    state.opening?.itemId !== opening?.itemId ||
+    state.opening?.focusedTab !== opening?.focusedTab
+  ) {
+    setState({
+      sections,
+      opening,
+      hold: currentHoldOf(state, sections, opening, holds),
+    });
+  }
+  return state.hold;
 }
 
 /**

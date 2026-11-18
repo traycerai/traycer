@@ -925,7 +925,8 @@ function buildFakeBridge(
     },
     localHostCapability: "managed",
     selectionAuthority: createInertSelectionAuthorityClient(),
-    refreshSelectionFleet: () => Promise.resolve(),
+    refreshSelectionFleet: () =>
+      Promise.resolve({ kind: "published" as const }),
   };
 
   return {

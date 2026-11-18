@@ -1,3 +1,4 @@
+import { SoundtrackPageControlsScope } from "@/components/soundtrack/soundtrack-page-controls-scope";
 import { useState, type ReactNode } from "react";
 import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { DiffWorkerPoolProvider } from "@/components/diff-worker-pool-provider";
@@ -64,7 +65,9 @@ export function AppShell(props: AppShellProps) {
   return (
     <MobileBotHeaderSlotProvider>
       <MobileDrawerHistoryGateProvider>
-        <AppShellBody>{props.children}</AppShellBody>
+        <SoundtrackPageControlsScope>
+          <AppShellBody>{props.children}</AppShellBody>
+        </SoundtrackPageControlsScope>
       </MobileDrawerHistoryGateProvider>
     </MobileBotHeaderSlotProvider>
   );

@@ -16,10 +16,13 @@ import {
   browserTabId,
   resetBrowserTabIdentityForTesting,
 } from "@/lib/browser-tab-identity";
+import { setMobileApp } from "@/lib/mobile-app";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
+  EMPTY_LANDING_DRAFT_CONTENT,
+  emptyLandingDraftWorkspaceSnapshot,
   setLandingDraftDesktopProjectionBridge,
   useLandingDraftStore,
   type LandingDraftTab,
@@ -1716,6 +1719,65 @@ describe("tab command coordinator transactions", () => {
           HOST_LOCAL,
         ).primaryPath,
       ).toBe(LOCAL_FOLDER.path);
+    });
+  });
+
+  describe("the installed mobile app's id-less new-draft activation", () => {
+    afterEach(() => {
+      setMobileApp(false);
+    });
+
+    function newTask(): string {
+      const activation = tabCommandCoordinator.activateTab({
+        kind: "draft",
+        draftId: null,
+        settings: null,
+        create: true,
+      });
+      if (activation === null) {
+        throw new Error("expected the new-task activation to land on a draft");
+      }
+      return activation.ref.id;
+    }
+
+    it("mints its own draft instead of landing on one mirrored from another device, and mints again once that draft is gone", () => {
+      setMobileApp(true);
+      useLandingDraftStore.getState().installLandingDraft({
+        id: "mirrored",
+        content: {
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "typed on the other device" }],
+            },
+          ],
+        },
+        selection: null,
+        lastTouchedAt: Date.now() + 60_000,
+        settings: null,
+        composerMode: "chat",
+        workspace: emptyLandingDraftWorkspaceSnapshot(),
+        closed: false,
+        returnedSandbox: null,
+        namedHostId: null,
+        durability: "saved",
+      });
+
+      const first = newTask();
+
+      expect(first).not.toBe("mirrored");
+      const minted = useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === first);
+      expect(minted?.content).toEqual(EMPTY_LANDING_DRAFT_CONTENT);
+      expect(newTask()).toBe(first);
+
+      useLandingDraftStore.getState().deleteDraft(first);
+
+      const next = newTask();
+      expect(next).not.toBe(first);
+      expect(next).not.toBe("mirrored");
     });
   });
 });

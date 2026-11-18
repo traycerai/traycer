@@ -92,6 +92,7 @@ import type {
   DeviceFlowAuthorization,
   DeviceFlowResult,
   DeviceFlowSession,
+  FleetRefreshOutcome,
   HostRestartRequestResult,
   IDeviceFlowHost,
   IHostManagement,
@@ -377,14 +378,14 @@ export class MockRunnerHost implements IRunnerHost {
     return null;
   }
 
-  refreshHostFleet(): Promise<void> {
+  refreshHostFleet(): Promise<FleetRefreshOutcome> {
     const current = this.selectionFleet.snapshot();
     this.selectionFleet.publish(
       current.identityGeneration,
       current.localHostId,
       current.hosts,
     );
-    return Promise.resolve();
+    return Promise.resolve({ kind: "published" });
   }
 
   readonly tray: MockTrayState = new MockTrayState();

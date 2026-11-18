@@ -61,6 +61,38 @@ export function recordAppLocalDisplayReceipt(
   compactNotificationIds(version);
 }
 
+/**
+ * The value a version's receipt key holds while its kind was refused
+ * (Settings → Alerts) and its inbox-only relay has not yet succeeded. Never a
+ * receipt: the row stays pending, so a failed relay is retried. The receipt
+ * overwrites it.
+ */
+const REFUSED = "refused";
+
+/**
+ * Remembers that this version's kind did not interrupt when it came up for
+ * display. A retry reads it so the version is only ever relayed inbox-only,
+ * even if the kind has been turned on since: turning a kind on never makes an
+ * occurrence that arrived while it was off audible.
+ */
+export function recordAppLocalDisplayRefusal(
+  version: AppLocalDisplayReceiptVersion,
+): void {
+  const key = appLocalNotificationDisplayReceiptKey(version);
+  if (window.localStorage.getItem(key) === "1") return;
+  window.localStorage.setItem(key, REFUSED);
+}
+
+export function hasAppLocalDisplayRefusal(
+  version: AppLocalDisplayReceiptVersion,
+): boolean {
+  return (
+    window.localStorage.getItem(
+      appLocalNotificationDisplayReceiptKey(version),
+    ) === REFUSED
+  );
+}
+
 export function captureAppLocalDisplayReceiptSession(
   userId: string,
 ): AppLocalDisplayReceiptSession {

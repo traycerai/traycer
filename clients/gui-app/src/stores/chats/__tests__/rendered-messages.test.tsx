@@ -47,6 +47,12 @@ import {
   RETRY_IN_PROGRESS_ERROR_CODE,
   RETRY_RECOVERED_ERROR_CODE,
 } from "@traycer/protocol/host/agent/gui/retry-feedback";
+import {
+  PENDING,
+  SOURCE,
+} from "@/components/bots/__tests__/bot-feedback-draft-card-test-support";
+
+const draftProjection = { source: SOURCE, draft: PENDING };
 
 // Mirror the host accumulator: a persisted tool_call/approval block carries
 // precomputed display fields, not the raw input. Computed via the same protocol
@@ -1433,6 +1439,25 @@ describe("useRenderedMessages", () => {
     });
   });
 
+  it("carries the message a member's row replies to onto the row, and leaves the key off a row that replies to none", () => {
+    const replying = {
+      ...userMessageAt("message-reply", 1000),
+      repliesTo: "message-target",
+    };
+    const plain = userMessageAt("message-plain", 2000);
+
+    const { result } = renderRenderedMessages({ messages: [replying, plain] });
+
+    expect(result.current[0]).toMatchObject({
+      persistentMessageId: "message-reply",
+      repliesTo: "message-target",
+    });
+    expect(result.current[1]).toMatchObject({
+      persistentMessageId: "message-plain",
+    });
+    expect(result.current[1]).not.toHaveProperty("repliesTo");
+  });
+
   it("threads per-turn run metadata onto the assistant row's assistantMeta", () => {
     // Distinct turnId so this turn doesn't reuse another test's cached model
     // (the per-turn cache keys on the shared display context + turnKey).
@@ -1932,6 +1957,131 @@ describe("useRenderedMessages", () => {
       throw new Error("expected text segment");
     }
     expect(completedSegment.isStreaming).toBe(false);
+  });
+
+  it("carries a bot row's feedback draft projection onto the rendered row and refreshes it when the stamp settles", () => {
+    const sent = {
+      ...draftProjection,
+      draft: { ...PENDING, state: "sent" as const, decidedAt: 5000 },
+    };
+    const row: Message = {
+      ...assistantMessage("turn-1", 2000),
+      feedbackDraft: draftProjection,
+    };
+
+    const driver = renderRenderedMessages({ messages: [row] });
+    expect(driver.result.current[0].feedbackDraft).toEqual(draftProjection);
+
+    // Same row id and timestamp, only the mirrored stamp changed: the cached
+    // turn must not hide it.
+    driver.patch({ messages: [{ ...row, feedbackDraft: sent }] });
+
+    expect(driver.result.current[0].feedbackDraft).toEqual(sent);
+  });
+
+  describe("a bot turn's feedback draft across split rows", () => {
+    const steerContent = {
+      type: "doc" as const,
+      content: [{ type: "paragraph" as const, content: [] }],
+    };
+
+    function steerBlock(id: string, timestamp: number) {
+      return {
+        type: "steer" as const,
+        blockId: `steer:${id}`,
+        status: "completed" as const,
+        timestamp,
+        queueItemId: `queue-${id}`,
+        messageId: `message-${id}`,
+        mode: "safe_point" as const,
+        sender: null,
+        content: steerContent,
+      };
+    }
+
+    function steeredUser(id: string, timestamp: number): Message {
+      return {
+        ...userMessage(`message-${id}`),
+        message: {
+          kind: "user" as const,
+          content: steerContent,
+          browserAnnotations: [],
+        },
+        timestamp,
+      };
+    }
+
+    function rowsCarryingDraft(
+      rows: ReadonlyArray<{ readonly feedbackDraft?: unknown }>,
+    ): number {
+      return rows.filter((row) => row.feedbackDraft !== undefined).length;
+    }
+
+    it("renders the draft on exactly one row when a steer splits the turn", () => {
+      const assistant: Message = {
+        ...assistantMessage("turn-draft-split", 2000),
+        feedbackDraft: draftProjection,
+        blocks: [
+          plainTextBlock("before-draft-split", 2001, "Before steer."),
+          steerBlock("draft-split", 2002),
+          plainTextBlock("after-draft-split", 2003, "After steer."),
+        ],
+      };
+
+      const { result } = renderRenderedMessages({
+        messages: [assistant, steeredUser("draft-split", 2002)],
+      });
+
+      expect(
+        result.current.filter((row) => row.role === "assistant"),
+      ).toHaveLength(2);
+      expect(rowsCarryingDraft(result.current)).toBe(1);
+    });
+
+    it("renders the draft on exactly one row when a trailing steer ends the turn", () => {
+      const assistant: Message = {
+        ...codexAssistantMessage("turn-draft-trailing", 2000),
+        timestamp: 2004,
+        feedbackDraft: draftProjection,
+        blocks: [
+          plainTextBlock("before-draft-trailing", 2001, "Before steer."),
+          steerBlock("draft-trailing", 2002),
+          codexRetryBlock({
+            blockId: "retry-ended-draft-trailing",
+            timestamp: 2003,
+            code: RETRY_ENDED_ERROR_CODE,
+            message: "The Codex retry attempt ended.",
+          }),
+        ],
+      };
+      const completedEvent: ChatEvent = {
+        eventId: "event:turn.completed:turn-draft-trailing",
+        type: "turn.completed",
+        timestamp: 2004,
+        clientActionId: null,
+        actor: null,
+        message: "Turn completed.",
+        turnId: "turn-draft-trailing",
+        messageId: null,
+        queueItemId: null,
+        approvalId: null,
+        blockId: null,
+        severity: "info",
+        metadata: null,
+      };
+
+      const { result } = renderRenderedMessages({
+        messages: [assistant, steeredUser("draft-trailing", 2002)],
+        events: [completedEvent],
+      });
+
+      expect(result.current.map((row) => row.role)).toEqual([
+        "assistant",
+        "user",
+        "assistant",
+      ]);
+      expect(rowsCarryingDraft(result.current)).toBe(1);
+    });
   });
 
   it("invalidates assistant turn cache when text changes without a timestamp change", () => {

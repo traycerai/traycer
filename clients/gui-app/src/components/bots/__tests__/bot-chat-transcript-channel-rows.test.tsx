@@ -323,7 +323,7 @@ describe("<BotChatTranscript /> in the channel", () => {
 
   function channelSurface(
     openAnnouncementThread: ((announcementId: string) => void) | null,
-    chooseOption: ((choice: string) => void) | null,
+    chooseOption: ((messageId: string | null, choice: string) => void) | null,
   ): BotTranscriptSurface {
     return {
       kind: "channel",
@@ -332,9 +332,10 @@ describe("<BotChatTranscript /> in the channel", () => {
       openAnnouncementThread,
       threadAnchorKinds: [],
       chooseOption,
+      reply: null,
       answerQuestion: null,
       answerQuestions: null,
-      discussQuestion: null,
+      questionBox: null,
       failedRequest: () => null,
       openTurn: null,
       sessionChatId: null,
@@ -352,7 +353,7 @@ describe("<BotChatTranscript /> in the channel", () => {
     );
 
     expect(screen.queryByTestId("bot-thread-line")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Reply in thread" }));
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
 
     expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
     expect(openAnnouncementThread).toHaveBeenCalledWith(QUESTION_ID, null);
@@ -404,7 +405,7 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
   }
 
   function channel(
-    chooseOption: ((choice: string) => void) | null,
+    chooseOption: ((messageId: string | null, choice: string) => void) | null,
     threadLine: (postMessageId: string) => ChatBotThreadLine | null,
   ): BotTranscriptSurface {
     return {
@@ -414,9 +415,10 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
       openAnnouncementThread: vi.fn(),
       threadAnchorKinds: [],
       chooseOption,
+      reply: null,
       answerQuestion: null,
       answerQuestions: null,
-      discussQuestion: null,
+      questionBox: null,
       failedRequest: () => null,
       openTurn: null,
       sessionChatId: null,
@@ -547,9 +549,10 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
     expect(screen.queryByTestId("conversation-request")).toBeNull();
   });
 
-  it("posts the option a person clicks under a direct reply through the channel surface", async () => {
+  it("posts the option a person clicks under a direct reply through the channel surface, naming the reply's own message", async () => {
     const user = userEvent.setup();
-    const chooseOption = vi.fn<(choice: string) => void>();
+    const chooseOption =
+      vi.fn<(messageId: string | null, choice: string) => void>();
     mountTranscript(
       [directPost(DIRECT_REQUEST), directReply(["Staging", "Production"])],
       channel(chooseOption, () => null),
@@ -558,7 +561,7 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
     await user.click(screen.getByRole("button", { name: "Production" }));
 
     expect(chooseOption).toHaveBeenCalledTimes(1);
-    expect(chooseOption).toHaveBeenCalledWith("Production");
+    expect(chooseOption).toHaveBeenCalledWith(REPLY_ID, "Production");
   });
 
   it("badges a reply with its post's writer and first line when another row sits between them", () => {
@@ -575,6 +578,28 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
     expect(
       within(replyRow).getByRole("button", {
         name: "Replying to Olive Owner: Please review",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("badges a member's message with the message it replies to, though that message is the row directly above", () => {
+    mountTranscript(
+      [
+        reply(),
+        {
+          ...otherUserMessage(),
+          messageId: "chosen-1",
+          timestamp: 3_000,
+          repliesTo: REPLY_ID,
+        },
+      ],
+      channel(null, () => null),
+    );
+
+    const memberRow = within(scrollStub()).getByTestId("bot-member-row");
+    expect(
+      within(memberRow).getByRole("button", {
+        name: "Replying to Release Bot: Here is my review",
       }),
     ).toBeTruthy();
   });
@@ -655,9 +680,10 @@ describe("<BotChatTranscript /> a member's answers to a bot's question card", ()
         openAnnouncementThread: null,
         threadAnchorKinds: [],
         chooseOption: null,
+        reply: null,
         answerQuestion: null,
         answerQuestions: null,
-        discussQuestion: null,
+        questionBox: null,
         failedRequest: () => null,
         openTurn: null,
         sessionChatId: null,
@@ -720,9 +746,10 @@ describe("<BotChatTranscript /> the pictures on members' rows", () => {
       openAnnouncementThread: null,
       threadAnchorKinds: [],
       chooseOption: null,
+      reply: null,
       answerQuestion: null,
       answerQuestions: null,
-      discussQuestion: null,
+      questionBox: null,
       failedRequest: () => null,
       openTurn: null,
       sessionChatId: null,

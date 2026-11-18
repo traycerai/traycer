@@ -91,7 +91,7 @@ function transcript(fold: BotTranscriptFold | null): ReactNode {
             showConnecting
             header={null}
             landOn={null}
-            flow={{ fold, mark: null }}
+            flow={{ fold, unread: null }}
           />
         </ChatExpansionTestProviders>
       </TooltipProvider>

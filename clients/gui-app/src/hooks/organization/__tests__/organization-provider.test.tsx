@@ -1,10 +1,17 @@
 import {
+  defaultScheduler,
+  notifyManager,
   QueryClient,
   QueryClientProvider,
   queryOptions,
   useQuery,
 } from "@tanstack/react-query";
-import { useEffect, type ReactNode } from "react";
+import {
+  Profiler,
+  useEffect,
+  type ProfilerOnRenderCallback,
+  type ReactNode,
+} from "react";
 import {
   act,
   cleanup,
@@ -14,27 +21,43 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import type {
   OrganizationAction,
   OrganizationView,
 } from "@traycer/protocol/host/organization/contracts";
+import { OrganizationMetadata } from "@/components/organization/organization-metadata";
 import { OrganizationProvider } from "@/hooks/organization/organization-provider";
-import { useOrganization } from "@/hooks/organization/organization-context";
+import {
+  useOrganization,
+  useTaskOrganization,
+} from "@/hooks/organization/organization-context";
 import {
   cloudEpicTasksQueryKey,
   LIST_CLOUD_TASKS_REQUEST,
 } from "@/lib/cloud-epic-tasks-query";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { organizationKeys } from "@/lib/query-keys/organization-query-keys";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { tabItemId } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 
 /** The stream transport as the provider uses it: frames, and recovery evidence. */
 interface FakeStreamClient {
-  readonly subscribe: () => {
-    readonly onServerFrame: () => void;
+  readonly subscribe: (
+    method: string,
+    request: { readonly taskIds: readonly string[] },
+  ) => {
+    readonly onServerFrame: (listener: (envelope: unknown) => void) => void;
     readonly close: () => void;
   };
   readonly subscribeAvailabilityRecovered: (listener: () => void) => () => void;
@@ -74,6 +97,7 @@ const state = vi.hoisted(() => {
       };
     }) => Promise<unknown>
   >();
+  const revalidateAuth = vi.fn<() => Promise<null>>();
   // The stream transport the surface binding hands out: `null` until a test
   // dials one. The host's recovery evidence is its availability listeners.
   const stream: {
@@ -82,13 +106,23 @@ const state = vi.hoisted(() => {
   // What the pool tier resolves the surface's stream to. `null` is the
   // no-pool plan, where the answer is the surface's own stream.
   const poolStream: { current: FakeStreamClient | null } = { current: null };
-  return { client, identity, view, support, mutateAsync, stream, poolStream };
+  return {
+    viewFromCache: false,
+    client,
+    identity,
+    view,
+    support,
+    mutateAsync,
+    revalidateAuth,
+    stream,
+    poolStream,
+  };
 });
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => state.client,
   useAuthService: () => ({
-    revalidateCurrentContextAfterInvalidation: () => Promise.resolve(null),
+    revalidateCurrentContextAfterInvalidation: state.revalidateAuth,
   }),
 }));
 
@@ -147,7 +181,31 @@ vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
 }));
 
 vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostQuery: () => ({ data: state.view }),
+  useHostQuery: (args: {
+    readonly method: string;
+    readonly cacheKeyIdentity: readonly unknown[];
+  }) => {
+    // The real hook's entry: the view the provider writes frames into, so a
+    // frame re-renders the provider through the cache as it does in the app.
+    const observed = state.viewFromCache && args.method === "organization.read";
+    const cached = useQuery(
+      queryOptions({
+        queryKey: observed
+          ? [
+              ...hostQueryKeys.method<HostRpcRegistry, "organization.read">(
+                state.identity.hostId,
+                "organization.read",
+                { taskIds: [] },
+              ),
+              ...args.cacheKeyIdentity,
+            ]
+          : ["organization-provider-test", "unobserved"],
+        queryFn: () => state.view,
+        enabled: false,
+      }),
+    );
+    return observed ? cached : { data: state.view };
+  },
   useHostMutation: () => ({ mutateAsync: state.mutateAsync }),
 }));
 
@@ -203,6 +261,7 @@ function renderProvider(queryClient: QueryClient, children: ReactNode) {
 function resetStores(): void {
   state.stream.current = null;
   state.poolStream.current = null;
+  state.viewFromCache = false;
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useTabsStore.setState(useTabsStore.getInitialState(), true);
   state.identity.hostId = "host-1";
@@ -210,6 +269,7 @@ function resetStores(): void {
   state.identity.authUserId = "user-1";
   state.support.current = true;
   state.mutateAsync.mockReset();
+  state.revalidateAuth.mockReset().mockResolvedValue(null);
   state.mutateAsync.mockImplementation(() =>
     Promise.resolve({
       commandId: "command-1",
@@ -220,10 +280,41 @@ function resetStores(): void {
 }
 
 function OrganizationStateProbe() {
-  const organization = useOrganization();
+  const taskOrganization = useTaskOrganization("task-1", undefined);
   return (
     <output data-testid="organization-state">
-      {organization?.view === undefined ? "hidden" : "visible"}
+      {taskOrganization === undefined ? "hidden" : "visible"}
+    </output>
+  );
+}
+
+function OrganizationRenderProbe() {
+  const organization = useOrganization();
+  return (
+    <output data-testid="organization-context">
+      {String(organization?.supported)}
+    </output>
+  );
+}
+
+function TaskOrganizationRenderProbe(props: { readonly taskId: string }) {
+  const organization = useTaskOrganization(props.taskId, undefined);
+  return (
+    <output data-testid={`task-organization-${props.taskId}`}>
+      {`${organization?.group?.groupId ?? "none"}:${organization?.appearance.color ?? "none"}`}
+    </output>
+  );
+}
+
+function TabProjectionRenderProbe(props: {
+  readonly select: "groups" | "customizations";
+}) {
+  const selected = useTabsStore((tabState) =>
+    props.select === "groups" ? tabState.groups : tabState.customizations,
+  );
+  return (
+    <output data-testid={`tab-projection-${props.select}`}>
+      {String(selected !== undefined)}
     </output>
   );
 }
@@ -262,6 +353,23 @@ function ActiveOrganizationRefreshQuery(props: {
   return null;
 }
 
+function ActiveHistoryRefetchProbe(props: { readonly fetch: () => void }) {
+  useQuery(
+    queryOptions({
+      queryKey: [
+        ...hostQueryKeys.methodScope("host-1", "organization.history"),
+        "active-history-refetch-probe",
+      ],
+      queryFn: () => {
+        props.fetch();
+        return Promise.resolve("history");
+      },
+      staleTime: Infinity,
+    }),
+  );
+  return null;
+}
+
 function openTask(taskId: string): string {
   const tabId = useEpicCanvasStore.getState().openEpicTab(taskId, taskId);
   const refs = useEpicCanvasStore.getState().openTabOrder.map((id) => ({
@@ -295,6 +403,65 @@ afterEach(() => {
 });
 
 describe("OrganizationProvider lifecycle projection", () => {
+  it("commits a token-only account-wide frame once, with no render of its own for the identity re-read", async () => {
+    // Each notification reaches the provider as it is made, so a re-read
+    // that rendered would commit on its own instead of batching with the view.
+    notifyManager.setScheduler((notify) => notify());
+    onTestFinished(() => notifyManager.setScheduler(defaultScheduler));
+    const subscriptions = new Map<string, (envelope: unknown) => void>();
+    state.stream.current = {
+      wsStreamClient: {
+        subscribe: (_method, request) => ({
+          onServerFrame: (listener) => {
+            subscriptions.set(request.taskIds.join(","), listener);
+          },
+          close: () => undefined,
+        }),
+        subscribeAvailabilityRecovered: () => () => undefined,
+      },
+    };
+    state.view = { ...emptyView(), historyInvalidation: "token-1" };
+    state.viewFromCache = true;
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(
+      organizationKeys.view("host-1", "user-1"),
+      state.view,
+    );
+    const providerCommits = vi.fn<ProfilerOnRenderCallback>();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Profiler id="organization-provider" onRender={providerCommits}>
+          <OrganizationProvider>{null}</OrganizationProvider>
+        </Profiler>
+      </QueryClientProvider>,
+    );
+    const pushAccountWideFrame = (token: string): void => {
+      act(() => {
+        subscriptions.get("")?.({
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          view: { ...state.view, historyInvalidation: token },
+        });
+      });
+    };
+    pushAccountWideFrame("token-1");
+    providerCommits.mockClear();
+
+    pushAccountWideFrame("token-2");
+    await waitFor(() =>
+      expect(
+        queryClient
+          .getMutationCache()
+          .getAll()
+          .map((mutation) => mutation.state.status),
+      ).toEqual(["success"]),
+    );
+
+    expect(state.revalidateAuth).toHaveBeenCalledTimes(1);
+    // The token moved the cached view: that is the one commit.
+    expect(providerCommits).toHaveBeenCalledTimes(1);
+  });
+
   it("opens saved siblings when a grouped task is opened", async () => {
     const taskOneTabId = openTask("task-1");
     state.view = viewWithGroup([
@@ -608,6 +775,213 @@ describe("OrganizationProvider lifecycle projection", () => {
     expect(invalidateQueries).toHaveBeenCalledWith({
       queryKey: hostQueryKeys.methodScope("host-1", "organization.history"),
     });
+  });
+
+  it("keeps tab, context and task consumers quiet when only the History token moves", async () => {
+    const taskTabId = openTask("task-1");
+    state.view = {
+      ...viewWithGroup([{ taskId: "task-1", groupId: "group-1", position: 0 }]),
+      historyInvalidation: "marker-1",
+    };
+    const queryClient = new QueryClient();
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+    const historyFetch = vi.fn();
+    const renders = {
+      groups: 0,
+      customizations: 0,
+      context: 0,
+      task: 0,
+    };
+    const probes = (
+      <>
+        <Profiler id="groups" onRender={() => (renders.groups += 1)}>
+          <TabProjectionRenderProbe select="groups" />
+        </Profiler>
+        <Profiler
+          id="customizations"
+          onRender={() => (renders.customizations += 1)}
+        >
+          <TabProjectionRenderProbe select="customizations" />
+        </Profiler>
+        <Profiler
+          id="organization-context"
+          onRender={() => (renders.context += 1)}
+        >
+          <OrganizationRenderProbe />
+        </Profiler>
+        <Profiler id="task-organization" onRender={() => (renders.task += 1)}>
+          <TaskOrganizationRenderProbe taskId="task-1" />
+        </Profiler>
+        <ActiveHistoryRefetchProbe fetch={historyFetch} />
+      </>
+    );
+    const rendered = renderProvider(queryClient, probes);
+
+    await waitFor(() => {
+      expect(tabGroupId(taskTabId)).toBe("group-1");
+      expect(historyFetch).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId("task-organization-task-1").textContent).toBe(
+        "group-1:none",
+      );
+    });
+    const baseline = { ...renders };
+    historyFetch.mockClear();
+    invalidateQueries.mockClear();
+
+    state.view = { ...state.view, historyInvalidation: "marker-2" };
+    act(() => {
+      rendered.rerender(
+        <QueryClientProvider client={queryClient}>
+          <OrganizationProvider>{probes}</OrganizationProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(renders).toEqual(baseline);
+    const historyInvalidation = {
+      queryKey: hostQueryKeys.methodScope("host-1", "organization.history"),
+    };
+    expect(
+      invalidateQueries.mock.calls.filter(
+        ([filters]) =>
+          JSON.stringify(filters) === JSON.stringify(historyInvalidation),
+      ),
+    ).toHaveLength(1);
+    await waitFor(() => expect(historyFetch).toHaveBeenCalledTimes(1));
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      ...historyInvalidation,
+    });
+  });
+
+  it("updates an open tab's task organization and customization when its appearance changes", async () => {
+    const taskTabId = openTask("task-1");
+    state.view = viewWithGroup([
+      { taskId: "task-1", groupId: "group-1", position: 0 },
+    ]);
+    const queryClient = new QueryClient();
+    const rendered = renderProvider(
+      queryClient,
+      <TaskOrganizationRenderProbe taskId="task-1" />,
+    );
+
+    await waitFor(() => expect(tabGroupId(taskTabId)).toBe("group-1"));
+    expect(screen.getByTestId("task-organization-task-1").textContent).toBe(
+      "group-1:none",
+    );
+
+    state.view = {
+      ...state.view,
+      appearances: [
+        { taskId: "task-1", version: "1", color: "#123456", icon: "UX" },
+        ...state.view.appearances.filter((entry) => entry.taskId !== "task-1"),
+      ],
+    };
+    act(() => {
+      rendered.rerender(
+        <QueryClientProvider client={queryClient}>
+          <OrganizationProvider>
+            <TaskOrganizationRenderProbe taskId="task-1" />
+          </OrganizationProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("task-organization-task-1").textContent).toBe(
+        "group-1:#123456",
+      );
+      expect(
+        useTabsStore.getState().customizations?.[`epic:${taskTabId}`]?.color,
+      ).toBe("#123456");
+    });
+  });
+
+  it("does not re-render one task's organization probe when another task's labels change", async () => {
+    state.view = {
+      ...viewWithGroup([{ taskId: "task-1", groupId: "group-1", position: 0 }]),
+      taskLabels: { "task-1": { labels: [], removed: [] } },
+    };
+    const queryClient = new QueryClient();
+    let renders = 0;
+    const probe = (
+      <Profiler id="task-organization" onRender={() => (renders += 1)}>
+        <TaskOrganizationRenderProbe taskId="task-1" />
+      </Profiler>
+    );
+    const rendered = renderProvider(queryClient, probe);
+    await waitFor(() =>
+      expect(screen.getByTestId("task-organization-task-1").textContent).toBe(
+        "group-1:none",
+      ),
+    );
+    const baseline = renders;
+
+    state.view = {
+      ...state.view,
+      taskLabels: {
+        ...state.view.taskLabels,
+        "task-2": { labels: [], removed: [] },
+      },
+    };
+    act(() => {
+      rendered.rerender(
+        <QueryClientProvider client={queryClient}>
+          <OrganizationProvider>{probe}</OrganizationProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(renders).toBe(baseline);
+  });
+
+  it("shows a new label on a task open in a tab", async () => {
+    const taskTabId = openTask("task-1");
+    state.view = viewWithGroup([
+      { taskId: "task-1", groupId: "group-1", position: 0 },
+    ]);
+    const queryClient = new QueryClient();
+    const metadata = (
+      <OrganizationMetadata taskId="task-1" canEdit fallback={undefined} />
+    );
+    const rendered = renderProvider(queryClient, metadata);
+    await waitFor(() => expect(tabGroupId(taskTabId)).toBe("group-1"));
+    expect(
+      screen.getByRole("button", { name: "Task organization: Group: Project" }),
+    ).toBeTruthy();
+
+    state.view = {
+      ...state.view,
+      taskLabels: {
+        "task-1": {
+          labels: [
+            {
+              ownerId: "user-1",
+              labelId: "label-1",
+              kind: "custom",
+              systemKey: null,
+              name: "Urgent",
+              color: "#ff0000",
+              version: "1",
+              assignmentId: "assignment-1",
+            },
+          ],
+          removed: [],
+        },
+      },
+    };
+    act(() => {
+      rendered.rerender(
+        <QueryClientProvider client={queryClient}>
+          <OrganizationProvider>{metadata}</OrganizationProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(
+      screen.getByRole("button", {
+        name: "Task organization: Group: Project; Label: Urgent",
+      }),
+    ).toBeTruthy();
   });
 
   it("does not retain another account's group projection", async () => {
@@ -1351,9 +1725,10 @@ describe("OrganizationProvider draft group intent", () => {
 describe("OrganizationProvider host support", () => {
   function SupportProbe() {
     const organization = useOrganization();
+    const taskOrganization = useTaskOrganization("task-1", undefined);
     return (
       <output data-testid="support">
-        {`${String(organization?.hostSupport)} ${String(organization?.supported)} ${organization?.view === undefined ? "no-view" : "view"}`}
+        {`${String(organization?.hostSupport)} ${String(organization?.supported)} ${taskOrganization === undefined ? "no-view" : "view"}`}
       </output>
     );
   }

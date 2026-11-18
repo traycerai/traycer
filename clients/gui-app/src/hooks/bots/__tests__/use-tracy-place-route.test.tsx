@@ -844,20 +844,30 @@ describe("the Tracy surface's place on the route", () => {
     it("are untouched by any move, Back or Forward", async () => {
       const harness = await mountOnChannel(BOT_A);
       const drafts = useBotDraftsStore.getState();
-      drafts.typeThreadBox(BOT_A, "conversation-1", "channel box", null);
-      drafts.typeThreadBox(BOT_A, "m-1", "thread box", null);
+      drafts.typeThreadBox(BOT_A, "conversation-1", {
+        text: "channel box",
+        content: null,
+        held: [],
+      });
+      drafts.typeThreadBox(BOT_A, "m-1", {
+        text: "thread box",
+        content: null,
+        held: [],
+      });
       drafts.setAnswer(BOT_A, "q-1#0", {
         chosen: ["a"],
         typed: "typed answer",
-        skip: false,
         sent: null,
         unsureSince: null,
+        heldForSettlement: null,
       });
       drafts.offerUnsent(BOT_A, "m-2", {
         text: "unsent",
         wire: "unsent",
         supersedes: null,
         content: { type: "doc", content: [] },
+        held: [],
+        replyTo: null,
       });
       const held = () => {
         const { answers, threadBoxes, unsentBoxes } =
