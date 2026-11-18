@@ -251,7 +251,7 @@ function parseChatPayload(
   const eventId = readString(value.eventId);
   const botId = readString(value.botId);
   const threadId = readString(value.threadId);
-  // Flat mobile push routes carry the channel identity in chatId.
+  // Flat routes without conversationId carry an unthreaded channel in chatId.
   const conversationId =
     value.conversationId === undefined && threadId === null
       ? chatId
