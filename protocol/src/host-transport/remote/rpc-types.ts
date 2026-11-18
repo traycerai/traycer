@@ -93,9 +93,7 @@ export class HostRpcError extends Error {
    * omitted it, or when it failed schema parse.
    */
   readonly staleWrite: EnvironmentStaleWrite | null;
-  /**
-   * In the shape a door refusal takes; `null` on every other answer: the socket stays up.
-   */
+  /** In the shape a door refusal takes; `null` on every other answer: the socket stays up. */
   readonly doorRefusal: FatalErrorDetails | null;
 
   constructor(details: {

@@ -208,7 +208,7 @@ function qosForStreamMethod(method: string): QosClassValue {
  * R4-E3):
  *   mint fresh grant → dial relay(?grant) → attach_ack{sid}
  *     → Noise-NK handshake (msg0 → msg1)
- *     → open{bearer, manifest, authz:null, resume:null}  (re-presents bearer, A2)
+ *     → open{bearer:"", manifest, authz:{v:2, grant}, resume:null}  (host-only token, A2)
  *     → openAck{manifest, capabilities}  → compat mirror → ready
  *     → re-subscribe every live stream
  *

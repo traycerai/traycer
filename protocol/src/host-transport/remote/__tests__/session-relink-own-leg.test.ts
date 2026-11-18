@@ -397,10 +397,7 @@ class FakeRelay {
     });
   }
 
-  /**
-   * A host-sent session FATAL on stream 0, sealed in order like any host
-   * frame.
-   */
+  /** A host-sent session FATAL on stream 0, sealed in order like any host frame. */
   async sendSessionFatal(
     code: string,
     retryable: boolean,
