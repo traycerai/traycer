@@ -25,7 +25,12 @@ import {
   RouterProvider,
   type RouterHistory,
 } from "@tanstack/react-router";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  queryOptions,
+} from "@tanstack/react-query";
+import { installBotReadReadability } from "@/lib/bots/bot-read-readability";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { expect, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -354,6 +359,8 @@ export function startCase(
   scene.threads = [];
   scene.threadListLoaded = true;
   scene.threadAnchors = null;
+  scene.threadListError = null;
+  scene.threadListData = null;
   scene.locate = { status: "waiting" };
   scene.commits = [];
   scene.panelKinds = [];
@@ -680,4 +687,20 @@ export async function routeNames(
       { cause: error },
     );
   }
+}
+
+/**
+ * `data` as an answer the app's bot read retains for the signed-in account:
+ * fetched through a real query cache that marks readability, as the thread
+ * list's own read is. Call it after the account is signed in.
+ */
+export async function markReadable<T extends object>(data: T): Promise<T> {
+  const client = new QueryClient();
+  installBotReadReadability(client);
+  return client.fetchQuery(
+    queryOptions({
+      queryKey: ["host", "host-1", "bot.thread.list", { answer: data }],
+      queryFn: () => Promise.resolve(data),
+    }),
+  );
 }

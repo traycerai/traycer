@@ -114,6 +114,7 @@ export function BotSessionView(props: {
   readonly botId: string;
   /** The host serving the tab: the session is read through it. */
   readonly hostId: string;
+  readonly boundHostId: string | null;
   readonly botTitle: string;
   readonly session: BotOpenSession;
   /** The bot's threads, as listed: a thread's session names its post; `null` while the list is not read. */
@@ -258,6 +259,7 @@ export function BotSessionView(props: {
                     botId={botId}
                     chatId={session.chatId}
                     hostId={hostId}
+                    boundHostId={props.boundHostId}
                     title={botTitle}
                     instanceId={instanceId}
                     surface={null}

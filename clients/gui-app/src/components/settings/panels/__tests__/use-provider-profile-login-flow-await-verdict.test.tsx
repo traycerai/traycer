@@ -16,13 +16,14 @@ import {
   HostRequestControlFlowError,
   type HostRequestControlFlowReason,
 } from "@traycer-clients/shared/host-client/host-request-coordinator";
-import type {
+import {
   HostRpcError,
-  RequestOfMethod,
-  ResponseOfMethod,
+  type RequestOfMethod,
+  type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
+import type { AwaitLoginTestAnswer } from "./provider-profile-login-flow-test-support";
 import { appLogger } from "@/lib/logger";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 import {
@@ -59,13 +60,10 @@ type CancelLoginResponse = ResponseOfMethod<
   HostRpcRegistry,
   "providers.cancelLogin"
 >;
-type AwaitLoginResponse = ResponseOfMethod<
-  HostRpcRegistry,
-  "providers.awaitLogin"
->;
-type SubmitLoginCodeRequest = RequestOfMethod<
-  HostRpcRegistry,
-  "providers.submitLoginCode"
+type AwaitLoginResponse = AwaitLoginTestAnswer;
+type SubmitLoginCodeRequest = Omit<
+  RequestOfMethod<HostRpcRegistry, "providers.submitLoginCode">,
+  "code"
 >;
 type SubmitLoginCodeResponse = ResponseOfMethod<
   HostRpcRegistry,
@@ -137,6 +135,28 @@ function controlFlowRejection(
   );
 }
 
+const ENVIRONMENT_MANAGED_LINE = "Managed by your environment — sign in there.";
+
+/**
+ * The host's refusal of an environment-held account, as the real boundary mints
+ * it from the typed host error.
+ */
+function environmentManagedRejection(): Promise<AwaitLoginResponse> {
+  return withHostQueryErrorBoundary<AwaitLoginResponse>(
+    "providers.awaitLogin",
+    () =>
+      Promise.reject(
+        new HostRpcError({
+          code: "environment-managed",
+          message: ENVIRONMENT_MANAGED_LINE,
+          requestId: "request-environment-managed",
+          method: "providers.awaitLogin",
+          fatalDetails: null,
+        }),
+      ),
+  );
+}
+
 /** The same boundary applied to an ordinary failure (a transport error). */
 function transportRejection(): Promise<AwaitLoginResponse> {
   return withHostQueryErrorBoundary<AwaitLoginResponse>(
@@ -159,6 +179,8 @@ function queryClientWrapper(): (props: {
     );
   };
 }
+
+const onFailedSpy = vi.fn<(message: string, hostSentence: boolean) => void>();
 
 function LoginFlowHarness(props: {
   readonly mode: ProviderProfileLoginFlowMode;
@@ -229,10 +251,11 @@ function LoginFlowHarness(props: {
     awaitLogin,
     cancelLogin,
     submitLoginCode,
+    setSubmittedLoginCode: () => undefined,
     touchLogin,
     ensurePack,
     failureMessages: { notStarted: NOT_STARTED, notFinished: NOT_FINISHED },
-    onFailed: () => undefined,
+    onFailed: (message, hostSentence) => onFailedSpy(message, hostSentence),
   });
 
   return (
@@ -240,6 +263,11 @@ function LoginFlowHarness(props: {
       <div data-testid="flow-state">{flow.state.kind}</div>
       <div data-testid="flow-message">
         {flow.state.kind === "failed" ? flow.state.message : ""}
+      </div>
+      <div data-testid="flow-refusal">
+        {flow.state.kind === "failed" && flow.state.refusal !== null
+          ? "refusal"
+          : "none"}
       </div>
       <button
         type="button"
@@ -278,6 +306,7 @@ function awaitEndedCalls(warn: {
 }
 
 afterEach(() => {
+  onFailedSpy.mockReset();
   cleanup();
   vi.restoreAllMocks();
 });
@@ -404,5 +433,44 @@ describe("useProviderProfileLoginFlow - an await that ends without a verdict", (
 
     expect(flowState()).toBe("cancelled");
     expect(awaitEndedCalls(warn)).toHaveLength(0);
+  });
+
+  it.each<ProviderProfileLoginFlowMode>(["create", "reauth"])(
+    "%s mode ends on the host's own line when the host refuses the sign-in as environment-managed",
+    async (mode) => {
+      vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+      renderFlow({
+        mode,
+        existingProfileId: mode === "reauth" ? "p-existing" : null,
+        awaitLoginImpl: () => environmentManagedRejection(),
+      });
+
+      await waitFor(() => expect(flowState()).toBe("failed"));
+      expect(screen.getByTestId("flow-message").textContent).toBe(
+        ENVIRONMENT_MANAGED_LINE,
+      );
+      expect(screen.getByTestId("flow-refusal").textContent).toBe("none");
+    },
+  );
+
+  it("reports the host's sentence to the caller as a host sentence, and an ordinary rejection as not", async () => {
+    vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+    renderFlow({
+      mode: "create",
+      existingProfileId: null,
+      awaitLoginImpl: () => environmentManagedRejection(),
+    });
+    await waitFor(() => expect(flowState()).toBe("failed"));
+    expect(onFailedSpy).toHaveBeenCalledWith(ENVIRONMENT_MANAGED_LINE, true);
+
+    cleanup();
+    onFailedSpy.mockReset();
+    renderFlow({
+      mode: "create",
+      existingProfileId: null,
+      awaitLoginImpl: () => transportRejection(),
+    });
+    await waitFor(() => expect(flowState()).toBe("failed"));
+    expect(onFailedSpy).toHaveBeenCalledWith(NOT_FINISHED, false);
   });
 });

@@ -71,6 +71,16 @@ export const scene = {
   threadListLoaded: true,
   /** The rows the bound host opens their own thread under, as its thread list says. */
   threadAnchors: null as BotThreadAnchors | null,
+  /** The failure the thread list's last refetch ended in; `null` for none. */
+  threadListError: null as Error | null,
+  /**
+   * The answer the thread list holds, where a case needs one the app's read
+   * retains as readable (`markReadable`); `null` for a fresh answer each draw.
+   */
+  threadListData: null as {
+    readonly threads: BotThreadSummary[];
+    readonly threadAnchors: BotThreadAnchors | null;
+  } | null,
   /** Every commit of the surface, in order. */
   commits: [] as DomReading[],
   /** The `thread.kind` the real thread panel was rendered with, in order. */
@@ -172,9 +182,14 @@ export const botThreadListChannelMock = {
     );
     return {
       data: scene.threadListLoaded
-        ? { threads: scene.threads, threadAnchors: scene.threadAnchors }
+        ? (scene.threadListData ?? {
+            threads: scene.threads,
+            threadAnchors: scene.threadAnchors,
+          })
         : undefined,
-      isError: false,
+      isError: scene.threadListError !== null,
+      error: scene.threadListError,
+      dataUpdatedAt: 1,
       isFetching: !scene.threadListLoaded,
       refetch: vi.fn(),
     };

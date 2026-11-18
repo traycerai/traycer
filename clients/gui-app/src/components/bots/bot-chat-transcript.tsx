@@ -389,6 +389,8 @@ export function BotChatTranscript(props: {
   readonly botId: string;
   readonly chatId: string;
   readonly hostId: string;
+  /** The bot's bound host, whose payer the rows read; `null` when none runs it. */
+  readonly boundHostId: string | null;
   readonly title: string;
   readonly instanceId: string;
   readonly surface: BotTranscriptSurface | null;
@@ -455,6 +457,7 @@ export function BotChatTranscript(props: {
             botId={botId}
             chatId={chatId}
             hostId={hostId}
+            boundHostId={props.boundHostId}
             title={title}
             instanceId={instanceId}
             surface={surface}
@@ -653,6 +656,7 @@ function BotChatTranscriptBody(props: {
   readonly botId: string;
   readonly chatId: string;
   readonly hostId: string;
+  readonly boundHostId: string | null;
   readonly title: string;
   readonly instanceId: string;
   readonly surface: BotTranscriptSurface | null;
@@ -1045,6 +1049,7 @@ function BotChatTranscriptBody(props: {
                     taskId={chatId}
                     epicId={botId}
                     hostId={hostId}
+                    payerHostId={props.boundHostId}
                     messages={messages}
                     transcriptWindow={transcriptWindow}
                     onVisibleOrdinalRangeChange={

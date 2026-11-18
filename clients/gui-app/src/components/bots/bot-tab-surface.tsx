@@ -17,6 +17,7 @@ import {
 import { createPortal } from "react-dom";
 import { useMobileBotHeaderSlot } from "@/components/layout/header/mobile-bot-header-context";
 import {
+  use,
   useCallback,
   useEffect,
   useEffectEvent,
@@ -61,8 +62,15 @@ import {
 } from "@/hooks/bots/use-bot-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { BotLooksContext, botLooksOf } from "@/hooks/bots/use-bot-appearance";
-import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotDirectoryRecord,
+  BotRecord,
+} from "@traycer/protocol/host/bot/schemas";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
+import {
+  BotMayChangeContext,
+  useReaderMayChangeBot,
+} from "@/hooks/bots/use-reader-may-change-bot";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentMemberDirectory } from "@/hooks/bots/use-environment-members-query";
 import { useBotOpenMutation } from "@/hooks/bots/use-bot-mutations";
@@ -283,7 +291,7 @@ function TracySurfaceShell(props: {
   const navigate = useNavigate();
   const client = useTabHostClient();
   const botList = useBotListQuery(client, true);
-  const environments = useEnvironmentListQuery(client, true);
+  const environments = useEnvironmentListQuery(true);
   // A teammate's rename, claim or delete reaches the list (and so the
   // surface) without waiting for focus, through the surface's own host.
   useBotListChangedSubscriptionForHost(hostId, true);
@@ -678,7 +686,7 @@ function useChannelRoute(
 } {
   const client = useTabHostClient();
   const botList = useBotListQuery(client, true);
-  const environments = useEnvironmentListQuery(client, true);
+  const environments = useEnvironmentListQuery(true);
   const groups = useBotsGroups(botList.data, environments.data);
   const teamSetups = useTeamSetups({ client, hostId, groups });
   const listed = botList.data?.bots.some((bot) => bot.botId === botId) ?? false;
@@ -965,6 +973,8 @@ function BotTabBody(props: {
     return () =>
       document.removeEventListener("visibilitychange", onVisibilityChange);
   }, [paneVisible]);
+  const mayChangeBot = useReaderMayChangeBot(subscription.snapshot);
+
   // A transient failure is also asked again on the tab's own backoff, since
   // the host owes no ring for a lone 5xx. Only while the surface and the
   // window are in view, by the rule above; coming back into view re-opens.
@@ -1028,26 +1038,28 @@ function BotTabBody(props: {
   }
 
   return (
-    <BotTabContent
-      botId={botId}
-      hostId={hostId}
-      snapshot={snapshot}
-      pausedReason={openState.kind === "paused" ? openState.reason : null}
-      reopenFailure={openError}
-      onReopen={reopen}
-      reopenPending={openPending}
-      streamError={subscription.error}
-      snapshotFresh={subscription.snapshotFresh}
-      onRetry={resubscribe}
-      view={view}
-      onViewChange={changeView}
-      level2={props.level2}
-      tiles={props.tiles}
-      onRailDrawn={props.onRailDrawn}
-      threadsView={threadsView}
-      onDeleted={deleted}
-      mainBotIds={props.mainBotIds}
-    />
+    <BotMayChangeContext value={mayChangeBot}>
+      <BotTabContent
+        botId={botId}
+        hostId={hostId}
+        snapshot={snapshot}
+        pausedReason={openState.kind === "paused" ? openState.reason : null}
+        reopenFailure={openError}
+        onReopen={reopen}
+        reopenPending={openPending}
+        streamError={subscription.error}
+        snapshotFresh={subscription.snapshotFresh}
+        onRetry={resubscribe}
+        view={view}
+        onViewChange={changeView}
+        level2={props.level2}
+        tiles={props.tiles}
+        onRailDrawn={props.onRailDrawn}
+        threadsView={threadsView}
+        onDeleted={deleted}
+        mainBotIds={props.mainBotIds}
+      />
+    </BotMayChangeContext>
   );
 }
 
@@ -1806,7 +1818,7 @@ function BotTabContent(props: {
   const threadsShown = threadsView.shown;
   const client = useTabHostClient();
   const isMain = isMainBot(mainBotIds, snapshot.bot);
-  const environments = useEnvironmentListQuery(client, true);
+  const environments = useEnvironmentListQuery(true);
   const environment =
     environments.data?.environments.find(
       (entry) => entry.environmentId === snapshot.bot.environmentId,
@@ -1815,6 +1827,7 @@ function BotTabContent(props: {
   // Only a personal environment's bot may answer posts itself; a list not
   // read yet draws no reply-mode control.
   const personal = environment?.ownerKind === "user";
+  const mayChangeBot = use(BotMayChangeContext);
   const setupHistory = useChannelSetupHistory({
     client,
     hostId,
@@ -1830,14 +1843,10 @@ function BotTabContent(props: {
         : environmentBotsOf(botList.data.bots, snapshot.bot.environmentId),
     [botList.data, snapshot.bot.environmentId],
   );
-  // Who wrote each channel row. A host without the method shows the other
-  // members by id.
-  const membersSupported =
-    useHostMethodSupport(hostId, "environment.members") === true;
+  // Who wrote each channel row.
   const directory = useEnvironmentMemberDirectory(
-    client,
     snapshot.bot.environmentId,
-    membersSupported,
+    true,
   );
   const resolveMember = directory.resolve;
   const {
@@ -1991,6 +2000,7 @@ function BotTabContent(props: {
                     key={session.chatId}
                     botId={botId}
                     hostId={hostId}
+                    boundHostId={snapshot.boundHost.hostId}
                     botTitle={snapshot.bot.title}
                     session={session}
                     threads={threads}
@@ -2103,8 +2113,9 @@ function BotTabContent(props: {
               ))}
             {settingsOpen ? (
               <BotChannelSettingsPanel
-                bot={snapshot.bot}
+                bot={botWithProfileChoice(snapshot.bot, botList.data)}
                 personal={personal}
+                mayChange={mayChangeBot}
                 channelId={snapshot.bot.appConversationChatId}
                 environmentBots={environmentBots}
                 onClose={closeSettings}
@@ -2561,4 +2572,13 @@ function PausedBanner(props: {
       ) : null}
     </div>
   );
+}
+
+/** The channel snapshot owns the tuple; the directory carries the host's choice. */
+function botWithProfileChoice(
+  bot: BotRecord,
+  listed: BotListResponse | undefined,
+): BotDirectoryRecord {
+  const row = listed?.bots.find((candidate) => candidate.botId === bot.botId);
+  return { ...bot, profileChoice: row?.profileChoice ?? null };
 }

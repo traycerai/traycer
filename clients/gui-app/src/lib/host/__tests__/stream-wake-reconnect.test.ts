@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
+import { inertHostTokenSource } from "../../../../__tests__/create-fake-runner-host";
 
 // `subscribeStreamWakeReconnect` registers the `window 'online'` listener first,
 // then the OS-resume subscription. These tests pin that the first listener is
@@ -53,6 +54,7 @@ function makeClient() {
     cloudAuthorized: () => false,
     authnBaseUrl: "http://localhost:5005",
     auth: null,
+    hostTokens: inertHostTokenSource(),
     // Local (plain-WS) target: sweep eligibility only gates the remote-session
     // cache, so this is inert here.
     proactiveWakeEligible: true,

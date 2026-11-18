@@ -13,11 +13,14 @@ import {
   maxModeListedFor,
   type MaxModeContext,
 } from "@/components/home/data/model-max-mode";
+import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import {
   profileAccentDotInput,
-  profileCommitId,
   profileDisplayLabel,
+  profileDropdownShown,
+  resolvedProfileRow,
   type ProfileAccentDotInput,
+  type RemovedProviderProfile,
 } from "@/components/providers/provider-profile-model";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 
@@ -38,6 +41,7 @@ interface HarnessModelPickerPresentationInput {
    *  chip's send-identity badge, distinct from the panel's browsed
    *  provider. */
   readonly selectedHarnessProfiles: ReadonlyArray<ProviderProfile>;
+  readonly selectedHarnessRemovedProfiles: readonly RemovedProviderProfile[];
 }
 
 /**
@@ -107,6 +111,7 @@ export function deriveHarnessModelPickerPresentation(
     modelsPending,
     selectedHarnessAvailable,
     selectedHarnessProfiles,
+    selectedHarnessRemovedProfiles,
     stagedModelName,
   } = input;
 
@@ -136,15 +141,21 @@ export function deriveHarnessModelPickerPresentation(
   });
   const isLoading =
     harnessesPending || (selectedHarnessAvailable && modelsPending);
-  const hasMultipleProfiles = selectedHarnessProfiles.length >= 2;
-  // The profile a send will actually burn: the committed selection's profile,
-  // resolved only once the provider crosses the 2-profile progressive-
-  // disclosure gate. A stale/removed profileId that no longer matches any
-  // known profile silently omits the badge rather than guessing.
-  const activeProfile = hasMultipleProfiles
-    ? (selectedHarnessProfiles.find(
-        (profile) => profileCommitId(profile) === selection.profileId,
-      ) ?? null)
+  // The profile a send will actually burn: the committed selection's profile
+  // (or the row it is an alias of), named wherever the account dropdown is
+  // drawn (`profileDropdownShown`). A stale/removed profileId that resolves to
+  // no row silently omits the badge rather than guessing.
+  const activeProfile = profileDropdownShown(
+    guiHarnessIdToProviderId(selection.harnessId),
+    selectedHarnessProfiles,
+    selectedHarnessRemovedProfiles,
+    selection.profileId,
+  )
+    ? resolvedProfileRow(
+        selectedHarnessProfiles,
+        selectedHarnessRemovedProfiles,
+        selection.profileId,
+      )
     : null;
   const profileLabel =
     activeProfile === null ? null : profileDisplayLabel(activeProfile);

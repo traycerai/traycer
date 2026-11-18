@@ -18,7 +18,11 @@ import { tooltipTextNear } from "@/components/ui/__tests__/tooltip-probe";
 // stubbed to keep this test scoped to a QueryClient with no bound host.
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
-  return { ...actual, useHostClient: () => null };
+  return {
+    ...actual,
+    useHostClient: () => null,
+    useAuthService: () => ({ setProfileRecordEnabled: vi.fn() }),
+  };
 });
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
@@ -37,8 +41,8 @@ vi.mock("@/hooks/providers/use-rename-provider-profile-mutation", () => ({
     error: null,
   }),
 }));
-vi.mock("@/hooks/providers/use-recolor-provider-profile-mutation", () => ({
-  useRecolorProviderProfile: () => ({
+vi.mock("@/hooks/providers/use-account-profile-recolor", () => ({
+  useAccountProfileRecolorForClient: () => ({
     mutate: vi.fn(),
     isPending: false,
     error: null,
@@ -233,6 +237,7 @@ describe("<ProviderProfileScopedSection /> host gate", () => {
         failedAttempt: {
           providerId: "opencode",
           message: "did not finish",
+          hostSentence: false,
         },
       },
       null,

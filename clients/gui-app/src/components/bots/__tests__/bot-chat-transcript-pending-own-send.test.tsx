@@ -174,6 +174,7 @@ function mountChannel(sendBinding: typeof BINDING | null): void {
               botId={BOT_ID}
               chatId={CHANNEL_ID}
               hostId={HOST_ID}
+              boundHostId={null}
               title="Release Bot"
               instanceId="bot-channel:windowed"
               surface={channelSurface()}
@@ -584,6 +585,7 @@ function OrdinaryChatList(): ReactNode {
       taskId={CHANNEL_ID}
       epicId={BOT_ID}
       hostId={HOST_ID}
+      payerHostId={null}
       messages={messages}
       transcriptWindow={state.transcriptWindow}
       onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}

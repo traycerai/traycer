@@ -16,6 +16,7 @@ import {
   type EnvironmentStaleWrite,
 } from "./environment-stale-write";
 import { notWrittenWireFieldSchema } from "./not-written";
+import { doorReasonWireFieldSchema } from "./door-reason";
 
 /**
  * Wire-level frame types for the local WebSocket RPC protocol.
@@ -255,6 +256,8 @@ export type FatalErrorDetails = {
    * cannot see this field at all.
    */
   readonly clientCompatibilityRequirement?: ClientCompatibilityRequirement;
+  /** One of `HOST_DOOR_REASONS`, read through `readDoorReason`. Additive and optional. */
+  readonly doorReason?: string;
 };
 
 /**
@@ -392,6 +395,8 @@ export type HostResponseFrame = {
      * a permanent `UNAUTHORIZED` and any host that predates the field.
      */
     readonly retryable?: boolean;
+    /** As {@link FatalErrorDetails.doorReason}; a malformed value fails the frame and ends the session. */
+    readonly doorReason?: string;
   } | null;
 };
 
@@ -503,6 +508,7 @@ export const fatalErrorDetailsSchema = z.object({
   // envelope's `reason` carries the whole remedy on its own.
   clientCompatibilityRequirement:
     clientCompatibilityRequirementSchema.optional(),
+  doorReason: doorReasonWireFieldSchema,
 });
 
 /** Canonical schema for the client `open` frame. */
@@ -594,6 +600,7 @@ export const hostResponseErrorSchema = z.object({
   // carries on the open frame). Absent on every other envelope, including
   // a permanent `UNAUTHORIZED` and any host that predates the field.
   retryable: z.boolean().optional(),
+  doorReason: doorReasonWireFieldSchema,
 });
 
 /** Canonical schema for the host `response` frame. */

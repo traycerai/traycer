@@ -14,6 +14,9 @@ export interface PersonIdentity {
   readonly avatarUrl: string | null;
 }
 
+/** Names no one: never a member, never shown as an id. */
+export const SYSTEM_ACTOR_ID = "system";
+
 export interface PersonIdentitySources {
   readonly viewer: AuthProfile | null;
   readonly collaborators: ReadonlyArray<EpicCollaboratorView>;
@@ -29,6 +32,7 @@ export function resolvePersonIdentity(
   sources: PersonIdentitySources,
   userId: string,
 ): PersonIdentity | null {
+  if (userId === SYSTEM_ACTOR_ID) return null;
   if (sources.viewer?.userId === userId) {
     return identity(
       userId,

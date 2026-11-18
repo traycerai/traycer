@@ -54,20 +54,20 @@ export function useAuthRequestStepUpChallenge(): UseMutationResult<
   });
 }
 
-export function useAuthVerifyStepUpChallenge(): UseMutationResult<
-  RetainedStepUpVerifyResponse,
-  Error,
-  string
-> {
+export function useAuthVerifyStepUpChallenge(
+  readCode: () => string,
+  clearCodeInput: () => void,
+): UseMutationResult<RetainedStepUpVerifyResponse, Error, void> {
   const binding = useHostBinding();
   return useMutation({
     mutationKey: authMutationKeys.verifyStepUpChallenge(),
-    mutationFn: async (code: string): Promise<RetainedStepUpVerifyResponse> => {
+    onSettled: clearCodeInput,
+    mutationFn: async (): Promise<RetainedStepUpVerifyResponse> => {
       if (binding === null) {
         throw new Error("Sign in again to verify this action.");
       }
       return unwrapStepUpVerifyResult(
-        await binding.auth.verifyStepUpChallenge(code),
+        await binding.auth.verifyStepUpChallenge(readCode()),
       );
     },
   });

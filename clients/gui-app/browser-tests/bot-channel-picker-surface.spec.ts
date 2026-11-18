@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { fixture } from "./support/fixtures.ts";
 import { followSurface, type SurfaceEntry } from "./support/follow-surface.ts";
+import { setInsets, type Insets } from "./support/viewport-insets.ts";
 
 // The installed app's bot picker is a full-width surface that enters from the
 // right edge. Its width, where it rests and the movement that brings it there
@@ -28,22 +29,6 @@ const TRIGGER = '[data-testid="bot-channel-picker-trigger"]';
 /** Clicks the trigger, then follows the picker's entry to where it rests. */
 function openAndFollow(page: Page): Promise<SurfaceEntry> {
   return followSurface(page, { surface: PICKER, trigger: TRIGGER });
-}
-
-interface Insets {
-  readonly top: number;
-  readonly left: number;
-  readonly right: number;
-}
-
-/** The property `index.css` reads each inset by, set on the root as the notch would. */
-async function setInsets(page: Page, insets: Insets): Promise<void> {
-  await page.evaluate((value: Insets) => {
-    const style = document.documentElement.style;
-    style.setProperty("--safe-area-inset-top", `${String(value.top)}px`);
-    style.setProperty("--safe-area-inset-left", `${String(value.left)}px`);
-    style.setProperty("--safe-area-inset-right", `${String(value.right)}px`);
-  }, insets);
 }
 
 test("the picker enters from the right edge and rests across the full width", async ({

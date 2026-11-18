@@ -39,17 +39,7 @@ export interface ChatTileHostUpdate {
 export function useChatTileHostUpdate(): ChatTileHostUpdate {
   const tabHostId = useTabHostId();
   const hostEntry = useHostDirectoryEntry(tabHostId);
-  const { openSettings } = useSystemTabModalActions();
-  const openHostUpdate = useCallback(() => {
-    carryViewedHostIntoSettingsScope(tabHostId);
-    openSettings({
-      section: "host",
-      resetToGeneral: false,
-      tab: "updates",
-      draft: null,
-      hostId: null,
-    });
-  }, [openSettings, tabHostId]);
+  const openHostUpdate = useOpenHostUpdate(tabHostId);
   return useMemo(
     () => ({
       hostAppVersion: hostAppVersionFromDirectoryEntry(hostEntry),
@@ -58,4 +48,18 @@ export function useChatTileHostUpdate(): ChatTileHostUpdate {
     }),
     [hostEntry, openHostUpdate],
   );
+}
+
+export function useOpenHostUpdate(hostId: string): () => void {
+  const { openSettings } = useSystemTabModalActions();
+  return useCallback(() => {
+    carryViewedHostIntoSettingsScope(hostId);
+    openSettings({
+      section: "host",
+      resetToGeneral: false,
+      tab: "updates",
+      draft: null,
+      hostId: null,
+    });
+  }, [openSettings, hostId]);
 }

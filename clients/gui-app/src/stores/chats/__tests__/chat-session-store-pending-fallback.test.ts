@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { Chat, Message } from "@traycer/protocol/persistence/epic/schemas";
+import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type {
+  ChatAccountWait,
   PendingFallback,
   PendingReturn,
+} from "@traycer/protocol/host/agent/gui/subscribe";
+import {
+  chatAccountWaitSchema,
+  readChatAccountWait,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type {
   ChatLoadRangeRequest,
@@ -14,6 +19,11 @@ import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+import {
+  createLegacyChatSessionHarness,
+  emitLegacySnapshot,
+  emitTurnState,
+} from "./chat-session-test-support";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { isTailHydrated } from "@/stores/chats/transcript-window";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
@@ -28,6 +38,13 @@ import {
 const EPIC_ID = "epic-fallback";
 const CHAT_ID = "chat-fallback";
 const OWNER_ID = "owner-fallback";
+const LEGACY_IDENTITY = {
+  epicId: EPIC_ID,
+  chatId: CHAT_ID,
+  hostId: "host-a",
+  snapshotHostId: "test-host",
+  userId: OWNER_ID,
+};
 
 const CONTENT: JsonContent = {
   type: "doc",
@@ -57,6 +74,11 @@ const RETURN = pendingReturn({
   revision: 6,
 });
 
+const ACCOUNT_WAIT: ChatAccountWait = chatAccountWaitSchema.parse({
+  reason: "needs-sign-in",
+  source: { providerId: "claude-code", profileId: "profile-waiting" },
+});
+
 function userMessage(messageId: string, timestamp: number): Message {
   return {
     role: "user",
@@ -65,44 +87,6 @@ function userMessage(messageId: string, timestamp: number): Message {
     message: { kind: "user", content: CONTENT, browserAnnotations: [] },
     timestamp,
     sessionAnchor: null,
-  };
-}
-
-interface LegacyHarness {
-  readonly handle: ChatSessionStoreHandle;
-  callbacks(): ChatStreamCallbacks;
-}
-
-function createLegacyHarness(): LegacyHarness {
-  let callbacks: ChatStreamCallbacks | null = null;
-  const handle = createChatSessionStore({
-    environment: CHAT_STORE_TEST_ENVIRONMENT,
-    hostId: "host-a",
-    epicId: EPIC_ID,
-    chatId: CHAT_ID,
-    userId: OWNER_ID,
-    onAuthError: null,
-    onProviderAuthError: null,
-    wakeTransport: null,
-    streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
-    streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
-      callbacks = nextCallbacks;
-      return {
-        sendAction: () => undefined,
-        sameTurnSteeringProtocolSupported: () => true,
-        draftBlobBridgeSupported: () => false,
-        requestTranscriptRange: () => undefined,
-        requestResnapshot: () => undefined,
-        close: () => undefined,
-      };
-    },
-  });
-  return {
-    handle,
-    callbacks: () => {
-      if (callbacks === null) throw new Error("Expected callbacks");
-      return callbacks;
-    },
   };
 }
 
@@ -155,76 +139,6 @@ function createWindowedHarness(): WindowedHarness {
   };
 }
 
-function emptyChat(): Chat {
-  return {
-    id: CHAT_ID,
-    parentId: null,
-    userId: OWNER_ID,
-    hostId: "test-host",
-    title: "Host Chat",
-    createdAt: 1,
-    updatedAt: 1,
-    isTitleEditedByUser: false,
-    settings: null,
-    activeSessionChain: null,
-    claudePendingWakes: [],
-    messages: [],
-    events: [],
-    archivedAt: null,
-    pinnedUserProviderHandle: null,
-    lastDeliveredRolesDigest: null,
-  };
-}
-
-function emitLegacySnapshot(
-  callbacks: ChatStreamCallbacks,
-  pending: PendingFallback | undefined,
-  returning: PendingReturn | undefined,
-): void {
-  callbacks.onConnectionStatus("open", null, null, null);
-  callbacks.onSnapshot({
-    kind: "snapshot",
-    hasBinaryPayload: false,
-    epicId: EPIC_ID,
-    chatId: CHAT_ID,
-    snapshot: {
-      chat: emptyChat(),
-      access: { role: "owner", ownerUserId: OWNER_ID, canAct: true },
-      queue: { status: "idle", items: [] },
-      runStatus: "idle",
-      activeTurn: null,
-      pendingApprovals: [],
-      pendingInterviews: [],
-      worktreeBinding: null,
-      missingWorktreePaths: [],
-      pendingFileEditApprovals: [],
-      accumulatedFileChanges: [],
-      managedCommands: [],
-      heldUpdates: [],
-      portForwards: [],
-      pendingFallback: pending,
-      pendingReturn: returning,
-    },
-  });
-}
-
-function emitTurnState(
-  callbacks: ChatStreamCallbacks,
-  pending: PendingFallback | undefined,
-  returning: PendingReturn | undefined,
-): void {
-  callbacks.onTurnStateChanged({
-    kind: "turnStateChanged",
-    hasBinaryPayload: false,
-    epicId: EPIC_ID,
-    chatId: CHAT_ID,
-    runStatus: "idle",
-    activeTurn: null,
-    pendingFallback: pending,
-    pendingReturn: returning,
-  });
-}
-
 const WINDOWED_DERIVED: ChatTranscriptDerived = {
   latestAssistantUsage: null,
   pinnedTodo: null,
@@ -239,6 +153,7 @@ const WINDOWED_DERIVED: ChatTranscriptDerived = {
 function deferredWindowedSnapshot(
   pending: PendingFallback | undefined,
   returning: PendingReturn | undefined,
+  accountWait: ChatAccountWait | null,
 ): Parameters<ChatStreamCallbacks["onWindowedSnapshot"]>[0] {
   return {
     kind: "snapshot",
@@ -282,20 +197,29 @@ function deferredWindowedSnapshot(
       derived: WINDOWED_DERIVED,
       pendingFallback: pending,
       pendingReturn: returning,
+      accountWait,
     },
   };
 }
 
 describe("chat-session-store pendingFallback / pendingReturn D115", () => {
   it("clears both DTOs when an authoritative snapshot writes undefined", () => {
-    const harness = createLegacyHarness();
+    const harness = createLegacyChatSessionHarness(LEGACY_IDENTITY);
     try {
       const callbacks = harness.callbacks();
-      emitLegacySnapshot(callbacks, HOLD, RETURN);
+      emitLegacySnapshot(callbacks, LEGACY_IDENTITY, {
+        pendingFallback: HOLD,
+        pendingReturn: RETURN,
+        accountWait: null,
+      });
       expect(harness.handle.store.getState().pendingFallback).toEqual(HOLD);
       expect(harness.handle.store.getState().pendingReturn).toEqual(RETURN);
 
-      emitLegacySnapshot(callbacks, undefined, undefined);
+      emitLegacySnapshot(callbacks, LEGACY_IDENTITY, {
+        pendingFallback: undefined,
+        pendingReturn: undefined,
+        accountWait: undefined,
+      });
       // Falsification: add "?? current.pendingFallback" to the applyAuthoritativeSnapshot write in chat-session-store.ts and THIS assertion must go red.
       expect(harness.handle.store.getState().pendingFallback).toBeUndefined();
       expect(harness.handle.store.getState().pendingReturn).toBeUndefined();
@@ -304,16 +228,73 @@ describe("chat-session-store pendingFallback / pendingReturn D115", () => {
     }
   });
 
-  it("clears both DTOs when turnStateChanged writes undefined", () => {
-    const harness = createLegacyHarness();
+  it("replaces accountWait from snapshots and turn state, clearing missing and unreadable values", () => {
+    const harness = createLegacyChatSessionHarness(LEGACY_IDENTITY);
     try {
       const callbacks = harness.callbacks();
-      emitLegacySnapshot(callbacks, undefined, undefined);
-      emitTurnState(callbacks, HOLD, RETURN);
+      emitLegacySnapshot(callbacks, LEGACY_IDENTITY, {
+        pendingFallback: undefined,
+        pendingReturn: undefined,
+        accountWait: ACCOUNT_WAIT,
+      });
+      expect(harness.handle.store.getState().accountWait).toEqual(ACCOUNT_WAIT);
+
+      emitTurnState(callbacks, LEGACY_IDENTITY, {
+        pendingFallback: undefined,
+        pendingReturn: undefined,
+        accountWait: null,
+      });
+      expect(harness.handle.store.getState().accountWait).toBeNull();
+
+      emitLegacySnapshot(callbacks, LEGACY_IDENTITY, {
+        pendingFallback: undefined,
+        pendingReturn: undefined,
+        accountWait: ACCOUNT_WAIT,
+      });
+      emitLegacySnapshot(callbacks, LEGACY_IDENTITY, {
+        pendingFallback: undefined,
+        pendingReturn: undefined,
+        accountWait: undefined,
+      });
+      expect(harness.handle.store.getState().accountWait).toBeNull();
+
+      const unreadable = readChatAccountWait({
+        accountWait: { reason: "unknown", source: null },
+      });
+      expect(unreadable).toBeNull();
+      emitLegacySnapshot(callbacks, LEGACY_IDENTITY, {
+        pendingFallback: undefined,
+        pendingReturn: undefined,
+        accountWait: unreadable,
+      });
+      expect(harness.handle.store.getState().accountWait).toBeNull();
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("clears both DTOs when turnStateChanged writes undefined", () => {
+    const harness = createLegacyChatSessionHarness(LEGACY_IDENTITY);
+    try {
+      const callbacks = harness.callbacks();
+      emitLegacySnapshot(callbacks, LEGACY_IDENTITY, {
+        pendingFallback: undefined,
+        pendingReturn: undefined,
+        accountWait: null,
+      });
+      emitTurnState(callbacks, LEGACY_IDENTITY, {
+        pendingFallback: HOLD,
+        pendingReturn: RETURN,
+        accountWait: null,
+      });
       expect(harness.handle.store.getState().pendingFallback).toEqual(HOLD);
       expect(harness.handle.store.getState().pendingReturn).toEqual(RETURN);
 
-      emitTurnState(callbacks, undefined, undefined);
+      emitTurnState(callbacks, LEGACY_IDENTITY, {
+        pendingFallback: undefined,
+        pendingReturn: undefined,
+        accountWait: null,
+      });
       // Falsification: add "?? current.pendingFallback" to the turnStateChanged write in chat-session-store.ts and THIS assertion must go red.
       expect(harness.handle.store.getState().pendingFallback).toBeUndefined();
       expect(harness.handle.store.getState().pendingReturn).toBeUndefined();
@@ -326,12 +307,18 @@ describe("chat-session-store pendingFallback / pendingReturn D115", () => {
     const harness = createWindowedHarness();
     try {
       const callbacks = harness.callbacks();
-      callbacks.onWindowedSnapshot(deferredWindowedSnapshot(HOLD, RETURN));
+      callbacks.onWindowedSnapshot(
+        deferredWindowedSnapshot(HOLD, RETURN, null),
+      );
       expect(
         isTailHydrated(harness.handle.store.getState().transcriptWindow),
       ).toBe(false);
 
-      emitTurnState(callbacks, undefined, undefined);
+      emitTurnState(callbacks, LEGACY_IDENTITY, {
+        pendingFallback: undefined,
+        pendingReturn: undefined,
+        accountWait: null,
+      });
       expect(harness.handle.store.getState().pendingFallback).toBeUndefined();
       expect(harness.handle.store.getState().pendingReturn).toBeUndefined();
 
@@ -356,6 +343,48 @@ describe("chat-session-store pendingFallback / pendingReturn D115", () => {
       // Falsification: add "?? held.pendingFallback" to the turnStateChanged deferred-aux write in chat-session-store.ts and THIS assertion must go red.
       expect(harness.handle.store.getState().pendingFallback).toBeUndefined();
       expect(harness.handle.store.getState().pendingReturn).toBeUndefined();
+    } finally {
+      harness.handle.dispose();
+    }
+  });
+
+  it("does not replay accountWait from a deferred snapshot after turnStateChanged clears it", () => {
+    const harness = createWindowedHarness();
+    try {
+      const callbacks = harness.callbacks();
+      callbacks.onWindowedSnapshot(
+        deferredWindowedSnapshot(HOLD, RETURN, ACCOUNT_WAIT),
+      );
+      expect(
+        isTailHydrated(harness.handle.store.getState().transcriptWindow),
+      ).toBe(false);
+
+      emitTurnState(callbacks, LEGACY_IDENTITY, {
+        pendingFallback: undefined,
+        pendingReturn: undefined,
+        accountWait: null,
+      });
+      expect(harness.handle.store.getState().accountWait).toBeNull();
+
+      callbacks.onRange({
+        kind: "range",
+        hasBinaryPayload: false,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        range: {
+          requestId: harness.lastRangeRequestId(),
+          epoch: 4,
+          fromOrdinal: 0,
+          rowIds: ["row-0", "row-1"],
+          messages: [userMessage("m-0", 0), userMessage("m-1", 1)],
+          events: [],
+          rowContext: {},
+          reachedStart: true,
+          reachedEnd: true,
+        },
+      });
+
+      expect(harness.handle.store.getState().accountWait).toBeNull();
     } finally {
       harness.handle.dispose();
     }

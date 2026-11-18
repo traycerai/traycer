@@ -56,6 +56,21 @@ export function useOnTeamSandbox(hostId: string | null): boolean {
 export function useSandboxHostConfiguration(
   hostId: string | null,
 ): StageConfiguration | null {
+  return useDirectorySandboxConfiguration(hostId, false);
+}
+
+/** `null` for a row with no owner, a host that is not a sandbox, and while the directory cannot say. */
+export function useSandboxHostPayer(
+  hostId: string | null,
+): StageConfiguration | null {
+  return useDirectorySandboxConfiguration(hostId, true);
+}
+
+/** `personalNeedsOwner`: Personal only when the row names the person as its owner. */
+function useDirectorySandboxConfiguration(
+  hostId: string | null,
+  personalNeedsOwner: boolean,
+): StageConfiguration | null {
   const subscribe = useCallback(
     (callback: () => void) =>
       hostId === null
@@ -70,10 +85,13 @@ export function useSandboxHostConfiguration(
     if (entry === null || !isRemoteHostDirectoryEntry(entry)) return null;
     if (entry.sandbox === null) return null;
     const { ownerTeamId, ownerTeamName } = entry.sandbox;
-    return ownerTeamId === null
+    if (ownerTeamId !== null) {
+      return `${ownerTeamId}${TEAM_SEPARATOR}${ownerTeamName ?? ""}`;
+    }
+    return !personalNeedsOwner || entry.owner?.kind === "user"
       ? PERSONAL_SNAPSHOT
-      : `${ownerTeamId}${TEAM_SEPARATOR}${ownerTeamName ?? ""}`;
-  }, [hostId]);
+      : null;
+  }, [hostId, personalNeedsOwner]);
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   return useMemo((): StageConfiguration | null => {
     if (snapshot === null) return null;

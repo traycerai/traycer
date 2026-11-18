@@ -317,7 +317,7 @@ function TeamRoutingEditor(props: {
           profileStepHint={
             props.snapshot.profiles.filter((profile) => profile.enabled)
               .length < 2
-              ? "Link another plan to switch accounts."
+              ? "No other accounts to switch to yet."
               : null
           }
           tierStepHint={null}
@@ -424,6 +424,7 @@ function TeamRoutingReadOnly(props: {
     <section className="flex flex-col gap-3 text-ui-sm">
       <FallbackPolicySummary
         policy={props.policy}
+        tierLabels={null}
         accounts={
           <p>
             Accounts:{" "}

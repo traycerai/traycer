@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 /**
  * Shared bootstrap for `TerminalTile` and `TuiAgentTile`. Owns:
  *
@@ -460,6 +461,7 @@ export function useTerminalTileBootstrap(
   const retrySessionId = input.sessionId;
   const retrySessionKind = input.sessionKind;
   const retry = useCallback(() => {
+    if (showHostUpdateNeededForGesture(input.hostId)) return;
     hasDispatchedRef.current = false;
     setCreateRetryError(create.error);
     create.reset();
@@ -476,7 +478,14 @@ export function useTerminalTileBootstrap(
         setCreateRetryError(null);
       }
     });
-  }, [create, list, resetPrepare, retrySessionId, retrySessionKind]);
+  }, [
+    create,
+    input.hostId,
+    list,
+    resetPrepare,
+    retrySessionId,
+    retrySessionKind,
+  ]);
 
   return {
     hostHasSession,

@@ -9,12 +9,11 @@ export const botMentionHostClientMock = {
 };
 
 export const emptyBotMentionHostListsMock = {
-  useEnvironmentHostLists: (
-    _client: unknown,
-    environmentIds: readonly string[],
-  ) => ({
+  useEnvironmentHostLists: (environmentIds: readonly string[]) => ({
     hostsByEnvironmentId: new Map<string, readonly EnvironmentHostRecordV11[]>(
       environmentIds.map((id) => [id, EMPTY_HOSTS]),
     ),
+    failedEnvironmentIds: new Set<string>(),
+    retryFailed: () => undefined,
   }),
 };

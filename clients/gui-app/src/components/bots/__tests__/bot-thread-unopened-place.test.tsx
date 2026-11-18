@@ -71,6 +71,7 @@ import {
   USER_A,
   endCase,
   heldRail,
+  markReadable,
   mountSurfaceOnRouteAs,
   mountSurfaceOnRouteAtEntry,
   type PlaceRoute,
@@ -93,6 +94,10 @@ import {
   type BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import { botThreadIdFor } from "@traycer/protocol/persistence/epic/messages";
+import {
+  hostFailure,
+  transportFailure,
+} from "@/lib/host/test-support/cloud-failure-reads";
 import { historyEntryIdentity } from "@/lib/bots/tracy-place-traversal";
 import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 import {
@@ -563,6 +568,48 @@ describe("a restored place the list has not caught up with", () => {
 
     await expectPending();
   });
+});
+
+describe("a restored place whose thread list then fails to refresh", () => {
+  it.each([
+    {
+      name: "a server error",
+      error: () => hostFailure("RPC_ERROR", "bot.thread.list"),
+    },
+    {
+      name: "a cloud drop",
+      error: () => hostFailure("E_CLOUD_UNREACHABLE", "bot.thread.list"),
+    },
+    {
+      name: "a silent host",
+      error: () => transportFailure("bot.thread.list"),
+    },
+  ])(
+    "keeps the box that starts the post's thread, over the list's retry line, after $name",
+    async ({ error }) => {
+      setChannel(directPost(POST, TEXT_A));
+      await mountSurfaceOnRouteAtEntry(USER_A, queryClient, placeOf(POST));
+      await expectUnopened();
+      const answer = await markReadable({
+        threads: [] as BotThreadSummary[],
+        threadAnchors: null,
+      });
+
+      act(() => {
+        scene.threadListData = answer;
+        scene.threadListError = error();
+        threadListChanged();
+      });
+
+      const panel = screen.getByTestId("bot-thread-panel");
+      await within(panel).findByTestId("bot-thread-stale");
+      expect(
+        within(panel).queryByTestId("bot-thread-error"),
+        "the panel drew the list's failure in place of the post",
+      ).toBeNull();
+      await expectUnopened();
+    },
+  );
 });
 
 describe("a thread opened at Send whose post the host then stores", () => {

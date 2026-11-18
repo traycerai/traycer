@@ -1,3 +1,4 @@
+import { reportedSaveFailure } from "@/lib/environment/settings-save-follow";
 import {
   useEffect,
   useId,
@@ -37,6 +38,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { isProviderNativeRpcError } from "@/hooks/providers/native-response-map";
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useProvidersMcpMutate } from "@/hooks/providers/use-providers-mcp-mutate-mutation";
 import { nativeErrorMessage } from "@/lib/providers/native-error-copy";
 import { cn } from "@/lib/utils";
@@ -291,7 +293,14 @@ export function ProviderMcpAddDialog(props: {
     [defaultAuth, initialServer, mode, remoteTransports, supportsRemote],
   );
   const [formError, setFormError] = useState<string | null>(null);
-  const mutate = useProvidersMcpMutate();
+  const submittedTransport =
+    useSubmittedSecretInput<ProviderMcpServerTransportWrite>(
+      "MCP transport input is unavailable.",
+    );
+  const mutate = useProvidersMcpMutate(
+    submittedTransport.read,
+    submittedTransport.clear,
+  );
   // A server whose definition carries a secret (an auth header's value, a
   // stdio env value) is never written to a sandbox. One with none (a bare
   // command, an OAuth or env-name server) still is: that is configuration,
@@ -314,9 +323,6 @@ export function ProviderMcpAddDialog(props: {
     if (!next) {
       form.reset();
       setFormError(null);
-      // M8: clear the TanStack mutation cache immediately on close so a
-      // submitted secret (header/env value) doesn't linger in
-      // `mutate.variables` after the user is done with the dialog.
       mutate.reset();
     }
     onOpenChange(next);
@@ -475,6 +481,8 @@ export function ProviderMcpAddDialog(props: {
       submission.transport.type !== "stdio" &&
       submission.transport.auth !== null &&
       submission.transport.auth.type === "oauth";
+    const name = submission.name;
+    submittedTransport.set(submission.transport);
     mutate.mutate(
       {
         ...scopeTuple,
@@ -482,24 +490,23 @@ export function ProviderMcpAddDialog(props: {
           mode === "edit"
             ? {
                 action: "update",
-                name: submission.name,
-                transport: submission.transport,
+                name,
               }
             : {
                 action: "add",
-                name: submission.name,
-                transport: submission.transport,
+                name,
               },
         suppressToast: true,
       },
       {
         onSuccess: () => {
           if (mode === "add" && onAdded !== null) {
-            onAdded({ name: submission.name, requiresAuth });
+            onAdded({ name, requiresAuth });
           }
           handleOpenChange(false);
         },
         onError: (error) => {
+          if (reportedSaveFailure(error) === null) return;
           if (isProviderNativeRpcError(error)) {
             setFormError(
               nativeErrorMessage(error.nativeCode, error.nativeDetail),

@@ -107,6 +107,7 @@ async function fetchRegisteredHostsWithSignal(
         Authorization: `Bearer ${bearerToken}`,
         Accept: "application/json",
       },
+      redirect: "manual",
       signal,
     });
   } catch {

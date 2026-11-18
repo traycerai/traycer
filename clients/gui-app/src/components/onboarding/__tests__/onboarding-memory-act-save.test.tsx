@@ -14,6 +14,7 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import {
   ENVIRONMENT_ID,
   HOST_ID,
+  fixtureAuthService,
   acceptHeldWrite,
   deliverAcceptedWrites,
   deliverSavedWrite,
@@ -37,6 +38,7 @@ import {
   leaveTour,
   invalidateAllQueries,
   hostCalls,
+  holdAgentMemoriesSetMutation,
   isOn,
   methodsInOrder,
   openMemoryAct,
@@ -47,6 +49,7 @@ import {
   world,
 } from "@/components/onboarding/__tests__/onboarding-memory-act-fixture";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { configMutationKeys } from "@/lib/query-keys";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 
@@ -261,6 +264,64 @@ describe("the Memory act: order and failure", () => {
     await settled();
 
     expect(hostCalls().slice(sentBefore)).toEqual([]);
+  });
+});
+
+describe("the Memory act: a write abandoned before it was sent", () => {
+  it("ends the save unsent, sends nothing more, and leaves the act as it was before the press", async () => {
+    await openMemoryAct();
+    await chooseTraycer();
+    await providerSwitch("codex");
+    const advance = screen.getByTestId("onboarding-advance");
+    const labelBefore = advance.textContent;
+    const auth = fixtureAuthService();
+    await waitFor(() =>
+      expect(auth.environmentCloud().onOriginSignIn()).toBe(true),
+    );
+    const pressedOrigin = auth.environmentCloud();
+    const heldMutation = holdAgentMemoriesSetMutation();
+
+    try {
+      await clickAdvance();
+      await heldMutation.started;
+
+      expect(heldMutation.capture()).toEqual({
+        mutationKey: configMutationKeys.agentMemoriesSet(),
+        variables: { enabled: true },
+      });
+      expect(pressedOrigin.onOriginSignIn()).toBe(true);
+      expect(currentStepId()).toBe("agent-memories");
+      expect(isOn(switchOf("onboarding-memory-traycer"))).toBe(true);
+      expect(advance.hasAttribute("disabled")).toBe(true);
+
+      expect(await auth.signOut()).toBe(true);
+      expect(pressedOrigin.onOriginSignIn()).toBe(false);
+    } finally {
+      heldMutation.release();
+    }
+
+    await writesAnswered();
+    await waitFor(() => expect(advance.hasAttribute("disabled")).toBe(false));
+
+    expect(screen.queryByTestId("onboarding-memory-save-report")).toBeNull();
+    expect(currentStepId()).toBe("agent-memories");
+    expect(advance.textContent).toBe(labelBefore);
+    expect(paramsOf("config.agentMemories.set")).toEqual([]);
+    expect(paramsOf("providers.setNativeMemory")).toEqual([]);
+  });
+
+  it("still files a provider write abandoned before it was sent as failed", async () => {
+    world.nativeFailures.set("codex", 1);
+    world.nativeFailureKind = "abandoned";
+    await openMemoryAct();
+    await chooseTraycer();
+    await providerSwitch("codex");
+
+    await clickAdvance();
+    const report = await screen.findByTestId("onboarding-memory-save-report");
+
+    expect(report.textContent).toContain("Couldn't change Codex memories.");
+    expect(currentStepId()).toBe("agent-memories");
   });
 });
 

@@ -140,12 +140,16 @@ describe("validateVersionedStreamRpcRegistry", () => {
     // RESTATED rather than derived, deliberately: this file is the
     // change-detector for the line set, so deriving it from the registry would
     // assert the registry against itself.
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(45);
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(46);
     // @1.6 added the `viewer` intent on the open request; @1.7 added the
-    // `viewer` client frame that restates it on a live stream.
-    expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(7);
+    // `viewer` client frame; @1.8 added the `viewers` server frame.
+    expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(8);
     // @1.1 carries the resume cursor that lets a reconnect skip the catch-up.
     expect(hostStreamRpcRegistry["worktree.changed"][1].latestMinor).toBe(1);
+    // @1.1 adds optional creator attribution to environment-owned chat rows.
+    expect(
+      hostStreamRpcRegistry["environment.chats.subscribe"][1].latestMinor,
+    ).toBe(1);
     // @1.3 carries `chatTier` on failed-frame chat-turn holders.
     expect(hostStreamRpcRegistry["worktree.deleteByPath"][1].latestMinor).toBe(
       3,
@@ -679,7 +683,7 @@ describe("stream compatibility", () => {
     expect(openAckManifest["browser.screencast"]).toBeUndefined();
     expect(openAckManifest["terminal.subscribe"]).toEqual({
       major: 1,
-      minor: 7,
+      minor: 8,
     });
 
     const terminalAsHost = checkStreamMethodCompatibility(

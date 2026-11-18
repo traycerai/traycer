@@ -49,7 +49,7 @@ interface ComposerToolbarProps {
    */
   dictationPreparing: DictationPreparingStatus | null;
   settingsLocked: boolean;
-  /** The host "Create new profile" creates on - see `HarnessModelPicker`'s
+  /** The host "Add a profile" creates on - see `HarnessModelPicker`'s
    *  prop of the same name. */
   createProfileHostId: string | null;
   readonly runTargetHostId: string | null;

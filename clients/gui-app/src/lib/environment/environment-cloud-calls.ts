@@ -1,0 +1,210 @@
+import type {
+  AuthnSecretsCreateResponse,
+  AuthnSecretsReplaceValueResponse,
+} from "@traycer-clients/shared/environment/configuration-secrets";
+import {
+  EnvironmentCloudError,
+  SETTINGS_REFUSED_MESSAGE,
+  type EnvironmentCloud,
+  type EnvironmentErrorKind,
+} from "@traycer-clients/shared/environment/environment-cloud";
+import {
+  deleteConfigurationItem,
+  deleteConfigurationMcpServer,
+  listConfigurationMcpServers,
+  listConfigurationPlans,
+  putConfigurationItem,
+  putConfigurationPolicy,
+  readConfigurationHistory,
+  readConfigurationItems,
+  readConfigurationRevision,
+  setConfigurationMcpServerEnabled,
+  unlinkConfigurationPlan,
+} from "@traycer-clients/shared/environment/configuration-settings";
+import { listConfigurationHosts } from "@traycer-clients/shared/environment/configuration-hosts";
+import {
+  inviteConfigurationMember,
+  readConfigurationSeats,
+  recordConfigurationNoticeSeen,
+  removeConfigurationMember,
+  setConfigurationMemberRole,
+} from "@traycer-clients/shared/environment/configuration-members";
+import {
+  consentToSecret,
+  createSecret,
+  destroySecretVersion,
+  listSecrets,
+  readSecretRotation,
+  readSecretVersions,
+  replaceSecretValue,
+  undoSecretVersion,
+  verifySecret,
+} from "@traycer-clients/shared/environment/configuration-secrets";
+import {
+  HostRpcError,
+  type RequestOfMethod,
+  type ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { RpcErrorCode } from "@traycer/protocol/framework/index";
+import type { HostRpcRegistry } from "@/lib/host";
+
+/** Each answers the protocol's response for that method, so a screen keeps its data contract. */
+export type EnvironmentCloudMethod =
+  | "environment.configuration.revision"
+  | "environment.configuration.items"
+  | "environment.configuration.items.put"
+  | "environment.configuration.items.delete"
+  | "environment.configuration.mcpServers.list"
+  | "environment.configuration.mcpServers.delete"
+  | "environment.configuration.mcpServers.setEnabled"
+  | "environment.configuration.policy.put"
+  | "environment.history"
+  | "environment.host.list"
+  | "environment.members.seats"
+  | "environment.members.invite"
+  | "environment.members.setRole"
+  | "environment.members.remove"
+  | "environment.members.noticeSeen"
+  | "environment.plans.list"
+  | "environment.plans.unlink"
+  | "environment.secrets.list"
+  | "environment.secrets.create"
+  | "environment.secrets.verify"
+  | "environment.secrets.replaceValue"
+  | "environment.secrets.versions"
+  | "environment.secrets.undo"
+  | "environment.secrets.destroy"
+  | "environment.secrets.rotation"
+  | "environment.secrets.consent";
+
+/** Authn's value writes answer no host-side pending-upload arm. */
+export type EnvironmentCloudResponse<Method extends EnvironmentCloudMethod> =
+  ResponseOfMethod<HostRpcRegistry, Method> &
+    (Method extends "environment.secrets.create"
+      ? AuthnSecretsCreateResponse
+      : unknown) &
+    (Method extends "environment.secrets.replaceValue"
+      ? AuthnSecretsReplaceValueResponse
+      : unknown);
+
+type EnvironmentCloudCall<Method extends EnvironmentCloudMethod> = (
+  cloud: EnvironmentCloud,
+  request: RequestOfMethod<HostRpcRegistry, Method>,
+) => Promise<EnvironmentCloudResponse<Method>>;
+
+/** A null environment is refused here, unsent, as a host with no environment refused it. */
+function namedEnvironment(environmentId: string | null): string {
+  if (environmentId === null) {
+    throw new EnvironmentCloudError("invalid", SETTINGS_REFUSED_MESSAGE);
+  }
+  return environmentId;
+}
+
+const CALLS: {
+  readonly [Method in EnvironmentCloudMethod]: EnvironmentCloudCall<Method>;
+} = {
+  "environment.configuration.revision": (cloud, request) =>
+    readConfigurationRevision(cloud, request.environmentId),
+  "environment.configuration.items": (cloud, request) =>
+    readConfigurationItems(cloud, request.environmentId),
+  "environment.configuration.items.put": putConfigurationItem,
+  "environment.configuration.items.delete": deleteConfigurationItem,
+  "environment.configuration.mcpServers.list": (cloud, request) =>
+    listConfigurationMcpServers(cloud, request.environmentId),
+  "environment.configuration.mcpServers.delete": deleteConfigurationMcpServer,
+  "environment.configuration.mcpServers.setEnabled":
+    setConfigurationMcpServerEnabled,
+  "environment.configuration.policy.put": putConfigurationPolicy,
+  "environment.history": readConfigurationHistory,
+  "environment.host.list": (cloud, request) =>
+    listConfigurationHosts(cloud, request.environmentId),
+  "environment.members.seats": (cloud, request) =>
+    readConfigurationSeats(cloud, request.environmentId),
+  "environment.members.invite": inviteConfigurationMember,
+  "environment.members.setRole": setConfigurationMemberRole,
+  "environment.members.remove": removeConfigurationMember,
+  "environment.members.noticeSeen": (cloud, request) =>
+    recordConfigurationNoticeSeen(cloud, request.environmentId),
+  "environment.plans.list": (cloud, request) =>
+    listConfigurationPlans(cloud, request.environmentId),
+  "environment.plans.unlink": (cloud, request) =>
+    unlinkConfigurationPlan(
+      cloud,
+      request.environmentId,
+      request.profileId,
+      request.expectedBindingVersion,
+    ),
+  "environment.secrets.list": (cloud, request) =>
+    listSecrets(cloud, namedEnvironment(request.environmentId)),
+  "environment.secrets.create": (cloud, request) =>
+    createSecret(cloud, namedEnvironment(request.environmentId), request),
+  "environment.secrets.verify": (cloud, request) =>
+    verifySecret(cloud, namedEnvironment(request.environmentId), request),
+  "environment.secrets.replaceValue": (cloud, request) =>
+    replaceSecretValue(cloud, namedEnvironment(request.environmentId), request),
+  "environment.secrets.versions": (cloud, request) =>
+    readSecretVersions(cloud, namedEnvironment(request.environmentId), request),
+  "environment.secrets.undo": (cloud, request) =>
+    undoSecretVersion(cloud, namedEnvironment(request.environmentId), request),
+  // The latest version may remove a secret's current version, as the host allows on @1.1.
+  "environment.secrets.destroy": (cloud, request) =>
+    destroySecretVersion(
+      cloud,
+      namedEnvironment(request.environmentId),
+      request,
+      true,
+    ),
+  "environment.secrets.rotation": (cloud, request) =>
+    readSecretRotation(cloud, namedEnvironment(request.environmentId), request),
+  "environment.secrets.consent": (cloud, request) =>
+    consentToSecret(cloud, namedEnvironment(request.environmentId), request),
+};
+
+/** The code a host gave the same failure, so a screen's existing handling reads it unchanged. */
+const HOST_CODE_OF: Readonly<Record<EnvironmentErrorKind, RpcErrorCode>> = {
+  unauthorized: "UNAUTHORIZED",
+  forbidden: "E_ROLE_FORBIDDEN",
+  invalid: "E_INVALID_ARGUMENT",
+  not_readable: "E_ENVIRONMENT_NOT_A_MEMBER",
+  refused: "RPC_ERROR",
+  unavailable: "RPC_ERROR",
+  no_response: "RPC_ERROR",
+};
+
+export function environmentCloudHostError(
+  method: string,
+  error: unknown,
+): unknown {
+  if (!(error instanceof EnvironmentCloudError)) return error;
+  return new HostRpcError({
+    code: HOST_CODE_OF[error.kind],
+    message: error.message,
+    requestId: "",
+    method,
+    fatalDetails: null,
+  });
+}
+
+/**
+ * Every request goes on the sign-in current when the operation began, so a
+ * multi-request operation never finishes on the next person's sign-in.
+ */
+export type EnvironmentCloudSend = <Method extends EnvironmentCloudMethod>(
+  method: Method,
+  request: RequestOfMethod<HostRpcRegistry, Method>,
+) => Promise<EnvironmentCloudResponse<Method>>;
+
+export async function callEnvironmentCloud<
+  Method extends EnvironmentCloudMethod,
+>(
+  cloud: EnvironmentCloud,
+  method: Method,
+  request: RequestOfMethod<HostRpcRegistry, Method>,
+): Promise<EnvironmentCloudResponse<Method>> {
+  const call: EnvironmentCloudCall<Method> = CALLS[method];
+  try {
+    return await call(cloud, request);
+  } catch (error) {
+    throw environmentCloudHostError(method, error);
+  }
+}
