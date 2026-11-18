@@ -11,7 +11,6 @@ const BOT_LOOK_PARTS: readonly BotLookPart[] = [
   "color",
   "eyewear",
   "accessory",
-  "background",
 ];
 
 /**

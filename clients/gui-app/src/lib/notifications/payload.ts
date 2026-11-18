@@ -174,7 +174,7 @@ export type HostSurfaceNotificationPayload = {
     }
   | {
       readonly surface: "notificationSettings";
-      /** A removal notice always opens its affected computer, including offline. */
+      /** The computer whose hooks were removed. Still required on the wire; the row opens Alerts, which no host scopes. */
       readonly hostId: string;
     }
 );
@@ -779,8 +779,8 @@ function routeHostSurfaceNotification(
   navigate: NotificationNavigate,
   payload: HostSurfaceNotificationPayload,
 ): void {
-  carryViewedHostIntoSettingsScope(payload.hostId ?? null);
   if (payload.surface === "worktreeSettings") {
+    carryViewedHostIntoSettingsScope(payload.hostId ?? null);
     selectWorktreeCleanupView(
       payload.view === "cleanupHistory" ? "cleanupHistory" : "settings",
       payload.focus?.resourceId ?? null,
@@ -810,7 +810,11 @@ const HOST_SURFACE_SETTINGS_SECTION: Record<
   SettingsSectionId
 > = {
   worktreeSettings: "worktrees",
-  notificationSettings: "notifications",
+  // A "hooks removed" row. Notification hooks are gone from the app, and with
+  // them the host page that listed them, so it opens Alerts, where what is
+  // left to set about notifications lives; that page is not the host's, so
+  // the row's host is not carried into the Settings scope.
+  notificationSettings: "alerts",
 };
 
 function routeTerminalNotification(

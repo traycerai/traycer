@@ -152,10 +152,7 @@ import {
   readHeaderStripSlots,
   type HeaderStripDeclaration,
 } from "@/components/layout/tabs/header-strip-geometry";
-import {
-  pulledOutOfStrip,
-  type StripAxis,
-} from "@/components/epic-canvas/dnd/strip-axis";
+import { pulledOutOfStrip } from "@/components/epic-canvas/dnd/strip-axis";
 import { pointIsOutsideViewport } from "@/components/epic-canvas/dnd/viewport-release";
 import {
   readTabDetachHandler,
@@ -437,7 +434,7 @@ const rootDragOverlayModifier: Modifier = (args) => {
   const strip = document.querySelector(
     `[data-testid="${HEADER_STRIP_SCROLL_TEST_ID}"]`,
   );
-  const bounds = overlayBoundsOf(axis, geometry, strip);
+  const bounds = overlayBoundsOf(session, strip);
   const start = overlayStartForPointer({
     pointer: axis.pointerMain(pointer),
     grabOffset: geometry.grabOffset,
@@ -458,16 +455,22 @@ const rootDragOverlayModifier: Modifier = (args) => {
 
 /**
  * The range, along the strip's axis, the dragged tab's overlay stays in: the
- * strip, or for a sectioned strip the section the tab is dragged in.
+ * strip, or for a sectioned strip the section the tab is dragged in, which it
+ * leaves only while another section has a tab it can split with.
  */
 function overlayBoundsOf(
-  axis: StripAxis,
-  geometry: StripDragGeometry,
+  session: HeaderStripDragSession,
   strip: Element | null,
 ): { readonly start: number; readonly end: number } {
+  const { axis, geometry } = session;
   const contentOrigin = readHeaderStripContentOrigin(axis);
+  const splitsAcrossLanes =
+    session.canSplit &&
+    geometry.otherLaneSlots.some((slot) => slot.isMergeTarget);
   const lane =
-    contentOrigin === null ? null : laneBoundsOf(geometry, contentOrigin);
+    contentOrigin === null || splitsAcrossLanes
+      ? null
+      : laneBoundsOf(geometry, contentOrigin);
   if (lane !== null) return lane;
   if (strip === null) {
     return { start: Number.NEGATIVE_INFINITY, end: Number.POSITIVE_INFINITY };
@@ -1152,7 +1155,9 @@ function groupDropCannotBeSaved(
   to: string | null,
 ): boolean {
   if (!leavesOrganization && !isOrganizationGroup(to)) return false;
-  return organization?.supported !== true || organization.view === undefined;
+  return (
+    organization?.supported !== true || organization.readView() === undefined
+  );
 }
 
 function isOrganizationGroup(groupId: string | null): groupId is string {
@@ -1172,7 +1177,7 @@ function saveOrganizationGroupMove(
   stripItemId: string,
   groups: DroppedGroups,
 ): void {
-  const view = organization?.supported ? organization.view : undefined;
+  const view = organization?.supported ? organization.readView() : undefined;
   if (organization === null || view === undefined) return;
   const action = organizationGroupAction(view, stripItemId, groups);
   if (action !== null) void organization.command(action).catch(() => undefined);

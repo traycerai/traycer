@@ -9,6 +9,7 @@ export {
   appLocalNotificationCompletionReceiptKey,
   appLocalNotificationCompletionReceiptPrefix,
   appLocalNotificationsKey,
+  botBoxDraftsKey,
   composerHarnessMemoryKey,
   composerCanvasAnnotationsKey,
   composerCanvasAnnotationsKeyPrefix,

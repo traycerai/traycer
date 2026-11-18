@@ -152,7 +152,11 @@ export function Dock(props: {
         onEditResume={noop}
         seed={null}
         keptDraft={null}
+        hold={null}
         quote={null}
+        reply={{ reach: "none", chosen: 0 }}
+        moved={null}
+        notice={null}
         onSent={() => false}
       />
     </div>

@@ -391,6 +391,7 @@ export type AnalyticsSetting =
   | "useTraycerMemories"
   | "agentTabSurfacing"
   | "agentWorktreeCreate"
+  | "worktreeRecoverMissing"
   | "artifactIconColorMode"
   | "artifactIconColors"
   | "catalogProbeTimeout"
@@ -1552,6 +1553,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     agentOfficeDefaultView: true,
     agentTabSurfacing: true,
     agentWorktreeCreate: true,
+    worktreeRecoverMissing: true,
     allowPrereleaseUpdates: true,
     useTraycerMemories: true,
     artifactIconColorMode: true,

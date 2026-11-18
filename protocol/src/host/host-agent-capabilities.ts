@@ -27,7 +27,10 @@ import {
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
 import { agentModeSchema } from "@traycer/protocol/common/schemas";
+import { chatRecordHeadStampSchema } from "@traycer/protocol/host/epic/chat-records";
+import { cloudChatVisibilitySchema } from "@traycer/protocol/host/epic/cloud-chat";
 import { browserSessionReferenceSchema } from "@traycer/protocol/persistence/epic/content-blocks";
+import { roleClaimSchema } from "@traycer/protocol/persistence/epic/role-claims";
 import {
   chatRunSettingsStrictSchemaPreUltracode,
   tuiHarnessIdSchema,
@@ -707,6 +710,91 @@ export const hostAgentCreateFromRemoteSenderUpgradeV10ToV11 = defineUpgradePath<
   to: { major: 1, minor: 1 },
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
+});
+
+/**
+ * The created agent's record as the cloud acknowledged it, relayed by the
+ * owning host: the fields of the cloud row that a host keeps for a record
+ * another host owns. `tenantKind` stays a plain string, as on the cloud row,
+ * so a tenant a newer deploy adds still parses. Timestamps and the head are
+ * bounded as the record rows a host serves bound them
+ * (`chatRecordSummarySchema`, `chatRecordHeadStampSchema`): integer
+ * milliseconds, never negative.
+ */
+export const hostAgentCreatedRecordSchema = lazySchema(() =>
+  z.object({
+    taskId: z.string().min(1),
+    chatId: z.string().min(1),
+    ownerUserId: z.string().min(1),
+    ownerHostId: z.string().min(1),
+    tenantKind: z.string().min(1),
+    createdAt: z.number().int().nonnegative(),
+    visibility: cloudChatVisibilitySchema,
+    metadataRevision: z.number().int().nonnegative(),
+    title: z.string().nullable(),
+    isTitleEditedByUser: z.boolean(),
+    parentChatId: z.string().nullable(),
+    isArchived: z.boolean(),
+    archiveChangedAt: z.number().int().nonnegative().nullable(),
+    runSettingsSummary: z.string().nullable(),
+    metadataUpdatedAt: z.number().int().nonnegative(),
+    roleClaims: z.array(roleClaimSchema),
+    head: chatRecordHeadStampSchema.nullable(),
+  }),
+);
+export type HostAgentCreatedRecord = z.infer<
+  typeof hostAgentCreatedRecordSchema
+>;
+
+/**
+ * Whether the cloud held the created agent's record when the owning host
+ * answered. `admitted` carries the record the cloud acknowledged; `pending`
+ * means the owner's bounded wait ended first, or the task has not been
+ * uploaded yet, and the record reaches the cloud through the owner's
+ * ordinary retry.
+ */
+export const hostAgentCreateAdmissionSchema = lazySchema(() =>
+  z.discriminatedUnion("status", [
+    z.object({
+      status: z.literal("admitted"),
+      record: hostAgentCreatedRecordSchema,
+    }),
+    z.object({ status: z.literal("pending") }),
+  ]),
+);
+export type HostAgentCreateAdmission = z.infer<
+  typeof hostAgentCreateAdmissionSchema
+>;
+
+/**
+ * `@1.2` adds `admission` to the response. `null` is what a caller reads from
+ * an owner on `@1.1` or older, through the upgrade below: that owner never
+ * reported whether the cloud held the record.
+ */
+export const hostAgentCreateFromRemoteSenderResponseSchemaV12 = lazySchema(() =>
+  createAgentResponseSchema.extend({
+    admission: hostAgentCreateAdmissionSchema.nullable(),
+  }),
+);
+export type HostAgentCreateFromRemoteSenderResponse = z.infer<
+  typeof hostAgentCreateFromRemoteSenderResponseSchemaV12
+>;
+
+export const hostAgentCreateFromRemoteSenderV12 = defineRpcContract({
+  method: "host.agent.createFromRemoteSender",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: hostAgentCreateFromRemoteSenderRequestSchemaV11,
+  responseSchema: hostAgentCreateFromRemoteSenderResponseSchemaV12,
+});
+
+export const hostAgentCreateFromRemoteSenderUpgradeV11ToV12 = defineUpgradePath<
+  typeof hostAgentCreateFromRemoteSenderV11,
+  typeof hostAgentCreateFromRemoteSenderV12
+>({
+  from: { major: 1, minor: 1 },
+  to: { major: 1, minor: 2 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, admission: null }),
 });
 
 /**

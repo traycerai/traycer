@@ -14,6 +14,7 @@ import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { creationColorOf } from "@/hooks/bots/use-bot-appearance";
 import {
   invalidateBotLists,
   useBotUpdateAppearanceMutation,
@@ -103,7 +104,11 @@ function refusalOf(error: unknown): string | null {
   return certain ? error.message : null;
 }
 
-/** Whether every cached list that names the bot holds `value` for `part`. */
+/**
+ * Whether every cached list that names the bot holds what saving `value`
+ * for `part` leaves there. A cleared colour leaves the colour the bot was
+ * created with, not none.
+ */
 function listsHold(
   queryClient: QueryClient,
   botId: string,
@@ -117,10 +122,13 @@ function listsHold(
     .map((bot) => bot.appearance ?? null);
   return (
     looks.length > 0 &&
-    looks.every(
-      (look) =>
-        JSON.stringify(look?.[part] ?? null) === JSON.stringify(value ?? null),
-    )
+    looks.every((look) => {
+      const left =
+        part === "color" && value === null
+          ? creationColorOf(look)
+          : (value ?? null);
+      return JSON.stringify(look?.[part] ?? null) === JSON.stringify(left);
+    })
   );
 }
 

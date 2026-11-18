@@ -27,6 +27,7 @@ import {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { VoiceCallAuthority } from "@/lib/auth/auth-service";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { useHostMutation } from "@/hooks/host/use-host-query";
@@ -34,6 +35,7 @@ import {
   BOT_CONVERSATION_ANSWER_SET_VERSION,
   BOT_CONVERSATION_ANSWER_VERSION,
   BOT_CONVERSATION_CALL_VERSION,
+  BOT_CONVERSATION_REPLY_VERSION,
   BOT_CONVERSATION_RETRY_VERSION,
 } from "@/hooks/bots/use-bot-send-version";
 import { botMutationKeys, hostQueryKeys } from "@/lib/query-keys";
@@ -156,7 +158,7 @@ export function useBotUpdateReplyModeMutation(
 }
 
 /**
- * The bot's icon, colour, what it wears or its channel background, each key
+ * The bot's icon, colour or what it wears, each key
  * left out kept and each `null` cleared. No toast, and no list read of its
  * own: `useBotLookSaver` sends these in order and keeps the lists.
  */
@@ -215,14 +217,16 @@ interface BotConversationSendContext {
  * A retry or an edit's replacement is refused before it leaves by a host
  * below {@link BOT_CONVERSATION_RETRY_VERSION}, a question card's answer by
  * one below {@link BOT_CONVERSATION_ANSWER_VERSION}, a card's answers sent
- * together by one below {@link BOT_CONVERSATION_ANSWER_SET_VERSION}, and a
- * call's words by one below {@link BOT_CONVERSATION_CALL_VERSION}.
+ * together by one below {@link BOT_CONVERSATION_ANSWER_SET_VERSION}, a
+ * call's words by one below {@link BOT_CONVERSATION_CALL_VERSION}, and a
+ * reply to a chosen message by one below {@link BOT_CONVERSATION_REPLY_VERSION}.
  *
  * A send may change a thread, so the channel's thread list is read again on
- * the host the send went through. So is a card's answers sent together that
- * the bot's host does not take (`E_BOT_ANSWER_SETS_UNSUPPORTED`): the list
- * says what that host takes, and a card answers each question on its own
- * once it says so.
+ * the host the send went through. So is a card's answers sent together, or a
+ * reply, that the bot's host does not take (`E_BOT_ANSWER_SETS_UNSUPPORTED`,
+ * `E_BOT_REPLIES_UNSUPPORTED`): the list says what that host takes, and a
+ * card answers each question on its own, and no row offers Reply, once it
+ * says so.
  */
 export function useBotConversationSendMutation(
   client: HostClient<HostRpcRegistry> | null,
@@ -258,7 +262,8 @@ export function useBotConversationSendMutation(
         if (
           hostId !== null &&
           refusal instanceof HostRpcError &&
-          refusal.code === "E_BOT_ANSWER_SETS_UNSUPPORTED"
+          (refusal.code === "E_BOT_ANSWER_SETS_UNSUPPORTED" ||
+            refusal.code === "E_BOT_REPLIES_UNSUPPORTED")
         ) {
           void queryClient.invalidateQueries({
             queryKey: hostQueryKeys.methodScope(hostId, "bot.thread.list"),
@@ -274,6 +279,12 @@ export interface BotCallSendVariables {
   readonly hostId: string;
   /** The account signed in when the call started; `null` owns no call. */
   readonly account: string | null;
+  /**
+   * The sign-in session the call was started under, by value: when set, the
+   * send leaves only while it is still the one signed in. `null` checks no
+   * session.
+   */
+  readonly authority: VoiceCallAuthority | null;
   readonly request: BotConversationSendRequest;
 }
 
@@ -282,11 +293,13 @@ export interface BotCallSendVariables {
  * to a host the hook follows: a call's last words still go to its own host
  * after another call has started on a different one.
  *
- * A send leaves only under the account whose call it is. The check runs in
- * the client resolver, in the same synchronous step as the dispatch (no
- * `prepareRequest` stands between them), against the request context that
- * dispatch carries; a switch after it aborts the captured authority in
- * HostClient. Any other account, or none, refuses the send.
+ * A send leaves only under the account whose call it is, and, when the send
+ * names the call's sign-in session, only while that session is still the one
+ * signed in. Both checks run in the client resolver, in the same synchronous
+ * step as the dispatch (no `prepareRequest` stands between them), so after
+ * anything Query awaits before it; a switch after it aborts the captured
+ * authority in HostClient. Any other account, or none, or a session that is
+ * gone, refuses the send.
  */
 export function useBotCallSendMutation(): UseMutationResult<
   BotConversationSendResponse,
@@ -311,6 +324,13 @@ export function useBotCallSendMutation(): UseMutationResult<
       ) {
         throw new Error("The call's account is no longer signed in.");
       }
+      if (
+        variables.authority !== null &&
+        (binding === null ||
+          !binding.auth.isVoiceCallAuthorityLive(variables.authority))
+      ) {
+        throw new Error("The call's sign-in session is no longer signed in.");
+      }
       return client;
     },
     method: "bot.conversation.send",
@@ -331,10 +351,16 @@ export function useBotCallSendMutation(): UseMutationResult<
   });
 }
 
-/** The send line a request needs: a retry, an answer, a call's words and a card's answers together came later. */
+/** The send line a request needs: a retry, an answer, a call's words, a card's answers together and a reply came later. */
 function conversationSendVersion(
   variables: BotConversationSendRequest,
 ): RequiredHostMethodVersion | null {
+  if (variables.replyTo !== undefined) {
+    return {
+      method: "bot.conversation.send",
+      version: BOT_CONVERSATION_REPLY_VERSION,
+    };
+  }
   if (variables.spoken === true || variables.origin !== undefined) {
     return {
       method: "bot.conversation.send",

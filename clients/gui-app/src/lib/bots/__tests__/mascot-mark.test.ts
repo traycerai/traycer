@@ -24,7 +24,7 @@ import {
   botMascot,
   drawMascotMark,
   mascotCells,
-  mascotRampAt,
+  mascotRampOf,
   smallMascotCells,
   ownMascotAccessory,
   ownMascotEyewear,
@@ -38,7 +38,13 @@ import {
   type MascotShape,
   type MascotTone,
 } from "@/lib/bots/mascot-mark";
-import { derivedBotColorIndex } from "@/lib/providers/profile-accent-color";
+import {
+  BLOB_UNCHANGED_POSES,
+  BLOB_SHADES16,
+  BLOB_SHADES32,
+  BLOB_VISOR16,
+  BLOB_VISOR32,
+} from "@/lib/bots/__tests__/mascot-eyewear-pinned";
 
 const GRID = 10;
 const SMALL_GRID = 7;
@@ -131,7 +137,6 @@ const STYLISH_BOT_ID = "bot_0KNEF4PC1F8D0H626S5VEKEQ8Y";
 const NO_CHOICE: BotAppearance = {
   mark: null,
   color: null,
-  background: null,
 };
 
 const EXPRESSIONS: readonly MascotExpression[] = ["idle", "working", "away"];
@@ -296,7 +301,13 @@ describe("the face", () => {
     }
   });
 
-  it("changes between the beats of working, and a blink is not the first beat", () => {
+  it("changes between the beats of working: a blink is not the first beat, and shades, which do not blink, change on the glance", () => {
+    const COMPARED: Record<BotMascotEyewear, number> = {
+      none: 3,
+      glasses: 3,
+      shades: 1,
+      visor: 3,
+    };
     for (const [name, draw] of DRAWINGS) {
       for (const shape of MASCOT_SHAPES) {
         for (const eyewear of BOT_MASCOT_EYEWEAR) {
@@ -305,7 +316,7 @@ describe("the face", () => {
             JSON.stringify(draw(look, working(beat))),
           );
           const where = `${name} ${shape} ${eyewear}`;
-          expect(faces[3], where).not.toBe(faces[0]);
+          expect(faces[COMPARED[eyewear]], where).not.toBe(faces[0]);
         }
       }
     }
@@ -408,11 +419,11 @@ describe("what a mascot carries", () => {
 describe("a bot's mascot from its look", () => {
   const botId = STYLISH_BOT_ID;
 
-  it("is the id's own body, colour, eyewear and accessory when nothing was chosen", () => {
+  it("is the id's own body, eyewear and accessory, in the default colour, when nothing was chosen", () => {
     for (const pinned of PINNED) {
       expect(botMascot(pinned.botId, null, false), pinned.botId).toEqual({
         shape: pinned.shape,
-        ramp: mascotRampAt(derivedBotColorIndex(pinned.botId)),
+        ramp: DEFAULT_MASCOT_RAMP,
         eyewear: pinned.eyewear,
         accessory: pinned.accessory,
       });
@@ -433,8 +444,7 @@ describe("a bot's mascot from its look", () => {
       botId,
       {
         mark: { kind: "mascot", shape: "ghost" },
-        color: 5,
-        background: null,
+        color: "#4c8af0",
         eyewear: "none",
         accessory: "halo",
       },
@@ -443,7 +453,7 @@ describe("a bot's mascot from its look", () => {
 
     expect(chosen).toEqual({
       shape: "ghost",
-      ramp: mascotRampAt(5),
+      ramp: mascotRampOf("#4c8af0"),
       eyewear: "none",
       accessory: "halo",
     });
@@ -499,12 +509,12 @@ describe("a bot's mascot from its look", () => {
 describe("an environment's main bot's mascot", () => {
   const botId = STYLISH_BOT_ID;
 
-  it("is the plain default mascot in the id's own colours when nothing was chosen", () => {
+  it("is the plain default mascot, in the default colour, when nothing was chosen", () => {
     expect(ownMascotShape(botId)).not.toBe(DEFAULT_MASCOT_SHAPE);
 
     expect(botMascot(botId, null, true)).toEqual({
       shape: DEFAULT_MASCOT_SHAPE,
-      ramp: botMascot(botId, null, false).ramp,
+      ramp: DEFAULT_MASCOT_RAMP,
       eyewear: "none",
       accessory: "none",
     });
@@ -648,8 +658,8 @@ function lightnessOf(fill: string): number {
 }
 
 describe("the colours of what a mascot wears", () => {
-  const FAR_RAMPS = [DEFAULT_MASCOT_RAMP, mascotRampAt(0)] as const;
-  const AMBER = mascotRampAt(2);
+  const FAR_RAMPS = [DEFAULT_MASCOT_RAMP, mascotRampOf("#f04c4c")] as const;
+  const AMBER = mascotRampOf("#f0b34c");
   const HALO_HUE = 48;
 
   function hueGap(hue: number): number {
@@ -721,5 +731,452 @@ describe("the colours of what a mascot wears", () => {
     );
 
     expect(lightnessOf(near)).toBeGreaterThan(lightnessOf(far));
+  });
+});
+
+describe("glasses, drawn as wide eyes", () => {
+  const SIZES: ReadonlyArray<readonly [MascotMarkSize, number, number]> = [
+    [16, 2, 1],
+    [24, 2, 2],
+    [32, 3, 1],
+    [40, 4, 0],
+  ];
+  const SHUT: MascotPose = { expression: "away", beat: 0 };
+  const BLINK = working(3);
+  const GLANCE = working(1);
+  const OPEN: readonly MascotPose[] = [
+    MASCOT_AT_REST,
+    working(0),
+    GLANCE,
+    working(2),
+  ];
+
+  function drawn(
+    shape: MascotShape,
+    eyewear: BotMascotEyewear,
+    size: MascotMarkSize,
+    pose: MascotPose,
+  ): MascotMarkDrawing {
+    return drawMascotMark(lookOf(shape, eyewear, "none"), size, pose);
+  }
+
+  /** Each square's fill, by the pixel it starts at as "x,y". */
+  function fillsByOrigin(drawing: MascotMarkDrawing): Map<string, string> {
+    return new Map(
+      drawing.layers.flatMap((layer) =>
+        (parseSquares(layer.path) ?? []).map((square): [string, string] => [
+          `${String(square.x)},${String(square.y)}`,
+          layer.fill,
+        ]),
+      ),
+    );
+  }
+
+  /**
+   * The pixel origins of the cells between the two eyes, on the rows the
+   * eyes are on, found from a bare body's eyes.
+   */
+  function betweenTheEyes(
+    shape: MascotShape,
+    size: MascotMarkSize,
+    cell: number,
+    offset: number,
+  ): string[] {
+    const bare = (size === 16 ? smallMascotCells : mascotCells)(
+      lookOf(shape, "none", "none"),
+      MASCOT_AT_REST,
+    );
+    const eyes = placesOf(bare, "eye");
+    const columns = eyes.map(([x]) => x);
+    const gap = size === 16 ? 1 : 2;
+    const origins: string[] = [];
+    for (const row of new Set(eyes.map(([, y]) => y))) {
+      for (
+        let x = Math.min(...columns) + gap;
+        x <= Math.max(...columns) - gap;
+        x += 1
+      ) {
+        origins.push(
+          `${String(offset + x * cell)},${String(offset + row * cell)}`,
+        );
+      }
+    }
+    return origins;
+  }
+
+  const CASES = MASCOT_SHAPES.flatMap((shape) =>
+    SIZES.map((entry) => [shape, ...entry] as const),
+  );
+
+  it.each(CASES)(
+    "closes a wide eye to a dash as wide as the eye, with no white, whether shut or blinking, as a %s does at %i px",
+    (shape, size) => {
+      const shut = drawn(shape, "none", size, SHUT);
+      if (size === 16) {
+        expect(drawn(shape, "glasses", size, SHUT)).toEqual(shut);
+        expect(drawn(shape, "glasses", size, BLINK)).toEqual(
+          drawn(shape, "none", size, BLINK),
+        );
+      } else {
+        expect(drawn(shape, "glasses", size, SHUT)).toEqual(shut);
+        expect(drawn(shape, "glasses", size, BLINK)).toEqual(shut);
+      }
+    },
+  );
+
+  it.each(CASES)(
+    "draws white around the open eyes, in no colour but the body's, the eye's and white, as a %s does at %i px",
+    (shape, size) => {
+      const { ramp } = lookOf(shape, "glasses", "none");
+      const allowed = new Set([...ramp.tones, ramp.eye, ramp.white]);
+      for (const pose of OPEN) {
+        const fills = drawn(shape, "glasses", size, pose).layers.map(
+          (layer) => layer.fill,
+        );
+
+        expect(fills).toContain(ramp.white);
+        expect(fills.filter((fill) => !allowed.has(fill))).toEqual([]);
+      }
+    },
+  );
+
+  it.each(CASES)(
+    "leaves what lies between the open eyes as the bare body has it, as a %s does at %i px",
+    (shape, size, cell, offset) => {
+      const between = betweenTheEyes(shape, size, cell, offset);
+      expect(between.length).toBeGreaterThan(0);
+      const poses = size === 16 ? OPEN.filter((pose) => pose !== GLANCE) : OPEN;
+      for (const pose of poses) {
+        const wide = fillsByOrigin(drawn(shape, "glasses", size, pose));
+        const bare = fillsByOrigin(drawn(shape, "none", size, pose));
+
+        expect(between.map((origin) => wide.get(origin))).toEqual(
+          between.map((origin) => bare.get(origin)),
+        );
+      }
+    },
+  );
+
+  /** The pixel origins of the squares drawn in `fill`, as numbers. */
+  function originsOf(
+    drawing: MascotMarkDrawing,
+    fill: string,
+  ): Array<readonly [number, number]> {
+    return [...fillsByOrigin(drawing)].flatMap(([origin, drawnFill]) => {
+      const [x, y] = origin.split(",").map(Number);
+      return drawnFill === fill ? [[x, y] as const] : [];
+    });
+  }
+
+  const SMALL_CASES = MASCOT_SHAPES.map((shape) => [shape] as const);
+
+  it.each(SMALL_CASES)(
+    "gives each open eye of a %s at 16 px one white beside its pupil, a different white for each, and no other white",
+    (shape) => {
+      const { ramp } = lookOf(shape, "glasses", "none");
+      for (const pose of OPEN) {
+        const drawing = drawn(shape, "glasses", 16, pose);
+        const whites = originsOf(drawing, ramp.white);
+        const pupils = originsOf(drawing, ramp.eye);
+        const beside = pupils.map(([px, py]) =>
+          whites.filter(([wx, wy]) => wy === py && Math.abs(wx - px) === 2),
+        );
+
+        expect(whites).toHaveLength(2);
+        expect(pupils).toHaveLength(2);
+        expect(beside.every((own) => own.length > 0)).toBe(true);
+        expect(new Set(beside.flat().map(([x]) => x)).size).toBe(2);
+      }
+    },
+  );
+
+  it.each(CASES.filter(([, size]) => size !== 16))(
+    "gives each open eye of a %s at %i px a white cell touching its pupil",
+    (shape, size, cell) => {
+      const { ramp } = lookOf(shape, "glasses", "none");
+      for (const pose of OPEN) {
+        const drawing = drawn(shape, "glasses", size, pose);
+        const whites = originsOf(drawing, ramp.white);
+        const pupils = originsOf(drawing, ramp.eye);
+
+        expect(pupils).toHaveLength(2);
+        for (const [px, py] of pupils) {
+          expect(
+            whites.some(
+              ([wx, wy]) => Math.abs(wx - px) + Math.abs(wy - py) === cell,
+            ),
+          ).toBe(true);
+        }
+      }
+    },
+  );
+
+  it.each(SMALL_CASES)(
+    "joins a %s's two eyes at 16 px on the glance as white then pupil across columns 2 to 5, with the body as bare outside them",
+    (shape) => {
+      const { ramp } = lookOf(shape, "glasses", "none");
+      const wide = drawn(shape, "glasses", 16, GLANCE);
+      const bare = fillsByOrigin(drawn(shape, "none", 16, GLANCE));
+      const row = [...fillsByOrigin(wide)]
+        .filter(([, fill]) => fill === ramp.white || fill === ramp.eye)
+        .map(([origin]) => origin.split(",").map(Number));
+      const rowY = new Set(row.map(([, y]) => y));
+
+      expect([...rowY]).toHaveLength(1);
+      const column = (x: number): number => 1 + x * 2;
+      expect(row.map(([x]) => x).toSorted((a, b) => a - b)).toEqual(
+        [2, 3, 4, 5].map(column),
+      );
+      const outside = [...rowY].flatMap((y) =>
+        [0, 1, 6].map((x) => `${String(column(x))},${String(y)}`),
+      );
+      const wideFills = fillsByOrigin(wide);
+      expect(outside.map((origin) => wideFills.get(origin))).toEqual(
+        outside.map((origin) => bare.get(origin)),
+      );
+    },
+  );
+
+  it.each([
+    ["shades", 16, BLOB_SHADES16],
+    ["shades", 32, BLOB_SHADES32],
+    ["visor", 16, BLOB_VISOR16],
+    ["visor", 32, BLOB_VISOR32],
+  ] as const)(
+    "draws a blob's %s at %i px as it always has, looking ahead",
+    (eyewear, size, pinned) => {
+      expect(drawn("blob", eyewear, size, MASCOT_AT_REST).layers).toEqual(
+        pinned,
+      );
+    },
+  );
+});
+
+describe("shades while a mascot works", () => {
+  const LARGE: ReadonlyArray<readonly [MascotMarkSize, number, number]> = [
+    [24, 2, 2],
+    [32, 3, 1],
+    [40, 4, 0],
+  ];
+  const CASES = MASCOT_SHAPES.flatMap((shape) =>
+    LARGE.map((entry) => [shape, ...entry] as const),
+  );
+  const GLANCE = working(1);
+  const SHUT: MascotPose = { expression: "away", beat: 0 };
+  const WHITE = DEFAULT_MASCOT_RAMP.white;
+  const EYE = DEFAULT_MASCOT_RAMP.eye;
+
+  function shades(
+    shape: MascotShape,
+    size: MascotMarkSize,
+    pose: MascotPose,
+  ): MascotMarkDrawing {
+    return drawMascotMark(lookOf(shape, "shades", "none"), size, pose);
+  }
+
+  /** The cells `fills` are drawn in, as "x,y" in cell units. */
+  function cellsIn(
+    drawing: MascotMarkDrawing,
+    fills: ReadonlySet<string>,
+    cell: number,
+    offset: number,
+  ): string[] {
+    return drawing.layers
+      .filter((layer) => fills.has(layer.fill))
+      .flatMap((layer) =>
+        (parseSquares(layer.path) ?? []).map(
+          (square) =>
+            `${String((square.x - offset) / cell)},${String((square.y - offset) / cell)}`,
+        ),
+      )
+      .toSorted();
+  }
+
+  /** The shades' own dark fill: the one fill a shut pair has beyond the body's. */
+  function lensFills(
+    shape: MascotShape,
+    size: MascotMarkSize,
+  ): ReadonlySet<string> {
+    const body = new Set<string>([...DEFAULT_MASCOT_RAMP.tones, EYE, WHITE]);
+    const own = shades(shape, size, SHUT)
+      .layers.map((layer) => layer.fill)
+      .filter((fill) => !body.has(fill));
+    expect(own).toHaveLength(1);
+    return new Set(own);
+  }
+
+  /** Where the eyes sit on a bare body looking ahead: the row they start on and their outer columns. */
+  function eyesOf(shape: MascotShape): {
+    readonly y: number;
+    readonly left: number;
+    readonly right: number;
+  } {
+    const eyes = placesOf(
+      mascotCells(lookOf(shape, "none", "none"), MASCOT_AT_REST),
+      "eye",
+    );
+    return {
+      y: Math.min(...eyes.map(([, y]) => y)),
+      left: Math.min(...eyes.map(([x]) => x)),
+      right: Math.max(...eyes.map(([x]) => x)),
+    };
+  }
+
+  const rowOf = (place: string): number => Number(place.split(",")[1]);
+
+  it.each(CASES)(
+    "lowers the glance's shades a row and shows an eye over each lens, with the glints on the lowered row, on a %s at %i px",
+    (shape, size, cell, offset) => {
+      const { y, left, right } = eyesOf(shape);
+      const drawing = shades(shape, size, GLANCE);
+      const lens = cellsIn(
+        drawing,
+        new Set([...lensFills(shape, size), WHITE]),
+        cell,
+        offset,
+      );
+
+      expect([...new Set(lens.map(rowOf))].toSorted()).toEqual([y + 1, y + 2]);
+      expect(cellsIn(drawing, new Set([EYE]), cell, offset)).toEqual(
+        [
+          `${String(left)},${String(y)}`,
+          `${String(right)},${String(y)}`,
+        ].toSorted(),
+      );
+      expect(cellsIn(drawing, new Set([WHITE]), cell, offset)).toEqual(
+        [
+          `${String(left)},${String(y + 1)}`,
+          `${String(right - 1)},${String(y + 1)}`,
+        ].toSorted(),
+      );
+    },
+  );
+
+  it.each(CASES)(
+    "draws beats 0, 2 and 3 as one picture, the resting one: lenses on the eye rows, glints on the first, no eye over them, on a %s at %i px",
+    (shape, size, cell, offset) => {
+      const { y, left, right } = eyesOf(shape);
+      const beats = [0, 2, 3].map((beat) => shades(shape, size, working(beat)));
+      const idle = shades(shape, size, MASCOT_AT_REST);
+
+      for (const drawing of beats) {
+        expect(drawing).toEqual(idle);
+        const lens = cellsIn(
+          drawing,
+          new Set([...lensFills(shape, size), WHITE]),
+          cell,
+          offset,
+        );
+        expect([...new Set(lens.map(rowOf))].toSorted()).toEqual([y, y + 1]);
+        expect(cellsIn(drawing, new Set([EYE]), cell, offset)).toEqual([]);
+        expect(
+          cellsIn(drawing, new Set([WHITE]), cell, offset).toSorted(),
+        ).toEqual(
+          [
+            `${String(left)},${String(y)}`,
+            `${String(right - 1)},${String(y)}`,
+          ].toSorted(),
+        );
+      }
+    },
+  );
+
+  it.each(CASES)(
+    "keeps every cell of the shades, lowered or not, on the body, on a %s at %i px",
+    (shape, size) => {
+      const body = new Set(
+        drawMascotMark(lookOf(shape, "none", "none"), size, MASCOT_AT_REST)
+          .layers.flatMap((layer) => parseSquares(layer.path) ?? [])
+          .map((square) => `${String(square.x)},${String(square.y)}`),
+      );
+      for (const pose of [GLANCE, working(0), SHUT, MASCOT_AT_REST]) {
+        const drawn = shades(shape, size, pose)
+          .layers.flatMap((layer) => parseSquares(layer.path) ?? [])
+          .map((square) => `${String(square.x)},${String(square.y)}`);
+
+        expect(drawn.filter((origin) => !body.has(origin))).toEqual([]);
+      }
+    },
+  );
+
+  it.each(BLOB_UNCHANGED_POSES)(
+    "draws a blob's $eyewear at $size px, $expression on beat $beat, as it always has",
+    (pinned) => {
+      expect(
+        drawMascotMark(lookOf("blob", pinned.eyewear, "none"), pinned.size, {
+          expression: pinned.expression,
+          beat: pinned.beat,
+        }).layers,
+      ).toEqual(pinned.layers);
+    },
+  );
+});
+
+describe("a saved colour drawn as a ramp", () => {
+  /** `#rrggbb` of hue `h` (degrees), saturation `sat` and lightness `light` (percent). */
+  function hexOf(h: number, sat: number, light: number): string {
+    const s = sat / 100;
+    const l = light / 100;
+    const a = s * Math.min(l, 1 - l);
+    const channel = (n: number): string => {
+      const k = (n + h / 30) % 12;
+      const value = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+      return Math.round(value * 255)
+        .toString(16)
+        .padStart(2, "0");
+    };
+    return `#${channel(0)}${channel(8)}${channel(4)}`;
+  }
+
+  const lookIn = (color: string): MascotLook => ({
+    ...lookOf("blob", "none", "none"),
+    ramp: botMascot(
+      "bot_0KNEF4PC1F8D0H626S5VEKEQ8Y",
+      { ...NO_CHOICE, color },
+      false,
+    ).ramp,
+  });
+  const baseOf = (color: string): string => lookIn(color).ramp.tones[2];
+  const saturationOf = (fill: string): number => {
+    const match = /^hsl\(\d+ (\d+)%/.exec(fill);
+    if (match === null) throw new Error(`no saturation in ${fill}`);
+    return Number(match[1]);
+  };
+
+  it("draws a colour off any line-up on its own hue, not the default's", () => {
+    const own = lookIn("#123abc");
+    const drawn = drawMascotMark(own, 24, MASCOT_AT_REST).layers.map(
+      (layer) => layer.fill,
+    );
+    const standard = drawMascotMark(
+      lookOf("blob", "none", "none"),
+      24,
+      MASCOT_AT_REST,
+    ).layers.map((layer) => layer.fill);
+
+    expect(Math.abs(own.ramp.hue - 226)).toBeLessThanOrEqual(1);
+    expect(own.ramp.hue).not.toBe(DEFAULT_MASCOT_RAMP.hue);
+    expect(drawn).not.toEqual(standard);
+  });
+
+  it("draws the same base tone for a hue at lightness 68 as for a near white one, and at 48 as for a near black one", () => {
+    const light = lightnessOf(baseOf(hexOf(200, 60, 68)));
+    const dark = lightnessOf(baseOf(hexOf(200, 60, 48)));
+
+    expect(light).toBe(68);
+    expect(dark).toBe(48);
+    expect(lightnessOf(baseOf(hexOf(200, 60, 97)))).toBe(light);
+    expect(lightnessOf(baseOf("#ffffff"))).toBe(light);
+    expect(lightnessOf(baseOf(hexOf(200, 60, 6)))).toBe(dark);
+    expect(lightnessOf(baseOf("#000000"))).toBe(dark);
+  });
+
+  it("keeps the lightness of a colour between the bounds", () => {
+    expect(lightnessOf(baseOf(hexOf(200, 60, 58)))).toBe(58);
+  });
+
+  it("draws no body more saturated than 85", () => {
+    expect(saturationOf(baseOf(hexOf(120, 100, 50)))).toBeLessThanOrEqual(85);
+    expect(saturationOf(baseOf(hexOf(120, 100, 50)))).toBeGreaterThan(80);
   });
 });

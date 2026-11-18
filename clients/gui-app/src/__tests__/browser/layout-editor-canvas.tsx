@@ -737,6 +737,7 @@ function ProbeBackdrops(): ReactNode {
           title="Backdrop probe"
           contentClassName="h-1/4 w-1/4"
           dataAttributes={{}}
+          headerActions={null}
           promoteAriaLabel="Open as tab"
           promoteTestId="probe-backdrop-promote"
           closeTestId="probe-backdrop-close"

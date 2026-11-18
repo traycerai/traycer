@@ -15,6 +15,7 @@
  * None of them is wire surface: they are constructor inputs to the engine.
  */
 import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { FleetRefreshOutcome } from "@traycer-clients/shared/platform/runner-host";
 import type {
   HostListItem,
   HostListResponse,
@@ -330,8 +331,18 @@ export class DesktopHostFleetSource implements HostFleetSource {
    * fleet until the host's next read supersedes it.
    */
   private readonly watermarks: Record<RegistryScope, ScopeWatermark> = {
-    personal: { seq: 0, readAtMs: Number.NEGATIVE_INFINITY },
-    team: { seq: 0, readAtMs: Number.NEGATIVE_INFINITY },
+    personal: {
+      seq: 0,
+      readAtMs: Number.NEGATIVE_INFINITY,
+      replayFloorMs: Number.NEGATIVE_INFINITY,
+      generation: null,
+    },
+    team: {
+      seq: 0,
+      readAtMs: Number.NEGATIVE_INFINITY,
+      replayFloorMs: Number.NEGATIVE_INFINITY,
+      generation: null,
+    },
   };
   private readonly identitySubscription: SelectionSubscription;
   private readonly onHostChange: () => void;
@@ -397,13 +408,14 @@ export class DesktopHostFleetSource implements HostFleetSource {
    * is what makes the guarantee independent of who remembers to wrap.
    *
    * Failing to refresh costs one stale cycle, which the next identity change,
-   * local-host change or explicit call re-reads anyway - strictly cheaper than
-   * any way of surfacing it.
+   * local-host change or explicit call re-reads anyway. The outcome says which
+   * happened, for the one caller that acts on it (the renderer's directory,
+   * through the `refreshFleet` invoke); a throw is `unavailable`.
    */
-  async refresh(): Promise<void> {
-    if (this.disposed) return;
+  async refresh(): Promise<FleetRefreshOutcome> {
+    if (this.disposed) return { kind: "superseded" };
     try {
-      await this.refreshOrThrow();
+      return await this.refreshWith(null);
     } catch (error: unknown) {
       // WARN, not debug: this is now the single place a thrown refresh is
       // reported anywhere in the process, so it must not be the quiet level.
@@ -411,6 +423,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
       this.options.log.warn("[selection-fleet] registry refresh threw", {
         error: String(error),
       });
+      return { kind: "unavailable" };
     }
   }
 
@@ -445,10 +458,6 @@ export class DesktopHostFleetSource implements HostFleetSource {
     }
   }
 
-  private async refreshOrThrow(): Promise<void> {
-    await this.refreshWith(null);
-  }
-
   private async adoptRegistryResponse(read: PushedRegistryRead): Promise<void> {
     await this.refreshWith(read);
   }
@@ -463,7 +472,9 @@ export class DesktopHostFleetSource implements HostFleetSource {
    * signed-out and unverified branches, publishing before adopting - is a rule
    * about ADOPTING registry rows, not about who read them.
    */
-  private async refreshWith(pushed: PushedRegistryRead | null): Promise<void> {
+  private async refreshWith(
+    pushed: PushedRegistryRead | null,
+  ): Promise<FleetRefreshOutcome> {
     // Stamped at fetch START (contract: "the generation this snapshot was
     // FETCHED under"), so a completion that lands after an account switch is
     // recognisably stale. The identity KEY is captured in the same read for
@@ -486,7 +497,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
           generation,
         },
       );
-      return;
+      return { kind: "superseded" };
     }
     // The time the registry was OBSERVED, which is what adoption is ordered
     // on. A fetch of our own is stamped HERE - at its start, before the await
@@ -515,7 +526,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
         { personal: [], team: [] },
         readAtMs,
       );
-      return;
+      return this.fleetOutcome(generation, REGISTRY_SCOPES);
     }
     // Stamped BEFORE the read, so ordering follows what each read OBSERVED.
     this.localIdentitySeq += 1;
@@ -542,7 +553,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
         generation,
       });
       this.adoptLocalIdentityRead(generation, identitySeq, localHostId);
-      return;
+      return { kind: "unavailable" };
     }
     if (pushed !== null) {
       // The host has already made the read this branch would make. It arrives
@@ -560,8 +571,9 @@ export class DesktopHostFleetSource implements HostFleetSource {
         pushed.response,
         scopeRows(pushed.response, PUSH_SCOPES),
         readAtMs,
+        false,
       );
-      return;
+      return this.fleetOutcome(generation, PUSH_SCOPES);
     }
     let result: HostListFetchResult;
     try {
@@ -587,7 +599,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
       // Same rule as the thrown arm above: a refused registry read keeps the
       // known rows AND still adopts this machine's own identity.
       this.adoptLocalIdentityRead(generation, identitySeq, localHostId);
-      return;
+      return { kind: "unavailable" };
     }
     this.publishAndAdopt(
       identity,
@@ -598,7 +610,9 @@ export class DesktopHostFleetSource implements HostFleetSource {
       result.response,
       scopeRows(result.response, REGISTRY_SCOPES),
       readAtMs,
+      true,
     );
+    return this.fleetOutcome(generation, REGISTRY_SCOPES);
   }
 
   /**
@@ -624,11 +638,18 @@ export class DesktopHostFleetSource implements HostFleetSource {
     response: HostListResponse,
     scoped: ScopedRows,
     readAtMs: number,
+    bearer: boolean,
   ): void {
     const current = generation === this.options.identity.current().generation;
     const admitted: ScopedRows = {
-      personal: this.admitScope("personal", scoped, current, seq, readAtMs),
-      team: this.admitScope("team", scoped, current, seq, readAtMs),
+      personal: this.admitScope("personal", scoped, current, seq, readAtMs, {
+        generation,
+        bearer,
+      }),
+      team: this.admitScope("team", scoped, current, seq, readAtMs, {
+        generation,
+        bearer,
+      }),
     };
     if (admitted.personal === null && admitted.team === null) return;
     this.options.publishRegistryResponse({
@@ -655,6 +676,10 @@ export class DesktopHostFleetSource implements HostFleetSource {
   /**
    * This read's rows for `scope`, or null when it does not speak for the
    * scope or a newer read of the scope has already been adopted.
+   *
+   * The read-time fence is {@link readTimeFence}: a push is held to every
+   * mark, the cross-account replay floor included; a bearer read for the
+   * current identity only to marks that identity's own adoptions set.
    */
   private admitScope(
     scope: RegistryScope,
@@ -662,11 +687,12 @@ export class DesktopHostFleetSource implements HostFleetSource {
     currentIdentity: boolean,
     seq: number,
     readAtMs: number,
+    read: { readonly generation: number; readonly bearer: boolean },
   ): readonly HostListItem[] | null {
     const rows = scoped[scope];
     if (rows === null) return null;
     const watermark = this.watermarks[scope];
-    if (readAtMs < watermark.readAtMs) {
+    if (readAtMs < readTimeFence(watermark, read, currentIdentity)) {
       // An answer that observed the scope EARLIER than one already adopted.
       // Declined before the publish, not just before the adoption: the renderer
       // push is the display half of the same fact, and showing windows a fleet
@@ -773,7 +799,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
 
   /**
    * Adopts a local-identity read that has no registry rows to travel with -
-   * the failure arms of `refreshOrThrow`. Same fences as
+   * the failure arms of `refreshWith`. Same fences as
    * `refreshLocalIdentity`, in the same order: the generation guard drops a
    * read that straddled an account switch, the seq guard drops one a newer
    * writer has superseded, and the value guard keeps an unchanged id from
@@ -853,7 +879,16 @@ export class DesktopHostFleetSource implements HostFleetSource {
       // whose rows are the ones this port is serving for the scope", so a
       // completion declined above - or one that never reached this method -
       // must not raise it and lock out the read that should win.
-      watermark.readAtMs = Math.max(watermark.readAtMs, readAtMs);
+      if (watermark.generation === generation) {
+        watermark.readAtMs = Math.max(watermark.readAtMs, readAtMs);
+      } else {
+        watermark.replayFloorMs = Math.max(
+          watermark.replayFloorMs,
+          watermark.readAtMs,
+        );
+        watermark.readAtMs = readAtMs;
+      }
+      watermark.generation = generation;
       this.rows[scope] = scoped[scope] ?? [];
     }
     // The ID is fenced SEPARATELY from the rows: this refresh's row projection
@@ -870,6 +905,36 @@ export class DesktopHostFleetSource implements HostFleetSource {
       });
     }
     this.publishAt(generation);
+  }
+
+  /**
+   * What a read did to the authority's fleet, decided from the fleet rather
+   * than from whether this read was the one adopted.
+   *
+   * A disposed source, or a retired identity: nothing current came of it,
+   * `superseded`. Otherwise `published` exactly when every scope the read
+   * spoke for is serving rows adopted under this generation - by this read,
+   * or by a newer read of the same identity that won the scope - so a partial
+   * adoption with one scope still on another identity's marks is not
+   * `published`. Anything less is `unavailable`, and the caller keeps its
+   * obligation to re-ask. Generation alone is not proof: the seq and
+   * read-time fences outlive an identity change while the rows are cleared.
+   */
+  private fleetOutcome(
+    generation: number,
+    scopes: readonly RegistryScope[],
+  ): FleetRefreshOutcome {
+    if (
+      this.disposed ||
+      generation !== this.options.identity.current().generation
+    ) {
+      return { kind: "superseded" };
+    }
+    return scopes.every(
+      (scope) => this.watermarks[scope].generation === generation,
+    )
+      ? { kind: "published" }
+      : { kind: "unavailable" };
   }
 
   /** Publishes under the generation that is current right now. */
@@ -942,6 +1007,31 @@ function registryScopeOf(row: HostListItem): RegistryScope {
   return row.owner?.kind === "team" ? "team" : "personal";
 }
 
+/**
+ * The read time a read must not be older than to be admitted for a scope.
+ *
+ * A BEARER read issued under the current identity is held only to the marks
+ * that identity's own adoptions set (`readAtMs` once the scope serves its
+ * generation, nothing before): this process made it with this identity's
+ * credential, so it is this identity's answer whatever the wall clock says,
+ * and a mark from an account the user has left (a clock that stepped back)
+ * must not decline it - or freeze the reads after it. A PUSH, and any read
+ * issued under an earlier identity, is held to every mark, the cross-account
+ * replay floor included: that is the reason the marks outlive the switch.
+ */
+function readTimeFence(
+  watermark: ScopeWatermark,
+  read: { readonly generation: number; readonly bearer: boolean },
+  currentIdentity: boolean,
+): number {
+  if (read.bearer && currentIdentity) {
+    return watermark.generation === read.generation
+      ? watermark.readAtMs
+      : Number.NEGATIVE_INFINITY;
+  }
+  return Math.max(watermark.readAtMs, watermark.replayFloorMs);
+}
+
 /** One read's rows per scope; null for a scope the read does not speak for. */
 type ScopedRows = Readonly<
   Record<RegistryScope, readonly HostListItem[] | null>
@@ -949,7 +1039,24 @@ type ScopedRows = Readonly<
 
 interface ScopeWatermark {
   seq: number;
+  /** The newest read time adopted for this scope under `generation`. */
   readAtMs: number;
+  /**
+   * The newest read time adopted for this scope under any EARLIER
+   * generation: the cross-account replay floor. It fences pushes only - a host
+   * snapshot read in a departed account's era must not win after a switch -
+   * and never the current identity's own bearer reads, whose ordering is
+   * `readAtMs` alone. Kept apart so a clock that stepped back across a switch
+   * freezes neither: B's later reads order against B's own adopted time.
+   */
+  replayFloorMs: number;
+  /**
+   * The identity generation whose read this scope's served rows were adopted
+   * under, or null before any adoption. The two fences above outlive an
+   * identity change while the rows do not, so only this says whether the
+   * scope is serving the CURRENT identity's rows.
+   */
+  generation: number | null;
 }
 
 /**

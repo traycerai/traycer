@@ -17,7 +17,7 @@ import {
   type MediaSessionHandlers,
   type SoundtrackMediaSession,
 } from "@/lib/soundtrack/media-session";
-import { desktopSoundtrackBridge } from "@/lib/soundtrack/desktop-set";
+import { desktopSoundtrackBridge } from "@/lib/soundtrack/desktop-soundtrack-bridge";
 import { MIX_TUNING } from "@/lib/soundtrack/mix-tuning";
 import type {
   RecordingQuality,

@@ -563,7 +563,12 @@ export function createCredentialsMutationStore(
   options: CredentialsMutationStoreOptions,
 ): CredentialsMutationStore {
   const { paths, refresh } = options;
-  const reserve = new CredentialsReserve(paths.credentialsPath, paths.lockPath);
+  const reserve = new CredentialsReserve(
+    paths.credentialsPath,
+    paths.lockPath,
+    options.lockWaitMs,
+    options.lockPollIntervalMs,
+  );
   const commitPaths: CommitPaths = {
     credentialsPath: paths.credentialsPath,
     metaPath: paths.metaPath,

@@ -19,7 +19,6 @@ import {
   BotLooksContext,
   type BotLooks,
 } from "@/hooks/bots/use-bot-appearance";
-import { botColorAt } from "@/lib/providers/profile-accent-color";
 import {
   useVoiceSessionStore,
   type VoiceSessionDriver,
@@ -37,6 +36,7 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
   type Mock,
 } from "vitest";
@@ -48,7 +48,6 @@ import type {
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import {
-  BOT_APPEARANCE_UNRECOGNISED,
   type BotAppearance,
   type BotReadCursorAdvanceRequest,
   type BotNotificationLevel,
@@ -142,8 +141,6 @@ const mocks = vi.hoisted(() => {
       readCursors: undefined as BotReadCursorReadResponse | undefined,
       // Whether the host keeps read cursors at all.
       readCursorsKept: true,
-      // The next advance fails, as one to an offline host does.
-      failNextAdvance: false,
       // The person's notification levels by channel id; `undefined` = not read.
       levels: undefined as Record<string, BotNotificationLevel> | undefined,
       chats,
@@ -261,9 +258,7 @@ vi.mock("@/hooks/bots/use-bot-read-cursor", async (importOriginal) => ({
   useBotReadCursorAdvanceMutation: () => ({
     mutateAsync: (request: BotReadCursorAdvanceRequest): Promise<void> => {
       mocks.advance(request);
-      if (!mocks.state.failNextAdvance) return Promise.resolve();
-      mocks.state.failNextAdvance = false;
-      return Promise.reject(new Error("the host is offline"));
+      return Promise.resolve();
     },
   }),
 }));
@@ -569,8 +564,11 @@ let mountLanding: BotChannelLanding | null = null;
 /** How many tiles the next mount is told the installed app shows; `null` off it. */
 let mountTiles: MobileTileCount | null = null;
 
-/** The background the surface's list names for the bot on the next mount. */
-let mountBackground: BotAppearance["background"] = null;
+/**
+ * The channel background a host of the same method version still delivers on
+ * the bot's look on the next mount, raw as it arrives, or `null` for none.
+ */
+let mountStaleBackground: number | null = null;
 
 function mount(options: MountOptions): {
   readonly onOpenThread: Mock<(open: BotOpenThread | null) => void>;
@@ -581,10 +579,11 @@ function mount(options: MountOptions): {
 } {
   const onOpenThread = vi.fn<(open: BotOpenThread | null) => void>();
   const queryClient = new QueryClient();
+  const deliveredLook: BotAppearance & {
+    readonly background: number | null;
+  } = { mark: null, color: null, background: mountStaleBackground };
   const looks: BotLooks = {
-    appearances: new Map([
-      [BOT_ID, { mark: null, color: null, background: mountBackground }],
-    ]),
+    appearances: new Map([[BOT_ID, deliveredLook]]),
     main: null,
   };
   const runnerHost = createFakeRunnerHost({});
@@ -679,7 +678,6 @@ beforeEach(() => {
   mocks.state.follows = undefined;
   mocks.state.readCursors = undefined;
   mocks.state.readCursorsKept = true;
-  mocks.state.failNextAdvance = false;
   mocks.state.levels = undefined;
   mocks.postIds = [];
   mocks.sendResponse = {
@@ -696,52 +694,28 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
-  mountBackground = null;
+  mountStaleBackground = null;
   document.documentElement.classList.remove("dark");
 });
 
 describe("<BotChannelView tiles={null} /> channel background", () => {
-  const TINT_CLASS = "bg-(--channel-tint)/10";
+  /** What a channel's tint leaves on a page: its variable, its marker and its class. */
+  const TINT =
+    '[data-channel-background], [style*="channel-tint"], [class*="channel-tint"]';
 
   it.each([false, true])(
-    "tints the message area, and only it, with the chosen colour (dark: %s)",
+    "keeps the page's own colour in the message area and everywhere else though the host still delivers the bot a background (dark: %s)",
     (dark) => {
       document.documentElement.classList.toggle("dark", dark);
-      mountBackground = 11;
+      mountStaleBackground = 11;
       mount({ openThreadPostId: "post-1" });
 
       const area = screen.getByTestId("bot-channel-messages");
-      expect(area.classList.contains(TINT_CLASS)).toBe(true);
-      expect(area.getAttribute("data-channel-background")).toBe("11");
-      expect(area.style.getPropertyValue("--channel-tint")).toBe(
-        botColorAt(11),
-      );
-      expect(within(area).getByTestId("stub-transcript-channel")).toBeTruthy();
-      // The composer and the thread panel sit outside it.
-      expect(
-        within(area).queryByTestId("stub-bot-channel-composer"),
-      ).toBeNull();
-      const panel = screen.getByTestId("bot-thread-panel");
-      expect(area.contains(panel)).toBe(false);
-      expect(panel.closest(`[data-channel-background]`)).toBeNull();
-      expect(
-        screen
-          .getByTestId("stub-bot-channel-composer")
-          .closest(`[data-channel-background]`),
-      ).toBeNull();
-    },
-  );
-
-  it.each([null, BOT_APPEARANCE_UNRECOGNISED] as const)(
-    "keeps the page's own message area when the background is %s",
-    (background) => {
-      mountBackground = background;
-      mount({ openThreadPostId: null });
-
-      const area = screen.getByTestId("bot-channel-messages");
-      expect(area.classList.contains(TINT_CLASS)).toBe(false);
       expect(area.hasAttribute("data-channel-background")).toBe(false);
       expect(area.style.getPropertyValue("--channel-tint")).toBe("");
+      expect(area.className).not.toContain("channel-tint");
+      expect(within(area).getByTestId("stub-transcript-channel")).toBeTruthy();
+      expect(document.body.querySelector(TINT)).toBeNull();
     },
   );
 });
@@ -1712,9 +1686,11 @@ describe("<BotChannelView tiles={null} /> focused notification presence", () => 
     mocks.state.realComposer = true;
     // The other channel already holds a draft of its own, which every typed
     // draft's seed (`seedId` 0) shares with the one typed below.
-    useBotDraftsStore
-      .getState()
-      .typeThreadBox(BOT_ID, "conversation-later", "Draft for B", null);
+    useBotDraftsStore.getState().typeThreadBox(BOT_ID, "conversation-later", {
+      text: "Draft for B",
+      content: null,
+      held: [],
+    });
     const held = Promise.withResolvers<BotConversationSendResponse>();
     mocks.sendAsync.mockImplementationOnce(() => held.promise);
     const user = userEvent.setup();
@@ -1853,78 +1829,47 @@ describe("<BotChannelView tiles={null} /> read cursor", () => {
   const OLD_ROW = { messageId: "row-old", seq: 1_000 };
   const NEW_ROW = { messageId: "row-new", seq: 2_000 };
 
-  it("advances the channel's cursor to its newest row once, only while shown, and not again when the read catches up", () => {
+  // Retired: the channel used to advance its cursor to the metadata `latest`
+  // the moment it was presented (once, again for a landed row, again after a
+  // failed write). Presenting alone reads nothing now; the rows must be drawn
+  // and held in view (bot-channel-unread-banner.test.tsx, over the real
+  // transcript rows), so this stubbed-transcript rig only pins that it asks
+  // for no write on its own.
+  it("writes no cursor of its own for a channel being shown or becoming shown, whatever newest row the host names, however long it stays", async () => {
+    // A write held back by a dwell would arrive after the render: the clock
+    // runs past it after EACH change of what is presented or of the newest row.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const pass = async (ms: number): Promise<void> => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    };
     mocks.state.paneVisible = false;
     mocks.state.readCursors = {
       cursors: { "conversation-channel": OLD_ROW },
       latest: { "conversation-channel": NEW_ROW },
     };
     const { rerender } = mount({ openThreadPostId: null });
+    await pass(1_500);
     expect(mocks.advance).not.toHaveBeenCalled();
 
     mocks.state.paneVisible = true;
     rerender();
-    rerender();
-    expect(mocks.advance).toHaveBeenCalledTimes(1);
-    expect(mocks.advance).toHaveBeenCalledWith({
-      botId: BOT_ID,
-      conversationId: "conversation-channel",
-      ...NEW_ROW,
-    });
-
-    mocks.state.readCursors = {
-      cursors: { "conversation-channel": NEW_ROW },
-      latest: { "conversation-channel": NEW_ROW },
-    };
-    rerender();
-    expect(mocks.advance).toHaveBeenCalledTimes(1);
-  });
-
-  it("advances again for a row that lands while the channel is shown", () => {
-    mocks.state.readCursors = {
-      cursors: { "conversation-channel": NEW_ROW },
-      latest: { "conversation-channel": NEW_ROW },
-    };
-    const { rerender } = mount({ openThreadPostId: null });
+    await pass(1_500);
     expect(mocks.advance).not.toHaveBeenCalled();
 
     const landed = { messageId: "row-landed", seq: 3_000 };
     mocks.state.readCursors = {
-      cursors: { "conversation-channel": NEW_ROW },
+      cursors: { "conversation-channel": OLD_ROW },
       latest: { "conversation-channel": landed },
     };
     rerender();
-    expect(mocks.advance).toHaveBeenCalledWith({
-      botId: BOT_ID,
-      conversationId: "conversation-channel",
-      ...landed,
-    });
-  });
+    await pass(1_500);
 
-  it("advances again to the same row when an advance failed and the channel is presented again", async () => {
-    mocks.state.failNextAdvance = true;
-    mocks.state.readCursors = {
-      cursors: { "conversation-channel": OLD_ROW },
-      latest: { "conversation-channel": NEW_ROW },
-    };
-    const { rerender } = mount({ openThreadPostId: null });
-    expect(mocks.advance).toHaveBeenCalledTimes(1);
-    // Let the rejected advance settle, so the view has forgotten it.
-    await act(async () => {
-      await Promise.resolve();
-    });
-
-    mocks.state.paneVisible = false;
-    rerender();
-    mocks.state.paneVisible = true;
-    rerender();
-
-    expect(mocks.advance).toHaveBeenCalledTimes(2);
-    expect(mocks.advance).toHaveBeenLastCalledWith({
-      botId: BOT_ID,
-      conversationId: "conversation-channel",
-      ...NEW_ROW,
-    });
+    expect(mocks.advance).not.toHaveBeenCalled();
   });
 
   it("says no new replies on a followed thread of a channel set to Nothing", () => {
@@ -1995,7 +1940,7 @@ describe("<BotChannelView tiles={null} /> read cursor", () => {
     expect(marked("post-c")).toBe("false");
   });
 
-  it("clears a thread's new replies once the cursor catches up, and advances the thread that is open", () => {
+  it("clears a thread's new replies once the cursor catches up, and writes nothing for the thread that is open merely for being shown", () => {
     mocks.state.threads = [
       thread("thread-a", "post-a", { replyCount: 2, lastReplyAt: 2_000 }),
     ];
@@ -2008,11 +1953,7 @@ describe("<BotChannelView tiles={null} /> read cursor", () => {
     };
     mocks.postIds = ["post-a"];
     const { rerender } = mount({ openThreadPostId: "post-a" });
-    expect(mocks.advance).toHaveBeenCalledWith({
-      botId: BOT_ID,
-      conversationId: "thread-a",
-      ...NEW_ROW,
-    });
+    expect(mocks.advance).not.toHaveBeenCalled();
 
     mocks.state.readCursors = {
       cursors: { "thread-a": NEW_ROW },
@@ -2742,5 +2683,97 @@ describe("<BotChannelView tiles={null} /> a post whose answer lands in a thread"
     await user.click(screen.getByTestId("stub-bot-thread-composer-sent"));
 
     expect(onOpenThread).not.toHaveBeenCalled();
+  });
+});
+
+describe("<BotChannelView tiles={null} /> a box whose stored draft names images still being read (T186)", () => {
+  const STORED = "Words stored with an image";
+  const WAITING = {
+    [BOT_ID]: { "conversation-channel": { text: STORED, replyTo: null } },
+  };
+
+  afterEach(() => {
+    useBotDraftsStore.setState({ boxesReading: {} });
+  });
+
+  const channelBox = (): HTMLElement =>
+    within(screen.getByTestId("bot-channel-composer")).getByRole("textbox");
+
+  it("shows the stored text in a box that cannot be edited or sent, with a line saying it waits and a Discard draft button, in place of the composer", () => {
+    mocks.state.realComposer = true;
+    useBotDraftsStore.setState({ boxesReading: WAITING });
+
+    mount({ openThreadPostId: null });
+
+    const input = screen.getByTestId("bot-channel-composer-input");
+    expect(input).toHaveProperty("value", STORED);
+    expect(input).toHaveProperty("disabled", true);
+    expect(input).toHaveProperty("readOnly", true);
+    expect(screen.getByTestId("bot-channel-composer-send")).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByTestId("bot-channel-composer-reading")).toBeTruthy();
+    expect(
+      within(screen.getByTestId("bot-channel-composer")).getByRole("button", {
+        name: "Discard draft",
+      }),
+    ).toBeTruthy();
+    expect(mocks.sendAsync).not.toHaveBeenCalled();
+  });
+
+  it("gives an empty box to type in after a discard", async () => {
+    mocks.state.realComposer = true;
+    useBotDraftsStore.setState({ boxesReading: WAITING });
+    const user = userEvent.setup();
+    mount({ openThreadPostId: null });
+
+    await user.click(screen.getByTestId("bot-channel-composer-discard"));
+
+    expect(useBotDraftsStore.getState().boxesReading).toEqual({});
+    expect(screen.queryByTestId("bot-channel-composer-reading")).toBeNull();
+    expect(textOf(channelBox())).toBe("");
+    typeInto(channelBox(), "Typed after the discard");
+    expect(textOf(channelBox())).toBe("Typed after the discard");
+  });
+
+  it("gives the box with its whole draft once the images settle", () => {
+    mocks.state.realComposer = true;
+    useBotDraftsStore.setState({ boxesReading: WAITING });
+    mount({ openThreadPostId: null });
+    expect(screen.getByTestId("bot-channel-composer-reading")).toBeTruthy();
+
+    act(() => {
+      useBotDraftsStore.setState({
+        boxesReading: {},
+        threadBoxes: {
+          [BOT_ID]: {
+            "conversation-channel": {
+              text: STORED,
+              content: null,
+              seedId: 1,
+              replyTo: null,
+            },
+          },
+        },
+      });
+    });
+
+    expect(screen.queryByTestId("bot-channel-composer-reading")).toBeNull();
+    expect(textOf(channelBox())).toBe(STORED);
+  });
+
+  it("leaves another conversation's box usable while this one waits", () => {
+    mocks.state.realComposer = true;
+    useBotDraftsStore.setState({ boxesReading: WAITING });
+    const { rerender } = mount({ openThreadPostId: null });
+    expect(screen.getByTestId("bot-channel-composer-reading")).toBeTruthy();
+
+    mocks.state.appConversationChatId = "conversation-later";
+    rerender();
+
+    expect(screen.queryByTestId("bot-channel-composer-reading")).toBeNull();
+    typeInto(channelBox(), "Typed beside a waiting box");
+    expect(textOf(channelBox())).toBe("Typed beside a waiting box");
   });
 });
