@@ -47,7 +47,7 @@ export interface MoveRerun {
   readonly resumed: boolean;
   /** The refusal shown before the Retry, again once its re-run stopped before asking. */
   readonly stoppedAgain: string | null;
-  /** The move stopped: a stopped move refuses every plan until it runs again. */
+  /** The move, or a Retry's re-run of it, stopped: it refuses every plan until it runs again. */
   readonly stopped: boolean;
   readonly pending: boolean;
   readonly rerun: (refusal: string, started: () => void) => void;
@@ -119,7 +119,11 @@ export function useMoveRerun(
     resumed: reading === "resumed",
     stoppedAgain:
       rerun !== null && reading === "stopped_again" ? rerun.refusal : null,
-    stopped: retryable && status !== null && moveHasStopped(status),
+    // A re-run can stop before it reaches the move; the host retries any stopped stage.
+    stopped:
+      retryable &&
+      (reading === "stopped_again" ||
+        (status !== null && moveHasStopped(status))),
     pending: retry.isPending,
     rerun: (refusal, started) => {
       retry.mutate(

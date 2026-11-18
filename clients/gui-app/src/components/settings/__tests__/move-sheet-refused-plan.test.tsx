@@ -622,6 +622,39 @@ describe("<MoveSheet /> after a refused plan read", () => {
     expect(harness.retries()).toBe(2);
   });
 
+  it.each(["failed", "stalled"])(
+    "re-runs again when the re-run stopped in registering as %s",
+    async (state) => {
+      const harness = mountSheet({
+        plan: STALE_PLAN,
+        planFailure: null,
+        status: awaitingConsentStatus(),
+        servesRetry: true,
+      });
+      await settle();
+      harness.computer.status = stoppedStatus();
+      harness.computer.planFailure = NOT_AWAITING;
+      await rereadPlan(harness);
+      await deliverNextStatusRead();
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await settle();
+      expect(harness.retries()).toBe(1);
+
+      harness.computer.status = environmentStatusFixture({
+        setup: { stage: "registering", state },
+      });
+      await deliverNextStatusRead();
+      expect(screen.getByText(NOT_AWAITING.message)).toBeTruthy();
+      const readsBeforeSecondRetry = harness.planReads();
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await settle();
+
+      expect(harness.retries()).toBe(2);
+      expect(harness.planReads()).toBe(readsBeforeSecondRetry);
+    },
+  );
+
   it("asks the fresh plan when the re-run passes registering and waits for the person again", async () => {
     const harness = mountSheet({
       plan: STALE_PLAN,
