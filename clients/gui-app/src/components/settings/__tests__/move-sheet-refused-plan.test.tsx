@@ -3,6 +3,7 @@ import {
   QueryClientProvider,
   focusManager,
 } from "@tanstack/react-query";
+import { createAppQueryClient } from "@/lib/query-client";
 import {
   advanceLegendListTime,
   installLegendListTestClock,
@@ -231,22 +232,33 @@ interface Harness {
   readonly stages: () => number;
   /** Holds the next status read unanswered until the returned function is called. */
   readonly holdNextStatusRead: () => () => void;
+  /**
+   * Holds the next plan read unanswered until the returned function is
+   * called; the computer then answers with whatever it holds at that moment.
+   */
+  readonly holdNextPlanRead: () => () => void;
   readonly starts: EnvironmentMoveStartRequest[];
   readonly client: HostClient<HostRpcRegistry>;
 }
 
-function mountComputer(computer: Computer): Harness {
+function mountComputer(computer: Computer, queryClient: QueryClient): Harness {
   const starts: EnvironmentMoveStartRequest[] = [];
   let retries = 0;
   let heldStatusRead: Promise<void> | null = null;
+  let heldPlanRead: Promise<void> | null = null;
   let answered: EnvironmentMovePlanResponseV20 | null = null;
+  const answerPlan = (): EnvironmentMovePlanResponseV20 => {
+    if (computer.planFailure !== null) throw computer.planFailure;
+    answered = computer.plan;
+    return computer.plan;
+  };
   const { client, messenger } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
       "environment.move.plan": () => {
-        if (computer.planFailure !== null) throw computer.planFailure;
-        answered = computer.plan;
-        return computer.plan;
+        const held = heldPlanRead;
+        heldPlanRead = null;
+        return held === null ? answerPlan() : held.then(answerPlan);
       },
       "environment.status": () => {
         const asked = computer.status;
@@ -323,12 +335,7 @@ function mountComputer(computer: Computer): Harness {
   return {
     computer,
     client,
-    queryClient: new QueryClient({
-      defaultOptions: {
-        queries: { retry: false, gcTime: 0 },
-        mutations: { retry: false },
-      },
-    }),
+    queryClient,
     planReads: () =>
       messenger.calls.filter((call) => call.method === "environment.move.plan")
         .length,
@@ -341,6 +348,11 @@ function mountComputer(computer: Computer): Harness {
       heldStatusRead = held.promise;
       return () => held.resolve();
     },
+    holdNextPlanRead: () => {
+      const held = Promise.withResolvers<void>();
+      heldPlanRead = held.promise;
+      return () => held.resolve();
+    },
     stages: () =>
       messenger.calls.filter((call) => call.method === "environment.move.stage")
         .length,
@@ -348,20 +360,44 @@ function mountComputer(computer: Computer): Harness {
   };
 }
 
+/** A cache that drops an entry once nothing reads it: a closed sheet keeps no answer. */
+function shortLivedQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+      mutations: { retry: false },
+    },
+  });
+}
+
 function mountSheet(computer: Computer): Harness {
-  const harness = mountComputer(computer);
+  return mountSheetOn(computer, shortLivedQueryClient());
+}
+
+function mountSheetOn(computer: Computer, queryClient: QueryClient): Harness {
+  const harness = mountComputer(computer, queryClient);
   render(
     <QueryClientProvider client={harness.queryClient}>
       <MoveSheet />
       <MoveProgressDialog />
     </QueryClientProvider>,
   );
+  openMoveSheet();
+  return harness;
+}
+
+function openMoveSheet(): void {
   act(() => {
     useMoveSheetStore
       .getState()
       .openSheet({ hostId: HOST_ID, hostName: "Old laptop" });
   });
-  return harness;
+}
+
+function closeMoveSheet(): void {
+  act(() => {
+    useMoveSheetStore.getState().closeSheet();
+  });
 }
 
 const TEAM: EnvironmentDescriptorV11 = {
@@ -377,7 +413,12 @@ const TEAM: EnvironmentDescriptorV11 = {
 };
 
 function mountGiveDialog(computer: Computer): Harness {
-  const harness = mountComputer(computer);
+  const harness = mountComputer(computer, shortLivedQueryClient());
+  renderGiveDialog(harness);
+  return harness;
+}
+
+function renderGiveDialog(harness: Harness): void {
   render(
     <QueryClientProvider client={harness.queryClient}>
       <TeamGiveDialog
@@ -391,7 +432,6 @@ function mountGiveDialog(computer: Computer): Harness {
       />
     </QueryClientProvider>,
   );
-  return harness;
 }
 
 /** Lets a pending read land and render. */
@@ -876,5 +916,135 @@ describe("<TeamGiveDialog /> after a refused plan read", () => {
 
     expect(screen.getByText(NOT_AWAITING.message)).toBeTruthy();
     expect(confirm().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("holds Confirm at this computer on a reopen until this opening's read answers", async () => {
+    const harness = mountComputer(
+      {
+        plan: GIVE_PLAN,
+        planFailure: null,
+        status: awaitingConsentStatus(),
+        servesRetry: true,
+      },
+      createAppQueryClient(),
+    );
+    renderGiveDialog(harness);
+    await settle();
+    const confirm = (): HTMLElement =>
+      screen.getByRole("button", { name: "Confirm at this computer" });
+    expect(confirm().hasAttribute("disabled")).toBe(false);
+    cleanup();
+
+    const answer = harness.holdNextPlanRead();
+    renderGiveDialog(harness);
+    await settle();
+
+    expect(confirm().hasAttribute("disabled")).toBe(true);
+
+    answer();
+    await settle();
+
+    expect(confirm().hasAttribute("disabled")).toBe(false);
+  });
+});
+
+describe("<MoveSheet /> reopened over an earlier opening's answer", () => {
+  /**
+   * The app's own cache, which keeps a closed sheet's answers for minutes and
+   * calls an answer fresh for a minute. Only its retry is switched off: a
+   * retried refusal waits out a backoff the fake clock does not run here.
+   */
+  function mountWithAppCache(computer: Computer): Harness {
+    const queryClient = createAppQueryClient();
+    queryClient.setDefaultOptions({
+      ...queryClient.getDefaultOptions(),
+      queries: { ...queryClient.getDefaultOptions().queries, retry: false },
+    });
+    return mountSheetOn(computer, queryClient);
+  }
+
+  const awaitingComputer = (): Computer => ({
+    plan: STALE_PLAN,
+    planFailure: null,
+    status: awaitingConsentStatus(),
+    servesRetry: true,
+  });
+
+  it("offers no plan and holds Move to Personal until this opening's read answers, then accepts the fresh plan", async () => {
+    const harness = mountWithAppCache(awaitingComputer());
+    await settle();
+    expect(summaryText()).toBe("2 variables");
+    closeMoveSheet();
+    await settle();
+
+    harness.computer.plan = FRESH_PLAN;
+    const answer = harness.holdNextPlanRead();
+    openMoveSheet();
+    await settle();
+
+    expect(planIsDrawn()).toBe(false);
+    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Leave on this computer only" }),
+    ).toBeNull();
+    expect(acceptIsDisabled()).toBe(true);
+
+    answer();
+    await settle();
+
+    expect(summaryText()).toBe("3 variables");
+    expect(acceptIsDisabled()).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(screen.getByText("FRESH_ONE")).toBeTruthy();
+    expect(screen.queryByText("STALE_ONE")).toBeNull();
+    expect(
+      screen.getAllByRole("button", { name: "Leave on this computer only" })
+        .length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("reads the plan again on a reopen within a minute of the last answer", async () => {
+    const harness = mountWithAppCache(awaitingComputer());
+    await settle();
+    expect(harness.planReads()).toBe(1);
+    closeMoveSheet();
+    await advanceLegendListTime(30_000);
+
+    harness.computer.plan = FRESH_PLAN;
+    const answer = harness.holdNextPlanRead();
+    openMoveSheet();
+    await settle();
+
+    expect(harness.planReads()).toBe(2);
+    expect(summaryText()).toBeNull();
+
+    answer();
+    await settle();
+
+    expect(summaryText()).toBe("3 variables");
+  });
+
+  it("shows no refusal line or Retry from the last opening until this opening's read answers", async () => {
+    const harness = mountWithAppCache(awaitingComputer());
+    await settle();
+    harness.computer.planFailure = NOT_AWAITING;
+    await rereadPlan(harness);
+    expect(screen.getByText(NOT_AWAITING.message)).toBeTruthy();
+    closeMoveSheet();
+    await settle();
+
+    const answer = harness.holdNextPlanRead();
+    openMoveSheet();
+    await settle();
+
+    expect(screen.queryByText(NOT_AWAITING.message)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(acceptIsDisabled()).toBe(true);
+
+    answer();
+    await settle();
+
+    expect(screen.getByText(NOT_AWAITING.message)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 });
