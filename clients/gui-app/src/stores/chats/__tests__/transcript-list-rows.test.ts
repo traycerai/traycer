@@ -1234,6 +1234,25 @@ describe("transcriptListRows", () => {
       });
 
       expect(kinds(rows)).toEqual(c.expected);
+      // The live tail owns no ordinal slot.
+      expect(rows.at(-1)).toMatchObject({ kind: "hydrated", ordinal: null });
+    });
+
+    it("seats it at its own ordinal when the skeleton names a free one, with no placeholder and no tail copy", () => {
+      const rows = transcriptListRows({
+        splitLongTurns: true,
+        window: windowOf({
+          rowCount: 2,
+          spans: [span(0, ["u-1"])],
+          skeleton: [skeletonEntry("u-1"), skeletonEntry("assistant:t1")],
+          skeletonComplete: false,
+          invalidated: false,
+        }),
+        rendered: [model("u-1"), working],
+      });
+
+      expect(kinds(rows)).toEqual(["H:u-1", "H:assistant:t1"]);
+      expect(rows.at(-1)).toMatchObject({ kind: "hydrated", ordinal: 1 });
     });
   });
 
