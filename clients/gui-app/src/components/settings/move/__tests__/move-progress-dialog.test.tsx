@@ -3,6 +3,7 @@ import {
   QueryClient,
   QueryClientProvider,
 } from "@tanstack/react-query";
+import { createAppQueryClient } from "@/lib/query-client";
 import {
   advanceLegendListTime,
   installLegendListTestClock,
@@ -250,6 +251,21 @@ interface Harness {
 
 /** The dialog over a computer that answers `answer`, closed until {@link openDialog}. */
 function mount(answer: EnvironmentStatusResponseV13): Harness {
+  return mountOn(
+    answer,
+    new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0 },
+        mutations: { retry: false },
+      },
+    }),
+  );
+}
+
+function mountOn(
+  answer: EnvironmentStatusResponseV13,
+  queryClient: QueryClient,
+): Harness {
   const feed: StatusFeed = { answer, attempts: [], hold: null };
   const statusReadTimes: number[] = [];
   const { client, messenger } = buildEnvironmentClient({
@@ -290,12 +306,6 @@ function mount(answer: EnvironmentStatusResponseV13): Harness {
     "environment.status": { major: 1, minor: 3 },
     "environment.setup.retry": { major: 1, minor: 0 },
     "environment.setup.attempts": { major: 1, minor: 0 },
-  });
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false, gcTime: 0 },
-      mutations: { retry: false },
-    },
   });
   render(
     <QueryClientProvider client={queryClient}>
@@ -397,6 +407,12 @@ async function savedDiagnostics(): Promise<{
   const call = saveMock.saveBlobToDisk.mock.calls.at(0);
   if (call === undefined) throw new Error("nothing was saved");
   return { name: call[1], text: await call[0].text() };
+}
+
+function closeDialog(): void {
+  act(() => {
+    useMoveProgressDialogStore.getState().closeDialog();
+  });
 }
 
 function dialogIsGone(): boolean {
@@ -916,6 +932,93 @@ describe("<MoveProgressDialog />", () => {
       expect(saved.text).not.toContain("OPENAI_API_KEY");
       expect(saved.text).not.toContain("hash-of-the-script");
       expect(JSON.parse(saved.text)).toEqual(EXPECTED_DIAGNOSTICS);
+    });
+  });
+
+  describe("reopened over the status an earlier opening cached", () => {
+    /** The app's own cache, which keeps a closed dialog's status for minutes and calls it fresh for a minute. */
+    function mountWithAppCache(cached: EnvironmentStatusResponseV13): Harness {
+      return mountOn(cached, createAppQueryClient());
+    }
+
+    it("shows the moving view, not the stopped view or Retry, until a status answers after the reopen", async () => {
+      const harness = mountWithAppCache(stoppedStatus("failed"));
+      openDialog();
+      await settle();
+      expect(screen.getByTestId("move-progress-dialog-stopped")).toBeTruthy();
+      closeDialog();
+      await settle();
+
+      let release = (): void => undefined;
+      harness.feed.hold = new Promise((resolve) => {
+        release = resolve;
+      });
+      openDialog();
+      await advance(10_000);
+
+      expect(screen.getByText("Moving Old laptop to Personal")).toBeTruthy();
+      expect(screen.queryByTestId("move-progress-dialog-stopped")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+
+      release();
+      await settle();
+
+      expect(screen.getByTestId("move-progress-dialog-stopped")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    });
+
+    it("keeps the moving view when this opening's first status read fails, until a later read answers", async () => {
+      const harness = mountWithAppCache(stoppedStatus("failed"));
+      openDialog();
+      await settle();
+      expect(screen.getByTestId("move-progress-dialog-stopped")).toBeTruthy();
+      closeDialog();
+      await settle();
+
+      let refuse = (): void => undefined;
+      harness.feed.hold = new Promise<void>((_resolve, reject) => {
+        refuse = () => reject(new Error("status read refused"));
+      });
+      openDialog();
+      await advance(10_000);
+      refuse();
+      await settle();
+
+      expect(screen.queryByTestId("move-progress-dialog-stopped")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+
+      harness.feed.hold = null;
+      await advance(5_000);
+
+      expect(screen.getByTestId("move-progress-dialog-stopped")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    });
+
+    it("shows neither the done view nor closes itself until a status answers after the reopen", async () => {
+      const harness = mountWithAppCache(movedStatus());
+      openDialog();
+      await settle();
+      expect(screen.getByTestId("move-progress-dialog-done")).toBeTruthy();
+      closeDialog();
+      await settle();
+
+      let release = (): void => undefined;
+      harness.feed.answer = movingStatus(1, 3);
+      harness.feed.hold = new Promise((resolve) => {
+        release = resolve;
+      });
+      openDialog();
+      await advance(10_000);
+
+      expect(screen.getByText("Moving Old laptop to Personal")).toBeTruthy();
+      expect(screen.queryByTestId("move-progress-dialog-done")).toBeNull();
+      expect(dialogIsGone()).toBe(false);
+
+      release();
+      await settle();
+
+      expect(screen.getByTestId("move-progress-dialog-progress")).toBeTruthy();
+      expect(screen.queryByTestId("move-progress-dialog-done")).toBeNull();
     });
   });
 
