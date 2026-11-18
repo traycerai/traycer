@@ -64,6 +64,8 @@ import {
   handTracyLandingToChannel,
   releaseTracyLanding,
   stageTracyLanding,
+  adoptLegacyActiveBotTab,
+  bindTracySurfaceToWindow,
   useTracySurfaceStore,
 } from "@/stores/bots/tracy-surface-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
@@ -333,6 +335,137 @@ describe("a bot notification activated while the tabs hydrate, once the surface 
     expect(onResult.mock.calls).toEqual([["success"]]);
     expect(navigateSpy).toHaveBeenCalledTimes(1);
     expect(landedMessages()).toEqual(["reply-1"]);
+  });
+});
+
+describe("a bot notification activated while the tabs hydrate, once the surface's host moved without a withdrawal", () => {
+  /** The surface's persisted records live in `localStorage` under the store's own key; nothing outlives the case. */
+  function isolatePersistence(): { readonly globalKey: string } {
+    const globalKey = useTracySurfaceStore.persist.getOptions().name;
+    if (globalKey === undefined) {
+      throw new Error("the surface store persists under no key");
+    }
+    onTestFinished(() => {
+      useTracySurfaceStore.persist.setOptions({ name: globalKey });
+      for (const key of Object.keys(localStorage)) {
+        if (key.startsWith(globalKey)) localStorage.removeItem(key);
+      }
+      useTracySurfaceStore.setState(
+        useTracySurfaceStore.getInitialState(),
+        true,
+      );
+    });
+    return { globalKey };
+  }
+
+  /** The surface finished adopting what the window stored. */
+  function hydrated(): Promise<unknown> {
+    return new Promise((resolve) => {
+      const unsubscribe = useTracySurfaceStore.persist.onFinishHydration(
+        (state) => {
+          unsubscribe();
+          resolve(state);
+        },
+      );
+    });
+  }
+
+  /** The bot's channel shows on the surface, as it does once the surface is open and the bot selected. */
+  function showChannel(): void {
+    act(() => {
+      useTracySurfaceStore.getState().openSurface(HOST_ID);
+      useTracySurfaceStore.getState().selectChannel(BOT_ID);
+    });
+  }
+
+  function expectOpeningRefused(
+    onResult: Mock<(outcome: "success" | "failure") => void>,
+  ): void {
+    expect(onResult.mock.calls).toEqual([["success"]]);
+    expect(navigateSpy).not.toHaveBeenCalled();
+    expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+  }
+
+  /** The channel shown afterwards has nothing of the refused opening to land. */
+  function expectChannelSpendsNothing(): void {
+    showChannel();
+    expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+    expect(navigateSpy).not.toHaveBeenCalled();
+  }
+
+  it("is refused when the tabs layout's migration puts the surface on the host its legacy bot tab was bound to", async () => {
+    const { globalKey } = isolatePersistence();
+    // A version-1 payload fills the migration's host map, as an older install's does.
+    localStorage.setItem(
+      globalKey,
+      JSON.stringify({
+        state: {
+          tabs: {
+            legacy: { botId: BOT_ID, hostId: "host-legacy", openedAt: 1 },
+          },
+          fixedBotId: BOT_ID,
+        },
+        version: 1,
+      }),
+    );
+    const migrated = hydrated();
+    void useTracySurfaceStore.persist.rehydrate();
+    await migrated;
+    useTracySurfaceStore.setState(useTracySurfaceStore.getInitialState(), true);
+    __resetTabNavigationHydrationForTesting();
+    const onResult = vi.fn<(outcome: "success" | "failure") => void>();
+    activate("reply-1", onResult);
+
+    act(() => {
+      adoptLegacyActiveBotTab(BOT_ID);
+    });
+    hydrate();
+
+    expectOpeningRefused(onResult);
+    expectChannelSpendsNothing();
+  });
+
+  it("is refused when the window binds to a stored record of its own that names another host", async () => {
+    const { globalKey } = isolatePersistence();
+    __resetTabNavigationHydrationForTesting();
+    const onResult = vi.fn<(outcome: "success" | "failure") => void>();
+    activate("reply-1", onResult);
+    localStorage.removeItem(globalKey);
+    localStorage.setItem(
+      `${globalKey}:window-b`,
+      JSON.stringify({
+        state: { open: true, hostId: "host-b", botId: null },
+        version: 2,
+      }),
+    );
+
+    const adopted = hydrated();
+    act(() => {
+      bindTracySurfaceToWindow("window-b");
+    });
+    await adopted;
+    hydrate();
+
+    expectOpeningRefused(onResult);
+    expect(useTracySurfaceStore.getState().botId).toBeNull();
+    expectChannelSpendsNothing();
+  });
+
+  it("is refused when the window binds with no record of its own and the surface is written closed", () => {
+    const { globalKey } = isolatePersistence();
+    __resetTabNavigationHydrationForTesting();
+    const onResult = vi.fn<(outcome: "success" | "failure") => void>();
+    activate("reply-1", onResult);
+    localStorage.removeItem(globalKey);
+
+    act(() => {
+      bindTracySurfaceToWindow("window-c");
+    });
+    hydrate();
+
+    expectOpeningRefused(onResult);
+    expect(useTracySurfaceStore.getState().botId).toBeNull();
+    expectChannelSpendsNothing();
   });
 });
 

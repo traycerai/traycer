@@ -1607,6 +1607,53 @@ describe("a landing on a thread's message while the tab reads its thread list", 
   });
 
   describe("of a chat the bot names", () => {
+    it("lands a landing on the channel's own chat on the exact message at once, while the host is not yet known to list threads", () => {
+      mocks.state.threadListSupport = null;
+      mocks.state.threadsHeld = false;
+      render(surface());
+
+      act(() => {
+        useBotTabLandingStore.getState().request(BOT_ID, {
+          kind: "chat",
+          chatId: MAIN,
+          messageId: "post-5",
+          sendPostId: null,
+        });
+      });
+
+      expect(landedOn()).toEqual({ ...NOWHERE, row: "post-5" });
+      expect(spent()).toBe(true);
+    });
+
+    it("still waits for the thread list when the chat it names is not the channel's, then lands once the list names it", () => {
+      mocks.state.threadListSupport = null;
+      mocks.state.threadsHeld = false;
+      const { rerender } = render(surface());
+
+      act(() => {
+        useBotTabLandingStore.getState().request(BOT_ID, {
+          kind: "chat",
+          chatId: "thread-1",
+          messageId: "reply-9",
+          sendPostId: null,
+        });
+      });
+      expect(landedOn()).toEqual(NOWHERE);
+      expect(spent()).toBe(false);
+
+      mocks.state.threadListSupport = true;
+      mocks.state.threadsHeld = true;
+      mocks.state.threads = [threadOf(MAIN, true)];
+      rerender(surface());
+
+      expect(landedOn()).toEqual({
+        row: "reply-9",
+        thread: "thread-1",
+        open: "post-7",
+      });
+      expect(spent()).toBe(true);
+    });
+
     it("still lands a thread's own chat on the exact message once the list names it", () => {
       mocks.state.threads = [threadOf(MAIN, true)];
       render(surface());

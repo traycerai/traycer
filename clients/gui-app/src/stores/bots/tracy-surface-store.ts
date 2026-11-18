@@ -228,6 +228,15 @@ const stagedLandings = new Map<string, BotTabLanding>();
  * How many times the surface has withdrawn its landings. An opening asked
  * for at one count has lost its landing at any later one, whether or not the
  * surface is on the same host again.
+ *
+ * Seven writes set the surface's host, and two of them withdraw: `rebind` to
+ * another host and `closeSurface`. Another account signing in withdraws too
+ * and writes no host. The other five move the host and withdraw nothing:
+ * `openSurface`, the store's own hydration, `adoptLegacyActiveBotTab`,
+ * `bindTracySurfaceToWindow` reading the window's record back,
+ * `bindTracySurfaceToWindow` writing the closed surface, and
+ * `settleTracySurfaceAdoption`. Whoever holds an opening across those
+ * compares `tracySurfaceHostId` as well as this count.
  */
 let landingsRetired = 0;
 
@@ -240,9 +249,10 @@ export function tracyLandingsRetired(): number {
  * channel's to spend. Each was asked for under one account, of one surface
  * host: once the account changes, the surface moves to another host or it
  * closes, a channel that shows or reads its thread list afterwards has
- * nothing of them to land.
+ * nothing of them to land. So does an opening of the surface that was held
+ * and then refused: the surface may still show its channel.
  */
-function retireTracyLandings(): void {
+export function retireTracyLandings(): void {
   landingsRetired += 1;
   stagedLandings.clear();
   useBotTabLandingStore.getState().clearAll();

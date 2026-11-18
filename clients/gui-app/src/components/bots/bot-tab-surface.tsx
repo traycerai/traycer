@@ -1614,14 +1614,16 @@ function useSpendTabLanding(args: {
       });
       return;
     }
-    if (threads === null) return;
-    useBotTabLandingStore.getState().clear(botId);
     const { messageId } = landing;
     const { chatId } = landing;
+    // The channel itself is known without the thread list.
     if (chatId === channelChatId) {
+      useBotTabLandingStore.getState().clear(botId);
       landChannel(messageId);
       return;
     }
+    if (threads === null) return;
+    useBotTabLandingStore.getState().clear(botId);
     if (threads.some((thread) => thread.threadId === chatId)) {
       showThread(chatId, messageId);
       return;

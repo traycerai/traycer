@@ -50,7 +50,9 @@ import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { HOME_TAB_REF, isHomePath } from "@/stores/tabs/kinds/home";
 import { isTracySurfaceOpen, TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
 import {
+  retireTracyLandings,
   tracyLandingsRetired,
+  tracySurfaceHostId,
   useTracySurfaceStore,
 } from "@/stores/bots/tracy-surface-store";
 import { isHomeTabEnabled } from "@/stores/layout/layout-store";
@@ -205,19 +207,39 @@ interface QueuedActivation {
   readonly intent: TabActivationIntent;
   readonly options: TabNavigationOptions | undefined;
   readonly tracyOrigin: StampedTracyOrigin | null;
-  /**
-   * How many times the Tracy surface had withdrawn its landings when an
-   * opening of it was asked for while the tabs were hydrating; null for any
-   * other opening. It runs once they are ready only if that count still
-   * stands: after another account signs in, or the surface moves to another
-   * host or closes, it was asked of something the app no longer shows, and
-   * the surface coming back to the same host does not bring its landing back.
-   */
-  readonly tracyAsk: number | null;
+  readonly tracyAsk: TracyAsk | null;
 }
 
-function tracyAskStands(ask: number | null): boolean {
-  return ask === null || ask === tracyLandingsRetired();
+/**
+ * What an opening of the Tracy surface was asked under while the tabs were
+ * hydrating. It runs once they are ready only if both still stand; otherwise
+ * it was asked of something the app no longer shows. The count moves each
+ * time the surface withdraws its landings (another account signs in, it
+ * moves to another host, it closes), so the surface coming back to the same
+ * host does not bring an opening's landing back. The host covers the writes
+ * that move the surface without withdrawing anything (`tracyLandingsRetired`
+ * names them).
+ */
+interface TracyAsk {
+  readonly landingsRetired: number;
+  readonly surfaceHostId: string | null;
+}
+
+function tracyAskOf(intent: TabActivationIntent): TracyAsk | null {
+  return intent.kind === "tracy"
+    ? {
+        landingsRetired: tracyLandingsRetired(),
+        surfaceHostId: tracySurfaceHostId(),
+      }
+    : null;
+}
+
+function tracyAskStands(ask: TracyAsk | null): boolean {
+  return (
+    ask === null ||
+    (ask.landingsRetired === tracyLandingsRetired() &&
+      ask.surfaceHostId === tracySurfaceHostId())
+  );
 }
 
 interface QueuedExternal {
@@ -802,7 +824,7 @@ export class TabNavigationController {
         intent,
         options,
         tracyOrigin,
-        tracyAsk: intent.kind === "tracy" ? tracyLandingsRetired() : null,
+        tracyAsk: tracyAskOf(intent),
       };
       this.notifyPendingListeners();
       superseded?.options?.onRejected?.(
@@ -1039,8 +1061,13 @@ export class TabNavigationController {
     this.queuedActivation = null;
     if (queuedActivation !== null) {
       this.notifyPendingListeners();
+      const stands = tracyAskStands(queuedActivation.tracyAsk);
+      // An opening that no longer stands takes its landing with it: the
+      // surface may still show that channel, which would spend it. Only one
+      // opening is ever held, so the count this raises refuses no other.
+      if (!stands) retireTracyLandings();
       const accepted =
-        tracyAskStands(queuedActivation.tracyAsk) &&
+        stands &&
         this.executeActivation(
           queuedActivation.navigate,
           queuedActivation.intent,
