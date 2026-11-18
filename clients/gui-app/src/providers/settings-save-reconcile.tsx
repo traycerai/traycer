@@ -5,14 +5,16 @@ import {
   type ReactNode,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { subscribeHostRowChanged } from "@traycer-clients/shared/host-client/host-connection-registry";
 import {
   hasBorrowableRemoteSession,
   subscribeRemoteSessionReadiness,
 } from "@traycer-clients/shared/host-transport/remote/index";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
-import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
-import { useHostBinding } from "@/lib/host";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import { servesOverLocalSocket } from "@/lib/host/host-messenger";
 import type { SettingsSaveCoordinator } from "@/lib/environment/settings-save-coordinator";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsSaveMemoryStore } from "@/stores/settings/settings-save-memory-store";
@@ -31,17 +33,37 @@ function useBorrowableRemoteSession(hostId: string): boolean {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
+/**
+ * Whether the transport serves `hostId` over the local socket, read from the
+ * same row it routes by. Reading it opens nothing.
+ */
+function useServedOverLocalSocket(
+  client: HostClient<HostRpcRegistry> | null,
+  hostId: string,
+): boolean {
+  const subscribe = useCallback(
+    (onStoreChange: () => void) =>
+      subscribeHostRowChanged(hostId, onStoreChange),
+    [hostId],
+  );
+  const getSnapshot = useCallback(() => {
+    const entry = client === null ? null : client.resolveHostById(hostId);
+    return entry !== null && servesOverLocalSocket(entry);
+  }, [client, hostId]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
 /** Nothing here opens or dials a connection: a host the window is not connected to waits. */
 function HostReconcile(props: {
   readonly hostId: string;
-  readonly localHostId: string | null;
   readonly coordinator: SettingsSaveCoordinator;
 }): null {
-  const { hostId, localHostId, coordinator } = props;
-  const isLocal = hostId === localHostId;
+  const { hostId, coordinator } = props;
   // A requester and its readiness read the directory row; neither dials.
+  const client = useHostClientForHostId(hostId);
+  const isLocal = useServedOverLocalSocket(client, hostId);
   const localReady = useReactiveHostReadiness(
-    useHostClientForHostId(isLocal ? hostId : null),
+    isLocal ? client : null,
   ).canExecute;
   const remoteHeld = useBorrowableRemoteSession(hostId);
   const connected = isLocal ? localReady : remoteHeld;
@@ -60,7 +82,6 @@ function HostReconcile(props: {
 export function SettingsSaveReconcile(props: {
   readonly coordinator: SettingsSaveCoordinator;
 }): ReactNode {
-  const localHostId = useReactiveLocalHostId();
   const hostIds = useSettingsSaveMemoryStore(
     useShallow((state) =>
       [
@@ -72,7 +93,6 @@ export function SettingsSaveReconcile(props: {
     <HostReconcile
       key={hostId}
       hostId={hostId}
-      localHostId={localHostId}
       coordinator={props.coordinator}
     />
   ));
