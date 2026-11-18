@@ -219,7 +219,11 @@ function MoveSheetBody(props: {
     .map((host) => host.name);
   // Who the settings reach is said, and the plan offered, only once the
   // host list has answered: an unread list is not "no other computer".
-  const shownPlan = planOnceReachKnown(runningPersonal, plan.data, plan.isError);
+  const shownPlan = planOnceReachKnown(
+    runningPersonal,
+    plan.data,
+    plan.isError,
+  );
   const environmentId = personal.environmentId;
   const versionDiffers = disclosureDiffers(shownPlan);
   return (

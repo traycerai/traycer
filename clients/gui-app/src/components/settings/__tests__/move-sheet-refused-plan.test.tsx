@@ -19,6 +19,7 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import type { EnvironmentStatusResponseV13 } from "@traycer/protocol/host/environment-schemas";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import type {
@@ -133,7 +134,7 @@ const FRESH_PLAN = planOf("hash-fresh", [
   "FRESH_THREE",
 ]);
 
-function planRefusal(code: string, message: string): HostRpcError {
+function planRefusal(code: RpcErrorCode, message: string): HostRpcError {
   return new HostRpcError({
     code,
     message,
