@@ -1,4 +1,3 @@
-import { ownValue } from "@/lib/own-value";
 /**
  * Display labels for the open-string and closed-enum fields on an event row.
  *
@@ -8,6 +7,7 @@ import { ownValue } from "@/lib/own-value";
  * knows and falls back to the RAW STRING; it may never become an exhaustive
  * match, and may never drop a row.
  */
+import { ownValue } from "@/lib/own-value";
 
 const NOTICE_REASON_LABELS: Readonly<Record<string, string>> = {
   "turn-ended": "Turn ended",

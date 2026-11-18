@@ -1,4 +1,3 @@
-import { ownValue } from "@/lib/own-value";
 /**
  * Categorical color assignment for the per-day chart's harness/model
  * breakdown.
@@ -18,6 +17,8 @@ import { ownValue } from "@/lib/own-value";
  * a seventeenth color - a generated color is indistinguishable from an
  * existing one under CVD and breaks every validated-palette check.
  */
+import { ownValue } from "@/lib/own-value";
+
 export const USAGE_SERIES_SLOT_COUNT = 16;
 export const USAGE_SERIES_OTHER_KEY = "__usage_series_other__";
 
