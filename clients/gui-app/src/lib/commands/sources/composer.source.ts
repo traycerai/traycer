@@ -358,9 +358,10 @@ function useFocusedComposerCatalog(): GuiHarnessCatalog {
  * probe that never consults auth, so a provider whose account is signed out
  * was offered here indistinguishably from a live one.
  *
- * The signed-out verdict is the row-carried `authStatus`, as the rail reads it;
- * absent on a host below `agent.gui.listHarnesses@7.1`, where both subpages
- * look as before. Only the signed-in managed profile exception (see
+ * The signed-out verdict is the row-carried `authStatus`, as the rail reads it.
+ * On a host below `agent.gui.listHarnesses@7.1` the field is absent, the
+ * predicate is false for every row, and both subpages look exactly as they do
+ * today. Only the signed-in managed profile exception (see
  * {@link providerSignedOutInPalette}) reads `providers.list`.
  */
 function providerOfferableInPalette(provider: HarnessOption): boolean {
