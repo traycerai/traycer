@@ -135,8 +135,7 @@ function controlFlowRejection(
   );
 }
 
-const ENVIRONMENT_MANAGED_LINE =
-  "This account is managed by your environment — sign in there.";
+const ENVIRONMENT_MANAGED_LINE = "Managed by your environment — sign in there.";
 
 /**
  * The host's refusal of an environment-held account, as the real boundary mints

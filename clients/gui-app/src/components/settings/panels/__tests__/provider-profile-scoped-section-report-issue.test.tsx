@@ -212,14 +212,12 @@ describe("<ProviderProfileScopedSection /> sign-in failure report action", () =>
     renderSection({
       failedAttempt: {
         providerId: "opencode",
-        message: "This account is managed by your environment — sign in there.",
+        message: "Managed by your environment — sign in there.",
         hostSentence: true,
       },
     });
 
-    screen.getByText(
-      "This account is managed by your environment — sign in there.",
-    );
+    screen.getByText("Managed by your environment — sign in there.");
     expect(screen.queryByText(/Sign-in did not finish for/)).toBeNull();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
