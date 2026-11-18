@@ -145,6 +145,31 @@ describe("Add a profile around one sign-in", () => {
     expect(signInFetchFor(harness).fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("shows the waiting result, not did-not-finish, when the computer has no outcome yet for the recorded sign-in", async () => {
+    const harness = renderAddFlow({
+      ...ADD_FLOW_DEFAULTS,
+      offers: true,
+      profilesBefore: [],
+      profilesAfter: [],
+      outcome: null,
+      awaitAnswers: [asksToRecordSignIn(), nothingChanged(null)],
+    });
+    signInFetchFor(harness).enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+    await pressAccount();
+
+    expect(await screen.findByText(WAITING)).toBeTruthy();
+    expect(screen.queryByText(DID_NOT_FINISH)).toBeNull();
+    expectNoSuccessSentence();
+    const awaitRequests = harness.messenger.calls
+      .filter((call) => call.method === "providers.awaitLogin")
+      .map((call) => call.params);
+    expect(awaitRequests).toHaveLength(2);
+    expect(awaitRequests[1]).toMatchObject({
+      recordedOperationId: SIGN_IN_REQUEST_FIXTURE.operationId,
+    });
+    expect(signInFetchFor(harness).fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     { name: "a 403", reply: FORBIDDEN_SIGN_IN_REQUEST_REPLY },
     { name: "a 404", reply: ENVIRONMENT_NOT_FOUND_SIGN_IN_REQUEST_REPLY },
