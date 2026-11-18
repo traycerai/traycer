@@ -1,3 +1,4 @@
+import { BOT_PROFILE_CHOICE_MESSAGE } from "@/lib/bots/bot-profile-choice";
 import {
   useContext,
   useEffect,
@@ -12,6 +13,7 @@ import { X } from "lucide-react";
 import type {
   BotNotificationLevel,
   BotRecord,
+  BotDirectoryRecord,
   BotReplyMode,
 } from "@traycer/protocol/host/bot/schemas";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
@@ -65,6 +67,7 @@ import {
 } from "@/components/bots/bot-memory-context";
 import { useBotMemory } from "@/hooks/bots/use-bot-memory";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
+import { useBotMayChange } from "@/hooks/bots/use-bot-may-change";
 
 const BOT_TITLE_MAX = 500;
 
@@ -87,16 +90,20 @@ const BOT_TITLE_MAX = 500;
  *   pane the bot's card opens (decision 148);
  * - deleting the bot, behind a confirmation.
  *
- * Every write goes through the tab host's client - the host `bot.open` chose
- * to serve the tab - with nothing gated on which host that is: a host that
- * cannot make the change refuses it, and the refusal is shown in place,
- * under the control. The stream snapshot, not the mutation's answer, is what
- * the header re-renders from.
+ * The Model group and Delete are drawn only when `mayChange`; nothing stands in their place for a
+ * Viewer. The model, reply mode and delete are the app's own server calls on the person's sign-in
+ * and need no host. Every other write goes through the tab host's
+ * client - the host `bot.open` chose to serve the tab - with nothing gated on
+ * which host that is. A refusal is shown in place, under the control, as it
+ * is when the reader's role changed after the panel opened. The stream
+ * snapshot, not the mutation's answer, is what the header re-renders from (a
+ * direct write lays its answer over that snapshot).
  */
 export function BotChannelSettingsPanel(props: {
-  readonly bot: BotRecord;
+  readonly bot: BotDirectoryRecord;
   /** Whether the bot is a personal environment's; a team's always answers in threads. */
   readonly personal: boolean;
+  readonly mayChange: boolean;
   /** The bot's channel, whose notification level the panel sets; `null` from a host that names none. */
   readonly channelId: string | null;
   /** The bots of the bot's environment; `null` until the list answers. */
@@ -105,7 +112,8 @@ export function BotChannelSettingsPanel(props: {
   /** The bot was deleted: the surface moves to its default channel. */
   readonly onDeleted: () => void;
 }): ReactNode {
-  const { bot, personal, channelId, environmentBots, onClose } = props;
+  const { bot, personal, mayChange, channelId, environmentBots, onClose } =
+    props;
   const panelRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
   // Opening the panel takes focus into it, and Escape inside it closes it.
@@ -160,7 +168,7 @@ export function BotChannelSettingsPanel(props: {
           {personal ? <BotReplyModeSection bot={bot} /> : null}
           {personal ? null : <BotTeamMembers />}
         </SettingsGroup>
-        <BotRunSettingsForm bot={bot} />
+        {mayChange ? <BotRunSettingsForm bot={bot} /> : null}
         <BotCallVoiceGroup />
         {channelId === null ? null : (
           <BotNotificationsSection botId={bot.botId} channelId={channelId} />
@@ -168,9 +176,11 @@ export function BotChannelSettingsPanel(props: {
         {personal || environmentBots === null ? null : (
           <BotsInChannel bots={environmentBots} />
         )}
-        <BotSlackSettings botId={bot.botId} />
+        <BotSlackSettings botId={bot.botId} environmentId={bot.environmentId} />
         <BotUsageSection bot={bot} onClose={onClose} />
-        <BotDeleteSection bot={bot} onDeleted={props.onDeleted} />
+        {mayChange ? (
+          <BotDeleteSection bot={bot} onDeleted={props.onDeleted} />
+        ) : null}
       </div>
     </aside>
   );
@@ -583,11 +593,16 @@ function BotTitleForm(props: { readonly bot: BotRecord }): ReactNode {
   );
 }
 
-function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
+/**
+ * Applied by the app's own server call, so it needs no host.
+ */
+function BotRunSettingsForm(props: {
+  readonly bot: BotDirectoryRecord;
+}): ReactNode {
   const { bot } = props;
   const client = useTabHostClient();
   const hostId = useTabHostId();
-  const update = useBotUpdateRunSettingsMutation(client);
+  const update = useBotUpdateRunSettingsMutation();
   // The picker opens on what the bot RUNS, not on the app default: seeded
   // from the bot row's harness, model, effort and profile, so Apply has
   // nothing to apply until the person changes something. Permission and
@@ -638,6 +653,11 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
     !unchanged && selection.modelSlug.length > 0 && !update.isPending;
   return (
     <SettingsGroup title="Model" testId="bot-settings-model">
+      <BotSettingsRefusal
+        message={
+          bot.profileChoice === "ambiguous" ? BOT_PROFILE_CHOICE_MESSAGE : null
+        }
+      />
       <p className="text-ui-xs text-muted-foreground">
         The next turn uses what you apply here.
       </p>
@@ -709,18 +729,17 @@ const REPLY_MODE_OPTIONS: ReadonlyArray<{
 ];
 
 /**
- * How the bot answers a post: drawn for a personal environment's bot
- * only, where the tab's host can write it. A pick applies to the next post.
+ * How the bot answers a post: drawn for a personal environment's bot only,
+ * and only to a person whose role may change the bot's environment. The
+ * pick is the app's own call to the server, so it needs no host; it applies
+ * to the next post.
  */
 function BotReplyModeSection(props: { readonly bot: BotRecord }): ReactNode {
   const { bot } = props;
-  const client = useTabHostClient();
-  const hostId = useTabHostId();
-  const supported =
-    useHostMethodSupport(hostId, "bot.updateReplyMode") === true;
-  const update = useBotUpdateReplyModeMutation(client);
+  const update = useBotUpdateReplyModeMutation();
+  const mayChange = useBotMayChange(bot.environmentId);
   const groupId = useId();
-  if (!supported) return null;
+  if (!mayChange) return null;
   return (
     <section
       className="flex flex-col gap-2"
@@ -794,8 +813,7 @@ function BotDeleteSection(props: {
   readonly onDeleted: () => void;
 }): ReactNode {
   const { bot, onDeleted } = props;
-  const client = useTabHostClient();
-  const remove = useBotDeleteMutation(client);
+  const remove = useBotDeleteMutation();
   const [open, setOpen] = useState(false);
   return (
     <section
@@ -832,7 +850,9 @@ function BotDeleteSection(props: {
           remove.mutate(
             { botId: bot.botId },
             {
-              onSuccess: () => {
+              // `null`: the sign-in it was pressed under has ended; an abandoned delete moves nothing.
+              onSuccess: (answer) => {
+                if (answer === null) return;
                 setOpen(false);
                 onDeleted();
               },

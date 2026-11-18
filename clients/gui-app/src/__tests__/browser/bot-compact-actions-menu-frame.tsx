@@ -16,11 +16,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
 import { MobileBotHeaderSlotProvider } from "@/components/layout/header/mobile-bot-header-slot";
-import {
-  HostRuntimeProvider,
-  hostRpcRegistry,
-  useHostBinding,
-} from "@/lib/host";
+import { HostRuntimeProvider, hostRpcRegistry } from "@/lib/host";
 import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
 import { BotDraftsPersistLifecycleBridge } from "@/providers/bot-drafts-persist-lifecycle-bridge";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -34,44 +30,15 @@ import "@/index.css";
 import {
   messengerFactory,
   queryClient,
-  requestContext,
   runnerHost,
-  USER_ID,
+  storedSession,
   windowsBridgeValue,
 } from "./bot-compact-actions-menu-host";
 
-/** Holds the page back until the host client has its request context. */
-function RequestContextGate(props: {
-  readonly children: ReactNode;
-}): ReactNode {
-  const binding = useHostBinding();
-  const [ready, setReady] = useState(false);
-  useEffect(() => {
-    if (ready || binding === null) return;
-    const unsubscribe = binding.hostClient.onChange(() => setReady(true));
-    binding.hostClient.setRequestContext(requestContext);
-    return unsubscribe;
-  }, [binding, ready]);
-  return ready ? props.children : null;
-}
-
-function SignedIn(props: { readonly children: ReactNode }): ReactElement {
+function SignedIn(props: { readonly children: ReactNode }): ReactNode {
   const authStatus = useAuthStore((state) => state.status);
-  useEffect(() => {
-    if (authStatus === "signed-in") return;
-    useAuthStore.getState().setSignedIn(
-      {
-        userId: USER_ID,
-        userName: "Fixture User",
-        email: "compact-actions-menu@example.invalid",
-      },
-      { userId: USER_ID, username: "Fixture User" },
-      [],
-    );
-  }, [authStatus]);
-  return <>{props.children}</>;
+  return authStatus === "signed-in" ? props.children : null;
 }
-
 /** Marks the first commit of what it holds, for a sampler that starts there. */
 function CommitMarker(): null {
   useLayoutEffect(() => {
@@ -128,9 +95,7 @@ function buildRouter(content: ReactElement) {
               <TooltipProvider>
                 <SignedIn>
                   <BotDraftsPersistLifecycleBridge>
-                    <RequestContextGate>
-                      <FixtureFrame>{content}</FixtureFrame>
-                    </RequestContextGate>
+                    <FixtureFrame>{content}</FixtureFrame>
                   </BotDraftsPersistLifecycleBridge>
                 </SignedIn>
               </TooltipProvider>
@@ -154,7 +119,17 @@ function buildRouter(content: ReactElement) {
 /** The fixture app with `children` as the tab, over the fake host. */
 export function FixtureApp(props: {
   readonly children: ReactElement;
-}): ReactElement {
+}): ReactElement | null {
   const [router] = useState(() => buildRouter(props.children));
-  return <RouterProvider router={router} />;
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let disposed = false;
+    void storedSession.then(() => {
+      if (!disposed) setReady(true);
+    });
+    return () => {
+      disposed = true;
+    };
+  }, []);
+  return ready ? <RouterProvider router={router} /> : null;
 }

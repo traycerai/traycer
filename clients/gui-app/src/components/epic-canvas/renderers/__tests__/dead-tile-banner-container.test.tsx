@@ -185,6 +185,7 @@ const sandboxHookSources = vi.hoisted(
       configurations: [{ kind: "personal" }],
       teamEnvironmentIds: new Set<string>(),
       complete: true,
+      personalEnvironmentId: null,
     },
     hostEntry: null,
     sampledNow: 0,
@@ -413,6 +414,7 @@ afterEach(() => {
     configurations: [{ kind: "personal" }],
     teamEnvironmentIds: new Set<string>(),
     complete: true,
+    personalEnvironmentId: null,
   };
   sandboxHookSources.hostEntry = null;
   sandboxHookSources.sampledNow = 0;

@@ -3920,6 +3920,61 @@ describe("useRenderedMessages", () => {
     expect(group.hasLaterOverlappingChanges).toBe(true);
   });
 
+  it("bundles each html and canvas artifact's changed files into one entry and drops a no-op member", () => {
+    const tagged = (
+      filePath: string,
+      artifact: { artifactId: string; kind: "html" | "canvas"; title: string },
+      hashes: { beforeHash: string; afterHash: string },
+    ) => ({
+      filePath,
+      operation: "edit" as const,
+      ...hashes,
+      undoable: true,
+      reason: null,
+      artifact,
+    });
+    const cart = { artifactId: "html-1", kind: "html", title: "Cart" } as const;
+    const board = {
+      artifactId: "canvas-1",
+      kind: "canvas",
+      title: "Board",
+    } as const;
+    const changed = { beforeHash: "before", afterHash: "after" };
+    const manifest: TurnCheckpointManifest = {
+      ...checkpointManifest("turn-1", "/repo/unused"),
+      entries: [
+        tagged("/repo/cart/index.html", cart, changed),
+        tagged("/repo/board/canvas.json", board, changed),
+        tagged("/repo/cart/style.css", cart, changed),
+        tagged("/repo/board/touched.md", board, {
+          beforeHash: "same",
+          afterHash: "same",
+        }),
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [assistantMessage("turn-1", 2000)],
+      events: [checkpointEvent(manifest)],
+    });
+
+    const segments = result.current[0]?.segments ?? [];
+    const group = segments[segments.length - 1];
+    if (group.kind !== "file_change_group") {
+      throw new Error("expected file change group");
+    }
+    expect(
+      group.artifacts.map((entry) =>
+        entry.kind === "bundle"
+          ? [entry.artifactId, entry.members.length]
+          : entry.item.filePath,
+      ),
+    ).toEqual([
+      ["html-1", 2],
+      ["canvas-1", 1],
+    ]);
+  });
+
   it("detects a later overlapping change across an intervening unrelated turn", () => {
     // turn-1 edits app.ts, turn-2 edits an unrelated file, turn-3 edits app.ts
     // again. The overlap for turn-1 is non-adjacent (it is separated from the
@@ -8103,7 +8158,7 @@ describe("useRenderedMessages: object artifact creation cards", () => {
     blockId: string,
     timestamp: number,
     kind: "html" | "canvas" | "spec",
-    operation: "create" | "update",
+    operation: "create" | "update" | "delete",
   ): AssistantBlock {
     return {
       type: "artifact_operation",
@@ -8153,15 +8208,25 @@ describe("useRenderedMessages: object artifact creation cards", () => {
     ).toEqual(["command", "card:html", "card:canvas", "text:Done"]);
   });
 
-  it("leaves non-object and non-create cards in place", () => {
+  it("leaves non-object cards and object deletions in place", () => {
     expect(
       segmentOrder([
         commandBlockAt("c1", 2001),
-        plainTextBlock("t1", 2002, "Done"),
+        plainTextBlock("t1", 2005, "Done"),
         artifactBlockAt("a1", 2003, "spec", "create"),
-        artifactBlockAt("a2", 2004, "html", "update"),
+        artifactBlockAt("a2", 2002, "html", "delete"),
       ]),
     ).toEqual(["command", "text:Done", "card:spec", "card:html"]);
+  });
+
+  it("places an HTML update card emitted at turn end beside the activity that wrote it", () => {
+    expect(
+      segmentOrder([
+        commandBlockAt("c1", 2001),
+        plainTextBlock("t1", 2005, "Done"),
+        artifactBlockAt("a1", 2002, "html", "update"),
+      ]),
+    ).toEqual(["command", "card:html", "text:Done"]);
   });
 
   function readToolBlockAt(

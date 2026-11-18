@@ -35,6 +35,13 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     harness.methods.has(method),
 }));
 
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-me",
+}));
+
 vi.mock("@/hooks/auto-mode/use-auto-policy-query", () => ({
   useAutoPolicyQuery: () => harness.policy ?? { data: undefined },
 }));
@@ -43,20 +50,28 @@ import {
   advanceLegendListTime,
   installLegendListTestClock,
 } from "@/components/chat/__tests__/legend-list-test-environment";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
 import { act, cleanup, render, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type {
   EnvironmentSecretV12,
   EnvironmentSecretsRotationResponse,
 } from "@traycer/protocol/host/environment-schemas";
+import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
 import {
-  buildEnvironmentClient,
+  buildEnvironmentClient as buildHostEnvironmentClient,
   environmentStatusFixture,
+  type EnvironmentClientFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
+import {
+  mountTeamPage,
+  personalPoolSource,
+  resetTeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import {
   __resetSupportContextRegistryForTests,
   getSupportEnvironmentSection,
@@ -128,17 +143,62 @@ const NEVER: Promise<never> = new Promise(() => undefined);
 
 let queryClient: QueryClient;
 
+const handlersByClient = new WeakMap<
+  HostClient<HostRpcRegistry>,
+  MockHandlerMap<HostRpcRegistry>
+>();
+
+function buildBridgeClient(options: {
+  readonly hostId: string;
+  readonly handlers: MockHandlerMap<HostRpcRegistry>;
+}): EnvironmentClientFixture {
+  const built = buildHostEnvironmentClient(options);
+  handlersByClient.set(built.client, options.handlers);
+  return built;
+}
+
 function mountBridge(client: HostClient<HostRpcRegistry>): {
   readonly rerender: () => void;
 } {
   harness.client = client;
-  queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+  const handlers = handlersByClient.get(client);
+  if (handlers === undefined) {
+    throw new Error("the support bridge client has no registered handlers");
+  }
+  const environment = mountTeamPage(personalPoolSource(), {
+    "environment.list": () => ({
+      environments: [
+        {
+          environmentId: "env-personal",
+          ownerKind: "user",
+          ownerId: "user-me",
+          roomId: "room-personal",
+          label: "Personal",
+          effectiveRole: "owner",
+          kind: "personal",
+          hostCount: 1,
+          providerHandle: null,
+        },
+        {
+          environmentId: "env-team",
+          ownerKind: "organization",
+          ownerId: "team-a",
+          roomId: "room-team",
+          label: "Acme",
+          effectiveRole: "owner",
+          kind: "team",
+          hostCount: 1,
+          providerHandle: "acme",
+        },
+      ],
+    }),
+    ...handlers,
   });
+  queryClient = environment.queryClient;
   const tree = (): ReactNode => (
-    <QueryClientProvider client={queryClient}>
+    <environment.Wrapper>
       <SupportEnvironmentBridge />
-    </QueryClientProvider>
+    </environment.Wrapper>
   );
   const view = render(tree());
   return { rerender: () => view.rerender(tree()) };
@@ -172,6 +232,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  resetTeamPageHarness();
   __resetSupportContextRegistryForTests();
 });
 
@@ -179,7 +240,7 @@ describe("SupportEnvironmentBridge's states", () => {
   it("is unavailable, not the last host's section, until the selected host has answered", async () => {
     supportAll();
     setSupportEnvironmentSection(knownField(EARLIER_HOST_SECTION));
-    const { client } = buildEnvironmentClient({
+    const { client } = buildBridgeClient({
       hostId: "host-env",
       handlers: { "environment.status": () => NEVER },
     });
@@ -194,7 +255,7 @@ describe("SupportEnvironmentBridge's states", () => {
   it("is unavailable when the window has no host at all", async () => {
     harness.hostId = null;
     setSupportEnvironmentSection(knownField(EARLIER_HOST_SECTION));
-    const { client } = buildEnvironmentClient({ hostId: "x", handlers: {} });
+    const { client } = buildBridgeClient({ hostId: "x", handlers: {} });
 
     mountBridge(client);
 
@@ -206,7 +267,7 @@ describe("SupportEnvironmentBridge's states", () => {
   it("keeps the last answer, labelled stale, when the host stops answering", async () => {
     supportAll();
     let fail = false;
-    const { client } = buildEnvironmentClient({
+    const { client } = buildBridgeClient({
       hostId: "host-env",
       handlers: {
         "environment.status": () => {
@@ -236,7 +297,7 @@ describe("SupportEnvironmentBridge's states", () => {
 
   it("never carries the previous host's section after the selection moves", async () => {
     supportAll();
-    const first = buildEnvironmentClient({
+    const first = buildBridgeClient({
       hostId: "host-a",
       handlers: {
         "environment.status": () =>
@@ -251,7 +312,7 @@ describe("SupportEnvironmentBridge's states", () => {
       expect(knownSection().hostId).toBe("host-a");
     });
 
-    const second = buildEnvironmentClient({
+    const second = buildBridgeClient({
       hostId: "host-b",
       handlers: { "environment.status": () => NEVER },
     });
@@ -266,19 +327,42 @@ describe("SupportEnvironmentBridge's states", () => {
 
   it("starts the new host's rotations from nothing, whichever secret ids the two hosts share", async () => {
     supportAll();
-    const first = buildEnvironmentClient({
+    const teamHost: EnvironmentHostRecordV12 = {
+      hostId: "host-b",
+      hostLabel: "host-b",
+      hostPlatform: "linux",
+      enrolledByUserId: "user-me",
+      kind: "personal",
+      boundAt: 1,
+      reachable: true,
+      lastReportedAt: 1,
+      hasLocalRow: false,
+      applied: [],
+    };
+    let secondHostRotationReads = 0;
+    const first = buildBridgeClient({
       hostId: "host-a",
       handlers: {
-        "environment.status": () => environmentStatusFixture({}),
+        "environment.status": () =>
+          environmentStatusFixture({ principal: { kind: "personal" } }),
         "environment.setup.attempts": () => ({ attempts: [] }),
+        "environment.host.list": (request) => ({
+          hosts: request.environmentId === "env-team" ? [teamHost] : [],
+        }),
         "environment.secrets.list": () => ({
           removed: [],
           secrets: [secret("sec-1", "STRIPE_KEY")],
         }),
-        "environment.secrets.rotation": () => ({
-          rotation: rotation("enforced", true),
-          lastVerify: null,
-        }),
+        "environment.secrets.rotation": (request) => {
+          if (request.environmentId === "env-team") {
+            secondHostRotationReads += 1;
+            return NEVER;
+          }
+          return {
+            rotation: rotation("enforced", true),
+            lastVerify: null,
+          };
+        },
       },
     });
     harness.hostId = "host-a";
@@ -287,16 +371,14 @@ describe("SupportEnvironmentBridge's states", () => {
       expect(knownSection().rotations).toHaveLength(1);
     });
 
-    const second = buildEnvironmentClient({
+    const second = buildHostEnvironmentClient({
       hostId: "host-b",
       handlers: {
-        "environment.status": () => environmentStatusFixture({}),
+        "environment.status": () =>
+          environmentStatusFixture({
+            principal: { kind: "team", teamName: "Acme" },
+          }),
         "environment.setup.attempts": () => ({ attempts: [] }),
-        "environment.secrets.list": () => ({
-          removed: [],
-          secrets: [secret("sec-1", "STRIPE_KEY")],
-        }),
-        "environment.secrets.rotation": () => NEVER,
       },
     });
     harness.hostId = "host-b";
@@ -306,7 +388,10 @@ describe("SupportEnvironmentBridge's states", () => {
     await waitFor(() => {
       expect(knownSection().hostId).toBe("host-b");
     });
-    expect(knownSection().rotations).toEqual([]);
+    await waitFor(() => {
+      expect(secondHostRotationReads).toBeGreaterThan(0);
+      expect(knownSection().rotations).toEqual([]);
+    });
   });
 
   it("asks a host that lacks environment.status for nothing else", async () => {
@@ -315,7 +400,7 @@ describe("SupportEnvironmentBridge's states", () => {
     harness.methods.add("environment.secrets.list");
     let attempts = 0;
     let listed = 0;
-    const { client } = buildEnvironmentClient({
+    const { client } = buildBridgeClient({
       hostId: "host-env",
       handlers: {
         "environment.setup.attempts": () => {
@@ -341,7 +426,7 @@ describe("SupportEnvironmentBridge's states", () => {
 
   it("has no rotations to report until the secrets have been listed", async () => {
     supportAll();
-    const { client } = buildEnvironmentClient({
+    const { client } = buildBridgeClient({
       hostId: "host-env",
       handlers: {
         "environment.status": () => environmentStatusFixture({}),
@@ -369,7 +454,7 @@ describe("SupportEnvironmentBridge's states", () => {
         readState: "stale",
       },
     };
-    const { client } = buildEnvironmentClient({
+    const { client } = buildBridgeClient({
       hostId: "host-env",
       handlers: {
         "environment.status": () => environmentStatusFixture({}),
@@ -409,7 +494,7 @@ describe("SupportEnvironmentBridge's states", () => {
           team,
         },
       };
-      const { client } = buildEnvironmentClient({
+      const { client } = buildBridgeClient({
         hostId: "host-env",
         handlers: {
           "environment.status": () => environmentStatusFixture({}),
@@ -444,7 +529,7 @@ describe("SupportEnvironmentBridge's states", () => {
         team: null,
       },
     };
-    const { client } = buildEnvironmentClient({
+    const { client } = buildBridgeClient({
       hostId: "host-env",
       handlers: {
         "environment.status": () => environmentStatusFixture({}),
@@ -468,7 +553,7 @@ describe("SupportEnvironmentBridge's states", () => {
   it("drops a secret from the section when the list no longer has it", async () => {
     supportAll();
     let secrets = [secret("sec-1", "STRIPE_KEY"), secret("sec-2", "GH_TOKEN")];
-    const { client } = buildEnvironmentClient({
+    const { client } = buildBridgeClient({
       hostId: "host-env",
       handlers: {
         "environment.status": () => environmentStatusFixture({}),
@@ -506,7 +591,7 @@ describe("SupportEnvironmentBridge's rotation reads", () => {
     readonly reads: () => number;
   } {
     let reads = 0;
-    const { client } = buildEnvironmentClient({
+    const { client } = buildBridgeClient({
       hostId: "host-env",
       handlers: {
         "environment.status": () => environmentStatusFixture({}),
@@ -529,12 +614,24 @@ describe("SupportEnvironmentBridge's rotation reads", () => {
     return { client, reads: () => reads };
   }
 
+  async function waitForInitialRotationRead(
+    reads: () => number,
+  ): Promise<void> {
+    for (let turn = 0; turn < 20 && reads() === 0; turn += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+    }
+    expect(reads()).toBe(1);
+  }
+
   it("re-reads a rotation that is still moving", async () => {
     supportAll();
     const host = rotationHost(false);
     vi.useFakeTimers();
 
     mountBridge(host.client);
+    await waitForInitialRotationRead(host.reads);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(8_000);
     });
@@ -548,6 +645,7 @@ describe("SupportEnvironmentBridge's rotation reads", () => {
     vi.useFakeTimers();
 
     mountBridge(host.client);
+    await waitForInitialRotationRead(host.reads);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });

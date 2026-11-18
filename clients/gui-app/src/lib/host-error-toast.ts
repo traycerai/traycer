@@ -5,11 +5,25 @@ import {
   isTransientHostRpcFailure,
   RetryableTransportError,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import { NEEDS_PERMISSION_MESSAGE } from "@traycer-clients/shared/environment/environment-cloud";
 import { toast } from "sonner";
+import { HostBelowMinimumError } from "@/lib/host/host-below-minimum-error";
+import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
+import { readHostDirectoryEntry } from "@traycer-clients/shared/host-client/host-connection-registry";
+import {
+  hostDirectoryEntryNeedsUpdate,
+  MINIMUM_HOST_VERSION,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
+import { readDoorReason } from "@traycer/protocol/framework/door-reason";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import { isCredentialRefusal } from "@traycer/protocol/host-transport/door-refusal";
+import { hostRefusalOf } from "@traycer-clients/shared/host-transport/host-door-state";
 import { staleWriteOfHostError } from "@/lib/environment/stale-write";
 import { showStaleWriteNotice } from "@/lib/environment/write-outcome";
 import { emitHostErrorNotification } from "@/stores/notifications/app-local-notifications-store";
 import { useAuthStore, type CloudVerdictLoss } from "@/stores/auth/auth-store";
+import { isDoorCoverDrawn } from "@/stores/host/drawn-door-cover-store";
+import { hostOfFailedCall } from "@/lib/host/refused-host";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
@@ -17,6 +31,7 @@ import {
   type EpicShareRefusal,
   type EpicSharePromotionPendingReason,
 } from "@traycer/protocol/host/epic/share-refusal";
+import { REMOVED_PROFILE_PIN_TEXT } from "@/components/providers/profile-sync-copy";
 
 /**
  * One stable id for every PRE-SEND transport notice, across every call site.
@@ -238,7 +253,8 @@ export function toastUnknownOutcomeAfterRefusedRetry(
   fallback: string,
 ): void {
   const guidance =
-    finalRefusal.code === "E_IDEMPOTENCY_OUTCOME_UNKNOWN"
+    finalRefusal.code === "E_IDEMPOTENCY_OUTCOME_UNKNOWN" &&
+    reasonedDoorRefusal(finalRefusal) === null
       ? fallback
       : hostErrorToastMessage(finalRefusal, fallback);
   showUnknownOutcomeAfterRefusedRetry(guidance === fallback ? null : guidance);
@@ -310,6 +326,10 @@ export function toastFromHostError(
   // saying "couldn't do X" for something they themselves cancelled is no
   // better.
   if (isSilentHostError(error)) return;
+  if (error instanceof HostBelowMinimumError) {
+    hostUpdateNeededToast();
+    return;
+  }
   const staleWrite = staleWriteOfHostError(error);
   if (staleWrite !== null) {
     showStaleWriteNotice(staleWrite);
@@ -368,7 +388,10 @@ export function toastFromHostErrorOnFork(
   error: HostRpcError,
   fallback: string,
 ): void {
-  const shareRefusal = epicShareRefusalFromErrorCode(error.code);
+  const shareRefusal =
+    reasonedDoorRefusal(error) === null
+      ? epicShareRefusalFromErrorCode(error.code)
+      : null;
   if (shareRefusal === null) {
     toastFromHostError(error, fallback);
     return;
@@ -409,6 +432,16 @@ export function classifySendRefusal(error: unknown): SendRefusal {
   if (!(error instanceof HostRpcError) || isSilentHostError(error)) {
     return { kind: "silent" };
   }
+  if (error instanceof HostBelowMinimumError) {
+    return { kind: "actionable", message: HOST_UPDATE_SKEW_COPY.title };
+  }
+  const byReason = reasonedDoorRefusal(error);
+  if (byReason !== null) {
+    const message = reasonedDoorRefusalMessage(byReason, "");
+    return message.length === 0
+      ? { kind: "failed" }
+      : { kind: "actionable", message };
+  }
   const shareRefusal = epicShareRefusalFromErrorCode(error.code);
   if (shareRefusal !== null) {
     return isTaskStillSettingUp(shareRefusal)
@@ -419,7 +452,7 @@ export function classifySendRefusal(error: unknown): SendRefusal {
     isTransportClassFailure(error) ||
     staleWriteOfHostError(error) !== null ||
     error.code === "FORBIDDEN" ||
-    (error.code === "UNAUTHORIZED" && error.fatalDetails?.retryable === true)
+    (error.code === "UNAUTHORIZED" && hostRefusalOf(error)?.retryable === true)
   ) {
     return { kind: "failed" };
   }
@@ -561,7 +594,12 @@ export function toastFromBackgroundHostError(
   error: HostRpcError,
   fallback: string,
 ): void {
-  if (error.code === "E_HOST_UNSUPPORTED") return;
+  if (error instanceof HostBelowMinimumError) return;
+  if (
+    error.code === "E_HOST_UNSUPPORTED" &&
+    reasonedDoorRefusal(error) === null
+  )
+    return;
   if (isTransientHostRpcFailure(error)) return;
   toastFromHostError(error, fallback);
 }
@@ -570,6 +608,10 @@ export function toastFromHostErrorWithDetail(
   error: HostRpcError,
   fallback: string,
 ): void {
+  if (error instanceof HostBelowMinimumError) {
+    hostUpdateNeededToast();
+    return;
+  }
   if (shouldSuppressRecoverableUnauthorized(error)) return;
   const staleWrite = staleWriteOfHostError(error);
   if (staleWrite !== null) {
@@ -597,22 +639,65 @@ export function toastFromHostErrorWithDetail(
 }
 
 /**
- * A host `UNAUTHORIZED` while the app-level session is still signed in is the
- * recoverable stale-bearer race (the wake-after-suspension case: an in-flight
- * call raced the token refresh). The shared single-flight revalidator owns
- * recovery: on "rotated" the retry succeeds silently, and on "rejected" the
- * revalidator signs out - flipping auth status to `signed-out`, which emits
- * the one authoritative "Session expired - sign in again." toast via
- * `AuthSessionExpiredToastBridge`. Toasting here too produced a "sign in"
- * toast on every overnight wake even though recovery succeeded seconds later.
- * The `retryable` (host-side JWKS outage) variant keeps its distinct copy:
- * it is not a credential statement and never leads to a sign-out.
+ * A credential refusal reaches this file only after recovery has run: the
+ * call was refreshed and sent once more, or recovery ended it. A sign-out
+ * on the way flips auth status to `signed-out`, and
+ * `AuthSessionExpiredToastBridge` says so. Still signed in, the refusal says
+ * nothing only while the window is drawing the door cover of the host the
+ * call was sent to: the person sees that cover. A blocking state stored for
+ * a host no cover is drawn for does not count. Anything else gets the caller's
+ * own line. The `retryable` variant keeps its own copy: it is not a
+ * credential statement.
  */
 function shouldSuppressRecoverableUnauthorized(error: HostRpcError): boolean {
+  if (useAuthStore.getState().status === "signed-out") return false;
+  const byReason = reasonedDoorRefusal(error);
+  if (byReason !== null)
+    return isCredentialRefusal(byReason) && doorStateCovers(error);
   if (error.code !== "UNAUTHORIZED") return false;
-  if (error.fatalDetails?.retryable === true) return false;
-  return useAuthStore.getState().status !== "signed-out";
+  if (hostRefusalOf(error)?.retryable === true) return false;
+  return doorStateCovers(error);
 }
+
+function doorStateCovers(error: HostRpcError): boolean {
+  const hostId = hostOfFailedCall(error);
+  return hostId !== null && isDoorCoverDrawn(hostId);
+}
+
+/** Signed in, a fresh credential was just refused, so the caller's own line is said. */
+function signInAdvice(fallback: string): string {
+  return useAuthStore.getState().status === "signed-out"
+    ? SIGN_IN_AGAIN_MESSAGE
+    : fallback;
+}
+
+/** Not retryable; with no reason, an unknown one, or a retryable refusal the code decides. Read before any code. */
+function reasonedDoorRefusal(error: HostRpcError): FatalErrorDetails | null {
+  const refusal = hostRefusalOf(error);
+  if (refusal === null || refusal.retryable === true) return null;
+  const reason = readDoorReason(refusal.doorReason);
+  return reason === "absent" || reason === "unrecognised" ? null : refusal;
+}
+
+/** The door's own notice says what is wrong with the computer. */
+function reasonedDoorRefusalMessage(
+  refusal: FatalErrorDetails,
+  fallback: string,
+): string {
+  return isCredentialRefusal(refusal) ? signInAdvice(fallback) : fallback;
+}
+
+/** A recognised reason decides first; a reasonless `UNAUTHORIZED` is a credential refusal. */
+export function credentialRefusalHeadline(
+  error: HostRpcError,
+  generic: string,
+): string | null {
+  const byReason = reasonedDoorRefusal(error);
+  if (byReason !== null) return reasonedDoorRefusalMessage(byReason, generic);
+  return error.code === "UNAUTHORIZED" ? signInAdvice(generic) : null;
+}
+
+const SIGN_IN_AGAIN_MESSAGE = "Please sign in again.";
 
 /**
  * Copy for a terminal verdict riding on a transport-class failure - the one
@@ -717,10 +802,16 @@ const AGENT_NOT_LOCAL_MESSAGE =
   "This agent runs on another host. Archive it from that host instead.";
 
 function hostErrorToastMessage(error: HostRpcError, fallback: string) {
+  const byReason = reasonedDoorRefusal(error);
+  if (byReason !== null) return reasonedDoorRefusalMessage(byReason, fallback);
   const verdict = hostTerminalVerdictMessage(error);
   if (verdict !== null) {
     return verdict;
   }
+  // The computer's text carries the profile id; the pin's words replace it.
+  if (error.code === "removed-by-person") return REMOVED_PROFILE_PIN_TEXT;
+  // The host refused an account its environment holds, in its own words.
+  if (error.code === "environment-managed") return error.message;
   if (isLastOwnerRevokeError(error.message)) {
     return "Can't revoke the only Owner. Transfer ownership first.";
   }
@@ -763,19 +854,28 @@ function hostErrorToastMessage(error: HostRpcError, fallback: string) {
 /** The plain `code` switchboard, split out to keep either half readable. */
 function codeKeyedMessage(error: HostRpcError, fallback: string): string {
   if (
-    error.method === "providers.signOutProfile" &&
+    (error.method === "providers.signOutProfile" ||
+      error.method === "providers.setProfileEnabled") &&
     error.code === "binding-changed"
   ) {
     return "This connection changed. Refresh and try again.";
+  }
+  // authn refuses an Undo 403 for the person's role; the grant refusal is
+  // drawn on the row, not here.
+  if (
+    error.method === "environment.undo" &&
+    error.code === "E_ROLE_FORBIDDEN"
+  ) {
+    return NEEDS_PERMISSION_MESSAGE;
   }
   if (error.code === "FORBIDDEN") {
     return forbiddenToastMessage(error.message);
   }
   if (error.code === "UNAUTHORIZED") {
-    if (error.fatalDetails?.retryable === true) {
+    if (hostRefusalOf(error)?.retryable === true) {
       return "The host couldn't verify your session. Try again in a moment.";
     }
-    return "Please sign in again.";
+    return signInAdvice(fallback);
   }
   if (error.code === "WORKTREE_BUSY") {
     return "Worktree is in use by an active agent or terminal. Stop those runs and try again.";
@@ -981,8 +1081,12 @@ function emitHostFatalErrorNotification(
   // persistent app-local failure row. The one-shot toast already delivers the
   // upgrade guidance; a lingering feed entry would just be noise. This mirrors
   // `toastFromBackgroundHostError`, which suppresses `E_HOST_UNSUPPORTED`
-  // outright.
-  if (error.code === "E_HOST_UNSUPPORTED") return;
+  // outright. A refusal its reason decides is not a capability gap.
+  if (
+    error.code === "E_HOST_UNSUPPORTED" &&
+    reasonedDoorRefusal(error) === null
+  )
+    return;
   const dedupeKey = hostErrorDedupeKey(error);
   emitHostErrorNotification({
     id: dedupeKey ?? `${error.method}:${error.requestId}`,
@@ -990,4 +1094,22 @@ function emitHostFatalErrorNotification(
     detail: error.fatalDetails.reason,
     payload: null,
   });
+}
+
+function hostUpdateNeededToast(): void {
+  toast(HOST_UPDATE_SKEW_COPY.title, { id: TRANSPORT_NOTICE_TOAST_ID });
+}
+
+/** Check at a press, including presses that schedule work for a later effect. */
+export function showHostUpdateNeededForGesture(hostId: string | null): boolean {
+  if (hostId === null) return false;
+  const entry = readHostDirectoryEntry(hostId);
+  if (
+    entry === null ||
+    !hostDirectoryEntryNeedsUpdate(entry, MINIMUM_HOST_VERSION)
+  ) {
+    return false;
+  }
+  hostUpdateNeededToast();
+  return true;
 }

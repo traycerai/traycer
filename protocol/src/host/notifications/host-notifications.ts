@@ -14,7 +14,7 @@ import {
 } from "@traycer/protocol/framework/index";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
-import { executableWriteGrantSchema } from "@traycer/protocol/host/executable-write-grant";
+import { releasedExecutableWriteGrantSchema } from "@traycer/protocol/host/released-executable-write-grant";
 
 const textFrameFields = {
   hasBinaryPayload: lazySchema(() => z.literal(false)),
@@ -3730,16 +3730,14 @@ export type NotificationHooksSaveRequestV10 = z.infer<
 >;
 
 /**
- * v2.0: the saved list can hold a `command` action, which the
- * host runs, so the save carries the executable-write grant. A whole-list
- * save with no per-hook write, so the grant matters when the list holds a
- * command; `null` otherwise.
+ * Frozen @2 request: the inert carrier preserves its strict released shape
+ * and major boundary. Current @3/@4 callers omit it; no host reads it.
  */
 export const notificationHooksSaveRequestSchemaV20 = lazySchema(() =>
   z
     .object({
       hooks: z.array(notificationHookConfigSchema),
-      executableWriteGrant: executableWriteGrantSchema,
+      executableWriteGrant: releasedExecutableWriteGrantSchema,
     })
     .strict(),
 );
@@ -3894,6 +3892,7 @@ export type NotificationHooksStatusResponse = z.infer<
 
 export const notificationHooksSaveRequestSchema = lazySchema(() =>
   notificationHooksSaveRequestSchemaV20
+    .omit({ executableWriteGrant: true })
     .extend({
       // Null represents a released caller's absent revision, never a fresh read.
       // The host rejects null from a direct @3 caller using ctx.schemaVersion.
@@ -3965,7 +3964,10 @@ export const hostNotificationHooksSaveUpgradeV2ToV3 = defineUpgradePath<
 >({
   from: { major: 2, minor: 0 },
   to: { major: 3, minor: 0 },
-  upgradeRequest: (request) => ({ ...request, configurationRevision: null }),
+  upgradeRequest: (request) => ({
+    hooks: request.hooks,
+    configurationRevision: null,
+  }),
   upgradeResponse: upgradeHooksStatus,
 });
 export const hostNotificationHooksSaveDowngradeV30ToV20 = defineDowngradePath<
@@ -3978,7 +3980,7 @@ export const hostNotificationHooksSaveDowngradeV30ToV20 = defineDowngradePath<
     ok: true,
     value: {
       hooks: request.hooks,
-      executableWriteGrant: request.executableWriteGrant,
+      executableWriteGrant: null,
     },
   }),
   downgradeResponse: (response) => ({

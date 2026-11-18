@@ -19,10 +19,7 @@ export function HostPickerSandboxesLink(props: {
 }): ReactNode {
   const team =
     props.scope.host === null ? null : hostOptionTeamOwner(props.scope.host);
-  const environments = useEnvironmentListQuery(
-    props.scope.client,
-    team !== null,
-  );
+  const environments = useEnvironmentListQuery(team !== null);
   let configurationId: ConfigurationId | null = PERSONAL_CONFIGURATION_ID;
   if (team !== null) {
     configurationId =

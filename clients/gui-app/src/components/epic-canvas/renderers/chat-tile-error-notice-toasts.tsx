@@ -49,7 +49,7 @@ export function ChatTileErrorNoticeToasts(
       if (notice.severity !== "error" && !noticeMustSurviveUnfocus(notice)) {
         return;
       }
-      showErrorNoticeToast(notice);
+      showErrorNoticeToast(notice, handle.lineBreakNotices.has(notice));
       markDelivered(handle, notice);
     });
 
@@ -57,7 +57,7 @@ export function ChatTileErrorNoticeToasts(
       if (state.errorNotices === previousState.errorNotices) return;
       state.errorNotices.forEach((notice) => {
         if (!rememberErrorNotice(notice, tracker)) return;
-        showErrorNoticeToast(notice);
+        showErrorNoticeToast(notice, handle.lineBreakNotices.has(notice));
         markDelivered(handle, notice);
       });
     });

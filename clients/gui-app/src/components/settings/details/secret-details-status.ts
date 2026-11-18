@@ -1,11 +1,8 @@
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
-import {
-  hostRpcServingTierHostId,
-  readProcessHostRpcTierPlan,
-} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { environmentCloudQueryKey } from "@/hooks/environment/use-environment-cloud";
 import { removalLabel } from "@/components/settings/details/details-copy";
+import { hostListEnvironmentId } from "@/hooks/environment/environment-host-list-key";
 import type { HostRpcRegistry } from "@/lib/host";
-import { hostQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type {
   EnvironmentSecretRemoval,
@@ -28,10 +25,12 @@ type SecretsList = ResponseOfMethod<
   "environment.secrets.list"
 >;
 
+type HostList = ResponseOfMethod<HostRpcRegistry, "environment.host.list">;
+
 const FAILED_STATES = new Set(["failed", "not_applied"]);
 
 /**
- * The page's "Now": where the configuration's secrets stand on the hosts
+ * The page's "Now": where the configuration's secrets stand on the sandboxes
  * running it. "Applied on 2 hosts" when every host applied them, "Not
  * applied on dev-box" when a host could not, "Applying on dev-box…" while a
  * host has not reported the latest change.
@@ -178,15 +177,10 @@ async function singleSecretDetails(
   const versions =
     removed?.removal.outcome === "destroyed"
       ? null
-      : await context.client.requestWithSignalRequiringHostMethodVersion(
-          "environment.secrets.versions",
-          { environmentId: subject.environmentId, secretId: subject.key },
-          undefined,
-          {
-            method: "environment.secrets.versions",
-            version: { major: 1, minor: 1 },
-          },
-        );
+      : await context.environmentCloud("environment.secrets.versions", {
+          environmentId: subject.environmentId,
+          secretId: subject.key,
+        });
   const current = versions?.versions.find((version) => version.current);
   const removal = newestRemoval(
     versions?.removal ?? null,
@@ -217,7 +211,7 @@ async function singleSecretDetails(
  * second entry that no observer ever refetches, and a sweep over the method's
  * scope would go on reading its answer long after the page's own had moved on.
  *
- * `staleTime: 0` keeps the read itself. Every open asks the host again, as
+ * `staleTime: 0` keeps the read itself. Every open asks authn again, as
  * the direct call did, so the answer is as fresh and as authorized as before;
  * the cache holds the result, never a licence to skip the request.
  */
@@ -226,30 +220,51 @@ async function readSecretsList(
   context: DetailsProviderContext,
 ): Promise<SecretsList> {
   const viewerId = useAuthStore.getState().contextMetadata?.userId ?? "";
+  // `environmentCloud` is the sign-in of the viewer the key already names.
+  // eslint-disable-next-line @tanstack/query/exhaustive-deps
   return context.queryClient.fetchQuery({
-    queryKey: [
-      ...hostQueryKeys.method<HostRpcRegistry, "environment.secrets.list">(
-        hostRpcServingTierHostId(
-          "environment.secrets.list",
-          context.hostId,
-          readProcessHostRpcTierPlan(),
-          null,
-        ),
-        "environment.secrets.list",
-        { environmentId },
-      ),
+    queryKey: environmentCloudQueryKey(
+      "environment.secrets.list",
+      { environmentId },
       viewerId,
-    ],
-    queryFn: ({ signal }) =>
-      context.client.requestWithSignalRequiringHostMethodVersion(
-        "environment.secrets.list",
-        { environmentId },
-        signal,
-        { method: "environment.secrets.list", version: { major: 1, minor: 1 } },
-      ),
+      [],
+    ),
+    queryFn: () =>
+      context.environmentCloud("environment.secrets.list", { environmentId }),
     staleTime: 0,
     retry: false,
   });
+}
+
+/**
+ * `null` while the list is not loaded or its last read failed. Nothing is read for
+ * it: a secret is used on sandboxes only.
+ */
+function cachedSandboxIds(
+  environmentId: string,
+  context: DetailsProviderContext,
+): ReadonlySet<string> | null {
+  const viewerId = useAuthStore.getState().contextMetadata?.userId ?? "";
+  const list = context.queryClient
+    .getQueriesData<HostList>({
+      predicate: (query) =>
+        hostListEnvironmentId(query.queryKey) === environmentId &&
+        query.queryKey.at(-1) === viewerId,
+    })
+    .flatMap(([queryKey, data]) => {
+      const state = context.queryClient.getQueryState(queryKey);
+      return data === undefined || state?.status !== "success"
+        ? []
+        : [{ data, at: state.dataUpdatedAt }];
+    })
+    .toSorted((a, b) => b.at - a.at)
+    .at(0)?.data;
+  if (list === undefined) return null;
+  return new Set(
+    list.hosts
+      .filter((host) => host.kind === "sandbox")
+      .map((host) => host.hostId),
+  );
 }
 
 export async function loadSecretDetails(
@@ -260,11 +275,17 @@ export async function loadSecretDetails(
   const list = await readSecretsList(subject.environmentId, context);
   if (subject.key.length > 0)
     return singleSecretDetails(subject, context, status, list);
+  const sandboxIds = cachedSandboxIds(subject.environmentId, context);
+  const sandboxes =
+    sandboxIds === null
+      ? []
+      : status.hosts.filter((host) => sandboxIds.has(host.hostId));
   return {
     title: "Secrets",
     status: {
       ...status,
-      summary: secretsHostSummary(status.hosts),
+      summary: sandboxIds === null ? "" : secretsHostSummary(sandboxes),
+      hosts: sandboxes,
       items: secretInventory(subject, list, status.hosts),
     },
   };

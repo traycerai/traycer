@@ -108,6 +108,7 @@ import { buildHostDownloadCommand } from "./commands/host-download";
 import { hostDoctorCommand } from "./commands/host-doctor";
 import { buildHostEnsureCommand } from "./commands/host-ensure";
 import { buildHostUseCommand } from "./commands/host-use";
+import { buildHostClaimCommand } from "./commands/host-claim";
 import { buildHostFreePortCommand } from "./commands/host-free-port";
 import { buildHostFreePortAndRestartCommand } from "./commands/host-free-port-and-restart";
 import { buildHostInstallCommand } from "./commands/host-install";
@@ -122,7 +123,8 @@ import {
   type HostMaintenanceLeaseAdmission,
 } from "./commands/host-maintenance-lease";
 import { buildHostRestartCommand } from "./commands/host-restart";
-import { runHostStart, type RunHostStartOptions } from "./commands/host-start";
+import type { RunHostStartOptions } from "./commands/host-start";
+import { runHostStartCommand } from "./commands/host-start-command";
 import { readHostStartAdoptionNonce } from "./host/host-start-adoption";
 import { LIFECYCLE_ORIGIN_COMMANDS } from "@traycer/protocol/config/lifecycle-origin-commands";
 import {
@@ -179,7 +181,8 @@ import {
 } from "./runner/exit";
 import { parsePositiveIntegerArg } from "./runner/parse-positive-integer-arg";
 import { runCommand, type CommandFn } from "./runner/runner";
-import { readonlyEnv } from "./runner/runtime";
+import { readonlyEnv, resolveRuntimeContext } from "./runner/runtime";
+import { createOutput } from "./runner/output";
 import {
   agentWorktreeCreateOffered,
   assertAgentWorktreeCreateAllowed,
@@ -1178,7 +1181,12 @@ function registerHostCommands(program: Command): void {
     // going through the runner, so nothing else resolves them for it.
     const command = actionArgs[actionArgs.length - 1] as CommanderCommand;
     const opts = command.optsWithGlobals() as Record<string, unknown>;
-    const logger = createCliLogger(config.environment);
+    const runtime = resolveRuntimeContext(
+      extractRunnerFlags(opts),
+      readonlyEnv(),
+    );
+    const logger = runtime.logger;
+    const output = createOutput(runtime);
     const serviceLabel =
       typeof opts.serviceLabel === "string" ? opts.serviceLabel : null;
     const transitionId =
@@ -1218,7 +1226,8 @@ function registerHostCommands(program: Command): void {
       {},
     );
     try {
-      await runHostStart(
+      await runHostStartCommand(
+        { runtime, output, progress: (info) => output.progress(info) },
         hostStartOptionsFromCommand({
           environment: config.environment,
           cwd: typeof opts.cwd === "string" ? opts.cwd : null,
@@ -1709,6 +1718,14 @@ function registerHostCommands(program: Command): void {
       .argument("<slug>", "Team slug from its dashboard address")
       .description("Give this computer to a team you belong to."),
     (_opts, [team]) => buildHostUseCommand(team ?? ""),
+  );
+
+  withRunner(
+    host
+      .command("claim")
+      .description("Claim this team computer as your own.")
+      .option("--yes", "Skips the question, for scripts."),
+    (opts) => buildHostClaimCommand({ yes: opts.yes === true }),
   );
 
   withRunner(
@@ -2942,13 +2959,14 @@ function registerProfileCommands(program: Command): void {
         "Sign an existing profile in again. Prints a sign-in link and waits for it to finish.",
       )
       .argument("<provider>", providerArgument)
-      .argument("<profile>", profileArgument),
-    (_opts, args) =>
+      .argument("<profile>", profileArgument)
+      .option("--switch-account", "Switch account"),
+    (opts, args) =>
       buildProfileLoginCommand(
         {
           provider: expectRequiredPositional(args[0], "provider"),
           target: {
-            kind: "existing",
+            kind: opts.switchAccount === true ? "switch" : "existing",
             profile: expectRequiredPositional(args[1], "profile"),
           },
         },

@@ -6,8 +6,8 @@ import {
 } from "@traycer/protocol/host/agent/shared";
 import { AGENT_LIST_HARNESS_MODELS_PROFILE_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
 import {
-  callHostRpc,
-  callHostRpcWithDispatch,
+  callAgentHostRpc,
+  callAgentHostRpcWithDispatch,
   PLAIN_DISPATCH,
   parseCanonicalHostResponse,
   parseUserInput,
@@ -53,8 +53,8 @@ async function listSingleHarnessModels(
   });
   const result = await toAgentCliError(
     request.profileId === undefined
-      ? callHostRpc("agent.listHarnessModels", request)
-      : callHostRpcWithDispatch("agent.listHarnessModels", request, {
+      ? callAgentHostRpc("agent.listHarnessModels", request)
+      : callAgentHostRpcWithDispatch("agent.listHarnessModels", request, {
           ...PLAIN_DISPATCH,
           requiredHostMethodVersion:
             AGENT_LIST_HARNESS_MODELS_PROFILE_REQUIRED_HOST_VERSION,

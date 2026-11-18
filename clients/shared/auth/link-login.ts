@@ -307,6 +307,8 @@ async function postJson(
         },
         body: JSON.stringify(body),
         signal: abort.signal,
+        // Carries a credential: never follow a redirect.
+        redirect: "manual",
       }),
       abort.signal,
     );

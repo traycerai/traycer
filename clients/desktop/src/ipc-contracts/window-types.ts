@@ -101,6 +101,8 @@ export interface PerWindowLandingDraft {
    * renderer parses. Present only while the draft has one.
    */
   readonly returnedSandbox?: JsonValue;
+  /** Present, as `true`, only while nobody chose the draft's account. */
+  readonly accountFollowsDefault?: boolean;
   /**
    * The host the draft was opened for (a draft that names its machine).
    * Present only while the draft has one.

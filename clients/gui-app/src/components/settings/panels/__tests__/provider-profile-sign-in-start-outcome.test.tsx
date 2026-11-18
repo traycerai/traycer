@@ -34,6 +34,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 // on `requestWithResponseTimeout`, which no flow in this suite uses).
 const host = vi.hoisted(() => ({
   request: vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
+  signInRecordingService: {
+    recordSignInRequest: vi.fn(() => Promise.resolve({ kind: "failed" })),
+  },
   requestWithOptions:
     vi.fn<
       (
@@ -48,17 +51,43 @@ vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   const client = Object.assign({} as HostClient<HostRpcRegistry>, {
     getActiveHostId: () => "host-local",
+    onChange: () => () => undefined,
     request: host.request,
     requestWithSignal: host.request,
     requestWithOptions: host.requestWithOptions,
   });
-  return { ...actual, useHostClient: () => client };
+  return {
+    ...actual,
+    useHostClient: () => client,
+    useAuthService: () => host.signInRecordingService,
+  };
+});
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return {
+    ...actual,
+    useAuthService: () => host.signInRecordingService,
+  };
 });
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 vi.mock("@/hooks/providers/use-refresh-providers", () => ({
   useRefreshProviders: () => () => Promise.resolve(),
+}));
+vi.mock("@/hooks/providers/use-name-profile-record-mutation", () => ({
+  useNameProfileRecordForClient: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    error: null,
+  }),
+}));
+vi.mock("@/hooks/providers/use-account-profile-recolor", () => ({
+  useAccountProfileRecolorForClient: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    error: null,
+  }),
 }));
 // A spy, so a test can see which link a button sent the user to.
 const links = vi.hoisted(() => ({
@@ -480,6 +509,38 @@ function answerSignInWith(awaitAnswer: {
   );
 }
 
+const ENVIRONMENT_MANAGED_LINE = "Managed by your environment — sign in there.";
+
+/**
+ * The host starts the sign-in, then refuses `awaitLogin` because the
+ * environment holds the account.
+ */
+function refuseAwaitAsEnvironmentManaged(): void {
+  host.request.mockImplementation((method) =>
+    method === "providers.startLogin"
+      ? Promise.resolve({
+          url: "https://accounts.google.com/o/oauth2/v2/auth?client_id=agy",
+          started: true,
+          profileId: PROFILE_ID,
+          userCode: null,
+        })
+      : Promise.resolve({}),
+  );
+  host.requestWithOptions.mockImplementation((method) =>
+    method === "providers.awaitLogin"
+      ? Promise.reject(
+          new HostRpcError({
+            code: "environment-managed",
+            message: ENVIRONMENT_MANAGED_LINE,
+            requestId: "request-environment-managed",
+            method: "providers.awaitLogin",
+            fatalDetails: null,
+          }),
+        )
+      : new Promise<unknown>(() => undefined),
+  );
+}
+
 function renderAntigravityReauth() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -517,6 +578,7 @@ function renderAntigravityAddDialog(
   });
   const client = Object.assign({} as HostClient<HostRpcRegistry>, {
     getActiveHostId: () => "host-local",
+    onChange: () => () => undefined,
     request: host.request,
     requestWithSignal: host.request,
     requestWithOptions: host.requestWithOptions,
@@ -529,6 +591,8 @@ function renderAntigravityAddDialog(
           client={client}
           isLocalHost
           open
+          target={null}
+          targetResult={null}
           onOpenChange={() => undefined}
           onFailedAttempt={onFailedAttempt}
           onProfileCreated={() => undefined}
@@ -644,7 +708,7 @@ describe("the add-profile dialog when the provider refuses the sign-in", () => {
     const onFailedAttempt = vi.fn<(attempt: unknown) => void>();
     renderAntigravityAddDialog(onFailedAttempt);
 
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     expect(await screen.findByText(REFUSAL_HEADLINE)).toBeTruthy();
     expect(screen.getByText(ANTIGRAVITY_REFUSAL.reason)).toBeTruthy();
@@ -657,7 +721,24 @@ describe("the add-profile dialog when the provider refuses the sign-in", () => {
     expect(onFailedAttempt).toHaveBeenCalledWith({
       providerId: "antigravity",
       message: ANTIGRAVITY_REFUSAL.reason,
+      hostSentence: false,
     });
+  });
+
+  it("reports the host's sentence as a host-marked failed attempt when the host refuses the account as environment-managed", async () => {
+    refuseAwaitAsEnvironmentManaged();
+    const onFailedAttempt = vi.fn<(attempt: unknown) => void>();
+    renderAntigravityAddDialog(onFailedAttempt);
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() =>
+      expect(onFailedAttempt).toHaveBeenCalledWith({
+        providerId: "antigravity",
+        message: ENVIRONMENT_MANAGED_LINE,
+        hostSentence: true,
+      }),
+    );
   });
 
   it("opens the verification link and starts a fresh sign-in from 'Try another account'", async () => {
@@ -668,7 +749,7 @@ describe("the add-profile dialog when the provider refuses the sign-in", () => {
       refusal: ANTIGRAVITY_REFUSAL,
     });
     renderAntigravityAddDialog(vi.fn());
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     fireEvent.click(
       await screen.findByRole("button", { name: "Verify account" }),
@@ -694,7 +775,7 @@ describe("the add-profile dialog when the provider refuses the sign-in", () => {
       refusal: { reason: "This account cannot be used.", actionUrl: null },
     });
     renderAntigravityAddDialog(vi.fn());
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     expect(await screen.findByText(REFUSAL_HEADLINE)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Verify account" })).toBeNull();
@@ -711,7 +792,7 @@ describe("the add-profile dialog when the provider refuses the sign-in", () => {
       refusal: null,
     });
     renderAntigravityAddDialog(vi.fn());
-    fireEvent.click(screen.getByRole("button", { name: "Link account" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     expect(
       await screen.findByText(
@@ -794,7 +875,7 @@ describe.each(MOUNT_MODES)(
       expect(hostCallsFor("providers.ensurePack")).toBe(0);
     });
 
-    it("the add-profile dialog shows the sentence and its Link account control sends nothing", async () => {
+    it("the add-profile dialog shows the sentence and its Sign in control sends nothing", async () => {
       const queryClient = new QueryClient({
         defaultOptions: {
           queries: { retry: false },
@@ -803,6 +884,7 @@ describe.each(MOUNT_MODES)(
       });
       const client = Object.assign({} as HostClient<HostRpcRegistry>, {
         getActiveHostId: () => "host-local",
+        onChange: () => () => undefined,
         request: host.request,
         requestWithSignal: host.request,
         requestWithOptions: host.requestWithOptions,
@@ -816,6 +898,8 @@ describe.each(MOUNT_MODES)(
                 client={client}
                 isLocalHost
                 open
+                target={null}
+                targetResult={null}
                 onOpenChange={() => undefined}
                 onFailedAttempt={() => undefined}
                 onProfileCreated={() => undefined}
@@ -826,7 +910,7 @@ describe.each(MOUNT_MODES)(
       );
 
       expect(await screen.findByText(MACOS_SENTENCE)).toBeTruthy();
-      const link = screen.getByRole("button", { name: /Link account/u });
+      const link = screen.getByRole("button", { name: "Sign in" });
       expect(link.hasAttribute("disabled")).toBe(true);
       fireEvent.click(link);
       expect(hostCallsFor("providers.startLogin")).toBe(0);

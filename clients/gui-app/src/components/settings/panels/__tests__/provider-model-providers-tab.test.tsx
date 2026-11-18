@@ -1,9 +1,10 @@
 import type {
+  ModelProviderAuthAction,
   ModelProviderAuthResult,
-  ModelProviderEntry,
   ModelProvidersListResult,
   ProviderModelProvidersCapabilities,
 } from "@traycer/protocol/host/provider-native-schemas";
+import type { ModelProviderAuthVariables } from "@/hooks/providers/use-providers-model-provider-auth-mutation";
 
 /**
  * The callbacks the tab hands `mutate`, named so a test can fire one by hand.
@@ -18,6 +19,11 @@ type AuthMutateOptions = {
   }) => void;
   readonly onSettled: () => void;
 };
+
+type CustomProviderAuthAction = Extract<
+  ModelProviderAuthAction,
+  { readonly action: "createCustom" | "updateCustom" }
+>;
 import {
   act,
   cleanup,
@@ -29,6 +35,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sortModelProviderEntries } from "@/components/settings/panels/model-provider-connect-model";
 import { ProviderModelProvidersTab } from "@/components/settings/panels/provider-model-providers-tab";
 import { useModelProviderPendingAuthStore } from "@/stores/settings/model-provider-pending-auth-store";
+import { entry, FULL_CAPS } from "./provider-model-providers-tab-test-support";
 
 const hostMocks = vi.hoisted(() => ({
   listResult: null as ModelProvidersListResult | null,
@@ -36,7 +43,11 @@ const hostMocks = vi.hoisted(() => ({
   listFetching: false,
   listError: null as string | null,
   refetch: vi.fn(),
-  authMutate: vi.fn<(payload: unknown, options: AuthMutateOptions) => void>(),
+  authMutate:
+    vi.fn<
+      (payload: ModelProviderAuthVariables, options: AuthMutateOptions) => void
+    >(),
+  authActions: [] as ModelProviderAuthAction[],
   authIsPending: false,
   awaitMutate: vi.fn(),
   cancelMutate: vi.fn(),
@@ -95,8 +106,31 @@ vi.mock("@/hooks/providers/use-providers-model-providers-list-query", () => ({
 }));
 
 vi.mock("@/hooks/providers/use-providers-model-provider-auth-mutation", () => ({
-  useProvidersModelProviderAuth: () => ({
-    mutate: hostMocks.authMutate,
+  useProvidersModelProviderAuth: (
+    readAction:
+      | ((
+          target: ModelProviderAuthVariables["action"],
+        ) => ModelProviderAuthAction)
+      | null,
+    clearActionInput: (() => void) | null,
+  ) => ({
+    mutate: (
+      variables: ModelProviderAuthVariables,
+      options: AuthMutateOptions,
+    ) => {
+      const action =
+        variables.action.action === "disconnect"
+          ? variables.action
+          : (readAction?.(variables.action) ?? null);
+      if (action !== null) hostMocks.authActions.push(action);
+      hostMocks.authMutate(variables, {
+        ...options,
+        onSettled: () => {
+          options.onSettled();
+          clearActionInput?.();
+        },
+      });
+    },
     isPending: hostMocks.authIsPending,
   }),
 }));
@@ -125,25 +159,6 @@ vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => hostMocks.openLink,
 }));
 
-const FULL_CAPS: ProviderModelProvidersCapabilities = {
-  actions: ["connect", "oauth", "disconnect"],
-};
-
-function entry(overrides: Partial<ModelProviderEntry>): ModelProviderEntry {
-  return {
-    id: "anthropic",
-    name: "Anthropic",
-    source: null,
-    hasStoredCredential: false,
-    canDisconnect: false,
-    configDeclaredCustom: false,
-    custom: null,
-    connected: false,
-    methods: [],
-    ...overrides,
-  };
-}
-
 function renderTab(args: {
   readonly result: ModelProvidersListResult | null;
   readonly capabilities: ProviderModelProvidersCapabilities;
@@ -160,6 +175,29 @@ function renderTab(args: {
   );
 }
 
+function outgoingCustomActionMatches(
+  index: number,
+  expected: CustomProviderAuthAction,
+): boolean {
+  const action = hostMocks.authActions.at(index);
+  if (
+    action === undefined ||
+    (action.action !== "createCustom" && action.action !== "updateCustom")
+  ) {
+    return false;
+  }
+  return (
+    action.action === expected.action &&
+    action.modelProviderId === expected.modelProviderId &&
+    action.name === expected.name &&
+    action.baseUrl === expected.baseUrl &&
+    JSON.stringify(action.models) === JSON.stringify(expected.models) &&
+    JSON.stringify(action.headers) === JSON.stringify(expected.headers) &&
+    action.key === expected.key &&
+    JSON.stringify(action.env) === JSON.stringify(expected.env)
+  );
+}
+
 beforeEach(() => {
   hostMocks.listResult = null;
   hostMocks.listPending = false;
@@ -168,6 +206,7 @@ beforeEach(() => {
   hostMocks.authIsPending = false;
   hostMocks.refetch.mockReset();
   hostMocks.authMutate.mockReset();
+  hostMocks.authActions.length = 0;
   hostMocks.awaitMutate.mockReset();
   hostMocks.cancelMutate.mockReset();
   hostMocks.openLink.mockReset();
@@ -847,7 +886,10 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({
       providerId: "opencode",
-      action: {
+      action: { action: "createCustom", modelProviderId: "my-gateway" },
+    });
+    expect(
+      outgoingCustomActionMatches(0, {
         action: "createCustom",
         modelProviderId: "my-gateway",
         name: "My gateway",
@@ -858,8 +900,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
         // Untouched key field, so no env instruction at all - a declaration
         // that never mentioned env has nothing to clear.
         env: null,
-      },
-    });
+      }),
+    ).toBe(true);
   });
 
   it("says DISABLE, not remove, when disconnecting a declared custom provider", () => {
@@ -937,7 +979,10 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({
       providerId: "opencode",
-      action: {
+      action: { action: "updateCustom", modelProviderId: "my-gateway" },
+    });
+    expect(
+      outgoingCustomActionMatches(0, {
         action: "updateCustom",
         modelProviderId: "my-gateway",
         name: "My gateway v2",
@@ -949,8 +994,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
         headers: [],
         key: null,
         env: null,
-      },
-    });
+      }),
+    ).toBe(true);
   });
 
   it("shows the host's refusal when a removal-shaped update reaches it", () => {
@@ -1168,7 +1213,10 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
     );
     expect(hostMocks.authMutate.mock.calls[0]?.[0]).toEqual({
       providerId: "opencode",
-      action: {
+      action: { action: "updateCustom", modelProviderId: "my-gateway" },
+    });
+    expect(
+      outgoingCustomActionMatches(0, {
         action: "updateCustom",
         modelProviderId: "my-gateway",
         name: "My gateway",
@@ -1181,8 +1229,8 @@ describe("ProviderModelProvidersTab source and disconnect", () => {
         // would arrive as the wire's CLEAR signal - deleting a declaration
         // because a button that means "turn it on" said nothing about env.
         env: null,
-      },
-    });
+      }),
+    ).toBe(true);
   });
 
   it("offers Edit but NOT one-click re-enable for a broken declaration", () => {

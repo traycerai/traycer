@@ -16,6 +16,7 @@ import {
   mountTeamPage,
   personalPoolSource,
   poolSource,
+  requireTeamEnvironmentAuthnBinding,
   requireTeamHostClient,
   resetTeamPageHarness,
 } from "./team-configuration-test-support";
@@ -23,6 +24,7 @@ import {
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
 }));
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
@@ -73,6 +75,21 @@ const routing = (enabled: boolean, revision: number) =>
     revision,
   });
 
+function managedProfile(key: string, name: string, enabled: boolean) {
+  return configurationItem({
+    kind: "managed_profile",
+    key,
+    value: {
+      name,
+      color: null,
+      harnessId: "claude",
+      accountIdentity: null,
+      needsLink: false,
+      enabled,
+    },
+  });
+}
+
 const host: EnvironmentHostRecordV12 = {
   hostId: "host-a",
   hostLabel: "Mac mini",
@@ -109,7 +126,7 @@ const NATIVE_ROUTING_WRITES = [
 ] as const;
 
 describe("TeamModelRouting", () => {
-  it("reads the team's routing from the pool's fallback_policy item", async () => {
+  it("reads the team's routing from its cloud fallback_policy item", async () => {
     const harness = mountTeamPage(poolSource("viewer"), {
       "environment.configuration.items": () => ({ items: [routing(true, 9)] }),
     });
@@ -120,6 +137,50 @@ describe("TeamModelRouting", () => {
       environmentId: "env-a",
     });
     expect(harness.paramsOf("providers.fallbackPolicy.get")).toHaveLength(0);
+  });
+
+  it("shows the account-switch hint only when one enabled account is available", async () => {
+    const oneProfileHarness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({
+        items: [routing(true, 9), managedProfile("prof-1", "Claude", true)],
+      }),
+      "environment.host.list": () => ({ hosts: [host] }),
+    });
+    render(<TeamModelRouting />, { wrapper: oneProfileHarness.Wrapper });
+
+    const profileHint = await screen.findByText(
+      "No other accounts to switch to yet.",
+    );
+    expect(profileHint).toBeTruthy();
+    expect(within(profileHint).queryByRole("link")).toBeNull();
+    expect(
+      screen.queryByText("Link another plan to switch accounts."),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /link/i })).toBeNull();
+
+    cleanup();
+    resetTeamPageHarness();
+
+    const twoProfileHarness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({
+        items: [
+          routing(true, 9),
+          managedProfile("prof-1", "Claude", true),
+          managedProfile("prof-2", "Codex", true),
+        ],
+      }),
+      "environment.host.list": () => ({ hosts: [host] }),
+    });
+    render(<TeamModelRouting />, { wrapper: twoProfileHarness.Wrapper });
+
+    expect(await screen.findByText("Accounts: Claude, Codex.")).toBeTruthy();
+    expect(
+      screen.queryByText("No other accounts to switch to yet."),
+    ).toBeNull();
+    expect(
+      screen.queryByText("Link another plan to switch accounts."),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /link/i })).toBeNull();
   });
 
   it.each([

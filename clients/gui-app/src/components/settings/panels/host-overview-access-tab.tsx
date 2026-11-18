@@ -22,7 +22,6 @@ import {
   SETUP_STEPS,
   setupView,
   terminalAccountSentence,
-  teamTerminalAccountSentence,
   type SetupView,
 } from "@/components/settings/host-scope/host-access-model";
 import { HostScopeConnecting } from "@/components/settings/host-scope/host-scope-gate";
@@ -35,7 +34,6 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { useExecutableWriteGrant } from "@/hooks/environment/use-executable-write-grant";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import {
   useEnvironmentLocalOverridesRead,
@@ -183,15 +181,11 @@ function AccessSections(props: {
       {props.remoteAccess}
       <TerminalAccountsSection
         client={props.client}
-        sentence={
-          props.status.principal?.kind === "team"
-            ? teamTerminalAccountSentence(props.status.principal.teamName)
-            : terminalAccountSentence(
-                props.hostId !== null && props.hostId === localHostId
-                  ? null
-                  : props.hostName,
-              )
-        }
+        sentence={terminalAccountSentence(
+          props.hostId !== null && props.hostId === localHostId
+            ? null
+            : props.hostName,
+        )}
       />
       <LocalValuesSection client={props.client} hostId={props.hostId} />
     </>
@@ -210,8 +204,6 @@ function MovedNotice(props: {
     (props.status.setup.state === "done" ||
       props.status.setup.stage === "done");
   const notices = useEnvironmentNoticesRead(
-    props.client,
-    props.hostId,
     setupDone && props.status.principal?.kind === "personal",
   );
   const dismissed = useHostAccessPromptsStore((state) =>
@@ -542,11 +534,8 @@ function LocalValueRow(props: {
   readonly override: LocalOverride;
 }): ReactNode {
   const [draft, setDraft] = useState<string | null>(null);
-  const grant = useExecutableWriteGrant();
   const set = useHostScopedMutationForClient(props.client, {
     method: "config.env.localOverride.set",
-    // The value can select what starts, so it carries the grant.
-    prepareRequest: grant,
     mutationKey: environmentMutationKeys.localOverrideSet(),
     errorMessage: "Couldn't save the value.",
     scope: LOCAL_OVERRIDE_SCOPE,
@@ -636,7 +625,6 @@ function LocalValueRow(props: {
                 set.mutate({
                   target: props.override.target,
                   value: draft,
-                  executableWriteGrant: null,
                 })
               }
             >

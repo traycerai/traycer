@@ -319,7 +319,7 @@ export const LOCAL_HOST_ENTRY: HostDirectoryEntry = {
   label: "host-1",
   kind: "local",
   websocketUrl: "ws://127.0.0.1:1234",
-  version: "1.0.0",
+  version: "2.0.0",
   transportDialability: "dialable",
 };
 
@@ -344,7 +344,7 @@ export function hostListResultForOwner(
             viewerReachability: "ok",
             clientCloud: "ok",
             updateState: "current",
-            appVersion: "1.2.3",
+            appVersion: "2.0.0",
             lastSeenAt: null,
           },
           owner,

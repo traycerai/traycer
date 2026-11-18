@@ -78,6 +78,18 @@ export const sandboxQueryKeys = {
     authService: object,
     userId: string | null,
   ): readonly unknown[] => ["auth", "traycer-models", authService, userId],
+  /** Not under `registeredHostsAll`: it refreshes on mount and focus only. */
+  teamBalance: (
+    authService: object | null,
+    userId: string | null,
+    providerHandle: string,
+  ): readonly unknown[] => [
+    "auth",
+    "team-balance",
+    authService,
+    userId,
+    providerHandle,
+  ],
   traycerModelsMissing: (): readonly unknown[] => [
     "auth",
     "traycer-models",

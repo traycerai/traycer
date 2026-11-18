@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { app } from "electron";
 import { constants } from "node:fs";
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { encodeStageFingerprint } from "@traycer-clients/shared/host-version/stage-fingerprint";
 import { DESKTOP_RELEASE_CHANNEL } from "../../config";
@@ -992,6 +992,33 @@ async function resolveWindowsBundledHostArchive(): Promise<string | null> {
     }
   }
   return null;
+}
+
+// Selection hint only. `host ensure` verifies both the descriptor and archive
+// before installing; Desktop never grants trust based on this read.
+async function carriedHostVersion(): Promise<string | null> {
+  const cli = await resolveBundledCliPath();
+  if (cli === null) return null;
+  const arch =
+    process.platform === "win32" && process.arch === "arm64"
+      ? "x64"
+      : process.arch;
+  try {
+    const descriptor: unknown = JSON.parse(
+      await readFile(
+        join(
+          dirname(cli),
+          `host-runtime-${process.platform}-${arch}.descriptor.json`,
+        ),
+        "utf8",
+      ),
+    );
+    return isPlainObject(descriptor) && typeof descriptor.version === "string"
+      ? descriptor.version
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function latestVersionFromSnapshot(
@@ -4819,6 +4846,44 @@ export class HostController {
           const eligibleStage = this.eligibleStage;
           const installed = await readDesktopHostInstallRecord(this.layout);
           const staged = await readDesktopHostStagedRecord(this.layout);
+          const carriedVersion =
+            trigger === "manual" ? await carriedHostVersion() : null;
+          if (
+            carriedVersion !== null &&
+            (installed === null ||
+              isStrictlyNewerHostVersion(carriedVersion, installed.version)) &&
+            (eligibleStage === null ||
+              isStrictlyNewerHostVersion(
+                carriedVersion,
+                eligibleStage.version,
+              )) &&
+            (this.latestVersionCache === null ||
+              !isStrictlyNewerHostVersion(
+                this.latestVersionCache,
+                carriedVersion,
+              ))
+          ) {
+            return this.enqueueHostStart<MutationOutcome<ApplyStagedOk>>(
+              "apply",
+              `apply-carried:${carriedVersion}:${force}`,
+              "defer",
+              async () => {
+                // Explicit update: no --keep-installed or --respect-hold.
+                const outcome = (await this.isPackagedMacOwned())
+                  ? await this.convergeReadyPackagedMac(force, false)
+                  : await this.convergeReadyCliOwned(force, false);
+                if (outcome.kind !== "ok") return outcome;
+                return {
+                  kind: "ok",
+                  value: {
+                    applied: true,
+                    appliedVersion: outcome.value.version ?? carriedVersion,
+                    runningActivated: outcome.value.running,
+                  },
+                };
+              },
+            );
+          }
           if (eligibleStage === null) {
             if (staged === null) {
               return this.noOpApplyOutcome(installed?.version ?? "");

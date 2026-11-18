@@ -1,3 +1,4 @@
+import { useAccountProfileSetEnabledForClient } from "@/hooks/providers/use-account-profile-set-enabled";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import {
   createContext,
@@ -20,7 +21,6 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
-import { ProviderLinkDialog } from "@/components/settings/panels/provider-link-dialog";
 import {
   SettingsDetailHeader,
   SettingsMasterDetail,
@@ -39,6 +39,7 @@ import { Button } from "@/components/ui/button";
 import {
   isProviderSettingsUnreadableError,
   PROVIDER_SETTINGS_UNREADABLE_COPY,
+  PROVIDER_STATE_UNREADABLE_COPY,
 } from "@/lib/providers/provider-settings-unreadable-error";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -51,10 +52,7 @@ import {
   useHostSupportsMethod,
 } from "@/hooks/host/use-host-supports-method";
 import { catalogLineKnowsAutoMode } from "@/components/home/data/landing-options";
-import {
-  useProviderProfileEnablementPending,
-  useProvidersSetProfileEnabledForClient,
-} from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
+import { useProviderProfileEnablementPending } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useRefreshProviders } from "@/hooks/providers/use-refresh-providers";
 import { useHostClient } from "@/lib/host";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
@@ -105,7 +103,11 @@ import { providerRowUnreadableCopy } from "./provider-row-reset-copy";
 import {
   defaultSelectedProfileId,
   profileCommitId,
+  removedProfilesForProvider,
+  resolvedProfileRow,
+  type RemovedProviderProfile,
 } from "@/components/providers/provider-profile-model";
+import { AMBIENT_PROFILE_ID_SENTINEL } from "@traycer/protocol/host/agent/shared";
 import { providerPackPreparingForProvider } from "@/components/providers/provider-pack-readiness";
 import { providerCanStartProfileOauth } from "@/components/providers/provider-signin-availability";
 import { ProviderApiKeySection } from "./provider-api-key-section";
@@ -124,7 +126,6 @@ import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
 import { ProviderSectionSelect } from "./provider-section-select";
 import { ProviderCliCandidatesSection } from "./provider-cli-candidates-section";
 import {
-  providerKeyTab,
   providerTabInputs,
   supportedTabsFor as resolveSupportedTabs,
   tabsForView,
@@ -308,15 +309,31 @@ function resolveTabForProvider(
 
 function initialSelectedProfileId(
   profiles: readonly ProviderProfile[],
+  removedProfiles: readonly RemovedProviderProfile[],
   focusProfileId: string | null,
 ): string | null {
   if (focusProfileId !== null) {
-    const focused = profiles.find(
-      (profile) => profile.profileId === focusProfileId,
+    const focused = focusedSettingsProfile(
+      profiles,
+      removedProfiles,
+      focusProfileId,
     );
-    if (focused !== undefined) return profileCommitId(focused);
+    if (focused !== null) return profileCommitId(focused);
   }
   return defaultSelectedProfileId(profiles);
+}
+
+/** A removed or unknown id focuses nothing; the page opens on its first row. */
+function focusedSettingsProfile(
+  profiles: readonly ProviderProfile[],
+  removedProfiles: readonly RemovedProviderProfile[],
+  focusProfileId: string,
+): ProviderProfile | null {
+  return resolvedProfileRow(
+    profiles,
+    removedProfiles,
+    focusProfileId === AMBIENT_PROFILE_ID_SENTINEL ? null : focusProfileId,
+  );
 }
 
 // NOTE: the per-tab "has content" dot that used to render here is gone on
@@ -608,9 +625,6 @@ function ProvidersSettingsPanelInner({
           hostId={hostId}
           isSelectedHostLocal={isSelectedHostLocal}
         />
-        {/* The Link dialog: mounted once, inside the scoped
-            host, so its calls go to the host this page shows. */}
-        <ProviderLinkDialog />
       </HostScopeGate>
     </SettingsPanelShell>
   );
@@ -837,7 +851,7 @@ function ProvidersPanelBody({
     }
     return (
       <div className="flex flex-wrap items-center gap-2 px-6 py-8 text-ui-sm text-destructive">
-        Couldn't load provider state.
+        {PROVIDER_STATE_UNREADABLE_COPY}
         {retryButton}
         <ReportIssueAction
           context={createReportIssueContext({
@@ -1456,11 +1470,20 @@ function ProviderDetail({
   // keys `<ProviderDetail>` by `active.providerId`, remounting this component
   // (and this `useState`'s lazy initializer) whenever the active provider
   // changes.
+  const removedProfiles = removedProfilesForProvider(
+    useProvidersList({ enabled: true, subscribed: true }).data,
+    providerId,
+  );
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(
-    () => initialSelectedProfileId(state.profiles, initialProfileId),
+    () =>
+      initialSelectedProfileId(
+        state.profiles,
+        removedProfiles,
+        initialProfileId,
+      ),
   );
   const setEnabled = useProvidersSetEnabled();
-  const setProfileEnabled = useProvidersSetProfileEnabledForClient(
+  const setProfileEnabled = useAccountProfileSetEnabledForClient(
     hostClient,
     providerId,
   );
@@ -1515,9 +1538,11 @@ function ProviderDetail({
   const focusedProfile =
     initialProfileId === null
       ? null
-      : (state.profiles.find(
-          (profile) => profile.profileId === initialProfileId,
-        ) ?? null);
+      : focusedSettingsProfile(
+          state.profiles,
+          removedProfiles,
+          initialProfileId,
+        );
   const shouldStartInReauth =
     initialSignIn &&
     focusedProfile !== null &&
@@ -1738,6 +1763,8 @@ function ProviderDetail({
       </div>
       {addProfileOpen ? (
         <AddProviderProfileDialog
+          target={null}
+          targetResult={null}
           key={state.providerId}
           state={state}
           client={hostClient}
@@ -1823,16 +1850,11 @@ function AccountManagedCredentialsLine(): ReactNode {
   );
 }
 
-/** The Env tab: a provider with a key sends its own key variable to that key's tab. */
 function ProviderEnvTab(props: {
   readonly state: ProviderCliState;
-  readonly onActiveTabChange: (tab: ProviderTabKey) => void;
 }): ReactNode {
-  const { state, onActiveTabChange } = props;
+  const { state } = props;
   const configurationKey = useConfigurationKey();
-  const keyTab = providerKeyTab({
-    apiKeySupported: state.apiKey.supported,
-  });
   return (
     <ProviderEnvOverridesSection
       // Keyed by configuration and provider: a row's draft stays with the
@@ -1841,14 +1863,6 @@ function ProviderEnvTab(props: {
       providerId={state.providerId}
       overrides={state.envOverrides}
       envOverrideScope={state.nativeCapabilities.envOverrideScope}
-      keyHome={
-        keyTab === null
-          ? null
-          : {
-              label: keyTab.label,
-              open: () => onActiveTabChange(keyTab.tab),
-            }
-      }
     />
   );
 }
@@ -1933,9 +1947,7 @@ function ProviderTabBody({
       // that echo belongs to one provider. Switching providers must discard it.
       return <ProviderAutoJudgeSection key={state.providerId} state={state} />;
     case "env":
-      return (
-        <ProviderEnvTab state={state} onActiveTabChange={onActiveTabChange} />
-      );
+      return <ProviderEnvTab state={state} />;
     // Account is the key's place. The draft is threaded in because this
     // body unmounts with the tab (Radix `TabsContent`).
     case "account":
@@ -1945,6 +1957,8 @@ function ProviderTabBody({
             state={state}
             draft={apiKeyDraft}
             onDraftChange={onApiKeyDraftChange}
+            expectedEnvironmentId={null}
+            environmentName={null}
           />
         </CredentialsManagedInAccountOr>
       );
