@@ -3,6 +3,7 @@ import type {
   RotationProducer,
 } from "@traycer/protocol/host/environment-schemas";
 import type { SandboxGrantRotation } from "@traycer/protocol/host/sandbox-secrets";
+import { SANDBOX_SECRET_FORM_KINDS } from "@traycer/protocol/host/secret-intake-catalogue";
 
 /**
  * What a replaced value has done, in words: on the sandbox card per grant, and
@@ -179,25 +180,14 @@ function producerLines(
 
 /**
  * The kinds whose new value rotates to sandbox incarnations: the ones with
- * routes served by sandbox workers. `github`, `harness` and `mcp_credential`
- * are refused a value rotation ("managed by its own flow"), and a model
- * provider's key goes to computers by the Providers page, so none of those
- * has a sandbox rotation line. A kind this build does not list has none
- * either.
+ * routes served by sandbox workers. The add form's kinds are every kind but
+ * the three made by their own flows (`github`, `harness`, `mcp_credential`),
+ * which are refused a value rotation, so they are the catalogue's source for
+ * it; a model provider's key goes to computers by the Providers page and is
+ * left out. A kind this build does not list has no line either.
  */
-const SANDBOX_ROTATING_KINDS: readonly string[] = [
-  "api_key",
-  "database",
-  "ssh",
-  "aws",
-  "azure_storage",
-  "azure_sp",
-  "gcp_sa",
-  "client_certificate",
-  "broker",
-  "mail",
-  "rdp",
-];
+const SANDBOX_ROTATING_KINDS: readonly string[] =
+  SANDBOX_SECRET_FORM_KINDS.filter((kind) => kind !== "provider");
 
 export function rotatesToSandboxes(kind: string): boolean {
   return SANDBOX_ROTATING_KINDS.includes(kind);

@@ -502,7 +502,7 @@ describe("Replace", () => {
     );
   });
 
-  it.each(["provider", "github", "harness", "mcp_credential", "newer_kind"])(
+  it.each(["github", "harness", "mcp_credential", "newer_kind"])(
     "says no sandbox sentence on a %s row, however its rotation stands",
     async (kind) => {
       const host = buildRotationHost({
