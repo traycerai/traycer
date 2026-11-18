@@ -637,6 +637,48 @@ describe("TeamProviders profiles", () => {
     ).toBe("true");
   });
 
+  it("leaves no page line from a viewer's refused fallback press when the viewer is promoted while the page is open", async () => {
+    teamProfileRecordHttpBoundary.list = {
+      status: 200,
+      body: { enabled: false },
+    };
+    teamProfileRecordHttpBoundary.itemWriteStatus = 403;
+    const harness = mountTeamPageThroughBoundary(
+      "viewer",
+      {
+        ...handlers(() => [profile(true, 4)]),
+        "environment.host.list": () => ({ hosts: [reachableHost] }),
+      },
+      "providers",
+    );
+    await waitFor(() => {
+      expect(useAuthStore.getState().contextMetadata?.userId).toBe(
+        "team-test-user",
+      );
+    });
+    admitCurrentUserToTeamWindow();
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+    await screen.findByText("Work");
+
+    await userEvent.click(
+      screen.getByRole("switch", { name: "Allow agents to use Work" }),
+    );
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "You don't have permission to do that.",
+      );
+    });
+    harness.environmentListState.currentRole = "editor";
+    await harness.rereadEnvironmentList();
+
+    expect(
+      await screen.findByRole("button", { name: "Manage profile" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText("You no longer have access to change these settings."),
+    ).toBeNull();
+  });
+
   it("keeps the toast and no page line when an editor demoted mid-page presses the record switch", async () => {
     teamProfileRecordHttpBoundary.list = {
       status: 200,

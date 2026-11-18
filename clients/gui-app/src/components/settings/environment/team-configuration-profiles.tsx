@@ -109,10 +109,12 @@ export function ConfigurationProfiles(props: {
       },
       {
         onSuccess: (result) => {
-          // authn's 403 on an item write is an answer, not an error: a reader's press says the sentence.
+          // authn's 403 on an item write is an answer, not an error. A reader's refusal says the
+          // sentence and leaves nothing on the page: stored, it would read as lost access if the
+          // reader is promoted while the page is open.
           if (!canEdit && result.outcome === "forbidden")
             toast.error(PROFILE_RECORD_FAILURE_COPY.forbidden);
-          props.onOutcome(result);
+          else props.onOutcome(result);
           reread();
         },
         onError: (error) => {
