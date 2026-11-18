@@ -1,6 +1,9 @@
 // No host commits a setting: the app that made the edit applies its own hold.
 // Nothing here logs, reports or throws what it remembers.
-import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import {
+  isCloudFailure,
+  type EnvironmentCloud,
+} from "@traycer-clients/shared/environment/environment-cloud";
 import {
   applyHeldChange,
   readHeldChangesForMatch,
@@ -25,21 +28,23 @@ const NOTHING_TO_REMEMBER: SettingsSaveBeginning = {
 };
 const ACCOUNT_CHANGED: SettingsSaveBeginning = { kind: "account_changed" };
 
-/** An apply that went unanswered is tried once more at the same hold revision. */
+/**
+ * An apply authn refused for a reason other than {@link passingFailure} is
+ * tried once more at the same hold revision, then left.
+ */
 const TRIES_PER_HOLD_REVISION = 2;
 
 /**
- * An apply authn could not take just now (no answer at all, a redirect, 408,
- * 429 or any 5xx) spends no try: a short outage would otherwise use both
- * within the first follow-ups, and the hold would wait out its TTL unapplied.
+ * An apply authn could not take just now spends no try: a short outage would
+ * otherwise use both within the first follow-ups, and the hold would wait out
+ * its TTL unapplied. That is no answer at all, a redirect (the desktop's
+ * opaque status 0 among them), a 5xx, 408, 429, or a 401 a sign-in mends.
  */
 function passingFailure(status: number | null): boolean {
+  if (status === null) return true;
+  const answer = { status, body: null };
   return (
-    status === null ||
-    (status >= 300 && status < 400) ||
-    status === 408 ||
-    status === 429 ||
-    status >= 500
+    isCloudFailure(answer) || status === 401 || status === 408 || status === 429
   );
 }
 
@@ -55,6 +60,12 @@ const FOLLOW_UP_LONGEST_MS = 5 * 60_000;
 const FOLLOW_UP_LONGEST_STEP = Math.ceil(
   Math.log2(FOLLOW_UP_LONGEST_MS / FOLLOW_UP_FIRST_MS),
 );
+
+/** The `schedule` port on the window's own timers. */
+export function scheduleFollowUp(run: () => void, delayMs: number): () => void {
+  const timer = window.setTimeout(run, delayMs);
+  return () => window.clearTimeout(timer);
+}
 
 export interface SettingsSaveContext {
   /** Read before the preparation's first await. */

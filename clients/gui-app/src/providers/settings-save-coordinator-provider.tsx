@@ -4,7 +4,10 @@ import { tryAcquireReadyRemoteSession } from "@traycer-clients/shared/host-trans
 import { readHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
-import { createSettingsSaveCoordinator } from "@/lib/environment/settings-save-coordinator";
+import {
+  createSettingsSaveCoordinator,
+  scheduleFollowUp,
+} from "@/lib/environment/settings-save-coordinator";
 import { SettingsSaveCoordinatorContext } from "@/providers/settings-save-coordinator-context";
 import { SettingsSaveMemoryPersistLifecycleBridge } from "@/providers/settings-save-memory-persist-lifecycle-bridge";
 import { SettingsSaveReconcile } from "@/providers/settings-save-reconcile";
@@ -45,11 +48,6 @@ function nowMs(): number {
   return Date.now();
 }
 
-function scheduleOnce(run: () => void, delayMs: number): () => void {
-  const timer = window.setTimeout(run, delayMs);
-  return () => window.clearTimeout(timer);
-}
-
 /** Applies each hold as its host connects, with or without an editor open. */
 export function SettingsSaveCoordinatorProvider(props: {
   readonly children: ReactNode;
@@ -63,7 +61,7 @@ export function SettingsSaveCoordinatorProvider(props: {
           binding === null ? null : binding.auth.environmentCloud(),
         readProposals: proposalsReader(binding),
         now: nowMs,
-        schedule: scheduleOnce,
+        schedule: scheduleFollowUp,
       }),
     [binding],
   );
