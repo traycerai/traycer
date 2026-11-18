@@ -227,7 +227,6 @@ function credentialHome(
   };
 }
 
-/** A brokered row admitted in an environment that is not a record. */
 function unmappedBrokeredProfile(
   credentialIdentity: ProviderProfile["credentialIdentity"],
 ): ProviderProfile {
@@ -270,7 +269,6 @@ const CONNECTIONS_URL =
 const CONNECTION_URL = `https://authn.example.test/api/v3/environments/env-a/secrets/harness-connections/${ENTRY_PROFILE_ID}`;
 const MEMBER_PROFILE_ID = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
 
-/** This computer's live binding as `environment.host.read` answers it. */
 function hostBinding(
   environmentId: string,
   sharingGeneration: number | null,
@@ -295,7 +293,7 @@ function json(status: number, body: unknown): EnvironmentTransportAnswer {
   return { status, text: JSON.stringify(body) };
 }
 
-/** authn's `managed_profile` family for the row: its entry, a folded member, the family's connection. */
+/** authn's family for the row; `member` adds a folded member to its entry. */
 interface ModelledFamily {
   bindingVersion: number;
   spendScopeKey: SpendScopeKey | null;
@@ -415,16 +413,8 @@ function disconnectAnswer(
 }
 
 /**
- * authn's routes for one family, as the final tree serves them. The items GET
- * strips the binding fields and leaves a folded member out unless the reader
- * names `managed_profile_identity` (managed-profile-projection.ts:11-26). A
- * DELETE at the entry checks the entry's version: anything else is 409
- * `binding-changed` (harness-binding-cas.ts:53-93). A match deletes every
- * connection row of the family, a pending reconnect included, re-puts each
- * item at a new version with `custodianSignOutCause`, kept while nothing
- * serves (harness-connections.ts:2700-2850, families.ts:559-638), and answers
- * whether a row was deleted. The connections list names the family by its
- * entry id while it has a row, and a fresh entry otherwise (:826-880).
+ * Mirrors authn in the internal repository: managed-profile-projection.ts,
+ * harness-binding-cas.ts, harness-connections.ts and families.ts.
  */
 function modelAuthn(
   family: ModelledFamily,

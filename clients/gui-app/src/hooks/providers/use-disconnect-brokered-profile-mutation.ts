@@ -27,7 +27,6 @@ import { toastFromHostError } from "@/lib/host-error-toast";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
 
-/** The authn connection an unmapped brokered row's sign-out disconnects. */
 export interface BrokeredProfileConnection {
   readonly environmentId: string;
   readonly environmentProfileId: string;
@@ -35,10 +34,7 @@ export interface BrokeredProfileConnection {
   readonly credentialIdentity: ProviderProfile["credentialIdentity"];
 }
 
-/**
- * The connection of a brokered row that is admitted in an environment and is
- * not a record (no aliases), or null for every other row.
- */
+/** A row with `aliases` is a record's, which this does not disconnect. */
 export function brokeredProfileConnection(
   providerId: ProviderId,
   profile: ProviderProfile,
@@ -62,11 +58,7 @@ export function brokeredProfileConnection(
   };
 }
 
-/**
- * Whether the row's account is the one the environment's entry is bound to.
- * A Claude setup token carries no account: on an entry that holds none either,
- * it is the entry's only while the entry's live connection is a setup token.
- */
+/** "setup-token" holds only while the entry's connection is a setup token. */
 function rowAccountMatch(
   connection: BrokeredProfileConnection,
   binding: ManagedProfileBinding,
@@ -87,7 +79,6 @@ function rowAccountMatch(
 
 const UNLINK_METHOD = "environment.plans.unlink";
 
-/** A refused disconnect, as the app reads authn's refused settings call. */
 function refusedDisconnect(): HostRpcError {
   return new HostRpcError({
     code: "RPC_ERROR",
@@ -98,10 +89,7 @@ function refusedDisconnect(): HostRpcError {
   });
 }
 
-/**
- * Refuses a sign-out whose row no longer answers to the environment's entry
- * or to this computer's binding, with the code the existing copy reads.
- */
+/** This code and method select the existing binding-changed toast. */
 function bindingChanged(): HostRpcError {
   return new HostRpcError({
     code: "binding-changed",
@@ -112,10 +100,6 @@ function bindingChanged(): HostRpcError {
   });
 }
 
-/**
- * This computer's binding, read live: it must be bound, at a sharing
- * generation, to the row's environment, or nothing is sent.
- */
 async function assertBoundTo(
   client: HostClient<HostRpcRegistry>,
   environmentId: string,
@@ -131,7 +115,6 @@ async function assertBoundTo(
     throw bindingChanged();
 }
 
-/** One authn read of the sign-out, on the sign-in the operation began on. */
 function readOnSignIn<T>(
   cloud: EnvironmentCloud | null,
   read: (cloud: EnvironmentCloud) => Promise<T>,
@@ -148,12 +131,8 @@ function readOnSignIn<T>(
 }
 
 /**
- * Disconnects the row's family at authn on the person's own sign-in, at its
- * entry's binding version (the row's presence counter is this computer's).
- * Nothing changes unless this computer is bound to the row's environment
- * before the first read and after each one, the entry holds the row's account (a setup
- * token only on a setup-token connection), and the disconnect answers. An
- * environment with no entry for the row is already disconnected.
+ * Sends the entry's binding version, never the row's presence counter, which
+ * is this computer's. No entry for the row means it is already disconnected.
  */
 export function useDisconnectBrokeredProfile(): UseMutationResult<
   void,

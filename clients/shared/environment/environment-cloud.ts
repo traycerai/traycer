@@ -259,17 +259,10 @@ export function sendSettings(
   return sendEnvironmentRequest(cloud, "settings", method, path, body);
 }
 
-/**
- * The header a reader names the authn value shapes it parses in, comma
- * separated: `HOST_CAPABILITIES_HEADER` in the internal repository's
- * `packages/common/src/environments/internal-wire.ts`.
- */
+/** Equals `HOST_CAPABILITIES_HEADER` in the internal repository. */
 const CAPABILITIES_HEADER = "x-traycer-host-capabilities";
 
-/**
- * A settings read on the person's bearer that opts into the wider value
- * shapes `capabilities` name; without them authn answers the released ones.
- */
+/** Without `capabilities`, authn answers only the released value shapes. */
 export async function readSettingsWithCapabilities(
   cloud: EnvironmentCloud,
   path: string,
