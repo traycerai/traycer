@@ -67,6 +67,22 @@ import {
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
 
+/** A give whose start answered: the team it names and the line its receipt shows. */
+export interface StartedGive {
+  readonly teamId: string;
+  readonly line: string;
+}
+
+/**
+ * The give and claim receipt line. It is held above the card, because the owner
+ * change restarts the computer and the card unmounts while the host is away.
+ */
+export interface OwnershipReceipt {
+  readonly line: string | null;
+  readonly show: (line: string) => void;
+  readonly giveStarted: (give: StartedGive) => void;
+}
+
 /** The named host's settings place, above the Overview's tabs. */
 export function HostOverviewSettingsCard(props: {
   readonly client: HostClient<HostRpcRegistry>;
@@ -76,10 +92,10 @@ export function HostOverviewSettingsCard(props: {
   readonly binding: EnvironmentHostBinding | null;
   readonly owner: HostOwnerPrincipal | null;
   readonly isLocalMachine: boolean;
+  readonly receipt: OwnershipReceipt;
 }): ReactNode {
   const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
   const [stopOpen, setStopOpen] = useState(false);
-  const [ownershipReceipt, setOwnershipReceipt] = useState<string | null>(null);
   const hostIds = useMemo(() => [props.hostId], [props.hostId]);
   const statusVersion =
     useHostNegotiatedMethodVersions(hostIds, "environment.status").get(
@@ -114,7 +130,7 @@ export function HostOverviewSettingsCard(props: {
             />
           }
         />
-        <TransferReceipt value={ownershipReceipt} />
+        <TransferReceipt value={props.receipt.line} />
       </>
     );
   }
@@ -134,9 +150,9 @@ export function HostOverviewSettingsCard(props: {
           binding={props.binding}
           fallback={model.kind === "team" ? model : null}
           isLocalMachine={props.isLocalMachine}
-          onClaimed={setOwnershipReceipt}
+          onClaimed={props.receipt.show}
         />
-        <TransferReceipt value={ownershipReceipt} />
+        <TransferReceipt value={props.receipt.line} />
       </>
     );
   }
@@ -161,7 +177,7 @@ export function HostOverviewSettingsCard(props: {
             />
           }
         />
-        <TransferReceipt value={ownershipReceipt} />
+        <TransferReceipt value={props.receipt.line} />
       </>
     );
   }
@@ -185,7 +201,7 @@ export function HostOverviewSettingsCard(props: {
               currentEnvironmentId={
                 props.binding?.environment.environmentId ?? null
               }
-              onTransferred={setOwnershipReceipt}
+              receipt={props.receipt}
               value={model.value}
               options={model.options}
               onChoose={(option) => {
@@ -209,7 +225,7 @@ export function HostOverviewSettingsCard(props: {
         open={stopOpen}
         onOpenChange={setStopOpen}
       />
-      <TransferReceipt value={ownershipReceipt} />
+      <TransferReceipt value={props.receipt.line} />
     </>
   );
 }
@@ -389,7 +405,7 @@ function EnvironmentSourceControl(
     readonly hostName: string;
     readonly owner: HostOwnerPrincipal | null;
     readonly currentEnvironmentId: string | null;
-    readonly onTransferred: (receipt: string) => void;
+    readonly receipt: OwnershipReceipt;
   },
 ): ReactNode {
   const planVersion = useHostMethodSchemaVersion(
@@ -414,7 +430,7 @@ function TeamEnvironmentSourceControl(
     readonly hostId: string;
     readonly hostName: string;
     readonly currentEnvironmentId: string | null;
-    readonly onTransferred: (receipt: string) => void;
+    readonly receipt: OwnershipReceipt;
   },
 ): ReactNode {
   const environments = useEnvironmentListQuery(true);
@@ -448,16 +464,24 @@ function TeamEnvironmentSourceControl(
           currentEnvironmentId={props.currentEnvironmentId}
           team={selected}
           onClose={() => setSelected(null)}
+          onStarted={(team) => {
+            props.receipt.giveStarted({
+              teamId: team.ownerId,
+              line: givenLine(props.hostName, team),
+            });
+          }}
           onGiven={(team) => {
-            props.onTransferred(
-              `${props.hostName} now belongs to ${team.label}. Any Admin or Editor of the team can claim it as their own.`,
-            );
+            props.receipt.show(givenLine(props.hostName, team));
             setSelected(null);
           }}
         />
       )}
     </>
   );
+}
+
+function givenLine(hostName: string, team: EnvironmentDescriptorV11): string {
+  return `${hostName} now belongs to ${team.label}. Any Admin or Editor of the team can claim it as their own.`;
 }
 
 function EnvironmentSourceSelect(
@@ -627,6 +651,9 @@ export function HostOverviewSettingsCardSlot(props: {
   readonly usable: boolean;
   readonly owner: HostOwnerPrincipal | null;
   readonly isLocalMachine: boolean;
+  readonly receipt: OwnershipReceipt;
+  /** The card shows again after a time it could not: the host is back. */
+  readonly onReturn: () => void;
 }): ReactNode {
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const status = useEnvironmentStatusRead(
@@ -645,7 +672,7 @@ export function HostOverviewSettingsCardSlot(props: {
     props.hostId,
     props.usable && bindingSupport === true,
   );
-  if (
+  const hidden =
     !props.usable ||
     props.client === null ||
     props.hostId === null ||
@@ -653,10 +680,14 @@ export function HostOverviewSettingsCardSlot(props: {
     status.isError ||
     (bindingSupport === false && binding.kind !== "own_settings") ||
     binding.kind === "failed" ||
-    (binding.kind === "binding" && binding.query.isError)
-  ) {
-    return null;
-  }
+    (binding.kind === "binding" && binding.query.isError);
+  const wasHidden = useRef(hidden);
+  const { onReturn } = props;
+  useEffect(() => {
+    if (wasHidden.current && !hidden) onReturn();
+    wasHidden.current = hidden;
+  }, [hidden, onReturn]);
+  if (hidden) return null;
   return (
     <HostOverviewSettingsCard
       key={JSON.stringify([props.hostId, userId])}
@@ -667,6 +698,7 @@ export function HostOverviewSettingsCardSlot(props: {
       binding={binding.kind === "binding" ? (binding.query.data ?? null) : null}
       owner={props.owner}
       isLocalMachine={props.isLocalMachine}
+      receipt={props.receipt}
     />
   );
 }
