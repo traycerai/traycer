@@ -1864,6 +1864,26 @@ describe("useEdgeNavSwipe", () => {
       expect(reserved.cancelled).toBe(true);
     });
 
+    // A rail that already pans sideways owns the drag, so the reservation must
+    // not cancel it; the same drag on a plain element is reserved.
+    it("leaves a drag on a rail that already pans sideways to the page", () => {
+      mountOnBareScreen();
+      const rail = document.createElement("div");
+      rail.style.overflowX = "auto";
+      stubHorizontalPan(rail, { scrollWidth: 600, clientWidth: 300 });
+      document.body.appendChild(rail);
+      const plain = document.createElement("div");
+      document.body.appendChild(plain);
+
+      touchDown(8, rail);
+      const panning = touchTo({ clientX: 60, clientY: 300 }, rail);
+      touchDown(8, plain);
+      const reserved = touchTo({ clientX: 60, clientY: 300 }, plain);
+
+      expect(panning.cancelled).toBe(false);
+      expect(reserved.cancelled).toBe(true);
+    });
+
     it("leaves a drag alone while the edges are claimed", () => {
       setMobileApp(true);
       mountSwipe({ edgesClaimed: () => true, response: "instant" });
