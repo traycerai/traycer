@@ -5,7 +5,10 @@ import { buildProgram } from "../../index";
 import { buildAgentForkCommand } from "../agent-fork";
 import { AGENT_FORK_SPEED_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
 import { parseForkProfileSelection } from "../../internal/profile-selection";
-import { callHostRpc, callHostRpcWithDispatch } from "../../internal/host-rpc";
+import {
+  callAgentHostRpc,
+  callAgentHostRpcWithDispatch,
+} from "../../internal/host-rpc";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
 import { noopLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
@@ -32,13 +35,13 @@ vi.mock("../../internal/host-rpc", async () => {
   >("../../internal/host-rpc");
   return {
     ...actual,
-    callHostRpc: vi.fn(),
-    callHostRpcWithDispatch: vi.fn(),
+    callAgentHostRpc: vi.fn(),
+    callAgentHostRpcWithDispatch: vi.fn(),
   };
 });
 
-const rpcMock = vi.mocked(callHostRpc);
-const dispatchMock = vi.mocked(callHostRpcWithDispatch);
+const rpcMock = vi.mocked(callAgentHostRpc);
+const dispatchMock = vi.mocked(callAgentHostRpcWithDispatch);
 const PREV_ENV = {
   epic: process.env.TRAYCER_EPIC_ID,
   agent: process.env.TRAYCER_AGENT_ID,

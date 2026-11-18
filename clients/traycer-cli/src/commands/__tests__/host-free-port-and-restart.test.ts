@@ -39,7 +39,17 @@ const mocks = vi.hoisted(() => ({
   // command-level wiring and never publishes.
   crossSpawnEdge: false,
   publishedOrigins: [] as string[],
+  credentialProvisionMock: vi.fn(),
 }));
+
+vi.mock("../../host/install-auth", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/install-auth")>();
+  return {
+    ...actual,
+    maybeProvisionCredential: mocks.credentialProvisionMock,
+  };
+});
 
 vi.mock("../../service", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../service")>();
@@ -222,6 +232,10 @@ describe("buildHostFreePortAndRestartCommand", () => {
     expect(hostHomeDir("production").startsWith(workHome)).toBe(true);
     mocks.crossSpawnEdge = false;
     mocks.publishedOrigins = [];
+    mocks.credentialProvisionMock.mockReset().mockResolvedValue({
+      kind: "active",
+      minted: true,
+    });
   });
 
   afterEach(() => {
@@ -242,6 +256,11 @@ describe("buildHostFreePortAndRestartCommand", () => {
     mocks.controllerCalls = [];
     mocks.lockCalls = [];
     mocks.killCalls = [];
+    mocks.lockEvents = [];
+    mocks.credentialProvisionMock.mockImplementation(() => {
+      mocks.lockEvents.push("credential-probe");
+      return Promise.resolve({ kind: "active", minted: true });
+    });
 
     const { buildHostFreePortAndRestartCommand } =
       await import("../host-free-port-and-restart");
@@ -261,6 +280,22 @@ describe("buildHostFreePortAndRestartCommand", () => {
       killed: false,
       release: null,
     });
+    expect(result.data).toMatchObject({
+      credentialProvision: { kind: "active" },
+    });
+    expect(result.data).toHaveProperty("credentialProvision", {
+      kind: "active",
+    });
+    expect(result.human).toContain("host authorized");
+    expect(mocks.credentialProvisionMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "start",
+      null,
+    );
+    expect(mocks.lockEvents).toContain("lock released");
+    expect(mocks.lockEvents.indexOf("lock released")).toBeLessThan(
+      mocks.lockEvents.indexOf("credential-probe"),
+    );
     expect(result.exitCode).toBe(0);
   });
 
@@ -573,6 +608,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
 
       // The load-bearing negative: the service was never touched.
       expect(mocks.controllerCalls).toEqual([]);
+      expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
       // Paired positive, so this test cannot pass merely because the
       // command failed early and never reached the branch under test.
       expect(result.data).toMatchObject({
@@ -602,6 +638,7 @@ describe("buildHostFreePortAndRestartCommand", () => {
       const result = await command(fakeCtx());
 
       expect(mocks.controllerCalls).toEqual(["stop"]);
+      expect(mocks.credentialProvisionMock).not.toHaveBeenCalled();
       expect(result.data).toMatchObject({
         restartedLabel: null,
         deferredForParkedActivation: false,

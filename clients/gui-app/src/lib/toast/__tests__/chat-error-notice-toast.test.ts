@@ -40,7 +40,7 @@ describe("showErrorNoticeToast for TOO_MANY_ATTACHMENTS", () => {
   it.each(["error", "warning"] as const)(
     "a %s notice is a plain warning carrying the host's text, with no report offer",
     (severity) => {
-      showErrorNoticeToast(notice({ severity }));
+      showErrorNoticeToast(notice({ severity }), false);
 
       expect(mocks.warning).toHaveBeenCalledWith("Too many files attached", {
         description: "This message has 21 files; a message can carry up to 20.",
@@ -51,7 +51,7 @@ describe("showErrorNoticeToast for TOO_MANY_ATTACHMENTS", () => {
   );
 
   it("any other error notice still offers to report", () => {
-    showErrorNoticeToast(notice({ code: "SOMETHING_ELSE" }));
+    showErrorNoticeToast(notice({ code: "SOMETHING_ELSE" }), false);
 
     expect(mocks.reportableError).toHaveBeenCalledTimes(1);
     expect(mocks.warning).not.toHaveBeenCalled();

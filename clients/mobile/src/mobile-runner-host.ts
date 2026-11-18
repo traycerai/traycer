@@ -1,12 +1,24 @@
+import { nativeEnvironmentTransport } from "./native-environment-transport";
+import {
+  saveAutoPolicyViaHttp,
+  type AutoPolicySaveResult,
+} from "@traycer-clients/shared/host-client/auto-policy-save";
+import {
+  attachTaskEnvironmentViaHttp,
+  type TaskEnvironmentAttachmentRequest,
+  type TaskEnvironmentAttachmentResult,
+} from "@traycer-clients/shared/host-client/task-environment-attachment";
+import {
+  listEnvironmentsViaHttp,
+  type EnvironmentDirectoryResult,
+} from "@traycer-clients/shared/host-client/environment-directory";
 import {
   readHostOwnershipViaHttp,
   type HostOwnershipResult,
 } from "@traycer-clients/shared/host-client/host-ownership";
 import {
   listTeamComputersViaHttp,
-  setEnvironmentBotHostViaHttp,
   type TeamComputersResult,
-  type SetEnvironmentBotHostResult,
 } from "@traycer-clients/shared/host-client/team-computers";
 import {
   mintTeamComputerInstallTokenViaHttp,
@@ -22,10 +34,6 @@ import {
   SandboxArtifacts,
 } from "./sandbox-artifacts-plugin";
 import { App } from "@capacitor/app";
-import {
-  mintExecutableWriteGrantViaHttp,
-  type ExecutableWriteGrantFetchResult,
-} from "@traycer-clients/shared/host-client/executable-write-grant";
 import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { AppLauncher } from "@capacitor/app-launcher";
 import { Network, type ConnectionStatus } from "@capacitor/network";
@@ -44,6 +52,13 @@ import {
   type DevicePollSchedule,
 } from "@traycer-clients/shared/auth/device-auth";
 import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import {
+  createHostTokenSource,
+  type HostTokenSource,
+} from "@traycer-clients/shared/auth/host-token-source";
+import { createSecureStorageHostTokenPersistence } from "@traycer-clients/shared/auth/host-token-secure-storage";
+import { forgetHostTokensOnSignOut } from "@traycer-clients/shared/auth/host-token-sign-out";
+import { mintHostTokenViaHttp } from "@traycer-clients/shared/host-transport/remote/grant-client";
 import {
   credentialsIdentityFromAuthenticatedUser,
   refreshOnceAbortable,
@@ -162,6 +177,18 @@ import type {
   SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
 import {
+  deleteBotViaHttp,
+  updateBotReplyModeViaHttp,
+  updateBotRunSettingsViaHttp,
+  type BotDeleteResult,
+  type BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
+import {
   createSandboxViaHttp,
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
@@ -184,6 +211,13 @@ import {
   type TraycerModelsFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
+  fetchTeamChatAutoArchiveViaHttp,
+  putTeamChatAutoArchiveViaHttp,
+  type TeamChatAutoArchiveReadResult,
+  type TeamChatAutoArchiveSetRequest,
+  type TeamChatAutoArchiveWriteResult,
+} from "@traycer-clients/shared/host-client/team-chat-auto-archive";
+import {
   voiceSessionsAvailabilityViaHttp,
   voiceSessionsEndViaHttp,
   voiceSessionsMintViaHttp,
@@ -196,6 +230,9 @@ import {
 } from "@traycer-clients/shared/host-client/voice-sessions";
 import {
   decideSecretRequestViaHttp,
+  replaceEnvironmentApiKeyViaHttp,
+  type EnvironmentApiKeyReplaceRequest,
+  type EnvironmentApiKeyReplaceResult,
   fetchEnvironmentProvidersViaHttp,
   fetchSandboxGrantsViaHttp,
   fetchTeamEnvironmentViaHttp,
@@ -364,6 +401,7 @@ interface RetainedStepUpCredential {
 export class MobileRunnerHost implements IRunnerHost {
   readonly signInUrl: string;
   readonly authnBaseUrl: string;
+  readonly environmentTransport = nativeEnvironmentTransport;
   private readonly serverBaseUrl: string;
   readonly sandboxControlUnavailableReason: string | null;
   readonly relayBaseUrl: string;
@@ -372,6 +410,7 @@ export class MobileRunnerHost implements IRunnerHost {
   readonly hasLocalHost = false;
   readonly secureStorage: ISecureStorage = buildSecureStorage();
   readonly tokenStore: ITokenStore;
+  readonly hostTokens: HostTokenSource;
   readonly notifications: INotificationHost;
   readonly tray: ITrayState = new MobileNoopTrayState();
   readonly workspaceFolders: IWorkspaceFoldersHost = {
@@ -482,6 +521,29 @@ export class MobileRunnerHost implements IRunnerHost {
     this.tokenStore = new MobileTokenStore(
       this.secureStorage,
       options.authnBaseUrl,
+    );
+    this.hostTokens = createHostTokenSource({
+      persistence: createSecureStorageHostTokenPersistence(
+        this.secureStorage,
+        MOBILE_HOST_TOKENS_KEY,
+      ),
+      mint: (hostId, signInToken, signal) =>
+        mintHostTokenViaHttp(options.authnBaseUrl, hostId, signInToken, signal),
+      signIn: null,
+      now: Date.now,
+    });
+    const tokenStore = this.tokenStore;
+    forgetHostTokensOnSignOut(
+      {
+        current: async () => (await tokenStore.get())?.user.id ?? null,
+        onChange: (listener) => {
+          const subscription = tokenStore.subscribe((change) => {
+            listener(change.present ? change.userId : null);
+          });
+          return () => subscription.dispose();
+        },
+      },
+      this.hostTokens,
     );
     this.pushPermission = buildPushPermission(
       options.pushRegistration,
@@ -795,20 +857,6 @@ export class MobileRunnerHost implements IRunnerHost {
   ): Promise<TeamComputersResult> {
     return listTeamComputersViaHttp(this.authnBaseUrl, bearer, environmentId);
   }
-  setEnvironmentBotHost(
-    bearer: string,
-    environmentId: string,
-    hostId: string,
-    sharingGeneration: number,
-  ): Promise<SetEnvironmentBotHostResult> {
-    return setEnvironmentBotHostViaHttp(
-      this.authnBaseUrl,
-      bearer,
-      environmentId,
-      hostId,
-      sharingGeneration,
-    );
-  }
   mintTeamComputerInstallToken(
     bearerToken: string,
     environmentId: string,
@@ -847,6 +895,43 @@ export class MobileRunnerHost implements IRunnerHost {
   // CapacitorHttp, so traycer-server's CORS allow-list does not apply.
   listSandboxes(bearerToken: string): Promise<SandboxListFetchResult> {
     return listSandboxesViaHttp(this.serverBaseUrl, bearerToken, null);
+  }
+
+  // Through the native request that follows no redirect, as the
+  // environment calls go, rather than the patched `fetch`.
+  listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult> {
+    return listEnvironmentsViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
+    );
+  }
+
+  saveAutoPolicy(
+    bearerToken: string,
+    body: string,
+  ): Promise<AutoPolicySaveResult> {
+    return saveAutoPolicyViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
+      body,
+    );
+  }
+
+  attachTaskEnvironment(
+    bearerToken: string,
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult> {
+    return attachTaskEnvironmentViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
+      request,
+    );
   }
 
   getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult> {
@@ -1023,10 +1108,13 @@ export class MobileRunnerHost implements IRunnerHost {
     bearerToken: string,
     request: SlackAppRegisterRequest,
   ): Promise<SlackAppWriteResult> {
+    // The app's secrets ride in the body: through the native request that
+    // follows no redirect, not the patched `fetch`.
     return registerSlackAppViaHttp(
       this.serverBaseUrl,
       bearerToken,
       null,
+      nativeEnvironmentTransport,
       request,
     );
   }
@@ -1067,6 +1155,47 @@ export class MobileRunnerHost implements IRunnerHost {
     );
   }
 
+  // A bot's settings: through the native request that follows no redirect,
+  // as the environment list goes.
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult> {
+    return updateBotRunSettingsViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
+      request,
+    );
+  }
+
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult> {
+    return updateBotReplyModeViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
+      request,
+    );
+  }
+
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult> {
+    return deleteBotViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
+      request,
+    );
+  }
+
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -1087,6 +1216,17 @@ export class MobileRunnerHost implements IRunnerHost {
     return fetchTeamEnvironmentViaHttp(this.authnBaseUrl, bearerToken, teamId);
   }
 
+  replaceEnvironmentApiKey(
+    bearerToken: string,
+    request: EnvironmentApiKeyReplaceRequest,
+  ): Promise<EnvironmentApiKeyReplaceResult> {
+    return replaceEnvironmentApiKeyViaHttp(
+      this.authnBaseUrl,
+      bearerToken,
+      request,
+    );
+  }
+
   getEnvironmentProviders(
     bearerToken: string,
     environmentId: string,
@@ -1095,17 +1235,6 @@ export class MobileRunnerHost implements IRunnerHost {
       this.authnBaseUrl,
       bearerToken,
       environmentId,
-    );
-  }
-
-  mintExecutableWriteGrant(
-    bearerToken: string,
-    hostId: string,
-  ): Promise<ExecutableWriteGrantFetchResult> {
-    return mintExecutableWriteGrantViaHttp(
-      this.authnBaseUrl,
-      bearerToken,
-      hostId,
     );
   }
 
@@ -1254,6 +1383,35 @@ export class MobileRunnerHost implements IRunnerHost {
   async forceRestartUnresponsiveHost(): Promise<HostRestartRequestResult> {
     // The phone runs no local host, so it never offers this restart.
     return this.requestHostRespawn();
+  }
+
+  // The same native request, for the same reason.
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult> {
+    return fetchTeamChatAutoArchiveViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
+      teamId,
+    );
+  }
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult> {
+    return putTeamChatAutoArchiveViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      nativeEnvironmentTransport,
+      teamId,
+      request,
+    );
   }
 }
 
@@ -1468,6 +1626,7 @@ class MobileDeviceFlowSession implements DeviceFlowSession {
 // as the retired legacy per-window slots and wipes them at startup after its
 // migration pre-step, which would destroy this store's credentials.
 const MOBILE_TOKEN_STORE_KEY = "traycer.credentials";
+const MOBILE_HOST_TOKENS_KEY = "traycer.host-tokens";
 const MISSING_STORAGE_ITEM = "Item with given key does not exist";
 
 function buildSecureStorage(): ISecureStorage {

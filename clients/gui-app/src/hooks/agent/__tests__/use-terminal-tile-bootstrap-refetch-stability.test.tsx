@@ -11,6 +11,23 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { UseTerminalSessionHandleArgs } from "@/lib/registries/terminal-session-registry";
+import { installHostUpdateGestureDirectory } from "@/hooks/host/__tests__/host-update-gesture-directory";
+import { HOST_UPDATE_SKEW_COPY } from "@/lib/host/version-skew-copy";
+
+const toast = vi.hoisted(() => vi.fn());
+
+vi.mock("sonner", () => ({ toast }));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
 
 // A live session handle must survive `terminal.list` REFETCHES. The handle
 // gate used to derive from `hostHasSession`, which degrades to `null`
@@ -133,6 +150,7 @@ function lastHandleArgs(): UseTerminalSessionHandleArgs {
 
 describe("useTerminalTileBootstrap handle gate across list refetches", () => {
   beforeEach(() => {
+    toast.mockReset();
     handleCalls = [];
     mockCreate = {
       isError: false,
@@ -260,6 +278,41 @@ describe("useTerminalTileBootstrap handle gate across list refetches", () => {
       expect(lastHandleArgs().enabled).toBe(true);
     });
     expect(mockCreate.mutate).not.toHaveBeenCalled();
+  });
+
+  it("checks the live directory row on retry and admits a host at the floor", async () => {
+    const hostId = "host-1";
+    const liveDirectory = await installHostUpdateGestureDirectory(
+      hostId,
+      "2.0.0",
+      "1.0.0",
+    );
+
+    try {
+      mockList.data = { sessions: [] };
+      const refetch = vi.fn(() => Promise.resolve({ data: { sessions: [] } }));
+      mockList.refetch = refetch;
+      const reset = vi.fn();
+      mockCreate.reset = reset;
+      const { result } = runBootstrap();
+
+      await liveDirectory.refreshVersions("1.5.4", "9.9.9");
+      act(() => result.current.retry());
+
+      expect(toast).toHaveBeenCalledTimes(1);
+      expect(toast.mock.calls[0]?.[0]).toBe(HOST_UPDATE_SKEW_COPY.title);
+      expect(refetch).not.toHaveBeenCalled();
+      expect(reset).not.toHaveBeenCalled();
+
+      await liveDirectory.refreshVersions("2.0.0", "1.0.0");
+      act(() => result.current.retry());
+
+      expect(toast).toHaveBeenCalledTimes(1);
+      expect(refetch).toHaveBeenCalledOnce();
+      expect(reset).toHaveBeenCalledOnce();
+    } finally {
+      liveDirectory.dispose();
+    }
   });
 });
 

@@ -219,11 +219,15 @@ export default defineConfig({
     // `sonner` is inlined for what it keeps: its toast queue is module state, and
     // with `isolate: false` a module Node loaded natively is shared by every file
     // a worker runs, so one file's toasts would render in the next file's Toaster.
+    // `fake-indexeddb` is inlined for the same reason: `fake-indexeddb/auto`
+    // installs `indexedDB` when it is first evaluated, so a file that imports it
+    // after another file in the worker got a cached module and no `indexedDB`.
     server: {
       deps: {
         inline: [
           /[\\/]node_modules[\\/]zod[\\/]/,
           /[\\/]node_modules[\\/]sonner[\\/]/,
+          /[\\/]node_modules[\\/]fake-indexeddb[\\/]/,
         ],
       },
     },

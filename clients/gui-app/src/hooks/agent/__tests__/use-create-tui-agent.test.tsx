@@ -113,6 +113,7 @@ vi.mock("@/hooks/agent/use-tui-fork-profile-support", () => ({
   useTuiForkProfileSupported: () => useTuiForkProfileSupportedMock(),
 }));
 
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { toast } from "sonner";
 import {
   type CreateTuiAgentStatus,
@@ -1304,6 +1305,60 @@ describe("useCreateTuiAgent", () => {
     );
     expect(placeholderNode.type).toBe("terminal-agent");
 
+    queryClient.clear();
+  });
+
+  it("a removed-by-person refusal on the staged create path toasts Was removed", async () => {
+    vi.mocked(toast.error).mockClear();
+    hookMocks.request.mockImplementation((method, payload) => {
+      if (method === "agent.tui.prepareLaunch") {
+        return Promise.reject(
+          new HostRpcError({
+            code: "removed-by-person",
+            message: "The send was refused.",
+            requestId: "req-1",
+            method: "agent.tui.prepareLaunch",
+            fatalDetails: null,
+          }),
+        );
+      }
+      if (method === "epic.createTuiAgent") {
+        return Promise.resolve({ tuiAgentId: "server-id" });
+      }
+      return Promise.resolve(worktreeCreateOkResponse(payload));
+    });
+
+    const queryClient = makeQueryClient();
+    const { result } = renderHook(() => useCreateTuiAgent(), {
+      wrapper: queryClientWrapper(queryClient),
+    });
+
+    await act(async () => {
+      await result.current
+        .create({
+          epicId: EPIC_ID,
+          tabId: TAB_ID,
+          parentId: null,
+          title: "",
+          placement: null,
+          harnessId: "claude",
+          model: null,
+          reasoningEffort: null,
+          forkSourceHarnessSessionId: null,
+          sourceTuiAgentId: null,
+          sourceProfileId: null,
+          onStatusChange: null,
+          workspaceMode: "inherit",
+          worktreeIntent: null,
+          terminalAgentArgs: null,
+          profileId: null,
+        })
+        .catch(() => undefined);
+    });
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.error).mock.calls[0]?.[0]).toBe("Was removed");
+    });
     queryClient.clear();
   });
 

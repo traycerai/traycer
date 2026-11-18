@@ -28,6 +28,7 @@ export function ProfileEditDialogPresentation(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly switchingAccount: boolean;
+  readonly signInSettled: boolean;
   readonly label: string;
   readonly onLabelChange: (label: string) => void;
   readonly accentColor: ProviderProfileAccentColor | null;
@@ -44,6 +45,7 @@ export function ProfileEditDialogPresentation(props: {
   readonly confirmRemoveOpen: boolean;
   readonly onConfirmRemoveOpenChange: (open: boolean) => void;
   readonly removeDescription: string;
+  readonly removeConfirmation: ReactNode | null;
   readonly onConfirmRemove: () => void;
   readonly children: ReactNode;
 }): ReactNode {
@@ -52,7 +54,11 @@ export function ProfileEditDialogPresentation(props: {
       <Dialog
         open={props.open}
         onOpenChange={(nextOpen) => {
-          if (!nextOpen && (props.savePending || props.switchingAccount))
+          if (
+            !nextOpen &&
+            (props.savePending ||
+              (props.switchingAccount && !props.signInSettled))
+          )
             return;
           props.onOpenChange(nextOpen);
         }}
@@ -60,7 +66,7 @@ export function ProfileEditDialogPresentation(props: {
         <DialogContent
           layout="banded"
           className="flex max-h-[min(85dvh,40rem)] w-[min(92vw,30rem)] flex-col overflow-hidden sm:max-w-none"
-          showCloseButton={!props.switchingAccount}
+          showCloseButton={!props.switchingAccount || props.signInSettled}
         >
           <DialogHeader className="gap-1.5">
             <DialogTitle>{props.title}</DialogTitle>
@@ -136,17 +142,19 @@ export function ProfileEditDialogPresentation(props: {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <ConfirmDestructiveDialog
-        blockedReason={null}
-        open={props.confirmRemoveOpen}
-        onOpenChange={props.onConfirmRemoveOpenChange}
-        title={`Remove ${profileDisplayLabel(props.profile)}?`}
-        description={props.removeDescription}
-        cascadeSummary={null}
-        actionLabel="Remove"
-        isPending={props.removePending}
-        onConfirm={props.onConfirmRemove}
-      />
+      {props.removeConfirmation ?? (
+        <ConfirmDestructiveDialog
+          blockedReason={null}
+          open={props.confirmRemoveOpen}
+          onOpenChange={props.onConfirmRemoveOpenChange}
+          title={`Remove ${profileDisplayLabel(props.profile)}?`}
+          description={props.removeDescription}
+          cascadeSummary={null}
+          actionLabel="Remove"
+          isPending={props.removePending}
+          onConfirm={props.onConfirmRemove}
+        />
+      )}
     </>
   );
 }

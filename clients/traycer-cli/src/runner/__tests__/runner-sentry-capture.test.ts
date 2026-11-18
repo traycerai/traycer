@@ -67,15 +67,19 @@ vi.mock("../sentry-repeat-gate", async (importOriginal) => {
 });
 
 const stdoutChunks: string[] = [];
+const stderrChunks: string[] = [];
 
 describe("runner Sentry capture", () => {
   let priorExitCode: number | string | null | undefined;
+  let priorStderrIsTTY: PropertyDescriptor | undefined;
   let stdoutWriteSpy: MockInstance;
 
   beforeEach(() => {
     priorExitCode = process.exitCode;
     process.exitCode = undefined;
     stdoutChunks.length = 0;
+    stderrChunks.length = 0;
+    priorStderrIsTTY = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
     sentryMocks.captureException.mockReset();
     sentryMocks.addBreadcrumb.mockReset();
     sentryMocks.close.mockReset().mockResolvedValue(true);
@@ -94,9 +98,10 @@ describe("runner Sentry capture", () => {
       return true;
     }) as never);
     vi.spyOn(process.stderr, "write").mockImplementation(((
-      _chunk: string | Uint8Array,
+      chunk: string | Uint8Array,
       callback: (() => void) | undefined,
     ) => {
+      stderrChunks.push(typeof chunk === "string" ? chunk : chunk.toString());
       if (callback !== undefined) callback();
       return true;
     }) as never);
@@ -107,6 +112,11 @@ describe("runner Sentry capture", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     process.exitCode = priorExitCode;
+    Object.defineProperty(
+      process.stderr,
+      "isTTY",
+      priorStderrIsTTY ?? { value: undefined, configurable: true },
+    );
   });
 
   function terminalEnvelope(): Record<string, unknown> | null {
@@ -138,8 +148,9 @@ describe("runner Sentry capture", () => {
   }
 
   async function runMappedHostRpcError(
-    code: "RPC_ERROR" | "VERB_NOT_ALLOWED",
+    code: "RPC_ERROR" | "VERB_NOT_ALLOWED" | "removed-by-person",
     message: string,
+    json: boolean,
   ): Promise<void> {
     const { HostRpcError } =
       await import("../../../../shared/host-transport/host-messenger");
@@ -154,7 +165,7 @@ describe("runner Sentry capture", () => {
     });
 
     await runCommand(() => toAgentCliError(Promise.reject(err)), {
-      json: true,
+      json,
       quiet: null,
       noProgress: null,
       noBootstrap: null,
@@ -164,7 +175,7 @@ describe("runner Sentry capture", () => {
   it("maps the EntityMemoryManager shutdown refusal to expected host-busy output", async () => {
     const message = "EntityMemoryManager is shutting down";
 
-    await runMappedHostRpcError("RPC_ERROR", message);
+    await runMappedHostRpcError("RPC_ERROR", message, true);
 
     expect(sentryMocks.captureException).not.toHaveBeenCalled();
     expect(sentryMocks.addBreadcrumb).toHaveBeenCalledTimes(1);
@@ -185,7 +196,7 @@ describe("runner Sentry capture", () => {
   ])(
     "captures RPC_ERROR message %j and leaves no expected-code breadcrumb",
     async (message) => {
-      await runMappedHostRpcError("RPC_ERROR", message);
+      await runMappedHostRpcError("RPC_ERROR", message, true);
 
       expect(sentryMocks.captureException).toHaveBeenCalledTimes(1);
       expect(sentryMocks.addBreadcrumb).not.toHaveBeenCalled();
@@ -199,7 +210,7 @@ describe("runner Sentry capture", () => {
   it("captures the shutdown message when the wire code is unrelated", async () => {
     const message = "EntityMemoryManager is shutting down";
 
-    await runMappedHostRpcError("VERB_NOT_ALLOWED", message);
+    await runMappedHostRpcError("VERB_NOT_ALLOWED", message, true);
 
     expect(sentryMocks.captureException).toHaveBeenCalledTimes(1);
     expect(sentryMocks.captureException.mock.calls[0][0]).toMatchObject({
@@ -616,5 +627,122 @@ describe("runner Sentry capture", () => {
       repeatGateMocks.recordCliFailureForSentry.mock.invocationCallOrder[0];
 
     expect(errorEnvelopeCallOrder).toBeLessThan(gateCallOrder);
+  });
+
+  type ProfileSelectionOutputCase =
+    | {
+        readonly kind: "human";
+        readonly wireCode: "RPC_ERROR" | "removed-by-person";
+        readonly output: "tty" | "piped";
+        readonly tty: boolean;
+        readonly expected: string;
+      }
+    | {
+        readonly kind: "json";
+        readonly wireCode: "RPC_ERROR" | "removed-by-person";
+        readonly output: "json";
+        readonly tty: boolean;
+      };
+  const profileSelectionOutputCases: ReadonlyArray<ProfileSelectionOutputCase> =
+    [
+      {
+        kind: "human",
+        wireCode: "RPC_ERROR",
+        tty: true,
+        output: "tty",
+        expected:
+          'error: traycer: No profile "work" is registered for provider "claude-code".\n',
+      },
+      {
+        kind: "human",
+        wireCode: "RPC_ERROR",
+        tty: false,
+        output: "piped",
+        expected:
+          'error: traycer: No profile "work" is registered for provider "claude-code". [code=E_INVALID_ARGUMENT]\n',
+      },
+      {
+        kind: "json",
+        wireCode: "RPC_ERROR",
+        tty: false,
+        output: "json",
+      },
+      {
+        kind: "human",
+        wireCode: "removed-by-person",
+        tty: true,
+        output: "tty",
+        expected:
+          'error: traycer: No profile "work" is registered for provider "claude-code".\n',
+      },
+      {
+        kind: "human",
+        wireCode: "removed-by-person",
+        tty: false,
+        output: "piped",
+        expected:
+          'error: traycer: No profile "work" is registered for provider "claude-code". [code=E_INVALID_ARGUMENT]\n',
+      },
+      {
+        kind: "json",
+        wireCode: "removed-by-person",
+        tty: false,
+        output: "json",
+      },
+    ];
+  it.each(profileSelectionOutputCases)(
+    "prints the profile-selection refusal for $wireCode on $output",
+    async (testCase) => {
+      const message =
+        'No profile "work" is registered for provider "claude-code".';
+      Object.defineProperty(process.stderr, "isTTY", {
+        value: testCase.tty,
+        configurable: true,
+      });
+
+      await runMappedHostRpcError(
+        testCase.wireCode,
+        message,
+        testCase.kind === "json",
+      );
+
+      expect(process.exitCode).toBe(1);
+      if (testCase.kind === "json") {
+        const terminal = terminalEnvelope();
+        expect(terminal).not.toBeNull();
+        if (terminal === null)
+          throw new Error("expected the terminal envelope");
+        expect(stdoutChunks.join("")).toBe(
+          `${JSON.stringify({
+            type: "result",
+            status: "error",
+            error: {
+              code: "E_INVALID_ARGUMENT",
+              message: `traycer: ${message}`,
+              details: null,
+            },
+            timestamp: terminal.timestamp,
+          })}\n`,
+        );
+        expect(stderrChunks.join("")).toBe("");
+      } else {
+        expect(stderrChunks.join("")).toBe(testCase.expected);
+      }
+    },
+  );
+
+  it("prints an unrelated removed-by-person refusal as E_UNEXPECTED", async () => {
+    const message = "A provider action was refused for another reason.";
+    Object.defineProperty(process.stderr, "isTTY", {
+      value: false,
+      configurable: true,
+    });
+
+    await runMappedHostRpcError("removed-by-person", message, false);
+
+    expect(stderrChunks.join("")).toBe(
+      `error: ${message} [code=E_UNEXPECTED]\n`,
+    );
+    expect(process.exitCode).toBe(1);
   });
 });

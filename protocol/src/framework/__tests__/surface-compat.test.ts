@@ -1295,6 +1295,95 @@ describe("exception pattern matching", () => {
   });
 });
 
+describe("method-level exceptions for an optional major a released peer cannot reach", () => {
+  const optionalV20 = defineRpcContract({
+    method: "host.optional",
+    schemaVersion: { major: 2, minor: 0 } as const,
+    requestSchema: z.object({}),
+    responseSchema: z.object({ ok: z.boolean() }),
+  });
+  const withMajorTwo = defineFloorAwareVersionedRpcRegistry(["host.echo"], {
+    "host.echo": unaryV10(baseRequest, baseResponse),
+    "host.optional": {
+      degrade: { kind: "unsupported" },
+      ...optionalEntry,
+      2: {
+        latestMinor: 0,
+        versions: {
+          0: {
+            contract: optionalV20,
+            upgradeFromPreviousVersion: defineUpgradePath<
+              typeof optionalV10,
+              typeof optionalV20
+            >({
+              from: { major: 1, minor: 0 },
+              to: { major: 2, minor: 0 },
+              upgradeRequest: () => {
+                throw new Error("never run");
+              },
+              upgradeResponse: () => {
+                throw new Error("never run");
+              },
+            }),
+          },
+        },
+        downgradePathsFromLatest: {},
+      },
+    },
+  });
+  const released = defineFloorAwareVersionedRpcRegistry(["host.echo"], {
+    "host.echo": unaryV10(baseRequest, baseResponse),
+    "host.optional": { degrade: { kind: "unsupported" }, ...optionalEntry },
+  });
+  const methodLevel: CompatException = {
+    family: "unary",
+    method: "host.optional",
+    version: "*",
+    payload: null,
+    path: null,
+    reason: "admission refuses the released generation before any method runs",
+  };
+  const verdict = (exceptions: readonly CompatException[]) =>
+    checkSurfaceCompatibility({
+      mine: surfaceOfUnaryWithFloor(withMajorTwo, ["host.echo"]),
+      theirs: surfaceOfUnaryWithFloor(released, ["host.echo"]),
+      theirsLabel: "released",
+      exceptions,
+    });
+
+  it("reports the unbridgeable major as breaking with no path", () => {
+    const blocking = verdict([]).blocking;
+    expect(blocking).toHaveLength(1);
+    expect(blocking[0]).toMatchObject({
+      method: "host.optional",
+      severity: "breaking",
+      payload: null,
+      path: null,
+      excepted: false,
+    });
+  });
+
+  it("clears it only with a method-level entry naming the method", () => {
+    expect(verdict([methodLevel]).blocking).toEqual([]);
+    expect(
+      verdict([{ ...methodLevel, payload: "request", path: "**" }]).blocking,
+    ).toHaveLength(1);
+    expect(
+      verdict([{ ...methodLevel, method: "host.other" }]).blocking,
+    ).toHaveLength(1);
+  });
+
+  it("refuses a method-level entry with a glob or a half-null slot on load", () => {
+    expect(
+      validateCompatExceptions([{ ...methodLevel, method: "host.*" }]),
+    ).toHaveLength(1);
+    expect(() =>
+      parseCompatExceptionsFile({
+        exceptions: [{ ...methodLevel, payload: "request" }],
+      }),
+    ).toThrow(/only one of payload and path/);
+  });
+});
 describe("catalog methods at the oracle boundary", () => {
   it("a hand-built exception never suppresses catalog host→client growth", () => {
     const catalogContract = (harnessIds: readonly [string, ...string[]]) =>

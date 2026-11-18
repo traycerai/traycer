@@ -220,7 +220,8 @@ export async function readHostPidMetadataEvidenceAt(
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    logger.warn("Host pid metadata JSON parse failed", {
+    logger.warn("Host pid metadata JSON parse failed", { kind: "error" });
+    logger.debug("Host pid metadata JSON parse failed", {
       environment: logEnvironment,
       errorName: errorFromUnknown(err).name,
       errorMessage: errorFromUnknown(err).message,

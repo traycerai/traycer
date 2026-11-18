@@ -1,31 +1,24 @@
 /**
  * Write keys for the Personal settings the host forwards to the person's
  * environment (`environment.*`): agent definitions and machine setup, plus the
- * Tracy Bots host binding (`environment.host.bind`) and main bot
- * (`environment.setMainBot`), and the environments redesign's writes: the
- * move, a team configuration's items and policy, members, and the
- * retrospective sheet's held items.
+ * Tracy Bots main bot (`environment.setMainBot`), and the environments
+ * redesign's writes: the move, a team configuration's items and policy,
+ * members, and the retrospective sheet's held items.
  */
 export const environmentMutationKeys = {
-  hostBind: () => ["environment.host.bind"] as const,
-  hostBindConfirmedOwner: (hostId: string, userId: string | null) =>
-    [
-      ...environmentMutationKeys.hostBind(),
-      "confirmed-owner",
-      hostId,
-      userId,
-    ] as const,
   agentDefinitionsPut: () => ["environment.agentDefinitions.put"] as const,
   agentDefinitionsDelete: () =>
     ["environment.agentDefinitions.delete"] as const,
   setupPut: () => ["environment.setup.put"] as const,
   setupRetry: () => ["environment.setup.retry"] as const,
+  moveDiagnosticsExport: () => ["environment.move.diagnosticsExport"] as const,
   undo: () => ["environment.undo"] as const,
   localOverrideSet: () => ["config.env.localOverride.set"] as const,
   localOverrideClear: () => ["config.env.localOverride.clear"] as const,
   remoteAccessSet: () => ["host.remoteAccess.set"] as const,
+  remoteAccessTurnOn: () => ["hosts.remoteAccess.put"] as const,
   setMainBot: () => ["environment.setMainBot"] as const,
-  moveAccept: () => ["environment.move.accept"] as const,
+  moveStart: () => ["environment.move.start"] as const,
   moveStop: () => ["environment.move.stop"] as const,
   configurationItemsPut: () => ["environment.configuration.items.put"] as const,
   configurationItemsDelete: () =>
@@ -59,13 +52,16 @@ export const environmentMutationKeys = {
   membersRemove: () => ["environment.members.remove"] as const,
   membersNoticeSeen: () => ["environment.members.noticeSeen"] as const,
   invitationsAccept: () => ["environment.invitations.accept"] as const,
-  reviewHeldApply: () => ["environment.review.heldApply"] as const,
+  reviewApplyChoice: () => ["environment.review.applyChoice"] as const,
+  teamReviewApplyChoice: (environmentId: string, viewerId: string) =>
+    ["environment.review.applyChoice", environmentId, viewerId] as const,
   reviewRecord: () => ["environment.review.record"] as const,
-  plansUnlink: () => ["environment.plans.unlink"] as const,
-  // `providers.link@1.1` carries a team's `environmentId`: a team's Plans
-  // card links a plan into that configuration.
-  providersLink: () => ["providers.link"] as const,
-  providersLinkComplete: () => ["providers.linkComplete"] as const,
+  providersSetColor: () => ["auth", "profile-record-color"] as const,
+  providersSetEnabled: () => ["auth", "profile-record-enabled"] as const,
+  providersSignOut: () => ["auth", "profile-record-sign-out"] as const,
+  providersRemove: () => ["auth", "profile-record-remove"] as const,
+  providersRename: () => ["auth", "profile-record-name"] as const,
+  providersReplaceKey: () => ["environment.providers.replaceKey"] as const,
   configurationGuideSet: () => ["environment.configuration.guide.set"] as const,
   configurationGuideReset: () =>
     ["environment.configuration.guide.reset"] as const,

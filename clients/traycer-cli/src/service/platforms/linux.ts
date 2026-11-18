@@ -161,12 +161,16 @@ async function assertSystemdUserReachable(
   operation: "install" | "restart",
 ): Promise<void> {
   try {
-    await run("systemctl", ["--user", "show-environment"], {
-      env: undefined,
-      cwd: undefined,
-      timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
-      tolerateNonZeroExit: false,
-    });
+    await run(
+      "systemctl",
+      ["--user", "show", "--property=Version", "--value"],
+      {
+        env: undefined,
+        cwd: undefined,
+        timeoutMs: SYSTEMCTL_CALL_TIMEOUT_MS,
+        tolerateNonZeroExit: false,
+      },
+    );
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
     const wslGuidance =
@@ -1000,7 +1004,7 @@ export async function linuxServiceMayRespawn(
  * floor has already refused by the time the answer is read, and only the
  * wording changes.
  *
- * The same `show-environment` call `assertSystemdUserReachable` makes, read
+ * The same manager version query `assertSystemdUserReachable` makes, read
  * the same way: exit 0 is reachable, and anything else is not - a nonzero
  * exit (no bus), the runner's `-1` (a spawn failure or a timeout), or a
  * throw. No stderr text is read.
@@ -1011,12 +1015,16 @@ export async function linuxUserManagerUnreachable(
 ): Promise<boolean> {
   const run = runner ?? runCommand;
   try {
-    const result = await run("systemctl", ["--user", "show-environment"], {
-      env: undefined,
-      cwd: undefined,
-      timeoutMs,
-      tolerateNonZeroExit: true,
-    });
+    const result = await run(
+      "systemctl",
+      ["--user", "show", "--property=Version", "--value"],
+      {
+        env: undefined,
+        cwd: undefined,
+        timeoutMs,
+        tolerateNonZeroExit: true,
+      },
+    );
     return result.exitCode !== 0;
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;

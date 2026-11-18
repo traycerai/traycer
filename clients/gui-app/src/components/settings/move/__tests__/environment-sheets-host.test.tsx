@@ -14,10 +14,11 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import type {
   EnvironmentItemStatus,
   EnvironmentReviewResponseV12,
-  EnvironmentStatusResponseV12,
+  EnvironmentStatusResponseV13,
 } from "@traycer/protocol/host/environment-schemas";
 import { EnvironmentSheetsHost } from "@/components/settings/move/environment-sheets-host";
 import type { ThisComputer } from "@/components/settings/move/this-computer";
@@ -26,10 +27,16 @@ import {
   environmentStatusFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import type { OpenSettingsModalOpts } from "@/stores/tabs/use-system-tab-modal";
+import {
+  createFakeEnvironmentCloudAuth,
+  createFakeEnvironmentCloudTransport,
+  jsonEnvironmentAnswer,
+} from "../../../../../__tests__/create-fake-runner-host";
 
 // The host directory is the boundary: which computer this is, and the client
 // that names a host id. The reads and the sheet stay real.
@@ -48,6 +55,21 @@ vi.mock("@/components/settings/move/this-computer", () => ({
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (): HostClient<HostRpcRegistry> | null =>
     directory.client,
+}));
+
+// Personal's id and its holds are the app's own calls to authn on the
+// person's sign-in: the binding's `auth` lists Personal and answers the
+// review, and the cloud reads wait for the signed-in viewer.
+const authnMock = vi.hoisted((): { auth: unknown } => ({ auth: null }));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostBinding: () => ({ auth: authnMock.auth }),
+}));
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-me",
 }));
 
 // The move sheet reads the host runtime this suite does not mount; the target
@@ -75,8 +97,43 @@ interface Reads {
   readonly recorded: string[];
 }
 
+const PERSONAL: EnvironmentDescriptorV11 = {
+  environmentId: "env-personal",
+  ownerKind: "user",
+  ownerId: "user-me",
+  roomId: "room-personal",
+  label: "Personal",
+  effectiveRole: "owner",
+  kind: "personal",
+  hostCount: 1,
+  providerHandle: null,
+};
+
+/** Authn lists Personal and holds nothing for the person to choose. */
+function personalSignIn(): void {
+  authnMock.auth = createFakeEnvironmentCloudAuth({
+    listEnvironments: () =>
+      Promise.resolve({
+        kind: "ok" as const,
+        list: { environments: [PERSONAL] },
+      }),
+    transport: createFakeEnvironmentCloudTransport({
+      environments: () => [PERSONAL],
+      onRequest: (request) =>
+        request.method === "GET" &&
+        new URL(request.url).pathname.endsWith("/review")
+          ? jsonEnvironmentAnswer({ review: { hosts: [], needsYou: [] } })
+          : null,
+    }),
+  });
+  useAuthStore.setState({
+    status: "signed-in",
+    contextMetadata: { userId: "user-me", username: "user-me" },
+  });
+}
+
 function thisComputerAnswering(
-  status: EnvironmentStatusResponseV12,
+  status: EnvironmentStatusResponseV13,
   shownAt: number | null,
 ): Reads {
   const reads: { status: number; review: number; recorded: string[] } = {
@@ -106,6 +163,7 @@ function thisComputerAnswering(
   });
   directory.computer = { hostId: "old", hostName: "Old laptop", client };
   directory.client = client;
+  personalSignIn();
   return reads;
 }
 
@@ -126,13 +184,14 @@ beforeEach(() => {
     target: null,
     open: false,
     checkedHostIds: new Set(),
-    heldToastDismissed: false,
   });
   useMoveSheetStore.setState({ target: null });
 });
 
 afterEach(() => {
   cleanup();
+  authnMock.auth = null;
+  useAuthStore.setState({ status: "signed-out", contextMetadata: null });
   setSystemTabModalApi(null);
   resetNegotiatedManifests();
   directory.computer = {

@@ -6,6 +6,10 @@ import type {
   BotSubscribeServerFrame,
 } from "@traycer/protocol/host/bot/schemas";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
+import { credentialsIdentityFromAuthenticatedUser } from "@traycer-clients/shared/auth/auth-validation";
+import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
 import {
   MockRunnerHost,
   MockTraycerCli,
@@ -26,7 +30,8 @@ import type {
   StreamMethodSupport,
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { recordNegotiatedHostManifest } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { createRendererContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
+import { createFakeEnvironmentCloudTransport } from "../../../__tests__/create-fake-runner-host";
 import { publishAgentActivity } from "@/__tests__/agent-activity-harness";
 import { type HostRpcRegistry, type MessengerFactory } from "@/lib/host";
 import { acquireHostStreamClient } from "@/lib/host/host-stream-client-cache";
@@ -113,6 +118,7 @@ const SECOND_BOT_ID = "bot_01JD5X8Q2M4N6P8R0S2T4V6W9Z";
 const ENVIRONMENT_ID = "env-personal";
 const WEBSOCKET_URL = "ws://127.0.0.1:9/rpc";
 const AUTHN_BASE_URL = "http://127.0.0.1:9";
+const FIXTURE_TOKEN = "fixture";
 
 useSettingsStore.getState().setTheme("light");
 if (!DESKTOP_FORM) {
@@ -227,16 +233,23 @@ export function advertiseHostMethods(): void {
     "bot.readCursor.read": { major: 1, minor: 0 },
     "bot.notificationLevel.read": { major: 1, minor: 0 },
     "bot.turn.locate": { major: 1, minor: 0 },
-    "environment.list": { major: 1, minor: 1 },
-    "environment.members": { major: 1, minor: 2 },
   });
 }
 if (!HOST_METHODS_HELD) advertiseHostMethods();
 
-export const requestContext = createRendererContextFixture({
-  bearerToken: "fixture",
-});
-export const USER_ID = requestContext.identity.userId;
+const SIGNED_IN_USER = createAuthenticatedUserFixture(undefined);
+export const USER_ID = SIGNED_IN_USER.user.id;
+const PERSONAL_ENVIRONMENT: EnvironmentDescriptorV11 = {
+  environmentId: ENVIRONMENT_ID,
+  ownerKind: "user",
+  ownerId: USER_ID,
+  roomId: "room-personal",
+  label: "Personal",
+  effectiveRole: "owner",
+  kind: "personal",
+  hostCount: 1,
+  providerHandle: null,
+};
 
 const BOT: BotRecord = {
   botId: BOT_ID,
@@ -414,7 +427,6 @@ acquireHostStreamClient(
     publicKey: "",
     authnBaseUrl: AUTHN_BASE_URL,
     authRecovery: "revalidate",
-    openAuth: null,
   },
   () => streamClient,
 );
@@ -499,28 +511,6 @@ export const messengerFactory: MessengerFactory<HostRpcRegistry> = ({
             },
           ],
         }),
-      "environment.list": () =>
-        answerAfter("lists", {
-          environments: [
-            {
-              environmentId: ENVIRONMENT_ID,
-              ownerKind: "user",
-              ownerId: USER_ID,
-              roomId: "room-personal",
-              label: "Personal",
-              effectiveRole: "owner",
-              kind: "personal",
-              hostCount: 1,
-              providerHandle: null,
-            },
-          ],
-        }),
-      "environment.members": () => ({
-        members: [],
-        nextCursor: null,
-        legacyRoleNoticeSeenAt: null,
-        legacyMembers: [],
-      }),
       "bot.thread.list": () => ({
         threads: [],
         trunkCostUsd: null,
@@ -553,7 +543,33 @@ export function useSelectedBotId(): string {
   );
 }
 
-export const runnerHost = new MockRunnerHost({
+class CompactActionsRunnerHost extends MockRunnerHost {
+  override readonly environmentTransport = createFakeEnvironmentCloudTransport({
+    environments: () => [PERSONAL_ENVIRONMENT],
+  });
+
+  override validateAuthTokenIdentity(
+    token: string,
+  ): Promise<AuthIdentityValidationResult> {
+    return Promise.resolve(
+      token === FIXTURE_TOKEN
+        ? { kind: "valid", user: SIGNED_IN_USER }
+        : { kind: "rejected" },
+    );
+  }
+
+  override listEnvironments(
+    bearerToken: string,
+  ): Promise<EnvironmentDirectoryResult> {
+    return Promise.resolve(
+      bearerToken === FIXTURE_TOKEN
+        ? { kind: "ok", list: { environments: [PERSONAL_ENVIRONMENT] } }
+        : { kind: "unauthorized" },
+    );
+  }
+}
+
+export const runnerHost = new CompactActionsRunnerHost({
   signInUrl: `${AUTHN_BASE_URL}/sign-in`,
   authnBaseUrl: AUTHN_BASE_URL,
   localHost,
@@ -562,3 +578,8 @@ export const runnerHost = new MockRunnerHost({
   hasLocalHost: undefined,
   traycerCli: new MockTraycerCli(),
 });
+/** The fixture session, stored before the app first renders. */
+export const storedSession = runnerHost.tokenStore.signIn(
+  { token: FIXTURE_TOKEN, refreshToken: "fixture-refresh" },
+  credentialsIdentityFromAuthenticatedUser(SIGNED_IN_USER),
+);

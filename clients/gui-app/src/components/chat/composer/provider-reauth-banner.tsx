@@ -1,7 +1,8 @@
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useProvidersLoginOwnership } from "@/hooks/providers/use-providers-login-ownership";
 import { AlertTriangle, ExternalLink } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, useId, useMemo, useState } from "react";
+import { type ReactNode, useId, useMemo, useRef, useState } from "react";
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderCliState,
@@ -43,6 +44,7 @@ import { useProvidersCancelLogin } from "@/hooks/providers/use-providers-cancel-
 import { useProvidersEnsurePack } from "@/hooks/providers/use-providers-ensure-pack-mutation";
 import { useProvidersSetEnvOverride } from "@/hooks/providers/use-providers-set-env-override-mutation";
 import { useProvidersSetApiKey } from "@/hooks/providers/use-providers-set-api-key-mutation";
+import { takeProviderApiKeyInput } from "@/hooks/providers/provider-api-key-input";
 import { useProvidersStartLogin } from "@/hooks/providers/use-providers-start-login-mutation";
 import { useProvidersAwaitLogin } from "@/hooks/providers/use-providers-await-login-mutation";
 import { useProvidersSubmitLoginCode } from "@/hooks/providers/use-providers-submit-login-code-mutation";
@@ -77,10 +79,12 @@ import { useEnvironmentStatusRead } from "@/hooks/environment/use-environment-re
 import {
   deviceKeyCustodyLine,
   hostRunsPersonal,
+  PROVIDER_KEY_CUSTODY_SENTENCE,
   providerKeyIsPersonalSecret,
+  providerKeyEnvironmentName,
+  recordKeyCustodyLine,
   type ProviderKeyPrincipal,
 } from "@/lib/providers/provider-key-custody";
-import { SECRET_CUSTODY_SENTENCE } from "@/lib/sandboxes/secrets-page-copy";
 import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
 import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
 import { envNamePlaceholder } from "@/components/settings/panels/provider-env-name-placeholder";
@@ -166,7 +170,8 @@ function ProfileUnavailableBanner({
   readonly profileId: string | null;
   readonly profileLabel: string | null;
   readonly hostId: string;
-  readonly onContinueOnAmbient: () => void;
+  /** `null` offers no Terminal-account fallback (`continueOnTerminalOffered`). */
+  readonly onContinueOnAmbient: (() => void) | null;
 }) {
   const providerLabel = PROVIDER_DISPLAY_NAMES[providerId];
   const message =
@@ -209,9 +214,11 @@ function ProfileUnavailableBanner({
     >
       <span className="text-foreground/90">{message}</span>
       <div className="flex flex-wrap items-center gap-3">
-        <Button size="sm" variant="secondary" onClick={onContinueOnAmbient}>
-          Continue on Terminal account
-        </Button>
+        {onContinueOnAmbient === null ? null : (
+          <Button size="sm" variant="secondary" onClick={onContinueOnAmbient}>
+            Continue on Terminal account
+          </Button>
+        )}
         <Button
           size="sm"
           variant="ghost"
@@ -485,11 +492,6 @@ export function ProviderReauthBanner({
   // independent of the tab-host-reachability plumbing below that only the
   // ambient `provider_unauthenticated` path needs.
   if (reason !== "provider_unauthenticated") {
-    if (onContinueOnAmbient === null) {
-      throw new Error(
-        "ProviderReauthBanner: onContinueOnAmbient is required for a profile-specific reason.",
-      );
-    }
     return (
       <ProfileUnavailableBanner
         providerId={providerId}
@@ -549,6 +551,7 @@ export function ProviderReauthBanner({
         keyCustody={{
           principal,
           hostName: tabEntry?.label ?? null,
+          recordEnvironmentId: state?.apiKey.recordEnvironmentId ?? null,
         }}
       />
     </HostRuntimeContext.Provider>
@@ -586,9 +589,6 @@ function ReauthBannerInner({
     canTerminalLogin,
     terminalRow.kind,
   );
-  // Providers with a host-side encrypted API-key store (Cursor / Droid) save the
-  // pasted key as that secret (`providers.setApiKey`) rather than a plaintext env
-  // override, matching how Settings > Providers stores it.
   const apiKeySupported = state?.apiKey.supported ?? false;
 
   // No reconnect method available from here: a provider with no web login, or an
@@ -746,7 +746,13 @@ function OAuthReauthForm({
   const startLogin = useProvidersStartLogin();
   const awaitLogin = useProvidersAwaitLogin();
   const cancelLogin = useProvidersCancelLogin();
-  const submitLoginCode = useProvidersSubmitLoginCode();
+  const submittedLoginCode = useSubmittedSecretInput<string>(
+    "Provider login code input is unavailable.",
+  );
+  const submitLoginCode = useProvidersSubmitLoginCode(
+    submittedLoginCode.read,
+    submittedLoginCode.clear,
+  );
   const touchLogin = useProvidersTouchLogin();
   const ensurePack = useProvidersEnsurePack();
 
@@ -764,6 +770,7 @@ function OAuthReauthForm({
     awaitLogin,
     cancelLogin,
     submitLoginCode,
+    setSubmittedLoginCode: submittedLoginCode.set,
     touchLogin,
     ensurePack,
     failureMessages: {
@@ -1030,36 +1037,38 @@ function OAuthWaitingRow({
   );
 }
 
-// Paste a fresh credential into the provider's reconnect path, then immediately
-// force-probe auth. Providers with a host-side encrypted API-key store (Cursor /
-// Droid) save it as that secret via `providers.setApiKey` — the same path as
-// Settings > Providers; OAuth-token providers (Claude Code / Grok) write the
-// chosen credential var via `providers.setEnvOverride`. If the probe returns
-// authenticated the gate unmounts this banner; if still unauthenticated (bad
-// token) we stay mounted and show an inline error so the user can retry without a
-// page reload.
 /** Where a key pasted here is stored: read from the tab host's status. */
 interface KeyCustody {
   readonly principal: ProviderKeyPrincipal;
   readonly hostName: string | null;
+  readonly recordEnvironmentId: string | null;
 }
 
-/**
- * Under the key field, what saving it does: Personal's custody sentence for a
- * key the host forwards to Personal, else the line naming the one host that
- * keeps it. Only for the provider-level key (`providers.setApiKey`); an env
- * override says nothing here.
- */
+/** An environment-variable override has no custody line. */
 function PastedKeyCustody(props: {
   readonly providerId: ProviderId;
   readonly keyCustody: KeyCustody;
 }): ReactNode {
   const { providerId, keyCustody } = props;
+  if (keyCustody.recordEnvironmentId !== null) {
+    const principal = keyCustody.principal;
+    const environmentName = providerKeyEnvironmentName(principal);
+    return (
+      <>
+        <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
+          {recordKeyCustodyLine(providerId, environmentName)}
+        </p>
+        {providerKeyIsPersonalSecret(providerId, principal) ? (
+          <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
+        ) : null}
+      </>
+    );
+  }
   if (providerKeyIsPersonalSecret(providerId, keyCustody.principal)) {
     return (
       <>
         <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
-          {SECRET_CUSTODY_SENTENCE}
+          {PROVIDER_KEY_CUSTODY_SENTENCE}
         </p>
         <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
       </>
@@ -1100,8 +1109,21 @@ function TokenReauthForm({
   const [pickedVar, setPickedVar] = useState("");
   const [probing, setProbing] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
-  const setEnvOverride = useProvidersSetEnvOverride();
-  const setApiKey = useProvidersSetApiKey();
+  const submittedOverride = useSubmittedSecretInput<string | null>(
+    "Provider variable input is unavailable.",
+  );
+  const setEnvOverride = useProvidersSetEnvOverride(
+    submittedOverride.read,
+    submittedOverride.clear,
+  );
+  const sentApiKey = useRef<string | null>(null);
+  const setApiKey = useProvidersSetApiKey(
+    null,
+    () => takeProviderApiKeyInput(sentApiKey),
+    () => {
+      sentApiKey.current = null;
+    },
+  );
   const refreshProviders = useTabRefreshProviders();
   const queryClient = useQueryClient();
   const tabHostId = useTabHostId();
@@ -1164,19 +1186,29 @@ function TokenReauthForm({
     }
     setTokenError(null);
     if (apiKeySupported) {
-      // Cursor / Droid: store as the encrypted host-side secret, exactly like
-      // Settings > Providers.
+      sentApiKey.current = trimmed;
       setApiKey.mutate(
-        { providerId, apiKey: trimmed },
-        { onSuccess: afterWrite },
+        { providerId },
+        {
+          onSuccess: ({ keyChangeResult }) => {
+            if (
+              keyChangeResult !== null &&
+              keyChangeResult !== "installed" &&
+              keyChangeResult !== "unchanged"
+            ) {
+              setDraft("");
+              return;
+            }
+            afterWrite();
+          },
+        },
       );
     } else {
+      submittedOverride.set(trimmed);
       setEnvOverride.mutate(
         {
           providerId,
           key: activeVar,
-          value: trimmed,
-          executableWriteGrant: null,
         },
         { onSuccess: afterWrite },
       );

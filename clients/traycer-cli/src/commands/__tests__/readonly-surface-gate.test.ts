@@ -18,6 +18,7 @@ import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
 // some other reason downstream.
 const mocks = vi.hoisted(() => ({
   resolveHostAuthMock: vi.fn(async () => null),
+  readAgentCommandCredentialMock: vi.fn(),
 }));
 
 vi.mock("../../internal/host-auth", () => ({
@@ -29,6 +30,23 @@ vi.mock("../../internal/host-auth", () => ({
   // non-FORBIDDEN error on the full surface that proves the body was reached.
   resolveHostAuth: mocks.resolveHostAuthMock,
 }));
+
+vi.mock("../../internal/agent-session-capability", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../internal/agent-session-capability")
+    >();
+  return {
+    ...actual,
+    readAgentCommandCredential: (
+      ...args: Parameters<typeof actual.readAgentCommandCredential>
+    ) => {
+      const credential = actual.readAgentCommandCredential(...args);
+      mocks.readAgentCommandCredentialMock(credential.kind);
+      return credential;
+    },
+  };
+});
 
 // The user's Agent worktrees setting (`worktrees.agentCreate`), as
 // `worktree create` reads it. A mock rather than a real config file so no test
@@ -53,6 +71,8 @@ vi.mock("../../agent-worktree-create", async (importOriginal) => {
 
 beforeEach(() => {
   mocks.resolveHostAuthMock.mockClear();
+  mocks.readAgentCommandCredentialMock.mockClear();
+  vi.stubEnv("TRAYCER_AGENT_SESSION_CAPABILITY", "");
   worktreePolicy.state.current = "allow";
   worktreePolicy.read.mockClear();
 });
@@ -321,6 +341,7 @@ describe("readonly-surface gate: task create", () => {
         message: expect.stringContaining("cannot start Tasks"),
       });
       expect(mocks.resolveHostAuthMock).not.toHaveBeenCalled();
+      expect(mocks.readAgentCommandCredentialMock).not.toHaveBeenCalled();
     });
   });
 });
@@ -340,6 +361,7 @@ describe("readonly-surface gate: posting to and replying in a bot", () => {
         message: expect.stringContaining("cannot message them"),
       });
       expect(mocks.resolveHostAuthMock).not.toHaveBeenCalled();
+      expect(mocks.readAgentCommandCredentialMock).not.toHaveBeenCalled();
     });
   });
 });
@@ -356,6 +378,7 @@ describe("readonly-surface gate: refuses every table entry before the body runs"
         // dependency was never reached, so the refusal happened ahead of it
         // rather than merely producing the same-looking error downstream.
         expect(mocks.resolveHostAuthMock).not.toHaveBeenCalled();
+        expect(mocks.readAgentCommandCredentialMock).not.toHaveBeenCalled();
       });
     });
 
@@ -371,16 +394,17 @@ describe("readonly-surface gate: refuses every table entry before the body runs"
           });
           return;
         }
-        // Every gated command bottoms out in the mocked `resolveHostAuth`
-        // returning null, which throws AUTH_NO_CREDENTIALS - proof the body
-        // was reached rather than refused. Assert on "not E_FORBIDDEN" (per
-        // the task) rather than the exact code, so this stays robust to
-        // which specific downstream error a given command surfaces first.
         expect(thrown).not.toBeNull();
         expect(thrown).not.toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
-        // Positive proof: the body actually ran far enough to call its
-        // deepest dependency, not just "failed with a different code".
-        expect(mocks.resolveHostAuthMock).toHaveBeenCalled();
+        if (commandPath.startsWith("agent ")) {
+          expect(mocks.readAgentCommandCredentialMock).toHaveBeenCalledWith(
+            "none",
+          );
+          expect(mocks.resolveHostAuthMock).not.toHaveBeenCalled();
+        } else {
+          expect(mocks.resolveHostAuthMock).toHaveBeenCalled();
+          expect(mocks.readAgentCommandCredentialMock).not.toHaveBeenCalled();
+        }
       });
     });
   }
@@ -396,10 +420,15 @@ describe("readonly-surface gate: hidden-but-ungated reads stay runnable", () => 
         // not refused by the capability gate.
         expect(thrown).not.toBeNull();
         expect(thrown).not.toMatchObject({ code: CLI_ERROR_CODES.FORBIDDEN });
-        // Positive proof it reached the body, same as the full-surface case
-        // above - these reads must stay runnable under readonly, not merely
-        // fail with a code that happens not to be FORBIDDEN.
-        expect(mocks.resolveHostAuthMock).toHaveBeenCalled();
+        if (path[0] === "agent") {
+          expect(mocks.readAgentCommandCredentialMock).toHaveBeenCalledWith(
+            "none",
+          );
+          expect(mocks.resolveHostAuthMock).not.toHaveBeenCalled();
+        } else {
+          expect(mocks.resolveHostAuthMock).toHaveBeenCalled();
+          expect(mocks.readAgentCommandCredentialMock).not.toHaveBeenCalled();
+        }
       });
     });
   }

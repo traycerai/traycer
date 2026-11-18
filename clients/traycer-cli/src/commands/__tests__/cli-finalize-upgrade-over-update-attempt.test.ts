@@ -492,7 +492,10 @@ describe("cliFinalizeUpgradeCommand - the finalize helper's start, over a standi
       // (1) The swap stays deferred: never even attempted, and outcome/exit
       // code report the deferral, not a fabricated success.
       expect(mocks.finalizePendingCliUpgradeMock).not.toHaveBeenCalled();
-      expect(result.data).toEqual({ status: "lock-timeout" });
+      expect(result.data).toEqual({
+        status: "lock-timeout",
+        credentialProvision: null,
+      });
       expect(result.exitCode).toBe(0);
       expect(existsSync(cliPostFinalizeMarkerPath("production"))).toBe(false);
       // The fallback still does its one job: the host starts.
@@ -548,7 +551,10 @@ describe("cliFinalizeUpgradeCommand - the finalize helper's start, over a standi
     const result = await cliFinalizeUpgradeCommand(fakeCtx());
 
     expect(calls.start).toBe(0);
-    expect(result.data).toEqual({ status: "lock-timeout" });
+    expect(result.data).toEqual({
+      status: "lock-timeout",
+      credentialProvision: null,
+    });
     const stopOnly = logsMatching("info", STOP_ONLY_CONTINUATION_MESSAGE);
     expect(stopOnly).toHaveLength(1);
     expect(stopOnly[0]?.fields.phase).toBe("waiting-to-activate");
@@ -595,7 +601,10 @@ describe("cliFinalizeUpgradeCommand - the finalize helper's start, over a standi
     }
 
     expect(calls.start).toBe(0);
-    expect(result.data).toEqual({ status: "lock-timeout" });
+    expect(result.data).toEqual({
+      status: "lock-timeout",
+      credentialProvision: null,
+    });
     expect(logsMatching("info", DEFERRED_SWAP_MESSAGE)).toHaveLength(0);
     expect(logsMatching("info", LEFT_HOST_MESSAGE)).toHaveLength(0);
   });
@@ -625,7 +634,10 @@ describe("cliFinalizeUpgradeCommand - the finalize helper's start, over a standi
 
     const result = await cliFinalizeUpgradeCommand(fakeCtx());
 
-    expect(result.data).toEqual({ status: "lock-timeout" });
+    expect(result.data).toEqual({
+      status: "lock-timeout",
+      credentialProvision: null,
+    });
     expect(result.exitCode).toBe(0);
     expect(calls.start).toBe(1);
     const failed = logsMatching("warn", START_FAILED_MESSAGE);
@@ -797,7 +809,10 @@ describe("cliFinalizeUpgradeCommand - the third (recovery-maintenance) tier adds
       expect(existsSync(cliPostFinalizeMarkerPath("production"))).toBe(false);
       const manifestAfterBytes = await readCliManifestBytes();
       expect(manifestAfterBytes).toBe(manifestBeforeBytes);
-      expect(result.data).toEqual({ status: "lock-timeout" });
+      expect(result.data).toEqual({
+        status: "lock-timeout",
+        credentialProvision: null,
+      });
 
       if (expectStart === 1) {
         const restartCompletion = logsMatching(

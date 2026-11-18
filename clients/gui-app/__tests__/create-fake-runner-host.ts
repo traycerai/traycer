@@ -1,4 +1,18 @@
+import {
+  fetchEnvironmentTransport,
+  type EnvironmentTransport,
+  type EnvironmentTransportAnswer,
+  type EnvironmentTransportRequest,
+} from "@traycer-clients/shared/environment/environment-cloud";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+import {
+  createHostTokenSource,
+  createMemoryHostTokenPersistence,
+  type HostTokenSource,
+} from "@traycer-clients/shared/auth/host-token-source";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
+import { AuthService } from "@/lib/auth/auth-service";
 import type { SelectionAuthorityClient } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import {
   createInProcessSelectionAuthority,
@@ -13,6 +27,132 @@ import {
   silentAuthorityLog,
   type AuthorityClock,
 } from "@traycer-clients/shared/host-selection/selection-authority-engine";
+
+export interface FakeEnvironmentCloudAuthOptions {
+  readonly listEnvironments: () => Promise<EnvironmentDirectoryResult>;
+  readonly transport: EnvironmentTransport;
+}
+
+export interface FakeEnvironmentCloudServicesOptions extends FakeEnvironmentCloudAuthOptions {
+  readonly runnerHostOverrides: Partial<IRunnerHost>;
+}
+
+export interface FakeEnvironmentCloudServices {
+  readonly auth: AuthService;
+  readonly runnerHost: IRunnerHost;
+}
+
+export function createFakeEnvironmentCloudServices(
+  options: FakeEnvironmentCloudServicesOptions,
+): FakeEnvironmentCloudServices {
+  const runnerHost = createFakeRunnerHost({
+    ...options.runnerHostOverrides,
+    listEnvironments: () => options.listEnvironments(),
+    environmentTransport: options.transport,
+  });
+  const auth = new AuthService({ runnerHost });
+  auth.listEnvironments = () => runnerHost.listEnvironments("test-bearer");
+  auth.environmentCloud = () => ({
+    authnBaseUrl: runnerHost.authnBaseUrl,
+    bearer: {
+      kind: "cloud",
+      getBearerToken: () => "test-bearer",
+    },
+    transport: runnerHost.environmentTransport,
+    onOriginSignIn: () => true,
+  });
+  return { auth, runnerHost };
+}
+
+export function createFakeEnvironmentCloudAuth(
+  options: FakeEnvironmentCloudAuthOptions,
+): AuthService {
+  return createFakeEnvironmentCloudServices({
+    ...options,
+    runnerHostOverrides: {},
+  }).auth;
+}
+
+export function createFakeEnvironmentCloudTransport(options: {
+  readonly environments: () => readonly EnvironmentDescriptorV11[];
+  readonly onRequest?: (
+    request: EnvironmentTransportRequest,
+  ) =>
+    | EnvironmentTransportAnswer
+    | null
+    | Promise<EnvironmentTransportAnswer | null>;
+}): EnvironmentTransport {
+  return async (request) => {
+    const customAnswer = await options.onRequest?.(request);
+    if (customAnswer !== null && customAnswer !== undefined) {
+      return customAnswer;
+    }
+    return (
+      answerEnvironmentHostRead(request, options.environments()) ??
+      answerEnvironmentGetRead(request) ?? { status: 404, text: "{}" }
+    );
+  };
+}
+
+function answerEnvironmentHostRead(
+  request: EnvironmentTransportRequest,
+  environments: readonly EnvironmentDescriptorV11[],
+): EnvironmentTransportAnswer | null {
+  const url = new URL(request.url);
+  const route =
+    /\/api\/v3\/environments\/([^/]+)\/(hosts|members|review)$/u.exec(
+      url.pathname,
+    );
+  if (route === null) return null;
+
+  const environmentId = decodeURIComponent(route[1]);
+  const row = environments.find(
+    (environment) => environment.environmentId === environmentId,
+  );
+  switch (route[2]) {
+    case "hosts":
+      return jsonEnvironmentAnswer({
+        hosts: url.searchParams.has("include")
+          ? []
+          : Array.from({ length: row?.hostCount ?? 0 }, () => ({
+              purgePending: false,
+            })),
+      });
+    case "members":
+      if (row === undefined || row.providerHandle === null) {
+        return { status: 404, text: "{}" };
+      }
+      return jsonEnvironmentAnswer({
+        viewer: { effectiveRole: row.effectiveRole },
+      });
+    case "review":
+      return jsonEnvironmentAnswer({ review: null });
+    default:
+      return null;
+  }
+}
+
+function answerEnvironmentGetRead(
+  request: EnvironmentTransportRequest,
+): EnvironmentTransportAnswer | null {
+  if (request.method !== "GET") return null;
+  const pathname = new URL(request.url).pathname;
+  const responses = [
+    ["/items", { items: [] }],
+    ["/revision", { revision: 0 }],
+    ["/mcp-servers", { servers: [] }],
+    ["/secrets/harness-connections", { connections: [] }],
+    ["/secrets", { secrets: [], removed: [] }],
+  ] as const;
+  const match = responses.find(([suffix]) => pathname.endsWith(suffix));
+  return match === undefined ? null : jsonEnvironmentAnswer(match[1]);
+}
+
+export function jsonEnvironmentAnswer(
+  body: unknown,
+): EnvironmentTransportAnswer {
+  return { status: 200, text: JSON.stringify(body) };
+}
 
 /**
  * The engine arms a deadline timer to retry a refused local ensure, and the
@@ -78,6 +218,33 @@ function createDefaultLocalSelectionAuthority(localHostId: string): {
  * here is a deterministic no-op; pass `overrides` for whatever a given test
  * actually exercises (spies, `hostTray`/`hostManagement` doubles, etc.).
  */
+/** A token source that never mints: the fake has no verified sign-in. */
+export function inertHostTokenSource(): HostTokenSource {
+  return createHostTokenSource({
+    persistence: createMemoryHostTokenPersistence(),
+    mint: () => Promise.resolve({ kind: "no-sign-in" }),
+    signIn: null,
+    now: () => 0,
+  });
+}
+
+export async function heldHostTokenSource(
+  userId: string,
+  hostId: string,
+): Promise<HostTokenSource> {
+  const tokens = inertHostTokenSource();
+  await tokens.adopt(
+    userId,
+    hostId,
+    {
+      token: `host-token-${hostId}`,
+      expiresAtMs: Date.now() + 3_600_000,
+    },
+    tokens.era(userId),
+  );
+  return tokens;
+}
+
 export function createFakeRunnerHost(
   overrides: Partial<IRunnerHost>,
 ): IRunnerHost {
@@ -87,6 +254,7 @@ export function createFakeRunnerHost(
     sandboxArtifacts: null,
     signInUrl: "https://auth.example.invalid/sign-in",
     authnBaseUrl: "https://auth.example.invalid",
+    environmentTransport: fetchEnvironmentTransport,
     relayBaseUrl: "wss://relay.example.invalid/attach",
     poolBaseUrl: "",
     hasLocalHost: true,
@@ -115,6 +283,7 @@ export function createFakeRunnerHost(
       Promise.resolve({ kind: "network-error" as const }),
     mintHostCredential: () =>
       Promise.resolve({ kind: "network-error" as const }),
+    hostTokens: inertHostTokenSource(),
     requestStepUpChallenge: () =>
       Promise.resolve({ kind: "network-error" as const }),
     verifyStepUpChallenge: () =>
@@ -130,8 +299,6 @@ export function createFakeRunnerHost(
       Promise.resolve({ kind: "network-error" as const }),
     readHostOwnership: () => Promise.resolve({ kind: "unauthorized" as const }),
     listTeamComputers: () => Promise.resolve({ kind: "unauthorized" as const }),
-    setEnvironmentBotHost: () =>
-      Promise.resolve({ kind: "unauthorized" as const }),
     mintTeamComputerInstallToken: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
     releaseTeamComputer: () =>
@@ -140,6 +307,14 @@ export function createFakeRunnerHost(
       Promise.resolve({ kind: "network-error" as const }),
     listSandboxes: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
+    listEnvironments: () => Promise.resolve({ kind: "unauthorized" as const }),
+    getTeamChatAutoArchive: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    setTeamChatAutoArchive: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    saveAutoPolicy: () => Promise.resolve({ kind: "unauthorized" as const }),
+    attachTaskEnvironment: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCosts: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     getSandboxCatalogue: () =>
@@ -176,15 +351,19 @@ export function createFakeRunnerHost(
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     setSlackAppDms: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
+    updateBotRunSettings: () =>
+      Promise.resolve({ kind: "no_response" as const }),
+    updateBotReplyMode: () => Promise.resolve({ kind: "no_response" as const }),
+    deleteBot: () => Promise.resolve({ kind: "no_response" as const }),
     getSandboxGrants: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     getTeamEnvironment: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     getEnvironmentProviders: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
+    replaceEnvironmentApiKey: () =>
+      Promise.resolve({ kind: "failed" as const }),
     decideSecretRequest: () =>
-      Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
-    mintExecutableWriteGrant: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     openExternalLink: () => Promise.resolve(),
     getRegisteredUrlSchemes: () => Promise.resolve([]),

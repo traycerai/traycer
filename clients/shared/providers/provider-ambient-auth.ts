@@ -1,8 +1,9 @@
 import type { GuiHarnessOption } from "@traycer/protocol/host/index";
-import type {
-  ProviderAuthStatus,
-  ProviderMutationCliStateV21,
-  ProviderProfileKind,
+import {
+  isProfileEnabled,
+  type ProviderAuthStatus,
+  type ProviderMutationCliStateV21,
+  type ProviderProfileKind,
 } from "@traycer/protocol/host/provider-schemas";
 
 /**
@@ -186,4 +187,63 @@ export function isProviderAmbientAuthenticated(
     provider.auth.status === "authenticated" ||
     ambientProfileAuthStatus(provider) === "authenticated"
   );
+}
+
+type DefaultAccountSources = {
+  readonly auth: { readonly status: ProviderAuthStatus };
+  readonly profiles: readonly {
+    readonly profileId: string;
+    readonly kind: ProviderProfileKind;
+    readonly enabled?: boolean;
+    readonly auth: { readonly status: ProviderAuthStatus };
+  }[];
+};
+
+/**
+ * When the Terminal login shows signed out and the provider has exactly one
+ * enabled, signed-in profile, that profile; else `null`.
+ */
+export function soleSignedInProfileForSignedOutTerminal(
+  provider: DefaultAccountSources,
+): string | null {
+  if (!isProviderAmbientSignedOut(provider)) return null;
+  const signedIn = provider.profiles.filter(
+    (profile) =>
+      profile.kind === "managed" &&
+      isProfileEnabled(profile) &&
+      profile.auth.status === "authenticated",
+  );
+  return signedIn.length === 1 ? signedIn[0].profileId : null;
+}
+
+/**
+ * Whether the Terminal login shows as signed out (by its own row alone) while
+ * an enabled managed profile is signed in, which can run a turn: the Terminal
+ * login's verdict is not the provider's.
+ */
+export function signedOutTerminalBesideSignedInProfile(
+  profiles: DefaultAccountSources["profiles"],
+): boolean {
+  return (
+    isProviderAmbientSignedOut({ auth: { status: "unknown" }, profiles }) &&
+    profiles.some(
+      (profile) =>
+        profile.kind === "managed" &&
+        isProfileEnabled(profile) &&
+        profile.auth.status === "authenticated",
+    )
+  );
+}
+
+/**
+ * {@link soleSignedInProfileForSignedOutTerminal} read from a provider's
+ * profile rows alone (a harness catalog row carries no `providers.list` state).
+ */
+export function soleSignedInProfileFromRows(
+  profiles: DefaultAccountSources["profiles"],
+): string | null {
+  return soleSignedInProfileForSignedOutTerminal({
+    auth: { status: "unknown" },
+    profiles,
+  });
 }

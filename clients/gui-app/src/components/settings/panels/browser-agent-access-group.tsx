@@ -1,3 +1,4 @@
+import { everyAnswerProposes } from "@/lib/environment/settings-save-follow";
 import type { ReactNode } from "react";
 import { Switch } from "@/components/ui/switch";
 import { BROWSER_AGENT_ACCESS } from "@/components/settings/panels/browser-agent-access.definitions";
@@ -14,16 +15,19 @@ import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { ConfigurationWriteFeedback } from "@/components/settings/environment/configuration-write-feedback";
 import { configurationWriteIssue } from "@/components/settings/environment/configuration-write-issue";
 import {
-  useCanAdministerConfiguration,
+  useCanEditConfiguration,
   useConfigurationSource,
 } from "@/components/settings/environment/configuration-source";
 import { useEnvironmentBrowserAccessQuery } from "@/hooks/environment/team/use-browser-access-query";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
 import { ConfigurationReadFailed } from "@/components/settings/environment/team-read-failed";
+import { useSettingsSave } from "@/hooks/environment/use-settings-save";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
 
 const AGENT_BROWSER_ACCESS_GET = "config.browser.get";
 const AGENT_BROWSER_ACCESS_SET = "config.browser.set";
+const SAVED_KINDS = ["browser_agent_access"] as const;
 
 /**
  * Permissions ▸ Browser: whether agents get the in-app browser as a tool. A
@@ -97,6 +101,8 @@ function HostBrowserAccessRow(props: {
  */
 function AgentBrowserAccessRow(): ReactNode {
   const client = useHostClient();
+  const prepareSave = useSettingsSave(client, SAVED_KINDS);
+  const cloudSource = useEnvironmentCloud();
   const query = useHostQuery<HostRpcRegistry, "config.browser.get">({
     cacheKeyIdentity: undefined,
     client,
@@ -109,6 +115,16 @@ function AgentBrowserAccessRow(): ReactNode {
     mutationKey: configMutationKeys.browserSet(),
     errorMessage: "Couldn't update agent browser access",
     invalidateMethods: [AGENT_BROWSER_ACCESS_GET],
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: AGENT_BROWSER_ACCESS_SET, request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+      proposes: everyAnswerProposes,
+    },
   });
 
   return (
@@ -136,7 +152,7 @@ function AgentBrowserAccessRow(): ReactNode {
 
 function TeamBrowserAccessRow(): ReactNode {
   const source = useConfigurationSource();
-  const canEdit = useCanAdministerConfiguration();
+  const canEdit = useCanEditConfiguration();
   const query = useEnvironmentBrowserAccessQuery(false);
   const read = useBoundedRead(query);
   const { put } = useConfigurationItemMutations();

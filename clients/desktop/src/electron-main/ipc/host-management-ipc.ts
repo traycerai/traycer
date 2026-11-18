@@ -1,4 +1,3 @@
-import { invalidateMainLocalAdmission } from "../selection/local-admission-invalidation";
 import { randomUUID } from "node:crypto";
 import { readFile, stat, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -1334,14 +1333,6 @@ export function registerHostManagementIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(RunnerHostInvoke.traycerHostInstalled, async () => {
     return readInstalledHostRecord();
   });
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.invalidateLocalTeamAdmission,
-    (_event, hostId: unknown): void => {
-      if (typeof hostId !== "string" || hostId.length === 0) return;
-      invalidateMainLocalAdmission(hostId);
-    },
-  );
 
   // Deliberately NOT `okOrThrow`: a busy/deferred respawn outcome resolves
   // as a `declined` result the renderer presents as information - see

@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import type { RequestOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import {
   DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
@@ -16,6 +17,7 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { createAppQueryClient } from "@/lib/query-client";
+import { useProfileEligibilityGate } from "@/components/chat/composer/use-profile-eligibility-gate";
 import {
   useProviderProfileEnablementPending,
   useProvidersSetProfileEnabledForClient,
@@ -113,6 +115,57 @@ function providersListWithPersonalProfile(
         ...provider.profiles,
         { ...profile(false), profileId: "personal", label: "Personal" },
       ],
+    })),
+  };
+}
+
+type ProjectedProvidersList = ProvidersListResponse & {
+  readonly futureKey: string;
+};
+
+function projectedProvidersList(enabled: boolean): ProjectedProvidersList {
+  const base = providersListWithPersonalProfile(enabled);
+  return {
+    ...base,
+    offersSignIns: true,
+    removedProfiles: [
+      {
+        providerId: "claude-code",
+        profileId: "removed-work",
+        aliases: ["old-work"],
+      },
+    ],
+    futureKey: "kept",
+    providers: base.providers.map((provider) => ({
+      ...provider,
+      profiles: provider.profiles.map((candidate) =>
+        candidate.profileId === "work"
+          ? {
+              ...candidate,
+              aliases: ["legacy-work"],
+              otherNames: ["Claude account"],
+              personNotice: "waiting",
+            }
+          : candidate,
+      ),
+    })),
+  };
+}
+
+function withProfileEnabled(
+  answer: ProjectedProvidersList,
+  profileId: string,
+  enabled: boolean,
+): ProjectedProvidersList {
+  return {
+    ...answer,
+    providers: answer.providers.map((provider) => ({
+      ...provider,
+      profiles: provider.profiles.map((candidate) =>
+        candidate.profileId === profileId
+          ? { ...candidate, enabled }
+          : candidate,
+      ),
     })),
   };
 }
@@ -223,6 +276,80 @@ describe("useProvidersSetProfileEnabledForClient host-scoped mutation", () => {
       expect(pending.result.current("work")).toBe(false);
       expect(pending.result.current("personal")).toBe(false);
     });
+  });
+
+  it("keeps the list envelope and projected profile fields through optimistic enable and rollback", async () => {
+    const queryClient = createAppQueryClient();
+    let rejectRequest: (error: Error) => void = () => undefined;
+    const pendingRequest = new Promise<{
+      profileId: string;
+      enabled: boolean;
+    }>((_resolve, reject) => {
+      rejectRequest = (error) => reject(error);
+    });
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-profile-enabled-preservation",
+      handlers: {
+        "providers.setProfileEnabled": () => pendingRequest,
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: findTestHost,
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-profile-enabled-preservation",
+      }),
+    );
+    const client = spine.createRequester(HOST_A);
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      HOST_A.hostId,
+      "providers.list",
+      { native: null },
+    );
+    const snapshot = projectedProvidersList(false);
+    queryClient.setQueryData(listKey, snapshot);
+    const mutation = renderHook(
+      () => useProvidersSetProfileEnabledForClient(client, "claude-code"),
+      { wrapper: wrapperFor(queryClient) },
+    );
+
+    act(() => {
+      mutation.result.current.mutate({
+        providerId: "claude-code",
+        profileId: "work",
+        enabled: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(queryClient.getQueryData(listKey)).toEqual(
+        withProfileEnabled(snapshot, "work", true),
+      );
+    });
+    await waitFor(() => {
+      expect(
+        messenger.calls.filter(
+          (call) => call.method === "providers.setProfileEnabled",
+        ),
+      ).toHaveLength(1);
+    });
+    act(() => rejectRequest(new Error("profile write rejected")));
+    await waitFor(() => expect(mutation.result.current.isError).toBe(true));
+    expect(queryClient.getQueryData(listKey)).toEqual(snapshot);
+    expect(
+      messenger.calls.filter(
+        (call) => call.method === "providers.setProfileEnabled",
+      ),
+    ).toHaveLength(1);
+    expect(messenger.calls.map((call) => call.method)).toEqual([
+      "providers.setProfileEnabled",
+    ]);
   });
 
   it("rolls back only the failed profile across overlapping optimistic enables", async () => {
@@ -340,5 +467,164 @@ describe("useProvidersSetProfileEnabledForClient host-scoped mutation", () => {
     expect(profileEnabled(queryClient.getQueryData(exactA), "personal")).toBe(
       false,
     );
+  });
+
+  it("keeps an enabled profile unavailable through its real gate until the enable settles", async () => {
+    const queryClient = createAppQueryClient();
+    let resolveEnable: (value: {
+      profileId: string;
+      enabled: boolean;
+    }) => void = () => undefined;
+    const pendingEnable = new Promise<{
+      profileId: string;
+      enabled: boolean;
+    }>((resolve) => {
+      resolveEnable = resolve;
+    });
+    let serverEnabled = false;
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: findTestHost,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "req-profile-enable-gate",
+        handlers: {
+          "providers.list": () => providersList(serverEnabled),
+          "providers.setProfileEnabled": () => pendingEnable,
+        },
+      }),
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-profile-enable-gate",
+      }),
+    );
+    const clientA = spine.createRequester(HOST_A);
+    const exactA = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      HOST_A.hostId,
+      "providers.list",
+      { native: null },
+    );
+    queryClient.setQueryData(exactA, providersList(false));
+
+    const gate = renderHook(
+      () => useProfileEligibilityGate(clientA, "claude", "work", true),
+      { wrapper: wrapperFor(queryClient) },
+    );
+    expect(gate.result.current.disabled).toBe(true);
+
+    act(() => gate.result.current.enableProfile());
+    await waitFor(() => {
+      expect(gate.result.current.enablePending).toBe(true);
+      expect(gate.result.current.disabled).toBe(true);
+    });
+
+    serverEnabled = true;
+    act(() => resolveEnable({ profileId: "work", enabled: true }));
+    await waitFor(() => {
+      expect(gate.result.current.enablePending).toBe(false);
+      expect(gate.result.current.disabled).toBe(false);
+    });
+  });
+
+  it("keeps reused variables pending under each host key across a requester change", async () => {
+    const queryClient = createAppQueryClient();
+    let resolveA: (value: {
+      profileId: string;
+      enabled: boolean;
+    }) => void = () => undefined;
+    let resolveB: (value: {
+      profileId: string;
+      enabled: boolean;
+    }) => void = () => undefined;
+    const writeA = new Promise<{ profileId: string; enabled: boolean }>(
+      (resolve) => {
+        resolveA = resolve;
+      },
+    );
+    const writeB = new Promise<{ profileId: string; enabled: boolean }>(
+      (resolve) => {
+        resolveB = resolve;
+      },
+    );
+    let sent = 0;
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `req-profile-enable-host-${String(sent + 1)}`,
+      handlers: {
+        "providers.setProfileEnabled": () => {
+          sent += 1;
+          return sent === 1 ? writeA : writeB;
+        },
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: findTestHost,
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-profile-enable-host-switch",
+      }),
+    );
+    const clientA = spine.createRequester(HOST_A);
+    const clientB = spine.createRequester(HOST_B);
+    const exactA = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      HOST_A.hostId,
+      "providers.list",
+      { native: null },
+    );
+    const exactB = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      HOST_B.hostId,
+      "providers.list",
+      { native: null },
+    );
+    queryClient.setQueryData(exactA, providersList(false));
+    queryClient.setQueryData(exactB, providersList(false));
+    const wrapper = wrapperFor(queryClient);
+    const mutation = renderHook(
+      ({ client }: { readonly client: HostClient<HostRpcRegistry> }) =>
+        useProvidersSetProfileEnabledForClient(client, "claude-code"),
+      { initialProps: { client: clientA }, wrapper },
+    );
+    const pendingA = renderHook(
+      () => useProviderProfileEnablementPending(clientA, "claude-code"),
+      { wrapper },
+    );
+    const pendingB = renderHook(
+      () => useProviderProfileEnablementPending(clientB, "claude-code"),
+      { wrapper },
+    );
+    const reusedRequest: RequestOfMethod<
+      HostRpcRegistry,
+      "providers.setProfileEnabled"
+    > = {
+      providerId: "claude-code",
+      profileId: "work",
+      enabled: true,
+    };
+
+    act(() => mutation.result.current.mutate(reusedRequest));
+    await waitFor(() => expect(pendingA.result.current("work")).toBe(true));
+
+    mutation.rerender({ client: clientB });
+    act(() => mutation.result.current.mutate(reusedRequest));
+    await waitFor(() => expect(pendingB.result.current("work")).toBe(true));
+    expect(pendingA.result.current("work")).toBe(true);
+    expect(
+      messenger.calls.map((call) => call.authority.endpoint.hostId),
+    ).toEqual([HOST_A.hostId, HOST_B.hostId]);
+
+    act(() => resolveA({ profileId: "work", enabled: true }));
+    await waitFor(() => expect(pendingA.result.current("work")).toBe(false));
+    expect(pendingB.result.current("work")).toBe(true);
+
+    act(() => resolveB({ profileId: "work", enabled: true }));
+    await waitFor(() => expect(pendingB.result.current("work")).toBe(false));
   });
 });
