@@ -69,14 +69,15 @@ export function ConfigurationProfiles(props: {
   const source = useConfigurationSource();
   const canEdit = useCanEditConfiguration();
   const queries = useQueryClient();
-  // A role refusal says the permission sentence, not the generic save failure: this write keeps
-  // it out of the shared toast and says the sentence itself.
+  // A reader's refused press says the permission sentence, not the generic save failure: this
+  // write keeps the refusal out of the shared toast and says the sentence itself. An editor's
+  // stale press is the page line's, as before.
   const setEnabledPut = useEnvironmentCloudMutation({
     method: "environment.configuration.items.put",
     mutationKey: environmentMutationKeys.configurationItemsPut(),
     errorMessage: "Couldn't save these settings.",
     invalidateMethods: [],
-    silentCodes: ["E_ROLE_FORBIDDEN"],
+    silentCodes: canEdit ? [] : ["E_ROLE_FORBIDDEN"],
   });
   const [pickedKey, setPickedKey] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
@@ -108,14 +109,14 @@ export function ConfigurationProfiles(props: {
       },
       {
         onSuccess: (result) => {
-          // authn's 403 on an item write is an answer, not an error: the press says the same sentence.
-          if (result.outcome === "forbidden")
+          // authn's 403 on an item write is an answer, not an error: a reader's press says the sentence.
+          if (!canEdit && result.outcome === "forbidden")
             toast.error(PROFILE_RECORD_FAILURE_COPY.forbidden);
-          else props.onOutcome(result);
+          props.onOutcome(result);
           reread();
         },
         onError: (error) => {
-          if (error.code === "E_ROLE_FORBIDDEN")
+          if (!canEdit && error.code === "E_ROLE_FORBIDDEN")
             toast.error(PROFILE_RECORD_FAILURE_COPY.forbidden);
           reread();
         },

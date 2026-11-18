@@ -593,6 +593,9 @@ describe("TeamProviders profiles", () => {
     });
     expect(toast.error).toHaveBeenCalledTimes(1);
     expect(
+      screen.queryByText("You no longer have access to change these settings."),
+    ).toBeNull();
+    expect(
       harness.cloudRequests.some(
         (request) =>
           request.method === "PUT" &&
@@ -604,6 +607,100 @@ describe("TeamProviders profiles", () => {
         .getByRole("switch", { name: "Allow agents to use Work" })
         .getAttribute("aria-checked"),
     ).toBe("true");
+  });
+
+  it("keeps the page line, with no permission toast, when an editor demoted mid-page presses the items fallback switch", async () => {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("editor"), {
+      ...handlers(() => [profile(true, 4)]),
+    });
+    harness.cloudResponses.set(
+      "PUT /api/v3/environments/env-a/items/managed_profile",
+      () => ({ status: 403, text: "{}" }),
+    );
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+    await screen.findByText("Work");
+
+    await userEvent.click(
+      screen.getByRole("switch", { name: "Allow agents to use Work" }),
+    );
+
+    expect(
+      await screen.findByText(
+        "You no longer have access to change these settings.",
+      ),
+    ).toBeTruthy();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(
+      screen
+        .getByRole("switch", { name: "Allow agents to use Work" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
+  it("keeps the toast and no page line when an editor demoted mid-page presses the record switch", async () => {
+    teamProfileRecordHttpBoundary.list = {
+      status: 200,
+      body: teamProfileRecordsBody([
+        teamProfileRecord({
+          profileId: "team-demoted-switch-profile",
+          harnessId: "claude",
+          name: "Team demoted switch profile",
+          readerLabel: "live",
+          kind: "oauth_code",
+        }),
+      ]),
+    };
+    teamProfileRecordHttpBoundary.items = {
+      status: 200,
+      body: {
+        items: [
+          configurationItem({
+            kind: "managed_profile",
+            key: "claude:team-demoted-switch-profile",
+            value: {
+              name: "Team demoted switch profile",
+              color: null,
+              harnessId: "claude",
+              accountIdentity: null,
+              needsLink: false,
+              enabled: true,
+            },
+            revision: 1,
+          }),
+        ],
+      },
+    };
+    teamProfileRecordHttpBoundary.itemWriteStatus = 403;
+    const harness = mountTeamPageThroughBoundary(
+      "admin",
+      {
+        ...handlers(() => []),
+        "environment.host.list": () => ({ hosts: [reachableHost] }),
+      },
+      "providers",
+    );
+    await waitFor(() => {
+      expect(useAuthStore.getState().contextMetadata?.userId).toBe(
+        "team-test-user",
+      );
+    });
+    admitCurrentUserToTeamWindow();
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+    await screen.findByRole("button", {
+      name: "Claude Code profile: Team demoted switch profile",
+    });
+    openProfileMenu(profileTriggerName("Team demoted switch profile", false));
+
+    await userEvent.click(profileRowSwitch("Team demoted switch profile"));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "You don't have permission to do that.",
+      );
+    });
+    expect(
+      screen.queryByText("You no longer have access to change these settings."),
+    ).toBeNull();
   });
 
   it("updates a synced row through its exact managed-profile item key and rereads records", async () => {
