@@ -4,11 +4,16 @@ import {
   describe,
   expect,
   it,
+  onTestFinished,
   vi,
   type Mock,
 } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  queryOptions,
+} from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
 import type { IHostDirectoryService } from "@traycer-clients/shared/host-client/host-runtime";
 
@@ -412,6 +417,37 @@ describe("a bot notification that names the host it came from", () => {
     });
   }
 
+  /** A read of that answered list is in flight over its cached answer; it ends when the case does. */
+  function listRefetching(hostId: string, botIds: ReadonlyArray<string>): void {
+    listAnswered(hostId, botIds);
+    const answer = { bots: botIds.map(botRecord) };
+    let release: () => void = () => undefined;
+    const held = new Promise<typeof answer>((resolve) => {
+      release = () => {
+        resolve(answer);
+      };
+    });
+    const key = hostQueryEntryKey({
+      hostId,
+      effectiveHostId: useSelectionAuthorityStore.getState().effectiveHostId,
+      method: "bot.list",
+      params: {},
+      cacheKeyIdentity: undefined,
+    });
+    const read = queryClient.fetchQuery(
+      queryOptions({
+        queryKey: key,
+        queryFn: () => held,
+        staleTime: 0,
+      }),
+    );
+    expect(queryClient.getQueryState(key)?.fetchStatus).toBe("fetching");
+    onTestFinished(async () => {
+      release();
+      await read;
+    });
+  }
+
   function surfaceBoundTo(hostId: string): void {
     useTracySurfaceStore.getState().openSurface(hostId);
     useTracySurfaceStore.getState().selectChannel(BOT_ID);
@@ -492,6 +528,16 @@ describe("a bot notification that names the host it came from", () => {
     surfaceBoundTo(SURFACE_HOST);
     listAnswered(SURFACE_HOST, ["bot-other"]);
     await listInvalidated(SURFACE_HOST);
+    const onResult = vi.fn<(outcome: "success" | "failure") => void>();
+
+    activateFrom("reply-1", NAMED_HOST, onResult);
+
+    expectOpened(onResult);
+  });
+
+  it("opens as ever when the list lacks the bot but a read of it is in flight", () => {
+    surfaceBoundTo(SURFACE_HOST);
+    listRefetching(SURFACE_HOST, ["bot-other"]);
     const onResult = vi.fn<(outcome: "success" | "failure") => void>();
 
     activateFrom("reply-1", NAMED_HOST, onResult);
