@@ -94,6 +94,7 @@ const UNPROVEN =
   "This sign-in can't be matched to the account this profile uses.";
 const NOT_CHANGED = `${PROFILE_LABEL} was not changed.`;
 const WAITING_FOR_PROFILE = "Waiting for Traycer. Your sign-in is complete.";
+const DUPLICATE_REASON = `${PROFILE_LABEL} already uses this account and organization. Sign in again and choose a different organization.`;
 const DID_NOT_FINISH = "Sign-in did not finish. Try again.";
 const ADD_AS_NEW = "Add as a new profile";
 const SWITCH_ACCOUNT = "Switch account";
@@ -433,6 +434,11 @@ const REAUTH_MISFITS = [
 
 const SETTLED_CLOSE = [
   {
+    name: "already-signed-in",
+    outcome: { kind: "already-signed-in", profileId: PROFILE_ID },
+    sentence: DUPLICATE_REASON,
+  },
+  {
     name: "account-mismatch",
     outcome: { kind: "account-mismatch" },
     sentence: DIFFERENT_ACCOUNT,
@@ -616,19 +622,20 @@ describe("ProfileEditDialog startInReauth sign-in outcomes", () => {
     expect(harness.listCalls()).toBe(0);
   });
 
-  it("keeps today's did-not-finish result for already-signed-in", async () => {
-    renderReauth({
+  it("shows why an account the environment already holds is refused, not a failed sign-in", async () => {
+    const harness = renderReauth({
       ...REAUTH_DEFAULTS,
       offers: true,
       outcome: { kind: "already-signed-in", profileId: PROFILE_ID },
       holdAwait: false,
     });
-    expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
-    expect(
-      screen.queryByText(`Already signed in as ${PROFILE_LABEL}`),
-    ).toBeNull();
+    expect(await screen.findByText(DUPLICATE_REASON)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+    expect(screen.queryByText(DID_NOT_FINISH)).toBeNull();
     expect(screen.queryByText(ADD_AS_NEW)).toBeNull();
     expect(screen.queryByText(WAITING_FOR_PROFILE)).toBeNull();
+    expect(harness.selected).not.toHaveBeenCalled();
+    expect(harness.cancelCount()).toBe(0);
   });
 
   it("records a matching 200 receipt and shows the existing signed-in state", async () => {
