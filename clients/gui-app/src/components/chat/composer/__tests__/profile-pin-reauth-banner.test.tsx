@@ -6,6 +6,7 @@ import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import {
   pinProfile,
   providerState,
+  removedEntry,
 } from "@/components/providers/__tests__/profile-pin-fixtures";
 import {
   createProfileListHost,
@@ -196,5 +197,143 @@ describe("the landing reauth banner and a Terminal pin", () => {
       ).toBeDefined();
     });
     expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+  });
+});
+
+describe("the landing reauth banner while the Terminal account is signed out", () => {
+  afterEach(() => {
+    holder.client = null;
+    cleanup();
+  });
+
+  function signedOutManagedPin(terminal: {
+    readonly providerAuth: "authenticated" | "unauthenticated";
+    readonly ambientAuth: "authenticated" | "unauthenticated" | null;
+  }): ProfileListHost {
+    return hostFor({
+      providers: [
+        providerState({
+          providerId: "codex",
+          authStatus: terminal.providerAuth,
+          profiles: [
+            ...(terminal.ambientAuth === null
+              ? []
+              : [
+                  pinProfile({
+                    profileId: "terminal-row",
+                    label: "Terminal account",
+                    kind: "ambient",
+                    enabled: true,
+                    authStatus: terminal.ambientAuth,
+                    aliases: [],
+                    personNotice: null,
+                    terminalOnThisComputer: true,
+                    otherNames: [],
+                  }),
+                ]),
+            managed({
+              profileId: "work-row",
+              label: "Work",
+              authStatus: "unauthenticated",
+              personNotice: null,
+              terminalOnThisComputer: false,
+            }),
+          ],
+        }),
+      ],
+      native: null,
+      removedProfiles: [],
+    });
+  }
+
+  it("shows only Sign in for a signed-out managed pin", async () => {
+    const host = signedOutManagedPin({
+      providerAuth: "unauthenticated",
+      ambientAuth: null,
+    });
+    render(
+      <host.Wrapper>
+        <Banner profileId="work-row" />
+      </host.Wrapper>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+    });
+    expect(
+      screen.queryByRole("button", { name: "Continue on Terminal account" }),
+    ).toBeNull();
+  });
+
+  it("hides the button when the Terminal row is signed out though the provider summary lags", async () => {
+    const host = signedOutManagedPin({
+      providerAuth: "authenticated",
+      ambientAuth: "unauthenticated",
+    });
+    render(
+      <host.Wrapper>
+        <Banner profileId="work-row" />
+      </host.Wrapper>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+    });
+    expect(
+      screen.queryByRole("button", { name: "Continue on Terminal account" }),
+    ).toBeNull();
+  });
+
+  it("offers the button again once the Terminal account is signed in", async () => {
+    const host = signedOutManagedPin({
+      providerAuth: "authenticated",
+      ambientAuth: "authenticated",
+    });
+    render(
+      <host.Wrapper>
+        <Banner profileId="work-row" />
+      </host.Wrapper>,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Continue on Terminal account" }),
+      ).toBeDefined();
+    });
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+  });
+
+  it("shows only Manage in Settings for a removed account", async () => {
+    const host = hostFor({
+      providers: [
+        providerState({
+          providerId: "codex",
+          authStatus: "unauthenticated",
+          profiles: [],
+        }),
+      ],
+      native: null,
+      removedProfiles: [
+        removedEntry({
+          providerId: "codex",
+          profileId: "gone-row",
+          aliases: [],
+        }),
+      ],
+    });
+    render(
+      <host.Wrapper>
+        <Banner profileId="gone-row" />
+      </host.Wrapper>,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Manage in Settings" }),
+      ).toBeDefined();
+    });
+    expect(
+      screen.queryByRole("button", { name: "Continue on Terminal account" }),
+    ).toBeNull();
   });
 });
