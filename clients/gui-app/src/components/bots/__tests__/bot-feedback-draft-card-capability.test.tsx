@@ -123,6 +123,12 @@ let requestCounter = 0;
 /** What the host's next handshake advertises for the feedback methods. */
 let advertisesFeedback = true;
 
+/** Whether the source host's `host.status` read fails at the transport. */
+let statusFails = false;
+
+const UNAVAILABLE_COPY =
+  "This feedback draft is unavailable. Try again when its computer is connected.";
+
 function hostClient(
   entry: typeof mockLocalHostEntry,
   onStatus: () => void,
@@ -137,6 +143,7 @@ function hostClient(
       handlers: {
         "host.status": () => {
           onStatus();
+          if (statusFails) throw new Error("host.status failed");
           // The real transport records the handshake's manifest on its ack.
           recordNegotiatedHostManifest(
             entry.hostId,
@@ -203,6 +210,7 @@ beforeEach(() => {
   requests.decide.length = 0;
   requests.preview.length = 0;
   advertisesFeedback = true;
+  statusFails = false;
   boundary.sourceVersion = "0.0.0-mock";
   boundary.clients = {
     [SOURCE_HOST_ID]: hostClient(mockLocalHostEntry, () => {
@@ -263,6 +271,47 @@ describe("<BotFeedbackDraftCard /> source capability", () => {
     expect(requests.sourceStatus).toBe(2);
     expect(sendDisabled()).toBe(false);
     expect(requests.decide).toHaveLength(0);
+  });
+
+  it("reports the draft unavailable, not an endless wait, when an unseeded source host's probe fails", async () => {
+    statusFails = true;
+    renderCard();
+    await settle();
+    // The probe keeps the query client's retry policy; let it run out.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(8_000);
+    });
+    await settle();
+
+    expect(requests.sourceStatus).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.getByText(UNAVAILABLE_COPY)).toBeTruthy();
+    expect(requests.decide).toHaveLength(0);
+  });
+
+  it("keeps a known lacking verdict as unsupported when the probe fails", async () => {
+    statusFails = true;
+    recordNegotiatedHostManifest(SOURCE_HOST_ID, {
+      "host.status": { major: 1, minor: 0 },
+    });
+    renderCard();
+    await settle();
+
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+    expect(screen.queryByText(UNAVAILABLE_COPY)).toBeNull();
+  });
+
+  it("keeps a known advertising verdict sendable, and never probes it", async () => {
+    statusFails = true;
+    recordNegotiatedHostManifest(SOURCE_HOST_ID, {
+      "host.status": { major: 1, minor: 0 },
+      ...FEEDBACK_METHODS,
+    });
+    renderCard();
+    await settle();
+
+    expect(requests.sourceStatus).toBe(0);
+    expect(sendDisabled()).toBe(false);
   });
 
   it("asks a host that answers with the methods once, not on every render", async () => {

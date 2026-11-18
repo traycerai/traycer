@@ -50,7 +50,8 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     boundary.requestedHostIds.push(hostId);
     return hostId === null ? null : (boundary.clients[hostId] ?? null);
   },
-  useHostDirectoryEntryForHostId: () => null,
+  useHostDirectoryEntryForHostId: (hostId: string | null) =>
+    hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: () => boundary.supported,

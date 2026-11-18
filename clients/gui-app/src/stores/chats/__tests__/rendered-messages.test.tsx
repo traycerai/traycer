@@ -1973,6 +1973,130 @@ describe("useRenderedMessages", () => {
     expect(driver.result.current[0].feedbackDraft).toEqual(sent);
   });
 
+  describe("a bot turn's feedback draft across split rows", () => {
+    const draftProjection = {
+      source: {
+        hostId: "host-source",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        blockId: "block-1",
+      },
+      draft: {
+        category: "tool_problem",
+        toolName: "traycer_run_shell",
+        goal: "Restart a shell with a new working directory.",
+        observed: "The process kept the old directory.",
+        suggestion: null,
+        suggestDiagnostics: false,
+        state: "pending" as const,
+        decidedAt: null,
+        failureReason: null,
+      },
+    };
+    const steerContent = {
+      type: "doc" as const,
+      content: [{ type: "paragraph" as const, content: [] }],
+    };
+
+    function steerBlock(id: string, timestamp: number) {
+      return {
+        type: "steer" as const,
+        blockId: `steer:${id}`,
+        status: "completed" as const,
+        timestamp,
+        queueItemId: `queue-${id}`,
+        messageId: `message-${id}`,
+        mode: "safe_point" as const,
+        sender: null,
+        content: steerContent,
+      };
+    }
+
+    function steeredUser(id: string, timestamp: number): Message {
+      return {
+        ...userMessage(`message-${id}`),
+        message: {
+          kind: "user" as const,
+          content: steerContent,
+          browserAnnotations: [],
+        },
+        timestamp,
+      };
+    }
+
+    function rowsCarryingDraft(
+      rows: ReadonlyArray<{ readonly feedbackDraft?: unknown }>,
+    ): number {
+      return rows.filter((row) => row.feedbackDraft !== undefined).length;
+    }
+
+    it("renders the draft on exactly one row when a steer splits the turn", () => {
+      const assistant: Message = {
+        ...assistantMessage("turn-draft-split", 2000),
+        feedbackDraft: draftProjection,
+        blocks: [
+          plainTextBlock("before-draft-split", 2001, "Before steer."),
+          steerBlock("draft-split", 2002),
+          plainTextBlock("after-draft-split", 2003, "After steer."),
+        ],
+      };
+
+      const { result } = renderRenderedMessages({
+        messages: [assistant, steeredUser("draft-split", 2002)],
+      });
+
+      expect(
+        result.current.filter((row) => row.role === "assistant"),
+      ).toHaveLength(2);
+      expect(rowsCarryingDraft(result.current)).toBe(1);
+    });
+
+    it("renders the draft on exactly one row when a trailing steer ends the turn", () => {
+      const assistant: Message = {
+        ...codexAssistantMessage("turn-draft-trailing", 2000),
+        timestamp: 2004,
+        feedbackDraft: draftProjection,
+        blocks: [
+          plainTextBlock("before-draft-trailing", 2001, "Before steer."),
+          steerBlock("draft-trailing", 2002),
+          codexRetryBlock({
+            blockId: "retry-ended-draft-trailing",
+            timestamp: 2003,
+            code: RETRY_ENDED_ERROR_CODE,
+            message: "The Codex retry attempt ended.",
+          }),
+        ],
+      };
+      const completedEvent: ChatEvent = {
+        eventId: "event:turn.completed:turn-draft-trailing",
+        type: "turn.completed",
+        timestamp: 2004,
+        clientActionId: null,
+        actor: null,
+        message: "Turn completed.",
+        turnId: "turn-draft-trailing",
+        messageId: null,
+        queueItemId: null,
+        approvalId: null,
+        blockId: null,
+        severity: "info",
+        metadata: null,
+      };
+
+      const { result } = renderRenderedMessages({
+        messages: [assistant, steeredUser("draft-trailing", 2002)],
+        events: [completedEvent],
+      });
+
+      expect(result.current.map((row) => row.role)).toEqual([
+        "assistant",
+        "user",
+        "assistant",
+      ]);
+      expect(rowsCarryingDraft(result.current)).toBe(1);
+    });
+  });
+
   it("invalidates assistant turn cache when text changes without a timestamp change", () => {
     const partialAssistant: Message = {
       ...assistantMessage("turn-1", 2000),

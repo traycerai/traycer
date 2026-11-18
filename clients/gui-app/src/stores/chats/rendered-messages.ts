@@ -3470,17 +3470,26 @@ function renderAssistantTurnRows(
   );
   // Stamp the recovery-action anchor last: completion/run-state passes rebuild
   // row objects, so they must finish before its single owner is selected.
-  if (!plan.split)
-    return withManualRungAnchor(withTurnCompletion(visibleRows, input));
+  const completedRows = withTurnCompletion(
+    plan.split
+      ? attachRunStateToTrailingAssistantSlice(
+          visibleRows,
+          input,
+          plan,
+          rowIdByBlockId,
+        )
+      : visibleRows,
+    input,
+  );
+  const { feedbackDraft } = input.acc;
+  if (feedbackDraft === null) return withManualRungAnchor(completedRows);
+  const firstAssistantIndex = completedRows.findIndex(
+    (row) => row.role === "assistant",
+  );
+  // Select after hidden slices and trailing boundaries have been resolved.
   return withManualRungAnchor(
-    withTurnCompletion(
-      attachRunStateToTrailingAssistantSlice(
-        visibleRows,
-        input,
-        plan,
-        rowIdByBlockId,
-      ),
-      input,
+    completedRows.map((row, index) =>
+      index === firstAssistantIndex ? { ...row, feedbackDraft } : row,
     ),
   );
 }
@@ -3857,9 +3866,6 @@ function renderAssistantTurnSlice(
     ...(input.acc.question === null ? {} : { question: input.acc.question }),
     // Only a bot post that points into a task carries it; absent everywhere else.
     ...(input.acc.surface === null ? {} : { surface: input.acc.surface }),
-    ...(input.acc.feedbackDraft === null
-      ? {}
-      : { feedbackDraft: input.acc.feedbackDraft }),
     // Only a bot's direct reply in its channel carries it; absent everywhere else.
     ...(input.acc.repliesTo === null ? {} : { repliesTo: input.acc.repliesTo }),
     // Assistant rows render no provider/model label above the bubble (it moved
