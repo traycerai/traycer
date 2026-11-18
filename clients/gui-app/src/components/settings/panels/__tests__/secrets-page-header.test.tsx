@@ -82,6 +82,10 @@ function secret(name: string): EnvironmentSecretV12 {
   };
 }
 
+function providerSecret(name: string): EnvironmentSecretV12 {
+  return { ...secret(name), kind: "provider" };
+}
+
 /**
  * The team's page as `role` reads it. A team's own roles are admin, editor and
  * viewer: `owner` is the role of a user-owned configuration, and the boundary
@@ -149,6 +153,45 @@ describe("the Secrets page header", () => {
       "On your computers",
     );
     await expectTeamSubtitle();
+  });
+
+  it("lists no provider key, and says what secrets are when only provider keys are stored", async () => {
+    renderPanel({
+      secrets: [providerSecret("OPENAI_API_KEY")],
+      listError: { current: null },
+      role: "admin",
+      removed: [],
+    });
+
+    await screen.findByTestId("secrets-empty");
+    expect(screen.queryByText("OPENAI_API_KEY")).toBeNull();
+    expect(screen.queryByTestId("secret-row")).toBeNull();
+    await expectTeamSubtitle();
+  });
+
+  it("lists the other secrets beside a provider key it leaves out", async () => {
+    renderPanel({
+      secrets: [providerSecret("OPENAI_API_KEY"), secret("STRIPE_KEY")],
+      listError: { current: null },
+      role: "admin",
+      removed: [],
+    });
+
+    await screen.findByText("STRIPE_KEY");
+    expect(screen.queryByText("OPENAI_API_KEY")).toBeNull();
+    expect(screen.getAllByTestId("secret-row")).toHaveLength(1);
+  });
+
+  it("names no provider key to a viewer, who reads None", async () => {
+    renderPanel({
+      secrets: [providerSecret("OPENAI_API_KEY")],
+      listError: { current: null },
+      role: "viewer",
+      removed: [],
+    });
+
+    expect(await screen.findByText("No secrets.")).toBeTruthy();
+    expect(screen.queryByText("OPENAI_API_KEY")).toBeNull();
   });
 
   it("shows the subtitle once there are secrets", async () => {
