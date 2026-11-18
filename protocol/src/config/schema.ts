@@ -113,13 +113,18 @@ export type AgentWorktreeCreatePolicy =
  * has never touched Settings keeps that behaviour. Additive and `.default()`-ed
  * like every other block, so older config files keep validating without a
  * `CLI_CONFIG_VERSION` bump.
+ *
+ * `recoverMissing` is whether a run whose bound worktree or folder is gone is
+ * recovered (the worktree's repository folder is used, a missing folder is
+ * detached) instead of refused. On unless the file says `false`.
  */
 export const worktreesConfigSchema = lazySchema(() =>
   z
     .object({
       agentCreate: z.enum(AGENT_WORKTREE_CREATE_POLICIES).default("allow"),
+      recoverMissing: z.boolean().default(true),
     })
-    .default({ agentCreate: "allow" }),
+    .default({ agentCreate: "allow", recoverMissing: true }),
 );
 export type WorktreesConfig = z.infer<typeof worktreesConfigSchema>;
 
@@ -537,7 +542,7 @@ export const EMPTY_CLI_CONFIG: CliConfig = {
   logs: { cliLogLevel: DEFAULT_LOG_LEVEL, hostLogLevel: DEFAULT_LOG_LEVEL },
   features: { agentRoles: false, artifactVersioning: false },
   browser: { agentAccess: true },
-  worktrees: { agentCreate: "allow" },
+  worktrees: { agentCreate: "allow", recoverMissing: true },
   catalog: { probeTimeoutSeconds: CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS },
   catalogOverrides: {},
 };

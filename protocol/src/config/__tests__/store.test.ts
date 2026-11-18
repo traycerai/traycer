@@ -71,6 +71,7 @@ import {
   readAgentFeedbackConfigSync,
   setAgentRolesEnabled,
   setAgentWorktreeCreatePolicy,
+  setWorktreeRecoverMissing,
   setLogLevels,
   setShell,
   writeCliConfig,
@@ -120,7 +121,7 @@ describe("cli config store", () => {
         artifactVersioning: false,
       },
       browser: { agentAccess: true },
-      worktrees: { agentCreate: "allow" as const },
+      worktrees: { agentCreate: "allow" as const, recoverMissing: true },
       catalog: { probeTimeoutSeconds: 60 },
       catalogOverrides: {},
     };
@@ -600,7 +601,7 @@ describe("cli config store", () => {
         artifactVersioning: false,
       },
       browser: { agentAccess: true },
-      worktrees: { agentCreate: "allow" },
+      worktrees: { agentCreate: "allow", recoverMissing: true },
       catalog: { probeTimeoutSeconds: 60 },
       catalogOverrides: {},
     });
@@ -710,38 +711,62 @@ describe("agent worktree create policy", () => {
 
   it("reads allow from a pre-feature file", async () => {
     await writeRaw(JSON.stringify(BASE));
-    expect(await readWorktreesConfig()).toEqual({ agentCreate: "allow" });
-    expect(readWorktreesConfigSync()).toEqual({ agentCreate: "allow" });
+    expect(await readWorktreesConfig()).toEqual({
+      agentCreate: "allow",
+      recoverMissing: true,
+    });
+    expect(readWorktreesConfigSync()).toEqual({
+      agentCreate: "allow",
+      recoverMissing: true,
+    });
   });
 
   it("reads allow for a worktrees block that omits agentCreate", async () => {
     await writeRaw(JSON.stringify({ ...BASE, worktrees: {} }));
-    expect(await readWorktreesConfig()).toEqual({ agentCreate: "allow" });
-    expect(readWorktreesConfigSync()).toEqual({ agentCreate: "allow" });
+    expect(await readWorktreesConfig()).toEqual({
+      agentCreate: "allow",
+      recoverMissing: true,
+    });
+    expect(readWorktreesConfigSync()).toEqual({
+      agentCreate: "allow",
+      recoverMissing: true,
+    });
   });
 
-  it("sync read fails OPEN to allow when the file is missing", () => {
-    expect(readWorktreesConfigSync()).toEqual({ agentCreate: "allow" });
+  it("sync read fails OPEN to allow, but keeps the refusal, when the file is missing", () => {
+    expect(readWorktreesConfigSync()).toEqual({
+      agentCreate: "allow",
+      recoverMissing: false,
+    });
   });
 
   it("sync read fails OPEN to allow on malformed JSON", async () => {
     // Agents could create worktrees before the policy existed, so a config we
     // cannot read must not revoke it.
     await writeRaw("{ not json");
-    expect(readWorktreesConfigSync()).toEqual({ agentCreate: "allow" });
+    expect(readWorktreesConfigSync()).toEqual({
+      agentCreate: "allow",
+      recoverMissing: false,
+    });
   });
 
   it("sync read fails OPEN to allow on an invalid agentCreate value", async () => {
     for (const agentCreate of ["sometimes", "", 3, null, true]) {
       await writeRaw(JSON.stringify({ ...BASE, worktrees: { agentCreate } }));
-      expect(readWorktreesConfigSync()).toEqual({ agentCreate: "allow" });
+      expect(readWorktreesConfigSync()).toEqual({
+        agentCreate: "allow",
+        recoverMissing: false,
+      });
     }
   });
 
   it("sync read fails OPEN to allow when the worktrees block is not an object", async () => {
     for (const worktrees of ["never", 7, ["never"]]) {
       await writeRaw(JSON.stringify({ ...BASE, worktrees }));
-      expect(readWorktreesConfigSync()).toEqual({ agentCreate: "allow" });
+      expect(readWorktreesConfigSync()).toEqual({
+        agentCreate: "allow",
+        recoverMissing: false,
+      });
     }
   });
 
@@ -751,7 +776,10 @@ describe("agent worktree create policy", () => {
       await setAgentWorktreeCreatePolicy("never");
       await chmod(cliConfigPath(), 0o000);
       try {
-        expect(readWorktreesConfigSync()).toEqual({ agentCreate: "allow" });
+        expect(readWorktreesConfigSync()).toEqual({
+          agentCreate: "allow",
+          recoverMissing: false,
+        });
       } finally {
         await chmod(cliConfigPath(), 0o600);
       }
@@ -769,7 +797,10 @@ describe("agent worktree create policy", () => {
           worktrees: { agentCreate },
         }),
       );
-      expect(readWorktreesConfigSync()).toEqual({ agentCreate });
+      expect(readWorktreesConfigSync()).toEqual({
+        agentCreate,
+        recoverMissing: true,
+      });
     }
   });
 
@@ -782,7 +813,10 @@ describe("agent worktree create policy", () => {
           worktrees: { agentCreate },
         }),
       );
-      expect(readWorktreesConfigSync()).toEqual({ agentCreate });
+      expect(readWorktreesConfigSync()).toEqual({
+        agentCreate,
+        recoverMissing: true,
+      });
     }
   });
 
@@ -795,7 +829,10 @@ describe("agent worktree create policy", () => {
         worktrees: { agentCreate: "never" },
       }),
     );
-    expect(readWorktreesConfigSync()).toEqual({ agentCreate: "never" });
+    expect(readWorktreesConfigSync()).toEqual({
+      agentCreate: "never",
+      recoverMissing: true,
+    });
   });
 
   it("async read throws on a malformed file", async () => {
@@ -816,8 +853,14 @@ describe("agent worktree create policy", () => {
   it("sets the policy and round-trips it through both readers", async () => {
     for (const agentCreate of ["ask", "never", "allow"] as const) {
       await setAgentWorktreeCreatePolicy(agentCreate);
-      expect(await readWorktreesConfig()).toEqual({ agentCreate });
-      expect(readWorktreesConfigSync()).toEqual({ agentCreate });
+      expect(await readWorktreesConfig()).toEqual({
+        agentCreate,
+        recoverMissing: true,
+      });
+      expect(readWorktreesConfigSync()).toEqual({
+        agentCreate,
+        recoverMissing: true,
+      });
     }
   });
 
@@ -846,7 +889,65 @@ describe("agent worktree create policy", () => {
     await setEnvOverride("FOO", "bar");
     await setLogLevels("debug", "warn");
     await setAgentBrowserAccess(false);
-    expect(await readWorktreesConfig()).toEqual({ agentCreate: "ask" });
+    expect(await readWorktreesConfig()).toEqual({
+      agentCreate: "ask",
+      recoverMissing: true,
+    });
+  });
+
+  it("sync read honours an explicit recoverMissing beside an unrelated defect", async () => {
+    for (const recoverMissing of [true, false]) {
+      await writeRaw(
+        JSON.stringify({
+          ...BASE,
+          browser: { agentAccess: "no" },
+          worktrees: { agentCreate: "ask", recoverMissing },
+        }),
+      );
+      expect(readWorktreesConfigSync()).toEqual({
+        agentCreate: "ask",
+        recoverMissing,
+      });
+    }
+  });
+
+  it("sync read refuses recovery when recoverMissing is not a boolean", async () => {
+    for (const recoverMissing of ["yes", 1, null]) {
+      await writeRaw(
+        JSON.stringify({ ...BASE, worktrees: { recoverMissing } }),
+      );
+      expect(readWorktreesConfigSync()).toEqual({
+        agentCreate: "allow",
+        recoverMissing: false,
+      });
+    }
+  });
+
+  it("sets recoverMissing and keeps the agent-create policy", async () => {
+    await setAgentWorktreeCreatePolicy("never");
+    await setWorktreeRecoverMissing(false);
+    expect(await readWorktreesConfig()).toEqual({
+      agentCreate: "never",
+      recoverMissing: false,
+    });
+    expect(readWorktreesConfigSync()).toEqual({
+      agentCreate: "never",
+      recoverMissing: false,
+    });
+    await setWorktreeRecoverMissing(true);
+    expect(await readWorktreesConfig()).toEqual({
+      agentCreate: "never",
+      recoverMissing: true,
+    });
+  });
+
+  it("setting the agent-create policy keeps recoverMissing", async () => {
+    await setWorktreeRecoverMissing(false);
+    await setAgentWorktreeCreatePolicy("ask");
+    expect(await readWorktreesConfig()).toEqual({
+      agentCreate: "ask",
+      recoverMissing: false,
+    });
   });
 
   it("preserves an unknown top-level block across a policy write", async () => {

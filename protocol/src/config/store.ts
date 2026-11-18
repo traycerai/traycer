@@ -1258,7 +1258,9 @@ export function readWorktreesConfigSync(): WorktreesConfig {
     // An unreadable config must not revoke a capability the user never
     // restricted - fall through to the permissive default.
   }
-  return { agentCreate: "allow" };
+  // `recoverMissing` falls the other way: recovery changes which folder a run
+  // uses, so a config that cannot be read keeps the refusal.
+  return { agentCreate: "allow", recoverMissing: false };
 }
 
 /**
@@ -1272,6 +1274,22 @@ export async function setAgentWorktreeCreatePolicy(
     next: {
       ...current,
       worktrees: { ...current.worktrees, agentCreate: policy },
+    },
+    result: undefined,
+  }));
+}
+
+/**
+ * Sets whether a run whose bound worktree or folder is gone is recovered,
+ * while preserving the rest of the config.
+ */
+export async function setWorktreeRecoverMissing(
+  enabled: boolean,
+): Promise<void> {
+  await updateCliConfig((current) => ({
+    next: {
+      ...current,
+      worktrees: { ...current.worktrees, recoverMissing: enabled },
     },
     result: undefined,
   }));
