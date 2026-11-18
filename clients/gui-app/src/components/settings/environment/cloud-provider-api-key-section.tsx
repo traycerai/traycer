@@ -15,10 +15,41 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
+import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useBoundedRead } from "@/hooks/environment/team/use-bounded-read";
+import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
 import { useCloudProviderApiKeyMutation } from "@/hooks/providers/use-cloud-provider-api-key-mutation";
 import type { CloudProviderKeyScope } from "@/hooks/providers/use-cloud-provider-api-key-query";
+import { recordKeyCustodyLine } from "@/lib/providers/provider-key-custody";
 import { ConfigurationReadFailed } from "./team-read-failed";
+import { useConfigurationSource } from "./configuration-source";
+
+/**
+ * Where a saved key goes, only when the window's computer runs this
+ * environment and keeps the provider's key in its record: the computer's own
+ * `recordEnvironmentId`, absent on an older computer.
+ */
+function useRecordKeyCustodyLine(
+  environmentId: string,
+  providerId: ProviderKeyProviderId,
+): string | null {
+  const source = useConfigurationSource();
+  const providers = useProvidersList({ enabled: true, subscribed: true });
+  const environments = useEnvironmentListQuery(true);
+  const row = providers.data?.providers.find(
+    (provider) => provider.providerId === providerId,
+  );
+  if (row?.apiKey.recordEnvironmentId !== environmentId) return null;
+  const teamLabel = environments.data?.environments.find(
+    (environment) => environment.environmentId === environmentId,
+  )?.label;
+  const personal =
+    source.kind === "pool" && source.configuration === "personal";
+  return recordKeyCustodyLine(
+    providerId,
+    personal ? "Personal" : (teamLabel ?? null),
+  );
+}
 
 export function CloudProviderApiKeySection(props: {
   readonly scope: CloudProviderKeyScope;
@@ -60,6 +91,10 @@ function CloudProviderApiKeyField(props: {
       outstanding.current = false;
       setDraft("");
     },
+  );
+  const custodyLine = useRecordKeyCustodyLine(
+    props.scope.environmentId,
+    props.providerId,
   );
   const read = useBoundedRead(props.query);
   const list = props.query.isError ? undefined : props.query.data;
@@ -149,6 +184,11 @@ function CloudProviderApiKeyField(props: {
       >
         {refusal}
       </p>
+      {custodyLine === null ? null : (
+        <p className="max-w-[72ch] text-ui-xs text-muted-foreground">
+          {custodyLine}
+        </p>
+      )}
     </div>
   );
 }
