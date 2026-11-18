@@ -26,6 +26,7 @@ import {
 } from "vitest";
 import {
   createSettingsSaveCoordinator,
+  scheduleFollowUp,
   type SettingsSaveContext,
   type SettingsSaveCoordinator,
   type SettingsSaveTicket,
@@ -286,11 +287,6 @@ interface World {
   readonly applyPosted: (count: number) => Promise<void>;
 }
 
-function scheduleOnce(run: () => void, delayMs: number): () => void {
-  const timer = setTimeout(run, delayMs);
-  return () => clearTimeout(timer);
-}
-
 function createWorld(item: Item, receipt: Receipt): World {
   const outside: Outside = {
     receipt,
@@ -346,7 +342,7 @@ function createWorld(item: Item, receipt: Receipt): World {
       return outside.connected ? proposalsOf(item, outside.receipt) : null;
     },
     now: () => Date.now(),
-    schedule: scheduleOnce,
+    schedule: scheduleFollowUp,
   });
 
   return {
@@ -547,25 +543,32 @@ describe("settings save follow-up reads", () => {
     expect(world.applies).toHaveLength(2);
   });
 
-  it("applies once authn takes it after the apply answered 503 again and again", async () => {
-    const world = createWorld(VARIABLE_PUT, "proposed");
-    world.outside.applyStatuses = [503, 503, 503];
-    const ticket = await world.save();
-    await world.coordinator.settle(ticket, true);
-    await world.applyPosted(1);
+  it.each([
+    ["503", 503],
+    ["an opaque redirect", 0],
+    ["401", 401],
+  ])(
+    "applies once authn takes it after the apply answered %s again and again",
+    async (_name, passing) => {
+      const world = createWorld(VARIABLE_PUT, "proposed");
+      world.outside.applyStatuses = [passing, passing, passing];
+      const ticket = await world.save();
+      await world.coordinator.settle(ticket, true);
+      await world.applyPosted(1);
 
-    await vi.advanceTimersByTimeAsync(2 * SECOND);
-    await world.applyPosted(2);
-    await vi.advanceTimersByTimeAsync(4 * SECOND);
-    await world.applyPosted(3);
-    expect(rememberedSave().unanswered).toBeNull();
-    await vi.advanceTimersByTimeAsync(8 * SECOND);
-    await world.applyPosted(4);
-    await recordsGone();
+      await vi.advanceTimersByTimeAsync(2 * SECOND);
+      await world.applyPosted(2);
+      await vi.advanceTimersByTimeAsync(4 * SECOND);
+      await world.applyPosted(3);
+      expect(rememberedSave().unanswered).toBeNull();
+      await vi.advanceTimersByTimeAsync(8 * SECOND);
+      await world.applyPosted(4);
+      await recordsGone();
 
-    expect(world.applies).toHaveLength(4);
-    expect(world.applied).toHaveBeenCalledTimes(1);
-  });
+      expect(world.applies).toHaveLength(4);
+      expect(world.applied).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("stops applying a hold authn refused with 400 after two tries", async () => {
     const world = createWorld(VARIABLE_PUT, "proposed");
@@ -577,12 +580,13 @@ describe("settings save follow-up reads", () => {
     await world.applyPosted(2);
 
     await vi.advanceTimersByTimeAsync(HOUR);
-
-    expect(world.applies).toHaveLength(2);
     expect(rememberedSave().unanswered).toEqual({
       revision: HELD_REVISION,
       tries: 2,
     });
+    await vi.advanceTimersByTimeAsync(24 * HOUR);
+
+    expect(world.applies).toHaveLength(2);
   });
 
   it("applies on the follow-up after the host was not connected", async () => {

@@ -163,12 +163,29 @@ function stoppedStatus(): EnvironmentStatusResponseV13 {
   });
 }
 
+function registeringStatus(): EnvironmentStatusResponseV13 {
+  return environmentStatusFixture({
+    setup: { stage: "registering", state: "running" },
+  });
+}
+
 /** What the computer can read once a Retry has run the stopped move again. */
 const RESUMED_STATUSES: readonly [string, EnvironmentStatusResponseV13][] = [
   [
     "running",
     environmentStatusFixture({
       setup: { stage: "moving_settings", state: "running" },
+      move: {
+        state: "running",
+        attemptId: ATTEMPT_ID,
+        acceptanceId: ACCEPTANCE_ID,
+      },
+    }),
+  ],
+  [
+    "applying",
+    environmentStatusFixture({
+      setup: { stage: "applying", state: "running" },
       move: {
         state: "running",
         attemptId: ATTEMPT_ID,
@@ -187,7 +204,6 @@ const RESUMED_STATUSES: readonly [string, EnvironmentStatusResponseV13][] = [
       },
     }),
   ],
-  ["without a setup", environmentStatusFixture({ setup: null })],
 ];
 
 function awaitingConsentStatus(): EnvironmentStatusResponseV13 {
@@ -212,8 +228,8 @@ interface Harness {
   readonly planReads: () => number;
   readonly retries: () => number;
   readonly stages: () => number;
-  /** Holds every status read unanswered until the returned function is called. */
-  readonly holdStatusReads: () => () => void;
+  /** Holds the next status read unanswered until the returned function is called. */
+  readonly holdNextStatusRead: () => () => void;
   readonly starts: EnvironmentMoveStartRequest[];
   readonly client: HostClient<HostRpcRegistry>;
 }
@@ -221,7 +237,7 @@ interface Harness {
 function mountComputer(computer: Computer): Harness {
   const starts: EnvironmentMoveStartRequest[] = [];
   let retries = 0;
-  let statusHold: Promise<void> | null = null;
+  let heldStatusRead: Promise<void> | null = null;
   let answered: EnvironmentMovePlanResponseV20 | null = null;
   const { client, messenger } = buildEnvironmentClient({
     hostId: HOST_ID,
@@ -231,10 +247,12 @@ function mountComputer(computer: Computer): Harness {
         answered = computer.plan;
         return computer.plan;
       },
-      "environment.status": () =>
-        statusHold === null
-          ? computer.status
-          : statusHold.then(() => computer.status),
+      "environment.status": () => {
+        const asked = computer.status;
+        const held = heldStatusRead;
+        heldStatusRead = null;
+        return held === null ? asked : held.then(() => asked);
+      },
       "environment.setup.retry": () => {
         retries += 1;
         return { attemptId: "retry-attempt" };
@@ -314,13 +332,10 @@ function mountComputer(computer: Computer): Harness {
       messenger.calls.filter((call) => call.method === "environment.move.plan")
         .length,
     retries: () => retries,
-    holdStatusReads: () => {
+    holdNextStatusRead: () => {
       const held = Promise.withResolvers<void>();
-      statusHold = held.promise;
-      return () => {
-        statusHold = null;
-        held.resolve();
-      };
+      heldStatusRead = held.promise;
+      return () => held.resolve();
     },
     stages: () =>
       messenger.calls.filter((call) => call.method === "environment.move.stage")
@@ -548,6 +563,12 @@ describe("<MoveSheet /> after a refused plan read", () => {
       expect(harness.retries()).toBe(1);
       expect(useMoveSheetStore.getState().target).not.toBeNull();
 
+      harness.computer.status = registeringStatus();
+      await deliverNextStatusRead();
+      expect(useMoveSheetStore.getState().target).not.toBeNull();
+      expect(screen.getByTestId("move-sheet-loading")).toBeTruthy();
+      expect(screen.queryByTestId("move-progress-dialog")).toBeNull();
+
       harness.computer.status = resumedStatus;
       await deliverNextStatusRead();
       const dialog = await screen.findByTestId("move-progress-dialog");
@@ -579,7 +600,7 @@ describe("<MoveSheet /> after a refused plan read", () => {
     harness.computer.planFailure = NOT_AWAITING;
     await rereadPlan(harness);
     await deliverNextStatusRead();
-    const releaseStatusReads = harness.holdStatusReads();
+    const releaseStatusRead = harness.holdNextStatusRead();
 
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await settle();
@@ -587,7 +608,7 @@ describe("<MoveSheet /> after a refused plan read", () => {
     expect(screen.getByTestId("move-sheet-loading")).toBeTruthy();
     expect(screen.queryByText(NOT_AWAITING.message)).toBeNull();
 
-    releaseStatusReads();
+    releaseStatusRead();
     await settle();
 
     expect(screen.getByText(NOT_AWAITING.message)).toBeTruthy();
@@ -599,6 +620,117 @@ describe("<MoveSheet /> after a refused plan read", () => {
     await settle();
 
     expect(harness.retries()).toBe(2);
+  });
+
+  it("asks the fresh plan when the re-run passes registering and waits for the person again", async () => {
+    const harness = mountSheet({
+      plan: STALE_PLAN,
+      planFailure: null,
+      status: awaitingConsentStatus(),
+      servesRetry: true,
+    });
+    await settle();
+    harness.computer.status = stoppedStatus();
+    harness.computer.planFailure = NOT_AWAITING;
+    await rereadPlan(harness);
+    await deliverNextStatusRead();
+    const readsBeforeRetry = harness.planReads();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+    expect(harness.retries()).toBe(1);
+
+    harness.computer.status = registeringStatus();
+    await deliverNextStatusRead();
+
+    expect(useMoveSheetStore.getState().target).not.toBeNull();
+    expect(screen.getByTestId("move-sheet-loading")).toBeTruthy();
+    expect(harness.planReads()).toBe(readsBeforeRetry);
+    expect(screen.queryByTestId("move-progress-dialog")).toBeNull();
+
+    harness.computer.planFailure = null;
+    harness.computer.plan = FRESH_PLAN;
+    harness.computer.status = environmentStatusFixture({
+      setup: { stage: "moving_settings", state: "awaiting_consent" },
+      move: {
+        state: "needs_person",
+        attemptId: ATTEMPT_ID,
+        acceptanceId: ACCEPTANCE_ID,
+        reason: "acceptance_missing",
+      },
+    });
+    await deliverNextStatusRead();
+    await settle();
+
+    expect(summaryText()).toBe("3 variables");
+    expect(acceptIsDisabled()).toBe(false);
+    expect(harness.planReads()).toBe(readsBeforeRetry + 1);
+    expect(screen.queryByTestId("move-progress-dialog")).toBeNull();
+  });
+
+  it("waits through a resumed consent that still carries the stopped attempt, then hands over", async () => {
+    const harness = mountSheet({
+      plan: STALE_PLAN,
+      planFailure: null,
+      status: awaitingConsentStatus(),
+      servesRetry: true,
+    });
+    await settle();
+    harness.computer.status = stoppedStatus();
+    harness.computer.planFailure = NOT_AWAITING;
+    await rereadPlan(harness);
+    await deliverNextStatusRead();
+    const readsBeforeRetry = harness.planReads();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+    expect(harness.retries()).toBe(1);
+
+    harness.computer.status = environmentStatusFixture({
+      setup: { stage: "moving_settings", state: "awaiting_consent" },
+      move: {
+        state: "retry",
+        cause: "unavailable",
+        attemptId: ATTEMPT_ID,
+        acceptanceId: ACCEPTANCE_ID,
+      },
+    });
+    await deliverNextStatusRead();
+
+    expect(harness.planReads()).toBe(readsBeforeRetry);
+    expect(acceptIsDisabled()).toBe(true);
+    expect(screen.getByTestId("move-sheet-loading")).toBeTruthy();
+    expect(screen.queryByTestId("move-progress-dialog")).toBeNull();
+
+    harness.computer.status = RESUMED_STATUSES[0][1];
+    await deliverNextStatusRead();
+    await screen.findByTestId("move-progress-dialog");
+
+    expect(useMoveSheetStore.getState().target).toBeNull();
+  });
+
+  it("does not flash the old refusal from a status read sent before the retry", async () => {
+    const harness = mountSheet({
+      plan: STALE_PLAN,
+      planFailure: null,
+      status: awaitingConsentStatus(),
+      servesRetry: true,
+    });
+    await settle();
+    harness.computer.status = stoppedStatus();
+    harness.computer.planFailure = NOT_AWAITING;
+    await rereadPlan(harness);
+    await deliverNextStatusRead();
+    const releaseStatusRead = harness.holdNextStatusRead();
+    await deliverNextStatusRead();
+    harness.computer.status = registeringStatus();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+    expect(harness.retries()).toBe(1);
+    releaseStatusRead();
+    await settle();
+
+    expect(screen.queryByText(NOT_AWAITING.message)).toBeNull();
+    expect(screen.getByTestId("move-sheet-loading")).toBeTruthy();
   });
 
   it("keeps the plan refetch on a host without environment.setup.retry", async () => {
