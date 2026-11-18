@@ -19,6 +19,7 @@ import {
   ensureSandboxAwake,
   fetchSandboxCatalogueViaHttp,
   fetchSandboxCostsViaHttp,
+  fetchTraycerModelsViaHttp,
   getSandboxAutomationViaHttp,
   isSandboxAsleep,
   isSandboxFrozenInEffect,
@@ -892,6 +893,26 @@ describe("fetchSandboxCostsViaHttp", () => {
       kind: "network-error",
       detail: "the sandbox cost did not match the contract",
     });
+  });
+});
+
+describe("fetchTraycerModelsViaHttp", () => {
+  it("groups a row under its maker and keeps the provider for the rest", async () => {
+    stubFetch(async () =>
+      jsonResponse(200, [
+        { id: "kimi-k3", provider: "openrouter", vendor: "Moonshot AI" },
+        { id: "glm-5.2", provider: "openrouter", vendor: null },
+      ]),
+    );
+    const result = await fetchTraycerModelsViaHttp(BASE, BEARER, null);
+    if (result.kind !== "ok") throw new Error("expected ok");
+    expect(result.models.map((model) => model.metadata)).toEqual([
+      {
+        openCodeProviderId: "moonshot-ai",
+        openCodeProviderLabel: "Moonshot AI",
+      },
+      { openCodeProviderId: "openrouter", openCodeProviderLabel: "OpenRouter" },
+    ]);
   });
 });
 
