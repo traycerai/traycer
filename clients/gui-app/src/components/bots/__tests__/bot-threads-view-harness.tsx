@@ -50,6 +50,7 @@ import {
   postRow,
 } from "./bot-channel-rows-test-support";
 import { BotThreadsView } from "@/components/bots/bot-threads-view";
+import { TracyPlaybackScope } from "@/components/bots/tracy-playback-slot";
 import { useBotThreadFoldStore } from "@/stores/bots/bot-thread-fold-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import {
@@ -237,13 +238,15 @@ export function mount(): void {
           <BotTestRunnerHost>
             <TooltipProvider>
               <ChatExpansionTestProviders tileInstanceId="tile-1">
-                <BotThreadsView
-                  level2={mountLevel2}
-                  hostId="host-1"
-                  channelId={TRACY}
-                  channelTitle="Tracy"
-                  onBack={mocks.back}
-                />
+                <TracyPlaybackScope>
+                  <BotThreadsView
+                    level2={mountLevel2}
+                    hostId="host-1"
+                    channelId={TRACY}
+                    channelTitle="Tracy"
+                    onBack={mocks.back}
+                  />
+                </TracyPlaybackScope>
               </ChatExpansionTestProviders>
             </TooltipProvider>
           </BotTestRunnerHost>

@@ -1,6 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 
-/** Where the group sits: a title row of a channel header, or a row of its own. */
+/** Where the group sits: a title row of a channel or Threads header, or a row of its own. */
 type GroupPlacement = "none" | "row" | "reserved" | "header" | "other";
 
 export interface GroupFrame {
@@ -33,6 +33,9 @@ export async function recordGroupFrames(page: Page): Promise<void> {
     window.__groupFrames = frames;
     const placementIn = (header: Element | null): GroupPlacement => {
       if (header === null) return "row";
+      if (header.closest('[data-testid="bot-threads-view"]') !== null) {
+        return "header";
+      }
       const id = header.getAttribute("data-testid");
       if (id === "bot-channel-opening-header") return "reserved";
       return id === "bot-channel-header" ? "header" : "other";

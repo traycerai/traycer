@@ -403,6 +403,10 @@ vi.mock("@/components/bots/bot-threads-view", () => ({
       data-host-id={props.hostId}
       data-channel-title={props.channelTitle}
     >
+      {/* The real view holds the tab's playback slot in its desktop header. */}
+      <header data-testid="stub-threads-header">
+        <TracyPlaybackSlot />
+      </header>
       <button
         type="button"
         data-testid="stub-threads-back"
@@ -2619,17 +2623,20 @@ describe("<BotTabSurface /> the one music group", () => {
   /**
    * Where the group is drawn. The channel's own header holds it, or a setup
    * channel's, or the reserved title row a channel draws before its header
-   * exists, or a row of its own over the tab outside any `<header>`.
+   * exists, or the Threads view's, or a row of its own over the tab outside
+   * any `<header>`.
    */
   type Placement =
     | "title row"
     | "setup title row"
     | "reserved title row"
+    | "threads title row"
     | "row";
   const HEADER_OF: Readonly<Record<Placement, string | null>> = {
     "title row": "bot-channel-header",
     "setup title row": "team-setup-header",
     "reserved title row": "bot-channel-opening-header",
+    "threads title row": "stub-threads-header",
     row: null,
   };
 
@@ -2711,7 +2718,29 @@ describe("<BotTabSurface /> the one music group", () => {
       },
       channel: BOT_ID,
       shown: "stub-threads",
-      placement: "row",
+      placement: "threads title row",
+    },
+    {
+      state: "Threads shows before the lists answer and no channel is selected",
+      script: () => {
+        useTracyPlaceStore.getState().setThreadsShown(true);
+        mocks.state.listedBotIds = undefined;
+        useTracySurfaceStore.setState({ botId: null });
+      },
+      channel: null,
+      shown: "stub-threads",
+      placement: "threads title row",
+    },
+    {
+      state: "Threads shows and the lists answered with no bot to choose",
+      script: () => {
+        useTracyPlaceStore.getState().setThreadsShown(true);
+        mocks.state.listedBotIds = [];
+        useTracySurfaceStore.setState({ botId: null });
+      },
+      channel: null,
+      shown: "stub-threads",
+      placement: "threads title row",
     },
     {
       state: "a team's main bot is being set up",
@@ -2943,7 +2972,7 @@ describe("<BotTabSurface /> the one music group", () => {
 
     await user.click(screen.getByTestId("stub-sidebar-threads"));
     expect(screen.getByTestId("stub-threads")).toBeTruthy();
-    expectPlacement("row");
+    expectPlacement("threads title row");
     await user.click(screen.getByTestId("stub-threads-back"));
     expect(screen.queryByTestId("stub-threads")).toBeNull();
     expectPlacement("title row");
@@ -2966,7 +2995,7 @@ describe("<BotTabSurface /> the one music group", () => {
     expect(within(before).getByRole("button", { name: "Play" })).toBeTruthy();
 
     await user.click(screen.getByTestId("stub-sidebar-threads"));
-    expectPlacement("row");
+    expectPlacement("threads title row");
     expect(onlyGroup().group).toBe(before);
 
     await user.click(screen.getByTestId("stub-threads-back"));
@@ -2975,16 +3004,12 @@ describe("<BotTabSurface /> the one music group", () => {
     expect(within(before).getByRole("button", { name: "Play" })).toBeTruthy();
   });
 
-  it("puts the header's buttons before Search, and the row's before the tab's content", async () => {
-    const user = userEvent.setup();
+  it("puts the header's buttons before Search", () => {
     render(surface());
     const search = screen.getByTestId("bot-channel-search-open");
-    const group = onlyGroup().group;
-    const follows = (a: Node, b: Node): boolean =>
-      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(follows(group, search)).toBe(true);
-
-    await user.click(screen.getByTestId("stub-sidebar-threads"));
-    expect(follows(group, screen.getByTestId("stub-threads"))).toBe(true);
+    expect(
+      onlyGroup().group.compareDocumentPosition(search) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 });
