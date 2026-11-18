@@ -303,11 +303,7 @@ export function createSettingsSaveCoordinator(
     );
     const cancel = ports.schedule(() => {
       followUps.delete(hostId);
-      void run(
-        hostId,
-        Math.min(step + 1, FOLLOW_UP_LONGEST_STEP),
-        armedIn,
-      );
+      void run(hostId, Math.min(step + 1, FOLLOW_UP_LONGEST_STEP), armedIn);
     }, delay);
     followUps.set(hostId, cancel);
   };
