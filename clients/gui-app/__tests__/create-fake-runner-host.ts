@@ -25,7 +25,7 @@ import {
 import {
   createIncrementingIncarnationIds,
   silentAuthorityLog,
-  systemAuthorityClock,
+  type AuthorityClock,
 } from "@traycer-clients/shared/host-selection/selection-authority-engine";
 
 export interface FakeEnvironmentCloudAuthOptions {
@@ -155,6 +155,19 @@ export function jsonEnvironmentAnswer(
 }
 
 /**
+ * The engine arms a deadline timer to retry a refused local ensure, and the
+ * default authority's port refuses every ensure, so on a real clock the
+ * authority would tick every 30 s for as long as its host lives. A suite that
+ * drains its fake clock fires that timer and the engine arms the next, so the
+ * clock never goes quiet. The fixture's authority arms nothing: its clock
+ * reads the wall time and never schedules.
+ */
+const FIXTURE_AUTHORITY_CLOCK: AuthorityClock = {
+  now: () => Date.now(),
+  schedule: () => () => {},
+};
+
+/**
  * Browser/dev topology (D16): the same in-window authority engine
  * `MockRunnerHost` mounts, seeded with a single usable local host so app-boot
  * suites that render through `HostRuntimeProvider` get a real derivation
@@ -177,7 +190,7 @@ function createDefaultLocalSelectionAuthority(localHostId: string): {
     localHostEnsure: unavailableLocalHostEnsurePort,
     localOutage: inertLocalHostOutageSignal,
     preferredStore: new InMemoryPreferredHostStore(),
-    clock: systemAuthorityClock,
+    clock: FIXTURE_AUTHORITY_CLOCK,
     newIncarnationId: createIncrementingIncarnationIds(),
     log: silentAuthorityLog,
   });

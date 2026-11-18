@@ -288,6 +288,14 @@ interface ChatMessagesProps {
   onScrollRequestSettled:
     | ((requestId: number, outcome: ChatScrollRequestOutcome) => void)
     | null;
+  /**
+   * The reader moved the view themselves: a wheel, a touch drag, a scroll key
+   * or the scrollbar, which the viewport could answer. Never a click on a
+   * row, and never a navigation this component performs. An owner holding a
+   * scroll it has not issued yet drops it on this; `null` where there is
+   * nothing to drop.
+   */
+  onReaderMoved: (() => void) | null;
   /** Measured height of the overlaid composer/queue/pinned/agents dock
    *  (chat-tile.tsx), reserved as the transcript's bottom content inset. */
   composerOverlayHeight: number;
@@ -2204,6 +2212,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     nextStepActions,
     onFindReadOrdinalChange,
     onVisibleOrdinalRangeChange,
+    onReaderMoved,
     onScrollRequestSettled,
     scrollRequest,
     subagentDrillIn,
@@ -2449,6 +2458,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
    */
   const reissuingScrollRequestIdRef = useRef<number | null>(null);
   const onScrollRequestSettledRef = useRef(onScrollRequestSettled);
+  const onReaderMovedRef = useRef(onReaderMoved);
   const backgroundToolBlockIdsRef = useRef<ReadonlySet<string>>(
     EMPTY_BACKGROUND_TOOL_BLOCK_IDS,
   );
@@ -2785,6 +2795,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         // estimate-driven bootstrap that clamps to an estimated end.
         if (viewportCanAnswer) {
           readerPositionGenerationRef.current += 1;
+          onReaderMovedRef.current?.();
           pendingMeasuredFreeRestoreRef.current = null;
           pendingHydrationRestoreAnchorIdRef.current = null;
           forgetPendingHydrationRestore(identity);
@@ -3102,6 +3113,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   useLayoutEffect(() => {
     onScrollRequestSettledRef.current = onScrollRequestSettled;
   }, [onScrollRequestSettled]);
+
+  useLayoutEffect(() => {
+    onReaderMovedRef.current = onReaderMoved;
+  }, [onReaderMoved]);
 
   const backgroundToolBlockIds = useMemo<ReadonlySet<string>>(() => {
     if (backgroundItems === undefined || backgroundItems.length === 0) {

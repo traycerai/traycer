@@ -586,6 +586,7 @@ function OrdinaryChatList(): ReactNode {
       epicId={BOT_ID}
       hostId={HOST_ID}
       payerHostId={null}
+      onReaderMoved={null}
       messages={messages}
       transcriptWindow={state.transcriptWindow}
       onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
