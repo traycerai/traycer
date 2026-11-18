@@ -1,6 +1,6 @@
 import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { AppliedProviderItemDetails } from "@/components/settings/environment/applied-provider-item-details";
 import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
@@ -105,6 +105,9 @@ export function ProviderEnvOverridesSection(props: {
     clearOwnValue.isPending ||
     useEverywhere.isPending ||
     commitOverride.isPending;
+  // The whole save: the write and the overrides re-read after it, the window
+  // the editor keeps its rows disabled for.
+  const [saving, setSaving] = useState(false);
   const notes = usePersonalRowNotes({
     kind: "env_override",
     providerId,
@@ -132,13 +135,23 @@ export function ProviderEnvOverridesSection(props: {
   ): Promise<void> => {
     const hostId = hostClient?.getActiveHostId() ?? null;
     submittedValue.set(value);
-    await commitOverride.mutateAsync({ oldKey, newKey });
-    await rereadOverrides(hostId);
+    setSaving(true);
+    try {
+      await commitOverride.mutateAsync({ oldKey, newKey });
+      await rereadOverrides(hostId);
+    } finally {
+      setSaving(false);
+    }
   };
   const onDelete = async (key: string): Promise<void> => {
     const hostId = hostClient?.getActiveHostId() ?? null;
-    await deleteOverride.mutateAsync({ providerId, key });
-    await rereadOverrides(hostId);
+    setSaving(true);
+    try {
+      await deleteOverride.mutateAsync({ providerId, key });
+      await rereadOverrides(hostId);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -150,9 +163,7 @@ export function ProviderEnvOverridesSection(props: {
           </div>
           <ProviderEnvSubtitleLine />
         </div>
-        {setOverride.isPending ||
-        deleteOverride.isPending ||
-        commitOverride.isPending ? (
+        {saving || setOverride.isPending || deleteOverride.isPending ? (
           <MutedAgentSpinner />
         ) : null}
       </div>
