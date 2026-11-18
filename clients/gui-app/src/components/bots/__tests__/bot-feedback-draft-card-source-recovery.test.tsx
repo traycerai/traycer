@@ -120,7 +120,7 @@ function buildSpine(): HostClient<HostRpcRegistry> {
                 kind: "settled",
                 feedbackDraft: {
                   ...PENDING_WITH_DIAGNOSTICS,
-                  state: "sent",
+                  state: params.decision === "send" ? "sent" : "skipped",
                   decidedAt: 5,
                 },
               };
@@ -302,6 +302,8 @@ describe("<BotFeedbackDraftCard /> when its source host leaves and returns", () 
 
     expect(requests.decide).toHaveLength(2);
     expect(requests.decide[1]).toEqual(first);
+    expect(screen.getByText("Skipped")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry Skip" })).toBeNull();
   });
 
   it("offers no retry once the projection the channel holds is terminal", async () => {
