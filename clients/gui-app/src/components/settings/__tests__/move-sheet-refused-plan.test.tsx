@@ -227,6 +227,7 @@ interface Harness {
   readonly queryClient: QueryClient;
   readonly planReads: () => number;
   readonly retries: () => number;
+  readonly statusReads: () => number;
   readonly stages: () => number;
   /** Holds the next status read unanswered until the returned function is called. */
   readonly holdNextStatusRead: () => () => void;
@@ -332,6 +333,9 @@ function mountComputer(computer: Computer): Harness {
       messenger.calls.filter((call) => call.method === "environment.move.plan")
         .length,
     retries: () => retries,
+    statusReads: () =>
+      messenger.calls.filter((call) => call.method === "environment.status")
+        .length,
     holdNextStatusRead: () => {
       const held = Promise.withResolvers<void>();
       heldStatusRead = held.promise;
@@ -700,6 +704,35 @@ describe("<MoveSheet /> after a refused plan read", () => {
     expect(screen.queryByTestId("move-progress-dialog")).toBeNull();
   });
 
+  it("hides the plan it drew for the re-run's consent wait once a later status leaves that wait", async () => {
+    const harness = mountSheet({
+      plan: STALE_PLAN,
+      planFailure: null,
+      status: awaitingConsentStatus(),
+      servesRetry: true,
+    });
+    await settle();
+    harness.computer.status = stoppedStatus();
+    harness.computer.planFailure = NOT_AWAITING;
+    await rereadPlan(harness);
+    await deliverNextStatusRead();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+    harness.computer.planFailure = null;
+    harness.computer.plan = FRESH_PLAN;
+    harness.computer.status = awaitingConsentStatus();
+    await deliverNextStatusRead();
+    await settle();
+    expect(summaryText()).toBe("3 variables");
+    expect(acceptIsDisabled()).toBe(false);
+
+    harness.computer.status = registeringStatus();
+    await deliverNextStatusRead();
+
+    expect(planIsDrawn()).toBe(false);
+    expect(acceptIsDisabled()).toBe(true);
+  });
+
   it("waits through a resumed consent that still carries the stopped attempt, then hands over", async () => {
     const harness = mountSheet({
       plan: STALE_PLAN,
@@ -752,14 +785,23 @@ describe("<MoveSheet /> after a refused plan read", () => {
     harness.computer.planFailure = NOT_AWAITING;
     await rereadPlan(harness);
     await deliverNextStatusRead();
+    const readsBeforePoll = harness.statusReads();
     const releaseStatusRead = harness.holdNextStatusRead();
     await deliverNextStatusRead();
+    expect(harness.statusReads()).toBe(readsBeforePoll + 1);
     harness.computer.status = registeringStatus();
+    const releaseReplacement = harness.holdNextStatusRead();
 
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await settle();
     expect(harness.retries()).toBe(1);
+    expect(harness.statusReads()).toBe(readsBeforePoll + 2);
     releaseStatusRead();
+    await settle();
+
+    expect(screen.queryByText(NOT_AWAITING.message)).toBeNull();
+
+    releaseReplacement();
     await settle();
 
     expect(screen.queryByText(NOT_AWAITING.message)).toBeNull();

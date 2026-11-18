@@ -469,6 +469,7 @@ describe("settings save follow-up reads", () => {
 
   it("keeps reading while the host is offline and applies once its receipt turns proposed", async () => {
     const world = createWorld(VARIABLE_PUT, "queued");
+    world.outside.connected = false;
     const ticket = await world.save();
     await world.coordinator.settle(ticket, true);
 
@@ -477,6 +478,7 @@ describe("settings save follow-up reads", () => {
     expect(world.applies).toHaveLength(0);
     expect(recordCount()).toBe(1);
 
+    world.outside.connected = true;
     world.outside.receipt = "proposed";
     await vi.advanceTimersByTimeAsync(5 * MINUTE);
     await world.applyPosted(1);
@@ -765,5 +767,114 @@ describe("settings save follow-up bounds", () => {
     await vi.advanceTimersByTimeAsync(2 * SECOND);
 
     expect(world.reads).toHaveLength(3);
+  });
+});
+
+describe("settings save follow-up account, expiry and stop", () => {
+  it("reads and applies nothing while the memory installed is another account's", async () => {
+    const world = createWorld(VARIABLE_PUT, "proposed");
+    await world.save();
+    useSettingsSaveMemoryStore.persist.setOptions({
+      name: settingsSaveMemoryKey("account-b"),
+    });
+
+    await world.coordinator.reconcile(HOST_ID);
+    await vi.advanceTimersByTimeAsync(HOUR);
+
+    expect(world.reads).toHaveLength(0);
+    expect(world.applies).toHaveLength(0);
+    expect(recordCount()).toBe(1);
+  });
+
+  it("applies nothing when the memory becomes another account's while the proposals are read", async () => {
+    const world = createWorld(VARIABLE_PUT, "proposed");
+    await world.save();
+    const gate = Promise.withResolvers<void>();
+    world.outside.readGate = gate.promise;
+    const reconciled = world.coordinator.reconcile(HOST_ID);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(world.reads).toHaveLength(1);
+
+    useSettingsSaveMemoryStore.persist.setOptions({
+      name: settingsSaveMemoryKey("account-b"),
+    });
+    gate.resolve();
+    await reconciled;
+
+    expect(world.applies).toHaveLength(0);
+    expect(recordCount()).toBe(1);
+  });
+
+  it("forgets a save that passed its 24 hour memory while the proposals were read, and applies nothing", async () => {
+    const world = createWorld(VARIABLE_PUT, "proposed");
+    await world.save();
+    const gate = Promise.withResolvers<void>();
+    world.outside.readGate = gate.promise;
+    const reconciled = world.coordinator.reconcile(HOST_ID);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(world.reads).toHaveLength(1);
+
+    vi.setSystemTime(START_MS + 25 * HOUR);
+    gate.resolve();
+    await reconciled;
+
+    expect(world.applies).toHaveLength(0);
+    expect(recordCount()).toBe(0);
+  });
+
+  it("keeps an unlisted save that was out when the read began and was answered during it", async () => {
+    const world = createWorld(VARIABLE_PUT, "unlisted");
+    const ticket = await world.save();
+    vi.setSystemTime(START_MS + 2 * MINUTE);
+    const gate = Promise.withResolvers<void>();
+    world.outside.readGate = gate.promise;
+    const reconciled = world.coordinator.reconcile(HOST_ID);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(world.reads).toHaveLength(1);
+
+    await world.coordinator.settle(ticket, false);
+    gate.resolve();
+    await reconciled;
+
+    expect(recordCount()).toBe(1);
+  });
+
+  it("reads nothing for a follow-up that queued behind a pass and was stopped before its turn", async () => {
+    const world = createWorld(VARIABLE_PUT, "queued");
+    const ticket = await world.save();
+    await world.coordinator.settle(ticket, true);
+    expect(world.reads).toHaveLength(1);
+    const gate = Promise.withResolvers<void>();
+    world.outside.readGate = gate.promise;
+    const reconciled = world.coordinator.reconcile(HOST_ID);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(world.reads).toHaveLength(2);
+
+    await vi.advanceTimersByTimeAsync(2 * SECOND);
+    world.coordinator.stop();
+    gate.resolve();
+    await reconciled;
+    await vi.advanceTimersByTimeAsync(HOUR);
+
+    expect(world.reads).toHaveLength(2);
+  });
+
+  it("arms no follow-up for an unanswered save when stop came while its value was being digested", async () => {
+    const world = createWorld(VARIABLE_PUT, "queued");
+    const beginning = world.coordinator.begin(
+      mappingOf(VARIABLE_PUT),
+      context,
+      world.applied,
+    );
+    world.coordinator.stop();
+    const begun = await beginning;
+    if (begun.kind !== "remembered") {
+      throw new Error(`Expected a remembered save, got ${begun.kind}`);
+    }
+    await world.coordinator.settle(begun.ticket, false);
+
+    await vi.advanceTimersByTimeAsync(HOUR);
+
+    expect(world.reads).toHaveLength(0);
   });
 });
