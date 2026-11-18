@@ -571,7 +571,7 @@ function ProfileSignOutAction(props: {
   if (!profileSignOutAvailable(props.profile, recordAccount, supported))
     return null;
   const environmentAccount = recordAccount || custodyClass === "brokered";
-  const scope = recordAccount ? "record" : "legacy";
+  const scope = "record";
   const label = environmentAccount
     ? profilePersonActionLabel("sign-out", scope)
     : "Sign out";
