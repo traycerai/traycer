@@ -6,6 +6,7 @@ import {
   EMPTY_LANDING_DRAFT_CONTENT,
   LANDING_DRAFT_PERSIST_KEY,
   mergeLandingDraftWorkspaceFolders,
+  resumableLandingDraftId,
   removeLandingDraftWorkspaceFolder,
   setLandingDraftDesktopProjectionBridge,
   setLandingDraftWorkspacePrimary,
@@ -143,6 +144,7 @@ function resetStore(): void {
   useLandingDraftStore.setState({
     drafts: [],
     activeDraftId: null,
+    resumeDraftId: null,
   });
   useWorkspaceFoldersStore.setState({ byHost: {} });
   useSettingsStore.setState({
@@ -2000,22 +2002,95 @@ describe("useLandingDraftStore", () => {
       setMobileApp(false);
     });
 
-    it("never mints a second draft in the mobile app, even over real content", () => {
+    // A draft open on another device, mirrored here: an open row this device
+    // never minted, so it never moves the resume draft.
+    function installMirroredOpenDraft(id: string, lastTouchedAt: number): void {
+      useLandingDraftStore.getState().installLandingDraft({
+        id,
+        content: textContent("typed on the other device"),
+        selection: null,
+        lastTouchedAt,
+        settings: null,
+        composerMode: "chat",
+        workspace: emptyLandingDraftWorkspaceSnapshot(),
+        closed: false,
+        returnedSandbox: null,
+        namedHostId: null,
+        durability: "saved",
+      });
+    }
+
+    it("resumes the device's own draft over a newer open draft mirrored from another device", () => {
       setMobileApp(true);
-      const { createDraft, setDraftContent } = useLandingDraftStore.getState();
-      const first = createDraft(null);
-      setDraftContent(first, textContent("half-typed task"), null);
-      // The phone's one stable composer: New task lands back on it.
-      const again = createDraft(null);
-      expect(again).toBe(first);
-      expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
-      expect(useLandingDraftStore.getState().activeDraftId).toBe(first);
+      const { createDraft, setResumeDraft } = useLandingDraftStore.getState();
+      const own = createDraft(null);
+      setResumeDraft(own);
+      installMirroredOpenDraft("mirrored", Date.now() + 60_000);
+
+      expect(resumableLandingDraftId()).toBe(own);
     });
 
-    it("returns the newest draft on a lastTouchedAt tie (later entry wins)", () => {
+    it("resumes the draft the person opened by hand", () => {
       setMobileApp(true);
-      const { createDraft, createDraftWithId } =
+      const { createDraftWithId, openDraft } = useLandingDraftStore.getState();
+      createDraftWithId("older", null);
+      createDraftWithId("newer", null);
+
+      openDraft("older");
+
+      expect(resumableLandingDraftId()).toBe("older");
+    });
+
+    it("resumes nothing while no resume draft is set, though open drafts exist", () => {
+      setMobileApp(true);
+      installMirroredOpenDraft("mirrored", Date.now());
+
+      expect(resumableLandingDraftId()).toBeNull();
+    });
+
+    it("resumes nothing once the resume draft is closed or deleted", () => {
+      setMobileApp(true);
+      const { createDraft, setResumeDraft, closeDraft, deleteDraft } =
         useLandingDraftStore.getState();
+      const closing = createDraft(null);
+      setResumeDraft(closing);
+      closeDraft(closing);
+      expect(resumableLandingDraftId()).toBeNull();
+
+      const deleting = createDraft(null);
+      setResumeDraft(deleting);
+      expect(resumableLandingDraftId()).toBe(deleting);
+      deleteDraft(deleting);
+      expect(resumableLandingDraftId()).toBeNull();
+    });
+
+    it("moves the resume draft to the fork when it named the source", () => {
+      setMobileApp(true);
+      const { createDraft, setResumeDraft, forkDraft } =
+        useLandingDraftStore.getState();
+      const source = createDraft(null);
+      setResumeDraft(source);
+
+      expect(forkDraft(source, "fork")).toBe(true);
+
+      expect(useLandingDraftStore.getState().resumeDraftId).toBe("fork");
+    });
+
+    it("leaves the resume draft alone when forking a draft it did not name", () => {
+      setMobileApp(true);
+      const { createDraft, setResumeDraft, forkDraft } =
+        useLandingDraftStore.getState();
+      const resume = createDraft(null);
+      const other = createDraft(null);
+      setResumeDraft(resume);
+
+      forkDraft(other, "fork");
+
+      expect(useLandingDraftStore.getState().resumeDraftId).toBe(resume);
+    });
+
+    it("outside the mobile app resumes the newest open draft, the later entry winning a lastTouchedAt tie", () => {
+      const { createDraftWithId } = useLandingDraftStore.getState();
       // Restore paths can stamp several drafts within one millisecond;
       // drafts are append-ordered, so the later entry is the newer one.
       createDraftWithId("restored-older", null);
@@ -2024,9 +2099,21 @@ describe("useLandingDraftStore", () => {
         .getState()
         .drafts.map((draft) => ({ ...draft, lastTouchedAt: 1_000 }));
       useLandingDraftStore.setState({ drafts: sameStamp });
-      const reused = createDraft(null);
-      expect(reused).toBe("restored-newer");
+
+      expect(resumableLandingDraftId()).toBe("restored-newer");
+    });
+
+    it("mints a second draft in the mobile app too", () => {
+      setMobileApp(true);
+      const { createDraft, setDraftContent } = useLandingDraftStore.getState();
+      const first = createDraft(null);
+      setDraftContent(first, textContent("half-typed task"), null);
+
+      const second = createDraft(null);
+
+      expect(second).not.toBe(first);
       expect(useLandingDraftStore.getState().drafts).toHaveLength(2);
+      expect(useLandingDraftStore.getState().activeDraftId).toBe(second);
     });
 
     it("still honors explicit restore ids in the mobile app", () => {
