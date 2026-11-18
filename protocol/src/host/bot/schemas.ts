@@ -2,6 +2,10 @@ import { z } from "zod";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { autoJudgeTierSchema } from "@traycer/protocol/host/auto-mode/contracts";
 import { BOT_COLOR_HEX_PATTERN } from "@traycer/protocol/host/bot/colors";
+import {
+  BOT_PICTURE_MAX_BASE64_LENGTH,
+  BOT_PICTURE_MEDIA_TYPES,
+} from "@traycer/protocol/host/bot/pictures";
 
 /**
  * `bot.*` - bots (Tracy Bots): owner-only, host-bound chat containers that
@@ -190,17 +194,50 @@ export const botMascotAccessorySchema = lazySchema(() =>
 );
 export type BotMascotAccessory = z.infer<typeof botMascotAccessorySchema>;
 
-/**
- * The bot's chosen icon: a mascot the GUI draws from its shape's name, never
- * stored as pixels.
- */
-export const botAppearanceMarkSchema = lazySchema(() =>
+/** A bot picture's name: the sha256 of its stored bytes, in lower-case hex. */
+export const botPictureSha256Schema = lazySchema(() =>
+  z.string().regex(/^[0-9a-f]{64}$/),
+);
+
+const botMascotMarkSchema = lazySchema(() =>
   z.object({
     kind: z.literal("mascot"),
     shape: botMascotShapeSchema,
   }),
 );
+
+/**
+ * The bot's chosen icon as it is written: a mascot the GUI draws from its
+ * shape's name, or a picture named by the hash of its bytes, which
+ * `bot.uploadPicture` returned.
+ */
+export const botAppearanceMarkSchema = lazySchema(() =>
+  z.union([
+    botMascotMarkSchema,
+    z.object({
+      kind: z.literal("picture"),
+      sha256: botPictureSha256Schema,
+    }),
+  ]),
+);
 export type BotAppearanceMark = z.infer<typeof botAppearanceMarkSchema>;
+
+/**
+ * The bot's icon as it is stored and read. A picture keeps the mascot shape
+ * the bot had chosen before it (`null` when it had chosen none), so going
+ * back to a mascot brings that shape back.
+ */
+export const botStoredMarkSchema = lazySchema(() =>
+  z.union([
+    botMascotMarkSchema,
+    z.object({
+      kind: z.literal("picture"),
+      sha256: botPictureSha256Schema,
+      mascotShape: botMascotShapeSchema.nullable(),
+    }),
+  ]),
+);
+export type BotStoredMark = z.infer<typeof botStoredMarkSchema>;
 
 /**
  * What a person chose for a bot's look, as it is written: every value one
@@ -240,7 +277,7 @@ export const botAppearanceSchema = lazySchema(() =>
   z.object({
     mark: z
       .union([
-        botAppearanceMarkSchema,
+        botStoredMarkSchema,
         z.object({ kind: z.literal(BOT_APPEARANCE_UNRECOGNISED) }),
       ])
       .nullable()
@@ -460,6 +497,64 @@ export const botUpdateAppearanceResponseSchema = lazySchema(() =>
 );
 export type BotUpdateAppearanceResponse = z.infer<
   typeof botUpdateAppearanceResponseSchema
+>;
+
+// ---- bot.uploadPicture / bot.readPicture -------------------------------- //
+
+/**
+ * Stores a picture for one of the bot's environment's bots to wear and
+ * answers the hash that names it. It does not change the bot's look:
+ * `bot.updateAppearance` sets the picture by that hash. Takes the same
+ * authority as changing the look.
+ */
+export const botUploadPictureRequestSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    /** The picture's bytes, base64. */
+    bytesBase64: z.string().min(1).max(BOT_PICTURE_MAX_BASE64_LENGTH),
+  }),
+);
+export type BotUploadPictureRequest = z.infer<
+  typeof botUploadPictureRequestSchema
+>;
+
+export const botUploadPictureResponseSchema = lazySchema(() =>
+  z.object({ sha256: botPictureSha256Schema }),
+);
+export type BotUploadPictureResponse = z.infer<
+  typeof botUploadPictureResponseSchema
+>;
+
+/**
+ * The bytes of the picture the bot wears now. `sha256` must name that
+ * picture: one the bot wore before, or never wore, is not found.
+ */
+export const botReadPictureRequestSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    sha256: botPictureSha256Schema,
+  }),
+);
+export type BotReadPictureRequest = z.infer<typeof botReadPictureRequestSchema>;
+
+/** A stored picture's type and bytes. */
+export const botPictureBytesSchema = lazySchema(() =>
+  z.object({
+    mediaType: z.enum(BOT_PICTURE_MEDIA_TYPES),
+    bytesBase64: z.string().min(1).max(BOT_PICTURE_MAX_BASE64_LENGTH),
+  }),
+);
+export type BotPictureBytes = z.infer<typeof botPictureBytesSchema>;
+
+/**
+ * `picture` is `null` when the bot does not wear the picture asked for:
+ * its look changed, and the reader reads the bot again.
+ */
+export const botReadPictureResponseSchema = lazySchema(() =>
+  z.object({ picture: botPictureBytesSchema.nullable() }),
+);
+export type BotReadPictureResponse = z.infer<
+  typeof botReadPictureResponseSchema
 >;
 
 // ---- bot.notificationLevel.read / bot.notificationLevel.set ------------ //

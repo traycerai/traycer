@@ -368,6 +368,8 @@ export const HOST_UNARY_RPC_ROUTES = {
   "bot.readCursor.advance": "target-host",
   "bot.turn.locate": "target-host",
   "bot.updateAppearance": "target-host",
+  "bot.uploadPicture": "target-host",
+  "bot.readPicture": "target-host",
   "bot.updateDirective": "target-host",
   "bot.updateReplyMode": "target-host",
   "bot.updateRunSettings": "target-host",

@@ -21,6 +21,7 @@ import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { dismissRetainedDraftToasts } from "@/lib/toast/retained-draft-toasts";
 import { retireOnboardingReminder } from "@/lib/toast/onboarding-reminder-toast";
 import { clearImagePathForIdentityTeardown } from "@/lib/attachments/image-path-identity-teardown";
+import { clearBotPictures } from "@/lib/bots/bot-picture-cache";
 import {
   useAuthIdentityTransition,
   type AuthIdentityTransition,
@@ -155,6 +156,8 @@ export function EpicSessionLifecycleBridge(
       // maps so remount grace cannot join the outgoing fetch, then drop
       // the outgoing IndexedDB partition.
       void clearImagePathForIdentityTeardown(outgoingIdentity);
+      // Bot pictures are held by the hash of their bytes alone.
+      clearBotPictures();
     });
   }, []);
 

@@ -769,7 +769,9 @@ import {
   botUpdateRunSettingsV10,
   botUpdateDirectiveV10,
   botUpdateReplyModeV10,
+  botReadPictureV10,
   botUpdateAppearanceV10,
+  botUploadPictureV10,
   botUpdateTitleV10,
   botNotificationLevelReadV10,
   botNotificationLevelSetV10,
@@ -9698,6 +9700,32 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: botUpdateAppearanceV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.uploadPicture": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botUploadPictureV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.readPicture": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botReadPictureV10,
           upgradeFromPreviousVersion: null,
         },
       },

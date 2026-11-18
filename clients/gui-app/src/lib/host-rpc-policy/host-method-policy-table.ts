@@ -1775,6 +1775,12 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  "bot.uploadPicture": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "bot.readPicture": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "bot.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "bot.claimAuthority": {
     mode: "fifo",

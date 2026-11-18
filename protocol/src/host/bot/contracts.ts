@@ -34,7 +34,11 @@ import {
   botSubscribeServerFrameSchemaV13,
   botSubscribeServerFrameSchemaV14,
   botSubscribeServerFrameSchemaV15,
+  botReadPictureRequestSchema,
+  botReadPictureResponseSchema,
   botUpdateAppearanceRequestSchema,
+  botUploadPictureRequestSchema,
+  botUploadPictureResponseSchema,
   botUpdateAppearanceResponseSchema,
   botUpdateResponseSchema,
   botUpdateRunSettingsRequestSchema,
@@ -226,6 +230,25 @@ export const botUpdateAppearanceV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botUpdateAppearanceRequestSchema,
   responseSchema: botUpdateAppearanceResponseSchema,
+});
+
+/**
+ * `bot.uploadPicture@1.0` / `bot.readPicture@1.0`: a picture a bot wears in
+ * place of a mascot, stored and read through the host. Same optional posture
+ * as the namespace: a host without them shows the bot's mascot.
+ */
+export const botUploadPictureV10 = defineRpcContract({
+  method: "bot.uploadPicture",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botUploadPictureRequestSchema,
+  responseSchema: botUploadPictureResponseSchema,
+});
+
+export const botReadPictureV10 = defineRpcContract({
+  method: "bot.readPicture",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botReadPictureRequestSchema,
+  responseSchema: botReadPictureResponseSchema,
 });
 
 /**

@@ -2,6 +2,7 @@ import { useEffect, useMemo } from "react";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import { useBotPictureLoads } from "@/hooks/bots/use-bot-picture";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useRereadEnvironmentListOnFocus } from "@/hooks/bots/use-reread-environment-list-on-focus";
 import { useTeamSetups, type TeamSetup } from "@/hooks/bots/use-team-setups";
@@ -66,6 +67,11 @@ export function StandaloneBotsBridge(): null {
         mainBotIds: botData?.mainBotIds ?? null,
       }),
     [environmentData, botData],
+  );
+  useBotPictureLoads(
+    client,
+    useHostMethodSupport(hostId, "bot.readPicture") === true,
+    model,
   );
   // A signed-out viewer never reads the environments, and has no feed to name.
   const listsSettled =

@@ -38,6 +38,7 @@ import {
   type MascotShape,
   type MascotTone,
 } from "@/lib/bots/mascot-mark";
+import { deliveredLook } from "@/components/bots/__tests__/mascot-drawing";
 import {
   BLOB_UNCHANGED_POSES,
   BLOB_SHADES16,
@@ -471,6 +472,48 @@ describe("a bot's mascot from its look", () => {
         shape,
       ).toBe(ownMascotShape(botId));
     }
+  });
+
+  describe("a picture mark, drawn while its picture is not held", () => {
+    const picture = (mascotShape: unknown): BotAppearance =>
+      deliveredLook(
+        JSON.stringify({
+          mark: { kind: "picture", sha256: "a".repeat(64), mascotShape },
+          color: null,
+        }),
+      );
+    const shapeOf = (look: BotAppearance): MascotShape =>
+      botMascot(botId, look, false).shape;
+
+    it("draws the shape kept beside it", () => {
+      const kept = MASCOT_SHAPES.find(
+        (shape) => shape !== ownMascotShape(botId),
+      );
+      expect(kept).toBeDefined();
+
+      expect(shapeOf(picture(kept))).toBe(kept);
+    });
+
+    it.each([
+      ["null, as when no mascot was chosen before", null],
+      ["a shape this client has no art for", "dragon"],
+      ["something that is not a shape", 7],
+    ])(
+      "draws the bot's own shape, not the default one, when the kept shape is %s",
+      (_name, kept) => {
+        expect(ownMascotShape(botId)).not.toBe(DEFAULT_MASCOT_SHAPE);
+
+        expect(shapeOf(picture(kept))).toBe(ownMascotShape(botId));
+      },
+    );
+
+    it("draws the bot's own shape for a picture delivered with no kept shape at all", () => {
+      const look = deliveredLook(
+        `{"mark":{"kind":"picture","sha256":"${"a".repeat(64)}"},"color":null}`,
+      );
+
+      expect(shapeOf(look)).toBe(ownMascotShape(botId));
+    });
   });
 
   it("draws the default mascot for a mark it cannot read", () => {
