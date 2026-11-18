@@ -64,13 +64,14 @@ const NO_READ = { botId: "", sha256: "" };
  * so does the host coming back (`hostReady` turning true), so a read that
  * failed while it was away does not stay failed. A host without the method
  * is never asked. A picture the bot no longer wears
- * is answered as none, so the lists are read again.
+ * is answered as none, so the lists are read again. `model` is `null` until
+ * the bots are listed.
  */
 export function useBotPictureLoads(
   client: HostClient<HostRpcRegistry> | null,
   supported: boolean,
   hostReady: boolean,
-  model: HomeBotsModel,
+  model: HomeBotsModel | null,
 ): void {
   const queryClient = useQueryClient();
   // A round ends when its client or its answer about the method does, and
@@ -120,6 +121,8 @@ export function useBotPictureLoads(
   }, [next, isSuccess, isError, data, queryClient]);
 
   useEffect(() => {
+    // No list yet says nothing of what the bots wear, so nothing is dropped.
+    if (model === null) return;
     const worn = new Set<string>();
     for (const group of model.groups) {
       for (const bot of group.bots) {

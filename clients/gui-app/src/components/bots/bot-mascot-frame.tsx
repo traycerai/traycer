@@ -55,8 +55,10 @@ export function BotPictureFrame(props: {
   readonly dimmed: boolean;
   readonly size: IdentityAvatarSize;
   readonly testId: string;
+  /** Told when the picture cannot be drawn, so the caller draws the mascot. */
+  readonly onError: () => void;
 }): ReactElement {
-  const { src, expression, dimmed, size, testId } = props;
+  const { src, expression, dimmed, size, testId, onError } = props;
   return (
     <Avatar
       shape="squircle"
@@ -70,8 +72,9 @@ export function BotPictureFrame(props: {
         alt=""
         draggable={false}
         data-slot="bot-picture"
+        onError={onError}
         className={cn(
-          "size-full object-cover transition-opacity duration-500 [clip-path:var(--avatar-clip)]",
+          "size-full object-cover duration-500 motion-safe:transition-opacity [clip-path:var(--avatar-clip)]",
           expression === "away" && "opacity-55 grayscale",
           expression === "working" && dimmed && "opacity-55",
         )}

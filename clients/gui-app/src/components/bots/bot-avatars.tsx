@@ -1,4 +1,5 @@
 import {
+  useState,
   useSyncExternalStore,
   type CSSProperties,
   type ReactElement,
@@ -106,7 +107,10 @@ function BotIdentityAvatar(props: {
   const main = useBotIsMain(botId);
   const beat = useWorkingBeat(expression === "working");
   const picture = useBotPictureLink(botId, look);
-  if (picture !== null) {
+  // The link whose picture could not be drawn: the mascot stands in for it,
+  // and a new link is tried afresh.
+  const [undrawn, setUndrawn] = useState<string | null>(null);
+  if (picture !== null && picture !== undrawn) {
     return (
       <BotPictureFrame
         src={picture}
@@ -114,6 +118,7 @@ function BotIdentityAvatar(props: {
         dimmed={beat % 2 === 1}
         size={size}
         testId={testId}
+        onError={() => setUndrawn(picture)}
       />
     );
   }

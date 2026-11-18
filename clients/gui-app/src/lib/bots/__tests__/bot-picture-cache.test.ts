@@ -43,6 +43,11 @@ function settle(sha256: string, picture: BotPictureBytes | null): void {
   settleBotPictureRead({ sha256, botId: BOT, round: roundNow() }, picture);
 }
 
+/** Subscribes `listener` for the rest of the test, so it leaks into no other. */
+function subscribe(listener: () => void): void {
+  withdrawals.push(subscribeBotPictures(listener));
+}
+
 /** Holds `sha256` as a read of it would, kept by a listed bot wearing it. */
 function holdWorn(...hashes: readonly string[]): void {
   keepBotPictures(new Set(hashes));
@@ -140,7 +145,7 @@ describe("settling a read", () => {
     const read = nextWantedBotPicture();
     if (read === null) throw new Error("nothing was next");
     const listener = vi.fn();
-    subscribeBotPictures(listener);
+    subscribe(listener);
 
     settleBotPictureRead(read, PNG);
 
@@ -227,7 +232,7 @@ describe("retrying the pictures", () => {
     settle(HASH, null);
     expect(nextWantedBotPicture()).toBeNull();
     const listener = vi.fn();
-    subscribeBotPictures(listener);
+    subscribe(listener);
 
     retryBotPictures();
 
@@ -251,7 +256,7 @@ describe("retrying the pictures", () => {
     want(HASH, BOT);
     const before = nextWantedBotPicture();
     const listener = vi.fn();
-    subscribeBotPictures(listener);
+    subscribe(listener);
 
     retryBotPictures();
 
@@ -301,7 +306,7 @@ describe("withdrawing a want", () => {
     const second = want(HASH, OTHER_BOT);
     settle(HASH, PNG);
     const listener = vi.fn();
-    subscribeBotPictures(listener);
+    subscribe(listener);
 
     second();
     expect(botPictureLink(HASH)).not.toBeNull();
@@ -370,7 +375,7 @@ describe("bots drawing the same picture", () => {
     settle(HASH, null);
     expect(nextWantedBotPicture()).toBeNull();
     const listener = vi.fn();
-    subscribeBotPictures(listener);
+    subscribe(listener);
 
     withdrawA();
 
@@ -397,7 +402,7 @@ describe("bots drawing the same picture", () => {
     want(HASH, OTHER_BOT);
     settle(HASH, null);
     const listener = vi.fn();
-    subscribeBotPictures(listener);
+    subscribe(listener);
 
     first();
 
@@ -422,7 +427,7 @@ describe("keeping only the pictures still in use", () => {
   it("revokes and drops a picture no listed bot wears and nothing drawn wants, and tells subscribers", () => {
     holdWorn(HASH);
     const listener = vi.fn();
-    subscribeBotPictures(listener);
+    subscribe(listener);
 
     keepBotPictures(new Set());
 
@@ -436,7 +441,7 @@ describe("keeping only the pictures still in use", () => {
     holdWorn(HASH, THIRD);
     settle(OTHER, PNG);
     const listener = vi.fn();
-    subscribeBotPictures(listener);
+    subscribe(listener);
 
     keepBotPictures(new Set([HASH]));
 
@@ -450,7 +455,7 @@ describe("keeping only the pictures still in use", () => {
   it("tells no subscriber when nothing was dropped", () => {
     holdWorn(HASH);
     const listener = vi.fn();
-    subscribeBotPictures(listener);
+    subscribe(listener);
 
     keepBotPictures(new Set([HASH]));
 
@@ -468,7 +473,7 @@ describe("a hash that becomes worn again", () => {
     keepBotPictures(new Set([OTHER]));
     expect(nextWantedBotPicture()).toBeNull();
     const listener = vi.fn();
-    subscribeBotPictures(listener);
+    subscribe(listener);
 
     keepBotPictures(new Set([HASH]));
 
@@ -492,7 +497,7 @@ describe("clearing the pictures", () => {
   it("revokes every link, drops them, and tells subscribers", () => {
     holdWorn(HASH, OTHER);
     const listener = vi.fn();
-    subscribeBotPictures(listener);
+    subscribe(listener);
 
     clearBotPictures();
 

@@ -10,7 +10,13 @@
  * `env_personal`, and the team main bots of `env_team_a` and `env_team_s`.
  */
 import type { ReactElement } from "react";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   BOT_APPEARANCE_UNRECOGNISED,
@@ -815,8 +821,16 @@ describe("a bot's picture when it wears an uploaded one", () => {
     mascotShape: BotMascotShape | null,
     expression: MascotExpression,
   ): ReactElement {
+    return wearingHash(HASH, mascotShape, expression);
+  }
+
+  function wearingHash(
+    sha256: string,
+    mascotShape: BotMascotShape | null,
+    expression: MascotExpression,
+  ): ReactElement {
     const look: BotAppearance = {
-      mark: { kind: "picture", sha256: HASH, mascotShape },
+      mark: { kind: "picture", sha256, mascotShape },
       color: null,
     };
     return (
@@ -894,6 +908,36 @@ describe("a bot's picture when it wears an uploaded one", () => {
     holdPicture();
 
     expect(drawsPicture()).toBe(true);
+  });
+
+  it("draws the mascot in the picture's place when the picture cannot be drawn, and draws a new link for the same bot afresh", () => {
+    const { rerender } = render(wearing("cat", "idle"));
+    holdPicture();
+    expect(drawsPicture()).toBe(true);
+
+    fireEvent.error(picture());
+
+    expect(drawsPicture()).toBe(false);
+    expect(
+      screen
+        .getByTestId("bot-avatar")
+        .querySelector('[data-slot="bot-mascot"]'),
+    ).not.toBeNull();
+
+    rerender(wearingHash("d".repeat(64), "cat", "idle"));
+    holdPicture();
+
+    expect(picture().getAttribute("src")).toBe("blob:picture-2");
+  });
+
+  it("fades the picture with an opacity transition only for a person who has not asked for reduced motion", () => {
+    render(wearing(null, "idle"));
+    holdPicture();
+
+    expect(picture().classList.contains("motion-safe:transition-opacity")).toBe(
+      true,
+    );
+    expect(picture().classList.contains("transition-opacity")).toBe(false);
   });
 
   it("keeps the mascot when the answer that was read is no picture, drawing the shape kept beside it", () => {

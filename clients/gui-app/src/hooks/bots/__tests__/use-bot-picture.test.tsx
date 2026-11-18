@@ -921,6 +921,34 @@ describe("reading the pictures that drawn bots want", () => {
     expect(revokeLink).toHaveBeenCalledWith("blob:picture-1");
   });
 
+  it("keeps a held picture nothing draws while the bots are not listed yet, and drops it once a listing no longer names it", async () => {
+    const host = pictureHost();
+    const listed: { readonly model: HomeBotsModel | null } = {
+      model: modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]),
+    };
+    const { rerender } = renderHook(
+      ({ model }: { readonly model: HomeBotsModel | null }) => {
+        useBotPictureLoads(host.client, true, true, model);
+      },
+      { wrapper, initialProps: listed },
+    );
+    const drawer = drawn(PICTURE_BOT, pictureLook(HASH));
+    await waitFor(() => {
+      expect(host.reads).toHaveLength(1);
+    });
+    host.reads[0].answer();
+    await waitFor(() => {
+      expect(botPictureLink(HASH)).not.toBeNull();
+    });
+    drawer.unmount();
+
+    rerender({ model: null });
+    expect(botPictureLink(HASH)).not.toBeNull();
+    rerender({ model: modelOf([PICTURE_BOT, "env-1", MASCOT_LOOK]) });
+
+    expect(botPictureLink(HASH)).toBeNull();
+  });
+
   it("keeps the link of a picture a drawn bot still wants when the directory no longer lists a bot wearing it", async () => {
     const host = pictureHost();
     const { rerender } = renderHook(

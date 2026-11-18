@@ -216,6 +216,48 @@ function webpX(flags: number, side: number, total: number): Uint8Array {
   return bytes;
 }
 
+/** A lossy WebP (`VP8 `) `width` by `height`, with its frame header. */
+function webpLossy(width: number, height: number): Uint8Array {
+  const bytes = new Uint8Array(40);
+  const text = (from: number, value: string): void => {
+    [...value].forEach((char, i) => {
+      bytes[from + i] = char.charCodeAt(0);
+    });
+  };
+  text(0, "RIFF");
+  text(8, "WEBP");
+  text(12, "VP8 ");
+  bytes.set([0x9d, 0x01, 0x2a], 23);
+  bytes.set([width % 256, Math.floor(width / 256)], 26);
+  bytes.set([height % 256, Math.floor(height / 256)], 28);
+  return bytes;
+}
+
+/** A lossless WebP (`VP8L`) `width` by `height`: two 14-bit fields, each one less, packed low bit first. */
+function webpLossless(width: number, height: number): Uint8Array {
+  const bytes = new Uint8Array(40);
+  const text = (from: number, value: string): void => {
+    [...value].forEach((char, i) => {
+      bytes[from + i] = char.charCodeAt(0);
+    });
+  };
+  text(0, "RIFF");
+  text(8, "WEBP");
+  text(12, "VP8L");
+  bytes[20] = 0x2f;
+  const packed = width - 1 + (height - 1) * 0x4000;
+  bytes.set(
+    [
+      packed & 0xff,
+      (packed >>> 8) & 0xff,
+      (packed >>> 16) & 0xff,
+      (packed >>> 24) & 0xff,
+    ],
+    21,
+  );
+  return bytes;
+}
+
 const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
 /** One PNG chunk: a length, a type, `length` data bytes and a check. */
@@ -315,4 +357,24 @@ describe("an animated picture", () => {
     );
     expect(botPictureRefusalOf(new Uint8Array(40))).toBe("type");
   });
+});
+
+describe("the size of a simple WebP", () => {
+  it.each([
+    ["lossy", webpLossy],
+    ["lossless", webpLossless],
+  ])(
+    "is read from a %s header: the square side passes, any other size is refused as its dimensions",
+    (_form, make) => {
+      expect(
+        botPictureRefusalOf(make(BOT_PICTURE_SIDE, BOT_PICTURE_SIDE)),
+      ).toBeNull();
+      expect(
+        botPictureRefusalOf(make(BOT_PICTURE_SIDE - 1, BOT_PICTURE_SIDE)),
+      ).toBe("dimensions");
+      expect(
+        botPictureRefusalOf(make(BOT_PICTURE_SIDE, BOT_PICTURE_SIDE + 1)),
+      ).toBe("dimensions");
+    },
+  );
 });

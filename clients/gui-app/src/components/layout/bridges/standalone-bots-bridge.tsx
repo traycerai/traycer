@@ -73,7 +73,7 @@ export function StandaloneBotsBridge(): null {
     client,
     useHostMethodSupport(hostId, "bot.readPicture") === true,
     reachability.status === "reachable",
-    model,
+    botData === undefined ? null : model,
   );
   // A signed-out viewer never reads the environments, and has no feed to name.
   const listsSettled =
