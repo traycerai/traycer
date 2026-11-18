@@ -6,6 +6,7 @@ import {
 } from "@/hooks/environment/use-environment-secrets-calls";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
+  rotatesToSandboxes,
   secretRotationSettled,
   secretRotationStatus,
   type SecretRotationLine,
@@ -27,13 +28,15 @@ const TONE: Readonly<Record<SecretRotationLine["tone"], string>> = {
 export function SecretRotationStatus(props: {
   readonly client: HostClient<HostRpcRegistry>;
   readonly secretId: string;
+  readonly kind: string;
 }): ReactNode {
+  const applies = rotatesToSandboxes(props.kind);
   const { environmentId, resolved } = useSecretsEnvironment(props.client);
   const [moving, setMoving] = useState(true);
   const rotation = useSecretsRead({
     method: "environment.secrets.rotation",
     params: { secretId: props.secretId, environmentId },
-    enabled: resolved,
+    enabled: resolved && applies,
     poll: moving,
   });
   const current = rotation.data?.rotation;
@@ -41,7 +44,7 @@ export function SecretRotationStatus(props: {
   // on the same render that shows it.
   const stillMoving = current === undefined || !secretRotationSettled(current);
   if (stillMoving !== moving) setMoving(stillMoving);
-  if (current === undefined) return null;
+  if (!applies || current === undefined) return null;
   const status = secretRotationStatus(current);
   if (status === null) return null;
   return (

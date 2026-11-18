@@ -502,6 +502,24 @@ describe("Replace", () => {
     );
   });
 
+  it.each(["provider", "github", "harness", "mcp_credential", "newer_kind"])(
+    "says no sandbox sentence on a %s row, however its rotation stands",
+    async (kind) => {
+      const host = buildRotationHost({
+        secrets: [secretFixture({ kind, name: "SYNTHETIC_SECRET" })],
+        rotation: stalledRotation(),
+      });
+      renderPage(host);
+
+      await openVersions();
+
+      expect(host.reads.versions).toBeGreaterThan(0);
+      expect(host.reads.rotation).toBe(0);
+      expect(screen.queryByTestId("secret-rotation-status")).toBeNull();
+      expect(screen.queryByTestId("secret-rotation-headline")).toBeNull();
+    },
+  );
+
   it("sends the typed value against the listed version, then shows worker rotation status", async () => {
     const host = buildRotationHost({ rotation: enforcingRotation() });
     renderPage(host);

@@ -178,6 +178,32 @@ function producerLines(
 }
 
 /**
+ * The kinds whose new value rotates to sandbox incarnations: the ones with
+ * routes served by sandbox workers. `github`, `harness` and `mcp_credential`
+ * are refused a value rotation ("managed by its own flow"), and a model
+ * provider's key goes to computers by the Providers page, so none of those
+ * has a sandbox rotation line. A kind this build does not list has none
+ * either.
+ */
+const SANDBOX_ROTATING_KINDS: readonly string[] = [
+  "api_key",
+  "database",
+  "ssh",
+  "aws",
+  "azure_storage",
+  "azure_sp",
+  "gcp_sa",
+  "client_certificate",
+  "broker",
+  "mail",
+  "rdp",
+];
+
+export function rotatesToSandboxes(kind: string): boolean {
+  return SANDBOX_ROTATING_KINDS.includes(kind);
+}
+
+/**
  * The Secrets page's status of a secret's current rotation, or `null` when it
  * has none.
  */
