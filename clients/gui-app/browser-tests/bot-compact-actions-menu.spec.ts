@@ -96,31 +96,31 @@ for (const how of ["pointer", "keyboard"] as const) {
   });
 }
 
-test("keeps the active-task badge inside the header with zero top inset", async ({
+test("keeps the channel actions trigger inside the header with zero top inset", async ({
   page,
 }) => {
   await page.goto(fixture("bot-compact-actions-menu"));
   const header = page.getByTestId("app-header");
-  const badge = page.getByTestId("bot-channel-actions-activity-count");
-  await expect(badge).toHaveText("1");
+  const trigger = page.getByRole("button", {
+    name: /^Channel actions, 1 active$/,
+  });
+  await expect(trigger).toBeVisible();
   expect(
     await page
       .locator("#root")
       .evaluate((root) => getComputedStyle(root).paddingTop),
   ).toBe("0px");
   const headerBox = await header.boundingBox();
-  const badgeBox = await badge.boundingBox();
-  expect(headerBox).not.toBeNull();
-  expect(badgeBox).not.toBeNull();
-  if (headerBox === null || badgeBox === null)
-    throw new Error("header and badge must have geometry");
+  const triggerBox = await trigger.boundingBox();
+  if (headerBox === null || triggerBox === null)
+    throw new Error("header and trigger must have geometry");
   expect(headerBox.height).toBe(40);
-  expect(badgeBox.x).toBeGreaterThanOrEqual(headerBox.x);
-  expect(badgeBox.x + badgeBox.width).toBeLessThanOrEqual(
+  expect(triggerBox.x).toBeGreaterThanOrEqual(headerBox.x);
+  expect(triggerBox.x + triggerBox.width).toBeLessThanOrEqual(
     headerBox.x + headerBox.width,
   );
-  expect(badgeBox.y).toBeGreaterThanOrEqual(headerBox.y);
-  expect(badgeBox.y + badgeBox.height).toBeLessThanOrEqual(
+  expect(triggerBox.y).toBeGreaterThanOrEqual(headerBox.y);
+  expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(
     headerBox.y + headerBox.height,
   );
 });

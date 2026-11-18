@@ -26,11 +26,11 @@ const CONNECTING = '[data-testid="bot-tab-connecting"]';
 const BOX_EDITOR =
   '[data-testid="bot-channel-composer-input"] [data-composer-editor]';
 
-/** The tab is open: past its connecting state, with the Channel actions badge showing its one task. */
+/** The tab is open: past its connecting state, with the Channel actions trigger naming its one task. */
 async function expectTabOpen(page: Page): Promise<void> {
   await expect(
-    page.getByTestId("bot-channel-actions-activity-count"),
-  ).toHaveText("1");
+    page.getByRole("button", { name: "Channel actions, 1 active" }),
+  ).toBeVisible();
   await expect(page.locator(CONNECTING)).toHaveCount(0);
 }
 
