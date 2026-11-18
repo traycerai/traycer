@@ -8,6 +8,8 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   admitCurrentUserToTeamWindow,
   mountTeamPageThroughBoundary,
+  teamProfileRecordHttpBoundary,
+  teamProfileRecordsBody,
   type TeamBoundaryPageHarness,
 } from "./team-configuration-test-support";
 import { negotiateMethods, reachableHost } from "./mcp-skills-test-support";
@@ -38,6 +40,10 @@ async function renderKeyFieldFor(
   providerName: "Cursor" | "Kiro",
   row: ProviderCliState,
 ): Promise<TeamBoundaryPageHarness> {
+  teamProfileRecordHttpBoundary.list = {
+    status: 200,
+    body: teamProfileRecordsBody([]),
+  };
   const harness = mountTeamPageThroughBoundary(
     "admin",
     {
