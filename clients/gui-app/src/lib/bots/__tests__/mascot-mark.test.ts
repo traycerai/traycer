@@ -24,7 +24,7 @@ import {
   botMascot,
   drawMascotMark,
   mascotCells,
-  mascotRampAt,
+  mascotRampOf,
   smallMascotCells,
   ownMascotAccessory,
   ownMascotEyewear,
@@ -45,7 +45,6 @@ import {
   BLOB_VISOR16,
   BLOB_VISOR32,
 } from "@/lib/bots/__tests__/mascot-eyewear-pinned";
-import { derivedBotColorIndex } from "@/lib/providers/profile-accent-color";
 
 const GRID = 10;
 const SMALL_GRID = 7;
@@ -420,11 +419,11 @@ describe("what a mascot carries", () => {
 describe("a bot's mascot from its look", () => {
   const botId = STYLISH_BOT_ID;
 
-  it("is the id's own body, colour, eyewear and accessory when nothing was chosen", () => {
+  it("is the id's own body, eyewear and accessory, in the default colour, when nothing was chosen", () => {
     for (const pinned of PINNED) {
       expect(botMascot(pinned.botId, null, false), pinned.botId).toEqual({
         shape: pinned.shape,
-        ramp: mascotRampAt(derivedBotColorIndex(pinned.botId)),
+        ramp: DEFAULT_MASCOT_RAMP,
         eyewear: pinned.eyewear,
         accessory: pinned.accessory,
       });
@@ -445,7 +444,7 @@ describe("a bot's mascot from its look", () => {
       botId,
       {
         mark: { kind: "mascot", shape: "ghost" },
-        color: 5,
+        color: "#4c8af0",
         eyewear: "none",
         accessory: "halo",
       },
@@ -454,7 +453,7 @@ describe("a bot's mascot from its look", () => {
 
     expect(chosen).toEqual({
       shape: "ghost",
-      ramp: mascotRampAt(5),
+      ramp: mascotRampOf("#4c8af0"),
       eyewear: "none",
       accessory: "halo",
     });
@@ -510,12 +509,12 @@ describe("a bot's mascot from its look", () => {
 describe("an environment's main bot's mascot", () => {
   const botId = STYLISH_BOT_ID;
 
-  it("is the plain default mascot in the id's own colours when nothing was chosen", () => {
+  it("is the plain default mascot, in the default colour, when nothing was chosen", () => {
     expect(ownMascotShape(botId)).not.toBe(DEFAULT_MASCOT_SHAPE);
 
     expect(botMascot(botId, null, true)).toEqual({
       shape: DEFAULT_MASCOT_SHAPE,
-      ramp: botMascot(botId, null, false).ramp,
+      ramp: DEFAULT_MASCOT_RAMP,
       eyewear: "none",
       accessory: "none",
     });
@@ -659,8 +658,8 @@ function lightnessOf(fill: string): number {
 }
 
 describe("the colours of what a mascot wears", () => {
-  const FAR_RAMPS = [DEFAULT_MASCOT_RAMP, mascotRampAt(0)] as const;
-  const AMBER = mascotRampAt(2);
+  const FAR_RAMPS = [DEFAULT_MASCOT_RAMP, mascotRampOf("#f04c4c")] as const;
+  const AMBER = mascotRampOf("#f0b34c");
   const HALO_HUE = 48;
 
   function hueGap(hue: number): number {
@@ -1111,4 +1110,73 @@ describe("shades while a mascot works", () => {
       ).toEqual(pinned.layers);
     },
   );
+});
+
+describe("a saved colour drawn as a ramp", () => {
+  /** `#rrggbb` of hue `h` (degrees), saturation `sat` and lightness `light` (percent). */
+  function hexOf(h: number, sat: number, light: number): string {
+    const s = sat / 100;
+    const l = light / 100;
+    const a = s * Math.min(l, 1 - l);
+    const channel = (n: number): string => {
+      const k = (n + h / 30) % 12;
+      const value = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+      return Math.round(value * 255)
+        .toString(16)
+        .padStart(2, "0");
+    };
+    return `#${channel(0)}${channel(8)}${channel(4)}`;
+  }
+
+  const lookIn = (color: string): MascotLook => ({
+    ...lookOf("blob", "none", "none"),
+    ramp: botMascot(
+      "bot_0KNEF4PC1F8D0H626S5VEKEQ8Y",
+      { ...NO_CHOICE, color },
+      false,
+    ).ramp,
+  });
+  const baseOf = (color: string): string => lookIn(color).ramp.tones[2];
+  const saturationOf = (fill: string): number => {
+    const match = /^hsl\(\d+ (\d+)%/.exec(fill);
+    if (match === null) throw new Error(`no saturation in ${fill}`);
+    return Number(match[1]);
+  };
+
+  it("draws a colour off any line-up on its own hue, not the default's", () => {
+    const own = lookIn("#123abc");
+    const drawn = drawMascotMark(own, 24, MASCOT_AT_REST).layers.map(
+      (layer) => layer.fill,
+    );
+    const standard = drawMascotMark(
+      lookOf("blob", "none", "none"),
+      24,
+      MASCOT_AT_REST,
+    ).layers.map((layer) => layer.fill);
+
+    expect(Math.abs(own.ramp.hue - 226)).toBeLessThanOrEqual(1);
+    expect(own.ramp.hue).not.toBe(DEFAULT_MASCOT_RAMP.hue);
+    expect(drawn).not.toEqual(standard);
+  });
+
+  it("draws the same base tone for a hue at lightness 68 as for a near white one, and at 48 as for a near black one", () => {
+    const light = lightnessOf(baseOf(hexOf(200, 60, 68)));
+    const dark = lightnessOf(baseOf(hexOf(200, 60, 48)));
+
+    expect(light).toBe(68);
+    expect(dark).toBe(48);
+    expect(lightnessOf(baseOf(hexOf(200, 60, 97)))).toBe(light);
+    expect(lightnessOf(baseOf("#ffffff"))).toBe(light);
+    expect(lightnessOf(baseOf(hexOf(200, 60, 6)))).toBe(dark);
+    expect(lightnessOf(baseOf("#000000"))).toBe(dark);
+  });
+
+  it("keeps the lightness of a colour between the bounds", () => {
+    expect(lightnessOf(baseOf(hexOf(200, 60, 58)))).toBe(58);
+  });
+
+  it("draws no body more saturated than 85", () => {
+    expect(saturationOf(baseOf(hexOf(120, 100, 50)))).toBeLessThanOrEqual(85);
+    expect(saturationOf(baseOf(hexOf(120, 100, 50)))).toBeGreaterThan(80);
+  });
 });
