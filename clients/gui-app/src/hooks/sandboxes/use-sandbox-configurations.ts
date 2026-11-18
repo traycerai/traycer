@@ -19,9 +19,7 @@ export interface SandboxConfigurations {
    */
   readonly complete: boolean;
   /**
-   * The person's own environment's id where their environment list is
-   * already in hand, else `null`. It names Personal's rows before the teams
-   * answer; nothing is read for it.
+   * Names Personal's rows before the teams answer; nothing is read for it.
    */
   readonly personalEnvironmentId: string | null;
 }
@@ -33,9 +31,8 @@ export interface SandboxConfigurations {
 export function useSandboxConfigurations(): SandboxConfigurations {
   const userRead = useAuthUser();
   const user = userRead.data ?? null;
-  // The person's teams are known only once the user read has answered: a
-  // pending or failed read, or data kept from before a failed refetch, says
-  // nothing about which teams there are.
+  // A pending or failed read, or data kept from before a failed refetch, says nothing about the
+  // teams.
   const teamsKnown = !userRead.isPending && !userRead.isError && user !== null;
   const teams = useMemo(() => sandboxCreateTeams(user), [user]);
   const teamIds = useMemo(() => teams.map((team) => team.teamId), [teams]);

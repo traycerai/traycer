@@ -238,7 +238,6 @@ function prefilledForm(
     : { ...form, name: prefill.name, value: prefill.value };
 }
 
-/** A named kind opens its form; otherwise the kind picker. */
 function initialStepOf(
   initialKind: DesktopSecretKind | undefined,
   prefill: SecretPrefill | null,
@@ -251,7 +250,6 @@ function initialStepOf(
 export function AddSecretDialog(props: {
   readonly open: boolean;
   readonly initialKind?: DesktopSecretKind;
-  /** A name and value the form opens with, or `null`. */
   readonly prefill: SecretPrefill | null;
   readonly client: HostClient<HostRpcRegistry>;
   readonly onOpenChange: (open: boolean) => void;

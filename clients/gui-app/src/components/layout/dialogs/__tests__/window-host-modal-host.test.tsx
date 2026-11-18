@@ -1978,8 +1978,6 @@ describe("<WindowHostModalHost />", () => {
     renderHost(
       {
         ...EMPTY_PRESENTATION,
-        // Local provisioning applies to the target; the modal's update action
-        // applies to the separately named remote host.
         targetKind: "local",
         localBootIntent: true,
         canManageHost: true,

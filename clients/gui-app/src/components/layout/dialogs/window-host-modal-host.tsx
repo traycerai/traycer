@@ -348,9 +348,8 @@ function NarratingWindowHostModal(props: {
 }
 
 /**
- * Whether `NarratingWindowHostModal` puts a card or a dialog on screen: the
- * branches that return one, in its order. The toast stays quiet for a door
- * refusal only while its cover is drawn, so this must not drift from them.
+ * The toast stays quiet for a door refusal only while its cover is drawn, so this must match the
+ * branches of `NarratingWindowHostModal` that return one.
  */
 function drawsNarration(
   gateCardDrawn: boolean,

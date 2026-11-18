@@ -55,9 +55,8 @@ export interface RailEntry {
    *  missing an API key). Profile-level auth issues surface in the dropdown,
    *  not here. */
   readonly degraded: boolean;
-  /** Bottom-right accent-dot data, present whenever the provider's account
-   *  dropdown is drawn (`profileDropdownShown`). `null` renders no dot at
-   *  all: no dropdown, or a pin to a removed account. */
+  /** `null`: no dropdown, or a pin to a removed account.
+   */
   readonly accentDot: ProfileAccentDotInput | null;
   /** Non-null while this provider's managed pack is downloading or stuck on an
    *  error. The entry always stays VISIBLE and labelled - the dictation-mic
@@ -81,11 +80,10 @@ export function railEntryKey(harnessId: GuiHarnessId): string {
  * list resolves it (`resolveProfilePin`: its row, a row it is an alias of,
  * the record's row that is the Terminal login, or an account a person
  * removed), else the harness's first selectable profile (typically its
- * ambient row). A resolved committed id is returned as it is, never its
- * row's id, so a pin is never rewritten by browsing. Returns `null` outright
+ * ambient row). A removed pin always draws it, so choosing a model keeps that pin. Returns `null`
+ * outright
  * when the account dropdown is not drawn (`profileDropdownShown`) - profile
- * identity has no meaning there (progressive disclosure). A pin to a removed
- * account always draws it, so choosing a model keeps that pin.
+ * identity has no meaning there (progressive disclosure).
  */
 export function resolveActiveProfileForHarness(input: {
   readonly harnessId: GuiHarnessId;

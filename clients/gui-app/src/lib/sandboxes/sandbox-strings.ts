@@ -161,7 +161,6 @@ export function teamPossessive(teamName: string): string {
   return `${teamName}'s`;
 }
 
-/** `uses your credits` / `uses Acme's credits`. */
 export function usesCreditsClause(
   configuration: SandboxConfigurationCopy,
 ): string {
@@ -452,10 +451,6 @@ function notEnoughCreditsText(
   return `${opening}. ${formatSandboxDollarsRequired(shortfallMc)} more ${action} for an hour.`;
 }
 
-/**
- * Short for an hour of a team's sandbox, which the team's credits pay;
- * `null` names no amount.
- */
 export function teamCreditsShortLine(
   teamName: string,
   shortfallMc: number | null,

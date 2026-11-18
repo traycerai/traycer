@@ -115,11 +115,7 @@ function ownLoginLabel(providerLabel: string, hostName: string | null): string {
 }
 
 /**
- * What the section's selection names. The selection is this page's own
- * state: a pin reaches it only through a focus intent. An alias selects its
- * row; an id the list does not resolve to a row - removed by a person or
- * unknown - shows the first row with none checked, as any id the page does
- * not list always has.
+ * A pin reaches the selection only through a focus intent.
  */
 function settingsProfileSelection(
   profiles: readonly ProviderProfile[],

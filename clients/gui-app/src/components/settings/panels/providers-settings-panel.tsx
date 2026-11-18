@@ -1850,7 +1850,6 @@ function AccountManagedCredentialsLine(): ReactNode {
   );
 }
 
-/** The Env tab: the provider's variables. */
 function ProviderEnvTab(props: {
   readonly state: ProviderCliState;
 }): ReactNode {

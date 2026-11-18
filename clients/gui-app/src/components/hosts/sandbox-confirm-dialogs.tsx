@@ -99,8 +99,7 @@ interface SandboxDialogProps {
 }
 
 /**
- * The configuration a dialog speaks for, or `null` while the app does not
- * know whose sandbox it is: the dialog then says nothing about whose credits.
+ * `null` while ownership is unknown: the dialog then says nothing about whose credits.
  */
 function useDialogConfiguration(
   sandbox: SandboxSummary,
@@ -126,10 +125,6 @@ function useDialogSessions(
   ).report;
 }
 
-/**
- * `your credits` / `Acme's credits`: a team's sandbox is on the team's.
- * `null` where whose sandbox it is is not known.
- */
 function storageCredits(
   configuration: SandboxPageConfiguration | null,
 ): string | null {

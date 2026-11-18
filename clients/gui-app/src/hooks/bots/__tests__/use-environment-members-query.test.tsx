@@ -146,7 +146,6 @@ interface MountedMembers {
   }>;
 }
 
-/** The cursor a members page query names; undefined for any other query. */
 function cursorOf(queryKey: unknown): string | null | undefined {
   const key = JSON.stringify(queryKey);
   if (!key.includes("environment.members")) return undefined;
@@ -475,7 +474,6 @@ describe("useEnvironmentMembers", () => {
       );
     });
 
-    // The second page now names the cursor that asked for it.
     await mounted.publish(
       new Map([
         [ids[PAGE_SIZE - 1], page([ids[PAGE_SIZE]], ids[PAGE_SIZE - 1])],

@@ -44,7 +44,6 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return {
     ...actual,
     useHostBinding: () => hostBindingMock.current,
-    // Add a secret reads through the selected host's client.
     useHostClient: () => hostBindingMock.current?.hostClient,
   };
 });

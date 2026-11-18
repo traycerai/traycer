@@ -131,14 +131,8 @@ const resolveSessionHostClient = vi.hoisted(
 // The provider opens its own durable transport through the REAL
 // `useDurableStreamTransportFactory` and `openDurableStreamTransport`, so a row
 // below the floor is refused by the opener exactly as in the app
-// (`buildHostStreamClient`). Only what sits below the opener is supplied here:
-// the runner host, the directory and the request context it reads, and the
-// network boundary (`createRemoteHostTransport`), whose stream client is the
-// inert one `fakeDurableStreamTransports().opener` mints (a case may replace
-// that opener to count or throw on the socket's creation).
-// The suite setup (`__tests__/test-browser-apis.ts`) mocks this module with the
-// fake opener for every file; naming it here with its original puts the real
-// hook back for this one.
+// (`buildHostStreamClient`). The suite setup mocks this module for every file; naming it with its
+// original puts the real opener back here.
 vi.mock("@/lib/host/use-durable-stream-transport", (importOriginal) =>
   importOriginal<typeof import("@/lib/host/use-durable-stream-transport")>(),
 );

@@ -5076,8 +5076,7 @@ describe("a send whose sandbox left awake on its own after the create timed out"
 
   it("draws the failed line in a tile bound elsewhere without opening a draft mirror for the sandbox's host", async () => {
     const TILE_HOST = "tile-host";
-    // The billing runtime signs in as the fixture user, so the held send is
-    // theirs: another person's send is not drawn.
+    // Another person's send is not drawn, so the runtime signs in as the fixture user.
     useAuthStore.getState().setSignedIn(
       {
         userId: AUTHENTICATED_USER_FIXTURE_ID,

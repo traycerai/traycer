@@ -98,13 +98,11 @@ interface RecordedIntent {
  * `promoteToPersonal`): the entry is uploaded so every computer of that
  * environment gets it. Never sent without the click.
  *
- * For an MCP server, on a host that takes it, the click first records an
- * `mcp_promote` intent on the person's sign-in for this computer at its
- * sharing generation and the server's name; the computer uploads on its own
- * token against it, and the intent is read back. The click is one operation
- * on the sign-in current when it was pressed: both authn calls go on it, and
- * the upload is not asked for once that sign-in is gone. A skill is promoted
- * as today, with no intent.
+ * For an MCP server, on a host that takes it, the click first records an `mcp_promote` intent on
+ * the person's sign-in for this computer at its sharing generation and the server's name; the
+ * computer uploads on its own token against it, and the intent is read back. The click is one
+ * operation on the sign-in current when it was pressed: both authn calls go on it, and the upload
+ * is not asked for once that sign-in is gone. A skill is promoted with no intent.
  *
  * A refusal is an answer, not a transport error: it comes back as
  * `refused` with its words, and only a failed send toasts.

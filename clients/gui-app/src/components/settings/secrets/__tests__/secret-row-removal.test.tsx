@@ -203,7 +203,6 @@ function mountRowAs(host: Host, role: "viewer" | "editor"): TeamPageHarness {
   return harness;
 }
 
-/** A Personal host, optionally viewing its own host-scoped secrets. */
 function mountPersonalRowAtDestroy10(
   host: Host,
   pick: "personal" | "local",
