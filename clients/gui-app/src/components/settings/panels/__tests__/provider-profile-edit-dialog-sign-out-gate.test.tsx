@@ -1370,7 +1370,7 @@ describe("<ProfileEditDialog /> record sign-out and remove name the environment"
     },
   );
 
-  it("keeps the fallback when the row names an environment the list cannot read, even on a Personal computer", () => {
+  it("keeps the fallback for an environment the list cannot name, even on Personal", () => {
     fixture.listScope = "personal";
     fixture.environments = undefined;
     renderDialog(recordRowWithFolder(namingPresence("env-team")));
