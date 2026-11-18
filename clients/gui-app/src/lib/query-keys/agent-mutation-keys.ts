@@ -1,9 +1,0 @@
-export const agentMutationKeys = {
-  startTerminalSession: () => ["agent.tui.prepareLaunch"] as const,
-  validateForkProfile: () => ["agent.tui.validateForkProfile"] as const,
-  stop: () => ["agent.stop"] as const,
-  configure: () => ["agent.configure"] as const,
-  setGlobalSelectionGuide: () => ["agent.selectionGuide.setGlobal"] as const,
-  resetGlobalSelectionGuide: () =>
-    ["agent.selectionGuide.resetGlobalToDefault"] as const,
-};
