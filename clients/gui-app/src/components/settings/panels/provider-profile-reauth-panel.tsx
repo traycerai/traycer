@@ -187,6 +187,14 @@ export function ProviderProfileReauthPanel({
     start();
   };
 
+  const completed = flow.state.kind === "completed";
+  const completedHandledRef = useRef(false);
+  useEffect(() => {
+    if (!completed || completedHandledRef.current) return;
+    completedHandledRef.current = true;
+    onDone();
+  }, [completed, onDone]);
+
   useEffect(() => {
     // Not latched while refused, so the automatic start is never spent on a
     // sign-in that was not allowed to begin.
@@ -284,7 +292,6 @@ function ProviderProfileReauthOutcome({
   ) => void;
   readonly onDone: () => void;
 }): ReactNode {
-  if (flowState.kind === "waiting-for-profile") return <MutedAgentSpinner />;
   if (flowState.kind === "already-signed-in")
     return (
       <div className="flex flex-col gap-3">
@@ -338,7 +345,7 @@ function useSettledReport(
   const onSettledChange =
     signInOutcomes === null ? null : signInOutcomes.onSettledChange;
   const settled =
-    flowState.kind === "waiting-for-profile" ||
+    flowState.kind === "completed" ||
     flowState.kind === "already-signed-in" ||
     flowState.kind === "not-changed";
   useEffect(() => {

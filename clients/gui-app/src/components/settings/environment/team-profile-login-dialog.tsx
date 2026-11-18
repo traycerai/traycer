@@ -10,6 +10,7 @@ import {
 import type {
   ProviderId,
   ProviderProfile,
+  ProviderProfileAccentColor,
   ProviderCliState,
   ProviderLoginTargetRefusal,
 } from "@traycer/protocol/host/provider-schemas";
@@ -69,6 +70,10 @@ interface TeamLoginProps {
   readonly environmentId: string;
   readonly onClose: () => void;
   readonly onSelect: (profileId: string) => void;
+  readonly onCompletedUnlisted: (
+    profileId: string,
+    color: ProviderProfileAccentColor | undefined,
+  ) => void;
   readonly onAddAsNew: () => void;
 }
 

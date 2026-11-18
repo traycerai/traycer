@@ -146,7 +146,8 @@ export type ProviderProfileLoginFlowState =
     }
   | { readonly kind: "cancelled" }
   | { readonly kind: "already-signed-in"; readonly profile: ProviderProfile }
-  | { readonly kind: "waiting-for-profile" }
+  /** The host answered the duplicate check and the profile is not listed yet. */
+  | { readonly kind: "completed"; readonly profileId: string }
   | {
       readonly kind: "not-changed";
       readonly reason: "account-mismatch" | "account-unproven";
@@ -166,7 +167,7 @@ type ProfileOutcomeResolution =
       readonly profiles: readonly ProviderProfile[];
     }
   | { readonly kind: "already-signed-in"; readonly profile: ProviderProfile }
-  | { readonly kind: "waiting-for-profile"; readonly pending: ListedOutcome }
+  | { readonly kind: "completed"; readonly profileId: string }
   | { readonly kind: "list-unread"; readonly pending: ListedOutcome }
   | {
       readonly kind: "not-changed";
@@ -203,9 +204,11 @@ function resolveListedOutcome(
   const read = listedProfiles();
   const listed = profileRowIn(read.profiles, pending.profileId);
   if (listed !== null) return named(listed, read.profiles);
-  return read.readFailed
-    ? { kind: "list-unread", pending }
-    : { kind: "waiting-for-profile", pending };
+  if (read.readFailed) return { kind: "list-unread", pending };
+  // A duplicate names a record that already holds the account, so it is listed.
+  return pending.kind === "signed-in"
+    ? { kind: "completed", profileId: pending.profileId }
+    : NOTHING_CHANGED;
 }
 
 const NO_ECHOED_PROFILES = (): readonly ProviderProfile[] => [];
@@ -222,7 +225,8 @@ function resolveProfileOutcome(
 ): ProfileOutcomeResolution | null {
   if (outcome === null) return null;
   switch (outcome.kind) {
-    // The host has not named the profile: the caller asks again.
+    // A restarted host's recovered answer can still carry no profile: the
+    // caller asks again.
     case "waiting-for-profile":
       return null;
     case "signed-in":
@@ -1119,11 +1123,6 @@ export function useProviderDestinationLoginFlow(
         setState({ kind: "list-unread" });
         return;
       }
-      if (outcome.kind === "waiting-for-profile") {
-        listedOutcomeRef.current = outcome.pending;
-        setState({ kind: "waiting-for-profile" });
-        return;
-      }
       listedOutcomeRef.current = null;
       Analytics.getInstance().track(
         AnalyticsEvent.ProviderProfileLinkSucceeded,
@@ -1434,8 +1433,8 @@ export function useProviderDestinationLoginFlow(
           };
           const handleAwaitSuccess = (result: AwaitLoginAnswer): void => {
             if (attemptAbandoned()) return;
-            // The sign-in is complete but the host has not named the profile:
-            // no dialog ends here, the await is asked again.
+            // A restarted host's recovered answer can carry no profile yet: no
+            // dialog ends here, the await is asked again.
             if (result.profileOutcome?.kind === "waiting-for-profile") {
               repollTimerRef.current = window.setTimeout(() => {
                 repollTimerRef.current = null;
@@ -1662,39 +1661,6 @@ export function useProviderDestinationLoginFlow(
       );
     });
   }, [listRereadPending, profileOutcomes, settleProfileOutcome, state.kind]);
-
-  // A signed-in profile the list does not show yet is held, never ended: the
-  // list is read again until the row is listed.
-  const [holdReads, setHoldReads] = useState(0);
-  useEffect(() => {
-    const pending = listedOutcomeRef.current;
-    if (
-      state.kind !== "waiting-for-profile" ||
-      pending === null ||
-      profileOutcomes === null
-    ) {
-      return;
-    }
-    const thisAttemptId = attemptIdRef.current;
-    const timer = window.setTimeout(() => {
-      void profileOutcomes.rereadList().then(() => {
-        if (unmountedRef.current || attemptIdRef.current !== thisAttemptId) {
-          return;
-        }
-        const next = resolveListedOutcome(
-          pending,
-          NO_ECHOED_PROFILES,
-          profileOutcomes.listedProfiles,
-        );
-        if (next.kind === "waiting-for-profile") {
-          setHoldReads((reads) => reads + 1);
-          return;
-        }
-        settleProfileOutcome(thisAttemptId, next);
-      });
-    }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
-    return () => window.clearTimeout(timer);
-  }, [holdReads, profileOutcomes, settleProfileOutcome, state.kind]);
 
   const waitingForReaders =
     state.kind === "waiting" && state.readerCount !== undefined;

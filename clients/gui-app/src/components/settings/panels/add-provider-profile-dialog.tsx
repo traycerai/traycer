@@ -403,6 +403,16 @@ function ProviderProfileSignInDialog({
       return;
     }
     if (
+      flow.state.kind === "completed" &&
+      finalizeAttemptRef.current !== flow.state.profileId
+    ) {
+      finalizeAttemptRef.current = flow.state.profileId;
+      onFailedAttempt(null);
+      onProfileCreated(flow.state.profileId);
+      onOpenChange(false);
+      return;
+    }
+    if (
       flow.state.kind !== "identity" ||
       flow.state.existingProfileId !== null ||
       finalizeAttemptRef.current === flow.state.profileId ||
@@ -666,7 +676,6 @@ function dialogShowsCloseButton(
   return (
     flowState.kind === "start" ||
     flowState.kind === "already-signed-in" ||
-    flowState.kind === "waiting-for-profile" ||
     flowState.kind === "list-unread"
   );
 }
@@ -849,7 +858,6 @@ function signInAccountBody({
           profile={flowState.profile}
         />
       );
-    case "waiting-for-profile":
     case "list-unread":
       return (
         <p className="text-ui-sm text-muted-foreground">
@@ -1039,13 +1047,6 @@ function AddProfileOutcomeFooter({
           {USE_PROFILE_TEXT}
         </Button>
         <FooterSentence>{alreadySignedInAsText(profile.label)}</FooterSentence>
-      </DialogFooter>
-    );
-  }
-  if (flowState.kind === "waiting-for-profile") {
-    return (
-      <DialogFooter>
-        <MutedAgentSpinner />
       </DialogFooter>
     );
   }
