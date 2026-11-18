@@ -1,8 +1,9 @@
 /**
  * On a touch screen a bot channel's rows show no actions at rest (Tracy Bots,
  * decision 176): a long press of a finger or a pen on a member's post opens
- * a sheet instead, offering "Reply in thread" and, on a message the bot
- * failed to answer, Retry and Edit. Driven through the real `<ChatMessage>`.
+ * a sheet instead, offering Reply and "Create thread" and, on a message the
+ * bot failed to answer, Retry and Edit. Driven through the real
+ * `<ChatMessage>`.
  * That the floating actions neither show nor take a tap on a touch screen is
  * computed style, held by `browser-tests/bot-channel-row-actions.spec.ts`.
  */
@@ -26,6 +27,7 @@ import {
   type ChatBotFailedRequest,
   type ChatBotPresentation,
   type ChatBotThreadLine,
+  type ChatBotTurnReceipt,
 } from "@/components/chat/chat-bot-presentation-context";
 import { ChatMessage } from "@/components/chat/chat-message";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -64,6 +66,7 @@ function presentation(
     openAnnouncementThread: null,
     threadAnchorKinds: [],
     chooseOption: null,
+    reply: null,
     questions: null,
     failedRequest,
     failedRecovery: null,
@@ -107,6 +110,14 @@ function failing(
   );
 }
 
+/** A presentation whose rows reply through `reply`. */
+function replying(
+  value: ChatBotPresentation,
+  reply: ChatBotPresentation["reply"],
+): ChatBotPresentation {
+  return { ...value, reply };
+}
+
 function memberPost(
   conversationRequest: ConversationRequest | undefined,
 ): ChatMessageModel {
@@ -129,10 +140,7 @@ function memberPost(
     : { ...base, conversationRequest };
 }
 
-function renderRow(
-  message: ChatMessageModel,
-  value: ChatBotPresentation,
-): HTMLElement {
+function mountRow(message: ChatMessageModel, value: ChatBotPresentation): void {
   function Providers(props: { readonly children: ReactNode }) {
     return (
       <StrictMode>
@@ -155,6 +163,13 @@ function renderRow(
     />,
     { wrapper: Providers },
   );
+}
+
+function renderRow(
+  message: ChatMessageModel,
+  value: ChatBotPresentation,
+): HTMLElement {
+  mountRow(message, value);
   return screen.getByTestId("bot-member-row");
 }
 
@@ -194,8 +209,8 @@ describe("<ChatMessage /> a member's post in a bot channel on a touch screen", (
 
     longPress(row, "touch");
 
-    const choice = await screen.findByTestId("bot-reply-sheet-reply-in-thread");
-    expect(choice.textContent).toBe("Reply in thread");
+    const choice = await screen.findByTestId("bot-reply-sheet-thread");
+    expect(choice.textContent).toBe("Create thread");
     expect(screen.queryByTestId("bot-reply-sheet-retry")).toBeNull();
     expect(screen.queryByTestId("bot-reply-sheet-edit")).toBeNull();
     await user.click(choice);
@@ -212,9 +227,7 @@ describe("<ChatMessage /> a member's post in a bot channel on a touch screen", (
 
     longPress(row, "pen");
 
-    expect(
-      await screen.findByTestId("bot-reply-sheet-reply-in-thread"),
-    ).toBeTruthy();
+    expect(await screen.findByTestId("bot-reply-sheet-thread")).toBeTruthy();
   });
 });
 
@@ -260,7 +273,7 @@ describe("<ChatMessage /> a message the bot failed to answer on a touch screen",
     expect(retry).not.toHaveBeenCalled();
   });
 
-  it("still takes a long press where there is no thread to open, offering Retry and Edit and no Reply in thread", async () => {
+  it("still takes a long press where there is no thread to open, offering Retry and Edit and no thread action", async () => {
     const row = renderRow(
       memberPost(OPEN_REQUEST),
       failing(failedRequestOf(vi.fn(), false, vi.fn()), null),
@@ -271,9 +284,7 @@ describe("<ChatMessage /> a message the bot failed to answer on a touch screen",
     const sheet = await screen.findByTestId("bot-reply-sheet");
     expect(within(sheet).getByTestId("bot-reply-sheet-retry")).toBeTruthy();
     expect(within(sheet).getByTestId("bot-reply-sheet-edit")).toBeTruthy();
-    expect(
-      within(sheet).queryByTestId("bot-reply-sheet-reply-in-thread"),
-    ).toBeNull();
+    expect(within(sheet).queryByTestId("bot-reply-sheet-thread")).toBeNull();
   });
 
   it("keeps the thread line under a post with replies and the inline Not answered line", () => {
@@ -306,5 +317,149 @@ describe("<ChatMessage /> a message the bot failed to answer on a touch screen",
         "bot-message-unanswered-retry",
       ),
     ).toBeTruthy();
+  });
+});
+
+describe("<ChatMessage /> Reply on a touch screen", () => {
+  const BOT_ROW_ID = "reply-row-1";
+
+  function botReplyRow(): ChatMessageModel {
+    return {
+      ...makeMessage(1, "assistant"),
+      persistentMessageId: BOT_ROW_ID,
+      content: "The bot says hello\nand a second line",
+      segments: [
+        {
+          id: "message-1:text",
+          kind: "text",
+          markdown: "The bot says hello\nand a second line",
+          isStreaming: false,
+        },
+      ],
+    };
+  }
+
+  it("lists Reply and Create thread after Retry and Edit in the long-press sheet of a failed message", async () => {
+    const row = renderRow(
+      memberPost(OPEN_REQUEST),
+      replying(
+        failing(failedRequestOf(vi.fn(), false, vi.fn()), vi.fn()),
+        vi.fn(),
+      ),
+    );
+
+    longPress(row, "touch");
+
+    const sheet = await screen.findByTestId("bot-reply-sheet");
+    expect(
+      within(sheet)
+        .getAllByRole("button")
+        .map((item) => item.textContent),
+    ).toEqual(["Retry", "Edit", "Reply", "Create thread"]);
+  });
+
+  it("names the message in its box from the sheet's Reply, with the row's writer and text, and closes the sheet", async () => {
+    const user = userEvent.setup();
+    const reply = vi.fn<NonNullable<ChatBotPresentation["reply"]>>();
+    const openThread = vi.fn<(postMessageId: string) => void>();
+    const row = renderRow(
+      memberPost(undefined),
+      replying(plain(openThread), reply),
+    );
+
+    longPress(row, "touch");
+    await user.click(await screen.findByTestId("bot-reply-sheet-reply"));
+
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith({
+      messageId: POST_ID,
+      author: "Tess Teammate",
+      line: POST_TEXT,
+    });
+    expect(openThread).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.queryByTestId("bot-reply-sheet")).toBeNull();
+    });
+  });
+
+  it("reads Open thread in the sheet once the post's thread is listed", async () => {
+    const row = renderRow(
+      memberPost(undefined),
+      presentation(
+        () => ({
+          participants: [],
+          replyCount: 0,
+          lastReplyAt: null,
+          unread: false,
+          unreadCount: 0,
+          replying: false,
+          followedUnwritten: false,
+          newReplies: false,
+        }),
+        vi.fn(),
+        null,
+      ),
+    );
+
+    longPress(row, "touch");
+
+    expect(
+      (await screen.findByTestId("bot-reply-sheet-thread")).textContent,
+    ).toBe("Open thread");
+  });
+
+  it("offers Reply alone in the sheet of a row where no thread opens", async () => {
+    const row = renderRow(
+      memberPost(undefined),
+      replying(plain(null), vi.fn()),
+    );
+
+    longPress(row, "touch");
+
+    const sheet = await screen.findByTestId("bot-reply-sheet");
+    expect(within(sheet).getByTestId("bot-reply-sheet-reply")).toBeTruthy();
+    expect(within(sheet).queryByTestId("bot-reply-sheet-thread")).toBeNull();
+  });
+
+  it("offers no sheet on a row that can neither reply nor open a thread", () => {
+    const row = renderRow(memberPost(undefined), plain(null));
+
+    longPress(row, "touch");
+
+    expect(screen.queryByTestId("bot-reply-sheet")).toBeNull();
+  });
+
+  it("opens the sheet on the bot's row for its receipt alone, where it can neither reply nor open a thread", async () => {
+    const receipt: ChatBotTurnReceipt = {
+      summary: "Read 1 file",
+      startedAt: 0,
+      endedAt: 80_000,
+      open: vi.fn(),
+    };
+    mountRow(botReplyRow(), { ...plain(null), replyReceipt: () => receipt });
+
+    longPress(screen.getByTestId("bot-reply-row"), "touch");
+
+    const sheet = await screen.findByTestId("bot-reply-sheet");
+    expect(
+      within(sheet).getByTestId("bot-reply-sheet-receipt").textContent,
+    ).toBe("How Release Bot answered · Read 1 file · 1m 20s");
+    expect(within(sheet).queryByTestId("bot-reply-sheet-reply")).toBeNull();
+    expect(within(sheet).queryByTestId("bot-reply-sheet-thread")).toBeNull();
+  });
+
+  it("names the bot by its title when the sheet's Reply is chosen on its row", async () => {
+    const user = userEvent.setup();
+    const reply = vi.fn<NonNullable<ChatBotPresentation["reply"]>>();
+    mountRow(botReplyRow(), replying(plain(null), reply));
+
+    longPress(screen.getByTestId("bot-reply-row"), "touch");
+    await user.click(await screen.findByTestId("bot-reply-sheet-reply"));
+
+    expect(reply).toHaveBeenCalledWith({
+      messageId: BOT_ROW_ID,
+      author: "Release Bot",
+      line: "The bot says hello",
+    });
   });
 });

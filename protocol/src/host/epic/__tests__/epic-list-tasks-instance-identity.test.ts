@@ -3,6 +3,7 @@ import { hostRpcRegistry } from "@traycer/protocol/host/registry";
 import { epicListTasksUpgradeV10ToV11 } from "@traycer/protocol/host/epic/contracts";
 import {
   listTasksRequestSchema,
+  listTasksRequestSchemaPre110,
   listTasksRequestSchemaPre16,
   listTasksRequestSchemaV11,
   listTasksResponseSchema,
@@ -32,13 +33,13 @@ import {
  * protocol package.
  */
 describe("epic.listTasks instance identity", () => {
-  // The LATEST installed minor, which `@1.9` now is - bump alongside
+  // The LATEST installed minor, which `@1.10` now is - bump alongside
   // `latestMinor` in the registry. The index is spelled rather than derived
   // because the invariant is about the canonical contract specifically; a
   // derived lookup would keep passing while silently pointing at whatever
   // happened to be last.
   const hostContract =
-    hostRpcRegistry["epic.listTasks"][1].versions[9].contract;
+    hostRpcRegistry["epic.listTasks"][1].versions[10].contract;
 
   it("host request schema is the canonical listTasksRequestSchema instance", () => {
     expect(hostContract.requestSchema).toBe(listTasksRequestSchema);
@@ -195,6 +196,21 @@ describe("epic.listTasks instance identity", () => {
 
     expect(listTasksRequestSchemaV11.safeParse(request).success).toBe(false);
     expect(listTasksRequestSchema.parse(request).sort).toBe("last-viewed");
+  });
+
+  it("keeps the `@1.9` request frozen against the `@1.10` created-desc sort", () => {
+    const v19 = hostRpcRegistry["epic.listTasks"][1].versions[9].contract;
+    expect(v19.requestSchema).toBe(listTasksRequestSchemaPre110);
+    const request = {
+      limit: 20,
+      filters: null,
+      sort: "created-desc",
+      extensionPhaseVersion: "1.0.0",
+      extensionEpicVersion: "2.0.0",
+    } as const;
+
+    expect(listTasksRequestSchemaPre110.safeParse(request).success).toBe(false);
+    expect(listTasksRequestSchema.parse(request).sort).toBe("created-desc");
   });
 
   it("parses server-driven history filters, sort, and facets", () => {

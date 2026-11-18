@@ -684,11 +684,10 @@ export function harnessDisplayName(harness: GuiHarnessId): string {
  * every site that renders such a count calls this, so the word moves in one
  * edit.
  *
- * It is "session" and not "task" because after one task per repository the
- * two are no longer the same number. Thirty-one sessions out of one checkout
- * land as thirty-one chats inside ONE task, so "Imported 31 tasks" is not a
- * wording preference, it is false - and the picker's counts are counts of the
- * same things, before they land.
+ * It is "session" and not "task" because the picker counts the things being
+ * imported, before they land. Each session lands as its own task, so the two
+ * numbers match today, but the noun names what the person picked - and the
+ * picker's counts are counts of the same things.
  *
  * The flow's bare nouns follow the same rule as literal strings: whatever names
  * the things being imported says "session" ("Back to sessions", "Search

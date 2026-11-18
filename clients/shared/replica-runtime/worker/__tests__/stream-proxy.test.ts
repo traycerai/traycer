@@ -102,6 +102,7 @@ function connect() {
           event.status.reason,
           event.status.retryCause,
           event.status.continuity,
+          event.status.openRequestSent,
         );
         return;
       case "stream/manifest":

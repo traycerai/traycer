@@ -15,6 +15,7 @@ import {
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
   within,
@@ -43,12 +44,16 @@ import type {
   BotUpdateAppearanceRequest,
 } from "@traycer/protocol/host/bot/schemas";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import { useBotLookSaver } from "@/hooks/bots/use-bot-look-save";
 import { useBotLookSaveStore } from "@/stores/bots/bot-look-save-store";
 import { hostQueryKeys } from "@/lib/query-keys";
 import {
+  DEFAULT_MASCOT_RAMP,
   MASCOT_AT_REST,
+  MASCOT_SHAPES,
   botMascot,
   drawMascotMark,
+  ownMascotShape,
 } from "@/lib/bots/mascot-mark";
 
 const mocks = vi.hoisted(() => ({
@@ -77,10 +82,11 @@ import { NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { BotLooksContext, botLooksOf } from "@/hooks/bots/use-bot-appearance";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+const BLUE = "#4c8af0";
+const VIOLET = "#7e4cf0";
 const LISTED: BotAppearance = {
   mark: null,
-  color: 3,
-  background: null,
+  color: BLUE,
   eyewear: null,
   accessory: null,
 };
@@ -450,7 +456,9 @@ describe("a run of look saves retired while the cached bot lists are being settl
 
 const UNSURE = "This may not have been saved.";
 
-function refusalUnder(section: "eyewear" | "accessory"): string | null {
+function refusalUnder(
+  section: "icon" | "colour" | "eyewear" | "accessory",
+): string | null {
   return (
     within(screen.getByTestId(`bot-settings-${section}`)).queryByTestId(
       "bot-settings-refusal",
@@ -475,12 +483,12 @@ describe("a run of look saves when a choice is made through another host", () =>
     ...LISTED,
     ...SHADES,
     accessory: "halo",
-    color: 7,
+    color: VIOLET,
   } as const;
 
-  function colourPressed(index: number): string | null {
+  function colourPressed(hex: string): string | null {
     return screen
-      .getByTestId(`bot-settings-colour-${String(index)}`)
+      .getByTestId(`bot-settings-colour-${hex.slice(1)}`)
       .getAttribute("aria-pressed");
   }
 
@@ -504,7 +512,7 @@ describe("a run of look saves when a choice is made through another host", () =>
 
     const second = fakeHost("user-A");
     pointPanelAt(second, "host-2");
-    await user.click(screen.getByTestId("bot-settings-colour-7"));
+    await user.click(screen.getByTestId("bot-settings-colour-7e4cf0"));
     return { first, second, held };
   }
 
@@ -512,8 +520,7 @@ describe("a run of look saves when a choice is made through another host", () =>
     const { first, second, held } = await handOver(true);
 
     expect(useBotLookSaveStore.getState().saves[BOT_ID]?.hostId).toBe("host-2");
-    expect(colourPressed(7)).toBe("true");
-    await userEvent.click(screen.getByTestId("bot-settings-background-2"));
+    expect(colourPressed(VIOLET)).toBe("true");
     expect(second.writes).toHaveLength(0);
 
     act(() => {
@@ -524,14 +531,14 @@ describe("a run of look saves when a choice is made through another host", () =>
     expect(takenOver.request).toEqual({
       botId: BOT_ID,
       accessory: "halo",
-      color: 7,
-      background: 2,
+      color: VIOLET,
     });
+    expect(takenOver.request).not.toHaveProperty("background");
     expect(second.writes).toHaveLength(1);
     expect(first.writes).toHaveLength(1);
     expect(cachedLook()).toEqual({ ...LISTED, ...SHADES });
     expect(pressedIn("eyewear")).toBe("Shades");
-    takenOver.answer({ ...CHOSEN, background: 2 });
+    takenOver.answer(CHOSEN);
   });
 
   it("keeps the saving indicator under a part the old host is still saving, beside the colour chosen through the new host, until both are answered", async () => {
@@ -547,7 +554,7 @@ describe("a run of look saves when a choice is made through another host", () =>
 
     expect(savingShownUnder("eyewear")).toBe(false);
     expect(savingShownUnder("colour")).toBe(true);
-    takenOver.answer({ ...LISTED, ...SHADES, color: 7 });
+    takenOver.answer({ ...LISTED, ...SHADES, color: VIOLET });
     await waitFor(() => {
       expect(savingShownUnder("colour")).toBe(false);
     });
@@ -563,7 +570,7 @@ describe("a run of look saves when a choice is made through another host", () =>
     const takenOver = await writeAt(second, 0);
 
     expect(Object.keys(takenOver.request).sort()).toEqual(["botId", "color"]);
-    takenOver.answer({ ...LISTED, ...SHADES, color: 7 });
+    takenOver.answer({ ...LISTED, ...SHADES, color: VIOLET });
   });
 
   it("never sends the old host's parts when its save is certainly refused, and returns them to the held look with the refusal", async () => {
@@ -573,16 +580,16 @@ describe("a run of look saves when a choice is made through another host", () =>
     held.refuse("Old host refused.");
     const takenOver = await writeAt(second, 0);
 
-    expect(takenOver.request).toEqual({ botId: BOT_ID, color: 7 });
+    expect(takenOver.request).toEqual({ botId: BOT_ID, color: VIOLET });
     expect(second.writes).toHaveLength(1);
     expect(refusalUnder("eyewear")).toBe("Old host refused.");
     expect(pressedIn("eyewear")).toBe("None");
-    expect(colourPressed(7)).toBe("true");
+    expect(colourPressed(VIOLET)).toBe("true");
     const entry = useBotLookSaveStore.getState().saves[BOT_ID];
     expect(entry.hostId).toBe("host-2");
     expect(entry.run).toBe(run);
 
-    takenOver.answer({ ...LISTED, color: 7 });
+    takenOver.answer({ ...LISTED, color: VIOLET });
     await waitFor(() => {
       expect(useBotLookSaveStore.getState().saves[BOT_ID]?.sending).toBeNull();
     });
@@ -597,13 +604,13 @@ describe("a run of look saves when a choice is made through another host", () =>
     expect(takenOver.request).toEqual({
       botId: BOT_ID,
       accessory: "halo",
-      color: 7,
+      color: VIOLET,
     });
     expect(second.writes).toHaveLength(1);
     expect(refusalUnder("eyewear")).toBe(UNSURE);
     expect(refusalUnder("accessory")).toBeNull();
     expect(pressedIn("eyewear")).toBe("None");
-    takenOver.answer({ ...LISTED, accessory: "halo", color: 7 });
+    takenOver.answer({ ...LISTED, accessory: "halo", color: VIOLET });
   });
 
   it("says nothing under a part the re-read lists hold when the old host's plain failure ends its save", async () => {
@@ -616,7 +623,7 @@ describe("a run of look saves when a choice is made through another host", () =>
     expect(takenOver.request).toEqual({
       botId: BOT_ID,
       accessory: "halo",
-      color: 7,
+      color: VIOLET,
     });
     expect(refusalUnder("eyewear")).toBeNull();
     expect(pressedIn("eyewear")).toBe("Shades");
@@ -632,12 +639,12 @@ describe("a run of look saves when a choice is made through another host", () =>
     expect(takenOver.request).toEqual({
       botId: BOT_ID,
       accessory: "halo",
-      color: 7,
+      color: VIOLET,
     });
     expect(second.writes).toHaveLength(1);
     expect(refusalUnder("eyewear")).toBe(UNSURE);
     expect(pressedIn("eyewear")).toBe("None");
-    takenOver.answer({ ...LISTED, accessory: "halo", color: 7 });
+    takenOver.answer({ ...LISTED, accessory: "halo", color: VIOLET });
   });
 
   it("sends none of the old host's parts when a colour is chosen through the new host while the lists are re-read after its save ended unknown", async () => {
@@ -656,15 +663,15 @@ describe("a run of look saves when a choice is made through another host", () =>
     });
     const second = fakeHost("user-A");
     pointPanelAt(second, "host-2");
-    await user.click(screen.getByTestId("bot-settings-colour-7"));
+    await user.click(screen.getByTestId("bot-settings-colour-7e4cf0"));
 
     expect(second.writes).toHaveLength(0);
     releaseLists();
     const takenOver = await writeAt(second, 0);
 
-    expect(takenOver.request).toEqual({ botId: BOT_ID, color: 7 });
+    expect(takenOver.request).toEqual({ botId: BOT_ID, color: VIOLET });
     expect(second.writes).toHaveLength(1);
-    takenOver.answer({ ...LISTED, color: 7 });
+    takenOver.answer({ ...LISTED, color: VIOLET });
   });
 
   it("sends none of the answered save's parts when a colour is chosen through the new host while the lists in flight are being ended", async () => {
@@ -686,7 +693,7 @@ describe("a run of look saves when a choice is made through another host", () =>
         staleTime: 0,
         queryFn: async ({ signal }) => {
           signal.addEventListener("abort", () => {
-            fireEvent.click(screen.getByTestId("bot-settings-colour-7"));
+            fireEvent.click(screen.getByTestId("bot-settings-colour-7e4cf0"));
             writesInWindow = second.writes.length;
           });
           await readReleased.promise;
@@ -706,9 +713,9 @@ describe("a run of look saves when a choice is made through another host", () =>
     const takenOver = await writeAt(second, 0);
 
     expect(writesInWindow).toBe(0);
-    expect(takenOver.request).toEqual({ botId: BOT_ID, color: 7 });
+    expect(takenOver.request).toEqual({ botId: BOT_ID, color: VIOLET });
     expect(second.writes).toHaveLength(1);
-    takenOver.answer({ ...LISTED, ...SHADES, color: 7 });
+    takenOver.answer({ ...LISTED, ...SHADES, color: VIOLET });
   });
 });
 
@@ -754,5 +761,250 @@ describe("a run of look saves through one host whose save ends unknown", () => {
     expect(refusalUnder("eyewear")).toBeNull();
     expect(pressedIn("eyewear")).toBe("Shades");
     next.answer({ ...listed, accessory: "halo" });
+  });
+});
+
+describe("the reset of a bot's avatar", () => {
+  const CREATED = "#f04c4c";
+  const OTHER_SHAPE = MASCOT_SHAPES.find(
+    (shape) => shape !== ownMascotShape(BOT_ID),
+  );
+  const STYLED: BotAppearance = {
+    mark: { kind: "mascot", shape: OTHER_SHAPE ?? "cat" },
+    color: BLUE,
+    eyewear: "shades",
+    accessory: "halo",
+    createdColor: CREATED,
+  };
+  const RESET = {
+    botId: BOT_ID,
+    mark: null,
+    color: null,
+    eyewear: null,
+    accessory: null,
+  } as const;
+  /** What the host holds once it has applied a reset to {@link STYLED}. */
+  const AS_CREATED: BotAppearance = {
+    mark: null,
+    color: CREATED,
+    eyewear: null,
+    accessory: null,
+    createdColor: CREATED,
+  };
+
+  const fillsFor = (look: BotAppearance): Set<string> =>
+    new Set(
+      drawMascotMark(
+        botMascot(BOT_ID, look, false),
+        24,
+        MASCOT_AT_REST,
+      ).layers.map((layer) => layer.fill),
+    );
+  const bodyOf = (look: BotAppearance): string =>
+    botMascot(BOT_ID, look, false).ramp.tones[2];
+  const fillsIn = (root: HTMLElement): Set<string> =>
+    new Set(
+      [...root.querySelectorAll('[data-slot="bot-mascot"] path')].map(
+        (path) => path.getAttribute("fill") ?? "",
+      ),
+    );
+  const avatarFills = (): Set<string> =>
+    fillsIn(screen.getByTestId("bot-avatar"));
+  const previewFills = (): Set<string> =>
+    fillsIn(screen.getByTestId("bot-settings-avatar"));
+
+  async function panelOver(look: BotAppearance): Promise<FakeHost> {
+    listed = look;
+    const host = fakeHost("user-A");
+    await pointListedPanelAt(host, "host-1");
+    return host;
+  }
+
+  async function reset(): Promise<void> {
+    await userEvent.click(screen.getByTestId("bot-settings-avatar-reset"));
+  }
+
+  async function settledSending(): Promise<void> {
+    await waitFor(() => {
+      expect(
+        useBotLookSaveStore.getState().saves[BOT_ID]?.sending ?? null,
+      ).toBeNull();
+      expect(useBotLookSaveStore.getState().flights).toEqual({});
+    });
+  }
+
+  it("sends one request of exactly the four nulls, with no created colour in it", async () => {
+    const host = await panelOver(STYLED);
+
+    await reset();
+    const write = await writeAt(host, 0);
+
+    expect(write.request).toEqual(RESET);
+    expect(Object.keys(write.request).sort()).toEqual([
+      "accessory",
+      "botId",
+      "color",
+      "eyewear",
+      "mark",
+    ]);
+    expect(write.request).not.toHaveProperty("createdColor");
+    expect(host.writes).toHaveLength(1);
+    write.answer(AS_CREATED);
+  });
+
+  it("draws the preview and every avatar of the bot in the colour it was created with, and the derived body and wear, while the save is held", async () => {
+    const host = await panelOver(STYLED);
+
+    await reset();
+
+    const created = fillsFor(AS_CREATED);
+    expect(bodyOf(AS_CREATED)).not.toBe(DEFAULT_MASCOT_RAMP.tones[2]);
+    expect(avatarFills()).toEqual(created);
+    expect(previewFills()).toEqual(created);
+    expect(avatarPaths()).toEqual(avatarPathsFor(AS_CREATED));
+    expect(avatarPaths()).not.toEqual(avatarPathsFor(STYLED));
+    (await writeAt(host, 0)).answer(AS_CREATED);
+  });
+
+  it("draws the default teal while the save is held for a bot created with no colour", async () => {
+    const host = await panelOver({ ...STYLED, createdColor: null });
+
+    await reset();
+
+    const teal = fillsFor({ ...AS_CREATED, color: null, createdColor: null });
+    expect(teal).toContain(DEFAULT_MASCOT_RAMP.tones[2]);
+    expect(avatarFills()).toEqual(teal);
+    expect(previewFills()).toEqual(teal);
+    (await writeAt(host, 0)).answer({
+      ...AS_CREATED,
+      color: null,
+      createdColor: null,
+    });
+  });
+
+  it("draws the colour the host answered, not the optimistic one, when they differ", async () => {
+    const host = await panelOver(STYLED);
+    await reset();
+
+    (await writeAt(host, 0)).answer({ ...AS_CREATED, color: VIOLET });
+
+    await waitFor(() => {
+      expect(avatarFills()).toEqual(fillsFor({ ...AS_CREATED, color: VIOLET }));
+    });
+    expect(previewFills()).toEqual(fillsFor({ ...AS_CREATED, color: VIOLET }));
+    expect(avatarFills()).not.toEqual(fillsFor(AS_CREATED));
+  });
+
+  it("sends a reset after the pick it waits behind, so the reset is the later choice and wins", async () => {
+    const host = await panelOver(STYLED);
+    await userEvent.click(screen.getByTestId("bot-settings-eyewear-visor"));
+    const pick = await writeAt(host, 0);
+    await reset();
+
+    expect(host.writes).toHaveLength(1);
+    pick.answer({ ...STYLED, eyewear: "visor" });
+    const second = await writeAt(host, 1);
+
+    expect(pick.request).toEqual({ botId: BOT_ID, eyewear: "visor" });
+    expect(second.request).toEqual(RESET);
+    second.answer(AS_CREATED);
+    await settledSending();
+    expect(avatarFills()).toEqual(fillsFor(AS_CREATED));
+    expect(avatarPaths()).toEqual(avatarPathsFor(AS_CREATED));
+  });
+
+  it("keeps a pick made after a held reset: it is sent alone behind the reset and shows over it", async () => {
+    const host = await panelOver(STYLED);
+    await reset();
+    const first = await writeAt(host, 0);
+    await userEvent.click(screen.getByTestId("bot-settings-accessory-sparkle"));
+
+    expect(pressedIn("accessory")).toBe("Sparkle");
+    expect(host.writes).toHaveLength(1);
+    first.answer(AS_CREATED);
+    const second = await writeAt(host, 1);
+
+    expect(first.request).toEqual(RESET);
+    expect(second.request).toEqual({ botId: BOT_ID, accessory: "sparkle" });
+    expect(pressedIn("accessory")).toBe("Sparkle");
+    second.answer({ ...AS_CREATED, accessory: "sparkle" });
+    await settledSending();
+    expect(pressedIn("accessory")).toBe("Sparkle");
+    expect(avatarFills()).toEqual(
+      fillsFor({ ...AS_CREATED, accessory: "sparkle" }),
+    );
+  });
+
+  it("returns every part to the look the bot held when the host certainly refuses, and says why", async () => {
+    const host = await panelOver(STYLED);
+    await reset();
+
+    (await writeAt(host, 0)).refuse("Only the owner may change this.");
+
+    await waitFor(() => {
+      expect(refusalUnder("colour")).toBe("Only the owner may change this.");
+    });
+    for (const section of ["icon", "eyewear", "accessory"] as const) {
+      expect(refusalUnder(section)).toBe("Only the owner may change this.");
+    }
+    expect(avatarFills()).toEqual(fillsFor(STYLED));
+    expect(previewFills()).toEqual(fillsFor(STYLED));
+    expect(avatarPaths()).toEqual(avatarPathsFor(STYLED));
+    expect(pressedIn("eyewear")).toBe("Shades");
+  });
+
+  it("says nothing when the host's save ends unknown and the lists hold the creation colour for the cleared one", async () => {
+    const host = await panelOver(STYLED);
+    await reset();
+    const held = await writeAt(host, 0);
+    listed = AS_CREATED;
+
+    held.fail("Host failed.");
+
+    await settledSending();
+    for (const section of ["icon", "colour", "eyewear", "accessory"] as const) {
+      expect(refusalUnder(section), section).toBeNull();
+    }
+    expect(avatarFills()).toEqual(fillsFor(AS_CREATED));
+  });
+
+  it("says it may not have been saved when the host's save ends unknown and the lists hold another colour", async () => {
+    const host = await panelOver(STYLED);
+    await reset();
+    const held = await writeAt(host, 0);
+
+    held.fail("Host failed.");
+
+    await settledSending();
+    await waitFor(() => {
+      expect(refusalUnder("colour")).toBe(UNSURE);
+    });
+    expect(avatarFills()).toEqual(fillsFor(STYLED));
+  });
+});
+
+describe("saving a colour the settings do not offer", () => {
+  it("sends it unchanged, as any saved colour is", async () => {
+    const host = fakeHost("user-A");
+    mocks.client = host.client;
+    const wrapper = ({
+      children,
+    }: {
+      readonly children: ReactNode;
+    }): ReactElement => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(
+      () => useBotLookSaver(host.client, "host-1", BOT_ID),
+      { wrapper },
+    );
+
+    act(() => {
+      result.current.choose({ color: "#123456" });
+    });
+    const write = await writeAt(host, 0);
+
+    expect(write.request).toEqual({ botId: BOT_ID, color: "#123456" });
+    write.answer({ ...LISTED, color: "#123456" });
   });
 });

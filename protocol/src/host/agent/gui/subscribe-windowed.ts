@@ -11,6 +11,7 @@ import {
   openChatEventSchemaPreProviderSelection,
   openMessageSchema,
   openMessageSchemaPreFeedbackOrigin,
+  openMessageSchemaPreConversationImages,
   openMessageSchemaPreFeedbackDraft,
   openMessageSchemaPreSlack,
   openMessageSchemaPreNotApplied,
@@ -839,15 +840,16 @@ export const openChatTranscriptWindowSchemaPreCanvas = lazySchema(() =>
 );
 
 /**
- * The live tail with senders, actors, notices, plans and steer blocks reopened
- * to the open harness id (`open-harness-wire.ts`). `rowContext` keeps the live
- * anchor union: the host withholds an anchor the peer cannot decode rather
- * than this schema widening it.
+ * The tail `chat.subscribe@1.43` ships, with senders, actors, notices, plans
+ * and steer blocks reopened to the open harness id (`open-harness-wire.ts`),
+ * and no images on a resume trigger's member's message. `rowContext` keeps the
+ * live anchor union: the host withholds an anchor the peer cannot decode
+ * rather than this schema widening it.
  */
 export const openChatTranscriptWindowSchemaPreProviderSelection = lazySchema(
   () =>
     chatTranscriptWindowSchemaPreProviderSelection.extend({
-      messages: z.array(openMessageSchemaPreFeedbackOrigin),
+      messages: z.array(openMessageSchemaPreConversationImages),
       events: z.array(openChatEventSchemaPreProviderSelection),
     }),
 );
@@ -858,12 +860,17 @@ export const openChatTranscriptWindowSchemaPreFeedbackDraft = lazySchema(() =>
     events: z.array(openChatEventSchemaPreProviderSelection),
   }),
 );
-/** Provider dispatch provenance first rides chat.subscribe@1.44. */
+/**
+ * The tail `chat.subscribe@1.44` ships: provider dispatch provenance and a
+ * resume trigger's images, no feedback draft projection or origin.
+ */
 export const openChatTranscriptWindowSchemaPreFeedbackOrigin = lazySchema(() =>
   openChatTranscriptWindowSchemaPreProviderSelection.extend({
+    messages: z.array(openMessageSchemaPreFeedbackOrigin),
     events: z.array(openChatEventSchema),
   }),
 );
+/** The live tail: `chat.subscribe@1.45` adds the feedback draft leaves. */
 export const openChatTranscriptWindowSchema = lazySchema(() =>
   openChatTranscriptWindowSchemaPreFeedbackOrigin.extend({
     messages: z.array(openMessageSchema),
@@ -1275,21 +1282,27 @@ export const openChatRangeResponseSchemaPreCanvas = lazySchema(() =>
 );
 
 /**
- * The live range response with its rows reopened, for the reason
- * {@link openChatTranscriptWindowSchemaPreProviderSelection} gives.
+ * The range response `chat.subscribe@1.43` ships, its rows reopened for the
+ * reason {@link openChatTranscriptWindowSchemaPreProviderSelection} gives.
  */
 export const openChatRangeResponseSchemaPreProviderSelection = lazySchema(() =>
   chatRangeResponseSchemaPreProviderSelection.extend({
-    messages: z.array(openMessageSchemaPreFeedbackOrigin),
+    messages: z.array(openMessageSchemaPreConversationImages),
     events: z.array(openChatEventSchemaPreProviderSelection),
   }),
 );
-/** Provider dispatch provenance first rides chat.subscribe@1.44. */
+/**
+ * The range response `chat.subscribe@1.44` ships: provider dispatch
+ * provenance and a resume trigger's images, no feedback draft projection or
+ * origin.
+ */
 export const openChatRangeResponseSchemaPreFeedbackOrigin = lazySchema(() =>
   openChatRangeResponseSchemaPreProviderSelection.extend({
+    messages: z.array(openMessageSchemaPreFeedbackOrigin),
     events: z.array(openChatEventSchema),
   }),
 );
+/** The live range response: `chat.subscribe@1.45` adds the feedback draft leaves. */
 export const openChatRangeResponseSchema = lazySchema(() =>
   openChatRangeResponseSchemaPreFeedbackOrigin.extend({
     messages: z.array(openMessageSchema),

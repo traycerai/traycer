@@ -147,6 +147,7 @@ import {
 } from "@/stores/layout/layout-store";
 import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state";
+import { QUEUED_MESSAGE_PAUSED_LABEL } from "@/components/chat/queued-message-surface";
 import {
   ChatLowerInteractionSurfaces,
   type ChatLowerInteractionSurfacesProps,
@@ -1074,9 +1075,13 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
         .getAllByTestId("queued-message-content-preview")
         .map((row) => row.textContent),
     ).toEqual(["Received prompt one", "Held message"]);
+    const heldRow = within(queueRows)
+      .getAllByTestId("queued-message-row")
+      .find((row) => within(row).queryByText("Held message") !== null);
+    if (heldRow === undefined) throw new Error("Expected the held queue row");
     expect(
-      within(queueRows).getByTestId("queued-message-status-badge").textContent,
-    ).toBe("Paused after an error");
+      within(heldRow).getByTestId("queued-message-status-badge").textContent,
+    ).toBe(QUEUED_MESSAGE_PAUSED_LABEL);
   });
 
   // The roster is bounded by fleet size, so an uncapped join would read a

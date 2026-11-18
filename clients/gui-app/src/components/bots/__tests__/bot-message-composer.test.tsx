@@ -30,9 +30,17 @@ import {
   boxText,
   clearBox,
   findBoxInput,
+  NO_BOT_REPLY,
   typeKeys,
 } from "@/components/bots/__tests__/bot-box-test-support";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
+import {
+  drawsColouredMascot,
+  drawsRobotGlyph,
+  expectedTracyGlyph,
+  renderedMascotPaths,
+  renderedTracyGlyphs,
+} from "@/components/bots/__tests__/mascot-drawing";
 
 /** What the box hands the send mutation for its send. */
 interface SendCallbacks {
@@ -159,7 +167,11 @@ function composer(
         onEditResume={onEditResume}
         seed={null}
         keptDraft={null}
+        hold={null}
         quote={quote}
+        reply={NO_BOT_REPLY}
+        moved={null}
+        notice={null}
         onSent={onSent}
       />
     </BotTestRunnerHost>
@@ -213,7 +225,11 @@ function Harness(props: {
         }}
         seed={props.keepDraft ? kept.seed : null}
         keptDraft={props.keepDraft ? kept.keptDraft : null}
+        hold={props.keepDraft ? kept.hold : null}
         quote={null}
+        reply={NO_BOT_REPLY}
+        moved={null}
+        notice={null}
         onSent={onSent}
       />
     </BotTestRunnerHost>
@@ -376,6 +392,7 @@ describe("<BotMessageComposer /> reporting a send", () => {
           requestId: "request-failed",
           text: "Is CI green?",
           content: null,
+          held: [],
         },
         null,
       ),
@@ -398,6 +415,7 @@ describe("<BotMessageComposer /> reporting a send", () => {
           requestId: "request-first",
           text: "Is CI green?",
           content: null,
+          held: [],
         },
         null,
       ),
@@ -410,6 +428,7 @@ describe("<BotMessageComposer /> reporting a send", () => {
           requestId: "request-second",
           text: "Is the nightly green?",
           content: null,
+          held: [],
         },
         null,
       ),
@@ -493,6 +512,7 @@ describe("<BotMessageComposer /> clearing at the send", () => {
           requestId: "request-failed",
           text: "Is CI green?",
           content: null,
+          held: [],
         }}
         keepDraft={false}
       />,
@@ -549,6 +569,7 @@ describe("<BotMessageComposer /> clearing at the send", () => {
           requestId: "request-failed",
           text: "Is CI green?",
           content: null,
+          held: [],
         }}
         keepDraft={false}
       />,
@@ -824,6 +845,7 @@ describe("<BotMessageComposer /> @ mentions", () => {
               requestId: "request-failed",
               text: "hi <@u-ann-2>",
               content: null,
+              held: [],
             },
             null,
           )}
@@ -951,6 +973,24 @@ describe("<BotMessageComposer /> @ mentions of bots and tasks", () => {
 
     expect(menuLabels()).toEqual(["People", "Bots", "Tasks"]);
     expect(menuHeader()).toBe("Mentions");
+  });
+
+  it("draws the Bots category as the 16px Tracy glyph, not a bot's coloured mascot and not the robot glyph, while the bots it lists keep their own", async () => {
+    const user = userEvent.setup();
+    mountWith(TEAM, DIRECTORY, null);
+
+    await typeBox("@");
+
+    const row = menuRow("Bots");
+    expect(renderedTracyGlyphs(row)).toEqual([expectedTracyGlyph(16)]);
+    expect(drawsColouredMascot(row)).toBe(false);
+    expect(drawsRobotGlyph(row)).toBe(false);
+
+    await user.click(row);
+
+    const triage = menuRow("Triage");
+    expect(renderedMascotPaths(triage)).not.toEqual([]);
+    expect(renderedTracyGlyphs(triage)).toEqual([]);
   });
 
   it("shows Bots and Tasks after @ for a personal bot, which has no one else to name", async () => {
@@ -1305,6 +1345,7 @@ describe("<BotMessageComposer /> @ mentions of bots and tasks", () => {
       requestId: "request-failed",
       text: wire,
       content: null,
+      held: [],
     });
 
     expect(boxText(LABEL)).toBe("@Ann Lee asked @Triage about @Release notes");
@@ -1317,7 +1358,7 @@ describe("<BotMessageComposer /> @ mentions of bots and tasks", () => {
     mountWith(
       PERSON,
       { person: () => null, bots: [], tasks: [], tasksAnswered: true },
-      { requestId: "request-failed", text: gone, content: null },
+      { requestId: "request-failed", text: gone, content: null, held: [] },
     );
 
     expect(boxText(LABEL)).toBe(gone);

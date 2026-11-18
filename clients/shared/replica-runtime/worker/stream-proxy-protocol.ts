@@ -235,6 +235,8 @@ export interface StreamProxyStatus {
   /** The transition's retry cause (see `StatusChangeHandler`). */
   readonly retryCause: FatalErrorDetails | null;
   readonly continuity: StreamContinuity;
+  /** The main-thread session's `hasSentOpenRequest()` at this transition. */
+  readonly openRequestSent: boolean;
 }
 
 /** The per-SESSION negotiated version, replicated for a synchronous read. */

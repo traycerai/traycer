@@ -159,7 +159,9 @@ export const botConversationSendRequestSchemaV13 = lazySchema(() =>
      * otherwise it settles the card and opens a thread under it, whose
      * session takes it up with the member. `text` is the answer, or
      * the Skip's line. The bound host refuses an answer to a question already
-     * settled with `QUESTION_ALREADY_SETTLED`, and writes nothing. `null` (or
+     * settled with `QUESTION_ALREADY_SETTLED`, and writes nothing; a sender
+     * on that host gets `E_BOT_QUESTION_ALREADY_SETTLED` (`RPC_ERROR` from a
+     * host that predates it). `null` (or
      * absent) otherwise; never set with `announcementId`, `redeliver` or
      * `supersedes`.
      */
@@ -237,7 +239,8 @@ export type BotConversationQuestionAnswerEntry = z.infer<
  * bot's card at once (T167), each answered or skipped. The bound host settles
  * them all and writes them as one message, or refuses the whole set and
  * writes nothing: with `QUESTION_ALREADY_SETTLED` when any of them is already
- * settled, and as an invalid argument when an open question is missing, an
+ * settled (`E_BOT_QUESTION_ALREADY_SETTLED` to a sender on that host, as for
+ * `answer`), and as an invalid argument when an open question is missing, an
  * index is repeated or out of range, or an answer is not one the question
  * takes. Refused with `E_BOT_ANSWER_SETS_UNSUPPORTED`, nothing written or
  * queued, when the bot's bound host is another one that has not said it takes
@@ -249,7 +252,7 @@ export type BotConversationQuestionAnswerEntry = z.infer<
  * otherwise; never set with `answer`, `announcementId`, `redeliver`,
  * `supersedes`, `attachments`, `origin` or `spoken`.
  */
-export const botConversationSendRequestSchema = lazySchema(() =>
+export const botConversationSendRequestSchemaV15 = lazySchema(() =>
   botConversationSendRequestSchemaV14.extend({
     answers: z
       .object({
@@ -258,6 +261,25 @@ export const botConversationSendRequestSchema = lazySchema(() =>
         entries: z.array(botConversationQuestionAnswerEntrySchema).min(1),
       })
       .optional(),
+  }),
+);
+
+/**
+ * `bot.conversation.send@1.6`: the message a member chose to reply to (T166),
+ * by its message id. A message of the conversation the new one goes into: the
+ * channel's top level for a top-level post, the thread for a reply in a
+ * thread. The bound host stores it on the member's row as `repliesTo`, names
+ * that message and its first line in what it delivers to the bot, and refuses
+ * the send, nothing written or queued: as an invalid argument when the
+ * message is not in that conversation, and with `E_BOT_REPLIES_UNSUPPORTED`
+ * when the bot's bound host is another one that has not said it takes replies
+ * ({@link BOT_HOST_TAKES_REPLIES}). Absent for a message that replies to none;
+ * never set with `answer`, `answers`, `redeliver` or `supersedes`, whose
+ * message is already tied to the one it answers or replaces.
+ */
+export const botConversationSendRequestSchema = lazySchema(() =>
+  botConversationSendRequestSchemaV15.extend({
+    replyTo: z.string().min(1).max(255).optional(),
   }),
 );
 export type BotConversationSendRequest = z.infer<
@@ -619,6 +641,13 @@ export const BOT_HOST_TAKES_IMAGES = "images";
  * by another host. No row, as {@link BOT_HOST_TAKES_IMAGES}.
  */
 export const BOT_HOST_TAKES_ANSWER_SETS = "answers";
+
+/**
+ * The `threadAnchors` value saying the bot's bound host takes the message a
+ * member replies to (`bot.conversation.send@1.6`), queued for it by another
+ * host. No row, as {@link BOT_HOST_TAKES_IMAGES}.
+ */
+export const BOT_HOST_TAKES_REPLIES = "replies";
 
 /**
  * The channel rows, beyond a member's post, a question, a proposal and a

@@ -35,6 +35,15 @@ describe("presentationForUntypedCode", () => {
     });
   });
 
+  it("presents a turn refused while the previous account's session exits as an interruption", () => {
+    expect(
+      presentationForUntypedCode("PROFILE_PREVIOUS_SESSION_STOPPING"),
+    ).toEqual({
+      presentation: "interrupted",
+      headline: "Previous session still stopping",
+    });
+  });
+
   it("returns null with no code, which keeps the red row", () => {
     expect(presentationForUntypedCode(null)).toBeNull();
   });

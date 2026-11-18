@@ -231,7 +231,12 @@ new-conversation modal's host). `null` means "this surface owns its
 placement", and the two surfaces that own one resolve it differently:
 
 - the **landing composer** resolves its WINDOW-keyed pin ?? `effective`
-  (`useComposerPlacement`);
+  (`useComposerPlacement`), except for a draft opened FOR one machine
+  (`LandingDraftTab.namedHostId`, today Settings' "Set up with an agent"),
+  whose named host is its override: picker fixed, Send refused while it is
+  dead, its own staging surface (`landingDraftSurfaceKey`), the landing
+  terminal panel beside it on the same host and surface, and never adopted
+  by the mirror, so it stays on the device that named it until it is sent;
 - the **in-Epic new-conversation modal** resolves its per-**EPIC** pin ?? the
   Epic session's host ?? `effective` (`useEpicConversationPlacement`). The
   per-Epic pin is that Epic's _last created chat's host_: the picker writes
@@ -466,18 +471,6 @@ dispatch - is a Playwright spec in `browser-tests/` against a fixture page in
 `src/__tests__/browser/`; read `browser-tests/README.md` first. Run one file
 with `bun run test:browser browser-tests/<file>.spec.ts`; CI runs them all in
 `browser-regressions.yml`. Everything else stays in Vitest.
-
-## Skills (use when matched)
-
-| Skill                             | When                           |
-| --------------------------------- | ------------------------------ |
-| `shadcn`                          | Init/add/primitives            |
-| `tailwind-v4-shadcn`              | Theme tokens, dark mode, TW v4 |
-| `react-best-practices`            | React / `.tsx`                 |
-| `frontend-design`                 | New UI / visual work           |
-| `vite` / `vitest` / `zod` / `bun` | As named                       |
-
-Materialized from `skills-lock.json` under `.agents/` / `.claude/`.
 
 ## Status colors
 

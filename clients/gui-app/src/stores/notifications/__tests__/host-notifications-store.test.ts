@@ -171,6 +171,9 @@ class MockStreamSession implements IStreamSession {
     return null;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {
     this.requestReconnectCount += 1;
   }

@@ -20,7 +20,9 @@ import { Label } from "@/components/ui/label";
 import {
   type FeedbackDraftBlockRef,
   useChatFeedbackDraftDecideMutation,
+  useChatFeedbackDraftDecisionState,
   useChatFeedbackDraftPreviewQuery,
+  useSettleFeedbackDraftDecision,
   useChatFeedbackDraftSupported,
 } from "@/hooks/chats/use-chat-feedback-draft";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -128,13 +130,25 @@ function LiveFeedbackDraftCard(
   );
   const supported = useChatFeedbackDraftSupported(hostId);
   const client = useHostClientForHostId(hostId);
-  const decide = useChatFeedbackDraftDecideMutation(client, blockRef.blockId);
+  const draftRef = { ...blockRef, hostId };
+  const decide = useChatFeedbackDraftDecideMutation(client, draftRef);
+  const decision = useChatFeedbackDraftDecisionState(client, draftRef);
+  useSettleFeedbackDraftDecision(
+    client,
+    draftRef,
+    "card",
+    props.draft.state === "sent" || props.draft.state === "skipped",
+  );
   const readOnly = liveReadOnlyReason(canAct, supported);
   // The settled stamp also arrives as a row update; until it does, the
-  // response is what the card shows.
-  const settled = decide.data === undefined ? null : decide.data.feedbackDraft;
+  // answer to a decision made here or on the draft's notification row is
+  // what the card shows.
+  const settled = decision.settled;
   const draft =
-    settled !== null && props.draft.state === "pending" ? settled : props.draft;
+    settled !== null &&
+    (props.draft.state === "pending" || props.draft.state === "failed")
+      ? settled
+      : props.draft;
   return (
     <FeedbackDraftView
       id={props.id}
@@ -145,8 +159,9 @@ function LiveFeedbackDraftCard(
         client,
         readOnly,
         // Unknown standing (the chat is still connecting) holds the buttons
-        // without claiming the reader may not act.
-        isPending: decide.isPending || canAct === null,
+        // without claiming the reader may not act. So does a decision the
+        // draft's notification row has out.
+        isPending: decision.isPending || canAct === null,
         decide: (decision, includeDiagnostics) => {
           decide.mutate({
             ...blockRef,

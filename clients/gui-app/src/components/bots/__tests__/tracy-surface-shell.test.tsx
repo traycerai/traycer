@@ -155,7 +155,13 @@ function useListScript(): ListScript {
 // cases do not drive: neither knows any task.
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => {
   const tasksById = new Map<string, never>();
-  const read = () => ({ tasksById, isPending: false, error: null });
+  const read = () => ({
+    tasksById,
+    resolutionsById: new Map<string, never>(),
+    pendingTaskIds: new Set<string>(),
+    isPending: false,
+    error: null,
+  });
   return {
     useEpicGetTaskContexts: read,
     useEpicGetTaskContextsForClient: read,
@@ -628,7 +634,11 @@ function seedKeptState(botId: string): void {
     anchorKind: null,
     sent: null,
   });
-  useBotDraftsStore.getState().typeThreadBox(botId, "post-1", "unsent", null);
+  useBotDraftsStore.getState().typeThreadBox(botId, "post-1", {
+    text: "unsent",
+    content: null,
+    held: [],
+  });
   useBotTabLandingStore
     .getState()
     .request(botId, { kind: "thread", threadId: null, messageId: null });
@@ -786,9 +796,11 @@ describe("the Tracy surface shell", () => {
     const mounted = await mount(SurfaceHost, "/");
     open(mounted, "bot-release");
     await shownChannel("bot-release");
-    useBotDraftsStore
-      .getState()
-      .typeThreadBox("bot-triage", "post-1", "unsent", null);
+    useBotDraftsStore.getState().typeThreadBox("bot-triage", "post-1", {
+      text: "unsent",
+      content: null,
+      held: [],
+    });
     await waitFor(() => {
       expect(keptState("bot-triage").draft).toBe(true);
     });
@@ -802,9 +814,11 @@ describe("the Tracy surface shell", () => {
   });
 
   it("keeps a box draft of a bot that no list has carried since the app started", async () => {
-    useBotDraftsStore
-      .getState()
-      .typeThreadBox("bot-ghost", "post-1", "unsent", null);
+    useBotDraftsStore.getState().typeThreadBox("bot-ghost", "post-1", {
+      text: "unsent",
+      content: null,
+      held: [],
+    });
     answerList([NOTES, RELEASE, TRIAGE], { "env-me": "bot-notes" });
     const mounted = await mount(SurfaceHost, "/");
     open(mounted, "bot-release");

@@ -79,6 +79,7 @@ import {
 } from "@/lib/history-search";
 import type { HistoryScope } from "@/lib/history-scope";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import type { UseHistoryQueryParams } from "@/hooks/home/use-history-query";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -185,7 +186,7 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 }));
 
 vi.mock("@/hooks/home/use-history-query", () => ({
-  useHistoryQuery: () => {
+  useHistoryQuery: (params: UseHistoryQueryParams) => {
     testState.historyQueryCalls += 1;
     return {
       data: {
@@ -199,6 +200,8 @@ vi.mock("@/hooks/home/use-history-query", () => ({
         chatHostFilterUnsupported: testState.chatHostFilterUnsupported,
         hostRequiresCloudToList: testState.hostRequiresCloudToList,
       },
+      sort: params.search.sort,
+      createdSortAvailable: true,
       isPending: testState.isPending,
       isFetching: false,
       cloudPagePending: testState.cloudPagePending,
@@ -263,6 +266,7 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     taskType: "epic",
     title: "Open from landing",
     initialUserPrompt: "",
+    createdAtMs: 1_700_000_000_000,
     updatedAtMs: 1_700_000_000_000,
     updatedLabel: "about 2 hours ago",
     updatedBucket: "today",

@@ -41,7 +41,8 @@ const organizationState = vi.hoisted(() => ({
   value: null as {
     readonly supported: boolean;
     readonly userId: string | null;
-    readonly view: undefined;
+    readonly readView: () => undefined;
+    readonly subscribeView: (listener: () => void) => () => void;
     readonly openDialog: (dialog: OrganizationDialog) => void;
   } | null,
   openDialog: vi.fn<(dialog: OrganizationDialog) => void>(),
@@ -78,10 +79,16 @@ vi.mock("@/hooks/organization/organization-context", async (importOriginal) => {
     await importOriginal<
       typeof import("@/hooks/organization/organization-context")
     >();
+  const { organizationViewHookOverrides } =
+    await import("@/__tests__/organization-view-source");
   return {
     ...actual,
     useOrganization: () => organizationState.value,
     useOrganizationTasks: () => null,
+    ...organizationViewHookOverrides(
+      () => organizationState.value?.readView(),
+      actual.taskOrganization,
+    ),
   };
 });
 import {
@@ -115,7 +122,10 @@ import { historyRowProvenanceLabel } from "@/components/epics/history-row-proven
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
-import type { HistoryFacets } from "@/hooks/home/use-history-query";
+import type {
+  HistoryFacets,
+  UseHistoryQueryParams,
+} from "@/hooks/home/use-history-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
@@ -294,6 +304,7 @@ const testState = vi.hoisted(() => ({
   /** What the stub host client was asked to send, in order. */
   hostRequests: [] as { readonly method: string; readonly params: unknown }[],
   localContextMatchKey: "[]",
+  createdSortAvailable: true,
   // The message-hit section's two inputs. A `null` client is the no-host-runtime
   // reading every case in this file predates, under which the section is not
   // mounted at all - so only the cases that set both see it.
@@ -368,7 +379,7 @@ vi.mock(
 );
 
 vi.mock("@/hooks/home/use-history-query", () => ({
-  useHistoryQuery: () => ({
+  useHistoryQuery: (params: UseHistoryQueryParams) => ({
     data: {
       items: testState.items,
       availableRepos: testState.availableRepos,
@@ -385,6 +396,8 @@ vi.mock("@/hooks/home/use-history-query", () => ({
     cloudPagePending: testState.cloudPagePending,
     error: null,
     hostId: testState.hostId,
+    sort: params.search.sort,
+    createdSortAvailable: testState.createdSortAvailable,
     currentUserId: testState.currentUserId,
     localContextMatchKey: testState.localContextMatchKey,
     refetch: testState.refetch,
@@ -475,6 +488,7 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     taskType: "epic",
     title: "Open from landing",
     initialUserPrompt: "",
+    createdAtMs: 1_700_000_000_000,
     updatedAtMs: 1_700_000_000_000,
     updatedLabel: "about 2 hours ago",
     updatedBucket: "today",
@@ -753,6 +767,7 @@ describe("<EpicsListPanel />", () => {
     testState.useRealBatchDelete = false;
     testState.hostRequests = [];
     testState.localContextMatchKey = "[]";
+    testState.createdSortAvailable = true;
     testState.chatSearchClient = null;
     testState.chatSearchHits = { kind: "absent" };
     testState.activityByEpicId.clear();
@@ -1053,7 +1068,8 @@ describe("<EpicsListPanel />", () => {
       organizationState.value = {
         supported: true,
         userId: "user-1",
-        view: undefined,
+        readView: () => undefined,
+        subscribeView: () => () => undefined,
         openDialog: organizationState.openDialog,
       };
       testState.items = [
@@ -1136,7 +1152,8 @@ describe("<EpicsListPanel />", () => {
     organizationState.value = {
       supported: true,
       userId: "user-1",
-      view: undefined,
+      readView: () => undefined,
+      subscribeView: () => () => undefined,
       openDialog: organizationState.openDialog,
     };
     testState.items = [

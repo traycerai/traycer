@@ -8,8 +8,10 @@ import {
 } from "react";
 import {
   ChevronRight,
+  MessageSquarePlus,
   MessageSquareText,
   Pencil,
+  Reply,
   RotateCcw,
 } from "lucide-react";
 import {
@@ -42,6 +44,7 @@ import {
   botRowThreadAnchorKind,
   firstLineOf,
 } from "@/lib/bots/bot-trunk-model";
+import { botReplyTargetOf } from "@/lib/bots/bot-reply-target";
 import { turnReceiptLabel } from "@/lib/bots/bot-turn-receipt";
 import { collectAssistantReplyText } from "@/lib/chat/collect-assistant-reply-text";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
@@ -70,7 +73,9 @@ import { ChatMessageTimestamp } from "./chat-message-timestamp";
 import { useTimestampDrawn } from "./use-timestamp-drawn";
 import {
   answerDraftKey,
+  useBotDraftActions,
   useBotDraftsStore,
+  withoutAnswerFailure,
 } from "@/stores/bots/bot-drafts-store";
 import { QuestionCard, type QuestionCardQuestion } from "./question-card";
 import { ChatReplyBadgeSlot } from "./chat-reply-badge";
@@ -78,9 +83,17 @@ import {
   EMPTY_QUESTION_CARD_DRAFT,
   botQuestionCardSettlement,
   draftText,
+  questionCardMovedBlock,
+  questionCardMovedHow,
+  questionCardMovedLine,
   questionCardView,
+  type QuestionCardSettlement,
 } from "./question-card-view";
-import { mayHaveReachedHost } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  mayHaveReachedHost,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { finalRefusalOf } from "@traycer-clients/shared/host-transport/retrying-messenger";
 import { NO_TRANSCRIPT_BASELINE } from "@/stores/chats/chat-announcements";
 import { TextSegment } from "./segments/text-segment";
 import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery";
@@ -100,10 +113,14 @@ import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery"
  * answers posts itself (reply mode `direct`) replies in the channel, as a
  * plain row.
  *
- * In the channel, "Reply in thread" is among the row's hover actions, as
- * Slack offers it on every message, and a thread roots on the row it is
- * opened from (decision 114): a member's post, a question or proposal, a
- * direct reply and any other row of the bot each open their own
+ * Every stored row offers Reply among its hover actions (T166), where the
+ * tab's host and the bot's take one: the box of the row's own conversation,
+ * the channel's or the thread's, names the message, and the send links the
+ * two. In the channel "Create thread" sits beside it, "Open thread" on a row
+ * whose thread is listed, as Discord offers both on every message; a row in
+ * a thread offers Reply alone, since threads do not nest. A thread roots on
+ * the row it is opened from (decision 114): a member's post, a question or
+ * proposal, a direct reply and any other row of the bot each open their own
  * thread, the reply's apart from the post's, and each carries its own
  * thread line. Where the bot's host does not say it takes replies under
  * such a row (`threadAnchorKinds`), a direct reply opens the thread under
@@ -118,13 +135,15 @@ import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery"
  * what the turn did and how long it took, or while it runs how long it has
  * been running, always shown. It opens the turn's session, landed on the
  * turn. A row no turn wrote draws none. A touch screen has no hover, and its
- * rows show no actions until pressed: a long press on a row offers its
- * "Reply in thread", the receipt where the row has one, and on a message the
- * bot failed to answer its Retry and Edit, in a sheet instead.
+ * rows show no actions until pressed: a long press on a row offers its Reply
+ * and its thread's action, the receipt where the row has one, and on a
+ * message the bot failed to answer its Retry and Edit, in a sheet instead,
+ * each with its name written out.
  *
  * A bot's reply that answers a member's message (T165) draws that message's
  * badge above its header, unless the message is the row directly above; a
- * member's answers to a bot's card (T167) draw the card's badge, there too.
+ * member's answers to a bot's card (T167) draw the card's badge, there too,
+ * and so does a member's message that replies to one they chose (T166).
  *
  * Without `hoverActions` the row is drawn as the post a thread opens on, at
  * the top of the thread panel: the same row, with nothing on hover and no
@@ -191,12 +210,17 @@ function MemberRow(props: {
       : presentation.threadLine(postId);
   const replyInThread =
     postId === null ? null : memberReplyInThread(message, postId, presentation);
+  const thread: RowThreadAction | null =
+    replyInThread === null
+      ? null
+      : { open: replyInThread, listed: threadLine !== null };
+  const reply = replyTo(presentation, postId, name, message.content);
   const { failed, recovery, failedReceipt } = memberFailureOf(
     message,
     presentation,
   );
   const sheet = useRowSheet(
-    hoverActions && memberRowHasAction(replyInThread, failed),
+    hoverActions && rowHasSheetAction(reply, thread, failed, null),
   );
   return (
     <BotMessageFrame
@@ -215,7 +239,8 @@ function MemberRow(props: {
       instanceId={message.id}
       testId="bot-member-row"
       hoverActions={hoverActions}
-      replyInThread={replyInThread}
+      reply={reply}
+      thread={thread}
       failed={failed}
       longPress={sheet.longPress}
       timeLink={timeLink}
@@ -245,7 +270,8 @@ function MemberRow(props: {
           onOpenChange={sheet.setOpen}
           name={name}
           text={message.content}
-          replyInThread={replyInThread}
+          reply={reply}
+          thread={thread}
           failed={failed}
           receipt={null}
           botTitle={presentation.botTitle}
@@ -288,7 +314,8 @@ export function ChatBotDeliveredPost(props: {
       instanceId={message.id}
       testId="bot-delivered-post"
       hoverActions={false}
-      replyInThread={null}
+      reply={null}
+      thread={null}
       failed={null}
       longPress={null}
       timeLink={null}
@@ -385,8 +412,9 @@ function QuestionAnswerList(props: {
  * The badge of the message a row answers (T165), drawn in a channel's or a
  * thread's list (`hoverActions`): a bot's reply names the member's message,
  * and hides it when that message is the row directly above; a member's
- * answers to a bot's card (T167) name the card, and show it there too, as a
- * reply the member chose does. `null` on any other row.
+ * answers to a bot's card (T167) name the card, and a member's message that
+ * replies to one they chose (T166) names that one, both shown there too.
+ * `null` on any other row.
  */
 function replyBadgeOf(
   message: ChatMessageModel,
@@ -404,23 +432,51 @@ function replyBadgeOf(
     );
   }
   const answers = message.questionAnswers;
-  return answers === undefined ? null : (
+  if (answers !== undefined) {
+    return (
+      <ChatReplyBadgeSlot
+        rowMessageId={message.persistentMessageId}
+        answeredId={answers.questionMessageId}
+        adjacency="always"
+        questionCount={answers.answers.length}
+      />
+    );
+  }
+  return message.repliesTo === undefined ? null : (
     <ChatReplyBadgeSlot
       rowMessageId={message.persistentMessageId}
-      answeredId={answers.questionMessageId}
+      answeredId={message.repliesTo}
       adjacency="always"
-      questionCount={answers.answers.length}
+      questionCount={null}
     />
   );
 }
 
-/** Whether a member's row has anything for its long-press sheet to offer. */
-function memberRowHasAction(
-  replyInThread: (() => void) | null,
+/** Whether a row has anything for its long-press sheet ({@link RowSheet}) to offer. */
+function rowHasSheetAction(
+  reply: (() => void) | null,
+  thread: RowThreadAction | null,
   failed: FailedMessageActions | null,
+  receipt: ChatBotTurnReceipt | null,
 ): boolean {
-  if (replyInThread !== null) return true;
+  if (reply !== null || thread !== null || receipt !== null) return true;
   return failed !== null && (failed.onRetry !== null || failed.onEdit !== null);
+}
+
+/**
+ * A row's Reply (T166): names the row `messageId`, written by `author`, in
+ * the box of its conversation; `null` for a row not stored yet, and where
+ * nothing can carry a reply.
+ */
+function replyTo(
+  presentation: ChatBotPresentation,
+  messageId: string | null,
+  author: string,
+  text: string,
+): (() => void) | null {
+  const { reply } = presentation;
+  if (reply === null || messageId === null) return null;
+  return () => reply(botReplyTargetOf(messageId, author, text));
 }
 
 /**
@@ -444,7 +500,8 @@ export function ChatBotAppPost(props: {
       instanceId={props.testId}
       testId={props.testId}
       hoverActions={false}
-      replyInThread={null}
+      reply={null}
+      thread={null}
       failed={null}
       longPress={null}
       timeLink={null}
@@ -552,10 +609,20 @@ function BotRow(props: {
   const announcement = message.announcement ?? null;
   const question = message.question ?? null;
   const questions = question === null ? null : presentation.questions;
-  const { replyInThread, threadLine } = botRowThread(message, presentation);
+  const { replyInThread, threadLine, thread } = botRowThread(
+    message,
+    presentation,
+  );
+  const text = botRowText(message);
+  const reply = replyTo(
+    presentation,
+    message.persistentMessageId,
+    presentation.botTitle,
+    text,
+  );
   const receipt = replyReceiptFor(message, presentation);
   const sheet = useRowSheet(
-    hoverActions && (receipt !== null || replyInThread !== null),
+    hoverActions && rowHasSheetAction(reply, thread, null, receipt),
   );
   return (
     <BotMessageFrame
@@ -567,7 +634,8 @@ function BotRow(props: {
       instanceId={message.id}
       testId={announcement === null ? "bot-reply-row" : "bot-announcement"}
       hoverActions={hoverActions}
-      replyInThread={replyInThread}
+      reply={reply}
+      thread={thread}
       failed={null}
       longPress={sheet.longPress}
       timeLink={timeLink}
@@ -590,7 +658,9 @@ function BotRow(props: {
           onChoose={presentation.chooseOption}
         />
       )}
-      {receipt === null ? null : <TurnReceiptLine receipt={receipt} />}
+      {presentation.replyReceipt === null ? null : (
+        <TurnReceiptSlot receipt={receipt} />
+      )}
       {replyInThread === null || !threadStarted(threadLine) ? null : (
         <ThreadLine
           line={threadLine}
@@ -603,8 +673,9 @@ function BotRow(props: {
           open={sheet.open}
           onOpenChange={sheet.setOpen}
           name={presentation.botTitle}
-          text={message.content}
-          replyInThread={replyInThread}
+          text={text}
+          reply={reply}
+          thread={thread}
           failed={null}
           receipt={receipt}
           botTitle={presentation.botTitle}
@@ -643,6 +714,18 @@ function useRowSheet(enabled: boolean): {
     longPress: enabled ? longPress : null,
     shown: enabled && shown,
   };
+}
+
+/**
+ * A bot's row's text as the bot wrote it, its text parts a line apart, as
+ * the reply badge reads a post (`postTextOf`). The row's `content` is only a
+ * preview, its whitespace folded and its length cut, so its first line is
+ * not the message's.
+ */
+function botRowText(message: ChatMessageModel): string {
+  return message.segments
+    .flatMap((segment) => (segment.kind === "text" ? [segment.markdown] : []))
+    .join("\n");
 }
 
 /** The receipt under a row of the bot, by the turn that wrote it; `null` where none did. */
@@ -726,14 +809,43 @@ function BotAskingBody(props: {
   );
 }
 
+/** One of a member's answers moving off a card, with the settlement that overtook it. */
+interface MovedAnswer {
+  readonly index: number;
+  readonly question: string;
+  readonly answer: string;
+  readonly settlement: QuestionCardSettlement;
+  /** Who settled it: the member's user id; `null` for the asker. */
+  readonly settledBy: string | null;
+}
+
+/**
+ * Whether the bot's host refused a card's send because someone settled a
+ * question of it first (`E_BOT_QUESTION_ALREADY_SETTLED`). A host that
+ * predates the code refuses with `RPC_ERROR`, read as any other failure.
+ */
+function settledFirst(error: unknown): boolean {
+  const refusal = finalRefusalOf(error);
+  return (
+    refusal instanceof HostRpcError &&
+    refusal.code === "E_BOT_QUESTION_ALREADY_SETTLED"
+  );
+}
+
 /**
  * The card of the questions a bot's row asks, each settlement named as this
  * surface names its members, and the person's own answers kept under the bot
  * (`useBotDraftsStore`) so they outlive the view; without actions until the
  * row is written. A sent answer that the host does not take is given back to
- * edit; one whose question shows settled, or a draft with nothing of the
- * person's left in it, is spent. Discuss takes the draft off the card into
- * the discussion's box.
+ * edit, and the surface's box says it was not sent; one whose question shows
+ * settled by it, or a draft with nothing of the person's left in it, is
+ * spent. An answer whose question someone else settled first moves off the
+ * card into the surface's box, unsent, below what the box held, and the box
+ * says who settled it (T186); a card drawn where it has no box of its own
+ * leaves that to the copy that has. A send the host refused because a
+ * question of it was settled first stays held as sent, saying nothing, until
+ * that settlement shows here: the reply can beat the settlement to this
+ * window. A question of that send still open then goes back to edit.
  *
  * On a card of two or more questions whose answers go together (`answerAll`,
  * T167), one Submit sends them all. A send the host refused gives them all
@@ -750,17 +862,11 @@ function BotQuestionCard(props: {
   readonly questions: ChatBotQuestions;
 }): ReactElement {
   const { messageId, question, botTitle, questions } = props;
-  const {
-    botId,
-    viewerUserId,
-    memberName,
-    answer,
-    answerAll,
-    baseline,
-    discuss,
-  } = questions;
+  const { botId, viewerUserId, memberName, answer, answerAll, baseline, box } =
+    questions;
   const drafts = useBotDraftsStore((state) => state.answers[botId]);
-  const setAnswer = useBotDraftsStore((state) => state.setAnswer);
+  // A send or settlement that answers after the account retired changes nothing.
+  const { setAnswer, moveAnswers, noticeBox } = useBotDraftActions();
   const cardQuestions = question.questions.map(
     (item, index): QuestionCardQuestion => ({
       index,
@@ -797,6 +903,80 @@ function BotQuestionCard(props: {
     if (spent.length === 0) return;
     for (const key of spent.split("\n")) setAnswer(botId, key, null);
   }, [botId, setAnswer, spent]);
+  const overtaken =
+    messageId === null || box === null
+      ? ""
+      : cardQuestions
+          .filter(
+            (item) =>
+              drafts?.[answerDraftKey(messageId, item.index)] !== undefined &&
+              questionCardView(item.settlement, item.draft, item.several)
+                .kind === "overtaken",
+          )
+          .map((item) => answerDraftKey(messageId, item.index))
+          .join("\n");
+  useEffect(() => {
+    if (overtaken.length === 0 || messageId === null || box === null) return;
+    const byKey = new Map(
+      question.questions.map((item, index) => [
+        answerDraftKey(messageId, index),
+        { index, item },
+      ]),
+    );
+    moveAnswers(botId, box, overtaken.split("\n"), (taken) => {
+      const moved = taken
+        .flatMap(([key, draft]): ReadonlyArray<MovedAnswer> => {
+          const entry = byKey.get(key);
+          const settled = entry?.item.settlement ?? null;
+          if (entry === undefined || settled === null) return [];
+          const settlement = botQuestionCardSettlement(
+            settled,
+            memberName,
+            viewerUserId,
+          );
+          const own = draftText(draft, entry.item.multiSelect === true);
+          return settlement === null || own === null
+            ? []
+            : [
+                {
+                  index: entry.index,
+                  question: entry.item.text,
+                  answer: own,
+                  settlement,
+                  settledBy:
+                    settled.by.kind === "person" ? settled.by.userId : null,
+                },
+              ];
+        })
+        .sort((a, b) => a.index - b.index);
+      if (moved.length === 0) return null;
+      const first = moved[0];
+      // Settled by more than one, the line credits none of them with what
+      // the others did.
+      const oneSettler = moved.every(
+        (item) => item.settledBy === first.settledBy,
+      );
+      return {
+        block: questionCardMovedBlock(moved, question.questions.length > 1),
+        notice: questionCardMovedLine(
+          oneSettler ? first.settlement.by : null,
+          questionCardMovedHow(moved.map((item) => item.settlement)),
+          botTitle,
+          moved.length,
+        ),
+      };
+    });
+  }, [
+    botId,
+    botTitle,
+    box,
+    memberName,
+    messageId,
+    moveAnswers,
+    overtaken,
+    question,
+    viewerUserId,
+  ]);
   // A baseline from another session store is a later one too: the registry
   // replaced the store, whose epochs start again, and its snapshot is new.
   const resynced =
@@ -826,8 +1006,73 @@ function BotQuestionCard(props: {
       }
     }
   }, [botId, resynced, setAnswer]);
+  // A send the bot's host refused as settled already holds its answers until
+  // one of its questions shows settled here; those move or are spent as
+  // above. Any of its questions still open go back to edit, and where one
+  // held an answer of the person's the box says the send failed: sent again,
+  // it is not refused. Said where the box already says who answered first,
+  // the failure goes under that line (`noticeBox`).
+  const released =
+    messageId === null
+      ? ""
+      : [
+          ...new Set(
+            cardQuestions.flatMap((item) => {
+              const held =
+                drafts?.[answerDraftKey(messageId, item.index)]
+                  ?.heldForSettlement ?? null;
+              return held === null ? [] : [held];
+            }),
+          ),
+        ]
+          .flatMap((held) => {
+            const keys = held.split("\n");
+            const items = cardQuestions.filter((item) =>
+              keys.includes(answerDraftKey(messageId, item.index)),
+            );
+            return items.every((item) => item.settlement === null)
+              ? []
+              : items
+                  .filter((item) => item.settlement === null)
+                  .map((item) => answerDraftKey(messageId, item.index));
+          })
+          .join("\n");
+  useEffect(() => {
+    if (released.length === 0 || messageId === null) return;
+    const severalOf = new Map(
+      question.questions.map((item, index) => [
+        answerDraftKey(messageId, index),
+        item.multiSelect === true,
+      ]),
+    );
+    const given: string[] = [];
+    for (const key of released.split("\n")) {
+      const latest = useBotDraftsStore.getState().answers[botId]?.[key];
+      if (latest === undefined || latest.heldForSettlement === null) continue;
+      setAnswer(botId, key, { ...latest, sent: null, heldForSettlement: null });
+      if (draftText(latest, severalOf.get(key) === true) !== null) {
+        given.push(key);
+      }
+    }
+    if (given.length > 0 && box !== null) {
+      noticeBox(botId, box, { kind: "answer-failed", keys: given });
+    }
+  }, [botId, box, messageId, noticeBox, question, released, setAnswer]);
   const keyOf = (index: number): string | null =>
     messageId === null ? null : answerDraftKey(messageId, index);
+  // A new send takes back what the box said of an earlier one that failed,
+  // and only that; one that fails while an answer of it is still on the card
+  // says so there.
+  const sending = (): void => {
+    if (box === null) return;
+    const said = useBotDraftsStore.getState().boxNotices[botId]?.[box];
+    if (said !== undefined && said.kind !== "moved") {
+      noticeBox(botId, box, withoutAnswerFailure(said));
+    }
+  };
+  const failed = (keys: ReadonlyArray<string>): void => {
+    if (box !== null) noticeBox(botId, box, { kind: "answer-failed", keys });
+  };
   return (
     <QuestionCard
       asker={botTitle}
@@ -838,18 +1083,27 @@ function BotQuestionCard(props: {
           : (index, draft) => {
               const key = keyOf(index);
               if (key !== null) {
-                setAnswer(botId, key, { ...draft, unsureSince: null });
+                setAnswer(botId, key, {
+                  ...draft,
+                  unsureSince: null,
+                  heldForSettlement: null,
+                });
               }
             }
       }
       onAnswer={(given) => {
         const key = keyOf(given.questionIndex);
         if (messageId === null || key === null || answer === null) return;
-        answer(messageId, given).catch(() => {
+        sending();
+        answer(messageId, given).catch((error: unknown) => {
           const latest = useBotDraftsStore.getState().answers[botId]?.[key];
-          if (latest !== undefined) {
-            setAnswer(botId, key, { ...latest, sent: null });
+          if (latest === undefined) return;
+          if (settledFirst(error)) {
+            setAnswer(botId, key, { ...latest, heldForSettlement: key });
+            return;
           }
+          setAnswer(botId, key, { ...latest, sent: null });
+          failed([key]);
         });
       }}
       onAnswerAll={
@@ -877,15 +1131,37 @@ function BotQuestionCard(props: {
                   };
                 }),
               );
+              sending();
               answerAll(messageId, { entries, text }).catch(
                 (error: unknown) => {
-                  const unsure = mayHaveReachedHost(error);
+                  const keys = entries.map((entry) =>
+                    answerDraftKey(messageId, entry.questionIndex),
+                  );
                   const current =
                     useBotDraftsStore.getState().answers[botId] ?? {};
+                  if (settledFirst(error)) {
+                    const held = keys.join("\n");
+                    for (const key of keys) {
+                      const latest = current[key];
+                      if (latest !== undefined) {
+                        setAnswer(botId, key, {
+                          ...latest,
+                          heldForSettlement: held,
+                        });
+                      }
+                    }
+                    return;
+                  }
+                  const unsure = mayHaveReachedHost(error);
+                  // The person's own answers, which the failure names: an
+                  // untouched question went as skipped, and nothing of theirs
+                  // is on its card to send again.
+                  const kept: string[] = [];
                   for (const entry of entries) {
                     const key = answerDraftKey(messageId, entry.questionIndex);
                     const latest = current[key];
                     if (latest === undefined) continue;
+                    if (!entry.skipped) kept.push(key);
                     setAnswer(
                       botId,
                       key,
@@ -894,16 +1170,9 @@ function BotQuestionCard(props: {
                         : { ...latest, sent: null },
                     );
                   }
+                  if (kept.length > 0) failed(kept);
                 },
               );
-            }
-      }
-      onDiscuss={
-        messageId === null || discuss === null
-          ? null
-          : (index, draft) => {
-              discuss(messageId, draft);
-              setAnswer(botId, answerDraftKey(messageId, index), null);
             }
       }
     />
@@ -935,7 +1204,8 @@ function memberReplyInThread(
  * reply and any other row where the bot's host names that row among
  * its thread anchors. A direct reply whose host does not opens the thread
  * under the post it answers, with no line here; any other row then takes
- * none.
+ * none. `thread` is the row's action for it, which reads "Open thread" once
+ * the thread it opens is listed.
  */
 function botRowThread(
   message: ChatMessageModel,
@@ -943,6 +1213,7 @@ function botRowThread(
 ): {
   readonly replyInThread: (() => void) | null;
   readonly threadLine: ChatBotThreadLine | null;
+  readonly thread: RowThreadAction | null;
 } {
   const anchorKind = botRowThreadAnchorKind({
     announcementKind: message.announcement?.kind ?? null,
@@ -959,16 +1230,35 @@ function botRowThread(
         : null;
   }
   const open = presentation.openAnnouncementThread;
+  const listedLine =
+    anchorId === null || presentation.threadLine === null
+      ? null
+      : presentation.threadLine(anchorId);
+  const replyInThread =
+    anchorId === null || open === null
+      ? null
+      : () => open(anchorId, ownThread ? anchorKind : null);
   return {
-    replyInThread:
-      anchorId === null || open === null
+    replyInThread,
+    threadLine: ownThread ? listedLine : null,
+    thread:
+      replyInThread === null
         ? null
-        : () => open(anchorId, ownThread ? anchorKind : null),
-    threadLine:
-      !ownThread || anchorId === null || presentation.threadLine === null
-        ? null
-        : presentation.threadLine(anchorId),
+        : { open: replyInThread, listed: listedLine !== null },
   };
+}
+
+/**
+ * A row's way into its thread: "Create thread", or "Open thread" once the
+ * thread it opens is listed (`listed`).
+ */
+interface RowThreadAction {
+  readonly open: () => void;
+  readonly listed: boolean;
+}
+
+function threadActionLabel(thread: RowThreadAction): string {
+  return thread.listed ? "Open thread" : "Create thread";
 }
 
 /**
@@ -1004,8 +1294,10 @@ function BotMessageFrame(props: {
   readonly testId: string;
   /** Whether the row offers its actions on hover; the post a thread opens on does not. */
   readonly hoverActions: boolean;
-  /** Opens the row's thread, from its hover actions; `null` for a row that takes none. */
-  readonly replyInThread: (() => void) | null;
+  /** Replies to the row in its own conversation's box (T166); `null` where none can. */
+  readonly reply: (() => void) | null;
+  /** The row's way into its thread, among its hover actions; `null` for a row that takes none. */
+  readonly thread: RowThreadAction | null;
   /** Retry and Edit, among the hover actions of a message the bot failed to answer. */
   readonly failed: FailedMessageActions | null;
   /** A long press that opens the row's sheet on a touch screen; `null` for a row with none. */
@@ -1081,10 +1373,12 @@ function BotMessageFrame(props: {
         </div>
       </div>
       {!props.hoverActions ||
-      (props.replyInThread === null &&
+      (props.reply === null &&
+        props.thread === null &&
         (props.failed?.onRetry ?? null) === null) ? null : (
         <MessageActions
-          onReplyInThread={props.replyInThread}
+          reply={props.reply}
+          thread={props.thread}
           failed={props.failed}
         />
       )}
@@ -1307,6 +1601,30 @@ function TurnReceiptLine(props: {
   );
 }
 
+/**
+ * The line a bot's row keeps for its receipt wherever the surface draws
+ * receipts. The turn behind a row is named by the host after the row has
+ * drawn, so the row holds the line's height from its first paint and the
+ * receipt fills it without moving the rows under it. A row no turn wrote
+ * keeps the line empty.
+ */
+function TurnReceiptSlot(props: {
+  readonly receipt: ChatBotTurnReceipt | null;
+}): ReactElement {
+  if (props.receipt !== null) {
+    return <TurnReceiptLine receipt={props.receipt} />;
+  }
+  return (
+    <div
+      aria-hidden="true"
+      data-testid="bot-turn-receipt-slot"
+      className="py-0.5 text-ui-xs"
+    >
+      {"\u00A0"}
+    </div>
+  );
+}
+
 /** How long a running turn has been running, counting each second. */
 export function RunningFor(props: {
   readonly startedAt: number;
@@ -1318,8 +1636,8 @@ export function RunningFor(props: {
 /**
  * The sheet a long press on a row opens on a touch screen, which has no
  * hover to show the row's actions with: Retry and Edit on a message the bot
- * failed to answer, "Reply in thread" where the row takes one, and on a reply
- * "How Tracy answered", with the receipt's label.
+ * failed to answer, Reply and the thread's action where the row takes them,
+ * and on a reply "How Tracy answered", with the receipt's label.
  */
 function RowSheet(props: {
   readonly open: boolean;
@@ -1327,12 +1645,13 @@ function RowSheet(props: {
   /** Who wrote the row. */
   readonly name: string;
   readonly text: string;
-  readonly replyInThread: (() => void) | null;
+  readonly reply: (() => void) | null;
+  readonly thread: RowThreadAction | null;
   readonly failed: FailedMessageActions | null;
   readonly receipt: ChatBotTurnReceipt | null;
   readonly botTitle: string;
 }): ReactElement {
-  const { open, onOpenChange, botTitle, replyInThread, failed, receipt } =
+  const { open, onOpenChange, botTitle, reply, thread, failed, receipt } =
     props;
   const onRetry = failed?.onRetry ?? null;
   const onEdit = failed?.onEdit ?? null;
@@ -1383,21 +1702,34 @@ function RowSheet(props: {
               <span className="min-w-0 truncate">Edit</span>
             </button>
           )}
-          {replyInThread === null ? null : (
+          {reply === null ? null : (
             <button
               type="button"
-              data-testid="bot-reply-sheet-reply-in-thread"
+              data-testid="bot-reply-sheet-reply"
               className={itemClassName}
               onClick={() => {
                 onOpenChange(false);
-                replyInThread();
+                reply();
               }}
             >
-              <MessageSquareText
-                aria-hidden="true"
-                className="size-4 shrink-0"
-              />
-              <span className="min-w-0 truncate">Reply in thread</span>
+              <Reply aria-hidden="true" className="size-4 shrink-0" />
+              <span className="min-w-0 truncate">Reply</span>
+            </button>
+          )}
+          {thread === null ? null : (
+            <button
+              type="button"
+              data-testid="bot-reply-sheet-thread"
+              className={itemClassName}
+              onClick={() => {
+                onOpenChange(false);
+                thread.open();
+              }}
+            >
+              <ThreadActionIcon thread={thread} className="size-4 shrink-0" />
+              <span className="min-w-0 truncate">
+                {threadActionLabel(thread)}
+              </span>
             </button>
           )}
           {receipt === null ? null : (
@@ -1428,10 +1760,11 @@ function RowSheet(props: {
  * so its rows show no actions at rest and offer them on a long press.
  */
 function MessageActions(props: {
-  readonly onReplyInThread: (() => void) | null;
+  readonly reply: (() => void) | null;
+  readonly thread: RowThreadAction | null;
   readonly failed: FailedMessageActions | null;
 }): ReactElement {
-  const { onReplyInThread, failed } = props;
+  const { reply, thread, failed } = props;
   return (
     <div
       data-testid="bot-message-actions"
@@ -1459,17 +1792,38 @@ function MessageActions(props: {
           )}
         </>
       )}
-      {onReplyInThread === null ? null : (
+      {reply === null ? null : (
         <MessageAction
-          label="Reply in thread"
-          testId="bot-message-reply-in-thread"
+          label="Reply"
+          testId="bot-message-reply"
           disabled={false}
-          onClick={onReplyInThread}
+          onClick={reply}
         >
-          <MessageSquareText aria-hidden="true" />
+          <Reply aria-hidden="true" />
+        </MessageAction>
+      )}
+      {thread === null ? null : (
+        <MessageAction
+          label={threadActionLabel(thread)}
+          testId="bot-message-thread"
+          disabled={false}
+          onClick={thread.open}
+        >
+          <ThreadActionIcon thread={thread} className={undefined} />
         </MessageAction>
       )}
     </div>
+  );
+}
+
+function ThreadActionIcon(props: {
+  readonly thread: RowThreadAction;
+  readonly className: string | undefined;
+}): ReactElement {
+  return props.thread.listed ? (
+    <MessageSquareText aria-hidden="true" className={props.className} />
+  ) : (
+    <MessageSquarePlus aria-hidden="true" className={props.className} />
   );
 }
 
@@ -1647,7 +2001,7 @@ const THREAD_LINE_STACK_MAX = 3;
 /**
  * Whether a post's thread has something for its line to show: a reply, or
  * the bot answering in it now. Before that the thread is reached through
- * the row's "Reply in thread" action.
+ * the row's thread action.
  */
 function threadStarted(
   line: ChatBotThreadLine | null,

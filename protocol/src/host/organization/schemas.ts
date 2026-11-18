@@ -2,6 +2,7 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import {
   taskFiltersSchema,
   listTasksRequestSchema,
+  listTasksRequestSchemaPre110,
   listTasksResponseSchemaPre17,
   listTasksResponseSchemaPre18,
   listTaskLightSchemaPre17,
@@ -274,6 +275,13 @@ export const cloudTaskFiltersSchema = lazySchema(() =>
   }),
 );
 export type CloudTaskFilters = z.infer<typeof cloudTaskFiltersSchema>;
+// `organization.history@1.0`/`@1.1` requests, frozen before the
+// `created-desc` sort (`@1.2`, with `epic.listTasks@1.10`).
+export const cloudListTasksRequestSchemaPre12 = lazySchema(() =>
+  listTasksRequestSchemaPre110.extend({
+    filters: cloudTaskFiltersSchema.nullable(),
+  }),
+);
 export const cloudListTasksRequestSchema = lazySchema(() =>
   listTasksRequestSchema.extend({
     filters: cloudTaskFiltersSchema.nullable(),

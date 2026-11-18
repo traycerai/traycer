@@ -326,6 +326,7 @@ const imageStoreMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/composer/landing-image-store", () => ({
+  onLandingImagesDeleted: vi.fn(),
   sha256Hex: async (bytes: ImageBytes): Promise<string> => {
     const digest = await crypto.subtle.digest("SHA-256", bytes);
     return Array.from(new Uint8Array(digest), (byte) =>
@@ -988,6 +989,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       workspace: emptyLandingDraftWorkspaceSnapshot(),
       closed: false,
       returnedSandbox: null,
+      namedHostId: null,
       durability: "saved",
     });
     const composer = renderHook<void, { readonly draftId: string }>(

@@ -331,6 +331,19 @@ async function wheelUntilScrollAtMost(
   throw new Error(`scrollY stayed ${(await memory(page)).scrollY}`);
 }
 
+/** Wheel down until the element's top has passed the top of the frame. */
+async function wheelUntilTopAboveFrame(
+  page: Page,
+  selector: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const frameBox = await boxOf(frameElement(page));
+    if ((await elementBoxInPage(page, selector)).y < frameBox.y) return;
+    await wheelOnPage(page, 480);
+  }
+  throw new Error(`${selector} never scrolled past the top of the frame`);
+}
+
 /**
  * One Chrome touch gesture on one CDP session. Touch state is per session:
  * an end sent on a fresh session is rejected, because that session never saw
@@ -819,4 +832,56 @@ test("a link still opens the other page while Comments is off, and that page sti
   await clickInPage(page, "#counter");
 
   await expect(pageFrame(page).locator("#counter")).toHaveText("count 1");
+});
+
+test("a chat card takes a comment in full once expanded, though its row clips what paints outside it", async ({
+  page,
+}) => {
+  await serveArtifactFromPage(page);
+  await page.goto(`${fixture("html-artifact-comment-mode")}?layout=chat-row`);
+  await expect(pageFrame(page).locator("#counter")).toHaveText("count 0");
+  // Inline, the card has no Comments: a draft would be clipped by its row.
+  await expect(commentsButton(page)).toHaveCount(0);
+  // Inline, a card's controls come up on hover or focus.
+  await page.getByRole("button", { name: "Expand" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog", { name: FRAME_TITLE })).toBeVisible();
+  await expect(commentsButton(page)).toHaveAttribute("aria-pressed", "false");
+  await commentsButton(page).focus();
+  await page.keyboard.press("Enter");
+  await expect(commentsButton(page)).toHaveAttribute("aria-pressed", "true");
+
+  // The draft box takes the click only where the raised card took it: not
+  // clipped by the row, not left behind the inert page.
+  await commentOn(page, "#broken");
+});
+
+test("a comment on an element taller than the window opens a box inside the window", async ({
+  page,
+}) => {
+  await open(page);
+  await setComments(page, true);
+  await wheelUntilTopAboveFrame(page, "#tall");
+
+  const target = await elementBoxInPage(page, "#tall");
+  const viewport = page.viewportSize();
+  if (viewport === null) throw new Error("no viewport");
+  expect(target.height).toBeGreaterThan(viewport.height);
+
+  const point = await pointInFrame(page);
+  await page.mouse.click(point.x, point.y);
+  const dialog = page.getByRole("dialog", { name: "New comment" });
+  await expect(dialog).toBeVisible();
+
+  await expect
+    .poll(async () => {
+      const box = await boxOf(dialog);
+      return (
+        box.y >= 0 &&
+        box.y + box.height <= viewport.height &&
+        box.x >= 0 &&
+        box.x + box.width <= viewport.width
+      );
+    })
+    .toBe(true);
 });

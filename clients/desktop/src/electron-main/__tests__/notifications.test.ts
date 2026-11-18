@@ -91,6 +91,7 @@ function showOptions(replaceKey: string) {
     body: "Agent finished",
     replaceKey,
     deliveryKey: null,
+    inboxOnly: false,
     onClick: null,
     onForegroundSuppressed: null,
   };
@@ -280,6 +281,57 @@ describe("showNativeNotification", () => {
     });
 
     expect(outcome).toBe("presented");
+  });
+
+  describe("for a kind this device does not let interrupt", () => {
+    it("relays to a focused window and constructs no OS notification", async () => {
+      const { showNativeNotification } = await loadNotifications();
+      const onForegroundSuppressed = vi.fn();
+      FakeBrowserWindow.windows = [{ destroyed: false, focused: true }];
+
+      const outcome = showNativeNotification({
+        ...showOptions("app-local:host.error:1"),
+        inboxOnly: true,
+        onForegroundSuppressed,
+      });
+
+      expect(outcome).toBe("presented");
+      expect(onForegroundSuppressed).toHaveBeenCalledOnce();
+      expect(FakeNotification.constructed).toEqual([]);
+    });
+
+    it("shows nothing and relays nothing with no window focused, and spends the key", async () => {
+      const { showNativeNotification } = await loadNotifications();
+      const onForegroundSuppressed = vi.fn();
+      const options = {
+        ...showOptions("app-local:host.error:1"),
+        deliveryKey: "user-1:host.error:1:10",
+        inboxOnly: true,
+        onForegroundSuppressed,
+      };
+      FakeBrowserWindow.windows = [{ destroyed: false, focused: false }];
+
+      expect(showNativeNotification(options)).toBe("presented");
+      expect(showNativeNotification(options)).toBe("duplicate");
+
+      expect(FakeNotification.constructed).toEqual([]);
+      expect(onForegroundSuppressed).not.toHaveBeenCalled();
+    });
+
+    it("shows the notification for the same unfocused case once the kind interrupts", async () => {
+      const { showNativeNotification } = await loadNotifications();
+      FakeBrowserWindow.windows = [{ destroyed: false, focused: false }];
+
+      expect(
+        showNativeNotification({
+          ...showOptions("app-local:host.error:1"),
+          inboxOnly: false,
+        }),
+      ).toBe("presented");
+
+      expect(FakeNotification.constructed).toHaveLength(1);
+      expect(FakeNotification.instances[0]?.show).toHaveBeenCalledOnce();
+    });
   });
 
   it("reports undeliverable exactly once per key when notifications are unsupported", async () => {

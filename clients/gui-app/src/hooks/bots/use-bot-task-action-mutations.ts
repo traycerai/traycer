@@ -37,8 +37,7 @@ export function useBotTaskRunNowMutation(
     }),
     options: {
       mutationKey: botMutationKeys.taskRunNow(),
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't run the automation."),
+      onError: (error) => toastFromHostError(error, "Couldn't check in."),
     },
   });
 }
@@ -64,8 +63,8 @@ export function useBotTaskSetPausedMutation(
         toastFromHostError(
           error,
           variables.paused
-            ? "Couldn't pause the automation."
-            : "Couldn't resume the automation.",
+            ? "Couldn't pause reports."
+            : "Couldn't resume reports.",
         ),
     },
   });
@@ -84,8 +83,7 @@ export function useBotTaskStopMutation(
     }),
     options: {
       mutationKey: botMutationKeys.taskStop(),
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't stop the automation."),
+      onError: (error) => toastFromHostError(error, "Couldn't end reporting."),
     },
   });
 }

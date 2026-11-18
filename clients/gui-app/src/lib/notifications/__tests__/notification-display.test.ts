@@ -1,7 +1,14 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { isValidElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  HostNotificationCloudEntryV28,
   HostNotificationEntry,
   HostNotificationsCloudFeedRow,
 } from "@traycer/protocol/host/notifications/contracts";
@@ -26,6 +33,8 @@ import { buildNotificationActivationEnvelope } from "@/lib/notifications/notific
 import type { NotificationShowRequest } from "@/hooks/notifications/use-notifications";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { EMPTY_DIRECTORY_STATE } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
 import {
   __resetHostNotificationsStoreForTests,
@@ -99,6 +108,7 @@ describe("notification display", () => {
         showNotification,
         playChime,
         onToastClick: vi.fn(),
+        notifies: () => true,
       },
       "origin-host-1",
     );
@@ -151,9 +161,9 @@ describe("notification display", () => {
         showNotification,
         playChime: vi.fn(),
         onToastClick: vi.fn(),
+        notifies: () => true,
       },
-      "delivery-1",
-      "user-1",
+      { deliveryKey: "delivery-1", userId: "user-1", inboxOnly: false },
     );
 
     expect(showNotification).toHaveBeenCalledWith(
@@ -166,6 +176,86 @@ describe("notification display", () => {
         }),
       }),
     );
+  });
+
+  describe("an app-local row the caller marks inbox-only", () => {
+    const entry: AppLocalNotificationEntry = {
+      id: "host.error:muted",
+      updatedAt: 10,
+      readAt: null,
+      kind: "host.error",
+      sourceRef: "muted",
+      payload: null,
+      message: "Host error",
+      detail: "Details",
+      displayedUpdatedAt: null,
+    };
+
+    it("sends the request marked inbox-only, with no toast and no chime even when undeliverable", async () => {
+      const showNotification = vi.fn((_input: NotificationShowRequest) =>
+        Promise.resolve<NotificationShowOutcome>("undeliverable"),
+      );
+      const playChime = vi.fn();
+
+      await displayAppLocalNotification(
+        entry,
+        {
+          showNotification,
+          playChime,
+          onToastClick: vi.fn(),
+          // The caller's decision stands whatever the device would say now.
+          notifies: () => true,
+        },
+        { deliveryKey: "delivery-1", userId: "user-1", inboxOnly: true },
+      );
+
+      expect(showNotification).toHaveBeenCalledOnce();
+      expect(
+        showNotification.mock.calls[0][0].foregroundAppLocal,
+      ).toMatchObject({ userId: "user-1", inboxOnly: true });
+      expect(toastCalls).toHaveLength(0);
+      expect(playChime).not.toHaveBeenCalled();
+    });
+
+    it("lets the shell's failure propagate so the receipt stays pending", async () => {
+      const showNotification = vi.fn(() => Promise.reject(new Error("ipc")));
+
+      await expect(
+        displayAppLocalNotification(
+          entry,
+          {
+            showNotification,
+            playChime: vi.fn(),
+            onToastClick: vi.fn(),
+            notifies: () => true,
+          },
+          { deliveryKey: "delivery-1", userId: "user-1", inboxOnly: true },
+        ),
+      ).rejects.toThrow("ipc");
+      expect(toastCalls).toHaveLength(0);
+    });
+
+    it("sends inboxOnly false, with a toast, when the caller does not mark it", async () => {
+      const showNotification = vi.fn((_input: NotificationShowRequest) =>
+        Promise.resolve<NotificationShowOutcome>("presented"),
+      );
+
+      await displayAppLocalNotification(
+        entry,
+        {
+          showNotification,
+          playChime: vi.fn(),
+          onToastClick: vi.fn(),
+          notifies: () => true,
+        },
+        { deliveryKey: "delivery-1", userId: "user-1", inboxOnly: false },
+      );
+
+      expect(
+        showNotification.mock.calls[0][0].foregroundAppLocal,
+      ).toMatchObject({ inboxOnly: false });
+      expect(toastCalls).toHaveLength(1);
+    });
   });
 
   it("derives replacement keys from notification entities", () => {
@@ -229,12 +319,22 @@ describe("notification display", () => {
 
     displayNotificationRows(
       [prompt],
-      { showNotification, playChime: vi.fn(), onToastClick: vi.fn() },
+      {
+        showNotification,
+        playChime: vi.fn(),
+        onToastClick: vi.fn(),
+        notifies: () => true,
+      },
       null,
     );
     displayNotificationRows(
       [reopened],
-      { showNotification, playChime: vi.fn(), onToastClick: vi.fn() },
+      {
+        showNotification,
+        playChime: vi.fn(),
+        onToastClick: vi.fn(),
+        notifies: () => true,
+      },
       null,
     );
 
@@ -277,6 +377,7 @@ describe("notification display", () => {
         showNotification,
         playChime,
         onToastClick,
+        notifies: () => true,
       },
       "origin-host-1",
     );
@@ -324,6 +425,7 @@ describe("notification display", () => {
           showNotification,
           playChime,
           onToastClick: vi.fn(),
+          notifies: () => true,
         },
         null,
       );
@@ -344,6 +446,7 @@ describe("notification display", () => {
         ),
         playChime: vi.fn(),
         onToastClick,
+        notifies: () => true,
       },
       "origin-host-1",
     );
@@ -368,6 +471,7 @@ describe("notification display", () => {
         showNotification,
         playChime: vi.fn(),
         onToastClick: vi.fn(),
+        notifies: () => true,
       },
       "origin-host-1",
     );
@@ -396,6 +500,7 @@ describe("notification display", () => {
         ),
         playChime: vi.fn(),
         onToastClick: vi.fn(),
+        notifies: () => true,
       },
       null,
     );
@@ -422,6 +527,7 @@ describe("notification display", () => {
         ),
         playChime,
         onToastClick: vi.fn(),
+        notifies: () => true,
       },
       "origin-host-1",
     );
@@ -442,7 +548,12 @@ describe("notification display", () => {
 
     displayNotificationRows(
       [row("Checkout notifications")],
-      { showNotification, playChime, onToastClick: vi.fn() },
+      {
+        showNotification,
+        playChime,
+        onToastClick: vi.fn(),
+        notifies: () => true,
+      },
       "origin-host-1",
     );
 
@@ -462,7 +573,12 @@ describe("notification display", () => {
 
     displayNotificationRows(
       [row("Checkout notifications")],
-      { showNotification, playChime, onToastClick: vi.fn() },
+      {
+        showNotification,
+        playChime,
+        onToastClick: vi.fn(),
+        notifies: () => true,
+      },
       "origin-host-1",
     );
 
@@ -490,6 +606,7 @@ describe("notification display", () => {
         ),
         playChime,
         onToastClick: vi.fn(),
+        notifies: () => true,
       },
       "origin-host-1",
     );
@@ -519,6 +636,7 @@ describe("notification display", () => {
         ),
         playChime,
         onToastClick: vi.fn(),
+        notifies: () => true,
       },
       "origin-host-1",
     );
@@ -544,6 +662,7 @@ describe("notification display", () => {
         ),
         playChime,
         onToastClick: vi.fn(),
+        notifies: () => true,
       },
       "origin-host-1",
     );
@@ -589,6 +708,26 @@ function hostEntry(
             taskTitle: "Task",
             outcome: "completed",
           },
+  };
+}
+
+function failureHostEntry(id: string, chatId: string): HostNotificationEntry {
+  return {
+    id,
+    updatedAt: 10,
+    readAt: null,
+    kind: "agent.stalled",
+    sourceRef: id,
+    severity: "failure",
+    outcome: "errored",
+    epicId: "epic-1",
+    chatId,
+    payload: {
+      epicId: "epic-1",
+      chatId,
+      chatTitle: "Chat",
+      agentName: "Agent",
+    },
   };
 }
 
@@ -686,6 +825,7 @@ describe("host channel emission focus gate", () => {
       ),
       playChime: vi.fn(),
       onToastClick: vi.fn(),
+      notifies: () => true,
     };
   }
 
@@ -815,6 +955,198 @@ describe("host channel emission focus gate", () => {
     expect(toastCalls).toHaveLength(1);
   });
 
+  describe("when a kind's Notify switch is off", () => {
+    function failureOff() {
+      return {
+        ...displayTarget(),
+        notifies: (kind: string) => kind !== "failure",
+      };
+    }
+
+    it("shows only the kinds that notify from a mixed host batch", async () => {
+      const target = failureOff();
+
+      await displayHostChannelEmission(
+        [hostEntry("n-1", "chat-1", null), failureHostEntry("n-2", "chat-2")],
+        target,
+        "stream-host-1",
+      );
+
+      expect(target.showNotification).toHaveBeenCalledOnce();
+      expect(target.showNotification.mock.calls[0][0].feedOccurrences).toEqual([
+        expect.objectContaining({ key: N1_KEY }),
+      ]);
+      expect(target.playChime).toHaveBeenCalledExactlyOnceWith("done");
+      expect(toastCalls).toHaveLength(1);
+    });
+
+    it("shows nothing for a host batch of only refused kinds", async () => {
+      const target = failureOff();
+
+      await displayHostChannelEmission(
+        [failureHostEntry("n-2", "chat-2")],
+        target,
+        "stream-host-1",
+      );
+
+      expect(target.showNotification).not.toHaveBeenCalled();
+      expect(target.playChime).not.toHaveBeenCalled();
+      expect(toastCalls).toHaveLength(0);
+    });
+
+    describe("while the bot directory has not answered", () => {
+      afterEach(() => {
+        useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
+      });
+
+      function botEntry(id: string): HostNotificationCloudEntryV28 {
+        return {
+          id,
+          updatedAt: 10,
+          readAt: null,
+          kind: "host.operation.finished",
+          sourceRef: id,
+          severity: "done",
+          outcome: "completed",
+          epicId: "bot-1",
+          chatId: "thread-1",
+          payload: {
+            kind: "bot_conversation",
+            event: "bot.reply",
+            operation: "bot.reply",
+            title: "Tracy",
+            message: "Something in the thread",
+            botId: "bot-1",
+            conversationId: "conversation-1",
+            threadId: "thread-1",
+            messageId: id,
+            authorUserId: null,
+            mention: false,
+          },
+        };
+      }
+
+      /** A target whose `notifies` for Done reads a flag the test flips. */
+      function doneFlagTarget(initial: boolean) {
+        const flag = { done: initial };
+        return {
+          flag,
+          target: {
+            ...displayTarget(),
+            notifies: (kind: string) => (kind === "done" ? flag.done : true),
+          },
+        };
+      }
+
+      function settleDirectory(): void {
+        act(() => {
+          useStandaloneBotsStore.setState({ settled: true });
+        });
+      }
+
+      it("never shows a host arrival refused on arrival, though its kind is turned on during the wait", async () => {
+        useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
+        const { flag, target } = doneFlagTarget(false);
+
+        const pending = displayHostChannelEmission(
+          [botEntry("bot-n-1"), hostEntry("n-2", "chat-2", null)],
+          target,
+          "stream-host-1",
+        );
+        flag.done = true;
+        settleDirectory();
+        await pending;
+
+        expect(target.showNotification).not.toHaveBeenCalled();
+        expect(target.playChime).not.toHaveBeenCalled();
+        expect(toastCalls).toHaveLength(0);
+      });
+
+      it("never shows a cloud arrival refused on arrival, though its kind is turned on during the wait", async () => {
+        useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
+        const { flag, target } = doneFlagTarget(false);
+        const botRow = {
+          ...cloudRow("cloud-bot-row", "thread-1", "stream-host-2", null),
+          entry: botEntry("cloud-bot-row"),
+        };
+
+        const pending = displayCloudSnapshotArrivals([botRow], target);
+        flag.done = true;
+        settleDirectory();
+        await pending;
+
+        expect(target.showNotification).not.toHaveBeenCalled();
+        expect(target.playChime).not.toHaveBeenCalled();
+        expect(toastCalls).toHaveLength(0);
+      });
+
+      it("shows the arrival once after the directory settles while its kind stays on", async () => {
+        useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
+        const { target } = doneFlagTarget(true);
+
+        const pending = displayHostChannelEmission(
+          [botEntry("bot-n-1")],
+          target,
+          "stream-host-1",
+        );
+        await Promise.resolve();
+        expect(target.showNotification).not.toHaveBeenCalled();
+        settleDirectory();
+        await pending;
+
+        expect(target.showNotification).toHaveBeenCalledOnce();
+        expect(toastCalls).toHaveLength(1);
+      });
+    });
+
+    it("does not replay a refused occurrence once its kind is turned on", async () => {
+      const refusing = failureOff();
+      await displayHostChannelEmission(
+        [failureHostEntry("n-2", "chat-2")],
+        refusing,
+        "stream-host-1",
+      );
+
+      const notifying = displayTarget();
+      await displayHostChannelEmission(
+        [failureHostEntry("n-2", "chat-2"), hostEntry("n-1", "chat-1", null)],
+        notifying,
+        "stream-host-1",
+      );
+
+      expect(notifying.showNotification).toHaveBeenCalledOnce();
+      expect(
+        notifying.showNotification.mock.calls[0][0].feedOccurrences,
+      ).toEqual([expect.objectContaining({ key: N1_KEY })]);
+    });
+
+    it("applies to cloud arrivals the same way, and never replays them", async () => {
+      const refusing = failureOff();
+      const failureRow = {
+        ...cloudRow("cloud-failure-row", "chat-2", "stream-host-2", null),
+        entry: failureHostEntry("cloud-failure-row", "chat-2"),
+      };
+
+      await displayCloudSnapshotArrivals(
+        [
+          cloudRow("cloud-done-row", "chat-1", "stream-host-2", null),
+          failureRow,
+        ],
+        refusing,
+      );
+
+      expect(refusing.showNotification).toHaveBeenCalledOnce();
+      expect(refusing.showNotification.mock.calls[0][0]).toMatchObject({
+        payload: { feed: { source: "cloud", id: "cloud-done-row" } },
+      });
+
+      const notifying = displayTarget();
+      await displayCloudSnapshotArrivals([failureRow], notifying);
+
+      expect(notifying.showNotification).not.toHaveBeenCalled();
+    });
+  });
+
   it("still skips an unread cloud arrival for the focused entity", async () => {
     // The read gate is additive: focus suppression on this window's own
     // entity keeps working for rows the origin host left unread.
@@ -907,6 +1239,7 @@ describe("host channel emission focus gate", () => {
       showNotification: vi.fn(() => Promise.reject(new Error("ipc failure"))),
       playChime: vi.fn(),
       onToastClick: vi.fn(),
+      notifies: () => true,
     };
 
     await displayHostChannelEmission(
@@ -1010,6 +1343,62 @@ describe("forwarded foreground display gate", () => {
     };
   }
 
+  it("renders nothing and chimes nothing for a relayed kind the device refuses", () => {
+    disconnectedCloudFeed();
+    const playChime = vi.fn();
+    const notifies = vi.fn((kind: string) => kind !== "done");
+
+    displayForwardedForegroundNotification(forwardedDisplay("chat-1", null), {
+      playChime,
+      onToastClick: vi.fn(),
+      notifies,
+    });
+
+    expect(notifies).toHaveBeenCalledWith("done");
+    expect(toastCalls).toHaveLength(0);
+    expect(playChime).not.toHaveBeenCalled();
+  });
+
+  it("claims a refused relayed occurrence so turning its kind on never replays it", () => {
+    deliveringHostFeed();
+    const occurrence = relayOccurrence({
+      key: feedOccurrenceKey("origin-host-1", "n-1", 10, "n-1"),
+      replaceKey: "host:chat:chat-1",
+      originHostId: "origin-host-1",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      chimeEventType: "failure",
+      userId: null,
+    });
+    const relay: NotificationForegroundDisplay = {
+      title: "Traycer",
+      body: "1 new notification",
+      payload: null,
+      replaceKey: "notification-batch",
+      deliveryKey: null,
+      feedSource: "host",
+      foregroundAppLocal: null,
+      feedOccurrences: [occurrence],
+    };
+
+    displayForwardedForegroundNotification(relay, {
+      playChime: vi.fn(),
+      onToastClick: vi.fn(),
+      notifies: () => false,
+    });
+    expect(toastCalls).toHaveLength(0);
+
+    const playChime = vi.fn();
+    displayForwardedForegroundNotification(relay, {
+      playChime,
+      onToastClick: vi.fn(),
+      notifies: () => true,
+    });
+
+    expect(toastCalls).toHaveLength(0);
+    expect(playChime).not.toHaveBeenCalled();
+  });
+
   it("ignores a relayed feed display while our own feed is delivering", () => {
     // Every window holds its own feed subscription, so the relayed row is
     // already arriving here directly - filtered by THIS window's focus and
@@ -1021,6 +1410,7 @@ describe("forwarded foreground display gate", () => {
     displayForwardedForegroundNotification(forwardedDisplay("chat-1", null), {
       playChime,
       onToastClick: vi.fn(),
+      notifies: () => true,
     });
 
     expect(toastCalls).toHaveLength(0);
@@ -1048,7 +1438,7 @@ describe("forwarded foreground display gate", () => {
         feedSource: "host",
         foregroundAppLocal: null,
       },
-      { playChime, onToastClick: vi.fn() },
+      { playChime, onToastClick: vi.fn(), notifies: () => true },
     );
 
     expect(toastCalls).toHaveLength(0);
@@ -1066,6 +1456,7 @@ describe("forwarded foreground display gate", () => {
     displayForwardedForegroundNotification(forwardedDisplay("chat-1", null), {
       playChime,
       onToastClick: vi.fn(),
+      notifies: () => true,
     });
 
     expect(toastCalls).toHaveLength(1);
@@ -1099,6 +1490,7 @@ describe("forwarded foreground display gate", () => {
     displayForwardedForegroundNotification(forwardedHostFeedDisplay("chat-1"), {
       playChime,
       onToastClick: vi.fn(),
+      notifies: () => true,
     });
 
     expect(toastCalls).toHaveLength(1);
@@ -1113,6 +1505,7 @@ describe("forwarded foreground display gate", () => {
     displayForwardedForegroundNotification(forwardedHostFeedDisplay("chat-1"), {
       playChime,
       onToastClick: vi.fn(),
+      notifies: () => true,
     });
 
     expect(toastCalls).toHaveLength(0);
@@ -1132,6 +1525,7 @@ describe("forwarded foreground display gate", () => {
     displayForwardedForegroundNotification(forwardedDisplay("chat-1", null), {
       playChime,
       onToastClick: vi.fn(),
+      notifies: () => true,
     });
 
     expect(toastCalls).toHaveLength(1);
@@ -1158,7 +1552,7 @@ describe("forwarded foreground display gate", () => {
         feedSource: "cloud",
         foregroundAppLocal: null,
       },
-      { playChime, onToastClick: vi.fn() },
+      { playChime, onToastClick: vi.fn(), notifies: () => true },
     );
 
     expect(toastCalls).toHaveLength(1);
@@ -1175,6 +1569,7 @@ describe("forwarded foreground display gate", () => {
     displayForwardedForegroundNotification(forwardedDisplay("chat-1", null), {
       playChime,
       onToastClick: vi.fn(),
+      notifies: () => true,
     });
 
     expect(toastCalls).toHaveLength(0);
@@ -1189,6 +1584,7 @@ describe("forwarded foreground display gate", () => {
     displayForwardedForegroundNotification(forwardedDisplay(null, null), {
       playChime,
       onToastClick: vi.fn(),
+      notifies: () => true,
     });
 
     expect(toastCalls).toHaveLength(0);
@@ -1216,9 +1612,13 @@ describe("forwarded foreground display gate", () => {
         replaceKey: "terminal.closed:t-1",
         deliveryKey: null,
         feedSource: "app-local",
-        foregroundAppLocal: { userId: "user-1", entry: { id: "t-1" } },
+        foregroundAppLocal: {
+          userId: "user-1",
+          entry: { id: "t-1" },
+          inboxOnly: false,
+        },
       },
-      { playChime, onToastClick: vi.fn() },
+      { playChime, onToastClick: vi.fn(), notifies: () => true },
     );
 
     expect(toastCalls).toHaveLength(1);
@@ -1243,7 +1643,7 @@ describe("forwarded foreground display gate", () => {
         feedSource: null,
         foregroundAppLocal: null,
       },
-      { playChime, onToastClick: vi.fn() },
+      { playChime, onToastClick: vi.fn(), notifies: () => true },
     );
 
     expect(toastCalls).toHaveLength(0);
@@ -1309,7 +1709,7 @@ describe("forwarded foreground display gate", () => {
           }),
         ],
       },
-      { playChime, onToastClick: vi.fn() },
+      { playChime, onToastClick: vi.fn(), notifies: () => true },
     );
     expect(toastCalls).toHaveLength(1);
 
@@ -1322,6 +1722,7 @@ describe("forwarded foreground display gate", () => {
       ),
       playChime: vi.fn(),
       onToastClick: vi.fn(),
+      notifies: () => true,
     };
     await displayHostChannelEmission(
       [hostEntry("n-1", "chat-1", null)],
@@ -1345,6 +1746,7 @@ describe("forwarded foreground display gate", () => {
       ),
       playChime: vi.fn(),
       onToastClick: vi.fn(),
+      notifies: () => true,
     };
     await displayHostChannelEmission(
       [hostEntry("n-1", "chat-1", null)],
@@ -1384,7 +1786,7 @@ describe("forwarded foreground display gate", () => {
           }),
         ],
       },
-      { playChime, onToastClick: vi.fn() },
+      { playChime, onToastClick: vi.fn(), notifies: () => true },
     );
 
     // One toast from the local A delivery, one more for the relay - but only
@@ -1423,7 +1825,7 @@ describe("forwarded foreground display gate", () => {
           }),
         ],
       },
-      { playChime, onToastClick: vi.fn() },
+      { playChime, onToastClick: vi.fn(), notifies: () => true },
     );
 
     expect(toastCalls).toHaveLength(0);
@@ -1459,7 +1861,7 @@ describe("forwarded foreground display gate", () => {
           }),
         ],
       },
-      { playChime, onToastClick: vi.fn() },
+      { playChime, onToastClick: vi.fn(), notifies: () => true },
     );
 
     expect(toastCalls).toHaveLength(1);
@@ -1496,7 +1898,7 @@ describe("forwarded foreground display gate", () => {
           }),
         ],
       },
-      { playChime: vi.fn(), onToastClick: vi.fn() },
+      { playChime: vi.fn(), onToastClick: vi.fn(), notifies: () => true },
     );
     expect(toastCalls).toHaveLength(0);
 
@@ -1507,6 +1909,7 @@ describe("forwarded foreground display gate", () => {
       ),
       playChime: vi.fn(),
       onToastClick: vi.fn(),
+      notifies: () => true,
     };
     await displayHostChannelEmission(
       [hostEntry("n-1", "chat-1", null)],
@@ -1530,6 +1933,7 @@ describe("forwarded foreground display gate", () => {
       showNotification: vi.fn(() => directOutcome),
       playChime: vi.fn(),
       onToastClick: vi.fn(),
+      notifies: () => true,
     };
 
     // Direct call kicked off but its native response is still pending.
@@ -1558,7 +1962,7 @@ describe("forwarded foreground display gate", () => {
           }),
         ],
       },
-      { playChime: relayChime, onToastClick: vi.fn() },
+      { playChime: relayChime, onToastClick: vi.fn(), notifies: () => true },
     );
     expect(toastCalls).toHaveLength(1);
 
@@ -1599,7 +2003,7 @@ describe("forwarded foreground display gate", () => {
             }),
           ],
         },
-        { playChime, onToastClick: vi.fn() },
+        { playChime, onToastClick: vi.fn(), notifies: () => true },
       );
 
       expect(toastCalls).toHaveLength(1);
@@ -1642,7 +2046,7 @@ describe("forwarded foreground display gate", () => {
           }),
         ],
       },
-      { playChime, onToastClick: vi.fn() },
+      { playChime, onToastClick: vi.fn(), notifies: () => true },
     );
 
     expect(toastCalls).toHaveLength(1);
@@ -1679,7 +2083,7 @@ describe("forwarded foreground display gate", () => {
           }),
         ],
       },
-      { playChime, onToastClick: vi.fn() },
+      { playChime, onToastClick: vi.fn(), notifies: () => true },
     );
 
     expect(toastCalls).toHaveLength(0);
@@ -1717,7 +2121,7 @@ describe("forwarded foreground display gate", () => {
           }),
         ],
       },
-      { playChime, onToastClick: vi.fn() },
+      { playChime, onToastClick: vi.fn(), notifies: () => true },
     );
 
     expect(toastCalls).toHaveLength(1);

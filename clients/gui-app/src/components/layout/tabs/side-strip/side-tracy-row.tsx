@@ -6,14 +6,10 @@ import {
   TracyEntryHoverBody,
   TracyEntryIcon,
 } from "../tracy-strip-entry";
-import {
-  useTracyEntrySignals,
-  type TracyEntrySignals,
-} from "../use-tracy-entry-signals";
+import { useTracyEntrySignals } from "../use-tracy-entry-signals";
 import {
   SideTabRow,
   type SideRowFrame,
-  type SideTabRowProps,
   type SideTabRowVariant,
 } from "./side-tab-row";
 import { joinedAttribute, useSideTabJoin } from "./side-tab-join";
@@ -21,20 +17,10 @@ import { NO_LIVE_AGENTS } from "./side-tab-live-agents";
 import { StripElapsedTime } from "./strip-elapsed-time";
 
 /**
- * The rail tile's corner: the count wherever the host counts, the unread badge
- * where it does not.
- */
-function tileBadgeOf(signals: TracyEntrySignals): SideTabRowProps["badge"] {
-  if (signals.unreadCount === null) return signals.unread ? "unread" : null;
-  return signals.unreadCount > 0 ? { count: signals.unreadCount } : null;
-}
-
-/**
  * The fixed Tracy entry in the vertical strip, after Home in the nav block:
- * the same glyph, label and signals as the top strip's slot, the glyph
- * wearing the bot's unread count (on the rail, the tile's corner badge, or
- * its unread badge where the host does not count) and the label bold while
- * unread, and the working time as the row's trailing status. Like Home, no
+ * the same glyph, label and signals as the top strip's slot, the label bold
+ * while unread (on the rail, which has no label, the tile's unread badge),
+ * and the working time as the row's trailing status. Like Home, no
  * drag, no close and no Alt-digit; unlike Home it is a real tab, so like a
  * task row it joins its surface's sheet while selected.
  */
@@ -76,28 +62,12 @@ export function SideTracyRow(props: {
       tint={null}
       inBlock={false}
       // Its label stands where Home's does, after a 16px icon and space.
-      titleIcon={
-        <TracyEntryIcon
-          className="me-4"
-          unreadCount={signals.unreadCount}
-          muted={signals.muted}
-          ground="strip"
-        />
-      }
-      // The chip clips what overhangs it, so the tile's count is the row's
-      // corner badge rather than the glyph's.
+      titleIcon={<TracyEntryIcon className="me-4" muted={signals.muted} />}
       tile={{
         kind: "icon",
-        icon: (
-          <TracyEntryIcon
-            className={undefined}
-            unreadCount={null}
-            muted={signals.muted}
-            ground="strip"
-          />
-        ),
+        icon: <TracyEntryIcon className={undefined} muted={signals.muted} />,
       }}
-      badge={tileBadgeOf(signals)}
+      badge={signals.unread ? "unread" : null}
       agents={NO_LIVE_AGENTS}
       status={
         signals.workingSince === null

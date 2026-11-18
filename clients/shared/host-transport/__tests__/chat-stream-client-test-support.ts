@@ -27,6 +27,10 @@ export class StubStreamSession implements IStreamSession {
 
   onStatusChange(): void {}
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
+
   requestReconnect(): void {}
 
   getNegotiatedSchemaVersion(): SchemaVersion | null {
