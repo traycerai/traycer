@@ -1,5 +1,6 @@
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fetchEnvironmentTransport } from "@traycer-clients/shared/environment/environment-cloud";
 import {
   act,
   cleanup,
@@ -20,6 +21,7 @@ import { create } from "zustand";
 import * as Y from "yjs";
 import { Awareness } from "y-protocols/awareness";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import { inertHostTokenSource } from "../../../../__tests__/create-fake-runner-host";
 import { createInertSelectionAuthorityClient } from "@traycer-clients/shared/test-fixtures/selection-authority";
 import type { TaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
@@ -309,6 +311,7 @@ function createBaseRunnerHost(): IRunnerHost {
     onRegisteredHostsChange: () => null,
     signInUrl: "https://auth.example.invalid/sign-in",
     authnBaseUrl: "https://auth.example.invalid",
+    environmentTransport: fetchEnvironmentTransport,
     relayBaseUrl: "wss://relay.example.invalid/attach",
     poolBaseUrl: "",
     hasLocalHost: true,
@@ -325,6 +328,7 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "network-error" as const }),
     mintHostCredential: () =>
       Promise.resolve({ kind: "network-error" as const }),
+    hostTokens: inertHostTokenSource(),
     requestStepUpChallenge: () =>
       Promise.resolve({ kind: "network-error" as const }),
     verifyStepUpChallenge: () =>
@@ -340,8 +344,6 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "network-error" as const }),
     readHostOwnership: () => Promise.resolve({ kind: "unauthorized" as const }),
     listTeamComputers: () => Promise.resolve({ kind: "unauthorized" as const }),
-    setEnvironmentBotHost: () =>
-      Promise.resolve({ kind: "unauthorized" as const }),
     mintTeamComputerInstallToken: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
     releaseTeamComputer: () =>
@@ -349,6 +351,14 @@ function createBaseRunnerHost(): IRunnerHost {
     deregisterHostFromAccount: () =>
       Promise.resolve({ kind: "network-error" as const }),
     listSandboxes: () => Promise.resolve({ kind: "unauthorized" as const }),
+    listEnvironments: () => Promise.resolve({ kind: "unauthorized" as const }),
+    getTeamChatAutoArchive: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    setTeamChatAutoArchive: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    saveAutoPolicy: () => Promise.resolve({ kind: "unauthorized" as const }),
+    attachTaskEnvironment: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCosts: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCatalogue: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
@@ -371,14 +381,19 @@ function createBaseRunnerHost(): IRunnerHost {
     disconnectSlackApp: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
     setSlackAppDms: () => Promise.resolve({ kind: "unauthorized" as const }),
+    updateBotRunSettings: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    updateBotReplyMode: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    deleteBot: () => Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxGrants: () => Promise.resolve({ kind: "unauthorized" as const }),
     getTeamEnvironment: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
     getEnvironmentProviders: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
+    replaceEnvironmentApiKey: () =>
+      Promise.resolve({ kind: "failed" as const }),
     decideSecretRequest: () =>
-      Promise.resolve({ kind: "unauthorized" as const }),
-    mintExecutableWriteGrant: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
     openExternalLink: () => Promise.resolve(),
     getRegisteredUrlSchemes: () => Promise.resolve([]),
@@ -541,6 +556,7 @@ function createDirtyEpicHandle(
     ...EMPTY_PROJECTED_SLICES,
     chatRecords: EMPTY_CHATS_SLICE,
     chatRecordHeads: {},
+    chatRecordStarters: {},
     evictedChatIds: new Set(),
     chatRecordListAuthoritative: true,
     tuiAgentRecordListAuthoritative: true,

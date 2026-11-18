@@ -89,8 +89,15 @@ const HEALTHY_SHOW = {
 
 function respondHealthy(probe: RecordedProbe): ProbeCommandResult {
   if (probe.command === "loginctl") return ok("Linger=yes\n");
-  if (probe.args[1] === "show-environment") return ok("PATH=/usr/bin\n");
+  if (isUserManagerVersionProbe(probe)) return ok("255.4\n");
   return ok(showOutput(HEALTHY_SHOW));
+}
+
+function isUserManagerVersionProbe(probe: RecordedProbe): boolean {
+  return (
+    probe.command === "systemctl" &&
+    probe.args.join(" ") === "--user show --property=Version --value"
+  );
 }
 
 let savedUser: string | undefined;
@@ -120,7 +127,7 @@ describe("probeLinuxSystemdHealth", () => {
     // The WSL-without-systemd / sudo-su / headless-SSH state: the exact
     // environments where install fails and steers users to doctor.
     const { calls, runner } = runnerWith((probe) =>
-      probe.args[1] === "show-environment"
+      isUserManagerVersionProbe(probe)
         ? fail("Failed to connect to bus: No medium found")
         : ok(""),
     );
@@ -136,6 +143,10 @@ describe("probeLinuxSystemdHealth", () => {
     expect(issues[0]?.message).toContain("WSL");
     // Follow-on probes would only repeat the same failure.
     expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({
+      command: "systemctl",
+      args: ["--user", "show", "--property=Version", "--value"],
+    });
   });
 
   it("names systemctl itself as missing on a genuinely non-systemd distro, not WSL/headless-login", async () => {
@@ -144,7 +155,7 @@ describe("probeLinuxSystemdHealth", () => {
     // Alpine/OpenRC, Void. The WSL/headless-login guidance would misdirect
     // a user here, since neither applies.
     const { runner } = runnerWith((probe) =>
-      probe.args[1] === "show-environment" ? spawnFailure() : ok(""),
+      isUserManagerVersionProbe(probe) ? spawnFailure() : ok(""),
     );
     const issues = await probeLinuxSystemdHealth({
       labelId: LABEL_ID,
@@ -160,6 +171,7 @@ describe("probeLinuxSystemdHealth", () => {
 
   it("reports a failed unit with the journal command to read", async () => {
     const { runner } = runnerWith((probe) => {
+      if (isUserManagerVersionProbe(probe)) return ok("255.4\n");
       if (probe.args[1] === "show")
         return ok(
           showOutput({
@@ -189,6 +201,7 @@ describe("probeLinuxSystemdHealth", () => {
 
   it("reports a restart-looping unit (auto-restart), which status reads as merely stopped", async () => {
     const { runner } = runnerWith((probe) => {
+      if (isUserManagerVersionProbe(probe)) return ok("255.4\n");
       if (probe.args[1] === "show")
         return ok(
           showOutput({
@@ -212,6 +225,7 @@ describe("probeLinuxSystemdHealth", () => {
 
   it("reports a start skipped by the missing-CLI condition, pointing at reinstall", async () => {
     const { runner } = runnerWith((probe) => {
+      if (isUserManagerVersionProbe(probe)) return ok("255.4\n");
       if (probe.args[1] === "show")
         return ok(
           showOutput({
@@ -242,6 +256,7 @@ describe("probeLinuxSystemdHealth", () => {
     // positive-evidence guard this probe would cry "CLI binary missing" on
     // every such machine.
     const { runner } = runnerWith((probe) => {
+      if (isUserManagerVersionProbe(probe)) return ok("255.4\n");
       if (probe.args[1] === "show")
         return ok(
           showOutput({
@@ -286,8 +301,11 @@ describe("probeLinuxSystemdHealth", () => {
       runner,
     });
     expect(issues).toEqual([]);
-    expect(calls.map((call) => call.args[1] ?? call.command)).toEqual([
-      "show-environment",
+    expect(calls).toEqual([
+      {
+        command: "systemctl",
+        args: ["--user", "show", "--property=Version", "--value"],
+      },
     ]);
   });
 });

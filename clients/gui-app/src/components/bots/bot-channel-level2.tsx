@@ -178,7 +178,7 @@ function BotChannelPicker(props: {
     [threadsView],
   );
   return (
-    <Drawer direction="bottom" open={open} onOpenChange={setOpen}>
+    <Drawer direction="right" open={open} onOpenChange={setOpen}>
       <DrawerTrigger asChild>
         <Button
           type="button"
@@ -198,10 +198,11 @@ function BotChannelPicker(props: {
         tabIndex={-1}
         data-mobile-shell-touch-scope=""
         data-testid="bot-channel-picker"
+        fullWidth
         data-theme={themePreset}
         className={cn(
           resolvedTheme === "dark" && "dark",
-          "bottom-(--keyboard-inset)! h-[min(70%,var(--spacing-safe-dvh))] pb-safe-bottom",
+          "bottom-(--keyboard-inset)! pb-safe-bottom",
         )}
         onOpenAutoFocus={(event) => {
           event.preventDefault();

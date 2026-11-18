@@ -163,6 +163,7 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
   question: (a, b) => a.question === b.question,
   // A resolution arrives as a new surface object on the same row.
   surface: (a, b) => a.surface === b.surface,
+  feedbackDraft: (a, b) => a.feedbackDraft === b.feedbackDraft,
   repliesTo: (a, b) => a.repliesTo === b.repliesTo,
   assistantMeta: (a, b) => a.assistantMeta === b.assistantMeta,
   statusLabel: (a, b) => a.statusLabel === b.statusLabel,

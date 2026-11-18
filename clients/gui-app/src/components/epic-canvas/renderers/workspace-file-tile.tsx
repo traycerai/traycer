@@ -1,3 +1,4 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
@@ -827,6 +828,7 @@ function WorkspaceFileTileLive(props: {
     return refreshedContent;
   }, [editSession.state?.conflict?.diskContent, query]);
   const handleKeepMine = useCallback(async (): Promise<void> => {
+    if (showHostUpdateNeededForGesture(tabHostId)) return;
     try {
       await editSession.resolveKeepMine(await readLatestDiskContent());
     } catch (error) {
@@ -834,8 +836,11 @@ function WorkspaceFileTileLive(props: {
         conflictResolutionErrorMessage(error),
       );
     }
-  }, [editSession, readLatestDiskContent]);
+  }, [editSession, readLatestDiskContent, tabHostId]);
   const handleUseDisk = useCallback(async (): Promise<void> => {
+    const diskContent = editSession.state?.conflict?.diskContent ?? null;
+    if (diskContent === null && showHostUpdateNeededForGesture(tabHostId))
+      return;
     try {
       await editSession.resolveUseDisk(await readLatestDiskContent());
     } catch (error) {
@@ -843,7 +848,7 @@ function WorkspaceFileTileLive(props: {
         conflictResolutionErrorMessage(error),
       );
     }
-  }, [editSession, readLatestDiskContent]);
+  }, [editSession, readLatestDiskContent, tabHostId]);
   const handleRevealConsumed = useCallback((): void => {
     clearWorkspaceFileRevealTarget(props.viewTabId, node.id);
   }, [node.id, props.viewTabId]);
@@ -895,7 +900,10 @@ function WorkspaceFileTileLive(props: {
             <FileAutosaveStatus
               appearance="pill"
               state={editSession.state}
-              onRetry={editSession.retry}
+              onRetry={() => {
+                if (showHostUpdateNeededForGesture(tabHostId)) return;
+                editSession.retry();
+              }}
               onKeepMine={() => {
                 void handleKeepMine();
               }}

@@ -12,6 +12,8 @@ import {
 } from "@/components/ui/dialog";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 
+const RUN_ON_THE_COMPUTER = "Run this on the computer.";
+
 export function AddComputerDialog(props: {
   readonly teamName: string;
   readonly teamSelector: string;
@@ -59,7 +61,7 @@ export function AddComputerDialog(props: {
             .
           </p>
           <p className="text-ui-sm text-muted-foreground">
-            Run this on the computer, then sign in as a team member.
+            {RUN_ON_THE_COMPUTER}
           </p>
           <InstallCommand
             command={command}

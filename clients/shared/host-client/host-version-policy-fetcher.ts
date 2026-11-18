@@ -134,6 +134,7 @@ async function updateHostVersionPolicyWithSignal(
           desiredVersion: input.desiredVersion,
           force: input.force,
         }),
+        redirect: "manual",
         signal,
       }),
       signal,

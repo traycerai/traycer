@@ -8,6 +8,10 @@ import {
 import { isTuiHarnessId } from "@/components/home/data/landing-options";
 import type { TerminalAgentLaunch } from "@/components/home/hooks/use-landing-composer-actions";
 import { resolveSeededProfileId } from "@/lib/composer/resolve-seeded-profile-id";
+import {
+  removedProfilesForProvider,
+  type RemovedProviderProfile,
+} from "@/components/providers/provider-profile-model";
 import type { HostRpcRegistry } from "@/lib/host";
 import type { ComposerToolbarState } from "@/stores/composer/composer-toolbar-store";
 
@@ -72,6 +76,7 @@ export function stagedTerminalLaunchOnHost(
   captured: TerminalAgentLaunch,
   toolbar: Pick<ComposerToolbarState, "catalog">,
   providers: HostProviders | undefined,
+  removedProfiles: readonly RemovedProviderProfile[],
 ): TerminalAgentLaunch | null {
   const harness = toolbar.catalog.harnesses?.find(
     (option) => option.id === captured.harnessId,
@@ -84,6 +89,11 @@ export function stagedTerminalLaunchOnHost(
   )?.profiles;
   return {
     ...captured,
-    profileId: resolveSeededProfileId(captured.profileId, profiles, true),
+    profileId: resolveSeededProfileId(
+      captured.profileId,
+      profiles,
+      removedProfilesForProvider({ removedProfiles }, providerId),
+      true,
+    ),
   };
 }

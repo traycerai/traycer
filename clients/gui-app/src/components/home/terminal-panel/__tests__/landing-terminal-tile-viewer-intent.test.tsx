@@ -90,6 +90,7 @@ vi.mock("@/lib/host", () => ({
     }
     return globalClientRef.value;
   },
+  useOptionalHostClient: () => globalClientRef.value,
 }));
 
 const stableOpenTransport = vi.hoisted(() => {

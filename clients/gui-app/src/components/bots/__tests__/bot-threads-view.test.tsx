@@ -69,20 +69,22 @@ import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { mocks } from "./bot-threads-view-state";
 import {
+  FakeIntersectionObserver,
+  foregroundWindow,
+  intersectTarget,
+  observersOf,
+} from "@/components/bots/__tests__/bot-read-observer-test-support";
+import {
   callThread,
   card,
   deliverReply,
   drawnReplies,
-  FakeIntersectionObserver,
   FOLLOWING,
-  foregroundWindow,
   hydrateRepliesAt,
   installBotThreadsViewCaseLifecycle,
-  intersectTarget,
   listed,
   mount,
   mountBotBoundElsewhere,
-  observersOf,
   queryClient,
   readRow,
   replyTexts,

@@ -236,7 +236,6 @@ export function Pane(): ReactElement {
         <BotSearchPanel
           botId={BOT_ID}
           botTitle="Release Bot"
-          hostId={HOST_ID}
           environmentId={ENVIRONMENT_ID}
           onClose={noop}
         />

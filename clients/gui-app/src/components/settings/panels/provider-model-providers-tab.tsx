@@ -9,6 +9,7 @@ import {
 import { Plus } from "lucide-react";
 import type {
   ModelProviderAuthResult,
+  ModelProviderAuthAction,
   ModelProviderEntry,
   ModelProvidersListResult,
   ProviderModelProvidersCapabilities,
@@ -25,6 +26,7 @@ import {
   type ModelProviderVisibility,
 } from "@/hooks/providers/use-model-provider-visibility";
 import { useProvidersModelProvidersList } from "@/hooks/providers/use-providers-model-providers-list-query";
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
 import { useProvidersModelProviderAuth } from "@/hooks/providers/use-providers-model-provider-auth-mutation";
 import { useHostBinding } from "@/lib/host/runtime";
 import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
@@ -398,7 +400,16 @@ function useCustomProviderForm(
   // Its OWN mutation instance rather than the tab's. They share a key and an
   // invalidation, and nothing else: a disconnect in flight has no business
   // spinning this form's submit button, or the other way round.
-  const auth = useProvidersModelProviderAuth();
+  const submittedValues = useSubmittedSecretInput<CustomProviderValues>(
+    "Custom provider draft input is unavailable.",
+  );
+  const submittedAction = useSubmittedSecretInput<ModelProviderAuthAction>(
+    "Model provider input is unavailable.",
+  );
+  const auth = useProvidersModelProviderAuth(
+    submittedAction.read,
+    submittedAction.clear,
+  );
 
   const open = useCallback((initial: CustomProviderValues | null) => {
     setError(null);
@@ -420,27 +431,32 @@ function useCustomProviderForm(
       const token = configWrite.claim(values.modelProviderId);
       if (token === null) return;
       setError(null);
+      submittedAction.set({
+        // One shape, two verbs - the wire's own split. `updateCustom` is
+        // only reachable for a row the host flagged `configDeclaredCustom`,
+        // which is the same set of rows it will accept an update for.
+        action: declaring ? "createCustom" : "updateCustom",
+        modelProviderId: values.modelProviderId,
+        name: values.name,
+        baseUrl: values.baseUrl,
+        models: values.models.map((model) => ({ ...model })),
+        headers: values.headers.map((header) => ({ ...header })),
+        // Null means "leave whatever is stored alone" - the read side never
+        // carries a key back, so an edit that types nothing must not be
+        // read as clearing the credential.
+        key: values.key,
+        // Same word, and the empty array is NOT the same as it: `[]` is the
+        // wire's clear signal, so an untouched form must send null rather
+        // than an empty list it happens to be holding.
+        env: values.env === null ? null : [...values.env],
+      });
+      submittedValues.set(values);
       auth.mutate(
         {
           providerId,
           action: {
-            // One shape, two verbs - the wire's own split. `updateCustom` is
-            // only reachable for a row the host flagged `configDeclaredCustom`,
-            // which is the same set of rows it will accept an update for.
             action: declaring ? "createCustom" : "updateCustom",
             modelProviderId: values.modelProviderId,
-            name: values.name,
-            baseUrl: values.baseUrl,
-            models: values.models.map((model) => ({ ...model })),
-            headers: values.headers.map((header) => ({ ...header })),
-            // Null means "leave whatever is stored alone" - the read side never
-            // carries a key back, so an edit that types nothing must not be
-            // read as clearing the credential.
-            key: values.key,
-            // Same word, and the empty array is NOT the same as it: `[]` is the
-            // wire's clear signal, so an untouched form must send null rather
-            // than an empty list it happens to be holding.
-            env: values.env === null ? null : [...values.env],
           },
         },
         {
@@ -451,21 +467,30 @@ function useCustomProviderForm(
             // whatever the user did next, reporting a failure for a write that
             // has already been superseded.
             if (!configWrite.isCurrent(token)) return;
+            const submitted = submittedValues.read();
             const failure = customSubmitError(data.result);
             setError(failure);
             // A failure lands the user in the form for THESE values, whether or
             // not they came from one. A bare re-enable that the host refused
             // otherwise reports itself on a row with no way to act on it, and
             // the form is the surface that can.
-            setState(failure === null ? null : { initial: values });
+            setState(failure === null ? null : { initial: submitted });
           },
           onSettled: () => {
+            submittedValues.clear();
             configWrite.release(token);
           },
         },
       );
     },
-    [auth, configWrite, credentialRefusal, providerId],
+    [
+      auth,
+      configWrite,
+      credentialRefusal,
+      providerId,
+      submittedAction,
+      submittedValues,
+    ],
   );
 
   const submit = useCallback(
@@ -546,7 +571,7 @@ export function ProviderModelProvidersTab(props: {
     providerId,
     enabled: true,
   });
-  const auth = useProvidersModelProviderAuth();
+  const auth = useProvidersModelProviderAuth(null, null);
   const configWrite = useConfigWriteOwner();
   const customForm = useCustomProviderForm(
     providerId,

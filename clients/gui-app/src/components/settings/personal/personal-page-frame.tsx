@@ -1,8 +1,8 @@
+import type { ReviewHeldEntry } from "@traycer-clients/shared/environment/environment-review";
 import { useContext, type ReactNode } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   EnvironmentNotice,
-  EnvironmentReviewEntry,
   LocalOverride,
 } from "@traycer/protocol/host/environment-schemas";
 import {
@@ -17,6 +17,7 @@ import { SecretsHeaderDetails } from "@/components/settings/secrets/secrets-head
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { TeamOwnedLine } from "@/components/settings/host-scope/team-owned-line";
 import { usePersonalHostScope } from "@/components/settings/host-scope/use-host-scope";
+import { HostMinimumVersionGate } from "@/components/settings/host-scope/host-scope-gate";
 import {
   personalPageItemKinds,
   personalPageStatusLine,
@@ -48,6 +49,8 @@ import { useHostNegotiatedMethodVersion } from "@/hooks/host/use-host-negotiated
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { UnresolvedEnvironmentPage } from "@/components/settings/environment/unresolved-environment-page";
+import { useTeamEnvironmentReviewRead } from "@/hooks/environment/use-team-environment-review";
+import { environmentReadData } from "@/hooks/environment/environment-read-data";
 import { cn } from "@/lib/utils";
 
 interface WindowHostEnvironment {
@@ -57,7 +60,7 @@ interface WindowHostEnvironment {
   readonly hostName: string;
   readonly localOverrides: readonly LocalOverride[];
   readonly notices: readonly EnvironmentNotice[];
-  readonly review: readonly EnvironmentReviewEntry[];
+  readonly review: readonly ReviewHeldEntry[];
 }
 
 /** Read through the window's own host, like every Personal page. */
@@ -83,11 +86,7 @@ function useWindowHostEnvironmentState(
   // on a host without them, or on a team's host.
   const personal =
     state.kind === "ready" && state.status.principal?.kind === "personal";
-  const notices = useEnvironmentNoticesRead(
-    scope.client,
-    scope.hostId,
-    personal,
-  );
+  const notices = useEnvironmentNoticesRead(personal);
   const review = useEnvironmentReviewRead(scope.client, scope.hostId, personal);
   return {
     state,
@@ -261,6 +260,35 @@ function HostPageFrame(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const pick = useEnvironmentPick();
+  const computerPage = SETTINGS_SECTIONS.some(
+    (section) =>
+      section.id === props.section &&
+      (section.group === "personal" || section.group === "host"),
+  );
+  const content = <HostPageContents {...props} />;
+  return pick.kind === "local" && computerPage ? (
+    <LocalComputerPageGate>{content}</LocalComputerPageGate>
+  ) : (
+    content
+  );
+}
+
+function LocalComputerPageGate(props: {
+  readonly children: ReactNode;
+}): ReactNode {
+  const scope = usePersonalHostScope();
+  return (
+    <HostMinimumVersionGate host={scope.host}>
+      {props.children}
+    </HostMinimumVersionGate>
+  );
+}
+
+function HostPageContents(props: {
+  readonly section: SettingsSectionId;
+  readonly children: ReactNode;
+}): ReactNode {
+  const pick = useEnvironmentPick();
   // A Local row's settings are its computer's own, and no status reports
   // their revision: they are reread on focus.
   useRereadHostReadsOnFocus(pick.kind === "local" ? pick.hostId : null);
@@ -328,6 +356,14 @@ function TeamPageFrame(props: {
   const scope = useTeamViewingHost();
   const source = useConfigurationSource();
   const environmentId = source.kind === "pool" ? source.environmentId : null;
+  const kinds = personalPageItemKinds(props.section);
+  const reviewsTeam = source.kind === "pool" && source.configuration === "team";
+  const review = useTeamEnvironmentReviewRead(
+    reviewsTeam ? environmentId : null,
+    props.section === "secrets" ||
+      (kinds !== null && props.section !== "skills"),
+  );
+  const entries = environmentReadData(review) ?? [];
   useRereadOnStaleWrite(null, environmentId);
   useRereadConfigurationOnFocus(environmentId);
   return (
@@ -342,7 +378,11 @@ function TeamPageFrame(props: {
         client: scope.client,
         localOverrides: NO_OVERRIDES,
         notices: NO_NOTICES,
-        review: NO_REVIEW,
+        review: entries.flatMap((row) =>
+          props.section === "secrets" || kinds?.has(row.entry.kind) === true
+            ? [row.entry]
+            : [],
+        ),
       }}
     >
       {props.children}
@@ -430,7 +470,12 @@ export function PersonalPageHeaderStatus(): ReactNode {
   const value = useContext(PersonalPageContext);
   if (value === null) return null;
   if (value.pick.kind === "team")
-    return <PageChipRow section={value.section} pick={value.pick} />;
+    return (
+      <>
+        <PageChipRow section={value.section} pick={value.pick} />
+        <PersonalPageNotices />
+      </>
+    );
   if (value.state.kind === "unsupported" || teamNameOf(value.state) !== null) {
     return null;
   }

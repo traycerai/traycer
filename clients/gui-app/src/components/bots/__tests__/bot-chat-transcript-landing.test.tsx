@@ -18,7 +18,7 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
-import { create, type StoreApi, type UseBoundStore } from "zustand";
+import type { StoreApi, UseBoundStore } from "zustand";
 import {
   afterEach,
   beforeEach,
@@ -28,45 +28,18 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import type { JsonContent } from "@traycer/protocol/common/registry";
-import type {
-  AgentSender,
-  ContentBlock,
-  Message,
-} from "@traycer/protocol/persistence/epic/schemas";
+import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { ChatLocateRowArgs } from "@/hooks/chats/use-chat-locate-row";
-import type {
-  ChatSessionState,
-  ChatSessionStoreHandle,
-} from "@/stores/chats/chat-session-store";
-import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
-
-type LandingState = Pick<
-  ChatSessionState,
-  | "snapshotLoaded"
-  | "messages"
-  | "events"
-  | "transcriptRowContext"
-  | "transcriptDerived"
-  | "pendingUserMessages"
-  | "queue"
-  | "turnInProgress"
-  | "messageDelivery"
-  | "liveAssistantMessage"
-  | "activeTurn"
-  | "pendingApprovals"
-  | "pendingFileEditApprovals"
-  | "pendingInterviews"
-  | "runStatus"
-  | "transcriptWindow"
-  | "transcriptBaselineEpoch"
-  | "transcriptHydrationSequence"
-  | "coldRewrittenMessageIds"
-  | "backgroundItems"
-  | "reportVisibleTranscriptRange"
-  | "requestFindReadOrdinal"
-  | "requestTranscriptOrdinal"
->;
+import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import {
+  BOT_ID,
+  CHAT_ID,
+  createLandingStore,
+  otherUserMessage,
+  reply,
+  resolvedUserMessage,
+  type LandingState,
+} from "@/components/bots/__tests__/bot-chat-transcript-landing-support";
 
 const mocks = vi.hoisted(() => ({
   handle: null as ChatSessionStoreHandle | null,
@@ -141,128 +114,8 @@ import {
 } from "@/lib/bots/bot-member-names";
 import { useBotSearchStore } from "@/stores/bots/bot-search-store";
 
-const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
-const CHAT_ID = "conversation-app";
-const REPLY_ID = "reply-uuid";
-
-const ASK: JsonContent = {
-  type: "doc",
-  content: [
-    { type: "paragraph", content: [{ type: "text", text: "Please review" }] },
-  ],
-};
-
-const BOT_SENDER: AgentSender = {
-  type: "agent",
-  harnessId: "claude",
-  agentId: "claude-sonnet-4",
-  displayName: "Claude Sonnet 4",
-  reply: { expectsReply: false },
-  inReplyTo: null,
-};
-
-function resolvedUserMessage(): Extract<Message, { role: "user" }> {
-  return {
-    role: "user",
-    messageId: "ask-1",
-    sender: { type: "user", userId: "owner-1" },
-    message: { kind: "user", content: ASK, browserAnnotations: [] },
-    timestamp: 1_000,
-    sessionAnchor: null,
-    conversationRequest: {
-      requestId: "req-1",
-      resolvedAt: 1_000,
-      resolvedByMessageId: REPLY_ID,
-    },
-  };
-}
-
-/** A message between a post and its reply, so the reply is not the next row. */
-function otherUserMessage(): Extract<Message, { role: "user" }> {
-  return {
-    role: "user",
-    messageId: "other-1",
-    sender: { type: "user", userId: "owner-1" },
-    message: { kind: "user", content: ASK, browserAnnotations: [] },
-    timestamp: 1_500,
-    sessionAnchor: null,
-  };
-}
-
-function textBlock(blockId: string, text: string): ContentBlock {
-  return {
-    type: "text",
-    blockId,
-    status: "completed",
-    timestamp: 2_000,
-    text,
-    providerNotice: null,
-  };
-}
-
-function assistantMessage(input: {
-  readonly messageId: string;
-  readonly turnId: string | null;
-  readonly timestamp: number;
-  readonly text: string;
-}): Extract<Message, { role: "assistant" }> {
-  return {
-    role: "assistant",
-    messageId: input.messageId,
-    sender: BOT_SENDER,
-    blocks: [textBlock(`${input.messageId}:text`, input.text)],
-    startedAt: input.timestamp,
-    timestamp: input.timestamp,
-    turnId: input.turnId,
-    usage: null,
-    reasoningEffort: null,
-    serviceTier: null,
-    envCredentialVar: null,
-    imageResolutions: [],
-  };
-}
-
-function reply(): Extract<Message, { role: "assistant" }> {
-  return assistantMessage({
-    messageId: REPLY_ID,
-    turnId: null,
-    timestamp: 2_000,
-    text: "Here is my review",
-  });
-}
-
 let requestTranscriptOrdinal: Mock<(ordinal: number | null) => void>;
 let store: UseBoundStore<StoreApi<LandingState>>;
-
-function createLandingStore(
-  messages: ReadonlyArray<Message>,
-): UseBoundStore<StoreApi<LandingState>> {
-  return create<LandingState>()(() => ({
-    snapshotLoaded: true,
-    messages,
-    events: [],
-    transcriptRowContext: {},
-    transcriptDerived: null,
-    pendingUserMessages: [],
-    queue: { status: "idle", items: [] },
-    turnInProgress: undefined,
-    messageDelivery: null,
-    liveAssistantMessage: null,
-    activeTurn: null,
-    pendingApprovals: [],
-    pendingFileEditApprovals: [],
-    pendingInterviews: [],
-    runStatus: "idle",
-    transcriptWindow: emptyTranscriptWindow(),
-    transcriptBaselineEpoch: 0,
-    transcriptHydrationSequence: 0,
-    coldRewrittenMessageIds: new Set<string>(),
-    backgroundItems: undefined,
-    reportVisibleTranscriptRange: vi.fn(),
-    requestFindReadOrdinal: vi.fn(),
-    requestTranscriptOrdinal,
-  }));
-}
 
 const THREAD_SURFACE: BotTranscriptSurface = {
   kind: "thread",
@@ -288,7 +141,7 @@ function mountTranscript(
 ): {
   readonly rerender: () => void;
 } {
-  store = createLandingStore(messages);
+  store = createLandingStore(messages, requestTranscriptOrdinal);
   mocks.handle = { store } as ChatSessionStoreHandle;
   const queryClient = new QueryClient();
   const tree = (): ReactNode => (
@@ -299,6 +152,7 @@ function mountTranscript(
             botId={BOT_ID}
             chatId={CHAT_ID}
             hostId="host-1"
+            boundHostId={null}
             title="Release Bot"
             instanceId="bot-thread:test"
             surface={surface}

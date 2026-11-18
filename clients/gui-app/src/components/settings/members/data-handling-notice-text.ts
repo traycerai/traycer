@@ -7,7 +7,6 @@ import { DATA_HANDLING_NOTICE } from "@traycer/protocol/host/environment/data-ha
 export function dataHandlingNoticeText(): string {
   return [
     ...DATA_HANDLING_NOTICE.recipients,
-    DATA_HANDLING_NOTICE.destinations,
     DATA_HANDLING_NOTICE.authority,
     DATA_HANDLING_NOTICE.deletionLimits,
     DATA_HANDLING_NOTICE.processingLocations,
