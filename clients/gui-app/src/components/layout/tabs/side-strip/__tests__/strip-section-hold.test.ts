@@ -431,6 +431,28 @@ describe("useStripPointerInside", () => {
     expect(list.inside()).toBe(false);
   });
 
+  it("forgets the pointer when the list's scroller is replaced", () => {
+    const first = document.createElement("div");
+    const second = document.createElement("div");
+    document.body.append(first, second);
+    const { result, rerender } = renderHook(
+      (scroller: HTMLElement) => useStripPointerInside(scroller),
+      { initialProps: first },
+    );
+    act(() => {
+      first.dispatchEvent(new PointerEvent("pointerover"));
+    });
+    expect(result.current).toBe(true);
+
+    rerender(second);
+    expect(result.current).toBe(false);
+
+    act(() => {
+      second.dispatchEvent(new PointerEvent("pointerover"));
+    });
+    expect(result.current).toBe(true);
+  });
+
   it("is unchanged when focus leaves the scroller", () => {
     const list = mounted();
     list.fire(list.child, new PointerEvent("pointerover", { bubbles: true }));

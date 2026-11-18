@@ -138,6 +138,8 @@ export function useStripPointerInside(scroller: HTMLElement | null): boolean {
       scroller.removeEventListener("pointerleave", leave);
       window.removeEventListener("blur", leave);
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      // Another scroller starts with no pointer seen inside it.
+      setInside(false);
     };
   }, [scroller]);
   return inside;
