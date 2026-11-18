@@ -243,6 +243,11 @@ function ProviderProfileSignInDialog({
   const [accentColor, setAccentColor] = useState<ProviderProfileAccentColor>(
     () => nextAvailableAccentColor(state.profiles),
   );
+  // The row this sign-in creates joins `state.profiles` with the dialog's own
+  // colour, so the duplicate-colour warning counts only what was here at open.
+  const [profileIdsAtOpen] = useState(
+    () => new Set(state.profiles.map((profile) => profile.profileId)),
+  );
   const [emailRevealed, setEmailRevealed] = useState(false);
   const finalizeAttemptRef = useRef<string | null>(null);
   // Keep the committed name through recolor completion and retry, which still
@@ -471,7 +476,9 @@ function ProviderProfileSignInDialog({
           <div className="flex min-h-0 flex-col gap-5 overflow-y-auto px-5 pb-5">
             <AddProfileSetupFields
               target={target}
-              profiles={state.profiles}
+              profiles={state.profiles.filter((profile) =>
+                profileIdsAtOpen.has(profile.profileId),
+              )}
               label={label}
               onLabelChange={setLabel}
               accentColor={accentColor}
