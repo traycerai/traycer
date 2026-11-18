@@ -842,6 +842,7 @@ describe("a Personal page's 'needs you' rows", () => {
       within(rows[0]).getByRole("button", { name: "Review" }),
     ).toBeTruthy();
 
+    // A held command's opens the host's retrospective sheet.
     fireEvent.click(within(rows[0]).getByRole("button", { name: "Review" }));
     expect(navigateToSettingsSectionMock).not.toHaveBeenCalled();
     expect(useRetrospectiveSheetStore.getState()).toMatchObject({

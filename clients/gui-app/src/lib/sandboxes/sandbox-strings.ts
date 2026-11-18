@@ -161,6 +161,7 @@ export function teamPossessive(teamName: string): string {
   return `${teamName}'s`;
 }
 
+/** `uses your credits` / `uses Acme's credits`. */
 export function usesCreditsClause(
   configuration: SandboxConfigurationCopy,
 ): string {
