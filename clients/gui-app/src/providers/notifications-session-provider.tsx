@@ -1222,7 +1222,9 @@ function NotificationsSessionBody(
       }
       if (servingHostId === null) return;
       const streamHostId = servingHostId;
-      // For a stream that presented the sign-in only: the serving host's lanes present a host-only token.
+      // The shared recovery contract, `onStreamAuthError`, for a stream that
+      // presented the sign-in only: the serving host's lanes present a
+      // host-only token, and the cloud feed rides the pool when there is one.
       const onAuthError = signInRecoveryForStream(
         streamHostId,
         onStreamAuthError,

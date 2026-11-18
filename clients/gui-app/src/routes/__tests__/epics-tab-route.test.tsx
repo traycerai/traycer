@@ -98,7 +98,8 @@ vi.mock("@/providers/team-removal-tile-closer", () => ({
 vi.mock("@/providers/claimed-computer-notifier", () => ({
   ClaimedComputerNotifier: () => null,
 }));
-// This harness has no QueryClientProvider, so the cover is stubbed.
+// The window's claimed-computer cover reads the claims query; this harness
+// has no QueryClientProvider, so stub it like the shell pieces above.
 vi.mock("@/components/layout/dialogs/window-host-modal-host", () => ({
   WindowHostModalHost: () => null,
 }));

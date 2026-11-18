@@ -299,6 +299,7 @@ export function addServerReach(): string {
   return "It reaches every provider on every host running this environment.";
 }
 
+/** The Secret option's line. */
 export const SECRET_OPTION_LINE =
   "Pick or add a secret. It is sent only to this server's address.";
 

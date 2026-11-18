@@ -102,7 +102,10 @@ export interface MemorySaveIo {
   readonly read: () => Promise<ConfigAgentMemoriesResponse | null>;
   /** `environment.status`; `null` when it fails. */
   readonly lookUp: () => Promise<UploadStatus | null>;
-  /** `null` when it fails; `"unsent"` when abandoned before it was sent. */
+  /**
+   * `config.agentMemories.set` turning it on; `null` when it fails, and
+   * `"unsent"` when it was abandoned before it was sent.
+   */
   readonly set: () => Promise<ConfigAgentMemoriesSetResponse | null | "unsent">;
   /** `providers.setNativeMemory` for one row; whether it landed. */
   readonly writeProvider: (row: OnboardingMemoryRow) => Promise<boolean>;

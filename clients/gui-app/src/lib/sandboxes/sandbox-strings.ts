@@ -161,6 +161,7 @@ export function teamPossessive(teamName: string): string {
   return `${teamName}'s`;
 }
 
+/** `uses your credits` / `uses Acme's credits`. */
 export function usesCreditsClause(
   configuration: SandboxConfigurationCopy,
 ): string {
@@ -169,6 +170,7 @@ export function usesCreditsClause(
     : `uses ${teamPossessive(configuration.teamName)} credits`;
 }
 
+/** The cost line: `$0.12 an hour while awake · uses Acme's credits`. */
 export function costLine(
   priceMcPerHour: number,
   configuration: SandboxConfigurationCopy,
@@ -450,7 +452,10 @@ function notEnoughCreditsText(
   return `${opening}. ${formatSandboxDollarsRequired(shortfallMc)} more ${action} for an hour.`;
 }
 
-/** `null` names no amount. */
+/**
+ * Short for an hour of a team's sandbox, which the team's credits pay;
+ * `null` names no amount.
+ */
 export function teamCreditsShortLine(
   teamName: string,
   shortfallMc: number | null,

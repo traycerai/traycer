@@ -11,6 +11,10 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   return { useHostScope, usePersonalHostScope: useHostScope };
 });
 
+// The page's reads of Personal's id, notices and review sheet are the app's own
+// calls to authn through the real runtime's binding, with only its `auth`
+// swapped for the fake sign-in. The client is a real `HostClient` over an
+// in-memory messenger (`buildAccessHost`): only the host on the far side is faked.
 const hostMock = vi.hoisted((): { auth: AuthService | null } => ({
   auth: null,
 }));

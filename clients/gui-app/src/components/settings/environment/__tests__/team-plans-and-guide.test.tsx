@@ -225,6 +225,7 @@ describe("TeamPlans", () => {
           },
         ]);
       });
+      // The consequences are not known yet: no confirm, no unlink.
       expect(screen.queryByRole("dialog")).toBeNull();
       expect(harness.paramsOf("environment.plans.unlink")).toHaveLength(0);
 

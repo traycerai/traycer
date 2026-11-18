@@ -425,6 +425,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
               modelsFailed: false,
             };
       },
+      // The raw pick; `selection` above is what this host's catalog shows.
       values: {
         ultracode: false,
         selection: {

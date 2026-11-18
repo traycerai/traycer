@@ -215,7 +215,13 @@ export interface ComposerToolbarState extends ComposerToolbarDerived {
    * resolve so `model: ""` never reaches a draft.
    */
   readonly keptPickUnwritten: boolean;
-  /** A presentation layer: `values` keep the Terminal login, and no emit carries it (`withoutDefaultAccount`). */
+  /**
+   * The account an unchosen Terminal login is shown and run on: its
+   * provider's one signed-in profile while the Terminal login is signed out.
+   * `null` when there is none, and on every surface that never sets one. A
+   * presentation layer like a reroute: `values` keep the Terminal login, and
+   * no emit carries this account (`withoutDefaultAccount`).
+   */
   readonly defaultAccount: DefaultAccount | null;
   /** Set by an account commit; the surface restores it per draft. */
   readonly accountChosen: boolean;
@@ -693,6 +699,7 @@ function catalogMatchesSelection(
   );
 }
 
+/** The default account while it applies: nobody chose this composer's account. */
 function presentedAccount(
   state: Pick<ComposerToolbarState, "defaultAccount" | "accountChosen">,
 ): DefaultAccount | null {

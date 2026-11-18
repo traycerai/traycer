@@ -3,6 +3,8 @@ vi.mock("@/lib/settings-navigation", () => ({
   navigateToSettingsSection: navigateToSettingsSectionMock,
 }));
 
+// The page names its environment through the surface's client and the viewer;
+// its secrets are read and written through the sign-in's own calls.
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => requireTeamHostClient(),

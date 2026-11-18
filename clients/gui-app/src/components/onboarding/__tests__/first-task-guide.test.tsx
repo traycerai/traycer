@@ -653,6 +653,7 @@ describe("FirstTaskLandingGuide getting-started toast", () => {
     // invitation is not the setup reminder's other wording.
     const SETUP_REMINDER_TOAST_ID = "traycer-getting-started";
 
+    /** This computer's `environment.status` answers whatever `answer` holds. */
     function computerWhoseStatusChanges(
       answer: () => EnvironmentStatusResponseV13,
     ): void {

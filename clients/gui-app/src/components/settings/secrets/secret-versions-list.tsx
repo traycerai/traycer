@@ -36,6 +36,7 @@ function refusalText(operation: "undo" | "destroy", code: string): string {
   return secretChangeRefusalLine(operation, code) ?? "That didn't go through.";
 }
 
+/** A failed Undo or Destroy, in the words of its refusal. */
 function errorNote(error: Error | null): string | null {
   return error === null ? null : error.message;
 }

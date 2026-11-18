@@ -789,6 +789,11 @@ describe("<ErrorSegment /> sandbox refusals", () => {
 
   const TRANSCRIPT_HOST_ID = "sandbox-host-acme";
 
+  /**
+   * The error row inside a transcript whose host is read from `rows` (the
+   * person's host directory), with no billing runtime: the cases here never
+   * reach a team's role read.
+   */
   function renderFrozenOnHostRows(
     rows: ReadonlyArray<HostDirectoryEntry>,
     input: { readonly code: string | null; readonly message: string },

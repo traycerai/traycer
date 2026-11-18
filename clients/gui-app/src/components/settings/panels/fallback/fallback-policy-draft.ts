@@ -1878,6 +1878,10 @@ function withoutPendingSave(
   );
 }
 
+/**
+ * The `save-abandoned` arm: the save never went out, so it leaves no notice,
+ * no error and no claim about the host.
+ */
 function applySaveAbandoned(
   state: FallbackPolicyDraftState,
   requestId: number,

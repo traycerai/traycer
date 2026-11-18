@@ -526,7 +526,9 @@ export const PERSIST_STORES = [
     leaf: "team-continue-caution-seen",
     kind: "static",
   },
-  // Each claim notice is shown once per device.
+  // The teammates' claims of a team computer each person has been told about
+  // on this device (`claimed-computer-notice-store.ts`): the notice is shown
+  // once per device.
   {
     camelName: "claimNoticesTold",
     leaf: "claim-notices-told",

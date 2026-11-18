@@ -120,7 +120,9 @@ export function grantRotationLine(
 }
 
 export interface SecretRotationProducerLine {
+  /** A worker class; unique within one rotation. */
   readonly key: string;
+  /** "postgres: 3 sessions closed". */
   readonly text: string;
 }
 

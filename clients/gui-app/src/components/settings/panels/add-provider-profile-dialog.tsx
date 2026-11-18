@@ -152,6 +152,7 @@ export interface ProviderTargetLoginControls {
   readonly accentColor: ProviderProfileAccentColor;
 }
 
+/** Whether "Sign in" is held off: any one reason is enough. */
 function linkHeldOff(reasons: {
   readonly labelEmpty: boolean;
   readonly busy: boolean;

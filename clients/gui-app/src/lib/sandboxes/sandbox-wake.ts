@@ -276,7 +276,12 @@ function toastWakeOutcome(
 
 const NOT_ENOUGH_CREDITS_TO_WAKE = "Not enough credits to wake this sandbox";
 
-/** While ownership is unknown, nothing is told as the person's own. */
+/**
+ * The credit gate's description, or `null` for the title alone. A refusal
+ * that named a team pot says which, as a row does. The person's own balance,
+ * or an older server's silence, keeps the add-credits line. While whose
+ * sandbox it is is not known, nothing is told as the person's own.
+ */
 function creditGateDescription(
   outcome: Extract<SandboxWakeOutcome, { readonly kind: "credit-gate" }>,
   configuration: SandboxConfigurationCopy | null,

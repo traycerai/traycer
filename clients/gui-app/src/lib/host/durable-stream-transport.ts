@@ -133,7 +133,11 @@ export function openDurableStreamTransport(params: {
     autoStart: true,
   });
   if (wsStreamClient === null) {
-    // Refused before any dial: below the minimum host version, or a remote row's public key does not decode.
+    // Two causes, both refused before any dial: a target of any kind below
+    // the app's minimum host version, or a remote target whose
+    // registry-published public key does not decode (a corrupt row). Unlike
+    // the ordinary "no target yet" case callers already gate on before
+    // opening.
     throw new Error(
       `Host ${params.target.hostId} is below the minimum host version or has an invalid public key; cannot open a durable stream`,
     );

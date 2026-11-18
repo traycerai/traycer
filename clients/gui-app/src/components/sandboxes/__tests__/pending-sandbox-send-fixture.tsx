@@ -765,6 +765,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
       mocks.useRuntimeBinding ? actual.useHostClient() : null,
     useHostBinding: () =>
       mocks.useRuntimeBinding ? actual.useHostBinding() : hostBinding,
+    // The failed line's real actions read the control plane through it.
     useAuthService: () =>
       mocks.useRuntimeBinding ? actual.useAuthService() : hostBinding.auth,
   };

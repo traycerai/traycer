@@ -194,6 +194,11 @@ export function useBotFailedRequest(args: {
   );
 }
 
+/**
+ * A sandbox's refusal in the words the error row gives it: on a team's
+ * sandbox out of credits, the team's line, and cut as the row cuts it while
+ * whose credits the sandbox is on is not known.
+ */
 function refusalCopy(
   code: string | null,
   summary: string,

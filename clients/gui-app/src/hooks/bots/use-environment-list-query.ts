@@ -34,6 +34,7 @@ import {
 
 const METHOD = "environment.list";
 
+// Stable params identity so the key stays referentially constant across renders.
 const EMPTY_PARAMS = {};
 
 /**

@@ -3974,6 +3974,9 @@ describe("<HarnessModelPicker />", () => {
         profiles: claudeProfilesForDropdown(),
       }),
     ];
+    // Target host: no OAuth login capability. The rail's visible profiles
+    // resolve through `runTargetHostId`. Claude draws the dropdown from one
+    // row; this fixture keeps two profiles, matching the sibling above.
     queryMock.providerStatesByClient.set("tab-host-1", [
       providerCliStateWithProfiles({
         providerId: "claude-code",

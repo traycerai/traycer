@@ -76,6 +76,8 @@ function hasKnownCleanupFailure(
  */
 export function useSecretRemovalRetry(): DetailsItemRetry {
   const queryClient = useQueryClient();
+  // One mutation keeps the reads and the destroy in sequence, with a shared
+  // pending and refusal state. Success marks every scope's secret reads stale.
   const retry = useSecretsOperationMutation<string | null, DetailsSubject>({
     mutationKey: settingsDetailsMutationKeys.secretRemovalRetry(),
     mutationFn: async (subject, send) => {

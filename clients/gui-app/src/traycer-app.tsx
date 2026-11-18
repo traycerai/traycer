@@ -320,9 +320,10 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                                   own doorbell. */}
                                     <CloudRecoveryDoorbellMount />
                                     {/* Above the shell split on purpose: the onboarding tour
-                                       renders through `StandaloneShell`, not `AppShell`, and its
-                                       Import button needs this run handle. This is the lowest node
-                                       both shells share that still has the host stream. */}
+                                  renders through `StandaloneShell`, not `AppShell`, so a
+                                  mount inside the app shell left the tour's Import button
+                                  with no run handle to call. This is the lowest node both
+                                  shells share that still has the host stream. */}
                                     <SessionImportRunController />
                                     <EnvironmentArmScopeMount />
                                     <AppLocalNotificationsPersistLifecycleBridge>

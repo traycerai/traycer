@@ -204,6 +204,7 @@ const NEEDS_HOST: BotOnboardingSetup = {
   arrival: null,
 };
 
+/** The answers; a test swaps one to change what the next read sees. */
 interface HostAnswers {
   environments: () =>
     | EnvironmentListResponseV11

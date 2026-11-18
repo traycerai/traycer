@@ -178,7 +178,8 @@ export function useSettledRoutingCardOffersSwitch(input: {
   );
   const store = handle === null ? emptySlice : handle.store;
   const refusal = useFailedTurnRefusal({ hostId, chatId });
-  // A Switch the card does not offer does not hold the banner back.
+  // The card's own gate on a bot's chat (`fallback-manual-rungs.tsx`): a
+  // Switch it does not offer does not hold the banner back.
   const mayChangeBot = useBotTurnMayChange(epicId);
   const { harnessId, profileId } = account;
   return useStore(

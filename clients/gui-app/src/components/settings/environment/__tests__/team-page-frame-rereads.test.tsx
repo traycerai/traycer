@@ -128,7 +128,9 @@ function mountFrame(
     useSettingsEnvironmentPickStore.setState({ pick });
   });
   const harness = mountTeamPage({ kind: "host" }, handlers);
-  // Set before the list's first read, which joins each row's role and handle from them.
+  // The account's teams as the app has them at sign-in: the environment list
+  // joins the viewer's role and the team's handle from them as its first read
+  // starts.
   useAuthStore.setState({
     shareableTeams: [
       { teamId: acme.ownerId, slug: "handle-a", avatarUrl: null },

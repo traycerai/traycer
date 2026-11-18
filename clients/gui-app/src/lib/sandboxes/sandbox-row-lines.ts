@@ -433,6 +433,7 @@ export interface SandboxClockInput {
   /** A resumed host has not answered for this wake yet. */
   readonly resumePending?: boolean;
   readonly summary: SandboxSummary;
+  /** The page's configuration, which the settings line names. */
   readonly configuration: SandboxPageConfiguration;
   /** `null` (unknown) leaves both out. */
   readonly credits: SandboxPageConfiguration | null;
@@ -1088,6 +1089,7 @@ const NO_ROW_ACTIONS: SandboxRowActions = { primary: null, menu: [] };
 export function sandboxRowActions(input: {
   readonly summary: SandboxSummary;
   readonly unreachable: boolean;
+  /** A frozen row offers adding credits; everyone else is offered Resume. */
   readonly frozenOffersAddCredits: boolean;
   readonly settingsFailed: boolean;
 }): SandboxRowActions {

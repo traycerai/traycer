@@ -689,8 +689,9 @@ vi.mock(
       await importOriginal<
         typeof import("@/hooks/providers/use-providers-start-login-mutation")
       >();
-    // `mutateAsync` settles even where StrictMode detached the observer; this adapts it
-    // onto the recorded fake.
+    // The login flow starts through `mutateAsync` (its promise settles even
+    // where StrictMode detached the observer); this adapts it onto the
+    // recorded `(variables, { onSuccess, onError })` fake every test drives.
     const mockedMutation = () => ({
       mutateAsync: (variables: StartLoginVariables) =>
         new Promise<StartLoginData>((resolve, reject) => {
@@ -1071,6 +1072,8 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
   }),
 }));
 
+// Provider Env writes through a host-scoped mutation; neither is about these
+// cases, and it opens with `useQueryClient()`.
 vi.mock("@/hooks/host/use-host-scoped-mutation", async (importOriginal) => {
   const actual =
     await importOriginal<
@@ -2864,7 +2867,11 @@ describe("<ProvidersSettingsPanel />", () => {
   });
 
   beforeEach(() => {
-    // `9.1` is the line `auto` became expressible on.
+    // The Permissions tab reads the NEGOTIATED `agent.gui.listHarnesses` line
+    // (see `permissionsTab`), through the real manifest registry - only the
+    // scope's host id is mocked. `9.1` is the line `auto` became expressible
+    // on, so this is the ordinary auto-capable host; the cases about the gate
+    // record their own manifest over it.
     recordNegotiatedHostManifest(hostScopeMocks.hostId, {
       "agent.gui.listHarnesses": agentGuiListHarnessesV91.schemaVersion,
     });
@@ -3415,7 +3422,9 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(hostScopeMocks.setHostId).toHaveBeenCalledWith(
       "host-that-needs-reauth",
     );
-    // Consumed once, so a later visit does not pull the scope back to that host.
+    // Consumed exactly once: the host half is cleared at the point of use, so
+    // a later visit does not yank the scope back to a host the user has since
+    // navigated away from.
     expect(useProvidersFocusStore.getState().focusHostId).toBeNull();
   });
 
@@ -7481,7 +7490,9 @@ describe("<ProvidersSettingsPanel />", () => {
     );
     openProfilesTab();
 
-    // The dialog is the floor under every entry point and re-reads the answer.
+    // The panel's own gate keeps the Add profile button shut on a sandbox, so
+    // the dialog is opened while the host still takes credentials; the dialog
+    // is the floor under every entry point, and re-reads the answer.
     fireEvent.click(screen.getByRole("button", { name: "Add a profile" }));
     expect(screen.queryByTestId("credential-refusal")).toBeNull();
     expect(
@@ -9945,6 +9956,8 @@ describe("<ProvidersSettingsPanel />", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save profile" }));
     expect(providerMocks.renameProfileMutate).toHaveBeenCalledTimes(1);
 
+    // Simulate a failed rename mutation: no onSuccess, surface the error
+    // the dialog reads from the rename hook, then re-render.
     act(() => {
       providerMocks.renameProfileError = abandonedSaveError(
         "providers.renameProfile",
@@ -9978,6 +9991,7 @@ describe("<ProvidersSettingsPanel />", () => {
     expect(screen.getByRole("button", { name: "Save profile" })).toBeDefined();
     expect(providerMocks.recolorProfileMutate).not.toHaveBeenCalled();
 
+    // Retry: clear the prior error and let the second Save succeed.
     act(() => {
       providerMocks.renameProfileError = null;
     });

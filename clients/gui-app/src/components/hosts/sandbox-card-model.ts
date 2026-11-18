@@ -614,8 +614,9 @@ export function unnamedTeamCreditsRanOut(
 export type SandboxHeaderOwnership = "team" | "personal" | "unknown";
 
 /**
- * The host page offers only Destroy, so no wake remedy. `null` while ownership, or
- * a team's name, is unknown.
+ * The host page offers only Destroy when credits run out, so names no wake
+ * remedy. `null` while whose sandbox it is is not known, and while a team's
+ * sandbox has no name to give yet.
  */
 export function sandboxHeaderCreditsLine(
   summary: SandboxSummary | null,

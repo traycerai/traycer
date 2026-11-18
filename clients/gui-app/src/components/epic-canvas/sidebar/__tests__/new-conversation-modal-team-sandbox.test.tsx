@@ -556,6 +556,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
       },
       ultracode: false,
       selection: { harnessId: "claude", modelSlug: "sonnet", profileId: null },
+      // The raw pick; `selection` above is what this host's catalog shows.
       values: {
         ultracode: false,
         selection: {

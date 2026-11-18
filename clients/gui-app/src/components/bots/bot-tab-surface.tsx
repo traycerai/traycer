@@ -1592,6 +1592,7 @@ function BotTabContent(props: {
         : environmentBotsOf(botList.data.bots, snapshot.bot.environmentId),
     [botList.data, snapshot.bot.environmentId],
   );
+  // Who wrote each channel row.
   const directory = useEnvironmentMemberDirectory(
     snapshot.bot.environmentId,
     true,

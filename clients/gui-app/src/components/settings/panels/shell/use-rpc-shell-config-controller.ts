@@ -256,7 +256,8 @@ export function useRpcShellConfigController(props: {
       mutationFn: async (rename, pressed) => {
         const { client: pressedClient, hostId: sentOn } = pressed;
         if (pressedClient === null) {
-          // So `onError` always gets the `HostRpcError` shape the toast helper classifies.
+          // Normalized so `onError` always receives the `HostRpcError` shape the
+          // toast helper reads, rather than a bare `Error` it cannot classify.
           throw toHostRpcError(
             new Error("No host client to rename the environment variable"),
             "config.env.set",
@@ -282,7 +283,9 @@ export function useRpcShellConfigController(props: {
         );
       },
       onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
-      // Settled, not success: a set that lands then a delete that rejects leaves both keys.
+      // SETTLED, not success - the same two-write staleness the bridge twin has:
+      // a set that lands followed by a delete that rejects leaves both keys on
+      // the host with the editor showing the pre-rename list.
       onSettled: (_data, _error, _variables, context) => {
         const hostId = context?.hostId ?? null;
         if (hostId === null) return;

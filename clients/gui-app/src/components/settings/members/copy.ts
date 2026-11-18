@@ -112,6 +112,7 @@ export function legacyRoleNotice(
   return `${lead}. ${joinNames(names)} can now edit. ${tail}`;
 }
 
+/** The standing line on a configuration a viewer may read and not change. */
 export function seeButNotChangeLine(teamName: string): string {
   return `You can see ${teamName}'s settings but not change them.`;
 }
@@ -266,6 +267,7 @@ export function memberGainedEditing(
   );
 }
 
+/** A member in the team, not an invitation. */
 function isAcceptedMember(member: MembersListMember): boolean {
   return member.inviteState !== "pending";
 }

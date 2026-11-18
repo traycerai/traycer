@@ -44,6 +44,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
   return {
     ...actual,
     useHostBinding: () => hostBindingMock.current,
+    // Add a secret reads through the selected host's client.
     useHostClient: () => hostBindingMock.current?.hostClient,
   };
 });
@@ -487,6 +488,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         removed: [],
       }),
       "environment.review": () => ({
+        // The `@1.2` facts each row carries, none of them known here.
         entries: review.map((entry) => ({
           command: null,
           event: null,

@@ -335,7 +335,9 @@ export function useHostQueryWithResponseMap<
           throw hostClientUnavailableError(method);
         }
         args.preflight?.();
-        // Read before the ordering fence, so the fence stays the last capture before the request leaves.
+        // The payload, which is `params` unless a caller derives one per
+        // dispatch - see `buildRequest`. Read BEFORE the ordering fence below so
+        // that fence remains the last thing captured before the request leaves.
         const buildRequest = args.buildRequest;
         const payload =
           buildRequest === undefined ? params : buildRequest(params);
@@ -642,8 +644,10 @@ export function useHostMutation<
             if (idempotencyKey !== null) {
               return client.requestWithOptions(args.method, params, {
                 idempotencyKey,
-                // A keyed create is a small interactive request once images travel by hash, and
-                // the policy table refuses a budget it does not declare.
+                // The method's own scheduling budget. A keyed create is a small
+                // INTERACTIVE request once its images travel by hash, so there is
+                // nothing to extend - and the policy table REFUSES a budget it
+                // does not declare for the method.
                 responseTimeoutMs: null,
                 requiredHostMethodVersion: requirement,
                 signal,
@@ -661,7 +665,10 @@ export function useHostMutation<
               : client.requestWithSignal(args.method, params, signal);
           };
           const mapDispatchError = args.mapDispatchError;
-          // Directly on the dispatch: a catch after a `.then` would re-map a `resolveResponse` failure.
+          // `.catch` directly on the dispatch, never chained after a `.then`: a
+          // catch downstream of a success arm also catches what that arm throws,
+          // and here that would re-map a `resolveResponse` failure into a
+          // dispatch error.
           const mappedDispatch =
             mapDispatchError === undefined
               ? dispatch
@@ -677,7 +684,9 @@ export function useHostMutation<
                   mappedDispatch,
                   pressed.follow.proposes,
                 );
-          // Here so a substituted response is what every arm below sees, `mutateAsync` included.
+          // Between the dispatch and `onResponse`, so a substituted response is
+          // what every arm below sees - including the caller's `onSuccess` and
+          // whatever `mutateAsync` resolves with.
           const resolveResponse = args.resolveResponse;
           const response =
             resolveResponse === undefined

@@ -3703,7 +3703,8 @@ function useChatTileSessionViewModel(
       canParkCreatorMessage,
     ],
   );
-  // A host snapshot, not the at-rest hint, decides whether locally captured messages go.
+  // The handle's acquisition follows its actual serving peer. A host snapshot,
+  // not the at-rest hint, decides whether these locally captured messages go.
   useEffect(() => {
     if (evictedSend === null || !evictedSend.ready) return;
     if (

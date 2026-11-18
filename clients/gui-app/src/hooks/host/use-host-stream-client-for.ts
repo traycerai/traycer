@@ -268,7 +268,10 @@ export function buildHostStreamClient(params: {
    */
   readonly cloudAuthorized: () => boolean;
   readonly authnBaseUrl: string;
-  /** Reached only when authn refuses the sign-in token on a mint; a host's refusal never starts it. */
+  /**
+   * The sign-in's own recovery: reached only when authn refuses the sign-in
+   * token on a mint. A host's refusal never starts it.
+   */
   readonly auth: StreamAuthRevalidator | null;
   readonly hostTokens: HostTokenSource;
   /**
