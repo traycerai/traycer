@@ -690,16 +690,18 @@ function BotChatTranscriptBody(props: {
     located,
     end: () => setPendingJump(null),
   });
-  // The jump pending as of the last commit, for the ends that happen outside
-  // render: the reader moving, the bound falling due, and an "in reply to"
-  // open replacing it. A passive effect's cleanup runs after its commit, so
-  // the bound's timer can fire for a jump that has already ended; it asks
-  // here first. The layout effect keeps this current inside the commit, for
-  // the ends settled during render (a landing, a reported miss, a send's
-  // fallback, a landing's new jump), which never write it themselves: a
-  // render may be discarded or run twice. Its cleanup clears it on unmount,
-  // ahead of the timer's own. An end in an event clears it there, before its
-  // write.
+  // Invariant, with `usePendingJumpBound`: between commits a bound's timer
+  // exists only for the jump the last commit left pending, in a pane it left
+  // in view, and this names that jump until an event ends it. Both are kept
+  // in the layout phase, inside the commit, so no timer outlives the commit
+  // that lands or ends its jump, hides its pane or unmounts it. What a commit
+  // cannot cover is an end made in an event whose render comes a task later
+  // (a wheel's does): the reader moving, and an "in reply to" open replacing
+  // the jump. Each clears this before its write and the timer asks here
+  // first, so it says nothing of a jump the reader has left and cannot clear
+  // the one that replaced it. The ends settled during render (a landing, a
+  // reported miss, a send's fallback, a landing's new jump) never write this:
+  // a render may be discarded or run twice.
   const liveJumpRef = useRef<PendingJump | null>(null);
   useLayoutEffect(() => {
     liveJumpRef.current = pendingJump;
@@ -1491,9 +1493,11 @@ function useReportedMiss(args: {
  * list is mounted and scroll whenever the row came. The clock runs only while
  * the pane is in view and starts again each time it returns, so nobody comes
  * back to a jump that ended while they could not see it. One that reports its
- * miss says so; any other ends silently. `expire` answers whether the jump
- * was still the pending one: a timer that outlives its jump says and writes
- * nothing. The bound is this mount's and this jump's: a landing a remount
+ * miss says so; any other ends silently. The timer is armed and cancelled in
+ * the layout phase: a passive cleanup runs after its commit, and a timer
+ * firing in between would end a jump whose pane that commit hid, or speak of
+ * one it landed. `expire` answers whether an event has ended the jump since
+ * that commit. The bound is this mount's and this jump's: a landing a remount
  * tries again starts another, as does the turn a send falls back to.
  */
 function usePendingJumpBound(
@@ -1501,7 +1505,7 @@ function usePendingJumpBound(
   expire: (jump: PendingJump) => boolean,
 ): void {
   const paneVisible = usePaneVisible();
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (pendingJump === null || !paneVisible) return;
     const timer = window.setTimeout(() => {
       if (!expire(pendingJump)) return;

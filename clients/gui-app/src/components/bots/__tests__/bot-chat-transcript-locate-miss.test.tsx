@@ -10,7 +10,13 @@
  * not arrive within the bound, and when its landing is withdrawn as the row
  * arrives.
  */
-import { StrictMode, useContext, useEffect, type ReactNode } from "react";
+import {
+  StrictMode,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  type ReactNode,
+} from "react";
 import {
   act,
   cleanup,
@@ -203,6 +209,30 @@ function landingOf(
   return { messageId, visit: 1, ...input };
 }
 
+/**
+ * Runs `atCommit` in the layout phase of every commit of the tree it wraps,
+ * after the transcript's own layout effects and after every layout cleanup of
+ * that commit, and before any passive cleanup: the place a timer due "now"
+ * is put to fall inside a commit. A real timer cannot fire inside a commit;
+ * in a browser the same gap is a commit that is not sync-lane, whose passive
+ * effects wait for a later task.
+ */
+let atCommit: (() => void) | null = null;
+function AtCommit(props: { readonly children: ReactNode }): ReactNode {
+  useLayoutEffect(() => {
+    atCommit?.();
+  });
+  return props.children;
+}
+
+/** Fires `deadline` once, in the layout phase of the next commit. */
+function atTheNextCommit(deadline: () => void): void {
+  atCommit = () => {
+    atCommit = null;
+    deadline();
+  };
+}
+
 function mountTranscript(): { readonly rerender: () => void } {
   store = createLandingStore([resolvedUserMessage()], requestTranscriptOrdinal);
   mocks.handle = { store } as ChatSessionStoreHandle;
@@ -218,25 +248,27 @@ function mountTranscript(): { readonly rerender: () => void } {
   });
   const tree = (): ReactNode => (
     <StrictMode>
-      <QueryClientProvider client={queryClient}>
-        <PaneVisibilityContext.Provider value={paneVisible}>
-          <BotTestRunnerHost>
-            <BotChatTranscript
-              botId={BOT_ID}
-              chatId={CHAT_ID}
-              hostId="host-1"
-              title="Release Bot"
-              instanceId="bot-thread:test"
-              surface={THREAD_SURFACE}
-              resolveMember={UNRESOLVED_BOT_MEMBERS}
-              showConnecting
-              header={listHeader}
-              landOn={landing}
-              flow={null}
-            />
-          </BotTestRunnerHost>
-        </PaneVisibilityContext.Provider>
-      </QueryClientProvider>
+      <AtCommit>
+        <QueryClientProvider client={queryClient}>
+          <PaneVisibilityContext.Provider value={paneVisible}>
+            <BotTestRunnerHost>
+              <BotChatTranscript
+                botId={BOT_ID}
+                chatId={CHAT_ID}
+                hostId="host-1"
+                title="Release Bot"
+                instanceId="bot-thread:test"
+                surface={THREAD_SURFACE}
+                resolveMember={UNRESOLVED_BOT_MEMBERS}
+                showConnecting
+                header={listHeader}
+                landOn={landing}
+                flow={null}
+              />
+            </BotTestRunnerHost>
+          </PaneVisibilityContext.Provider>
+        </QueryClientProvider>
+      </AtCommit>
     </StrictMode>
   );
   const view = render(tree());
@@ -343,6 +375,7 @@ beforeEach(() => {
   landing = null;
   paneVisible = true;
   listHeader = null;
+  atCommit = null;
   mocks.asked = 0;
   mocks.locateParams = [];
   mocks.commits = 0;
@@ -932,14 +965,13 @@ describe("a pending jump that waits for its row beyond the bound", () => {
 });
 
 /**
- * Not shown here: the bound's timer firing between the commit in which the
- * row landed the jump and that commit's passive effects, which cancel it. The
- * row reaches the transcript through a store write, which React renders at
- * its sync lane, and it runs a sync-lane commit's passive effects at the tail
- * of the commit itself; with the flag that stops it counting a write outside
- * act as a test's mistake, the cleanup ran before the microtask that rendered
- * the write had finished, so no timer can be placed between the two without
- * stubbing React's scheduler or the hook.
+ * Not shown here: a deadline that falls while a render that ends the jump has
+ * started and not committed; nothing outside React can see an uncommitted
+ * render. The ends that commit are shown below: the hiding commit with a
+ * deadline in its layout phase, and the two ends made in an event, with a
+ * deadline in the same dispatch ahead of their commit. A deadline placed in a
+ * landing's commit would show neither guard alone: the layout-phase cancel
+ * and the ref that commit writes each stop it.
  */
 
 /** The bound's timer is cancelled when its jump lands: past the bound, a landed jump says nothing and the store is not asked again. */
@@ -1012,6 +1044,88 @@ describe('an "in reply to" open that was tried in view, and whose pane then leav
     await rowArrives();
 
     expect(flashing(TARGET)).toBe(false);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('an "in reply to" open whose deadline falls inside the commit that hides its pane', () => {
+  it("is not ended: it lands when the pane shows again and its row arrives", async () => {
+    mocks.locate = () => Promise.resolve(FOUND_ROW);
+    listHeader = <InReplyToOpener />;
+    const view = mountTranscript();
+    await settleLegendList();
+    askInReplyTo();
+    await answered();
+    await advanceToJumpAge(TRANSCRIPT_JUMP_TTL_MS - 1);
+
+    paneVisible = false;
+    atTheNextCommit(() => vi.advanceTimersByTime(1));
+    act(() => {
+      view.rerender();
+    });
+    paneVisible = true;
+    act(() => {
+      view.rerender();
+    });
+    await rowArrives();
+
+    await waitFor(() => {
+      expect(flashing(TARGET)).toBe(true);
+    });
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A jump the reader ends in an event is ended before the render that shows it
+ * has committed. A listener on `document` runs after the list's and React's
+ * own handlers of the same dispatch and before the commit, so a deadline
+ * fired there falls between the end and its commit. It stands in for a wheel,
+ * whose render comes a task later.
+ */
+describe("a pending jump whose deadline falls between an end made in an event and its commit", () => {
+  function deadlineAfter(eventType: string): void {
+    const fire = (): void => {
+      vi.advanceTimersByTime(1);
+    };
+    document.addEventListener(eventType, fire);
+    onTestFinished(() => document.removeEventListener(eventType, fire));
+  }
+
+  it("is not said of when the reader's move ended a notification's jump", async () => {
+    mocks.locate = () => Promise.resolve(FOUND_ROW);
+    const view = mountTranscript();
+    await settleLegendList();
+    askNotification(view);
+    await answered();
+    await advanceToJumpAge(TRANSCRIPT_JUMP_TTL_MS - 1);
+
+    deadlineAfter("pointerdown");
+    readerMovesTheList();
+    await rowArrives();
+
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(flashing(TARGET)).toBe(false);
+  });
+
+  it('does not end the jump a second "in reply to" open replaced it with', async () => {
+    mocks.locate = () => Promise.resolve(FOUND_ROW);
+    listHeader = <InReplyToOpener />;
+    mountTranscript();
+    await settleLegendList();
+    askInReplyTo();
+    await answered();
+    await advanceToJumpAge(TRANSCRIPT_JUMP_TTL_MS - 1);
+
+    deadlineAfter("click");
+    act(() => {
+      fireEvent.click(screen.getByTestId("open-in-reply"));
+    });
+    await rowArrives();
+
+    await waitFor(() => {
+      expect(flashing(TARGET)).toBe(true);
+    });
     expect(toast.error).not.toHaveBeenCalled();
   });
 });
