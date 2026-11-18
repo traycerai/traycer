@@ -1298,6 +1298,14 @@ interface UnplacedRenderedRows {
  * the ordinal is accounted for, and appending a second, ordinal-less copy
  * would draw the row twice.
  *
+ * A row the renderer itself calls Pending or Streaming is neither: it is the
+ * turn in progress, built here rather than inferred from a sibling, and it is
+ * drawn in every state. Reaching this point means no pass seated it, and
+ * {@link seatLiveRecords} declines only an ordinal that draws no placeholder
+ * (past `rowCount`, held by another row, or suppressed), so the tail is its
+ * one copy. Skipping it because the skeleton names it removes the working row
+ * from the list until a range serves it.
+ *
  * A model only a STALE span backs is pre-rebase history whose place in the
  * new space is not yet known - appending it to the tail would publish it at a
  * position it never had. It stays behind its placeholder unless it is also
@@ -1333,7 +1341,8 @@ function unplacedRenderedRows(input: {
     if (input.placedRowIds.has(model.id)) continue;
     if (
       input.skeletonOrdinals.has(model.id) &&
-      !input.heldPreSplitRows.has(model.id)
+      !input.heldPreSplitRows.has(model.id) &&
+      !isExplicitlyPendingOrStreaming(model)
     ) {
       continue;
     }

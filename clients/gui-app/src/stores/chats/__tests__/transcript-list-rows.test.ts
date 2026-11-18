@@ -1183,6 +1183,60 @@ describe("transcriptListRows", () => {
     expect(kinds(rows)).toEqual(["P:0", "P:1", "H:streaming-row"]);
   });
 
+  describe("working row the skeleton names but no pass seated", () => {
+    const working = {
+      ...modelWithoutPersistentMessageId("assistant:t1"),
+      content: "",
+      statusLabel: "Streaming" as const,
+      runState: "running" as const,
+    };
+
+    it.each([
+      {
+        name: "past rowCount",
+        window: {
+          rowCount: 1,
+          spans: [span(0, ["u-1"])],
+          skeleton: [skeletonEntry("u-1"), skeletonEntry("assistant:t1")],
+        },
+        rendered: [model("u-1"), working],
+        expected: ["H:u-1", "H:assistant:t1"],
+      },
+      {
+        name: "at an ordinal another span row holds",
+        window: {
+          rowCount: 2,
+          spans: [span(0, ["u-0", "u-1"])],
+          skeleton: [skeletonEntry("u-0"), skeletonEntry("assistant:t1")],
+        },
+        rendered: [model("u-0"), model("u-1"), working],
+        expected: ["H:u-0", "H:u-1", "H:assistant:t1"],
+      },
+      {
+        name: "at an ordinal suppressed for a withheld span row",
+        window: {
+          rowCount: 2,
+          spans: [span(0, ["u-0", "withheld"])],
+          skeleton: [skeletonEntry("u-0"), skeletonEntry("assistant:t1")],
+        },
+        rendered: [model("u-0"), working],
+        expected: ["H:u-0", "H:assistant:t1"],
+      },
+    ])("draws it at the tail when the skeleton names it $name", (c) => {
+      const rows = transcriptListRows({
+        splitLongTurns: true,
+        window: windowOf({
+          ...c.window,
+          skeletonComplete: false,
+          invalidated: false,
+        }),
+        rendered: c.rendered,
+      });
+
+      expect(kinds(rows)).toEqual(c.expected);
+    });
+  });
+
   it("still withholds a stale-only row that nothing live backs", () => {
     // The other half of the same gate, and the reason it exists: pre-rebase
     // history whose place in the new space is unknown stays behind its
