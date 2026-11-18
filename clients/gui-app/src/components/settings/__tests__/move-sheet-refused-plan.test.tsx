@@ -1047,4 +1047,36 @@ describe("<MoveSheet /> reopened over an earlier opening's answer", () => {
     expect(screen.getByText(NOT_AWAITING.message)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
+
+  it("runs the stopped move again from Retry only once this opening's status has answered stopped", async () => {
+    const harness = mountWithAppCache({
+      plan: STALE_PLAN,
+      planFailure: NOT_AWAITING,
+      status: stoppedStatus(),
+      servesRetry: true,
+    });
+    await settle();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    closeMoveSheet();
+    await settle();
+
+    const answerStatus = harness.holdNextStatusRead();
+    const readsBeforeReopen = harness.planReads();
+    openMoveSheet();
+    await settle();
+    expect(screen.getByText(NOT_AWAITING.message)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+
+    expect(harness.retries()).toBe(0);
+    expect(harness.planReads()).toBe(readsBeforeReopen + 2);
+
+    answerStatus();
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+
+    expect(harness.retries()).toBe(1);
+  });
 });
