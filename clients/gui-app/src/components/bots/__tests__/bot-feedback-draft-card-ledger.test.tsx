@@ -63,44 +63,21 @@ vi.mock("@/lib/registries/chat-session-registry", () => ({
 }));
 
 import { BotFeedbackDraftCard } from "@/components/bots/bot-feedback-draft-card";
+import {
+  gate,
+  PENDING,
+  SOURCE,
+  UNAVAILABLE_COPY,
+  type Gate,
+} from "./bot-feedback-draft-card-test-support";
 
-const SOURCE = {
-  hostId: mockLocalHostEntry.hostId,
-  epicId: "epic-1",
-  chatId: "chat-1",
-  blockId: "block-1",
-} as const;
 const OTHER_SOURCE = { ...SOURCE, blockId: "block-2" } as const;
 
-const PENDING: ToolCallFeedbackDraftStamp = {
-  category: "tool_problem",
-  toolName: "traycer_run_shell",
-  goal: "Restart a shell with a new working directory.",
-  observed: "The process kept the old directory.",
-  suggestion: null,
-  suggestDiagnostics: false,
-  state: "pending",
-  decidedAt: null,
-  failureReason: null,
-};
 const SENT: ToolCallFeedbackDraftStamp = {
   ...PENDING,
   state: "sent",
   decidedAt: 5,
 };
-
-interface Gate<T> {
-  readonly promise: Promise<T>;
-  readonly resolve: (value: T) => void;
-}
-
-function gate<T>(): Gate<T> {
-  let resolve: (value: T) => void = () => {};
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 let requestCounter = 0;
 let decideCalls: ChatFeedbackDraftDecideRequest[] = [];
@@ -225,8 +202,6 @@ function currentContext(): RequestContext {
   return context;
 }
 
-const UNAVAILABLE_COPY =
-  "This feedback draft is unavailable. Try again when its computer is connected.";
 const NOT_ALLOWED_COPY = "Only someone who can act in this chat can send it.";
 
 beforeEach(() => {

@@ -9,6 +9,7 @@ import {
   projectChatServerFrameForVersion,
   type ProjectedChatSubscribeServerFrame,
 } from "../chat-frame-compat";
+import { CHANNEL_ORIGIN, PROJECTION, STAMP } from "./feedback-draft-fixtures";
 
 /**
  * T356. A bot's feedback draft rides two optional leaves that land together on
@@ -19,38 +20,7 @@ import {
  * stamp (1.42) is untouched by this change.
  */
 
-const STAMP = {
-  category: "tool_problem",
-  toolName: "traycer_search_chats",
-  goal: "find a chat",
-  observed: "an opaque error",
-  suggestion: null,
-  suggestDiagnostics: false,
-  state: "pending",
-  decidedAt: null,
-  failureReason: null,
-};
-
-const CHANNEL_ORIGIN = {
-  kind: "channel",
-  botId: "bot-1",
-  hostEpoch: 3,
-  conversationId: "conv-1",
-  initiatingMessageId: "msg-1",
-  initiatingRequestId: "req-1",
-};
-
 const THREAD_ORIGIN = { ...CHANNEL_ORIGIN, kind: "thread", channelId: "ch-1" };
-
-const PROJECTION = {
-  source: {
-    hostId: "host-1",
-    epicId: "epic-1",
-    chatId: "chat-1",
-    blockId: "b-1",
-  },
-  draft: STAMP,
-};
 
 const TOOL_BLOCK = {
   type: "tool_call",

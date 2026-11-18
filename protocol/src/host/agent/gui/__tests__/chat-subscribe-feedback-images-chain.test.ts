@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import {
+  CHANNEL_ORIGIN,
+  PROJECTION as SHARED_PROJECTION,
+  STAMP,
+} from "./feedback-draft-fixtures";
 
 /**
  * Two independent additions to the `chat.subscribe` major-1 line, read through
@@ -13,35 +18,9 @@ import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 
 const versions = hostStreamRpcRegistry["chat.subscribe"][1].versions;
 
-const STAMP = {
-  category: "tool_problem",
-  toolName: "traycer_search_chats",
-  goal: "find a chat",
-  observed: "an opaque error",
-  suggestion: null,
-  suggestDiagnostics: false,
-  state: "pending",
-  decidedAt: null,
-  failureReason: null,
-};
-
-const CHANNEL_ORIGIN = {
-  kind: "channel",
-  botId: "bot-1",
-  hostEpoch: 3,
-  conversationId: "conv-1",
-  initiatingMessageId: "msg-1",
-  initiatingRequestId: "req-1",
-};
-
 const PROJECTION = {
-  source: {
-    hostId: "host-1",
-    epicId: "epic-1",
-    chatId: "chat-1",
-    blockId: "tool-1",
-  },
-  draft: STAMP,
+  ...SHARED_PROJECTION,
+  source: { ...SHARED_PROJECTION.source, blockId: "tool-1" },
 };
 
 const IMAGES = [

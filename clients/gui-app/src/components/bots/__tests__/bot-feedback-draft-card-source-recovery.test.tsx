@@ -64,28 +64,16 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 }));
 
 import { BotFeedbackDraftCard } from "@/components/bots/bot-feedback-draft-card";
+import {
+  PENDING,
+  SOURCE,
+  UNAVAILABLE_COPY,
+} from "./bot-feedback-draft-card-test-support";
 
-const SOURCE = {
-  hostId: mockLocalHostEntry.hostId,
-  epicId: "epic-1",
-  chatId: "chat-1",
-  blockId: "block-1",
-} as const;
-
-const PENDING: ToolCallFeedbackDraftStamp = {
-  category: "tool_problem",
-  toolName: "traycer_run_shell",
-  goal: "Restart a shell with a new working directory.",
-  observed: "The process kept the old directory.",
-  suggestion: null,
+const PENDING_WITH_DIAGNOSTICS: ToolCallFeedbackDraftStamp = {
+  ...PENDING,
   suggestDiagnostics: true,
-  state: "pending",
-  decidedAt: null,
-  failureReason: null,
 };
-
-const UNAVAILABLE_COPY =
-  "This feedback draft is unavailable. Try again when its computer is connected.";
 
 const REMEMBERED_MANIFEST = {
   "host.status": { major: 1, minor: 0 },
@@ -130,7 +118,11 @@ function buildSpine(): HostClient<HostRpcRegistry> {
             case "settles":
               return {
                 kind: "settled",
-                feedbackDraft: { ...PENDING, state: "sent", decidedAt: 5 },
+                feedbackDraft: {
+                  ...PENDING_WITH_DIAGNOSTICS,
+                  state: "sent",
+                  decidedAt: 5,
+                },
               };
           }
         },
@@ -173,7 +165,7 @@ function renderCard(): {
       <BotFeedbackDraftCard source={{ ...SOURCE }} draft={{ ...draft }} />
     </QueryClientProvider>
   );
-  const view = render(tree(PENDING));
+  const view = render(tree(PENDING_WITH_DIAGNOSTICS));
   return { rerender: (draft) => view.rerender(tree(draft)) };
 }
 
@@ -217,7 +209,7 @@ describe("<BotFeedbackDraftCard /> when its source host leaves and returns", () 
     expect(requests.preview).toHaveLength(0);
 
     world.entry = { ...mockLocalHostEntry, version: "0.0.1-mock" };
-    view.rerender(PENDING);
+    view.rerender(PENDING_WITH_DIAGNOSTICS);
     await settle();
 
     expect(actionsOffered()).toBe(true);
@@ -247,7 +239,7 @@ describe("<BotFeedbackDraftCard /> when its source host leaves and returns", () 
 
       // The source drops out of the directory: nothing to retry against.
       world.entry = null;
-      view.rerender(PENDING);
+      view.rerender(PENDING_WITH_DIAGNOSTICS);
       await settle();
       expect(screen.queryByRole("button", { name: "Retry Send" })).toBeNull();
       expect(screen.getByText(UNAVAILABLE_COPY)).toBeTruthy();
@@ -255,7 +247,7 @@ describe("<BotFeedbackDraftCard /> when its source host leaves and returns", () 
       // The source reconnects: a new incarnation of the same host.
       world.decideMode = "settles";
       world.entry = { ...mockLocalHostEntry, version: "0.0.1-mock" };
-      view.rerender(PENDING);
+      view.rerender(PENDING_WITH_DIAGNOSTICS);
       await settle();
 
       // Only the original intent: offering the other would change the decision
@@ -288,7 +280,7 @@ describe("<BotFeedbackDraftCard /> when its source host leaves and returns", () 
     await settle();
     world.decideMode = "settles";
     world.entry = { ...mockLocalHostEntry, version: "0.0.1-mock" };
-    view.rerender(PENDING);
+    view.rerender(PENDING_WITH_DIAGNOSTICS);
     await settle();
     return view;
   }
@@ -316,7 +308,7 @@ describe("<BotFeedbackDraftCard /> when its source host leaves and returns", () 
     const view = await failThenReturn("Send");
     expect(screen.getByRole("button", { name: "Retry Send" })).toBeTruthy();
 
-    view.rerender({ ...PENDING, state: "sent", decidedAt: 5 });
+    view.rerender({ ...PENDING_WITH_DIAGNOSTICS, state: "sent", decidedAt: 5 });
     await settle();
 
     expect(screen.queryByRole("button", { name: "Retry Send" })).toBeNull();

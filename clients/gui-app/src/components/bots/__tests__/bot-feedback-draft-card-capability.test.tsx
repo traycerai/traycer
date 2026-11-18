@@ -13,7 +13,6 @@ import type {
   ChatFeedbackDraftPreviewRequest,
 } from "@traycer/protocol/host/chat/feedback-draft";
 import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
-import type { ToolCallFeedbackDraftStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
   mockLocalHostEntry,
@@ -92,25 +91,11 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 }));
 
 import { BotFeedbackDraftCard } from "@/components/bots/bot-feedback-draft-card";
-
-const SOURCE = {
-  hostId: SOURCE_HOST_ID,
-  epicId: "epic-1",
-  chatId: "chat-1",
-  blockId: "block-1",
-} as const;
-
-const PENDING: ToolCallFeedbackDraftStamp = {
-  category: "tool_problem",
-  toolName: "traycer_run_shell",
-  goal: "Restart a shell with a new working directory.",
-  observed: "The process kept the old directory.",
-  suggestion: null,
-  suggestDiagnostics: false,
-  state: "pending",
-  decidedAt: null,
-  failureReason: null,
-};
+import {
+  PENDING,
+  SOURCE,
+  UNAVAILABLE_COPY,
+} from "./bot-feedback-draft-card-test-support";
 
 const requests: {
   sourceStatus: number;
@@ -125,9 +110,6 @@ let advertisesFeedback = true;
 
 /** Whether the source host's `host.status` read fails at the transport. */
 let statusFails = false;
-
-const UNAVAILABLE_COPY =
-  "This feedback draft is unavailable. Try again when its computer is connected.";
 
 function hostClient(
   entry: typeof mockLocalHostEntry,
