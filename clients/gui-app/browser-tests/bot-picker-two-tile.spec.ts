@@ -13,8 +13,10 @@ import { setInsets, type Insets } from "./support/viewport-insets.ts";
 // 1008 on the expanded one (240 + 2 x 384). A width of 768 alone cannot reach
 // it (the one-tile column form shows there), so the cases are the two sides of
 // a 1024 by 768 device, with and without side insets, and the 828 / 827
-// boundary. The form is read back from the page: the title picker's trigger
-// exists in the menu form and the column's pane exists in the column form.
+// boundary. The expanded strip's boundary is held from below, at 1007, and the
+// insets that move a width across the 828 boundary have a case of their own. The
+// form is read back from the page: the title picker's trigger exists in the menu
+// form and the column's pane exists in the column form.
 
 test.use({
   hasTouch: true,
@@ -62,6 +64,7 @@ async function expectTwoTileMenu(page: Page): Promise<void> {
  */
 async function expectOneTileColumn(page: Page): Promise<void> {
   await expect(page.locator(RAIL)).toBeVisible();
+  await expect(page.locator(CHANNEL)).toHaveCount(1);
   await expect(page.locator(CHANNEL)).toBeHidden();
   await expect(page.locator(COLUMN)).toBeVisible();
   await expect(page.locator(TRIGGER)).toHaveCount(0);
@@ -153,18 +156,6 @@ test("on a 1024 by 768 device with side insets the picker rests across everythin
   const entry = await openAndFollow(page);
 
   expectRestsAcross(entry, size, insets, size.height);
-});
-
-test("on a 1024 by 768 device with the expanded strip the picker rests across the full width", async ({
-  page,
-}) => {
-  const size = { width: 1024, height: 768 };
-  await openPage(page, size, "expanded");
-  await expectTwoTileMenu(page);
-
-  const entry = await openAndFollow(page);
-
-  expectRestsAcross(entry, size, NO_INSETS, size.height);
 });
 
 // The fixture draws no strip, so the expanded preference shows only in the width
