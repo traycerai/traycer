@@ -232,6 +232,7 @@ function MoveSheetBody(props: {
     runningPersonal,
     plan.data,
     refusal !== null,
+    rerun.planReadable,
   );
   const environmentId = personal.environmentId;
   const versionDiffers = disclosureDiffers(shownPlan);
@@ -365,14 +366,15 @@ function MoveAcceptButton(props: {
 /**
  * The plan, once the host list has answered: its lines name where it reaches.
  * A refused read keeps the last plan in the cache, which is not the plan the
- * computer would move now.
+ * computer would move now; nor is one read for a consent wait that is over.
  */
 function planOnceReachKnown(
   running: HostsRunningConfiguration,
   plan: MovePlan | undefined,
   refused: boolean,
+  readable: boolean,
 ): MovePlan | null {
-  return running.state === "ready" && plan !== undefined && !refused
+  return running.state === "ready" && plan !== undefined && !refused && readable
     ? plan
     : null;
 }
