@@ -1099,10 +1099,19 @@ describe("<BotThreadPanel /> a listed thread", () => {
     const group = screen.getByRole("group", { name: "Choices" });
 
     await user.dblClick(within(group).getByRole("button", { name: "Hold" }));
+    const settled = Promise.withResolvers<void>();
+    const stopWatching = panelQueryClient
+      .getMutationCache()
+      .subscribe((event) => {
+        const status =
+          event.type === "updated" ? event.mutation.state.status : null;
+        if (status === "success" || status === "error") settled.resolve();
+      });
     land(SEND_RESPONSE);
-    await waitFor(() => {
-      expect(panelQueryClient.isMutating()).toBe(0);
+    await act(async () => {
+      await settled.promise;
     });
+    stopWatching();
 
     expect(sent).toEqual([{ ...HOLD_PICK, replyTo: offered.messageId }]);
   });
