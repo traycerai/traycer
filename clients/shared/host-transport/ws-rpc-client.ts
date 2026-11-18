@@ -570,8 +570,7 @@ export class WsRpcClient<
         }
         continue;
       }
-      // The claim came after the token lookup, so a release in between found
-      // no slot to arm.
+      // A release between the token lookup and the claim found no slot to arm.
       if (releasedDuringLookup) this.sessions.armReleaseBeforeReady(sessionKey);
       return this.requestOnFreshSocket(
         method,

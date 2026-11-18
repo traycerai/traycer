@@ -239,8 +239,8 @@ function parseJsonOrNull(text: string | null): unknown {
 
 /**
  * `POST /api/slack/apps/register`: stores the app's credentials; a new
- * registration replaces the old one. `transport` is the shell's, which never
- * follows a redirect: the body carries two secrets.
+ * registration replaces the old one. `transport` is the shell's, which never follows a redirect:
+ * the body carries two secrets.
  */
 export async function registerSlackAppViaHttp(
   serverBaseUrl: string,

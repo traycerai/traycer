@@ -61,9 +61,8 @@ import { RemoteSession } from "../remote-session";
 import { PoolSessionPresence } from "../pool-session-presence";
 
 // The pool is a peer on the same mux as a host. These drive the real client
-// `RemoteSession` against a scripted peer. A pool open still carries the user
-// bearer and no authz. A relay open carries the host-only token in authz v2
-// and an empty bearer.
+// `RemoteSession` against a scripted peer. A pool open carries the user bearer and no authz; a
+// relay open carries the host-only token in authz v2 and an empty bearer.
 
 const EMPTY_AD = new Uint8Array(0);
 const WAIT = { timeout: 10_000, interval: 50 } as const;

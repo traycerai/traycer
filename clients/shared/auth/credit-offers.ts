@@ -90,8 +90,7 @@ async function request(
         },
         body: init.body,
         signal: abort.signal,
-        // The bearer rides along: a redirect is answered here, as a failure,
-        // and never followed with it.
+        // Carries a credential: never follow a redirect.
         redirect: "manual",
       }),
       abort.signal,
