@@ -1,7 +1,4 @@
-import type {
-  EnvironmentHostItemApply,
-  EnvironmentHostRecordV12,
-} from "@traycer/protocol/host/environment/contracts";
+import type { EnvironmentHostRecordV12 } from "@traycer/protocol/host/environment/contracts";
 import {
   hostNameFromLabel,
   UNNAMED_HOST_LABEL,
@@ -23,10 +20,6 @@ export interface RunningHost {
   readonly kind: "personal" | "sandbox";
   /** The computer this app runs on. */
   readonly isThisComputer: boolean;
-  /** When the host last reported to the cloud; `null` before it ever did. */
-  readonly lastReportedAt: number | null;
-  /** The host's last reported apply state per item, from the cloud. */
-  readonly applied: readonly EnvironmentHostItemApply[];
 }
 
 /** A name two or more running hosts share. */
@@ -55,8 +48,6 @@ export interface HostsRunningConfiguration {
   readonly thisComputerUnread: boolean;
   readonly collisions: readonly HostNameCollision[];
   readonly retry: () => void;
-  /** Refreshes without cancelling an answer already on its way. */
-  readonly reread: () => void;
 }
 
 /** A host this window can see firsthand: the account's or the directory's row. */
@@ -122,8 +113,6 @@ export function hostsRunningConfiguration(input: {
             : reported,
         kind: row.kind,
         isThisComputer: seen?.isLocalMachine === true,
-        lastReportedAt: row.lastReportedAt,
-        applied: row.applied,
       };
     });
   const listedIds = new Set(listed.map((host) => host.hostId));
@@ -134,8 +123,6 @@ export function hostsRunningConfiguration(input: {
       hostName: host.name,
       kind: host.sandbox ? "sandbox" : "personal",
       isThisComputer: host.isLocalMachine,
-      lastReportedAt: null,
-      applied: [],
     }));
   const all = [...listed, ...unlisted];
   const collisions = nameCollisions(all);

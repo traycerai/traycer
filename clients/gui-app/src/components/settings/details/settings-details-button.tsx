@@ -64,8 +64,6 @@ function DetailsSession(props: {
     if (provider === null)
       throw new Error("Details are unavailable. Update Traycer and try again.");
     return provider(subject, {
-      client,
-      hostId,
       environmentCloud: beginEnvironmentCloudOperation(environmentCloud),
       queryClient,
     });

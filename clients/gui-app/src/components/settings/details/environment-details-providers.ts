@@ -1,4 +1,3 @@
-import { queryOptions } from "@tanstack/react-query";
 import type {
   RequestOfMethod,
   ResponseOfMethod,
@@ -11,7 +10,6 @@ import type {
   DetailsHistoryEntry,
   DetailsHostStatus,
   DetailsProviderContext,
-  DetailsRecovery,
   DetailsStatus,
   DetailsSubject,
 } from "@/lib/settings-details-entry";
@@ -26,14 +24,7 @@ import {
 
 import { loadSecretDetails } from "@/components/settings/details/secret-details-status";
 import { sandboxDetailsProvider } from "@/lib/sandboxes/sandbox-details-provider";
-import { hostQueryKeys, sandboxQueryKeys } from "@/lib/query-keys";
-import type {
-  SandboxSummary,
-  SandboxListResponse,
-} from "@traycer/protocol/host/sandbox-control";
-import { useAuthStore } from "@/stores/auth/auth-store";
 import { unusedSettingLabel } from "@/components/settings/details/details-unused-setting";
-import { sandboxSettingsFailed } from "@traycer/protocol/host/sandbox-settings";
 
 type HistoryResponse = ResponseOfMethod<HostRpcRegistry, "environment.history">;
 type HistorySubject = RequestOfMethod<
@@ -47,15 +38,14 @@ const TITLES: Readonly<Record<string, string>> = {
   plan: "Plan details",
   host_settings: "Settings",
   move: "Move to Personal",
-  chip: "Settings delivery",
 };
 
 function historySubject(subject: DetailsSubject): HistorySubject {
-  if (subject.kind === "chip" || subject.key.length === 0) return null;
+  if (subject.key.length === 0) return null;
   return { kind: subject.kind, key: subject.key };
 }
 
-/** A host's state for the read's subject; the chip's subject names no item. */
+/** A host's state for the read; a subject with no key names no item. */
 function hostStatus(
   host: HistoryResponse["hostStates"][number],
   itemKind: string | null,
@@ -143,116 +133,6 @@ function memberNowSummary(
     : `${since}, changed by ${latest.actor.label}`;
 }
 
-type CurrentEnvironmentStatus = ResponseOfMethod<
-  HostRpcRegistry,
-  "environment.status"
->;
-
-function currentSandboxState(
-  previous: string,
-  sandbox: SandboxSummary | null,
-  status: CurrentEnvironmentStatus | null,
-): string {
-  if (
-    sandbox?.guestConfigured === false ||
-    (status !== null && sandboxSettingsFailed(status.items))
-  )
-    return "not_applied";
-  if (status === null) return previous;
-  const waiting =
-    status.receivedRevision === null ||
-    status.items.some(
-      (item) => item.status === "pending" || item.status === "received",
-    );
-  return waiting ? "received" : "applied";
-}
-
-/** Recovery admission and guest evidence come from the current sandbox, independently of history. */
-function deliveryRecovery(
-  host: DetailsHostStatus,
-  sandbox: SandboxSummary | null,
-  state: string,
-  isSandbox: boolean,
-): DetailsRecovery | null {
-  if (!isSandbox || (state !== "failed" && state !== "not_applied")) {
-    return host.recovery;
-  }
-  return {
-    kind: "apply",
-    hostId: host.hostId,
-    guestSetupFailed:
-      sandbox === null ? null : sandbox.guestConfigured === false,
-  };
-}
-
-/** Join current sandbox delivery with authorized history, preserving offline evidence. */
-async function deliveryHostRows(input: {
-  readonly host: DetailsHostStatus;
-  readonly sandbox: SandboxSummary | null;
-  readonly unusedListed: boolean;
-  readonly context: DetailsProviderContext;
-  readonly diagnostics: boolean;
-}): Promise<DetailsHostStatus[]> {
-  const { host, sandbox, context, diagnostics } = input;
-  if (sandbox !== null && sandbox.state !== "awake")
-    return [{ ...host, name: sandbox.displayName }];
-  const requestStatus = () =>
-    context.client
-      .createRequesterForHostId(host.hostId)
-      .request("environment.status", {});
-  const status = await context.queryClient
-    .fetchQuery(
-      queryOptions({
-        queryKey: hostQueryKeys.method<HostRpcRegistry, "environment.status">(
-          host.hostId,
-          "environment.status",
-          {},
-        ),
-        queryFn: requestStatus,
-        staleTime: 0,
-        retry: false,
-      }),
-    )
-    .catch(() => null);
-  const unused =
-    status?.items.filter((item) => item.status === "not_used") ?? [];
-  const isSandbox = sandbox !== null || unused.length > 0;
-  const state = isSandbox
-    ? currentSandboxState(host.state, sandbox, status)
-    : host.state;
-  const current: DetailsHostStatus = {
-    ...host,
-    name: sandbox?.displayName ?? host.name,
-    state,
-    reason: diagnostics ? host.reason : null,
-    recovery: deliveryRecovery(host, sandbox, state, isSandbox),
-  };
-  if (diagnostics && status !== null)
-    return [
-      current,
-      ...status.items.map(
-        ({ key: itemKey, status: state, code }): DetailsHostStatus => ({
-          ...current,
-          item: itemKey,
-          state,
-          reason: code,
-          recovery: null,
-        }),
-      ),
-    ];
-  return [
-    current,
-    ...(input.unusedListed ? [] : unused).map(
-      ({ key: itemKey }): DetailsHostStatus => ({
-        ...current,
-        item: unusedSettingLabel(itemKey),
-        state: "not_used",
-        recovery: null,
-      }),
-    ),
-  ];
-}
-
 /** All reads here run inside the drawer's Query, including the fresh export read.
  * Current host names come only from the server's separately authorized status;
  * historical actor labels come only from its reader-filtered history.
@@ -298,40 +178,6 @@ async function loadEnvironmentDetails(
         reason: response.hostStates[index]?.reason ?? null,
       };
     });
-  if (subject.kind === "chip") {
-    const viewer = useAuthStore.getState().contextMetadata?.userId ?? null;
-    const sandboxes = context.queryClient
-      .getQueriesData<SandboxListResponse | null>({
-        queryKey: sandboxQueryKeys.listAll(),
-      })
-      .filter(([key]) => key.at(-1) === viewer)
-      .flatMap(([, answer]) => answer?.sandboxes ?? []);
-    const serverUnused = hosts
-      .filter((host) => host.state === "not_used")
-      .map((host) => ({
-        ...host,
-        name:
-          sandboxes.find((row) => row.hostId === host.hostId)?.displayName ??
-          host.name,
-      }));
-    const rows = await Promise.all(
-      hosts
-        .filter((host) => host.state !== "not_used")
-        .map((host) =>
-          deliveryHostRows({
-            host,
-            sandbox:
-              sandboxes.find((row) => row.hostId === host.hostId) ?? null,
-            unusedListed: serverUnused.some(
-              (item) => item.hostId === host.hostId,
-            ),
-            context,
-            diagnostics,
-          }),
-        ),
-    );
-    hosts.splice(0, hosts.length, ...rows.flat(), ...serverUnused);
-  }
   let status: DetailsStatus = {
     summary: detailsNowSummary(hosts),
     currentVersion: null,
@@ -399,7 +245,6 @@ for (const kind of [
   "plan",
   "host_settings",
   "move",
-  "chip",
 ]) {
   registerDetailsProvider(kind, environmentDetailsProvider);
 }

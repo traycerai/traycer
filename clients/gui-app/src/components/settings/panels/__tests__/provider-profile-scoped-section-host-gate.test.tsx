@@ -174,7 +174,6 @@ function renderSection(
               section: "providers",
               pick: PERSONAL_PICK,
               state: { kind: "unknown" },
-              line: null,
               hostName,
               localOverrides: NO_OVERRIDES,
               hostId: "host-1",
