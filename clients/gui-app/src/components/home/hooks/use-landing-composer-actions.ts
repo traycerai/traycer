@@ -1948,6 +1948,11 @@ function openEpicBeforeCreate(
           epicName: epicTitle,
         });
   if (replaced === null) {
+    // A draft with no tab to replace is still the message being sent: the
+    // replace is what removes a draft's row, so it is removed here.
+    if (input.draftId !== null) {
+      useLandingDraftStore.getState().deleteDraft(input.draftId);
+    }
     activateTabIntent(
       navigate,
       openExactEpicTabIntent({
@@ -2030,6 +2035,10 @@ function placeCreatedDraftEpic(input: {
   scheduleLandingImageReconcile();
 
   if (replaced === null) {
+    // No tab of the draft was there to replace, so nothing removed its row:
+    // what it holds is the text just sent, and it must not stay a draft.
+    useLandingDraftStore.getState().deleteDraft(input.draftId);
+    input.editor.clear();
     useEpicCanvasStore
       .getState()
       .openEpicTabInBackground(input.epicId, input.epicTitle);
