@@ -272,7 +272,10 @@ function useThreadPanelLanding(
  * The landing the channel's own list takes: the one the channel mounted with,
  * then each the tab asks of it while it is shown (a tapped notification),
  * which arrives as a new `landOn` that no mount reads. Each is a new visit,
- * numbered past the memory links' own.
+ * numbered past the memory links' own. One that reports its miss is the
+ * tab's to withdraw: once the tab asks for nothing, or for a message of a
+ * thread instead, the list is shown none, so an answer arriving afterwards
+ * says nothing, and the visit it took stays counted.
  */
 function useChannelLanding(
   landOn: BotChannelLanding | null,
@@ -288,14 +291,19 @@ function useChannelLanding(
     setAsked(landOn);
     if (landOn !== null && landOn.threadId === null) {
       const { messageId, sendPostId } = landOn;
+      const reportsMiss = landOn.reportsMiss === true;
       setLanding((previous) => ({
         messageId,
         sendPostId,
         visit: (previous?.visit ?? 0) + 1,
+        reportsMiss,
       }));
     }
   }
-  return [landing, setLanding];
+  const withdrawn =
+    (landOn === null || landOn.threadId !== null) &&
+    landing?.reportsMiss === true;
+  return [withdrawn ? null : landing, setLanding];
 }
 
 /**
@@ -474,8 +482,15 @@ export function BotChannelView(props: {
   } = useBotConversationSendMutation(client);
   const sendFailure = useBotSendFailure();
   const { fail: failSend, clear: clearSendFailure } = sendFailure;
+  // Whether a send here can reply to a message (T166). A pick replies to the
+  // reply that offered it where it can, and is a plain post where it cannot.
+  const replyReach = useBotReplyReach({
+    hostId,
+    boundHostId,
+    boundHostTakes: threadAnchorKinds,
+  });
   const chooseOption = useCallback(
-    (choice: string) => {
+    (messageId: string | null, choice: string) => {
       if (channelId === null) return;
       clearSendFailure();
       send(
@@ -488,11 +503,14 @@ export function BotChannelView(props: {
           redeliver: null,
           supersedes: null,
           answer: null,
+          ...(replyReach === "delivered" && messageId !== null
+            ? { replyTo: messageId }
+            : {}),
         },
         { onError: () => failSend(null) },
       );
     },
-    [botId, channelId, clearSendFailure, failSend, send],
+    [botId, channelId, clearSendFailure, failSend, replyReach, send],
   );
   // A question card's answer or Skip, on a question the bot asked at the
   // channel's top level: the person's message goes to the bot itself and
@@ -553,11 +571,6 @@ export function BotChannelView(props: {
   // Reply on a row of the channel names it in the channel's box, which takes
   // the focus; none while the box edits a failed message, whose send replaces
   // it and replies to nothing (T166).
-  const replyReach = useBotReplyReach({
-    hostId,
-    boundHostId,
-    boundHostTakes: threadAnchorKinds,
-  });
   const { setReplyTarget } = useBotDraftActions();
   const [replyChosen, setReplyChosen] = useState(0);
   const replyInChannel = useMemo(

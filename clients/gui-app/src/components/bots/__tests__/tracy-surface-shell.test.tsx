@@ -28,12 +28,22 @@ import {
   type RouterHistory,
   type UseNavigateResult,
 } from "@tanstack/react-router";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
+import { toast } from "sonner";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
+import type { BotChannelLanding } from "@/components/bots/bot-channel-view";
 
 type ListStatus = "pending" | "error" | "success";
 
@@ -367,12 +377,14 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     botId: string;
     botTitle: string;
     openThread: BotOpenThread | null;
+    landOn: BotChannelLanding | null;
   }) => (
     <div
       data-testid="stub-channel"
       data-bot-id={props.botId}
       data-bot-title={props.botTitle}
       data-open-thread={props.openThread?.anchorMessageId ?? "none"}
+      data-land-on={props.landOn?.messageId ?? "none"}
     />
   ),
 }));
@@ -404,7 +416,10 @@ import { useTracyPlaceStore } from "@/stores/bots/tracy-place-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useBotSurfaceActionsStore } from "@/stores/bots/bot-surface-actions-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
-import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import {
+  stageTracyLanding,
+  useTracySurfaceStore,
+} from "@/stores/bots/tracy-surface-store";
 import { useLayoutStore } from "@/stores/layout/layout-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { emptyTabStripLayout } from "@/stores/tabs/layout";
@@ -1301,6 +1316,156 @@ describe("the Tracy surface shell", () => {
         expect(channel.getAttribute("data-open-thread")).toBe(
           "post-of-session-x",
         );
+      });
+      expect(keptState("bot-release").landing).toBe(false);
+    });
+  });
+
+  describe("a thread notification's landing held for its channel's thread list", () => {
+    const REPLY = "reply-9";
+    const THREAD: BotThreadSummary = {
+      threadId: "thread-x",
+      conversationId: "app-bot-release",
+      sessionChatId: "session-x",
+      anchor: {
+        messageId: "post-of-thread-x",
+        requestId: "request-x",
+        senderUserId: null,
+        sentAt: 1_000,
+        resolvedAt: null,
+        excerpt: null,
+      },
+      replyCount: 1,
+      lastReplyAt: 2_000,
+      openRequestCount: 0,
+      costUsd: null,
+    };
+
+    function stageReply(messageId: string): void {
+      act(() => {
+        stageTracyLanding("bot-release", {
+          kind: "thread",
+          threadId: "thread-x",
+          messageId,
+        });
+      });
+    }
+
+    function landedOn(channel: HTMLElement): {
+      readonly open: string | null;
+      readonly row: string | null;
+    } {
+      return {
+        open: channel.getAttribute("data-open-thread"),
+        row: channel.getAttribute("data-land-on"),
+      };
+    }
+
+    /** The release channel shows with its list being read and lacking the thread, and the reply's landing waits. */
+    async function waitingOnRelease(Host: () => ReactNode): Promise<Mounted> {
+      answerList([RELEASE, TRIAGE], null);
+      const mounted = await mount(Host, "/");
+      open(mounted, "bot-release");
+      await shownChannel("bot-release");
+      act(() =>
+        setThreadList("bot-release", {
+          threads: [],
+          isFetching: true,
+          isError: false,
+        }),
+      );
+      stageReply(REPLY);
+      expect(keptState("bot-release").landing).toBe(true);
+      return mounted;
+    }
+
+    beforeEach(() => {
+      const toastError = vi.spyOn(toast, "error").mockReturnValue("toast");
+      onTestFinished(() => toastError.mockRestore());
+    });
+
+    it("is withdrawn when another channel is chosen, so the list answering and the person returning land nothing, and a later notification of the channel still lands its own message", async () => {
+      const mounted = await waitingOnRelease(SurfaceHost);
+
+      fireEvent.click(row("bot-triage"));
+      expect(keptState("bot-release").landing).toBe(false);
+      await shownChannel("bot-triage");
+      act(() =>
+        setThreadList("bot-release", {
+          threads: [THREAD],
+          isFetching: false,
+          isError: false,
+        }),
+      );
+      fireEvent.click(row("bot-release"));
+
+      const channel = await shownChannel("bot-release");
+      expect(landedOn(channel)).toEqual({ open: "none", row: "none" });
+      expect(toast.error).not.toHaveBeenCalled();
+
+      act(() => {
+        openBotChannel(mounted.navigate, "bot-release", {
+          landing: {
+            kind: "thread",
+            threadId: "thread-x",
+            messageId: "reply-10",
+          },
+          isConnectable: null,
+          onRejected: null,
+        });
+      });
+      await waitFor(() => {
+        expect(landedOn(channel)).toEqual({
+          open: "post-of-thread-x",
+          row: "reply-10",
+        });
+      });
+    });
+
+    it("is withdrawn when the Tracy pane is hidden and shown again before the list answers, so a late answer lands nothing", async () => {
+      useLayoutStore.setState({ overrides: { homeTab: { shown: "shown" } } });
+      const mounted = await waitingOnRelease(PaneAwareSurfaceHost);
+
+      await act(() => mounted.navigate({ to: "/home" }));
+      await act(() => mounted.navigate(tracyRoute("bot-release")));
+      expect(keptState("bot-release").landing).toBe(false);
+      act(() =>
+        setThreadList("bot-release", {
+          threads: [THREAD],
+          isFetching: false,
+          isError: false,
+        }),
+      );
+
+      const channel = await shownChannel("bot-release");
+      expect(landedOn(channel)).toEqual({ open: "none", row: "none" });
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("still lands when staged while the pane is hidden and the list has already settled", async () => {
+      useLayoutStore.setState({ overrides: { homeTab: { shown: "shown" } } });
+      answerList([RELEASE, TRIAGE], null);
+      const mounted = await mount(PaneAwareSurfaceHost, "/");
+      open(mounted, "bot-release");
+      await shownChannel("bot-release");
+      act(() =>
+        setThreadList("bot-release", {
+          threads: [THREAD],
+          isFetching: false,
+          isError: false,
+        }),
+      );
+      await act(() => mounted.navigate({ to: "/home" }));
+
+      stageReply(REPLY);
+      await act(() => mounted.navigate(tracyRoute("bot-release")));
+
+      const channel = await shownChannel("bot-release");
+      await waitFor(() => {
+        expect(landedOn(channel)).toEqual({
+          open: "post-of-thread-x",
+          row: REPLY,
+        });
       });
       expect(keptState("bot-release").landing).toBe(false);
     });
