@@ -89,11 +89,10 @@ export const FRAME_TIMEOUT_MS = 15_000;
  *
  * The protocol (open → openAck → request → response, manifest negotiation,
  * frame parsing, timeouts) is the shared `WsRpcClient` that the Desktop renderer
- * also uses - the CLI no longer hand-rolls it. The host receives only this
- * CLI's host-only token for it (`cli-host-tokens.ts`), read from disk; the
- * stored sign-in (`resolveHostAuth`) is spent at authn alone. A host refusal
- * the shared auth-aware wrapper reads by its reason: a credential reason gets
- * one fresh token and one more send, never a third.
+ * also uses - the CLI no longer hand-rolls it. The host receives only this CLI's host-only token
+ * for it (`cli-host-tokens.ts`), read from disk; the stored sign-in (`resolveHostAuth`) is spent at
+ * authn alone. A host refusal the shared auth-aware wrapper reads by its reason: a credential
+ * reason gets one fresh token and one more send, never a third.
  */
 export async function callHostRpc<
   Method extends keyof HostRpcRegistry & string,

@@ -65,26 +65,18 @@ import type { CommandContext } from "../runner/runner";
 import { config } from "../config";
 import { probeHostHealth } from "../service/health-probe";
 
-// Install, ensure and service-install share the sign-in pre-flight and the
-// advisory post-start credential probe. Ensure probes only when it actually
-// starts a host; a bytes-only install starts nothing and leaves that step to
-// the later explicit start.
-//
-// Explicit starts and service cycles reuse the probe with stored sign-in only,
-// without prompting. The supervisor entrypoint excludes invocations carrying
-// existing service identity flags. Legacy unlabelled service starts cannot be
-// distinguished from a manual start and use the same stored-sign-in-only rule.
-// The host receives only its delegated credential; the person's sign-in stays
-// at the CLI's authn boundary. A host already reporting active is not reminted.
+// Install, ensure and service-install share the sign-in pre-flight and the post-start credential
+// probe, run only when a host was started. Explicit starts and service cycles probe on the stored
+// sign-in alone, without prompting. The host receives only its delegated credential; one already
+// active is not reminted. An attended team install signs in before staging: with no host identity
+// the sign-in mints the team's install token, staged before the first start; with a registered host
+// it authorizes the give. A piped token reads no CLI sign-in.
 //
 // Without --team, a signed-out interactive run is offered the device-flow
 // sign-in inline; a run that cannot prompt (JSON mode, CI, non-TTY stdout)
 // warns and continues, and so does a declined or failed sign-in. A later
 // `traycer login` can authorize the installed host without a reinstall.
-// An attended team install requires sign-in before staging. On a machine with
-// no host identity the sign-in mints the team's install token, which is staged
-// before the service starts so the host's first start is as the team's; on a
-// machine whose host is registered it authorizes the give. A piped install
+// An attended team install requires sign-in before staging. A piped install
 // token instead authorizes the host directly, without reading the CLI sign-in.
 //
 // Provisioning: a signed-in run that started a host follows up with a

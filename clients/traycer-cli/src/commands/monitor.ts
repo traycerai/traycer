@@ -409,8 +409,8 @@ async function signInMonitorCredential(
     }),
     // Proactively refresh the sign-in shortly before its ~4h TTL, and buy the
     // host-only token with it at once, so a long-running monitor never
-    // carries a dead token into a reconnect. The reactive recovery in
-    // `runInboxSubscription` stays as the safety net. The scheduler shares the
+    // carries a dead token into a reconnect. The shared single-flight `revalidator` keeps a
+    // proactive and a reactive refresh from racing. The scheduler shares the
     // same single-flight `revalidator`, so a proactive and reactive refresh
     // can't race into a double rotation.
     startUpkeep: (hostId, onRenewed) => {
@@ -426,8 +426,7 @@ async function signInMonitorCredential(
           ) {
             // The host updates its captured credential in place - no
             // reconnect. The reactive path already re-dials with the fresh
-            // token, so it needs no push. A refused mint ends the monitor
-            // through `onMintRefused`.
+            // token, so it needs no push. Updated in place.
             onRenewed();
           }
           return outcome;

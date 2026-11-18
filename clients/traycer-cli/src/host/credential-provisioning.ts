@@ -305,8 +305,7 @@ export async function provisionInstalledHostCredential(
   let stopMintRefusals: () => void = () => undefined;
   const lease = new MutableBearerLease(options.auth.token, options.auth.userId);
   const remaining = (): number => Math.max(0, deadlineAt - Date.now());
-  // A recovery still in flight is waited for only as long as the bound has
-  // left, never past it. A CANCELABLE deadline, not `sleep()`: an uncleared
+  // A CANCELABLE deadline, not `sleep()`: an uncleared
   // `setTimeout` keeps the Node event loop alive, and the CLI exits by
   // draining it rather than calling `process.exit`, so a plain race would
   // hold `host install` open for the whole remaining budget every time the
@@ -397,7 +396,7 @@ export async function provisionInstalledHostCredential(
       // the recovery below. Recorded before the early return so even a
       // recovery the deadline cannot cover still counts as contact.
       hostAnswered = true;
-      // Never START a recovery the deadline cannot cover. The CLI sets
+      // The CLI sets
       // `process.exitCode` rather than calling `process.exit` (see
       // `runner/exit.ts`), so the process waits for the event loop to
       // drain: a mint or refresh begun as the budget ran out would keep
