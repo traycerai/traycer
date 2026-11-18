@@ -295,7 +295,7 @@ export const botConversationSendRequestSchemaV16 = lazySchema(() =>
  * it answers from that row whatever the authority, so a Retry across a
  * re-claim by the same host can find its row. Only on a miss does it
  * compare the authority with its binding, and refuse one that is no longer
- * the bot's with `E_BOT_AUTHORITY_MOVED`, before writing anything
+ * the bot's with `E_BOT_AUTHORITY_MOVED`, before this attempt's row
  * (`notWritten`). The miss speaks for that attempt only: an earlier one may
  * have been written where this host's store does not show it. A host the
  * bot is not bound to takes no nonce send and refuses it the same way.

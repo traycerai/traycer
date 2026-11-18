@@ -7,8 +7,8 @@ import { unaryResponsePayloadSchema } from "@traycer/protocol/host-transport/mux
 import { HostRpcError } from "@traycer/protocol/host-transport/remote/rpc-types";
 
 /**
- * `notWritten: true` on a response error says the host refused the request
- * before it wrote anything, for that attempt only. Optional like `holders`
+ * `notWritten: true` on a response error says the host refused the attempt
+ * before its row, for that attempt only. Optional like `holders`
  * and `staleWrite`: a malformed value is sanitized to absent rather than
  * failing an envelope that parsed before the field existed, and the client's
  * RPC error carries it from both envelopes.

@@ -8,14 +8,14 @@ import { BotSendAccountMovedError } from "@/lib/bots/bot-sent-as";
 
 /**
  * What a failed attempt of a bot send that carries a nonce proves (Tracy Bots
- * T249): `refused` when this attempt wrote nothing, else `uncertain`.
+ * T249): `refused` when this attempt has no row, else `uncertain`.
  *
- * Nothing was written when the host said so (`notWritten`, set only before
- * its write), when the connection's handshake was below the floor the send
- * needs, when the client refused it before it left for an account no longer
- * signed in (`BotSendAccountMovedError`), and when the transport attests the
- * request never left. Every other failure, an answered error included, may
- * follow the host's write.
+ * It has none when the host said so (`notWritten`, set only when the host
+ * knows the attempt has no row), when the connection's handshake was below
+ * the floor the send needs, when the client refused it before it left for an
+ * account no longer signed in (`BotSendAccountMovedError`), and when the
+ * transport attests the request never left. Every other failure, an answered
+ * error included, may follow the host's write of its row.
  */
 export function botSendAttemptOutcome(error: unknown): "refused" | "uncertain" {
   if (error instanceof BotSendAccountMovedError) return "refused";
