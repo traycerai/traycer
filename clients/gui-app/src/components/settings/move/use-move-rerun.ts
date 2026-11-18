@@ -121,12 +121,14 @@ export function useMoveRerun(
     stoppedAgain:
       rerun !== null && reading === "stopped_again" ? rerun.refusal : null,
     // A re-run can stop before it reaches the move; the host retries any stopped stage.
-    // A status cached before the sheet opened is not read as stopped.
+    // A status cached before the sheet opened is not read as stopped, even
+    // when this opening's own read failed and left that status in place.
     stopped:
       retryable &&
       (reading === "stopped_again" ||
         (status !== null &&
           statusRead.isFetchedAfterMount &&
+          !statusRead.isError &&
           moveHasStopped(status))),
     pending: retry.isPending,
     rerun: (refusal, started) => {

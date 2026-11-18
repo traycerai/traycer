@@ -232,6 +232,8 @@ interface Harness {
   readonly stages: () => number;
   /** Holds the next status read unanswered until the returned function is called. */
   readonly holdNextStatusRead: () => () => void;
+  /** Refuses the next status read; the one after it answers as usual. */
+  readonly failNextStatusRead: () => void;
   /**
    * Holds the next plan read unanswered until the returned function is
    * called; the computer then answers with whatever it holds at that moment.
@@ -245,6 +247,7 @@ function mountComputer(computer: Computer, queryClient: QueryClient): Harness {
   const starts: EnvironmentMoveStartRequest[] = [];
   let retries = 0;
   let heldStatusRead: Promise<void> | null = null;
+  let statusReadFails = false;
   let heldPlanRead: Promise<void> | null = null;
   let answered: EnvironmentMovePlanResponseV20 | null = null;
   const answerPlan = (): EnvironmentMovePlanResponseV20 => {
@@ -261,6 +264,10 @@ function mountComputer(computer: Computer, queryClient: QueryClient): Harness {
         return held === null ? answerPlan() : held.then(answerPlan);
       },
       "environment.status": () => {
+        if (statusReadFails) {
+          statusReadFails = false;
+          throw new Error("The status read was refused.");
+        }
         const asked = computer.status;
         const held = heldStatusRead;
         heldStatusRead = null;
@@ -347,6 +354,9 @@ function mountComputer(computer: Computer, queryClient: QueryClient): Harness {
       const held = Promise.withResolvers<void>();
       heldStatusRead = held.promise;
       return () => held.resolve();
+    },
+    failNextStatusRead: () => {
+      statusReadFails = true;
     },
     holdNextPlanRead: () => {
       const held = Promise.withResolvers<void>();
@@ -1067,6 +1077,32 @@ describe("<MoveSheet /> reopened over an earlier opening's answer", () => {
 
     answerStatus();
     await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+
+    expect(harness.retries()).toBe(1);
+  });
+
+  it("does not run the stopped move again from Retry while this opening's status read has failed", async () => {
+    const harness = mountWithAppCache({
+      plan: STALE_PLAN,
+      planFailure: NOT_AWAITING,
+      status: stoppedStatus(),
+      servesRetry: true,
+    });
+    await settle();
+    closeMoveSheet();
+    await settle();
+
+    harness.failNextStatusRead();
+    openMoveSheet();
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+
+    expect(harness.retries()).toBe(0);
+
+    await deliverNextStatusRead();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await settle();
 
