@@ -432,6 +432,11 @@ function resolveRetry(args: {
   readonly settled: SettledFailure;
 }): ResolvedRetry {
   const { variant, hostTokens, presentation, localLifecycle, settled } = args;
+  // A failed read of the host list: re-reading it is the recovery, and it is
+  // always a failure, so there is no healthy start to keep Retry off for.
+  if (variant.kind === "host-list-unavailable") {
+    return { onRetry: presentation.refreshDirectory, pending: false };
+  }
   if (offersDoorRetry(variant)) {
     return {
       onRetry: () => {

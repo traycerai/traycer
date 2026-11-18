@@ -8,6 +8,7 @@ import {
   type Mock,
 } from "vitest";
 import {
+  isVoiceName,
   voiceSessionsAvailabilityViaHttp,
   voiceSessionsEndViaHttp,
   voiceSessionsMintViaHttp,
@@ -16,13 +17,41 @@ import { createOpaqueRedirectResponse } from "../../test-fixtures/opaque-redirec
 
 const BASE = "https://server.example.test";
 const BEARER = "user-jwt";
-const REQUEST = { offerSdp: "v=0 offer", input: "the briefing" };
+const REQUEST = {
+  offerSdp: "v=0 offer",
+  input: "the briefing",
+  voice: null,
+  voicePolicy: null,
+} as const;
 const MINTED = {
   voiceSessionId: "vs_123",
   answerSdp: "v=0 answer",
   expiresAt: 1_791_000_000_000,
   acknowledgementLines: ["Okay.", "One moment.", "Got it."],
 };
+
+const CAPABILITY = {
+  version: 1,
+  defaultVoice: "cedar",
+  voices: ["cedar", "marin"],
+  exactVoiceRenewal: true,
+};
+
+describe("isVoiceName", () => {
+  it.each(["cedar", "a", "voice_1-x", "0abc", "a".repeat(64)])(
+    "accepts %s",
+    (name) => {
+      expect(isVoiceName(name)).toBe(true);
+    },
+  );
+
+  it.each(["", "Cedar", "-a", "_a", "a b", "a".repeat(65), 3, null])(
+    "rejects %s",
+    (name) => {
+      expect(isVoiceName(name)).toBe(false);
+    },
+  );
+});
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -47,7 +76,10 @@ describe("voiceSessionsMintViaHttp", () => {
 
     const result = await voiceSessionsMintViaHttp(BASE, BEARER, null, REQUEST);
 
-    expect(result).toEqual({ kind: "ok", session: MINTED });
+    expect(result).toEqual({
+      kind: "ok",
+      session: { ...MINTED, voiceSelection: { kind: "absent" } },
+    });
     const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(String(url)).toBe(`${BASE}/api/voice/sessions`);
     expect(init?.method).toBe("POST");
@@ -115,7 +147,113 @@ describe("voiceSessionsMintViaHttp", () => {
           answerSdp: MINTED.answerSdp,
           expiresAt: MINTED.expiresAt,
           acknowledgementLines: null,
+          voiceSelection: { kind: "absent" },
         },
+      });
+    },
+  );
+
+  it("sends voice and voicePolicy in the body when the request names them", async () => {
+    const fetchMock = stubFetch(async () => jsonResponse(200, MINTED));
+
+    await voiceSessionsMintViaHttp(BASE, BEARER, null, {
+      ...REQUEST,
+      voice: "marin",
+      voicePolicy: "exact",
+    });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      offerSdp: REQUEST.offerSdp,
+      input: REQUEST.input,
+      voice: "marin",
+      voicePolicy: "exact",
+    });
+  });
+
+  it("sends exactly the offer and briefing when voice and voicePolicy are both null", async () => {
+    const fetchMock = stubFetch(async () => jsonResponse(200, MINTED));
+
+    await voiceSessionsMintViaHttp(BASE, BEARER, null, REQUEST);
+
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({ offerSdp: REQUEST.offerSdp, input: REQUEST.input }),
+    );
+  });
+
+  it("reads a 409 VOICE_SELECTION_UNAVAILABLE as voice-unavailable", async () => {
+    stubFetch(async () =>
+      jsonResponse(409, { error: "VOICE_SELECTION_UNAVAILABLE" }),
+    );
+
+    expect(await voiceSessionsMintViaHttp(BASE, BEARER, null, REQUEST)).toEqual(
+      { kind: "voice-unavailable" },
+    );
+  });
+
+  it("reads a 409 with any other body as network-error", async () => {
+    stubFetch(async () => jsonResponse(409, { error: "SOMETHING_ELSE" }));
+
+    expect(
+      (await voiceSessionsMintViaHttp(BASE, BEARER, null, REQUEST)).kind,
+    ).toBe("network-error");
+  });
+
+  it("returns a valid voice selection with the session", async () => {
+    const voiceSelection = {
+      kind: "valid",
+      requestedVoice: "marin",
+      effectiveVoice: "cedar",
+      reason: "unavailable",
+    };
+    stubFetch(async () => jsonResponse(200, { ...MINTED, voiceSelection }));
+
+    expect(await voiceSessionsMintViaHttp(BASE, BEARER, null, REQUEST)).toEqual(
+      { kind: "ok", session: { ...MINTED, voiceSelection } },
+    );
+  });
+
+  it("accepts a valid voice selection whose requestedVoice is null", async () => {
+    const voiceSelection = {
+      kind: "valid",
+      requestedVoice: null,
+      effectiveVoice: "cedar",
+      reason: "default",
+    };
+    stubFetch(async () => jsonResponse(200, { ...MINTED, voiceSelection }));
+
+    expect(await voiceSessionsMintViaHttp(BASE, BEARER, null, REQUEST)).toEqual(
+      { kind: "ok", session: { ...MINTED, voiceSelection } },
+    );
+  });
+
+  it.each([
+    ["a string", "marin"],
+    [
+      "an unknown reason",
+      { requestedVoice: null, effectiveVoice: "cedar", reason: "other" },
+    ],
+    [
+      "an effective voice that is not a voice name",
+      {
+        requestedVoice: null,
+        effectiveVoice: "Not A Voice",
+        reason: "default",
+      },
+    ],
+    [
+      "a requested voice that is not a voice name",
+      { requestedVoice: "UPPER", effectiveVoice: "cedar", reason: "selected" },
+    ],
+  ])(
+    "keeps the core session and marks the selection invalid when it is %s",
+    async (_name, voiceSelection) => {
+      stubFetch(async () => jsonResponse(200, { ...MINTED, voiceSelection }));
+
+      expect(
+        await voiceSessionsMintViaHttp(BASE, BEARER, null, REQUEST),
+      ).toEqual({
+        kind: "ok",
+        session: { ...MINTED, voiceSelection: { kind: "invalid" } },
       });
     },
   );
@@ -201,7 +339,11 @@ describe("voiceSessionsAvailabilityViaHttp", () => {
       "iap-token",
     );
 
-    expect(result).toEqual({ kind: "ok", available: true });
+    expect(result).toEqual({
+      kind: "ok",
+      available: true,
+      voiceSelection: null,
+    });
     const [url, init] = fetchMock.mock.calls[0] ?? [];
     expect(String(url)).toBe(`${BASE}/api/voice/availability`);
     expect(init?.method).toBe("GET");
@@ -219,8 +361,55 @@ describe("voiceSessionsAvailabilityViaHttp", () => {
     expect(await voiceSessionsAvailabilityViaHttp(BASE, BEARER, null)).toEqual({
       kind: "ok",
       available: false,
+      voiceSelection: null,
     });
   });
+
+  it("returns the voice selection capability the server names", async () => {
+    stubFetch(async () =>
+      jsonResponse(200, { available: true, voiceSelection: CAPABILITY }),
+    );
+
+    expect(await voiceSessionsAvailabilityViaHttp(BASE, BEARER, null)).toEqual({
+      kind: "ok",
+      available: true,
+      voiceSelection: CAPABILITY,
+    });
+  });
+
+  it.each([
+    ["version is not 1", { ...CAPABILITY, version: 2 }],
+    [
+      "exactVoiceRenewal is not true",
+      { ...CAPABILITY, exactVoiceRenewal: false },
+    ],
+    ["voices is empty", { ...CAPABILITY, voices: [] }],
+    [
+      "voices has more than 256 names",
+      {
+        ...CAPABILITY,
+        voices: Array.from({ length: 257 }, (_, i) => `voice-${i}`),
+        defaultVoice: "voice-0",
+      },
+    ],
+    [
+      "a voice name is not valid",
+      { ...CAPABILITY, voices: ["cedar", "Bad Name"] },
+    ],
+    ["voices has a duplicate", { ...CAPABILITY, voices: ["cedar", "cedar"] }],
+    ["defaultVoice is not in voices", { ...CAPABILITY, defaultVoice: "verse" }],
+  ])(
+    "reads the capability as null and keeps available when %s",
+    async (_name, voiceSelection) => {
+      stubFetch(async () =>
+        jsonResponse(200, { available: true, voiceSelection }),
+      );
+
+      expect(
+        await voiceSessionsAvailabilityViaHttp(BASE, BEARER, null),
+      ).toEqual({ kind: "ok", available: true, voiceSelection: null });
+    },
+  );
 
   it("maps 403 to unauthorized", async () => {
     stubFetch(async () => jsonResponse(403, {}));

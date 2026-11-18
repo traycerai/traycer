@@ -164,7 +164,7 @@ function nextSnapshotWhere(
  * The natural double for "two overlapping refreshes" is one keyed on call
  * order - `calls.length === 1 ? firstCall : secondCall`. It encodes an
  * assumption that is not true: WHICH refresh arrives first is decided by an
- * async race, not by the order the test started them. `refreshOrThrow` awaits
+ * async race, not by the order the test started them. `refreshWith` awaits
  * `readLocalHostId()` - a REAL filesystem read - before it ever calls this
  * double, so two overlapping refreshes are both suspended in libuv's
  * threadpool, and under a saturated pool their reads complete out of
@@ -183,11 +183,13 @@ function nextSnapshotWhere(
  * the weaker form of the same barrier and is deliberately not used for this:
  * a sleep long enough today is a sleep too short on a busier machine.
  */
-function recordingRegistryFetch(): {
+interface RecordingRegistry {
   readonly fetch: () => Promise<HostListFetchResult>;
   readonly calls: Array<Deferred<HostListFetchResult>>;
   readonly started: (index: number) => Promise<void>;
-} {
+}
+
+function recordingRegistryFetch(): RecordingRegistry {
   const calls: Array<Deferred<HostListFetchResult>> = [];
   const startSignals: Array<Deferred<void>> = [];
   const signalAt = (index: number): Deferred<void> => {
@@ -390,6 +392,13 @@ function buildHostListItem(hostId: string): HostListItem {
       lastSeenAt: null,
     },
     updatePolicy: "manual",
+  };
+}
+
+function buildTeamHostListItem(hostId: string): HostListItem {
+  return {
+    ...buildHostListItem(hostId),
+    owner: { kind: "team", id: "team-1", name: "Platform" },
   };
 }
 
@@ -1438,6 +1447,388 @@ describe("DesktopHostFleetSource", () => {
   });
 });
 
+describe("DesktopHostFleetSource.refresh outcome", () => {
+  async function signedInFleet(
+    listRegisteredHosts: () => Promise<HostListFetchResult>,
+    session: { readonly verified: boolean },
+  ): Promise<{
+    readonly fleet: DesktopHostFleetSource;
+    readonly identity: FakeIdentitySource;
+  }> {
+    const dir = await makeTempDir();
+    const authSession = new DesktopAuthSession();
+    if (session.verified) {
+      setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    } else {
+      authSession.set(signedInSnapshot("user-a", "token-1"));
+    }
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = await writeEnrollment(dir, "local-host");
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts,
+    });
+    return { fleet, identity };
+  }
+
+  it("reports published for an adopted registry read", async () => {
+    const { fleet } = await signedInFleet(
+      async () => ({
+        kind: "ok",
+        response: { hosts: [buildHostListItem("local-host")] },
+      }),
+      { verified: true },
+    );
+
+    await expect(fleet.refresh()).resolves.toEqual({ kind: "published" });
+    fleet.dispose();
+  });
+
+  it("reports published for a signed-out refresh, which adopts the empty fleet", async () => {
+    const fleet = buildFleetSource({
+      identity: new FakeIdentitySource(null, 0),
+      authSession: new DesktopAuthSession(),
+      host: new FakeHostLifecycle(),
+      listRegisteredHosts: async () => {
+        throw new Error("must not be called when signed out");
+      },
+    });
+
+    await expect(fleet.refresh()).resolves.toEqual({ kind: "published" });
+    fleet.dispose();
+  });
+
+  it("reports unavailable when the registry read is refused", async () => {
+    const { fleet } = await signedInFleet(
+      async () => ({ kind: "network-error" }),
+      { verified: true },
+    );
+
+    await expect(fleet.refresh()).resolves.toEqual({ kind: "unavailable" });
+    fleet.dispose();
+  });
+
+  it("reports unavailable instead of rejecting when the registry read throws", async () => {
+    const { fleet } = await signedInFleet(
+      async () => {
+        throw new Error("socket hang up");
+      },
+      { verified: true },
+    );
+
+    await expect(fleet.refresh()).resolves.toEqual({ kind: "unavailable" });
+    fleet.dispose();
+  });
+
+  it("reports unavailable for an unverified session, which never reaches the registry", async () => {
+    let registryCalls = 0;
+    const { fleet } = await signedInFleet(
+      async () => {
+        registryCalls += 1;
+        return { kind: "ok", response: { hosts: [] } };
+      },
+      { verified: false },
+    );
+
+    await expect(fleet.refresh()).resolves.toEqual({ kind: "unavailable" });
+    expect(registryCalls).toBe(0);
+    fleet.dispose();
+  });
+
+  it("reports superseded for a read that completes after its identity was retired", async () => {
+    const registry = recordingRegistryFetch();
+    const { fleet, identity } = await signedInFleet(registry.fetch, {
+      verified: true,
+    });
+
+    const inFlight = fleet.refresh();
+    await registry.started(0);
+    identity.set("user-b", 1);
+    await registry.started(1);
+    registry.calls[0]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("host-a")] },
+    });
+
+    await expect(inFlight).resolves.toEqual({ kind: "superseded" });
+    fleet.dispose();
+  });
+
+  it("reports published for a read a newer same-identity completion has already replaced", async () => {
+    const registry = recordingRegistryFetch();
+    const { fleet } = await signedInFleet(registry.fetch, { verified: true });
+
+    const older = fleet.refresh();
+    await registry.started(0);
+    const newer = fleet.refresh();
+    await registry.started(1);
+    registry.calls[1]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("local-host")] },
+    });
+    await expect(newer).resolves.toEqual({ kind: "published" });
+    registry.calls[0]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("local-host")] },
+    });
+
+    await expect(older).resolves.toEqual({ kind: "published" });
+    fleet.dispose();
+  });
+
+  /**
+   * Account A's schedule: a bearer read at 200 adopts both scopes, then A's
+   * personal push read at 300 advances the personal mark to 300. The clock is
+   * left at 300; each case positions it for what it exercises.
+   */
+  async function userAWithPersonalPushAt300(): Promise<{
+    readonly fleet: DesktopHostFleetSource;
+    readonly identity: FakeIdentitySource;
+    readonly authSession: DesktopAuthSession;
+    readonly registry: RecordingRegistry;
+    readonly published: RegisteredHostsPush[];
+    readonly setNow: (value: number) => void;
+  }> {
+    const dir = await makeTempDir();
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-a"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = await writeEnrollment(dir, "local-host");
+    const registry = recordingRegistryFetch();
+    const { fleet, published, setNow } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: registry.fetch,
+    });
+
+    setNow(200);
+    const first = fleet.refresh();
+    await registry.started(0);
+    registry.calls[0]?.resolve({
+      kind: "ok",
+      response: {
+        hosts: [buildHostListItem("host-a"), buildTeamHostListItem("team-a")],
+      },
+    });
+    await expect(first).resolves.toEqual({ kind: "published" });
+
+    setNow(300);
+    await fleet.acceptPushedRows({
+      response: { hosts: [buildHostListItem("host-a-pushed")] },
+      readAtMs: 300,
+      openedAtGeneration: 0,
+    });
+    return { fleet, identity, authSession, registry, published, setNow };
+  }
+
+  function snapshotHostIds(fleet: DesktopHostFleetSource): string[] {
+    return fleet
+      .snapshot()
+      .hosts.map((entry) => entry.hostId)
+      .sort();
+  }
+
+  it("admits a new identity's bearer read against the previous identity's read-time marks, and reports published", async () => {
+    const dir = await makeTempDir();
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-a"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = await writeEnrollment(dir, "local-host");
+    const registry = recordingRegistryFetch();
+    const { fleet, setNow } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: registry.fetch,
+    });
+
+    setNow(200);
+    const first = fleet.refresh();
+    await registry.started(0);
+    registry.calls[0]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("host-a")] },
+    });
+    await expect(first).resolves.toEqual({ kind: "published" });
+
+    // The wall clock steps back, then the account changes. The watermarks
+    // outlive the identity change while the rows are cleared, so account B's
+    // read, observed at 100, is older than account A's mark at 200: it is
+    // still B's own answer, made with B's credential.
+    setNow(100);
+    setVerifiedSession(authSession, signedInSnapshot("user-b", "token-b"));
+    // The identity change starts its own refresh (call 1); the explicit
+    // refresh below is call 2. Both observe time 100.
+    identity.set("user-b", 1);
+    await registry.started(1);
+    const second = fleet.refresh();
+    await registry.started(2);
+    const bResponse: HostListFetchResult = {
+      kind: "ok",
+      response: { hosts: [buildHostListItem("host-b")] },
+    };
+    registry.calls[1]?.resolve(bResponse);
+    registry.calls[2]?.resolve(bResponse);
+
+    await expect(second).resolves.toEqual({ kind: "published" });
+    expect(fleet.snapshot().identityGeneration).toBe(1);
+    expect(snapshotHostIds(fleet)).toEqual(["host-b", "local-host"]);
+    fleet.dispose();
+  });
+
+  it("serves a new identity's personal host when its bearer read is older than the previous identity's personal push", async () => {
+    const { fleet, identity, authSession, registry, setNow } =
+      await userAWithPersonalPushAt300();
+
+    // B's clock is behind A's personal mark (300) but ahead of A's team mark
+    // (200): before the fix the personal scope was declined, the team scope
+    // adopted, and the partial adoption was reported as published.
+    setNow(250);
+    setVerifiedSession(authSession, signedInSnapshot("user-b", "token-b"));
+    identity.set("user-b", 1);
+    await registry.started(1);
+    const bResponse: HostListFetchResult = {
+      kind: "ok",
+      response: { hosts: [buildHostListItem("host-b")] },
+    };
+    const second = fleet.refresh();
+    await registry.started(2);
+    registry.calls[1]?.resolve(bResponse);
+    registry.calls[2]?.resolve(bResponse);
+
+    await expect(second).resolves.toEqual({ kind: "published" });
+    expect(fleet.snapshot().identityGeneration).toBe(1);
+    expect(snapshotHostIds(fleet)).toEqual(["host-b", "local-host"]);
+    fleet.dispose();
+  });
+
+  it("after a switch admitted over a later mark, the new identity's next bearer read is adopted while pushes stay held to the previous identity's floor", async () => {
+    const { fleet, identity, authSession, registry, published, setNow } =
+      await userAWithPersonalPushAt300();
+
+    setNow(250);
+    setVerifiedSession(authSession, signedInSnapshot("user-b", "token-b"));
+    identity.set("user-b", 1);
+    await registry.started(1);
+    registry.calls[1]?.resolve({
+      kind: "ok",
+      response: {
+        hosts: [buildHostListItem("host-b"), buildTeamHostListItem("team-b")],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(snapshotHostIds(fleet)).toContain("host-b");
+    });
+
+    // B's own adopted time (250) orders B's reads: 260 is newer, although A's
+    // personal mark (300) is still above it.
+    setNow(260);
+    const next = fleet.refresh();
+    await registry.started(2);
+    registry.calls[2]?.resolve({
+      kind: "ok",
+      response: {
+        hosts: [
+          buildHostListItem("host-b"),
+          buildHostListItem("host-b-added"),
+          buildTeamHostListItem("team-b"),
+          buildTeamHostListItem("team-b-added"),
+        ],
+      },
+    });
+    await expect(next).resolves.toEqual({ kind: "published" });
+    expect(snapshotHostIds(fleet)).toEqual([
+      "host-b",
+      "host-b-added",
+      "local-host",
+      "team-b",
+      "team-b-added",
+    ]);
+
+    // A push read at 280 is newer than B's adopted 250/260 but older than the
+    // previous identity's 300: it is still not adopted or broadcast.
+    const publishedBefore = published.length;
+    const snapshotBefore = fleet.snapshot();
+    await fleet.acceptPushedRows({
+      response: { hosts: [buildHostListItem("host-b-pushed")] },
+      readAtMs: 280,
+      openedAtGeneration: 1,
+    });
+    expect(published).toHaveLength(publishedBefore);
+    expect(fleet.snapshot()).toBe(snapshotBefore);
+    expect(snapshotHostIds(fleet)).not.toContain("host-b-pushed");
+    fleet.dispose();
+  });
+
+  it("keeps declining pushes older than the previous identity's marks, without a broadcast or a fleet read", async () => {
+    const { fleet, identity, authSession, registry, published, setNow } =
+      await userAWithPersonalPushAt300();
+
+    setNow(250);
+    setVerifiedSession(authSession, signedInSnapshot("user-b", "token-b"));
+    // The identity change's own refresh (call 1) stays in flight, so B has
+    // adopted nothing and the only personal mark is still A's 300.
+    identity.set("user-b", 1);
+    await registry.started(1);
+    const publishedBefore = published.length;
+    const snapshotBefore = fleet.snapshot();
+
+    for (const readAtMs of [260, 270, 280]) {
+      await fleet.acceptPushedRows({
+        response: { hosts: [buildHostListItem("host-b-stale")] },
+        readAtMs,
+        openedAtGeneration: 1,
+      });
+    }
+
+    expect(published).toHaveLength(publishedBefore);
+    expect(fleet.snapshot()).toBe(snapshotBefore);
+    expect(registry.calls).toHaveLength(2);
+    fleet.dispose();
+  });
+
+  it("reports published when one scope is declined against a newer mark of the same identity", async () => {
+    const { fleet, registry, setNow } = await userAWithPersonalPushAt300();
+
+    // Same identity, clock behind its own personal push: personal is declined
+    // (300 > 250), team is adopted, and the personal rows already serving are
+    // this generation's own.
+    setNow(250);
+    const second = fleet.refresh();
+    await registry.started(1);
+    registry.calls[1]?.resolve({
+      kind: "ok",
+      response: {
+        hosts: [buildHostListItem("host-a"), buildTeamHostListItem("team-a")],
+      },
+    });
+
+    await expect(second).resolves.toEqual({ kind: "published" });
+    expect(snapshotHostIds(fleet)).toEqual([
+      "host-a-pushed",
+      "local-host",
+      "team-a",
+    ]);
+    fleet.dispose();
+  });
+
+  it("reports superseded once the source is disposed", async () => {
+    const { fleet } = await signedInFleet(
+      async () => ({ kind: "ok", response: { hosts: [] } }),
+      { verified: true },
+    );
+    fleet.dispose();
+
+    await expect(fleet.refresh()).resolves.toEqual({ kind: "superseded" });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // DesktopHostFleetSource / publishRegistryResponse (redesign P4.1/F22)
 // ---------------------------------------------------------------------------
@@ -1486,7 +1877,7 @@ describe("DesktopHostFleetSource publishRegistryResponse", () => {
   /**
    * ONE fetch per refresh - the arithmetic the whole move rests on.
    *
-   * Added after a probe: doubling the fetch inside `refreshOrThrow` DID turn
+   * Added after a probe: doubling the fetch inside `refreshWith` DID turn
    * this suite red, but for the wrong reason. The arm it broke drives
    * `listRegisteredHosts` with a CALL-ORDERED fake (`calls.length === 1 ? … : …`),
    * so an extra call shifts which promise each caller gets and the failure is

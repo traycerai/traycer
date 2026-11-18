@@ -132,6 +132,7 @@ function delivered(
     requestId: "req-delivered",
     senderUserId: SENDER_ID,
     postedAt: POSTED_AT,
+    images: [],
     ...overrides,
   };
 }

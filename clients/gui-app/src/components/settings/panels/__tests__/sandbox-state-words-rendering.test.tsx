@@ -103,8 +103,11 @@ vi.mock("@/lib/relative-time", () => ({
   useSampledNow: () => 1_791_100_000_000,
 }));
 vi.mock("@/stores/auth/auth-store", () => ({
-  useAuthStore: (selector: (state: { contextMetadata: null }) => unknown) =>
-    selector({ contextMetadata: null }),
+  useAuthStore: Object.assign(
+    (selector: (state: { contextMetadata: null }) => unknown) =>
+      selector({ contextMetadata: null }),
+    { subscribe: () => () => undefined },
+  ),
 }));
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({ data: undefined, isError: false }),

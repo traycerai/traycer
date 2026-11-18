@@ -27,6 +27,7 @@ import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-st
 const windowNarrationBinding = vi.hoisted(() => ({
   directory: {
     hasConcludedDiscovery: () => true,
+    hasFailedDiscovery: () => false,
     getLocalHostId: () => null,
     onChange: () => ({ dispose: () => undefined }),
   },
@@ -86,6 +87,8 @@ function baseInput(
     // grace and the ∅ arm are both written against. The pre-discovery arm has
     // its own block.
     discoveryConcluded: true,
+    // Discovery has not FAILED unless a case says so.
+    discoveryFailed: false,
     // This machine is `host-local` throughout, so a case whose target is
     // `host-local` is a LOCAL target and one that names anything else is
     // remote - the distinction the restarting-target arm turns on, and one no
@@ -605,6 +608,67 @@ describe("deriveWindowNarration", () => {
       expect(state).toEqual({
         kind: "narrating",
         cause: "no-usable-host",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("narrates host-list-unavailable instead of offline when discovery concluded on a failure", () => {
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          leases: [],
+          localHostExpected: false,
+          discoveryConcluded: true,
+          discoveryFailed: true,
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: { kind: "host-list-unavailable" },
+      });
+    });
+
+    it("keeps an actionable update-host verdict over a failed discovery", () => {
+      const detail = incompatibility({});
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          targetHostId: "host-a",
+          leases: [deadLease("host-a", { reason: "incompatible", detail })],
+          localHostExpected: false,
+          discoveryConcluded: true,
+          discoveryFailed: true,
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: {
+          kind: "update-host",
+          hostId: "host-a",
+          isTargetHost: true,
+          detail,
+        },
+      });
+    });
+
+    it("keeps the desktop pre-serve cold-start grace over a failed discovery", () => {
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          leases: [],
+          localHostExpected: true,
+          discoveryConcluded: true,
+          discoveryFailed: true,
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "cold-start",
         variant: { kind: "offline" },
       });
     });

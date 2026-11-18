@@ -29,6 +29,7 @@ function narrationInput(
     hasBeenServed: false,
     localHostExpected: true,
     discoveryConcluded: false,
+    discoveryFailed: false,
     localHostId: "local-host",
     ...(overrides ?? {}),
   };

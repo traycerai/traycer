@@ -1,10 +1,13 @@
 import { createPortal } from "react-dom";
+import { TracyPlaybackSlot } from "@/components/bots/tracy-playback-slot";
+import { isEditableEventTarget } from "@/lib/keybindings/editable-target";
 import { BotChannelTitle } from "@/components/bots/bot-channel-level2";
 import { useMobileBotHeaderSlot } from "@/components/layout/header/mobile-bot-header-context";
 import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -19,6 +22,12 @@ import type { EnvironmentMember } from "@traycer/protocol/host/environment/contr
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { BotUnreadBanner } from "@/components/bots/bot-unread-banner";
+import { refusingDropTarget } from "@/components/bots/bot-box-drops";
+import { DROP_AFTER_POST_GONE } from "@/components/bots/bot-drop-lines";
+import {
+  useComposerDropScope,
+  useComposerDropScopeTarget,
+} from "@/components/chat/composer/composer-drop-scope";
 import { useBotMarkRepresentedRead } from "@/hooks/bots/use-bot-mark-represented-read";
 import { NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
@@ -30,6 +39,12 @@ import {
 import { BotMentionsContext } from "@/components/bots/bot-mentions-context";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotSurfaceCardsContext } from "@/components/bots/bot-surface-card-context";
+import {
+  BotUnreadPageNavigationContext,
+  useBotUnreadBoundary,
+  type BotTranscriptUnread,
+} from "@/components/bots/bot-unread-boundary";
+import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { BotThreadRowMenu } from "@/components/bots/bot-thread-follow";
 import {
   BotThreadCardBody,
@@ -60,6 +75,7 @@ import { useBotSurfaceCards } from "@/hooks/bots/use-bot-surface-cards";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentMemberDirectory } from "@/hooks/bots/use-environment-members-query";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
@@ -67,6 +83,7 @@ import {
   botMemberName,
   type BotMemberResolver,
 } from "@/lib/bots/bot-member-names";
+import { useBotLifetime } from "@/lib/bots/bot-lifetime";
 import { firstLineOf } from "@/lib/bots/bot-trunk-model";
 import { postTextOf } from "@/lib/bots/reply-row";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
@@ -94,7 +111,9 @@ function stayOnThreads(): void {}
  * that replies in it (T137) - as Slack's Threads view does. The page is the
  * one scroller; a card grows to its thread.
  *
- * The banner counts unread threads and navigates between their cards.
+ * The banner counts unread threads and goes to the next of them: to the
+ * divider above its first reply new to the person, which stays while the
+ * page does, or to the card's top where it draws none.
  * Reading advances only through a contiguous range of hydrated replies
  * whose full extent has stayed in view for the shared read-after policy.
  *
@@ -170,7 +189,14 @@ export function BotThreadsView(props: {
               {`Back to ${props.channelTitle}`}
             </Button>
           )}
-          <h1 className="text-ui-md font-bold text-foreground">Threads</h1>
+          {/* As tall as a channel's title row, whose buttons set its height,
+              so the playback controls change nothing here by arriving. */}
+          <div className="@container/title-strip flex min-h-7 min-w-0 items-center gap-2">
+            <h1 className="min-w-0 truncate text-ui-md font-bold text-foreground">
+              Threads
+            </h1>
+            <TracyPlaybackSlot />
+          </div>
           <p className="text-ui-xs text-muted-foreground">
             Threads you follow, across every bot.
           </p>
@@ -286,6 +312,28 @@ function ThreadCards(props: {
     ),
   );
   const unfold = useBotThreadFoldStore((state) => state.unfold);
+  const paneVisible = usePaneVisible();
+  const pendingVisit = useRef<number | null>(null);
+  const cancelLanding = useCallback(() => {
+    pendingVisit.current = null;
+  }, []);
+  useEffect(() => {
+    if (!paneVisible) cancelLanding();
+  }, [cancelLanding, paneVisible]);
+  const pageNavigation = useMemo(
+    () => ({
+      cancel: cancelLanding,
+      isPending: (visit: number) =>
+        paneVisible && pendingVisit.current === visit,
+    }),
+    [cancelLanding, paneVisible],
+  );
+  useThreadsScrollIntent(scroller, cancelLanding);
+  const visitCounter = useRef(0);
+  const [landing, setLanding] = useState<{
+    readonly threadId: string;
+    readonly visit: number;
+  } | null>(null);
   const goToNextUnread = (): void => {
     if (scroller === null) return;
     const card = nextUnreadCard(
@@ -294,11 +342,19 @@ function ThreadCards(props: {
     );
     if (card === null) return;
     const threadId = card.dataset.threadId;
-    if (threadId !== undefined) unfold(threadId);
-    card.scrollIntoView({ block: "start", behavior: "smooth" });
+    if (threadId === undefined) return;
+    unfold(threadId);
+    visitCounter.current += 1;
+    pendingVisit.current = visitCounter.current;
+    setLanding({ threadId, visit: visitCounter.current });
+    // The card's rows land on their divider once it is drawn; a card that
+    // draws none is shown from its top.
+    if (card.querySelector("[data-unread-divider]") === null) {
+      card.scrollIntoView({ block: "start", behavior: "smooth" });
+    }
   };
   return (
-    <>
+    <BotUnreadPageNavigationContext value={pageNavigation}>
       {bannerSlot === null || (unread.length === 0 && !markRead.failed)
         ? null
         : createPortal(
@@ -325,6 +381,7 @@ function ThreadCards(props: {
               hostId={hostId}
               entry={entry}
               scroller={scroller}
+              unreadVisit={landing?.threadId === threadId ? landing.visit : 0}
               unreadCount={
                 Object.hasOwn(indicators.chats, threadId)
                   ? (indicators.chats[threadId].unreadCount ?? 0)
@@ -334,7 +391,60 @@ function ThreadCards(props: {
           );
         })}
       </ul>
-    </>
+    </BotUnreadPageNavigationContext>
+  );
+}
+
+/** Programmatic scrolling is not a new destination; only the person's input retires it. */
+function useThreadsScrollIntent(
+  scroller: HTMLElement | null,
+  cancel: () => void,
+): void {
+  useEffect(() => {
+    if (scroller === null) return undefined;
+    const keydown = (event: KeyboardEvent) => {
+      if (isThreadsScrollKey(event)) cancel();
+    };
+    scroller.addEventListener("wheel", cancel, { passive: true });
+    scroller.addEventListener("touchmove", cancel, { passive: true });
+    scroller.addEventListener("keydown", keydown);
+    scroller.addEventListener("pointerdown", cancel);
+    return () => {
+      scroller.removeEventListener("wheel", cancel);
+      scroller.removeEventListener("touchmove", cancel);
+      scroller.removeEventListener("keydown", keydown);
+      scroller.removeEventListener("pointerdown", cancel);
+    };
+  }, [cancel, scroller]);
+}
+
+function isThreadsScrollKey(event: KeyboardEvent): boolean {
+  if (event.defaultPrevented || isEditableEventTarget(event.target))
+    return false;
+  const { key } = event;
+  let owner: string;
+  switch (key) {
+    case "PageUp":
+    case "PageDown":
+      owner = 'select, [role="listbox"], [role="slider"], [role="grid"]';
+      break;
+    case "ArrowUp":
+    case "ArrowDown":
+    case "Home":
+    case "End":
+      owner =
+        'select, [role="listbox"], [role="menu"], [role="slider"], [role="tree"], [role="grid"]';
+      break;
+    case " ":
+      // Links activate on Enter; Space still scrolls their containing page.
+      owner =
+        'button, select, [role="button"], [role="listbox"], [role="menu"], [role="tree"], [role="grid"]';
+      break;
+    default:
+      return false;
+  }
+  return (
+    !(event.target instanceof Element) || event.target.closest(owner) === null
   );
 }
 
@@ -370,11 +480,31 @@ function ThreadCard(props: {
   readonly hostId: string;
   readonly entry: BotFollowedThread;
   readonly scroller: HTMLElement | null;
+  /** Counts the pill's jumps to this card's new replies; zero for none. */
+  readonly unreadVisit: number;
   /** The thread's unread notifications. */
   readonly unreadCount: number;
 }): ReactNode {
-  const { hostId, entry, scroller, unreadCount } = props;
+  const { hostId, entry, scroller, unreadVisit, unreadCount } = props;
   const { bot, thread } = entry;
+  const lifetime = useBotLifetime();
+  const viewerId = useCloudChatViewerId();
+  const paneVisible = usePaneVisible();
+  // Held here, above the thread drawn only once near, so the place where
+  // the new replies began is caught before reading moves the cursor.
+  const boundary = useBotUnreadBoundary({
+    identity: `${lifetime}:${viewerId}:${bot.botId}:${thread.threadId}`,
+    active: paneVisible,
+    read: entry.read,
+    conversationId: thread.threadId,
+  });
+  const afterMessageId = boundary?.afterMessageId ?? null;
+  const latched = boundary !== null;
+  const unread = useMemo(
+    (): BotTranscriptUnread | null =>
+      latched ? { afterMessageId, visit: unreadVisit } : null,
+    [afterMessageId, latched, unreadVisit],
+  );
   const directory = useEnvironmentMemberDirectory(bot.environmentId, true);
   const [card, setCard] = useState<HTMLElement | null>(null);
   const near = useCardNear(card, scroller);
@@ -384,37 +514,70 @@ function ThreadCard(props: {
     thread.threadId,
     anchor?.messageId ?? null,
   );
+  // The card is one drop zone for its box once it draws in full (T386). Until
+  // then nothing claims it, so a file dropped there is refused; a card whose
+  // post is gone never gets a box, and says why.
+  const drop = useComposerDropScope();
   return (
     <li
       ref={setCard}
-      className="flex min-w-0 flex-col rounded-lg border border-border/60 bg-card pb-1"
+      className="relative flex min-w-0 flex-col rounded-lg border border-border/60 bg-card pb-1"
       data-testid="bot-thread-card"
       data-thread-card=""
       data-thread-id={thread.threadId}
       data-bot-id={bot.botId}
       data-full={near && openThread !== null ? "true" : "false"}
+      {...drop.zoneProps}
     >
-      <ThreadChannelLine
-        entry={entry}
-        resolveMember={directory.resolve}
-        unreadCount={unreadCount}
-        onShowPost={showPost}
-        onOpenThread={openThread}
-      />
-      {near && anchor !== null && openThread !== null ? (
-        <FullThread
-          hostId={hostId}
-          entry={entry}
-          originMessageId={anchor.messageId}
-          members={directory.members}
-          resolveMember={directory.resolve}
-          onShowPost={showPost}
-        />
-      ) : (
-        <ThreadSummary hostId={hostId} entry={entry} />
+      {drop.provide(
+        <>
+          {anchor === null ? (
+            <PostGoneDropClaim threadId={thread.threadId} />
+          ) : null}
+          <ThreadChannelLine
+            entry={entry}
+            resolveMember={directory.resolve}
+            unreadCount={unreadCount}
+            onShowPost={showPost}
+            onOpenThread={openThread}
+          />
+          {near && anchor !== null && openThread !== null ? (
+            <FullThread
+              hostId={hostId}
+              entry={entry}
+              originMessageId={anchor.messageId}
+              members={directory.members}
+              resolveMember={directory.resolve}
+              unread={unread}
+              onShowPost={showPost}
+            />
+          ) : (
+            <ThreadSummary hostId={hostId} entry={entry} />
+          )}
+        </>,
       )}
+      {drop.overlay}
     </li>
   );
+}
+
+/**
+ * Claims a card's zone where its post is gone from the channel: such a card
+ * never gets a box, so a file dropped on it is refused, with that said, and a
+ * dragged file shows no overlay.
+ */
+function PostGoneDropClaim(props: { readonly threadId: string }): ReactNode {
+  const { threadId } = props;
+  const target = useMemo(
+    () =>
+      refusingDropTarget(
+        DROP_AFTER_POST_GONE,
+        `bot-drop:post-gone:${threadId}`,
+      ),
+    [threadId],
+  );
+  useComposerDropScopeTarget(target);
+  return null;
 }
 
 /**
@@ -703,6 +866,7 @@ function ReplyTime(props: { readonly at: number }): ReactNode {
  * body (`BotThreadCardBody`) - its post, its replies and its box - in the
  * bot's scope, folded in the middle while long and not yet shown in full.
  * The transcript qualifies reading from its hydrated, observed rows, as the panel does.
+ * A divider sits where the replies new to the person began (`unread`).
  */
 function FullThread(props: {
   readonly hostId: string;
@@ -710,10 +874,18 @@ function FullThread(props: {
   readonly originMessageId: string;
   readonly members: ReadonlyArray<EnvironmentMember> | null;
   readonly resolveMember: BotMemberResolver;
+  readonly unread: BotTranscriptUnread | null;
   readonly onShowPost: () => void;
 }): ReactNode {
-  const { hostId, entry, originMessageId, members, resolveMember, onShowPost } =
-    props;
+  const {
+    hostId,
+    entry,
+    originMessageId,
+    members,
+    resolveMember,
+    unread,
+    onShowPost,
+  } = props;
   const { bot, thread } = entry;
   const { botId } = bot;
   const { threadId } = thread;
@@ -762,8 +934,9 @@ function FullThread(props: {
             onUnfold: () => unfold(threadId),
           },
       onShowPost,
+      unread,
     }),
-    [onShowPost, threadId, unfold, unfolded],
+    [onShowPost, threadId, unfold, unfolded, unread],
   );
   const viewer = useAuthStore((s) => s.profile);
   const anchorSenderLabel = useCallback(

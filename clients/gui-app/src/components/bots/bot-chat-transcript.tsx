@@ -1,3 +1,8 @@
+import {
+  BotUnreadBoundaryContext,
+  BotUnreadPageNavigationContext,
+  type BotTranscriptUnread,
+} from "@/components/bots/bot-unread-boundary";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import {
   useCallback,
@@ -17,7 +22,13 @@ import {
 } from "@tanstack/react-query";
 import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
-import { useChatLocateRowAnswer } from "@/hooks/chats/use-chat-locate-row";
+import {
+  useChatLocateRowAnswer,
+  type ChatLocateRowAnswer,
+} from "@/hooks/chats/use-chat-locate-row";
+import { toast } from "sonner";
+import { NOTIFICATION_MESSAGE_UNAVAILABLE } from "@/lib/notifications/destination-copy";
+import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import type { BotReplyTarget } from "@/lib/bots/bot-reply-target";
 import { replyRowIdFor, sendCardFor } from "@/lib/bots/reply-row";
 import { botTurnIndexOf, turnOfMessages } from "@/lib/bots/bot-turn-receipt";
@@ -106,8 +117,10 @@ export type BotTranscriptSurface =
         | null;
       /** The rows of the bot its host opens their own thread under. */
       readonly threadAnchorKinds: readonly string[];
-      /** Posts a direct reply's chosen option as a new post; `null` while one is being sent. */
-      readonly chooseOption: ((choice: string) => void) | null;
+      /** Posts a direct reply's chosen option as a new post, replying to the reply where the bot's host takes replies; `null` while one is being sent. */
+      readonly chooseOption:
+        | ((messageId: string | null, choice: string) => void)
+        | null;
       /** Names a row of the channel in the channel's box as the message its send replies to (T166); `null` where none can. */
       readonly reply: ((target: BotReplyTarget) => void) | null;
       /** Sends a question card's answer at the channel's top level; `null` where nothing can send it. */
@@ -138,8 +151,10 @@ export type BotTranscriptSurface =
     }
   | {
       readonly kind: "thread";
-      /** Posts a reply's chosen option in the thread; `null` while one is being sent. */
-      readonly chooseOption: ((choice: string) => void) | null;
+      /** Posts a reply's chosen option in the thread, replying to the reply where the bot's host takes replies; `null` while one is being sent. */
+      readonly chooseOption:
+        | ((messageId: string | null, choice: string) => void)
+        | null;
       /** Names a row of the thread in the thread's box as the message its send replies to (T166); `null` where none can. */
       readonly reply: ((target: BotReplyTarget) => void) | null;
       /** Sends a question card's answer in the thread; `null` where the thread takes no send. */
@@ -503,7 +518,16 @@ function useUnreadOrdinal(
   if (pending !== null && !current) setPending(null);
   const seek = useCallback(
     (ordinal: number | null) => {
-      setPending(ordinal === null ? null : { ordinal, epoch, session });
+      setPending((previous) => {
+        if (ordinal === null) return null;
+        if (
+          previous?.ordinal === ordinal &&
+          previous.epoch === epoch &&
+          previous.session === session
+        )
+          return previous;
+        return { ordinal, epoch, session };
+      });
     },
     [epoch, session],
   );
@@ -614,7 +638,11 @@ function BotChatTranscriptBody(props: {
     (landing: BotTranscriptLanding) =>
       jumpTo(
         landing.sendPostId === null
-          ? { kind: "message", messageId: landing.messageId }
+          ? {
+              kind: "message",
+              messageId: landing.messageId,
+              reportsMiss: landing.reportsMiss === true,
+            }
           : {
               kind: "send",
               postId: landing.sendPostId,
@@ -652,8 +680,15 @@ function BotChatTranscriptBody(props: {
     setPendingJump({
       kind: "message",
       messageId: pendingJump.fallbackMessageId,
+      reportsMiss: false,
     });
   }
+  useReportedMiss({
+    pendingJump,
+    withdrawn: landOn === null,
+    located,
+    end: () => setPendingJump(null),
+  });
   const locatedOrdinal = located.status === "found" ? located.ordinal : null;
   const { requestTranscriptOrdinal } = state;
   // The store's pending-jump ordinal follows the pending jump: named while
@@ -681,7 +716,8 @@ function BotChatTranscriptBody(props: {
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const rowIdOf = useCallback(
     (messageId: string): string | null =>
-      jumpTargetIn(messages, { kind: "message", messageId })?.rowId ?? null,
+      jumpTargetIn(messages, { kind: "message", messageId, reportsMiss: false })
+        ?.rowId ?? null,
     [messages],
   );
   useBotSearchWordMarks(transcriptRef, chatId, rowIdOf);
@@ -781,7 +817,8 @@ function BotChatTranscriptBody(props: {
     return {
       ...repliesBase,
       above: (messageId) => above.get(messageId) ?? null,
-      open: (messageId) => jumpTo({ kind: "message", messageId }),
+      open: (messageId) =>
+        jumpTo({ kind: "message", messageId, reportsMiss: false }),
     };
   }, [flow, jumpTo, messages, repliesBase, transcriptWindow]);
   const listHeader = surface?.kind === "channel" ? surface.history : header;
@@ -805,23 +842,25 @@ function BotChatTranscriptBody(props: {
       ),
     [messages, transcriptWindow],
   );
-  const soughtRow = readRows.find((row, index) => {
-    if (seekOrdinal === null) return false;
-    return (transcriptWindow === null ? index : row.ordinal) === seekOrdinal;
-  });
-  if (soughtRow?.kind === "hydrated") {
-    issueScroll({ rowId: soughtRow.model.id, blockId: null });
-    setSeekOrdinal(null);
-  }
-  const navigateUnread = (landing: BotUnreadLanding): void => {
-    if (landing.kind === "message") {
+  const navigateUnread = useCallback(
+    (landing: BotUnreadLanding): void => {
+      if (landing.kind === "ordinal") {
+        setSeekOrdinal(landing.ordinal);
+        return;
+      }
       setSeekOrdinal(null);
-      jumpTo(landing);
-    } else {
       setPendingJump(null);
-      setSeekOrdinal(landing.ordinal);
-    }
-  };
+      setScroll((previous) => ({
+        request: {
+          kind: "boundary",
+          rowId: landing.rowId,
+          requestId: previous.issued + 1,
+        },
+        issued: previous.issued + 1,
+      }));
+    },
+    [setSeekOrdinal],
+  );
 
   // The channel's first screen, as a created channel nobody has written in
   // opens: the next post re-subscribes on its own, so nothing more is said.
@@ -851,11 +890,17 @@ function BotChatTranscriptBody(props: {
             hostId={hostId}
             rows={readRows}
             records={state.messages}
+            windowEpoch={state.transcriptWindow.epoch}
+            unread={flow === null ? undefined : flow.unread}
+            automaticBoundary={
+              flow === null && surface?.kind === "thread" && landOn === null
+            }
             onNavigate={navigateUnread}
           >
             <BotTranscriptRows
               ref={transcriptRef}
               flow={flow}
+              readingEnabled={reading.enabled}
               replies={repliesBase}
               intro={intro}
               header={listHeader}
@@ -909,6 +954,7 @@ function BotChatTranscriptBody(props: {
 function BotTranscriptRows(props: {
   readonly ref: RefObject<HTMLDivElement | null>;
   readonly flow: BotTranscriptFlow | null;
+  readonly readingEnabled: boolean;
   /** What the rows' badges read, but for the rows above and landing, which the flow's rows give. */
   readonly replies: RepliesBase | null;
   readonly intro: ChannelIntro | null;
@@ -942,6 +988,8 @@ function BotTranscriptRows(props: {
           transcriptWindow={props.transcriptWindow}
           reportVisibleRange={props.reportVisibleRange}
           fold={flow.fold}
+          unreadVisit={flow.unread?.visit ?? 0}
+          readingEnabled={props.readingEnabled}
         />
       </TasklessMarkdownLinkProvider>
     );
@@ -966,6 +1014,7 @@ function BotTranscriptRows(props: {
  */
 export interface BotTranscriptFlow {
   readonly fold: BotTranscriptFold | null;
+  readonly unread: BotTranscriptUnread | null;
 }
 
 /**
@@ -997,6 +1046,8 @@ function BotTranscriptFlowRows(props: {
   readonly transcriptWindow: TranscriptWindow | null;
   readonly reportVisibleRange: (range: OrdinalRange | null) => void;
   readonly fold: BotTranscriptFold | null;
+  readonly unreadVisit: number;
+  readonly readingEnabled: boolean;
 }): ReactNode {
   const { header, messages, transcriptWindow, reportVisibleRange, fold } =
     props;
@@ -1024,9 +1075,26 @@ function BotTranscriptFlowRows(props: {
     open: land,
   } = useFlowLanding({
     shown,
+    boundaryVisit: props.unreadVisit,
     onUnfold: fold !== null && folded ? fold.onUnfold : null,
   });
-  const replies = useFlowReplies(props.replies, shown, folded, land);
+  const pageNavigation = useContext(BotUnreadPageNavigationContext);
+  const cancelBoundaryLanding = useFlowBoundaryLanding({
+    ref: landingRef,
+    shown,
+    visit: props.unreadVisit,
+    enabled: props.readingEnabled,
+    onUnfold: fold !== null && folded ? fold.onUnfold : null,
+  });
+  const openReply = useCallback(
+    (messageId: string) => {
+      pageNavigation?.cancel();
+      cancelBoundaryLanding();
+      land(messageId);
+    },
+    [cancelBoundaryLanding, land, pageNavigation],
+  );
+  const replies = useFlowReplies(props.replies, shown, folded, openReply);
   const range = ordinalRangeOf(shown);
   const fromOrdinal = range?.fromOrdinal ?? null;
   const toOrdinal = range?.toOrdinal ?? null;
@@ -1109,6 +1177,48 @@ function BotTranscriptFlowRows(props: {
   );
 }
 
+function useFlowBoundaryLanding(args: {
+  readonly ref: RefObject<HTMLDivElement | null>;
+  readonly shown: readonly TranscriptListRow[];
+  readonly visit: number;
+  readonly enabled: boolean;
+  readonly onUnfold: (() => void) | null;
+}): () => void {
+  const boundary = useContext(BotUnreadBoundaryContext);
+  const rowId = boundary?.rowId ?? null;
+  const handled = useRef(0);
+  const pageNavigation = useContext(BotUnreadPageNavigationContext);
+  const { ref, shown, visit, enabled, onUnfold } = args;
+  const cancel = useCallback(() => {
+    // An explicit destination wins for this visit, even after its highlight expires.
+    handled.current = visit;
+  }, [visit]);
+  useEffect(() => {
+    if (
+      !enabled ||
+      visit === 0 ||
+      handled.current === visit ||
+      rowId === null ||
+      (pageNavigation !== null && !pageNavigation.isPending(visit))
+    )
+      return;
+    if (
+      !shown.some((row) => row.kind === "hydrated" && row.model.id === rowId)
+    ) {
+      onUnfold?.();
+      return;
+    }
+    const divider = ref.current?.querySelector<HTMLElement>(
+      "[data-unread-divider]",
+    );
+    if (divider === undefined || divider === null) return;
+    divider.scrollIntoView({ block: "start" });
+    handled.current = visit;
+    pageNavigation?.cancel();
+  }, [enabled, onUnfold, pageNavigation, ref, rowId, shown, visit]);
+  return cancel;
+}
+
 /** What a row's badge reads, but for the rows above it and landing, which its list gives. */
 type RepliesBase = Omit<ChatBotReplies, "above" | "open">;
 
@@ -1120,6 +1230,7 @@ type RepliesBase = Omit<ChatBotReplies, "above" | "open">;
  */
 function useFlowLanding(input: {
   readonly shown: ReadonlyArray<TranscriptListRow>;
+  readonly boundaryVisit: number;
   /** Unfolds the flow; `null` while it is not folded. */
   readonly onUnfold: (() => void) | null;
 }): {
@@ -1127,19 +1238,24 @@ function useFlowLanding(input: {
   readonly highlightedRowId: string | null;
   readonly open: (messageId: string) => void;
 } {
-  const { shown, onUnfold } = input;
+  const { shown, onUnfold, boundaryVisit } = input;
   const ref = useRef<HTMLDivElement | null>(null);
   const visits = useRef(0);
   const [target, setTarget] = useState<{
     readonly messageId: string;
     readonly visit: number;
+    readonly boundaryVisit: number;
   } | null>(null);
   const shownModels = useMemo(
     () => shown.flatMap((row) => (row.kind === "hydrated" ? [row.model] : [])),
     [shown],
   );
+  const current = target === null || target.boundaryVisit === boundaryVisit;
+  if (!current) setTarget(null);
   const targetRowId =
-    target === null ? null : replyRowIdFor(shownModels, target.messageId);
+    target === null || !current
+      ? null
+      : replyRowIdFor(shownModels, target.messageId);
   const visit = target?.visit ?? null;
   useEffect(() => {
     if (visit === null || targetRowId === null) return undefined;
@@ -1159,9 +1275,9 @@ function useFlowLanding(input: {
         onUnfold();
       }
       visits.current += 1;
-      setTarget({ messageId, visit: visits.current });
+      setTarget({ messageId, visit: visits.current, boundaryVisit });
     },
-    [onUnfold, shownModels],
+    [boundaryVisit, onUnfold, shownModels],
   );
   return { ref, highlightedRowId: targetRowId, open };
 }
@@ -1266,6 +1382,12 @@ export interface BotTranscriptLanding {
   readonly messageId: string;
   readonly sendPostId: string | null;
   readonly visit: number;
+  /**
+   * Set by a landing the person was told they would see (a notification's
+   * message): the list says so when the message cannot be opened. Any other
+   * landing that finds no row is left unlanded quietly.
+   */
+  readonly reportsMiss?: boolean;
 }
 
 /**
@@ -1286,11 +1408,54 @@ function useLandOnMessage(
 }
 
 /**
+ * A jump that reports its miss is one the person was told they would see. It
+ * ends unlanded, and says so, once the host answers that it has no such row
+ * or cannot be asked; a host that locates no rows says nothing about this
+ * one, whose transcript may still carry it. It ends silently once the landing
+ * that asked for it is withdrawn, or the pane it waited in view of leaves
+ * view: an answer arriving after that moves nothing. One asked of a pane not
+ * yet in view waits for it to show. Settled during render, as a pending jump
+ * is.
+ */
+function useReportedMiss(args: {
+  readonly pendingJump: PendingJump | null;
+  readonly withdrawn: boolean;
+  readonly located: ChatLocateRowAnswer;
+  readonly end: () => void;
+}): void {
+  const { pendingJump, withdrawn, located, end } = args;
+  const paneVisible = usePaneVisible();
+  const [seenJump, setSeenJump] = useState<PendingJump | null>(null);
+  const [unopened, setUnopened] = useState<PendingJump | null>(null);
+  const toldUnopened = useRef<PendingJump | null>(null);
+  useEffect(() => {
+    if (unopened === null || toldUnopened.current === unopened) return;
+    toldUnopened.current = unopened;
+    toast.error(NOTIFICATION_MESSAGE_UNAVAILABLE);
+  }, [unopened]);
+  if (pendingJump?.kind !== "message" || !pendingJump.reportsMiss) return;
+  if (paneVisible && seenJump !== pendingJump) setSeenJump(pendingJump);
+  if (withdrawn || (!paneVisible && seenJump === pendingJump)) {
+    end();
+    return;
+  }
+  if (!paneVisible) return;
+  if (located.status === "missing" && located.cause !== "unsupported") {
+    end();
+    setUnopened(pendingJump);
+  }
+}
+
+/**
  * A jump waiting on its row: to a message, or to the card of the send that
  * wrote a post, landing on `fallbackMessageId` where the session has none.
  */
 type PendingJump =
-  | { readonly kind: "message"; readonly messageId: string }
+  | {
+      readonly kind: "message";
+      readonly messageId: string;
+      readonly reportsMiss: boolean;
+    }
   | {
       readonly kind: "send";
       readonly postId: string;

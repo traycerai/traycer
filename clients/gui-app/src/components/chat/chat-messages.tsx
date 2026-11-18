@@ -1,3 +1,4 @@
+import { BotUnreadBoundaryContext } from "@/components/bots/bot-unread-boundary";
 import { QuoteArea } from "@/components/chat/quote/quote-area";
 import { useChatFindController } from "@/components/chat/use-chat-find-controller";
 import { type ChatMessageActions } from "@/components/chat/chat-message";
@@ -306,6 +307,7 @@ export type ChatScrollRequestOutcome = "landed" | "exhausted" | "cancelled";
  * not hydrated yet.
  */
 interface PendingScrollRequestLanding {
+  readonly kind: "message" | "boundary";
   readonly requestId: number;
   readonly messageId: string;
   readonly blockId: string | null;
@@ -324,6 +326,11 @@ interface PendingScrollRequestLanding {
 }
 
 export type ChatMessageScrollRequest =
+  | {
+      readonly kind: "boundary";
+      readonly rowId: string;
+      readonly requestId: number;
+    }
   | {
       readonly kind: "message";
       readonly messageId: string;
@@ -2217,6 +2224,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // message per row, which a part cannot be half of. It also puts the sender
   // first in the minimap's labels, since several people post there.
   const botChannel = use(ChatBotPresentationContext) !== null;
+  const unreadBoundary = use(BotUnreadBoundaryContext);
+  const cancelBoundaryNavigation = unreadBoundary?.cancelNavigation;
   // ONE decision, read by all three things that derive a part key: the rows
   // below, find's projection and `chatTimelineRowKeyForBlock`. A reader that
   // split differently from the list would name rows the list never built.
@@ -3874,7 +3883,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const pending = pendingScrollRequestLandingRef.current;
       if (pending === null || pending.requestId !== requestId) return;
       pendingScrollRequestLandingRef.current = null;
-      findLandingSettledRef.current(pending.messageId, outcome);
+      if (pending.kind === "message")
+        findLandingSettledRef.current(pending.messageId, outcome);
       onScrollRequestSettledRef.current?.(requestId, outcome);
     },
     [],
@@ -3927,14 +3937,25 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       followLatchRef.current?.beginOwnedFreeNavigation();
       const imperativeScrollGeneration = beginImperativeScrollOperation(false);
       const scrollNode = list.getScrollableNode();
-      const viewOffset = CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX;
+      const viewOffset = (): number => {
+        if (request.kind === "message")
+          return CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX;
+        const row = queryMountedChatRowRoot(scrollNode, rowKey());
+        const divider = row?.querySelector<HTMLElement>(
+          "[data-unread-divider]",
+        );
+        return row === null || divider === undefined || divider === null
+          ? 0
+          : row.getBoundingClientRect().top -
+              divider.getBoundingClientRect().top;
+      };
       const targetIndex = (): number | null =>
         rowIndexByKeyRef.current.get(rowKey()) ?? null;
       const issue = (index: number): Promise<void> => {
         const target = expectedTimelineScrollTop(
           list,
           index,
-          viewOffset,
+          viewOffset(),
           listTopOffsetAdjustmentRef.current,
         );
         if (target === null) return Promise.resolve();
@@ -3951,7 +3972,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
               scroll: scrollNode.scrollTop,
               topOffsetAdjustment: listTopOffsetAdjustmentRef.current,
             },
-            { index, viewOffset, animated: false },
+            { index, viewOffset: viewOffset(), animated: false },
             CHAT_TIMELINE_NAVIGATION_LANDING_EPSILON_PX,
           )
         ) {
@@ -4007,7 +4028,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           // Re-arm from the real landing so the 3s is measured from when the
           // reader can actually see the target; an already-in-view row
           // rang at issue and simply keeps ringing.
-          showNavigationHighlight(messageId, blockId);
+          if (request.kind === "message")
+            showNavigationHighlight(messageId, blockId);
           if (blockId !== null) {
             // Inner card centering only after the row landing is done: a
             // `scrollIntoView` during the settle window would fail the 1px
@@ -4028,7 +4050,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           // the reader can see, so it still rings and reveals its card; only
           // a row that never mounted is a genuine miss.
           if (queryMountedChatRowRoot(scrollNode, rowKey()) !== null) {
-            showNavigationHighlight(messageId, blockId);
+            if (request.kind === "message")
+              showNavigationHighlight(messageId, blockId);
             if (blockId !== null) blockReveal.requestReveal(messageId, blockId);
             settleScrollRequest(requestId, "landed");
             return;
@@ -4489,6 +4512,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // release, no freeze: the navigation's own scroll (issued right after, via
   // issueFreeTimelineNavigation) takes over immediately regardless.
   const releaseForExplicitNavigation = useCallback((): void => {
+    cancelBoundaryNavigation?.();
     forgetPendingHydrationRestore(identity);
     pendingHydrationRestoreAnchorIdRef.current = null;
     cancelTimelineLiveFollowForUserNavigation({
@@ -4496,7 +4520,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       freezeInFlightScroll: false,
       publishesReaderPosition: false,
     });
-  }, [cancelTimelineLiveFollowForUserNavigation, identity]);
+  }, [
+    cancelBoundaryNavigation,
+    cancelTimelineLiveFollowForUserNavigation,
+    identity,
+  ]);
 
   const navigateToMessage = useCallback(
     (
@@ -4909,13 +4937,16 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       scrollRequestRef.current = null;
       return;
     }
+    const messageId =
+      request.kind === "boundary" ? request.rowId : request.messageId;
+    const blockId = request.kind === "boundary" ? null : request.blockId;
     const activityGroupId =
-      request.blockId === null
+      blockId === null
         ? null
         : activityGroupIdForBlock(
             messagesRef.current,
-            request.messageId,
-            request.blockId,
+            messageId,
+            blockId,
             backgroundToolBlockIdsRef.current,
           );
     if (activityGroupId !== null) {
@@ -4937,9 +4968,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     if (superseded !== null)
       settleScrollRequest(superseded.requestId, "cancelled");
     const landing: PendingScrollRequestLanding = {
+      kind: request.kind,
       requestId: request.requestId,
-      messageId: request.messageId,
-      blockId: resolvedScrollBlockId(request.blockId),
+      messageId: messageId,
+      blockId: resolvedScrollBlockId(blockId),
       // A request can arrive at a tile that is already concealed, and nothing
       // on this path reads `visible`. Issuing it into a box this tile's own
       // hide collapsed is the same defect the hide-time suspension exists for,
@@ -4954,8 +4986,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // follow, and the ring paints at issue so an already-in-view target rings
     // immediately (it is re-armed from the real landing).
     releaseForExplicitNavigation();
-    setScrolledActiveUserMessageIdIfChanged(request.messageId);
-    showNavigationHighlight(landing.messageId, landing.blockId);
+    setScrolledActiveUserMessageIdIfChanged(messageId);
+    if (request.kind === "message")
+      showNavigationHighlight(landing.messageId, landing.blockId);
+    else clearNavigationHighlight();
     // Deliberately NOT the animated `navigateToMessage` path: the landing
     // effect right below issues `landScrollRequestRow` in this same commit,
     // and keeps retrying while the row key is not rendered yet.
@@ -4963,6 +4997,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   }, [
     activityGroupOpenStore,
     closeSubagentDrillIn,
+    clearNavigationHighlight,
     releaseForExplicitNavigation,
     scrollRequest?.requestId,
     scrollToEnd,

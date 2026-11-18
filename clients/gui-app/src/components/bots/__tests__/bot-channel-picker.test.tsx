@@ -117,6 +117,7 @@ describe("the channel title as a picker", () => {
     const sheet = await openPicker(user);
 
     expect(sheet.getAttribute("role")).toBe("dialog");
+    expect(sheet.getAttribute("data-vaul-drawer-direction")).toBe("right");
     expect(within(sheet).getAllByTestId("bot-channel-row")).toHaveLength(2);
     expect(
       screen.getByTestId("bot-channel-picker-trigger").textContent,

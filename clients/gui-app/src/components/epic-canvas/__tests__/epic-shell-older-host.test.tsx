@@ -112,6 +112,7 @@ const directory = vi.hoisted(() => ({
     },
   onChange: (_listener: () => void) => ({ dispose: () => undefined }),
   hasConcludedDiscovery: () => true,
+  hasFailedDiscovery: () => false,
   getLocalHostId: (): string | null => null,
 }));
 

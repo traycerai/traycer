@@ -1,12 +1,5 @@
-import { useEffect, useState, type ReactElement, type ReactNode } from "react";
-import {
-  createMemoryHistory,
-  createRootRoute,
-  createRoute,
-  createRouter,
-  RouterProvider,
-} from "@tanstack/react-router";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useSyncExternalStore } from "react";
+import { QueryClient } from "@tanstack/react-query";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type {
   BotRecord,
@@ -39,32 +32,16 @@ import type {
 import { recordNegotiatedHostManifest } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { createAuthenticatedUserFixture } from "@traycer-clients/shared/test-fixtures/authenticated-user";
 import { createFakeEnvironmentCloudTransport } from "../../../__tests__/create-fake-runner-host";
-import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 import { publishAgentActivity } from "@/__tests__/agent-activity-harness";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
-import { MobileBotHeaderSlotProvider } from "@/components/layout/header/mobile-bot-header-slot";
-import {
-  HostRuntimeProvider,
-  hostRpcRegistry,
-  type HostRpcRegistry,
-  type MessengerFactory,
-} from "@/lib/host";
+import { type HostRpcRegistry, type MessengerFactory } from "@/lib/host";
 import { acquireHostStreamClient } from "@/lib/host/host-stream-client-cache";
 import { setMobileApp, setPhoneLayoutOnly } from "@/lib/mobile-app";
-import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
-import { BotDraftsPersistLifecycleBridge } from "@/providers/bot-drafts-persist-lifecycle-bridge";
-import { RunnerHostProvider } from "@/providers/runner-host-provider";
-import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
-import { useAuthStore } from "@/stores/auth/auth-store";
-import { ActivityGroupOpenStoreProvider } from "@/stores/chats/activity-group-open-store";
-import { A2AOpenStoreProvider } from "@/stores/chats/a2a-open-store";
-import { ChatFindForceStoreProvider } from "@/stores/chats/chat-find-force-store";
-import { ChatOpenStoreScopeProvider } from "@/stores/chats/open-store-scope";
+import { playbackTrack } from "@/lib/soundtrack/__tests__/playback-track";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useSoundtrackStore } from "@/stores/soundtrack/soundtrack-store";
 import { tabItemId } from "@/stores/tabs/layout";
+import { useTracyPlaceStore } from "@/stores/bots/tracy-place-store";
 import { useTabsStore } from "@/stores/tabs/store";
-import "@/index.css";
 
 /**
  * THE COMPACT CHANNEL ACTIONS MENU, IN THE INSTALLED APP'S PHONE FORM.
@@ -85,6 +62,26 @@ import "@/index.css";
  * skips the phone-form flags, so a wide window gets the desktop form. With
  * neither, the page is the phone form with the snapshot delivered.
  *
+ * `?music=1` turns the playback controls on with a sounding track, as the
+ * Music settings do, and `window.__botChannelProbe` changes them live:
+ * `setControls` turns the setting on or off, `setPaneWidth` sets the width of
+ * the pane the channel is drawn in, in CSS pixels, `holdSnapshots` holds back
+ * the snapshots of one bot (`null`: of none, which delivers every one held;
+ * `?snapshot=held` holds every bot's), and `selectBot` changes the channel
+ * the surface is asked for.
+ * `?music=long` sounds a title too long for its window, so it scrolls;
+ * `showThreads` and `showSession` (a chat id, `null` to leave) move the
+ * surface to Threads and to a session in place of the channel, and
+ * `soundTrack` (a track name) sounds another track under the same title.
+ * `?bots=2` lists a second bot, `SECOND_BOT_ID`, for `selectBot` to switch to.
+ *
+ * `?hostMethods=held` leaves the host's handshake unanswered until
+ * `advertiseHostMethods` is called, and `hostGates` holds the lists' and
+ * `bot.open`'s answers until the promise in it settles and reports through
+ * `awaited` when a request begins to wait on one (a cold open's gates,
+ * `tracy-tab-cold-open`). `window.__fixtureCommitted` is set by the first
+ * commit of the content under `FixtureApp`.
+ *
  * The drafts bridge the app mounts above every tab
  * (`BotDraftsPersistLifecycleBridge`, `traycer-app.tsx`) is mounted here too:
  * the bot tab shows its tree only once the signed-in account's own drafts are
@@ -93,9 +90,31 @@ import "@/index.css";
 const QUERY = new URLSearchParams(window.location.search);
 const SNAPSHOT_HELD = QUERY.get("snapshot") === "held";
 const DESKTOP_FORM = QUERY.get("form") === "desktop";
+const MUSIC = QUERY.get("music") === "1" || QUERY.get("music") === "long";
+const LONG_TRACK_TITLE =
+  "A very long track title that cannot fit the window beside the buttons";
+const TWO_BOTS = QUERY.get("bots") === "2";
+const HOST_METHODS_HELD = QUERY.get("hostMethods") === "held";
 
-const HOST_ID = "bot-compact-actions-menu-host";
-const BOT_ID = "bot_01JD5X8Q2M4N6P8R0S2T4V6W8Y";
+declare global {
+  interface Window {
+    __botChannelProbe?: {
+      readonly setControls: (on: boolean) => void;
+      readonly setPaneWidth: (px: number) => void;
+      readonly holdSnapshots: (botId: string | null) => void;
+      readonly selectBot: (botId: string) => void;
+      readonly showThreads: (shown: boolean) => void;
+      readonly showSession: (chatId: string | null) => void;
+      readonly soundTrack: (name: string) => void;
+    };
+    /** Set once the content under `FixtureApp` has committed. */
+    __fixtureCommitted?: boolean;
+  }
+}
+
+export const HOST_ID = "bot-compact-actions-menu-host";
+export const BOT_ID = "bot_01JD5X8Q2M4N6P8R0S2T4V6W8Y";
+const SECOND_BOT_ID = "bot_01JD5X8Q2M4N6P8R0S2T4V6W9Z";
 const ENVIRONMENT_ID = "env-personal";
 const WEBSOCKET_URL = "ws://127.0.0.1:9/rpc";
 const AUTHN_BASE_URL = "http://127.0.0.1:9";
@@ -107,22 +126,119 @@ if (!DESKTOP_FORM) {
   setMobileApp(true);
 }
 
+if (MUSIC) {
+  // The availability the controls read: a desktop build that reports a source.
+  Object.defineProperty(globalThis, "runnerHost", {
+    configurable: true,
+    value: {
+      soundtrackSourceAvailable: true,
+      readSoundtrackSet: () => Promise.resolve({ kind: "unavailable" }),
+    },
+  });
+  useSettingsStore.setState({
+    soundtrackEnabled: true,
+    soundtrackPlaybackControls: true,
+  });
+  useSoundtrackStore.setState({
+    soundingTrack: {
+      ...playbackTrack("slow-tide", 60),
+      title: QUERY.get("music") === "long" ? LONG_TRACK_TITLE : "Slow Tide",
+    },
+  });
+}
+
+/** The channel the surface is asked for, which `selectBot` changes. */
+let selectedBotId = BOT_ID;
+const selectionListeners = new Set<() => void>();
+
+/**
+ * The bot whose snapshots are held back, `"all"` for every bot's, `null` for
+ * none; a held delivery waits in `heldDeliveries` until its bot is released.
+ */
+let heldBot: string | null = SNAPSHOT_HELD ? "all" : null;
+const heldDeliveries: Array<{ botId: string; deliver: () => void }> = [];
+
+function isHeld(botId: string): boolean {
+  return heldBot === "all" || heldBot === botId;
+}
+
+window.__botChannelProbe = {
+  setControls: (on) => {
+    useSettingsStore.setState({ soundtrackPlaybackControls: on });
+  },
+  setPaneWidth: (px) => {
+    document.documentElement.style.setProperty("--pane-width", `${px}px`);
+  },
+  holdSnapshots: (botId) => {
+    heldBot = botId;
+    const waiting = heldDeliveries.splice(0);
+    for (const entry of waiting) {
+      if (isHeld(entry.botId)) heldDeliveries.push(entry);
+      else entry.deliver();
+    }
+  },
+  selectBot: (botId) => {
+    selectedBotId = botId;
+    for (const listener of selectionListeners) listener();
+  },
+  showThreads: (shown) => {
+    const place = useTracyPlaceStore.getState();
+    if (shown) place.setSession(selectedBotId, null);
+    place.setThreadsShown(shown);
+  },
+  soundTrack: (name) => {
+    useSoundtrackStore.setState({
+      soundingTrack: { ...playbackTrack(name, 60), title: LONG_TRACK_TITLE },
+    });
+  },
+  showSession: (chatId) => {
+    useTracyPlaceStore
+      .getState()
+      .setSession(
+        selectedBotId,
+        chatId === null ? null : { chatId, threadId: null },
+      );
+  },
+};
+
+/** The answers a cold open holds: the lists', and `bot.open`'s. */
+export const hostGates: {
+  lists: Promise<void> | null;
+  open: Promise<void> | null;
+  /** Called when a request begins to wait on a gate that is held. */
+  awaited: (gate: "lists" | "open") => void;
+} = { lists: null, open: null, awaited: () => undefined };
+
+/** Holds an answer until its gate settles; a `null` gate answers at once. */
+function answerAfter<Answer>(
+  name: "lists" | "open",
+  answer: Answer,
+): Answer | Promise<Answer> {
+  const gate = hostGates[name];
+  if (gate === null) return answer;
+  hostGates.awaited(name);
+  return gate.then(() => answer);
+}
+
 // The page offers only what the host advertised in its handshake; this
 // fixture's mock messenger makes none, so the methods are recorded here.
-recordNegotiatedHostManifest(HOST_ID, {
-  "bot.list": { major: 1, minor: 1 },
-  "bot.open": { major: 1, minor: 0 },
-  "bot.conversation.list": { major: 1, minor: 0 },
-  "bot.conversation.search": { major: 1, minor: 0 },
-  "bot.thread.list": { major: 1, minor: 2 },
-  "bot.threadFollow.read": { major: 1, minor: 0 },
-  "bot.readCursor.read": { major: 1, minor: 0 },
-  "bot.notificationLevel.read": { major: 1, minor: 0 },
-  "bot.turn.locate": { major: 1, minor: 0 },
-});
+export function advertiseHostMethods(): void {
+  recordNegotiatedHostManifest(HOST_ID, {
+    "bot.list": { major: 1, minor: 1 },
+    "bot.open": { major: 1, minor: 0 },
+    "bot.conversation.list": { major: 1, minor: 0 },
+    "bot.conversation.search": { major: 1, minor: 0 },
+    "bot.thread.list": { major: 1, minor: 2 },
+    "bot.threadFollow.read": { major: 1, minor: 0 },
+    "bot.readCursor.read": { major: 1, minor: 0 },
+    "bot.notificationLevel.read": { major: 1, minor: 0 },
+    "bot.turn.locate": { major: 1, minor: 0 },
+  });
+}
+if (!HOST_METHODS_HELD) advertiseHostMethods();
 
 const SIGNED_IN_USER = createAuthenticatedUserFixture(undefined);
-const USER_ID = SIGNED_IN_USER.user.id;
+export const USER_ID = SIGNED_IN_USER.user.id;
 const PERSONAL_ENVIRONMENT: EnvironmentDescriptorV11 = {
   environmentId: ENVIRONMENT_ID,
   ownerKind: "user",
@@ -153,6 +269,20 @@ const BOT: BotRecord = {
   createdAt: 1_000,
   archivedAt: null,
 };
+
+const SECOND_BOT: BotRecord = {
+  ...BOT,
+  botId: SECOND_BOT_ID,
+  title: "Scribe",
+  appConversationChatId: `channel-${SECOND_BOT_ID}`,
+  trunkChatId: `trunk-${SECOND_BOT_ID}`,
+};
+
+const BOTS: readonly BotRecord[] = TWO_BOTS ? [BOT, SECOND_BOT] : [BOT];
+
+function botOf(botId: string): BotRecord {
+  return BOTS.find((bot) => bot.botId === botId) ?? BOT;
+}
 
 const SNAPSHOT: BotSubscribeServerFrame = {
   kind: "snapshot",
@@ -187,15 +317,22 @@ const SNAPSHOT: BotSubscribeServerFrame = {
   hasBinaryPayload: false,
 };
 
-/** One `bot.subscribe` session that opens and delivers the snapshot. */
+/** One `bot.subscribe` session that opens and delivers its bot's snapshot. */
 class SnapshotSession implements IStreamSession {
   readonly close = (): void => undefined;
+
+  constructor(private readonly botId: string) {}
 
   sendClientFrame(): void {}
 
   onServerFrame(handler: ServerFrameHandler): void {
-    if (SNAPSHOT_HELD) return;
-    queueMicrotask(() => handler(SNAPSHOT, null));
+    const deliver = (): void =>
+      handler({ ...SNAPSHOT, bot: botOf(this.botId) }, null);
+    if (isHeld(this.botId)) {
+      heldDeliveries.push({ botId: this.botId, deliver });
+      return;
+    }
+    queueMicrotask(deliver);
   }
 
   onStatusChange(handler: StatusChangeHandler): void {
@@ -223,9 +360,16 @@ class SnapshotStreamClient implements IHostStreamClient<HostStreamRpcRegistry> {
 
   subscribe<Method extends keyof HostStreamRpcRegistry & string>(
     _method: Method,
-    _params: ParamsOf<HostStreamRpcRegistry, Method>,
+    params: ParamsOf<HostStreamRpcRegistry, Method>,
   ): IStreamSession {
-    return new SnapshotSession();
+    return new SnapshotSession(
+      typeof params === "object" &&
+        params !== null &&
+        "botId" in params &&
+        typeof params.botId === "string"
+        ? params.botId
+        : BOT_ID,
+    );
   }
 
   subscribeWithParamsProvider<
@@ -234,7 +378,7 @@ class SnapshotStreamClient implements IHostStreamClient<HostStreamRpcRegistry> {
     _method: Method,
     _paramsProvider: StreamParamsProvider<HostStreamRpcRegistry, Method>,
   ): IStreamSession {
-    return new SnapshotSession();
+    return new SnapshotSession(BOT_ID);
   }
 
   getMethodSchemaVersion(): SchemaVersion | null {
@@ -311,13 +455,15 @@ const localHost = {
   availability: "available",
 } as const;
 
-const windowsBridgeValue = { bridge: null, hasHydrated: true } as const;
-const queryClient = new QueryClient({
+export const windowsBridgeValue = { bridge: null, hasHydrated: true } as const;
+export const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 });
 
 let requestCounter = 0;
-const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
+export const messengerFactory: MessengerFactory<HostRpcRegistry> = ({
+  registry,
+}) =>
   new MockHostMessenger<HostRpcRegistry>({
     registry,
     requestId: () => `bot-compact-actions-menu-${String(++requestCounter)}`,
@@ -346,22 +492,25 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         complete: true,
       }),
       "epic.getTaskContexts": () => ({ tasks: {} }),
-      "bot.list": () => ({ bots: [BOT], mainBotIds: null }),
-      "bot.open": () => ({
-        bot: BOT,
-        outcome: { kind: "serve-here", claimed: null },
-      }),
-      "bot.conversation.list": (request) => ({
-        conversations: [
-          {
-            conversationId: `channel-${request.botId}`,
-            botId: request.botId,
-            title: null,
-            createdAt: 1,
-            updatedAt: 1,
-          },
-        ],
-      }),
+      "bot.list": () =>
+        answerAfter("lists", { bots: [...BOTS], mainBotIds: null }),
+      "bot.open": (request) =>
+        answerAfter("open", {
+          bot: botOf(request.botId),
+          outcome: { kind: "serve-here", claimed: null },
+        }),
+      "bot.conversation.list": (request) =>
+        answerAfter("lists", {
+          conversations: [
+            {
+              conversationId: `channel-${request.botId}`,
+              botId: request.botId,
+              title: null,
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+        }),
       "bot.thread.list": () => ({
         threads: [],
         trunkCostUsd: null,
@@ -383,35 +532,14 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
     },
   });
 
-function SignedIn(props: { readonly children: ReactNode }): ReactNode {
-  const authStatus = useAuthStore((state) => state.status);
-  return authStatus === "signed-in" ? props.children : null;
-}
-
-function Page(): ReactElement {
-  return (
-    <ResolvedThemeContext.Provider
-      value={{ resolvedTheme: "light", themePreset: "neutral" }}
-    >
-      <MobileBotHeaderSlotProvider>
-        <div className="flex h-safe-dvh min-h-0 flex-col bg-background">
-          <MobileAppHeader />
-          <div className="flex min-h-0 flex-1">
-            <ChatOpenStoreScopeProvider value="compact-actions-menu">
-              <ActivityGroupOpenStoreProvider store={null}>
-                <A2AOpenStoreProvider store={null}>
-                  <ChatFindForceStoreProvider tileInstanceId="compact-actions-menu">
-                    <div className="h-full w-full">
-                      <BotTabSurface botId={BOT_ID} hostId={HOST_ID} />
-                    </div>
-                  </ChatFindForceStoreProvider>
-                </A2AOpenStoreProvider>
-              </ActivityGroupOpenStoreProvider>
-            </ChatOpenStoreScopeProvider>
-          </div>
-        </div>
-      </MobileBotHeaderSlotProvider>
-    </ResolvedThemeContext.Provider>
+/** The channel the surface is asked for, which `selectBot` changes. */
+export function useSelectedBotId(): string {
+  return useSyncExternalStore(
+    (listener) => {
+      selectionListeners.add(listener);
+      return () => selectionListeners.delete(listener);
+    },
+    () => selectedBotId,
   );
 }
 
@@ -441,7 +569,7 @@ class CompactActionsRunnerHost extends MockRunnerHost {
   }
 }
 
-const runnerHost = new CompactActionsRunnerHost({
+export const runnerHost = new CompactActionsRunnerHost({
   signInUrl: `${AUTHN_BASE_URL}/sign-in`,
   authnBaseUrl: AUTHN_BASE_URL,
   localHost,
@@ -450,63 +578,8 @@ const runnerHost = new CompactActionsRunnerHost({
   hasLocalHost: undefined,
   traycerCli: new MockTraycerCli(),
 });
-const storedSession = runnerHost.tokenStore.signIn(
+/** The fixture session, stored before the app first renders. */
+export const storedSession = runnerHost.tokenStore.signIn(
   { token: FIXTURE_TOKEN, refreshToken: "fixture-refresh" },
   credentialsIdentityFromAuthenticatedUser(SIGNED_IN_USER),
 );
-
-function buildRouter() {
-  const rootRoute = createRootRoute({
-    component: () => (
-      <QueryClientProvider client={queryClient}>
-        <RunnerHostProvider runnerHost={runnerHost}>
-          <HostRuntimeProvider
-            registry={hostRpcRegistry}
-            messengerFactory={messengerFactory}
-            invalidator={null}
-            requestId={null}
-            remoteFetcher={() =>
-              Promise.resolve({ kind: "hosts", entries: [] })
-            }
-            fallback={<div data-testid="bot-compact-actions-menu-fallback" />}
-          >
-            <WindowsBridgeContext.Provider value={windowsBridgeValue}>
-              <TooltipProvider>
-                <SignedIn>
-                  <BotDraftsPersistLifecycleBridge>
-                    <Page />
-                  </BotDraftsPersistLifecycleBridge>
-                </SignedIn>
-              </TooltipProvider>
-            </WindowsBridgeContext.Provider>
-          </HostRuntimeProvider>
-        </RunnerHostProvider>
-      </QueryClientProvider>
-    ),
-  });
-  const indexRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: "/",
-    component: () => null,
-  });
-  return createRouter({
-    routeTree: rootRoute.addChildren([indexRoute]),
-    history: createMemoryHistory({ initialEntries: ["/"] }),
-  });
-}
-
-const router = buildRouter();
-
-export function CompactActionsFixture(): ReactElement | null {
-  const [ready, setReady] = useState(false);
-  useEffect(() => {
-    let disposed = false;
-    void storedSession.then(() => {
-      if (!disposed) setReady(true);
-    });
-    return () => {
-      disposed = true;
-    };
-  }, []);
-  return ready ? <RouterProvider router={router} /> : null;
-}

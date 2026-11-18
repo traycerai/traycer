@@ -300,6 +300,7 @@ describe("local stream host-token open frame", () => {
         hasBeenServed: true,
         localHostExpected: true,
         discoveryConcluded: true,
+        discoveryFailed: false,
         localHostId: entry.hostId,
         doorState: hostDoorStateFor(entry.hostId),
       }),

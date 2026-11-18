@@ -60,6 +60,7 @@ import {
 } from "./registered-hosts-broadcast";
 import { onHostControllerStatusBroadcast } from "./host-controller-status-broadcast";
 import type { RunnerIpcBridge } from "./runner-ipc-bridge";
+import type { FleetRefreshOutcome } from "@traycer-clients/shared/platform/runner-host";
 
 const authorityLog: AuthorityLog = {
   debug: (message, detail) => {
@@ -270,7 +271,7 @@ function registerFleetRefresh(
 ): void {
   bridge.handleInvoke(
     SelectionAuthorityChannels.invoke.refreshFleet,
-    (): Promise<void> => fleet.refresh(),
+    (): Promise<FleetRefreshOutcome> => fleet.refresh(),
   );
 }
 

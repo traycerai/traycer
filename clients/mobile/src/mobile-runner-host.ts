@@ -107,6 +107,7 @@ import type {
   DeviceFlowAuthorization,
   DeviceFlowResult,
   DeviceFlowSession,
+  FleetRefreshOutcome,
   HostRestartRequestResult,
   IDeviceFlowHost,
   IDeviceDescriber,
@@ -611,16 +612,22 @@ export class MobileRunnerHost implements IRunnerHost {
    *
    * The generation is captured before the (async) read and re-checked after,
    * so a fetch that raced an identity transition is dropped rather than
-   * stamped onto the new account.
+   * stamped onto the new account - `superseded`. A read that fails or throws
+   * publishes nothing - `unavailable`; the authority keeps the fleet it had.
    */
-  async refreshHostFleet(): Promise<void> {
+  async refreshHostFleet(): Promise<FleetRefreshOutcome> {
     const identity = this.selectionIdentity.current();
-    const rows = await this.resolveFleetHostIds();
+    let rows: readonly FleetHostRow[] | null;
+    try {
+      rows = await this.resolveFleetHostIds();
+    } catch {
+      return { kind: "unavailable" };
+    }
     if (rows === null) {
-      return;
+      return { kind: "unavailable" };
     }
     if (this.selectionIdentity.current().generation !== identity.generation) {
-      return;
+      return { kind: "superseded" };
     }
     this.selectionFleet.publish(
       identity.generation,
@@ -631,6 +638,7 @@ export class MobileRunnerHost implements IRunnerHost {
         teamOwned: row.teamOwned,
       })),
     );
+    return { kind: "published" };
   }
 
   /**

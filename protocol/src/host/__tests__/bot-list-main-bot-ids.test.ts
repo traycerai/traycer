@@ -170,7 +170,7 @@ describe("bot.list rows' app conversation", () => {
 
 const APPEARANCE = {
   mark: { kind: "mascot", shape: "ghost" },
-  color: 3,
+  color: "#4c8af0",
 } as const;
 
 describe("bot appearance on the wire", () => {
@@ -299,17 +299,17 @@ describe("bot.updateAppearance request", () => {
     ).toEqual({ botId: BOT_A, eyewear: null, accessory: null });
   });
 
-  it("accepts a mascot and the color bounds", () => {
+  it("accepts a mascot and a hex colour", () => {
     expect(
       request.parse({
         botId: BOT_A,
         mark: { kind: "mascot", shape: "doc" },
-        color: 23,
+        color: "#93bdc8",
       }).color,
-    ).toBe(23);
+    ).toBe("#93bdc8");
   });
 
-  it("refuses an out-of-range color, an unknown shape or kind, and unrecognised", () => {
+  it("refuses a colour that is not a lowercase hex, an unknown shape or kind, and unrecognised", () => {
     for (const bad of [
       { color: 24 },
       { color: -1 },
@@ -340,12 +340,16 @@ describe("a channel background an older peer still sends", () => {
   it("is dropped from a bot.updateAppearance request, the other keys intact", () => {
     const parsed = botUpdateAppearanceV10.requestSchema.parse({
       botId: BOT_A,
-      color: 4,
+      color: "#f04c4c",
       eyewear: "visor",
       background: 5,
     });
 
-    expect(parsed).toEqual({ botId: BOT_A, color: 4, eyewear: "visor" });
+    expect(parsed).toEqual({
+      botId: BOT_A,
+      color: "#f04c4c",
+      eyewear: "visor",
+    });
     expect("background" in parsed).toBe(false);
   });
 

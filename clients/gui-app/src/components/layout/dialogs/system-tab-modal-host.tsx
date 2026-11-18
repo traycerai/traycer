@@ -1,5 +1,6 @@
 import { useEffect, useMemo, type ReactNode } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
+import { SoundtrackPlaybackControls } from "@/components/soundtrack/soundtrack-playback-controls";
 import { PromotableModalFrame } from "@/components/layout/dialogs/promotable-modal-frame";
 import "@/components/home/home-touch-targets.css";
 import {
@@ -112,6 +113,11 @@ export function SystemTabModalSurface(
         "data-home-touch-scope": "",
         "data-history-navigation-surface": editingTheme ? "blocked" : "allowed",
       }}
+      headerActions={
+        active.kind === "settings" ? (
+          <SoundtrackPlaybackControls placement="settings-modal" />
+        ) : null
+      }
       promoteAriaLabel={`Open ${meta.label} as a tab`}
       promoteTestId={`system-tab-modal-promote-${active.kind}`}
       closeTestId={`system-tab-modal-close-${active.kind}`}

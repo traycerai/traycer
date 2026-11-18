@@ -171,6 +171,7 @@ import {
   chatTranscriptWindowSchemaPreProviderSelection,
   chatTranscriptWindowSchemaPreMessageDelivery,
   openChatRangeResponseSchema,
+  openChatRangeResponseSchemaPreFeedbackOrigin,
   openChatRangeResponseSchemaPreProviderSelection,
   openChatRangeResponseSchemaPreFeedbackDraft,
   openChatRangeResponseSchemaPreSlack,
@@ -184,6 +185,7 @@ import {
   openChatTranscriptWindowSchemaPreConversation,
   openChatTranscriptWindowSchemaPreMcpApp,
   openChatTranscriptWindowSchema,
+  openChatTranscriptWindowSchemaPreFeedbackOrigin,
   openChatTranscriptWindowSchemaPreProviderSelection,
   openChatTranscriptWindowSchemaPreFeedbackDraft,
   openChatTranscriptWindowSchemaPreSlack,
@@ -8961,7 +8963,7 @@ const openChatWindowedSnapshotSchemaPreAccountWait = lazySchema(() =>
     chat: chatRecordSchemaLive,
     queue: openChatQueueStateSchema,
     ...ultracodeFallbackFields,
-    tail: openChatTranscriptWindowSchema,
+    tail: openChatTranscriptWindowSchemaPreFeedbackOrigin,
   }),
 );
 export const openChatWindowedSnapshotSchema = lazySchema(() =>
@@ -8996,7 +8998,7 @@ const chatSubscribeTurnStateChangedServerFrameSchemaV144 = lazySchema(() =>
     ultracodeFallbackFields,
   ),
 );
-const chatSubscribeTurnStateChangedServerFrameSchemaV145 = lazySchema(() =>
+const chatSubscribeTurnStateChangedServerFrameSchemaV146 = lazySchema(() =>
   chatSubscribeTurnStateChangedServerFrameSchemaV144.extend(accountWaitFields),
 );
 const openChatSubscribeWindowedServerFrameSchemaV141 = lazySchema(() =>
@@ -9109,11 +9111,35 @@ const openChatSubscribeWindowedServerFrameSchemaPreProviderSelection =
       blockDeltaServerFrameSchema(openRuntimeEventSchema),
     ]),
   );
-const openChatSubscribeWindowedServerFrameSchemaPreAccountWait = lazySchema(
+const openChatSubscribeWindowedServerFrameSchemaPreFeedbackOrigin = lazySchema(
   () =>
     z.discriminatedUnion("kind", [
       chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV139.extend({
         snapshot: openChatWindowedSnapshotSchemaPreAccountWait,
+      }),
+      chatSubscribeSkeletonChunkServerFrameSchemaV119,
+      chatSubscribeAccumulatedChangesServerFrameSchema,
+      chatSubscribeIndexChangedServerFrameSchema,
+      chatSubscribeRangeServerFrameSchemaOpenHarnessV143.extend({
+        range: openChatRangeResponseSchemaPreFeedbackOrigin,
+      }),
+      chatSubscribeTurnStateChangedServerFrameSchemaV144,
+      chatSubscribeManagedCommandsChangedServerFrameSchema,
+      chatSubscribePortForwardsChangedServerFrameSchema,
+      chatSubscribeHeldUpdatesChangedServerFrameSchema,
+      chatSubscribeThinkingTokensServerFrameSchema,
+      messageDeliveryChangedServerFrameSchemaV142,
+      ...chatSubscribeCommonServerFrameSchemasOpenHarnessV144,
+      blockDeltaServerFrameSchema(openRuntimeEventSchema),
+    ]),
+);
+const openChatSubscribeWindowedServerFrameSchemaPreAccountWait = lazySchema(
+  () =>
+    z.discriminatedUnion("kind", [
+      chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV139.extend({
+        snapshot: openChatWindowedSnapshotSchemaPreAccountWait.extend({
+          tail: openChatTranscriptWindowSchema,
+        }),
       }),
       chatSubscribeSkeletonChunkServerFrameSchemaV119,
       chatSubscribeAccumulatedChangesServerFrameSchema,
@@ -9134,7 +9160,9 @@ const openChatSubscribeWindowedServerFrameSchemaPreAccountWait = lazySchema(
 export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     chatSubscribeWindowedSnapshotServerFrameSchemaOpenHarnessV139.extend({
-      snapshot: openChatWindowedSnapshotSchema,
+      snapshot: openChatWindowedSnapshotSchema.extend({
+        tail: openChatTranscriptWindowSchema,
+      }),
     }),
     chatSubscribeSkeletonChunkServerFrameSchemaV119,
     chatSubscribeAccumulatedChangesServerFrameSchema,
@@ -9142,7 +9170,7 @@ export const openChatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribeRangeServerFrameSchemaOpenHarnessV143.extend({
       range: openChatRangeResponseSchema,
     }),
-    chatSubscribeTurnStateChangedServerFrameSchemaV145,
+    chatSubscribeTurnStateChangedServerFrameSchemaV146,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -9157,7 +9185,7 @@ export const chatSubscribeServerFrameSchema = lazySchema(() =>
     chatSubscribeSnapshotServerFrameSchema.extend({
       snapshot: chatSnapshotSchema,
     }),
-    chatSubscribeTurnStateChangedServerFrameSchemaV145,
+    chatSubscribeTurnStateChangedServerFrameSchemaV146,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
@@ -9354,22 +9382,39 @@ export const chatSubscribeV143 = defineStreamRpcContract({
   clientFrameSchema: chatSubscribeV142.clientFrameSchema,
 });
 
-/** Optional provider dispatch provenance on durable event carriers. */
+/**
+ * Optional provider dispatch provenance on durable event carriers.
+ *
+ * A resume divider's trigger's `conversationMessage` may carry `images`, the
+ * images a bot conversation delivery carried. Defaulted `[]`, so a peer below
+ * 1.44 drops it on decode and draws the divider it always did; `1.43` binds
+ * the rows without it (`openMessageSchemaPreConversationImages`).
+ */
 export const chatSubscribeV144 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 44 } as const,
   openRequestSchema: chatSubscribeV143.openRequestSchema,
-  serverFrameSchema: openChatSubscribeWindowedServerFrameSchemaPreAccountWait,
+  serverFrameSchema:
+    openChatSubscribeWindowedServerFrameSchemaPreFeedbackOrigin,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
 });
 
-/** Optional account wait on windowed snapshots and turn-state frames. */
+/** Bot feedback projections and canonical tool origins are reader-only additions. */
 export const chatSubscribeV145 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 45 } as const,
   openRequestSchema: chatSubscribeV144.openRequestSchema,
-  serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
+  serverFrameSchema: openChatSubscribeWindowedServerFrameSchemaPreAccountWait,
   clientFrameSchema: chatSubscribeV144.clientFrameSchema,
+});
+
+/** Optional account wait on windowed snapshots and turn-state frames. */
+export const chatSubscribeV146 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 46 } as const,
+  openRequestSchema: chatSubscribeV145.openRequestSchema,
+  serverFrameSchema: openChatSubscribeWindowedServerFrameSchema,
+  clientFrameSchema: chatSubscribeV145.clientFrameSchema,
 });
 
 const chatSubscribeCommonServerFrameSchemasV141 =
@@ -9402,7 +9447,7 @@ export const chatSubscribeWindowedServerFrameSchema = lazySchema(() =>
     chatSubscribeRangeServerFrameSchema.extend({
       range: chatRangeResponseSchema,
     }),
-    chatSubscribeTurnStateChangedServerFrameSchemaV145,
+    chatSubscribeTurnStateChangedServerFrameSchemaV146,
     chatSubscribeManagedCommandsChangedServerFrameSchema,
     chatSubscribePortForwardsChangedServerFrameSchema,
     chatSubscribeHeldUpdatesChangedServerFrameSchema,

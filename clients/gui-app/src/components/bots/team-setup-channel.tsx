@@ -1,4 +1,5 @@
 import { TeamComputerUnattendedSetup } from "@/components/settings/team/team-computer-unattended-setup";
+import { TracyPlaybackSlot } from "@/components/bots/tracy-playback-slot";
 import { useId, useMemo, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
@@ -113,7 +114,10 @@ export function TeamSetupChannel(props: {
         data-testid="team-setup-channel"
         className="flex min-h-0 min-w-0 flex-1 flex-col md:bg-canvas"
       >
-        <header className="flex shrink-0 items-center gap-2 px-4 pt-3 pb-2">
+        <header
+          data-testid="team-setup-header"
+          className="@container/title-strip flex shrink-0 items-center gap-2 px-4 pt-3 pb-2"
+        >
           <BotAvatar size="sm" />
           <BotChannelTitle
             level2={level2}
@@ -123,6 +127,7 @@ export function TeamSetupChannel(props: {
             threadsView={threadsView}
           />
           <MainBotBadge testId="bot-tab-main" tone="muted" />
+          <TracyPlaybackSlot />
         </header>
         {/* The post sits at the bottom, as a channel's newest row does; its
               top margin, not the column's end alignment, puts it there, so a

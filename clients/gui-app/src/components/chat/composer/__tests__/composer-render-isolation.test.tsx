@@ -362,7 +362,7 @@ describe("ComposerPromptEditor render isolation", () => {
     expect(handle).not.toBeNull();
     if (handle === null) throw new Error("editor handle missing");
     act(() => {
-      handle.insertImageAttachments([imageAttrs("img-new")]);
+      handle.insertImageAttachments([imageAttrs("img-new")], "caret");
     });
 
     expect(inlineSequence(handle.getJSON())).toEqual([
@@ -394,7 +394,7 @@ describe("ComposerPromptEditor render isolation", () => {
     expect(handle).not.toBeNull();
     if (handle === null) throw new Error("editor handle missing");
     act(() => {
-      handle.insertImageAttachments([imageAttrs("img-1")]);
+      handle.insertImageAttachments([imageAttrs("img-1")], "caret");
     });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -433,7 +433,7 @@ describe("ComposerPromptEditor render isolation", () => {
     expect(handle).not.toBeNull();
     if (handle === null) throw new Error("editor handle missing");
     act(() => {
-      handle.insertImageAttachments([imageAttrs("img-1")]);
+      handle.insertImageAttachments([imageAttrs("img-1")], "caret");
     });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -489,7 +489,7 @@ describe("ComposerPromptEditor render isolation", () => {
     expect(handle).not.toBeNull();
     if (handle === null) throw new Error("editor handle missing");
     act(() => {
-      handle.insertImageAttachments([imageAttrs("img-new")]);
+      handle.insertImageAttachments([imageAttrs("img-new")], "caret");
     });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));

@@ -9,7 +9,10 @@ import {
   type WindowNarrationState,
 } from "@/lib/host/window-narration";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
-import { useHostDiscoveryConcluded } from "@/hooks/host/use-host-discovery-concluded";
+import {
+  useHostDiscoveryConcluded,
+  useHostDiscoveryFailed,
+} from "@/hooks/host/use-host-discovery-concluded";
 import { useHostLeases } from "@/hooks/host/use-host-lease";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
@@ -80,6 +83,9 @@ export function useWindowNarration(): WindowNarrationReading {
   // unanswered fleet and an empty account produce the identical empty list.
   // Subscribed rather than derived from the directory rows - see the hook.
   const discoveryConcluded = useHostDiscoveryConcluded();
+  // WHETHER THAT ANSWER WAS A FAILURE to read the host list, which turns the
+  // ∅ verdict from "your hosts are down" into "the list couldn't be loaded".
+  const discoveryFailed = useHostDiscoveryFailed();
 
   const servingNow =
     attached && isServingLease(findLease(leases, effectiveHostId));
@@ -124,6 +130,7 @@ export function useWindowNarration(): WindowNarrationReading {
     }
     const input = {
       attached,
+      discoveryFailed,
       effectiveHostId,
       targetHostId,
       leases,
@@ -141,6 +148,7 @@ export function useWindowNarration(): WindowNarrationReading {
   }, [
     attached,
     discoveryConcluded,
+    discoveryFailed,
     effectiveHostId,
     hasBeenServed,
     leases,

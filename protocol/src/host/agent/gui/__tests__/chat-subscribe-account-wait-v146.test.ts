@@ -7,6 +7,7 @@ import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import {
   chatSubscribeV144,
   chatSubscribeV145,
+  chatSubscribeV146,
   readChatAccountWait,
   type ChatAccountWait,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -15,9 +16,9 @@ import {
   type ProjectedChatSubscribeServerFrame,
 } from "../chat-frame-compat";
 
-const V145: SchemaVersion = { major: 1, minor: 45 };
-const V145_CONTRACT =
-  hostStreamRpcRegistry["chat.subscribe"][1].versions[45].contract;
+const V146: SchemaVersion = { major: 1, minor: 46 };
+const V146_CONTRACT =
+  hostStreamRpcRegistry["chat.subscribe"][1].versions[46].contract;
 const V144_CONTRACT =
   hostStreamRpcRegistry["chat.subscribe"][1].versions[44].contract;
 const recordSchema = z.record(z.string(), z.unknown());
@@ -118,7 +119,7 @@ function withoutAccountWait(frame: unknown): Record<string, unknown> {
 function projectedFrame(
   frame: Record<string, unknown>,
 ): ProjectedChatSubscribeServerFrame {
-  const parsed = V145_CONTRACT.serverFrameSchema.parse(frame);
+  const parsed = V146_CONTRACT.serverFrameSchema.parse(frame);
   return projectedServerFrameSchema.parse(parsed);
 }
 
@@ -148,7 +149,7 @@ const FRAME_BUILDERS = [
   ["turnStateChanged", turnStateChangedFrame],
 ] as const;
 const OLD_VERSIONS: Array<SchemaVersion | null> = [
-  ...Array.from({ length: 45 }, (_, minor) => ({ major: 1, minor })),
+  ...Array.from({ length: 46 }, (_, minor) => ({ major: 1, minor })),
   null,
   { major: 2, minor: 0 },
 ];
@@ -158,12 +159,12 @@ const ALL_VERSIONS: Array<SchemaVersion | null> = [
   { major: 2, minor: 0 },
 ];
 
-describe("chat.subscribe@1.45 account wait", () => {
+describe("chat.subscribe@1.46 account wait", () => {
   describe.each(FRAME_BUILDERS)("%s", (_name, frameOf) => {
     it.each(["needs-sign-in", "removed", "waiting-for-traycer"] as const)(
       "reads %s with a named source",
       (reason) => {
-        const parsed = V145_CONTRACT.serverFrameSchema.parse(
+        const parsed = V146_CONTRACT.serverFrameSchema.parse(
           frameOf(wait(reason, SOURCE)),
         );
 
@@ -177,7 +178,7 @@ describe("chat.subscribe@1.45 account wait", () => {
     it.each(["needs-sign-in", "removed", "waiting-for-traycer"] as const)(
       "reads %s with an unresolved source",
       (reason) => {
-        const parsed = V145_CONTRACT.serverFrameSchema.parse(
+        const parsed = V146_CONTRACT.serverFrameSchema.parse(
           frameOf(wait(reason, null)),
         );
 
@@ -190,7 +191,7 @@ describe("chat.subscribe@1.45 account wait", () => {
 
     it("keeps the frame and treats an unknown reason as no wait", () => {
       const frame = frameOf({ reason: "not-a-reason", source: SOURCE });
-      const parsed = V145_CONTRACT.serverFrameSchema.parse(frame);
+      const parsed = V146_CONTRACT.serverFrameSchema.parse(frame);
 
       expect(readChatAccountWait(bodyOf(frame))).toBeNull();
       expect(readChatAccountWait(bodyOf(parsed))).toBeNull();
@@ -198,7 +199,7 @@ describe("chat.subscribe@1.45 account wait", () => {
 
     it("keeps the frame and treats a malformed value as no wait", () => {
       const frame = frameOf({ reason: "removed" });
-      const parsed = V145_CONTRACT.serverFrameSchema.parse(frame);
+      const parsed = V146_CONTRACT.serverFrameSchema.parse(frame);
 
       expect(readChatAccountWait(bodyOf(frame))).toBeNull();
       expect(readChatAccountWait(bodyOf(parsed))).toBeNull();
@@ -209,7 +210,7 @@ describe("chat.subscribe@1.45 account wait", () => {
       ["profileId", { providerId: "provider-a", profileId: "" }],
     ] as const)("keeps the frame when source.%s is empty", (_field, source) => {
       const frame = frameOf(wait("removed", source));
-      const parsed = V145_CONTRACT.serverFrameSchema.parse(frame);
+      const parsed = V146_CONTRACT.serverFrameSchema.parse(frame);
 
       expect(readChatAccountWait(bodyOf(frame))).toBeNull();
       expect(readChatAccountWait(bodyOf(parsed))).toBeNull();
@@ -217,7 +218,7 @@ describe("chat.subscribe@1.45 account wait", () => {
 
     it("accepts explicit null as no wait", () => {
       const frame = frameOf(null);
-      const parsed = V145_CONTRACT.serverFrameSchema.parse(frame);
+      const parsed = V146_CONTRACT.serverFrameSchema.parse(frame);
 
       expect(readChatAccountWait(bodyOf(frame))).toBeNull();
       expect(readChatAccountWait(bodyOf(parsed))).toBeNull();
@@ -228,8 +229,8 @@ describe("chat.subscribe@1.45 account wait", () => {
       const withoutKeyFrame = withoutAccountWait(
         frameOf(wait("needs-sign-in", SOURCE)),
       );
-      const keyed = V145_CONTRACT.serverFrameSchema.parse(keyedFrame);
-      const withoutKey = V145_CONTRACT.serverFrameSchema.parse(withoutKeyFrame);
+      const keyed = V146_CONTRACT.serverFrameSchema.parse(keyedFrame);
+      const withoutKey = V146_CONTRACT.serverFrameSchema.parse(withoutKeyFrame);
 
       expect(readChatAccountWait(bodyOf(keyed))).toEqual({
         reason: "needs-sign-in",
@@ -239,27 +240,33 @@ describe("chat.subscribe@1.45 account wait", () => {
     });
   });
 
-  it("keeps the 1.44 server-frame schema fingerprints from base 9f996844f", () => {
+  it("keeps the 1.44 and 1.45 server-frame schema fingerprints of main 50742047c", () => {
     expect(schemaDigest(chatSubscribeV144.serverFrameSchema, "input")).toBe(
-      "7d53f0c4df986f8be88431976868668536e95678414ccac11c2c7274c6c8d03d",
+      "caefa82ae8e6ec2e043b7918a286655ddaa7ee5e76809b70bcec5a7a15b5e9d0",
     );
     expect(schemaDigest(chatSubscribeV144.serverFrameSchema, "output")).toBe(
-      "debfa0f22ae45fb0695de0d543d9bc7714973487dce2674f9fc1938b7611dccf",
+      "73138f44c8fd5c62b2127942ecb5375aa43aa25f97d65ca375b3d91d0a0a1cad",
+    );
+    expect(schemaDigest(chatSubscribeV145.serverFrameSchema, "input")).toBe(
+      "e35d53ac69db50a4e3957e47427043d33e942a39554fdc22d4dbb223e14174e4",
+    );
+    expect(schemaDigest(chatSubscribeV145.serverFrameSchema, "output")).toBe(
+      "443e8b28bbc75623c2d0d2373792ff0c0456f61f88e45522ad57e0cb1750284f",
     );
   });
 
-  it("registers 1.45 as latest with the 1.44 open request and client frames", () => {
+  it("registers 1.46 as latest with the 1.44 open request and client frames", () => {
     const stream = hostStreamRpcRegistry["chat.subscribe"][1];
 
-    expect(stream.latestMinor).toBe(45);
-    expect(stream.versions[45].contract).toBe(chatSubscribeV145);
-    expect(chatSubscribeV145.openRequestSchema).toBe(
+    expect(stream.latestMinor).toBe(46);
+    expect(stream.versions[46].contract).toBe(chatSubscribeV146);
+    expect(chatSubscribeV146.openRequestSchema).toBe(
       chatSubscribeV144.openRequestSchema,
     );
-    expect(chatSubscribeV145.clientFrameSchema).toBe(
+    expect(chatSubscribeV146.clientFrameSchema).toBe(
       chatSubscribeV144.clientFrameSchema,
     );
-    expect(chatSubscribeV145.schemaVersion).toEqual(V145);
+    expect(chatSubscribeV146.schemaVersion).toEqual(V146);
   });
 
   it.each(FRAME_BUILDERS)(
@@ -285,7 +292,7 @@ describe("chat.subscribe@1.45 account wait", () => {
           expected,
         );
       }
-      expect(projectChatServerFrameForVersion(original, V145)).toEqual(
+      expect(projectChatServerFrameForVersion(original, V146)).toEqual(
         original,
       );
     },

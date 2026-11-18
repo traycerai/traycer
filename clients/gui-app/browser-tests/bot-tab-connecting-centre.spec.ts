@@ -60,6 +60,11 @@ for (const { name, query, width, height, phone } of CASES) {
       await nextFrames(page, 3);
 
       const paneBox = await pane.boundingBox();
+      // The desktop form reserves the title row above the spinner's area; the
+      // phone form's header is the app's own.
+      const reservedBox = phone
+        ? null
+        : await page.getByTestId("bot-channel-opening-header").boundingBox();
       const spinnerBox = await spinner.boundingBox();
       if (paneBox === null || spinnerBox === null)
         throw new Error("pane and spinner must have geometry");
@@ -67,9 +72,11 @@ for (const { name, query, width, height, phone } of CASES) {
       if (!phone) {
         expect(paneBox.x).toBeGreaterThan(0);
       }
+      const areaTop =
+        reservedBox === null ? paneBox.y : reservedBox.y + reservedBox.height;
       const paneCentre = {
         x: paneBox.x + paneBox.width / 2,
-        y: paneBox.y + paneBox.height / 2,
+        y: areaTop + (paneBox.y + paneBox.height - areaTop) / 2,
       };
       const spinnerCentre = {
         x: spinnerBox.x + spinnerBox.width / 2,
@@ -81,7 +88,7 @@ for (const { name, query, width, height, phone } of CASES) {
       ).toBeLessThanOrEqual(CENTRE_TOLERANCE_PX);
       expect(
         Math.abs(spinnerCentre.y - paneCentre.y),
-        `spinner centre y ${String(spinnerCentre.y)} vs pane centre y ${String(paneCentre.y)}`,
+        `spinner centre y ${String(spinnerCentre.y)} vs centre y ${String(paneCentre.y)} of the pane below the reserved title row`,
       ).toBeLessThanOrEqual(CENTRE_TOLERANCE_PX);
     });
   });

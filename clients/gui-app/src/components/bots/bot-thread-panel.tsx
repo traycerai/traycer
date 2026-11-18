@@ -1,5 +1,7 @@
+import { BotUnreadPageNavigationContext } from "@/components/bots/bot-unread-boundary";
 import {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -27,6 +29,8 @@ import {
   type BotComposerEdit,
   type BotComposerQuote,
 } from "@/components/bots/bot-message-composer";
+import { useHeldDropPicker } from "@/components/bots/bot-box-drops";
+import { useComposerDropScope } from "@/components/chat/composer/composer-drop-scope";
 import {
   useBotSendFailure,
   type BotSendFailure,
@@ -63,6 +67,7 @@ import type {
   QuestionAnswerSend,
   QuestionAnswersSend,
 } from "@/components/bots/bot-chat-transcript";
+import type { BotTranscriptUnread } from "@/components/bots/bot-unread-boundary";
 import {
   answerEntries,
   type ChatBotPresentation,
@@ -132,7 +137,8 @@ export type BotThreadPanelThread =
  * (Tracy Bots T137), which grows to the thread while the page scrolls. A
  * card's post's time shows the post in the channel
  * (`onShowPost`), a long thread folds its middle (`fold`, `null` once shown
- * in full).
+ * in full), and a divider sits where the replies new to the person began
+ * (`unread`, `null` for none).
  */
 export type BotThreadLayout =
   | { readonly kind: "panel" }
@@ -140,6 +146,7 @@ export type BotThreadLayout =
       readonly kind: "card";
       readonly fold: BotTranscriptFold | null;
       readonly onShowPost: () => void;
+      readonly unread: BotTranscriptUnread | null;
     };
 
 const PANEL_LAYOUT: BotThreadLayout = { kind: "panel" };
@@ -228,6 +235,9 @@ export function BotThreadPanel(props: {
   // scroll region and the box's one row: what it hides stays mounted.
   const [panel, setPanel] = useState<HTMLElement | null>(null);
   const focusLayout = useKeyboardFocusLayoutWithin(panel);
+  // The panel is one drop zone for its box (T386); a thread with no box
+  // claims none, so a file dropped there is refused.
+  const drop = useComposerDropScope();
   return (
     <section
       ref={setPanel}
@@ -236,61 +246,69 @@ export function BotThreadPanel(props: {
       data-bot-thread-panel=""
       data-thread-id={threadId ?? undefined}
       data-focus-layout={focusLayout ? "" : undefined}
-      className="group/thread-panel flex min-h-0 flex-1 flex-col"
+      className="group/thread-panel relative flex min-h-0 flex-1 flex-col"
+      {...drop.zoneProps}
     >
-      <header
-        className={cn(
-          "flex shrink-0 items-center gap-2 border-b border-border/60 px-4",
-          focusLayout ? "min-h-11" : "py-2.5",
-        )}
-      >
-        <div className="flex min-w-0 flex-1 items-baseline gap-2">
-          <h2 className="text-ui-md font-semibold text-foreground">Thread</h2>
-          <span
-            className="flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground"
-            data-testid="bot-thread-channel"
+      {drop.provide(
+        <>
+          <header
+            className={cn(
+              "flex shrink-0 items-center gap-2 border-b border-border/60 px-4",
+              focusLayout ? "min-h-11" : "py-2.5",
+            )}
           >
-            <span aria-hidden="true">·</span>
-            <span className="truncate">{botTitle}</span>
-          </span>
-        </div>
-        <div hidden={focusLayout} className="contents">
+            <div className="flex min-w-0 flex-1 items-baseline gap-2">
+              <h2 className="text-ui-md font-semibold text-foreground">
+                Thread
+              </h2>
+              <span
+                className="flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground"
+                data-testid="bot-thread-channel"
+              >
+                <span aria-hidden="true">·</span>
+                <span className="truncate">{botTitle}</span>
+              </span>
+            </div>
+            <div hidden={focusLayout} className="contents">
+              {threadId === null ? null : (
+                <BotThreadFollowControl
+                  botId={props.botId}
+                  hostId={props.hostId}
+                  threadId={threadId}
+                  postedByViewer={postedByViewer}
+                />
+              )}
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Close thread"
+              data-testid="bot-thread-close"
+              onClick={onClose}
+            >
+              <X aria-hidden="true" />
+            </Button>
+          </header>
           {threadId === null ? null : (
-            <BotThreadFollowControl
-              botId={props.botId}
-              hostId={props.hostId}
-              threadId={threadId}
-              postedByViewer={postedByViewer}
-            />
+            <div hidden={focusLayout} className="contents">
+              <ThreadTasks
+                botId={props.botId}
+                hostId={props.hostId}
+                threadId={threadId}
+                thread={thread}
+                tasks={props.tasks}
+              />
+            </div>
           )}
-        </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Close thread"
-          data-testid="bot-thread-close"
-          onClick={onClose}
-        >
-          <X aria-hidden="true" />
-        </Button>
-      </header>
-      {threadId === null ? null : (
-        <div hidden={focusLayout} className="contents">
-          <ThreadTasks
-            botId={props.botId}
-            hostId={props.hostId}
-            threadId={threadId}
-            thread={thread}
-            tasks={props.tasks}
+          <ThreadPanelBody
+            {...props}
+            sendFailure={sendFailure}
+            layout={PANEL_LAYOUT}
           />
-        </div>
+        </>,
       )}
-      <ThreadPanelBody
-        {...props}
-        sendFailure={sendFailure}
-        layout={PANEL_LAYOUT}
-      />
+      {drop.overlay}
     </section>
   );
 }
@@ -742,10 +760,13 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
   // Stable across what the box does to this component's own state, so typing
   // does not hand the replies' list a new header on every key.
   const origin = useMemo(() => <ThreadOrigin {...props} />, [props]);
-  const { seed, keptDraft, moved, notice, reading } = useKeptBoxDraft(
+  const { seed, keptDraft, moved, notice, reading, hold } = useKeptBoxDraft(
     botId,
     originMessageId,
   );
+  // The box's slot keeps the picker its reading view opens, so a pick
+  // outlives the read.
+  const picker = useHeldDropPicker(hold);
   // Reply on a row of the thread names it in this box; none while the box
   // edits a failed message, whose send replaces it and replies to nothing.
   const { setReplyTarget } = useBotDraftActions();
@@ -827,6 +848,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
           reply={{ reach: replyReach, chosen: replyChosen }}
           moved={moved}
           notice={notice}
+          hold={hold}
           onSent={keepOpenThread}
         />
       ) : (
@@ -835,9 +857,14 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
           label={edit === null ? box.label : IN_THREAD_LABEL}
           reading={reading}
           replyReach={replyReach}
+          imageReach={props.imageReach}
+          attach={picker.open}
           testId="bot-thread-composer"
         />
       )}
+      <span hidden data-testid="bot-thread-composer-picker">
+        {picker.input}
+      </span>
     </>
   );
 }
@@ -929,6 +956,7 @@ function KnownThread(
     hostId,
     boundHostId,
     answerReach,
+    replyReach,
     botTitle,
     conversationId,
     originMessageId,
@@ -1042,13 +1070,15 @@ function KnownThread(
   // A reply's option, clicked, is the person's next message in the thread:
   // offered only while no earlier pick is still being sent and the thread
   // takes a send, and a pick that fails says so where a failed message does.
+  // Where the bot's host takes replies, it replies to the reply that offered
+  // it (T357).
   const surface = useMemo(
     () => ({
       kind: "thread" as const,
       chooseOption:
         sending || !sendable
           ? null
-          : (choice: string) => {
+          : (messageId: string | null, choice: string) => {
               clearSendFailure();
               send(
                 {
@@ -1060,6 +1090,9 @@ function KnownThread(
                   redeliver: null,
                   supersedes: null,
                   answer: null,
+                  ...(replyReach === "delivered" && messageId !== null
+                    ? { replyTo: messageId }
+                    : {}),
                 },
                 { onError: () => failSend(null) },
               );
@@ -1089,6 +1122,7 @@ function KnownThread(
       onReply,
       originMessageId,
       opening,
+      replyReach,
       send,
       sendable,
       sending,
@@ -1119,7 +1153,10 @@ function KnownThread(
     [hasReplies, onCard, openingHighlighted, openingRef, origin, replies],
   );
   const flow = useMemo(
-    () => (layout.kind === "card" ? { fold: layout.fold } : null),
+    () =>
+      layout.kind === "card"
+        ? { fold: layout.fold, unread: layout.unread }
+        : null,
     [layout],
   );
   return (
@@ -1211,6 +1248,7 @@ function useThreadOpening(
 } {
   const ref = useRef<HTMLDivElement | null>(null);
   const timer = useRef<number | null>(null);
+  const pageNavigation = useContext(BotUnreadPageNavigationContext);
   const [highlighted, setHighlighted] = useState(false);
   useEffect(
     () => () => {
@@ -1219,6 +1257,7 @@ function useThreadOpening(
     [],
   );
   const show = useCallback(() => {
+    pageNavigation?.cancel();
     ref.current?.scrollIntoView({ block: "nearest" });
     if (timer.current !== null) window.clearTimeout(timer.current);
     setHighlighted(true);
@@ -1226,7 +1265,7 @@ function useThreadOpening(
       timer.current = null;
       setHighlighted(false);
     }, CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS);
-  }, []);
+  }, [pageNavigation]);
   const opening = useMemo(
     () => ({ messageId, conversationId, show }),
     [conversationId, messageId, show],

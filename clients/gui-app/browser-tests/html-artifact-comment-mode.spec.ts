@@ -885,3 +885,43 @@ test("a comment on an element taller than the window opens a box inside the wind
     })
     .toBe(true);
 });
+
+test("a comment on a script-built element opens its box beside that element, not its tall container", async ({
+  page,
+}) => {
+  await open(page);
+  await setComments(page, true);
+  await pageFrame(page)
+    .locator("#tall")
+    .evaluate((element) => {
+      element.innerHTML =
+        '<div style="padding-top:600px"><p id="built" style="margin:0;padding:8px">Built by a script.</p></div>';
+    });
+  await wheelUntilInside(page, "#built");
+
+  const frameBox = await boxOf(frameElement(page));
+  const container = await elementBoxInPage(page, "#tall");
+  expect(container.y).toBeLessThan(frameBox.y);
+  expect(container.y + container.height).toBeGreaterThan(
+    frameBox.y + frameBox.height,
+  );
+
+  const built = await elementBoxInPage(page, "#built");
+  const point = await centreOf(pageFrame(page).locator("#built"));
+  await page.mouse.click(point.x, point.y);
+
+  const dialog = page.getByRole("dialog", { name: "New comment" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText(
+    "Built by a script; commenting on its container",
+  );
+  await expect
+    .poll(async () => {
+      const box = await boxOf(dialog);
+      return Math.min(
+        Math.abs(box.y - (built.y + built.height)),
+        Math.abs(built.y - (box.y + box.height)),
+      );
+    })
+    .toBeLessThanOrEqual(12);
+});

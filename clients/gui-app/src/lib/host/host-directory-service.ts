@@ -20,7 +20,6 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import { appLogger, describeLogError } from "@/lib/logger";
-import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
 import { lastLocalHostIdKey } from "@/lib/persist";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import {
@@ -251,6 +250,25 @@ export class HostDirectoryService implements IHostDirectoryService {
    * identity lifecycle because `getCardinality()` reads it.
    */
   private concludedUnderIdentity: string | null = null;
+  /**
+   * Whether the conclusion above was a FAILURE: the registry read failed, or
+   * the fleet the listing should have reached the selection authority with
+   * could not be read. Meaningful only while {@link hasConcludedDiscovery}
+   * holds; read through {@link hasFailedDiscovery}. Cleared once a fleet
+   * refresh publishes for the same identity.
+   */
+  private concludedAsFailure = false;
+  /**
+   * Set when a fleet refresh came back `unavailable`, naming the identity it
+   * was requested under; null when no fleet is known to be stale. While it
+   * names the current identity, every listing commit re-requests the fleet
+   * even when membership did not move - at most one request per commit, with
+   * no timer of its own: the 60 s poll and Retry are what bound it. Cleared on
+   * `published`; `superseded` neither sets nor clears it. Read through the
+   * identity, like the conclusion, so another identity never sees it: a
+   * return to this one concludes afresh with a fleet refresh of its own.
+   */
+  private staleFleet: { readonly identity: string | null } | null = null;
   private readonly listeners = new Set<HostDirectoryListener>();
   /**
    * Refresh-liveness subscribers, kept OFF the main `listeners` fan-out on
@@ -296,11 +314,14 @@ export class HostDirectoryService implements IHostDirectoryService {
    */
   private lastCommitCredentialGeneration: number | null = null;
   /**
-   * Counts commits on the success path (`hosts` or `signed-out`). A conclusion
-   * held for a fleet refresh stands only while this still names its own
-   * commit; see {@link concludeAfterFleetRefresh}.
+   * Advances when a fleet refresh is REQUESTED, and when a commit withdraws
+   * the listing (`signed-out`). An outcome applies only while this still
+   * names its own request; see {@link requestFleet}. It deliberately does not
+   * advance on a commit that requests nothing - an unchanged listing landing
+   * while a read is in flight - because that read is still the newest word on
+   * the fleet, and dropping it would leave nothing to report its outcome.
    */
-  private commitSequence = 0;
+  private fleetRequestSequence = 0;
   /**
    * The identity the committed `remoteEntries` belong to - the OWNERSHIP half
    * of the retention rule. The `failed` branch keeps the last-known list on
@@ -410,6 +431,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.hasObservedRemoteListing = false;
     this.hasConcludedRemoteAttempt = false;
     this.concludedUnderIdentity = null;
+    this.concludedAsFailure = false;
     // BEFORE the first refresh: the very first launch after the upgrade that
     // introduced the persisted key has nothing stored, and that launch is
     // exactly the reinstall this guard exists for - the host is down, so no
@@ -781,6 +803,17 @@ export class HostDirectoryService implements IHostDirectoryService {
     );
   }
 
+  /**
+   * Whether discovery concluded on a FAILURE for the current identity: the
+   * registry read failed, or the fleet refresh a listing triggered came back
+   * `unavailable`. A surface that would otherwise read an empty selection as
+   * "no host" reads this first: the hosts were not ruled out, they could not
+   * be read.
+   */
+  hasFailedDiscovery(): boolean {
+    return this.hasConcludedDiscovery() && this.concludedAsFailure;
+  }
+
   onChange(listener: HostDirectoryListener): Disposable {
     this.listeners.add(listener);
     return {
@@ -997,9 +1030,6 @@ export class HostDirectoryService implements IHostDirectoryService {
       );
       return this.snapshot();
     }
-    if (outcome.kind === "failed") {
-      return this.retainOrDropAfterFailedRefresh(era);
-    }
     // The ORDERING fence, completing the era fences above. A constructive
     // read issued under a superseded credential is still ALLOWED to commit -
     // it describes the right account's hosts, and discarding it outright
@@ -1019,9 +1049,13 @@ export class HostDirectoryService implements IHostDirectoryService {
       );
       return this.snapshot();
     }
-    this.lastCommitCredentialGeneration = era.credentialGeneration;
-    this.lastCommitIdentity = era.identity;
-    this.commitSequence += 1;
+    // After the ordering fence, so a FAILED read from an older credential
+    // generation that lands after a newer commit is discarded like any other
+    // stale result, rather than recording a failure over the newer success.
+    if (outcome.kind === "failed") {
+      return this.retainOrDropAfterFailedRefresh(era);
+    }
+    this.recordCommit(era, outcome.kind === "signed-out");
     // Captured BEFORE the overwrite: this is the only place that holds both
     // sides of a membership transition.
     const previousRemoteIds = new Set(
@@ -1039,11 +1073,13 @@ export class HostDirectoryService implements IHostDirectoryService {
     // re-arms the answer without any outcome committing, so the raw flag can
     // sit at `true` across a transition this commit is the conclusion of.
     const concludedBefore = this.hasConcludedDiscovery();
+    const failedBefore = this.hasFailedDiscovery();
     this.hasObservedRemoteListing = outcome.kind === "hosts";
     const fleetStep = this.fleetStepFor(
       outcome,
       previousRemoteIds,
       concludedBefore,
+      failedBefore,
     );
     // Tracked with the listing flag and cleared by the same outcome: a
     // `signed-out` is the fetcher saying it had no bearer to ask WITH, so
@@ -1054,6 +1090,9 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.concludedUnderIdentity = this.hasConcludedRemoteAttempt
       ? era.identity
       : null;
+    // A known failure stands until a fleet refresh publishes: a listing alone
+    // does not put its hosts in front of the authority.
+    this.concludedAsFailure = this.hasConcludedRemoteAttempt && failedBefore;
     const observedChanged = observedBefore !== this.hasObservedRemoteListing;
     // A host registered late - from the CLI, or from another machine - reaches
     // this directory through its own poll, while the selection authority's
@@ -1074,9 +1113,9 @@ export class HostDirectoryService implements IHostDirectoryService {
     // other moment.
     //
     if (fleetStep === "hold-conclusion") {
-      await this.concludeAfterFleetRefresh(era, this.commitSequence);
+      await this.requestFleet(era, true);
     } else if (fleetStep === "request") {
-      requestFleetRefresh(this.runnerHost);
+      void this.requestFleet(era, false);
     }
     // The conclusion flag crosses on its own schedule, and the snapshot compare
     // cannot see it. Two empty listings either side of an account switch are
@@ -1111,6 +1150,19 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   /**
+   * The bookkeeping every success-path commit makes before touching rows: the
+   * ordering watermark and the owning identity. A withdrawal also retires any
+   * fleet read in flight - its outcome describes a listing that no longer
+   * stands, including one withdrawn within the same era after the
+   * session-verified path dropped the in-flight slot.
+   */
+  private recordCommit(era: AuthEra, withdraws: boolean): void {
+    this.lastCommitCredentialGeneration = era.credentialGeneration;
+    this.lastCommitIdentity = era.identity;
+    if (withdraws) this.fleetRequestSequence += 1;
+  }
+
+  /**
    * What this commit asks of the selection authority's fleet.
    *
    * On a shell with no local host the window narrator reads the discovery
@@ -1123,47 +1175,77 @@ export class HostDirectoryService implements IHostDirectoryService {
    * older era's held refresh does not conclude for it (see
    * {@link concludeAfterFleetRefresh}).
    *
-   * Otherwise a listing that moves membership requests a refresh. The `hosts`
-   * check IS load-bearing for removals: `signed-out` commits an empty set,
-   * which would otherwise read as every host removed (`failed` returns before
-   * this).
+   * Otherwise a listing requests a refresh when it moves membership, when the
+   * last fleet refresh for this identity was `unavailable`, or when discovery
+   * stands on a known failure - the last two are what let the 60 s poll and
+   * Retry recover a fleet that could not be read, one request per commit.
+   * The `hosts` check IS load-bearing for removals: `signed-out` commits an
+   * empty set, which would otherwise read as every host removed (`failed`
+   * returns before this).
    */
   private fleetStepFor(
     outcome: RemoteHostFetchOutcome,
     previousRemoteIds: ReadonlySet<string>,
     concludedBefore: boolean,
+    failedBefore: boolean,
   ): "none" | "request" | "hold-conclusion" {
     if (outcome.kind !== "hosts") return "none";
     if (!concludedBefore && !this.hasLocalHost) return "hold-conclusion";
-    return listingMovesMembership(previousRemoteIds, outcome.entries)
+    const fleetStale =
+      this.staleFleet !== null &&
+      this.staleFleet.identity === this.authContextId();
+    return failedBefore ||
+      fleetStale ||
+      listingMovesMembership(previousRemoteIds, outcome.entries)
       ? "request"
       : "none";
   }
 
   /**
-   * Waits for the fleet refresh a concluding listing triggered, then concludes
-   * discovery for `era`, unless something superseded that listing meanwhile:
-   * the identity changed, or any other commit landed. That covers a newer
-   * credential generation and a withdrawal in the SAME era alike - the
-   * session-verified path drops the in-flight slot and re-asks within the
-   * era, so a same-era read can commit while this one waits. A failed attempt
-   * landing meanwhile concludes on its own. A rejected fleet refresh still
-   * concludes: the fleet is then as stale as it was, and that is the verdict
-   * to narrate.
+   * Every fleet refresh this directory requests, held or not, and what its
+   * outcome does - one rule in one place, so no path can ignore an
+   * `unavailable` and leave the fleet stale with nothing re-asking.
+   *
+   * The outcome applies only while this is still the newest fleet request,
+   * nothing has withdrawn the listing, and the identity is unchanged (see
+   * {@link fleetRequestSequence}). A newer request - a newer era's own hold,
+   * or a later membership change - owns the answer instead; a later commit
+   * that requests nothing does not, so its read's `unavailable` still marks
+   * the fleet stale. `superseded` applies nothing: nothing current came of
+   * the read, and whichever era is current holds or requests its own.
+   *
+   * `holdsConclusion`: this request is what discovery waits on (a phone's
+   * first listing for the identity), so the outcome concludes it - `published`
+   * as a listing, `unavailable` as a failure. Otherwise discovery has already
+   * concluded and the outcome only moves the failure and stale marks: a fleet
+   * that published ends a known failure, one that did not keeps or starts it.
    */
-  private async concludeAfterFleetRefresh(
+  private async requestFleet(
     era: AuthEra,
-    commit: number,
+    holdsConclusion: boolean,
   ): Promise<void> {
-    await this.runnerHost.refreshHostFleet().catch(() => undefined);
+    this.fleetRequestSequence += 1;
+    const request = this.fleetRequestSequence;
+    const fleet = await this.runnerHost.refreshHostFleet();
     if (
+      fleet.kind === "superseded" ||
       this.authContextId() !== era.identity ||
-      this.commitSequence !== commit
+      this.fleetRequestSequence !== request
     ) {
       return;
     }
-    this.hasConcludedRemoteAttempt = true;
-    this.concludedUnderIdentity = era.identity;
+    const published = fleet.kind === "published";
+    this.staleFleet = published ? null : { identity: era.identity };
+    if (holdsConclusion) {
+      this.hasConcludedRemoteAttempt = true;
+      this.concludedUnderIdentity = era.identity;
+      this.concludedAsFailure = !published;
+      return;
+    }
+    if (!this.hasConcludedDiscovery()) return;
+    const failedBefore = this.concludedAsFailure;
+    this.concludedAsFailure = !published;
+    if (failedBefore !== this.concludedAsFailure) this.emit();
   }
 
   /**
@@ -1205,8 +1287,10 @@ export class HostDirectoryService implements IHostDirectoryService {
     // standing by a previous account is not a conclusion this identity has
     // seen, so the crossing it would otherwise swallow is a real one.
     const concludedBefore = this.hasConcludedDiscovery();
+    const failedBefore = this.hasFailedDiscovery();
     this.hasConcludedRemoteAttempt = true;
     this.concludedUnderIdentity = era.identity;
+    this.concludedAsFailure = true;
     const foreignIdentity = this.lastCommitIdentity !== era.identity;
     const foreignObservedListing =
       foreignIdentity && this.hasObservedRemoteListing;
@@ -1263,8 +1347,9 @@ export class HostDirectoryService implements IHostDirectoryService {
     // in failure. Same reasoning as the commit path's unconditional emit on the
     // observed flip - and gated on the FLIP, never on the outcome, because
     // every later poll tick lands here too and an unconditional emit would fan
-    // a failed 60s poll out to every consumer of the snapshot.
-    if (!concludedBefore) {
+    // a failed 60s poll out to every consumer of the snapshot. The failure flag
+    // crossing (a good listing, then a failed poll) is the same kind of flip.
+    if (!concludedBefore || !failedBefore) {
       this.emit();
     }
     return this.snapshot();

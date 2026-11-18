@@ -1,4 +1,5 @@
 import { useCallback, useMemo, type ReactNode } from "react";
+import { TracyPlaybackSlot } from "@/components/bots/tracy-playback-slot";
 import { ChevronLeft } from "lucide-react";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import { Badge } from "@/components/ui/badge";
@@ -218,7 +219,7 @@ export function BotSessionView(props: {
         data-chat-id={session.chatId}
         className="flex min-h-0 min-w-0 flex-1 flex-col pb-safe-bottom"
       >
-        <header className="flex shrink-0 items-center gap-2 border-b border-border/60 px-4 py-2.5">
+        <header className="@container/title-strip flex shrink-0 items-center gap-2 border-b border-border/60 px-4 py-2.5">
           <Button
             type="button"
             variant="ghost"
@@ -239,6 +240,7 @@ export function BotSessionView(props: {
           <Badge variant="muted" size="xs">
             Read-only
           </Badge>
+          <TracyPlaybackSlot />
         </header>
         <BotSessionContext value={access}>
           <TileFindScope

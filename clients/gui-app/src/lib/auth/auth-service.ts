@@ -379,6 +379,50 @@ interface LiveSessionAuthority {
   readonly generation: number;
 }
 
+/**
+ * Which account a session belongs to: its identity generation, its user and
+ * its live credential object. No bearer: that is read from the live session
+ * when a request is sent.
+ */
+type SessionPrincipal = Pick<
+  LiveSessionAuthority,
+  "credentials" | "userId" | "generation"
+>;
+
+/**
+ * The account one voice call was started under. Every mint and end of that
+ * call, renewals included, goes out under it or not at all. Opaque: only the
+ * AuthService that captured it can read what it stands for, and neither a
+ * structured clone nor JSON keeps anything of it.
+ */
+class VoiceCallAuthority {
+  readonly #issuer: AuthService;
+  readonly #principal: SessionPrincipal;
+
+  constructor(issuer: AuthService, principal: SessionPrincipal) {
+    this.#issuer = issuer;
+    this.#principal = principal;
+  }
+
+  /** What `handle` stands for, to the service that captured it; `null` to any other. */
+  static capturedBy(
+    handle: VoiceCallAuthority,
+    service: AuthService,
+  ): SessionPrincipal | null {
+    return handle.#issuer === service ? handle.#principal : null;
+  }
+}
+export type { VoiceCallAuthority };
+
+/**
+ * A call's request that was not sent: its account is no longer the one
+ * signed in (signed out, switched, replaced credentials, or this service
+ * disposed). Never retried under whoever is signed in now.
+ */
+export interface VoiceCallPrincipalChanged {
+  readonly kind: "principal-changed";
+}
+
 export type AuthSessionSnapshotListener = (
   snapshot: AuthSessionSnapshot,
 ) => void;
@@ -2257,7 +2301,7 @@ export class AuthService
   }
 
   private captureUpdatedSessionAuthority(
-    expected: LiveSessionAuthority,
+    expected: SessionPrincipal,
   ): LiveSessionAuthority | null {
     const current = this.captureLiveSessionAuthority();
     if (
@@ -3430,10 +3474,15 @@ export class AuthService
    * account, and its end. A shell that cannot reach traycer-server at all
    * (`sandboxControlUnavailableReason`) reads as not available and as the
    * dormant mint, so Talk hides there too.
+   *
+   * A call's mint and end go out under the account the call was started
+   * under (`captureVoiceCallAuthority`), or not at all: a session is the
+   * account's that minted it, and nothing of one call is sent as another
+   * account. A request already dispatched is not recalled by a later change.
    */
   async getVoiceAvailability(): Promise<VoiceAvailabilityFetchResult> {
     if (this.sandboxControlUnavailableReason() !== null) {
-      return { kind: "ok", available: false };
+      return { kind: "ok", available: false, voiceSelection: null };
     }
     const bearer = this.cloudBearer();
     if (bearer === null) {
@@ -3442,26 +3491,73 @@ export class AuthService
     return this.runnerHost.getVoiceAvailability(bearer);
   }
 
+  /**
+   * The signed-in account, captured for one voice call; `null` with no
+   * verified session.
+   */
+  captureVoiceCallAuthority(): VoiceCallAuthority | null {
+    if (this.disposed || !this.hasVerifiedSession()) return null;
+    const authority = this.captureLiveSessionAuthority();
+    if (authority === null) return null;
+    const { credentials, userId, generation } = authority;
+    return new VoiceCallAuthority(this, { credentials, userId, generation });
+  }
+
+  /**
+   * The bearer a call's request is sent with now: its account's current one,
+   * a rotation of the same credentials included, or `null` once that account
+   * is not the one signed in. Read with no await before the dispatch.
+   */
+  private voiceCallBearer(handle: VoiceCallAuthority): string | null {
+    if (this.disposed || !this.hasVerifiedSession()) return null;
+    const captured = VoiceCallAuthority.capturedBy(handle, this);
+    if (captured === null) return null;
+    return this.captureUpdatedSessionAuthority(captured)?.bearer ?? null;
+  }
+
+  /**
+   * Whether a call's account is still the one signed in, checked without
+   * sending anything: a sign-out moves the identity before its storage
+   * settles, so an answer that arrives in between is no longer the call's.
+   */
+  isVoiceCallAuthorityLive(authority: VoiceCallAuthority): boolean {
+    return this.voiceCallBearer(authority) !== null;
+  }
+
+  /**
+   * The availability read a call makes as it starts, under its own account:
+   * the voices it may ask for come from this answer, never from a cached
+   * one.
+   */
+  async getVoiceAvailabilityForCall(
+    authority: VoiceCallAuthority,
+  ): Promise<VoiceAvailabilityFetchResult | VoiceCallPrincipalChanged> {
+    if (this.sandboxControlUnavailableReason() !== null) {
+      return { kind: "ok", available: false, voiceSelection: null };
+    }
+    const bearer = this.voiceCallBearer(authority);
+    if (bearer === null) return { kind: "principal-changed" };
+    return this.runnerHost.getVoiceAvailability(bearer);
+  }
+
   async mintVoiceSession(
     request: VoiceSessionMintRequest,
-  ): Promise<VoiceSessionMintFetchResult> {
+    authority: VoiceCallAuthority,
+  ): Promise<VoiceSessionMintFetchResult | VoiceCallPrincipalChanged> {
     if (this.sandboxControlUnavailableReason() !== null) {
       return { kind: "dormant" };
     }
-    const bearer = this.cloudBearer();
-    if (bearer === null) {
-      return { kind: "unauthorized" };
-    }
+    const bearer = this.voiceCallBearer(authority);
+    if (bearer === null) return { kind: "principal-changed" };
     return this.runnerHost.mintVoiceSession(bearer, request);
   }
 
   async endVoiceSession(
     voiceSessionId: string,
-  ): Promise<VoiceSessionEndFetchResult> {
-    const bearer = this.cloudBearer();
-    if (bearer === null) {
-      return { kind: "unauthorized" };
-    }
+    authority: VoiceCallAuthority,
+  ): Promise<VoiceSessionEndFetchResult | VoiceCallPrincipalChanged> {
+    const bearer = this.voiceCallBearer(authority);
+    if (bearer === null) return { kind: "principal-changed" };
     return this.runnerHost.endVoiceSession(bearer, voiceSessionId);
   }
 
