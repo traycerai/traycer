@@ -5,6 +5,12 @@ import {
   botUpdateAppearanceRequestSchema,
 } from "@traycer/protocol/host/bot/schemas";
 import {
+  BOT_PICTURE_MAX_BYTES,
+  BOT_PICTURE_SIDE,
+  botPictureIsAnimated,
+  botPictureRefusalOf,
+} from "@traycer/protocol/host/bot/pictures";
+import {
   botListV12,
   botReadPictureV10,
   botUploadPictureV10,
@@ -187,5 +193,126 @@ describe("bot.uploadPicture and bot.readPicture", () => {
     expect(botReadPictureV10.responseSchema.parse({ picture: null })).toEqual({
       picture: null,
     });
+  });
+});
+
+/** A WebP with an extended header of the given flags, `side` pixels square. */
+function webpX(flags: number, side: number, total: number): Uint8Array {
+  const bytes = new Uint8Array(total);
+  const text = (from: number, value: string): void => {
+    [...value].forEach((char, i) => {
+      bytes[from + i] = char.charCodeAt(0);
+    });
+  };
+  text(0, "RIFF");
+  text(8, "WEBP");
+  text(12, "VP8X");
+  bytes[16] = 10;
+  bytes[20] = flags;
+  [24, 27].forEach((from) => {
+    bytes[from] = (side - 1) % 256;
+    bytes[from + 1] = Math.floor((side - 1) / 256);
+  });
+  return bytes;
+}
+
+const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+/** One PNG chunk: a length, a type, `length` data bytes and a check. */
+function pngChunk(type: string, length: number): number[] {
+  return [
+    Math.floor(length / 0x1000000) % 256,
+    Math.floor(length / 0x10000) % 256,
+    Math.floor(length / 0x100) % 256,
+    length % 256,
+    ...[...type].map((char) => char.charCodeAt(0)),
+    ...new Array<number>(length).fill(0),
+    0,
+    0,
+    0,
+    0,
+  ];
+}
+
+/** A PNG `side` pixels square whose chunks after the header are `types`. */
+function png(side: number, types: readonly string[]): Uint8Array {
+  const header = pngChunk("IHDR", 13);
+  [16, 20].forEach((from) => {
+    header[from - 8 + 2] = Math.floor(side / 256);
+    header[from - 8 + 3] = side % 256;
+  });
+  return Uint8Array.from([
+    ...PNG_MAGIC,
+    ...header,
+    ...types.flatMap((type) => pngChunk(type, type === "acTL" ? 8 : 4)),
+  ]);
+}
+
+const ANIMATION_FLAG = 0b10;
+const ICC_FLAG = 0b100000;
+
+describe("an animated picture", () => {
+  it("is refused as animated when a WebP extended header sets the animation flag, and passes when it does not", () => {
+    expect(
+      botPictureRefusalOf(webpX(ANIMATION_FLAG, BOT_PICTURE_SIDE, 40)),
+    ).toBe("animated");
+    expect(
+      botPictureRefusalOf(
+        webpX(ANIMATION_FLAG | ICC_FLAG, BOT_PICTURE_SIDE, 40),
+      ),
+    ).toBe("animated");
+    expect(botPictureRefusalOf(webpX(0, BOT_PICTURE_SIDE, 40))).toBeNull();
+    expect(
+      botPictureRefusalOf(webpX(ICC_FLAG, BOT_PICTURE_SIDE, 40)),
+    ).toBeNull();
+  });
+
+  it("is refused as animated when a PNG carries an animation control chunk before its image data, and passes without one", () => {
+    expect(
+      botPictureRefusalOf(png(BOT_PICTURE_SIDE, ["acTL", "IDAT", "IEND"])),
+    ).toBe("animated");
+    expect(
+      botPictureRefusalOf(
+        png(BOT_PICTURE_SIDE, ["gAMA", "acTL", "IDAT", "IEND"]),
+      ),
+    ).toBe("animated");
+    expect(
+      botPictureRefusalOf(png(BOT_PICTURE_SIDE, ["gAMA", "IDAT", "IEND"])),
+    ).toBeNull();
+  });
+
+  it("reads a PNG whose animation control chunk comes after its image data as still", () => {
+    expect(
+      botPictureIsAnimated(png(BOT_PICTURE_SIDE, ["IDAT", "acTL", "IEND"])),
+    ).toBe(false);
+  });
+
+  it("ends the walk of a PNG whose last chunk is cut short or claims more bytes than the file has", () => {
+    const whole = png(BOT_PICTURE_SIDE, ["gAMA", "IDAT"]);
+    expect(botPictureIsAnimated(whole.subarray(0, whole.length - 6))).toBe(
+      false,
+    );
+    const lying = Uint8Array.from([
+      ...png(BOT_PICTURE_SIDE, []),
+      0xff,
+      0xff,
+      0xff,
+      0xff,
+      ...[..."gAMA"].map((char) => char.charCodeAt(0)),
+    ]);
+    expect(botPictureIsAnimated(lying)).toBe(false);
+    expect(botPictureRefusalOf(lying)).toBeNull();
+  });
+
+  it("is judged on its size first, then its type, then its dimensions, then its animation", () => {
+    expect(
+      botPictureRefusalOf(
+        webpX(ANIMATION_FLAG, BOT_PICTURE_SIDE, BOT_PICTURE_MAX_BYTES + 1),
+      ),
+    ).toBe("size");
+    expect(botPictureRefusalOf(webpX(ANIMATION_FLAG, 128, 40))).toBe(
+      "dimensions",
+    );
+    expect(botPictureRefusalOf(new Uint8Array(40))).toBe("type");
   });
 });

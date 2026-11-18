@@ -1,5 +1,5 @@
 /**
- * The picture a bot wears in place of a mascot: one square of
+ * The picture a bot wears in place of a mascot: one still square of
  * {@link BOT_PICTURE_SIDE} pixels a side, stored as WebP or PNG.
  */
 export const BOT_PICTURE_SIDE = 256;
@@ -84,12 +84,43 @@ export function botPictureHeaderOf(bytes: Uint8Array): BotPictureHeader | null {
   return null;
 }
 
+/**
+ * Whether a picture's bytes declare an animation: a WebP whose extended
+ * header sets the animation flag, or a PNG with an animation control chunk
+ * before its image data. It reads what the file says of itself and decodes
+ * nothing; bytes that are neither read as still.
+ */
+export function botPictureIsAnimated(bytes: Uint8Array): boolean {
+  const at = (index: number): number => bytes[index] ?? 0;
+  const ascii = (from: number, text: string): boolean =>
+    [...text].every((char, i) => at(from + i) === char.charCodeAt(0));
+  if (ascii(0, "RIFF") && ascii(8, "WEBP")) {
+    return ascii(12, "VP8X") && Math.floor(at(20) / 2) % 2 === 1;
+  }
+  if (!PNG_SIGNATURE.every((byte, i) => at(i) === byte)) return false;
+  // Each chunk is a 4-byte length, a 4-byte type, the data and a 4-byte
+  // check. The walk ends at the image data, the end chunk or the bytes'
+  // own end, so it is bounded by the byte limit.
+  let offset = PNG_SIGNATURE.length;
+  while (offset + 8 <= bytes.byteLength) {
+    if (ascii(offset + 4, "acTL")) return true;
+    if (ascii(offset + 4, "IDAT") || ascii(offset + 4, "IEND")) return false;
+    const length =
+      at(offset) * 0x1000000 +
+      at(offset + 1) * 0x10000 +
+      at(offset + 2) * 0x100 +
+      at(offset + 3);
+    offset += 12 + length;
+  }
+  return false;
+}
+
 /** Why bytes are not a picture a bot may wear, or `null` when they are one. */
-export type BotPictureRefusal = "size" | "type" | "dimensions";
+export type BotPictureRefusal = "size" | "type" | "dimensions" | "animated";
 
 /**
  * Whether `bytes` are a picture a bot may wear: within the byte limit,
- * checked first, a WebP or a PNG, and exactly the square side.
+ * checked first, a WebP or a PNG, exactly the square side, and still.
  */
 export function botPictureRefusalOf(
   bytes: Uint8Array,
@@ -99,7 +130,8 @@ export function botPictureRefusalOf(
   }
   const header = botPictureHeaderOf(bytes);
   if (header === null) return "type";
-  return header.width === BOT_PICTURE_SIDE && header.height === BOT_PICTURE_SIDE
-    ? null
-    : "dimensions";
+  if (header.width !== BOT_PICTURE_SIDE || header.height !== BOT_PICTURE_SIDE) {
+    return "dimensions";
+  }
+  return botPictureIsAnimated(bytes) ? "animated" : null;
 }
