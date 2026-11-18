@@ -520,14 +520,26 @@ describe("bot settings controls with an unavailable tab host", () => {
       within(dialog).getByRole("button", { name: "Delete bot" }),
     );
     await waitFor(() => expect(onDeleted).toHaveBeenCalledTimes(1));
+    // The settings panel also reads voice availability for its call voice
+    // group; that read is the only other request, and none goes to a host.
+    const writes = requests.filter((request) =>
+      request.url.startsWith("https://server.test.invalid/api/bots/"),
+    );
+    expect(
+      new Set(
+        requests
+          .filter((request) => !writes.includes(request))
+          .map((request) => request.url),
+      ),
+    ).toEqual(new Set(["https://server.test.invalid/api/voice/availability"]));
 
-    expect(requests.map((request) => request.url)).toEqual([
+    expect(writes.map((request) => request.url)).toEqual([
       "https://server.test.invalid/api/bots/update-run-settings",
       "https://server.test.invalid/api/bots/update-reply-mode",
       "https://server.test.invalid/api/bots/delete",
     ]);
     expect(
-      requests.map((request) =>
+      writes.map((request) =>
         new Headers(request.headers).get("Authorization"),
       ),
     ).toEqual([
@@ -535,7 +547,7 @@ describe("bot settings controls with an unavailable tab host", () => {
       `Bearer ${USER_BEARER}`,
       `Bearer ${USER_BEARER}`,
     ]);
-    expect(requests.map((request) => request.body)).toEqual([
+    expect(writes.map((request) => request.body)).toEqual([
       {
         botId: BOT_ID,
         harness: "claude",
@@ -550,7 +562,7 @@ describe("bot settings controls with an unavailable tab host", () => {
     expect(queryClient.getQueryState(secondList)?.isInvalidated).toBe(true);
     expect(tabHost.messenger.calls).toEqual([]);
     for (const cached of queryClient.getQueryCache().getAll()) {
-      expect(JSON.stringify(cached.state.data)).not.toContain(
+      expect(JSON.stringify(cached.state.data) ?? "").not.toContain(
         "bot deleted notice",
       );
     }
