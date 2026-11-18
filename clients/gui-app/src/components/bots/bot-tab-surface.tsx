@@ -1480,8 +1480,11 @@ function threadListMayStillAnswer(list: ThreadListReading): boolean {
 /**
  * Whether the settled list names `threadId` as a thread this channel can
  * open: one with its post still in the channel, hanging off this channel's
- * own conversation. A host that names no channel (it predates the field)
- * leaves no conversation to compare, and the list's own word stands.
+ * own conversation. A host that names no channel (one built between the
+ * thread list and the channel field) leaves no conversation to compare, and
+ * the comparison is skipped there. The list is the bot's, not the channel's,
+ * so on such a host a listed thread of a later conversation opens beside the
+ * earliest one, without its post.
  */
 function threadOpensInChannel(
   list: ThreadListReading,
