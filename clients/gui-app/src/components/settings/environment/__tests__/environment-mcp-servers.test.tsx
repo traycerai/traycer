@@ -122,25 +122,31 @@ const SWITCH_FAILURE_CASES = [
   },
 ];
 
-const OWNED_MCP_SECRET: EnvironmentSecretV12 = {
-  secretId: "sec-1",
-  name: "MCP_SRV1_GitHub token",
-  kind: "mcp_credential",
-  protocol: "http",
-  destinations: [],
-  ...RETIRED_SECRET_ROW_FIELDS,
-  currentVersionId: "version-1",
-  revoked: false,
-  updatedAt: 1,
-  variables: [],
-  providerVariables: [...RETIRED_PROVIDER_VARIABLES],
-};
+function ownedMcpSecret(): EnvironmentSecretV12 {
+  return {
+    secretId: "sec-1",
+    name: "MCP_SRV1_GitHub token",
+    kind: "mcp_credential",
+    protocol: "http",
+    destinations: [],
+    ...RETIRED_SECRET_ROW_FIELDS,
+    currentVersionId: "version-1",
+    revoked: false,
+    updatedAt: 1,
+    variables: [],
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
+  };
+}
+const OWNED_MCP_SECRET = ownedMcpSecret();
 
-const EXTERNAL_MCP_SECRET: EnvironmentSecretV12 = {
-  ...OWNED_MCP_SECRET,
-  name: "GitHub token",
-  kind: "secret",
-};
+function externalMcpSecret(): EnvironmentSecretV12 {
+  return {
+    ...OWNED_MCP_SECRET,
+    name: "GitHub token",
+    kind: "secret",
+  };
+}
+const EXTERNAL_MCP_SECRET = externalMcpSecret();
 
 function handlers(options: {
   readonly servers: () => EnvironmentMcpServerDeclaration[];
