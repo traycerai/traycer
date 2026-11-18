@@ -725,10 +725,17 @@ function BotChatTranscriptBody(props: {
   // through `setJumpOutsideRender`, which clears this first, and the timer
   // asks here before it acts. The writes made during render (a landing, a
   // reported miss, a send's fallback, a landing's new jump) never touch
-  // this: a render may be discarded or run twice. Nothing reads it from
-  // inside a commit (its readers run from input, a click, the timer and a
-  // passive effect), so the layout phase, where the timer is armed, is early
-  // enough.
+  // this: a render may be discarded or run twice.
+  // The list can also report a movement from inside a commit, in a layout
+  // effect of its own that runs before this one (following the end, it reads
+  // a view the browser moved ahead of the scroll report). The commit is the
+  // cut: a movement reported before the commit that leaves a jump waiting
+  // does not end that jump, whether it is reported in an event or in that
+  // commit's own layout phase, where it finds this cleared; one reported
+  // later does. Nothing here knows when a landing made during render was
+  // asked, so no finer line can be drawn, and a movement made between that
+  // render and its commit counts as one before it. So this is published in
+  // the layout phase, where the timer is armed, and not earlier.
   const liveJumpRef = useRef<PendingJump | null>(null);
   useLayoutEffect(() => {
     liveJumpRef.current = pendingJump;
