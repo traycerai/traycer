@@ -48,6 +48,11 @@ import {
   hostSettingsRowModel,
 } from "@/components/settings/panels/host-overview-settings-card-model";
 import { HostOverviewSettingsCard } from "@/components/settings/panels/host-overview-settings-card";
+import { moveDiagnosticsExport } from "@/components/settings/move/move-diagnostics-export";
+import {
+  moveHasStopped,
+  moveIsRunning,
+} from "@/lib/environment/move-in-progress";
 import {
   buildEnvironmentClient,
   environmentStatusFixture,
@@ -1007,6 +1012,20 @@ describe("<HostOverviewSettingsCard />", () => {
         .getByTestId("host-settings-card-progress")
         .textContent.replace(/\s+/g, " "),
     ).toBe("Moving this computer's settings to Personal");
+  });
+
+  it("keeps a move moving whose state is named like an inherited property", () => {
+    const status = environmentStatusFixture({
+      setup: { stage: "moving_settings", state: "constructor" },
+    });
+
+    renderCard(status, {});
+
+    expect(screen.getByTestId("host-settings-card-progress")).toBeTruthy();
+    expect(screen.queryByTestId("host-settings-card-move-stopped")).toBeNull();
+    expect(moveHasStopped(status)).toBe(false);
+    expect(moveIsRunning(status)).toBe(true);
+    expect(moveDiagnosticsExport(status, null, 0).stopReason).toBeNull();
   });
 
   describe("when the move stopped", () => {

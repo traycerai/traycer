@@ -37,6 +37,7 @@ import {
 } from "@/stores/chats/open-store-scope";
 import { useToolOpenStore } from "@/stores/chats/tool-open-store";
 import { SegmentCard } from "./segment-card";
+import { ownValue } from "@/lib/own-value";
 
 const CATEGORY_LABELS: Readonly<Record<string, string>> = {
   tool_problem: "Tool problem",
@@ -47,7 +48,7 @@ const CATEGORY_LABELS: Readonly<Record<string, string>> = {
 
 /** The category's label; one this build has not heard of reads generically. */
 function feedbackDraftCategoryLabel(category: string): string {
-  return CATEGORY_LABELS[category] ?? "Feedback";
+  return ownValue(CATEGORY_LABELS, category) ?? "Feedback";
 }
 
 /**

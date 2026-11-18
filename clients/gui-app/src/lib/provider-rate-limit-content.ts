@@ -8,6 +8,7 @@ import {
   envelopeDegradedReason,
   resolveRetainedProviderRateLimits,
 } from "@/lib/rate-limits/rate-limit-envelope";
+import { ownValue } from "@/lib/own-value";
 
 /** The provider snapshot arms that actually carry usage detail. */
 type AvailableProviderRateLimits = Extract<
@@ -211,7 +212,7 @@ export function formatChatCredentialNotice(
     case "cloud-provider":
       return [
         text(
-          `Chats here run on ${CLOUD_PROVIDER_NAMES[credential.source] ?? credential.source}, so there are no plan limits to show.`,
+          `Chats here run on ${ownValue(CLOUD_PROVIDER_NAMES, credential.source) ?? credential.source}, so there are no plan limits to show.`,
         ),
       ];
   }

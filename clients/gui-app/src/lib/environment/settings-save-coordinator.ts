@@ -1,6 +1,9 @@
 // No host commits a setting: the app that made the edit applies its own hold.
 // Nothing here logs, reports or throws what it remembers.
-import type { EnvironmentCloud } from "@traycer-clients/shared/environment/environment-cloud";
+import {
+  isCloudFailure,
+  type EnvironmentCloud,
+} from "@traycer-clients/shared/environment/environment-cloud";
 import {
   applyHeldChange,
   readHeldChangesForMatch,
@@ -25,11 +28,44 @@ const NOTHING_TO_REMEMBER: SettingsSaveBeginning = {
 };
 const ACCOUNT_CHANGED: SettingsSaveBeginning = { kind: "account_changed" };
 
-/** An apply that went unanswered is tried once more at the same hold revision. */
+/**
+ * An apply authn refused for a reason other than {@link passingFailure} is
+ * tried once more at the same hold revision, then left.
+ */
 const TRIES_PER_HOLD_REVISION = 2;
+
+/**
+ * An apply authn could not take just now spends no try: a short outage would
+ * otherwise use both within the first follow-ups, and the hold would wait out
+ * its TTL unapplied. That is no answer at all, a redirect (the desktop's
+ * opaque status 0 among them), a 5xx, 408, 429, or a 401 a sign-in mends.
+ */
+function passingFailure(status: number | null): boolean {
+  if (status === null) return true;
+  const answer = { status, body: null };
+  return (
+    isCloudFailure(answer) || status === 401 || status === 408 || status === 429
+  );
+}
 
 /** Another window may still have the save out; its answer comes within this time. */
 const UNLISTED_GRACE_MS = 60_000;
+
+// The host answers a save before it proposes it, and nothing tells the app when
+// the proposal is made, so a host with a remembered save is read again: soon at
+// first, then no more often than the longest wait, until the memory forgets the
+// save (applied, decided, refused or past its TTL).
+const FOLLOW_UP_FIRST_MS = 2_000;
+const FOLLOW_UP_LONGEST_MS = 5 * 60_000;
+const FOLLOW_UP_LONGEST_STEP = Math.ceil(
+  Math.log2(FOLLOW_UP_LONGEST_MS / FOLLOW_UP_FIRST_MS),
+);
+
+/** The `schedule` port on the window's own timers. */
+export function scheduleFollowUp(run: () => void, delayMs: number): () => void {
+  const timer = window.setTimeout(run, delayMs);
+  return () => window.clearTimeout(timer);
+}
 
 export interface SettingsSaveContext {
   /** Read before the preparation's first await. */
@@ -48,6 +84,8 @@ export interface SettingsSaveCoordinatorPorts {
     hostId: string,
   ) => Promise<EnvironmentProposalsResponse | null>;
   readonly now: () => number;
+  /** Runs `run` once after `delayMs`; the returned function cancels it. */
+  readonly schedule: (run: () => void, delayMs: number) => () => void;
 }
 
 export interface SettingsSaveTicket {
@@ -75,6 +113,8 @@ export interface SettingsSaveCoordinator {
   ) => Promise<void>;
   /** One at a time per host; a call while one runs waits for it. */
   readonly reconcile: (hostId: string) => Promise<void>;
+  /** Cancels every follow-up read, including one a run still out would arm; a later call arms them again. */
+  readonly stop: () => void;
 }
 
 function receiptMatches(
@@ -124,6 +164,7 @@ function sortByReceipt(
   mine: ReadonlyArray<readonly [string, SettingsSaveMemoryRecord]>,
   proposals: EnvironmentProposalsResponse,
   now: number,
+  outAtRead: ReadonlySet<string>,
 ): {
   readonly forget: readonly RememberedSave[];
   readonly proposed: ReadonlyMap<string, readonly RememberedSave[]>;
@@ -136,8 +177,9 @@ function sortByReceipt(
     )?.proposal;
     if (receipt === undefined) {
       // A save still out, here or in another window, may not have reached
-      // the host's list yet.
-      if (!inFlight(id) && now - record.writtenAt > UNLISTED_GRACE_MS) {
+      // the host's list yet; one out when the read began may have been
+      // answered after the host listed its proposals.
+      if (!outAtRead.has(id) && now - record.writtenAt > UNLISTED_GRACE_MS) {
         forget.push({ id, record });
       }
     } else if (receipt.state === "refused") {
@@ -169,12 +211,12 @@ export function createSettingsSaveCoordinator(
     }
   };
 
+  const expired = (record: SettingsSaveMemoryRecord): boolean =>
+    ports.now() - record.writtenAt > SETTINGS_SAVE_MEMORY_TTL_MS;
+
   const forgetExpired = (): void => {
-    const now = ports.now();
     for (const [id, record] of Object.entries(store().records)) {
-      if (now - record.writtenAt > SETTINGS_SAVE_MEMORY_TTL_MS) {
-        forget(id);
-      }
+      if (expired(record)) forget(id);
     }
   };
 
@@ -193,8 +235,17 @@ export function createSettingsSaveCoordinator(
     ) {
       return "stays";
     }
+    const answered: { status: number | null } = { status: null };
+    const watched: EnvironmentCloud = {
+      ...cloud,
+      transport: async (request) => {
+        const answer = await cloud.transport(request);
+        answered.status = answer.status;
+        return answer;
+      },
+    };
     try {
-      const { outcome } = await applyHeldChange(cloud, record.environmentId, {
+      const { outcome } = await applyHeldChange(watched, record.environmentId, {
         heldId: hold.heldId,
         revision: hold.revision,
         expectedLiveRevision: record.expectedLiveRevision,
@@ -202,18 +253,37 @@ export function createSettingsSaveCoordinator(
       // A conflict, gone or forbidden decides this hold for this save too.
       return outcome === "applied" ? "applied" : "decided";
     } catch {
-      store().noteUnanswered(id, hold.revision);
+      if (!passingFailure(answered.status)) {
+        store().noteUnanswered(id, hold.revision);
+      }
       return "stays";
     }
   };
 
-  const reconcileOnce = async (hostId: string): Promise<void> => {
-    const account = ports.accountId();
+  /** The signed-in account, while the memory installed is that account's. */
+  const memoryAccount = (): string | null => {
+    const signedIn = ports.accountId();
+    return signedIn !== null &&
+      useSettingsSaveMemoryStore.persist.getOptions().name ===
+        settingsSaveMemoryKey(signedIn)
+      ? signedIn
+      : null;
+  };
+
+  const reconcileOnce = async (
+    hostId: string,
+    current: () => boolean,
+  ): Promise<void> => {
+    // Until the memory is the signed-in account's, its records are another
+    // account's, and they wait for that account.
+    const account = memoryAccount();
     if (account === null) return;
-    // Once the run's sign-in ends, the run stops even where the account is the same.
+    // Once the run's sign-in ends, the run stops even where the account is the
+    // same; a follow-up also stops once `stop()` has run since it was armed.
     const cloud = ports.cloud();
-    const sameAccount = (): boolean =>
-      ports.accountId() === account &&
+    const mayAct = (): boolean =>
+      current() &&
+      memoryAccount() === account &&
       (cloud === null || cloud.onOriginSignIn());
     forgetExpired();
     dropUnremembered();
@@ -222,6 +292,7 @@ export function createSettingsSaveCoordinator(
     );
     if (mine.length === 0) return;
 
+    const outAtRead = new Set(mine.map(([id]) => id).filter(inFlight));
     let proposals: EnvironmentProposalsResponse | null;
     try {
       proposals = await ports.readProposals(hostId);
@@ -230,18 +301,18 @@ export function createSettingsSaveCoordinator(
     }
     // Not connected, or nothing answered: every record waits for the next
     // connection.
-    if (proposals === null || !sameAccount()) return;
+    if (proposals === null || !mayAct()) return;
 
     // A later save of the same item may have replaced a record since the reads; then
     // neither its apply nor its forgetting is this run's.
-    const sorted = sortByReceipt(mine, proposals, ports.now());
+    const sorted = sortByReceipt(mine, proposals, ports.now(), outAtRead);
     for (const { id } of sorted.forget) {
       forget(id);
     }
     if (sorted.proposed.size === 0 || cloud === null) return;
 
     for (const [environmentId, saves] of sorted.proposed) {
-      if (!(await applyProposed(cloud, environmentId, saves, sameAccount))) {
+      if (!(await applyProposed(cloud, environmentId, saves, mayAct))) {
         return;
       }
     }
@@ -251,7 +322,7 @@ export function createSettingsSaveCoordinator(
     cloud: EnvironmentCloud,
     environmentId: string,
     saves: readonly RememberedSave[],
-    sameAccount: () => boolean,
+    mayAct: () => boolean,
   ): Promise<boolean> => {
     let holds: readonly HeldChangeForMatch[];
     try {
@@ -259,24 +330,80 @@ export function createSettingsSaveCoordinator(
     } catch {
       return true;
     }
-    for (const { id, record } of saves) {
-      if (!sameAccount()) return false;
-      if (!isCurrent(id)) continue;
+    for (const { id } of saves) {
+      if (!mayAct()) return false;
+      // Read after the waits: another coordinator may have spent a try since.
+      const record = settingsSaveMemoryRecord(store().records, id);
+      if (record === null) continue;
+      // The reads may have outlasted the save's TTL.
+      if (expired(record)) {
+        forget(id);
+        continue;
+      }
       const result = await applyHold(cloud, id, record, holds);
-      if (!sameAccount()) return false;
+      if (!mayAct()) return false;
       if (result === "applied") appliedListeners.get(id)?.();
       if (result !== "stays") forget(id);
     }
     return true;
   };
 
-  const reconcile = (hostId: string): Promise<void> => {
+  const followUps = new Map<
+    string,
+    { readonly dueAt: number; readonly cancel: () => void }
+  >();
+  let generation = 0;
+  /** A save begun before a stop arms nothing when it settles after it. */
+  const begunIn = new Map<string, number>();
+
+  const awaitsHold = (hostId: string): boolean =>
+    Object.values(store().records).some((record) => record.hostId === hostId);
+
+  // A later arm never pushes out a sooner one: a new save's short wait stands
+  // against an older run's long one, whichever of them arms last.
+  const armFollowUp = (hostId: string, step: number, armedIn: number): void => {
+    // Another account's records wait for that account: its sign-in reconciles them.
+    if (generation !== armedIn || memoryAccount() === null) return;
+    const armed = followUps.get(hostId);
+    if (!awaitsHold(hostId)) {
+      armed?.cancel();
+      followUps.delete(hostId);
+      return;
+    }
+    const delay = Math.min(
+      FOLLOW_UP_FIRST_MS * 2 ** step,
+      FOLLOW_UP_LONGEST_MS,
+    );
+    const dueAt = ports.now() + delay;
+    if (armed !== undefined && armed.dueAt <= dueAt) return;
+    armed?.cancel();
+    const cancel = ports.schedule(() => {
+      followUps.delete(hostId);
+      void run(
+        hostId,
+        Math.min(step + 1, FOLLOW_UP_LONGEST_STEP),
+        armedIn,
+        true,
+      );
+    }, delay);
+    followUps.set(hostId, { dueAt, cancel });
+  };
+
+  const run = (
+    hostId: string,
+    nextStep: number,
+    armedIn: number,
+    followUp: boolean,
+  ): Promise<void> => {
     const previous = running.get(hostId) ?? Promise.resolve();
     // A failed run reaches no error report: what it remembers stays private,
-    // and the records it did not settle wait for the next run.
+    // and the records it did not settle wait for the next run. A follow-up
+    // that waited here past a stop, or reaches one while it runs, acts on nothing.
+    const current = followUp ? () => generation === armedIn : () => true;
     const next = previous
-      .then(() => reconcileOnce(hostId))
-      .catch(() => undefined);
+      .then(() => (current() ? reconcileOnce(hostId, current) : undefined))
+      .catch(() => undefined)
+      .then(() => armFollowUp(hostId, nextStep, armedIn));
     running.set(hostId, next);
     void next.finally(() => {
       if (running.get(hostId) === next) running.delete(hostId);
@@ -284,13 +411,13 @@ export function createSettingsSaveCoordinator(
     return next;
   };
 
-  const account = (): string | null => {
-    const signedIn = ports.accountId();
-    return signedIn !== null &&
-      useSettingsSaveMemoryStore.persist.getOptions().name ===
-        settingsSaveMemoryKey(signedIn)
-      ? signedIn
-      : null;
+  const reconcile = (hostId: string): Promise<void> =>
+    run(hostId, 0, generation, false);
+
+  const stop = (): void => {
+    generation += 1;
+    for (const { cancel } of followUps.values()) cancel();
+    followUps.clear();
   };
 
   const begin = async (
@@ -298,14 +425,16 @@ export function createSettingsSaveCoordinator(
     context: SettingsSaveContext,
     applied: () => void,
   ): Promise<SettingsSaveBeginning> => {
-    if (account() !== context.accountId) return ACCOUNT_CHANGED;
+    if (memoryAccount() !== context.accountId) return ACCOUNT_CHANGED;
     if (mapping.kind !== "proposal") return NOTHING_TO_REMEMBER;
+    // A stop during the digest's await retires this save's follow-ups too.
+    const begun = generation;
     const { edit } = mapping;
     const valueDigest =
       edit.operation === "put" ? await settingValueDigest(edit.value) : null;
     // The memory may be another account's by now: an edit is remembered only
     // in the memory of the account it was made for.
-    if (account() !== context.accountId) return ACCOUNT_CHANGED;
+    if (memoryAccount() !== context.accountId) return ACCOUNT_CHANGED;
     const id = store().remember({
       editId: crypto.randomUUID(),
       environmentId: context.environmentId,
@@ -323,6 +452,7 @@ export function createSettingsSaveCoordinator(
     store().markSent(id);
     dropUnremembered();
     appliedListeners.set(id, applied);
+    begunIn.set(id, begun);
     return { kind: "remembered", ticket: { id } };
   };
 
@@ -331,10 +461,18 @@ export function createSettingsSaveCoordinator(
     hostAnswered: boolean,
   ): Promise<void> => {
     store().markAnswered(ticket.id);
+    const armedIn = begunIn.get(ticket.id) ?? null;
+    begunIn.delete(ticket.id);
     const record = settingsSaveMemoryRecord(store().records, ticket.id);
-    if (!hostAnswered || record === null) return;
-    await reconcile(record.hostId);
+    if (record === null || armedIn === null) return;
+    // An unanswered save may still reach the host, so it is read for later
+    // rather than now.
+    if (!hostAnswered) {
+      armFollowUp(record.hostId, 0, armedIn);
+      return;
+    }
+    await run(record.hostId, 0, armedIn, false);
   };
 
-  return { account, begin, settle, reconcile };
+  return { account: memoryAccount, begin, settle, reconcile, stop };
 }

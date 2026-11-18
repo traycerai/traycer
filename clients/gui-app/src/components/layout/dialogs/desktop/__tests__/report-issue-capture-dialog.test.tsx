@@ -1312,6 +1312,26 @@ describe("Report issue capture dialog (deep interactions)", () => {
         screen.queryByRole("option", { name: "Current location (current)" }),
       ).toBeNull();
     });
+
+    it("labels a route template named like an inherited member with the shared generic label", async () => {
+      setSupportContextSnapshot({ routeTemplate: knownField("constructor") });
+      const harness = createSupportBridgeHarness({
+        snapshot: undefined,
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      openManualReport();
+      renderReportIssueDialog(createRunnerHost(harness));
+      await flushDialogEffects();
+
+      fireEvent.click(screen.getByRole("combobox"));
+      expect(
+        await screen.findByRole("option", { name: "This screen (current)" }),
+      ).not.toBeNull();
+    });
   });
 
   describe("delivery states", () => {

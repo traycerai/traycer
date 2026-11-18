@@ -12,7 +12,9 @@ import {
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
 import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
+import { useHostBinding } from "@/lib/host";
 import type { SettingsSaveCoordinator } from "@/lib/environment/settings-save-coordinator";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useSettingsSaveMemoryStore } from "@/stores/settings/settings-save-memory-store";
 
 /** Reading it opens nothing. */
@@ -43,9 +45,15 @@ function HostReconcile(props: {
   ).canExecute;
   const remoteHeld = useBorrowableRemoteSession(hostId);
   const connected = isLocal ? localReady : remoteHeld;
+  // Read again under a new binding, and once a sign-in installs its account's
+  // memory: no follow-up is armed while the memory is another account's.
+  const binding = useHostBinding();
+  const account = useAuthStore(
+    (state) => state.contextMetadata?.userId ?? null,
+  );
   useEffect(() => {
     if (connected) void coordinator.reconcile(hostId);
-  }, [connected, coordinator, hostId]);
+  }, [connected, coordinator, hostId, binding, account]);
   return null;
 }
 

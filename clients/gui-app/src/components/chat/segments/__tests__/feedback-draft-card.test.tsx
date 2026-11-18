@@ -220,6 +220,16 @@ describe("FeedbackDraftCard", () => {
     );
   });
 
+  it.each(["category_from_a_newer_build", "constructor"])(
+    "heads a draft of category %s plainly as Feedback",
+    (category) => {
+      renderCard({ ...PENDING, category }, SCOPE);
+
+      expect(
+        screen.getByText("Feedback for Traycer · Feedback · traycer_run_shell"),
+      ).toBeTruthy();
+    },
+  );
   it("sends without diagnostics once the box is unticked, and skips with none", () => {
     renderCard(PENDING, SCOPE);
     fireEvent.click(

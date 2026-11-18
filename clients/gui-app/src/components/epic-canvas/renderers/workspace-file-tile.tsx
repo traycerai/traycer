@@ -95,6 +95,7 @@ import { MissingFilePlaceholder } from "@/components/epic-canvas/missing-file-pl
 import { useEffectiveDefaultEditor } from "@/hooks/editor/use-effective-default-editor";
 import { useDocumentOpenExternallyTarget } from "@/hooks/editor/use-document-open-target";
 import { useWorkspaceFileOpenExternally } from "@/hooks/editor/use-workspace-file-open-externally";
+import { ownValue } from "@/lib/own-value";
 const MAX_MARKDOWN_PREVIEW_CHARS = 100_000;
 
 /**
@@ -1420,7 +1421,7 @@ function languageForFileName(fileName: string): string {
   // Extension-less names (`Dockerfile`, `Makefile`) get an exact-name
   // mapping; everything else defers to the shared extension table.
   return (
-    EXACT_LANGUAGE_BY_FILE_NAME[fileName.toLowerCase()] ??
+    ownValue(EXACT_LANGUAGE_BY_FILE_NAME, fileName.toLowerCase()) ??
     languageFromFilePath(fileName)
   );
 }

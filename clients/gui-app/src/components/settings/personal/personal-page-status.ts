@@ -4,6 +4,7 @@ import type {
 } from "@traycer/protocol/host/environment-schemas";
 import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
 import type { SettingsSectionId } from "@/lib/settings-sections";
+import { ownValue } from "@/lib/own-value";
 
 /**
  * What a Personal page says about the host it reads through: whether its
@@ -110,7 +111,7 @@ const PAGE_NAMED_KINDS: Readonly<Partial<Record<string, string>>> = {
  * each item's own name (a variable, an MCP server).
  */
 export function itemPageName(kind: string): string | null {
-  return PAGE_NAMED_KINDS[kind] ?? null;
+  return ownValue(PAGE_NAMED_KINDS, kind) ?? null;
 }
 
 /**
@@ -170,11 +171,13 @@ function failedText(item: EnvironmentItemStatus, hostName: string): string {
   const { code } = item;
   const caseKind = item.args.kind;
   const caseText =
-    caseKind === null ? undefined : FAILURE_CASES[code]?.[caseKind];
+    caseKind === null
+      ? undefined
+      : ownValue(ownValue(FAILURE_CASES, code) ?? {}, caseKind);
   if (caseText !== undefined) {
     return `${itemLabel(item)} didn't apply on ${hostName}. ${caseText}`;
   }
-  const reason = FAILURE_REASONS[code];
+  const reason = ownValue(FAILURE_REASONS, code);
   return reason === undefined
     ? `${itemLabel(item)} didn't apply on ${hostName}.`
     : `${itemLabel(item)} didn't apply on ${hostName}: ${reason}.`;
