@@ -123,7 +123,7 @@ export interface MemorySaveIo {
  * - `undiscovered`: the host had not yet said which providers it can switch,
  *   and the save sent nothing.
  * - `unsent`: the Traycer memories write was abandoned before it was sent, and
- *   the save sent nothing more: the act is as it was before the press.
+ *   the save sent nothing more.
  */
 export type MemorySaveResult =
   | "done"

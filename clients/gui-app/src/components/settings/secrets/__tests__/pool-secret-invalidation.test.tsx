@@ -294,6 +294,7 @@ function handlersFor(state: SecretHostState): MockHandlerMap<HostRpcRegistry> {
   };
 }
 
+/** Keeps each of the team's secret reads, authn's own, observed while an action runs. */
 function SecretReadProbe(): ReactNode {
   const list = useSecretsRead({
     method: "environment.secrets.list",

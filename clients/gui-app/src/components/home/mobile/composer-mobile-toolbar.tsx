@@ -41,6 +41,7 @@ interface ComposerMobileToolbarProps {
   readonly dictation: ComposerDictationControl | null;
   readonly dictationPreparing: DictationPreparingStatus | null;
   readonly settingsLocked: boolean;
+  /** The host "Add a profile" creates on - see `HarnessModelPicker`. */
   readonly createProfileHostId: string | null;
   readonly runTargetHostId: string | null;
   /** Where the picker's setup terminal lands - see `HarnessModelPicker`. */

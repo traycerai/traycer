@@ -10,6 +10,7 @@ import {
 } from "@/components/settings/environment/__tests__/team-configuration-test-support";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
+// The hook, host binding, cloud hook and QueryClient stay real.
 const viewer = vi.hoisted(() => ({ current: "" }));
 
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
@@ -87,6 +88,7 @@ describe("useEnvironmentListQuery - per-viewer cache partition", () => {
     });
     first.unmount();
 
+    // What an identity transition does to the account directory: stale, not dropped.
     await fixture.queryClient.invalidateQueries({
       queryKey: ["host"],
       refetchType: "none",
