@@ -406,11 +406,11 @@ const traycerCatalogModelSchema = z.object({
 type TraycerCatalogModel = z.infer<typeof traycerCatalogModelSchema>;
 
 /**
- * The catalog names its upstream by id alone. A group header never prefixes
- * its models' names (the picker strips it from them), so gemini's is its
+ * The catalog names its upstream by id alone. Gemini's group header is its
  * vendor; an unknown id is title-cased. A row that carries its maker (`vendor`,
  * display only) is grouped under that name instead; `provider` still alone
- * decides routing.
+ * decides routing. The picker shows these models' names whole, so a maker's
+ * name may prefix them.
  */
 const TRAYCER_PROVIDER_LABELS: Readonly<Record<string, string>> = {
   anthropic: "Anthropic",
