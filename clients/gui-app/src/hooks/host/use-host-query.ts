@@ -201,28 +201,52 @@ function useHostQueryEntry<
 ): { readonly queryKey: QueryKey; readonly canExecute: boolean } {
   const readiness = useReactiveHostReadiness(args.client);
   const effectiveHostId = useEffectiveHostId();
+  return {
+    queryKey: hostQueryEntryKey<Registry, Method>({
+      hostId: readiness.hostId,
+      effectiveHostId,
+      method: args.method,
+      params: args.params,
+      cacheKeyIdentity: args.cacheKeyIdentity,
+    }),
+    canExecute: readiness.canExecute,
+  };
+}
+
+/**
+ * The key of the entry a read of `method` lands in when `hostId`'s requester
+ * carries it. Exported for a caller outside a render that reads what such a
+ * read has already answered: it names the entry through the same builder.
+ */
+export function hostQueryEntryKey<
+  Registry extends HostRpcRegistry,
+  Method extends keyof Registry & keyof HostRpcRegistry & string,
+>(input: {
+  readonly hostId: string | null;
+  readonly effectiveHostId: string | null;
+  readonly method: Method;
+  readonly params: RequestOfMethod<Registry, Method>;
+  readonly cacheKeyIdentity: ReadonlyArray<unknown> | undefined;
+}): QueryKey {
   // Keyed by the tier that ANSWERS, not the host the caller named: the client
   // routes a pool-only method to the pool and an input-device method to the
   // selected host whatever requester carried it, so keying by the caller
   // would file one answer under every host and miss the serving tier's
   // recovery sweeps.
   const servingHostId = hostRpcServingTierHostId(
-    args.method,
-    readiness.hostId,
+    input.method,
+    input.hostId,
     readProcessHostRpcTierPlan(),
-    effectiveHostId,
+    input.effectiveHostId,
   );
-  return {
-    queryKey: [
-      ...queryKeys.hostMethod<Registry, Method>(
-        servingHostId,
-        args.method,
-        args.params,
-      ),
-      ...(args.cacheKeyIdentity ?? []),
-    ],
-    canExecute: readiness.canExecute,
-  };
+  return [
+    ...queryKeys.hostMethod<Registry, Method>(
+      servingHostId,
+      input.method,
+      input.params,
+    ),
+    ...(input.cacheKeyIdentity ?? []),
+  ];
 }
 
 /**

@@ -26,12 +26,35 @@ export type BotTabLanding =
     }
   | { readonly kind: "sender"; readonly chatId: string };
 
+/** A landing on one message of a thread: what a notification of a reply asks for. */
+export type BotThreadMessageLanding = Extract<
+  BotTabLanding,
+  { kind: "thread" }
+> & { readonly threadId: string; readonly messageId: string };
+
+/**
+ * Whether `landing` names a message inside a thread. An opening of a thread
+ * itself (a Threads card, a thread chip) names no message, and a channel's
+ * row names no thread.
+ */
+export function isBotThreadMessageLanding(
+  landing: BotTabLanding,
+): landing is BotThreadMessageLanding {
+  return (
+    landing.kind === "thread" &&
+    landing.threadId !== null &&
+    landing.messageId !== null
+  );
+}
+
 interface BotTabLandingState {
   readonly byBotId: Readonly<Record<string, BotTabLanding>>;
   /** Asks `botId`'s tab to land there; a later request replaces an unspent one. */
   readonly request: (botId: string, landing: BotTabLanding) => void;
   /** Spends `botId`'s request: the tab has landed. */
   readonly clear: (botId: string) => void;
+  /** Withdraws every request: none of them is still asked for. */
+  readonly clearAll: () => void;
 }
 
 /**
@@ -49,4 +72,8 @@ export const useBotTabLandingStore = create<BotTabLandingState>()((set) => ({
       delete next[botId];
       return { byBotId: next };
     }),
+  clearAll: () =>
+    set((state) =>
+      Object.keys(state.byBotId).length === 0 ? state : { byBotId: {} },
+    ),
 }));

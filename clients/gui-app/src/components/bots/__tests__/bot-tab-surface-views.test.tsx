@@ -55,6 +55,7 @@ import { StrictMode, useContext, useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 import {
   afterEach,
   beforeEach,
@@ -497,6 +498,7 @@ import {
 } from "../../../../__tests__/mobile-level2-form-harness";
 
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
+import { useTracyPlaceStore } from "@/stores/bots/tracy-place-store";
 
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { NotificationFeedModeContext } from "@/lib/notifications/notification-feed-mode-context";
@@ -1287,5 +1289,390 @@ describe("the Channel actions trigger's active count in the compact header", () 
     expect(
       screen.getByRole("button", { name: "Channel actions" }),
     ).toBeTruthy();
+  });
+});
+
+describe("a landing on a thread's message while the tab reads its thread list", () => {
+  /** The bot's own conversation: the one `BOT` names as its app conversation. */
+  const MAIN = "conversation-app";
+
+  function threadOf(
+    conversationId: string,
+    anchored: boolean,
+  ): (typeof mocks.state.threads)[number] {
+    return {
+      threadId: "thread-1",
+      conversationId,
+      sessionChatId: "session-thread-1",
+      anchor: anchored
+        ? {
+            messageId: "post-7",
+            requestId: "req-7",
+            senderUserId: "user-1",
+            sentAt: 1_000,
+            resolvedAt: null,
+            excerpt: null,
+          }
+        : null,
+      replyCount: 1,
+      lastReplyAt: 2_000,
+      openRequestCount: 0,
+      costUsd: null,
+    };
+  }
+
+  function requestThreadLanding(
+    threadId: string | null,
+    messageId: string,
+  ): void {
+    act(() => {
+      useBotTabLandingStore
+        .getState()
+        .request(BOT_ID, { kind: "thread", threadId, messageId });
+    });
+  }
+
+  function landedOn(): {
+    readonly row: string;
+    readonly thread: string;
+    readonly open: string;
+  } {
+    const channel = screen.getByTestId("stub-channel");
+    return {
+      row: channel.getAttribute("data-land-on") ?? "",
+      thread: channel.getAttribute("data-land-on-thread") ?? "",
+      open: channel.getAttribute("data-open-thread") ?? "",
+    };
+  }
+
+  const NOWHERE = { row: "none", thread: "none", open: "none" };
+
+  function spent(): boolean {
+    return !Object.hasOwn(useBotTabLandingStore.getState().byBotId, BOT_ID);
+  }
+
+  /** The list the tab holds lacks the thread, and a read of it is in flight. */
+  function listBeingRead(failedBefore: boolean): {
+    readonly rerender: () => void;
+  } {
+    mocks.state.threads = [];
+    mocks.state.threadsFetching = true;
+    mocks.state.threadsError = failedBefore;
+    const { rerender } = render(surface());
+    return { rerender: () => rerender(surface()) };
+  }
+
+  function answer(threads: typeof mocks.state.threads, failed: boolean): void {
+    mocks.state.threads = threads;
+    mocks.state.threadsFetching = false;
+    mocks.state.threadsError = failed;
+  }
+
+  beforeEach(() => {
+    useBotTabLandingStore.setState({ byBotId: {} });
+    const toastError = vi.spyOn(toast, "error").mockReturnValue("toast");
+    onTestFinished(() => toastError.mockRestore());
+  });
+
+  describe("of the channel", () => {
+    it.each([
+      ["has not answered and a read is in flight", false, true, false],
+      ["failed", false, false, true],
+      ["failed and is being read again", false, true, true],
+    ])(
+      "lands on the exact message at once when the thread list %s",
+      (_name, held, fetching, failed) => {
+        mocks.state.threadsHeld = held;
+        mocks.state.threadsFetching = fetching;
+        mocks.state.threadsError = failed;
+        render(surface());
+
+        requestThreadLanding(null, "post-9");
+
+        expect(landedOn()).toEqual({
+          ...NOWHERE,
+          row: "post-9",
+          thread: "none",
+        });
+        expect(spent()).toBe(true);
+      },
+    );
+  });
+
+  describe("of a thread", () => {
+    it.each([[true], [false]])(
+      "waits for the read in flight over a list lacking the thread (failed before: %s), keeps the tab where it was, and lands the exact message once the answer has the thread",
+      (failedBefore) => {
+        const view = listBeingRead(failedBefore);
+        const movesBefore = useTracyPlaceStore.getState().automaticMoves;
+
+        requestThreadLanding("thread-1", "reply-9");
+        view.rerender();
+        view.rerender();
+
+        expect(spent()).toBe(false);
+        expect(landedOn()).toEqual(NOWHERE);
+        expect(useTracyPlaceStore.getState().automaticMoves).toBe(movesBefore);
+
+        answer([threadOf(MAIN, true)], false);
+        view.rerender();
+
+        expect(landedOn()).toEqual({
+          row: "reply-9",
+          thread: "thread-1",
+          open: "post-7",
+        });
+        expect(spent()).toBe(true);
+        expect(useTracyPlaceStore.getState().automaticMoves).toBe(
+          movesBefore + 1,
+        );
+      },
+    );
+
+    it("waits for the read in flight even over a held list that already names the thread, then lands the exact message once the read has settled", () => {
+      const view = listBeingRead(false);
+      mocks.state.threads = [threadOf(MAIN, true)];
+      view.rerender();
+      const movesBefore = useTracyPlaceStore.getState().automaticMoves;
+
+      requestThreadLanding("thread-1", "reply-9");
+      view.rerender();
+
+      expect(spent()).toBe(false);
+      expect(landedOn()).toEqual(NOWHERE);
+      expect(useTracyPlaceStore.getState().automaticMoves).toBe(movesBefore);
+
+      answer([threadOf(MAIN, true)], false);
+      view.rerender();
+
+      expect(landedOn()).toEqual({
+        row: "reply-9",
+        thread: "thread-1",
+        open: "post-7",
+      });
+      expect(spent()).toBe(true);
+      expect(useTracyPlaceStore.getState().automaticMoves).toBe(
+        movesBefore + 1,
+      );
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("refuses at once, landing nothing, when the host is known not to list threads, unlike a host not yet known to", () => {
+      mocks.state.threadListSupport = false;
+      const { rerender } = render(surface());
+      const movesBefore = useTracyPlaceStore.getState().automaticMoves;
+
+      requestThreadLanding("thread-1", "reply-9");
+      rerender(surface());
+
+      expect(spent()).toBe(true);
+      expect(landedOn()).toEqual(NOWHERE);
+      expect(useTracyPlaceStore.getState().automaticMoves).toBe(movesBefore);
+      expect(toast.error).toHaveBeenCalledTimes(1);
+    });
+
+    describe("on a host that names no conversation for the channel", () => {
+      beforeEach(() => {
+        mocks.state.snapshot = {
+          ...snapshot(),
+          bot: { ...BOT, appConversationChatId: null },
+        };
+      });
+
+      it("lands the exact message of a thread the settled list carries with its post", () => {
+        const view = listBeingRead(false);
+        const movesBefore = useTracyPlaceStore.getState().automaticMoves;
+        requestThreadLanding("thread-1", "reply-9");
+        expect(spent()).toBe(false);
+
+        answer([threadOf(MAIN, true)], false);
+        view.rerender();
+
+        expect(landedOn()).toEqual({
+          row: "reply-9",
+          thread: "thread-1",
+          open: "post-7",
+        });
+        expect(spent()).toBe(true);
+        expect(useTracyPlaceStore.getState().automaticMoves).toBe(
+          movesBefore + 1,
+        );
+        expect(toast.error).not.toHaveBeenCalled();
+      });
+
+      it("still lands nothing, and says so once, for a thread whose post is gone", () => {
+        const view = listBeingRead(false);
+        const movesBefore = useTracyPlaceStore.getState().automaticMoves;
+        requestThreadLanding("thread-1", "reply-9");
+
+        answer([threadOf(MAIN, false)], false);
+        view.rerender();
+
+        expect(spent()).toBe(true);
+        expect(landedOn()).toEqual(NOWHERE);
+        expect(useTracyPlaceStore.getState().automaticMoves).toBe(movesBefore);
+        expect(toast.error).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("opens a thread itself, naming no message, from a held list at once, though a read is in flight and the thread belongs to another conversation", () => {
+      mocks.state.threads = [threadOf("conversation-other", true)];
+      mocks.state.threadsFetching = true;
+      render(surface());
+      const movesBefore = useTracyPlaceStore.getState().automaticMoves;
+
+      act(() => {
+        useBotTabLandingStore.getState().request(BOT_ID, {
+          kind: "thread",
+          threadId: "thread-1",
+          messageId: null,
+        });
+      });
+
+      expect(landedOn()).toEqual({ ...NOWHERE, open: "post-7" });
+      expect(spent()).toBe(true);
+      expect(useTracyPlaceStore.getState().automaticMoves).toBe(
+        movesBefore + 1,
+      );
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("waits while the host's thread list is not yet known to be supported, rather than reading it as empty", () => {
+      mocks.state.threadListSupport = null;
+      mocks.state.threadsFetching = false;
+      const { rerender } = render(surface());
+      const movesBefore = useTracyPlaceStore.getState().automaticMoves;
+
+      requestThreadLanding("thread-1", "reply-9");
+
+      expect(spent()).toBe(false);
+      expect(landedOn()).toEqual(NOWHERE);
+      expect(useTracyPlaceStore.getState().automaticMoves).toBe(movesBefore);
+
+      mocks.state.threadListSupport = true;
+      mocks.state.threads = [threadOf(MAIN, true)];
+      rerender(surface());
+
+      expect(landedOn()).toEqual({
+        row: "reply-9",
+        thread: "thread-1",
+        open: "post-7",
+      });
+      expect(spent()).toBe(true);
+    });
+
+    it.each([
+      ["the thread is not in the list", [], false],
+      ["the list failed", [], true],
+      ["the thread has no anchor", [threadOf(MAIN, false)], false],
+      [
+        "the thread belongs to another conversation",
+        [threadOf("conversation-other", true)],
+        false,
+      ],
+    ] as const)(
+      "lands nothing and moves nothing once the read has settled and %s",
+      (_name, threads, failed) => {
+        const view = listBeingRead(true);
+        const movesBefore = useTracyPlaceStore.getState().automaticMoves;
+        requestThreadLanding("thread-1", "reply-9");
+        expect(spent()).toBe(false);
+
+        answer([...threads], failed);
+        view.rerender();
+
+        expect(spent()).toBe(true);
+        expect(landedOn()).toEqual(NOWHERE);
+        expect(useTracyPlaceStore.getState().automaticMoves).toBe(movesBefore);
+        expect(toast.error).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it("is spent unlanded when the person moves the tab while it waits, and a later answer brings nothing", async () => {
+      const user = userEvent.setup();
+      const view = listBeingRead(true);
+      requestThreadLanding("thread-1", "reply-9");
+      expect(spent()).toBe(false);
+
+      await user.click(screen.getByTestId("bot-tab-view-activity"));
+      view.rerender();
+      expect(spent()).toBe(true);
+
+      answer([threadOf(MAIN, true)], false);
+      view.rerender();
+
+      expect(screen.queryByTestId("stub-channel")).toBeNull();
+      expect(spent()).toBe(true);
+    });
+  });
+
+  describe("of a chat the bot names", () => {
+    it("lands a landing on the channel's own chat on the exact message at once, while the host is not yet known to list threads", () => {
+      mocks.state.threadListSupport = null;
+      mocks.state.threadsHeld = false;
+      render(surface());
+
+      act(() => {
+        useBotTabLandingStore.getState().request(BOT_ID, {
+          kind: "chat",
+          chatId: MAIN,
+          messageId: "post-5",
+          sendPostId: null,
+        });
+      });
+
+      expect(landedOn()).toEqual({ ...NOWHERE, row: "post-5" });
+      expect(spent()).toBe(true);
+    });
+
+    it("still waits for the thread list when the chat it names is not the channel's, then lands once the list names it", () => {
+      mocks.state.threadListSupport = null;
+      mocks.state.threadsHeld = false;
+      const { rerender } = render(surface());
+
+      act(() => {
+        useBotTabLandingStore.getState().request(BOT_ID, {
+          kind: "chat",
+          chatId: "thread-1",
+          messageId: "reply-9",
+          sendPostId: null,
+        });
+      });
+      expect(landedOn()).toEqual(NOWHERE);
+      expect(spent()).toBe(false);
+
+      mocks.state.threadListSupport = true;
+      mocks.state.threadsHeld = true;
+      mocks.state.threads = [threadOf(MAIN, true)];
+      rerender(surface());
+
+      expect(landedOn()).toEqual({
+        row: "reply-9",
+        thread: "thread-1",
+        open: "post-7",
+      });
+      expect(spent()).toBe(true);
+    });
+
+    it("still lands a thread's own chat on the exact message once the list names it", () => {
+      mocks.state.threads = [threadOf(MAIN, true)];
+      render(surface());
+
+      act(() => {
+        useBotTabLandingStore.getState().request(BOT_ID, {
+          kind: "chat",
+          chatId: "thread-1",
+          messageId: "reply-9",
+          sendPostId: null,
+        });
+      });
+
+      expect(landedOn()).toEqual({
+        row: "reply-9",
+        thread: "thread-1",
+        open: "post-7",
+      });
+      expect(spent()).toBe(true);
+    });
   });
 });

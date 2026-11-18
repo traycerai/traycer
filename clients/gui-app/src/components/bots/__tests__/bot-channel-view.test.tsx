@@ -297,6 +297,8 @@ vi.mock("@/components/bots/bot-chat-transcript", async (importOriginal) => ({
         data-testid={`stub-transcript-${surface === null ? "session" : surface.kind}`}
         data-chat-id={props.chatId}
         data-land-on={props.landOn?.messageId ?? "none"}
+        data-land-visit={props.landOn?.visit ?? "none"}
+        data-land-reports-miss={String(props.landOn?.reportsMiss === true)}
         data-answer-threads={
           surface !== null && surface.kind === "channel"
             ? String(surface.threadAnchorKinds.includes("answer"))
@@ -2262,6 +2264,116 @@ describe("<BotChannelView tiles={null} /> open thread", () => {
     };
     view.rerender();
     expect(channelLanding()).toBe("post-b");
+  });
+
+  describe("a landing on a channel row that reports its miss, withdrawn by the tab while the channel stays mounted", () => {
+    const REPORTING: BotChannelLanding = {
+      messageId: "post-a",
+      sendPostId: null,
+      threadId: null,
+      visit: 1,
+      reportsMiss: true,
+    };
+    const channelTranscript = (): HTMLElement =>
+      screen.getByTestId("stub-transcript-channel");
+
+    it("hands the channel's transcript the landing, with its miss reported, for as long as the tab holds it", () => {
+      const view = mount({ openThreadPostId: null });
+
+      mountLanding = REPORTING;
+      view.rerender();
+      view.rerender();
+
+      expect(channelTranscript().getAttribute("data-land-on")).toBe("post-a");
+      expect(channelTranscript().getAttribute("data-land-reports-miss")).toBe(
+        "true",
+      );
+    });
+
+    it("hands the channel's transcript no landing once the tab withdraws it", () => {
+      const view = mount({ openThreadPostId: null });
+      mountLanding = REPORTING;
+      view.rerender();
+      expect(channelTranscript().getAttribute("data-land-on")).toBe("post-a");
+
+      mountLanding = null;
+      view.rerender();
+
+      expect(channelTranscript().getAttribute("data-land-on")).toBe("none");
+    });
+
+    it("jumps again when the tab asks for the same message after withdrawing it", () => {
+      const view = mount({ openThreadPostId: null });
+      mountLanding = REPORTING;
+      view.rerender();
+      const firstVisit = Number(
+        channelTranscript().getAttribute("data-land-visit"),
+      );
+      mountLanding = null;
+      view.rerender();
+
+      mountLanding = { ...REPORTING, visit: 2 };
+      view.rerender();
+
+      expect(channelTranscript().getAttribute("data-land-on")).toBe("post-a");
+      expect(
+        Number(channelTranscript().getAttribute("data-land-visit")),
+      ).toBeGreaterThan(firstVisit);
+    });
+
+    describe("replaced by a landing on a message of a listed thread", () => {
+      const THREAD_LANDING: BotChannelLanding = {
+        messageId: "reply-a9",
+        sendPostId: null,
+        threadId: "thread-a",
+        visit: 2,
+      };
+
+      it("hands the channel's transcript no landing once the tab asks for the thread's message instead", () => {
+        const view = mount({ openThreadPostId: null });
+        mountLanding = REPORTING;
+        view.rerender();
+        expect(channelTranscript().getAttribute("data-land-on")).toBe("post-a");
+
+        mountLanding = THREAD_LANDING;
+        view.rerender();
+
+        expect(channelTranscript().getAttribute("data-land-on")).toBe("none");
+      });
+
+      it("keeps handing it a landing that reports no miss", () => {
+        const view = mount({ openThreadPostId: null });
+        mountLanding = { ...REPORTING, reportsMiss: false };
+        view.rerender();
+
+        mountLanding = THREAD_LANDING;
+        view.rerender();
+
+        expect(channelTranscript().getAttribute("data-land-on")).toBe("post-a");
+        expect(channelTranscript().getAttribute("data-land-reports-miss")).toBe(
+          "false",
+        );
+      });
+
+      it("jumps again when the tab then asks for the same channel message", () => {
+        const view = mount({ openThreadPostId: null });
+        mountLanding = REPORTING;
+        view.rerender();
+        const firstVisit = Number(
+          channelTranscript().getAttribute("data-land-visit"),
+        );
+        mountLanding = THREAD_LANDING;
+        view.rerender();
+
+        mountLanding = { ...REPORTING, visit: 3 };
+        view.rerender();
+
+        expect(channelTranscript().getAttribute("data-land-on")).toBe("post-a");
+        expect(
+          Number(channelTranscript().getAttribute("data-land-visit")),
+        ).toBeGreaterThan(firstVisit);
+      });
+    });
   });
 
   it("lands the thread beside a channel that is already shown on the message the tab names after its mount", () => {

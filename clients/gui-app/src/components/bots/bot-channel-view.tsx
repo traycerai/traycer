@@ -272,7 +272,10 @@ function useThreadPanelLanding(
  * The landing the channel's own list takes: the one the channel mounted with,
  * then each the tab asks of it while it is shown (a tapped notification),
  * which arrives as a new `landOn` that no mount reads. Each is a new visit,
- * numbered past the memory links' own.
+ * numbered past the memory links' own. One that reports its miss is the
+ * tab's to withdraw: once the tab asks for nothing, or for a message of a
+ * thread instead, the list is shown none, so an answer arriving afterwards
+ * says nothing, and the visit it took stays counted.
  */
 function useChannelLanding(
   landOn: BotChannelLanding | null,
@@ -288,14 +291,19 @@ function useChannelLanding(
     setAsked(landOn);
     if (landOn !== null && landOn.threadId === null) {
       const { messageId, sendPostId } = landOn;
+      const reportsMiss = landOn.reportsMiss === true;
       setLanding((previous) => ({
         messageId,
         sendPostId,
         visit: (previous?.visit ?? 0) + 1,
+        reportsMiss,
       }));
     }
   }
-  return [landing, setLanding];
+  const withdrawn =
+    (landOn === null || landOn.threadId !== null) &&
+    landing?.reportsMiss === true;
+  return [withdrawn ? null : landing, setLanding];
 }
 
 /**
