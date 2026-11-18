@@ -8,15 +8,15 @@
  * unknown, a later refusal marked `notWritten` gives no text back: the send
  * stays unconfirmed, with Retry.
  *
- * A host that serves `bot.conversation.send@1.7` sets it on any failure of a
- * 1.7 send whose attempt it knows has no row, whatever the code: one raised
- * before the send reached its write, or one under the request's lock when
- * the store, read again under that lock, holds no row of the request. It
- * sets it too on an `E_BOT_SEND_CONFLICT` its lookup found before accepting
- * a send of any version that names its request. A failure after the row, one
- * whose re-read fails, and a conflict the row's own write found are never
- * marked. A host below 1.7 never sets it, so each of its errors leaves the
- * outcome unknown.
+ * A host that serves `bot.conversation.send@1.7` sets it on a failure of a
+ * send that carries a nonce when it knows the attempt has no row, whatever
+ * the code: one raised before the send reached its write, or one under the
+ * request's lock when the store, read again under that lock, holds no row of
+ * the request. It sets it too on an `E_BOT_SEND_CONFLICT` its lookup found
+ * before accepting a send of any version that names its request. A failure
+ * after the row, one whose re-read fails, and a conflict the row's own write
+ * found are never marked. A host below 1.7 never sets it, so each of its
+ * errors leaves the outcome unknown.
  */
 import { z } from "zod";
 import { lazySchema } from "./lazy-schema";
