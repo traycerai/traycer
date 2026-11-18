@@ -1430,6 +1430,7 @@ function useReportedMiss(args: {
     end();
     return;
   }
+  if (!paneVisible) return;
   if (located.status === "missing" && located.cause !== "unsupported") {
     end();
     setUnopened(pendingJump);

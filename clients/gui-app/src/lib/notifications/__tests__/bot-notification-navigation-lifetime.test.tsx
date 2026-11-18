@@ -278,6 +278,64 @@ describe("a bot notification activated while the tabs are still hydrating", () =
   );
 });
 
+describe("a bot notification activated while the tabs hydrate, once the surface has left its host and come back", () => {
+  function expectNothingOpened(
+    onResult: Mock<(outcome: "success" | "failure") => void>,
+  ): void {
+    expect(onResult.mock.calls).toEqual([["success"]]);
+    expect(navigateSpy).not.toHaveBeenCalled();
+    expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+    expect(useTracySurfaceStore.getState().botId).toBeNull();
+  }
+
+  it("is refused when the surface was bound to another host and then back to the first", () => {
+    __resetTabNavigationHydrationForTesting();
+    const onResult = vi.fn<(outcome: "success" | "failure") => void>();
+    activate("reply-1", onResult);
+
+    act(() => {
+      useTracySurfaceStore.getState().rebind("host-other");
+    });
+    act(() => {
+      useTracySurfaceStore.getState().rebind(HOST_ID);
+    });
+    hydrate();
+
+    expectNothingOpened(onResult);
+  });
+
+  it("is refused when the surface closed and was opened again on the same host", () => {
+    __resetTabNavigationHydrationForTesting();
+    const onResult = vi.fn<(outcome: "success" | "failure") => void>();
+    activate("reply-1", onResult);
+
+    act(() => {
+      useTracySurfaceStore.getState().closeSurface();
+    });
+    act(() => {
+      useTracySurfaceStore.getState().openSurface(HOST_ID);
+    });
+    hydrate();
+
+    expectNothingOpened(onResult);
+  });
+
+  it("opens as ever when the surface is bound to the host it is already on", () => {
+    __resetTabNavigationHydrationForTesting();
+    const onResult = vi.fn<(outcome: "success" | "failure") => void>();
+    activate("reply-1", onResult);
+
+    act(() => {
+      useTracySurfaceStore.getState().rebind(HOST_ID);
+    });
+    hydrate();
+
+    expect(onResult.mock.calls).toEqual([["success"]]);
+    expect(navigateSpy).toHaveBeenCalledTimes(1);
+    expect(landedMessages()).toEqual(["reply-1"]);
+  });
+});
+
 describe("two notifications of one bot activated while the tabs are hydrating", () => {
   it("navigates once, to the newer message, and the older one's cleanup does not clear it", () => {
     __resetTabNavigationHydrationForTesting();

@@ -73,12 +73,16 @@ beforeEach(() => {
 
 describe("a thread notification shown by the operating system", () => {
   it("hands back the bot, thread and message it was shown for", async () => {
-    const shown: NotificationShowRequest[] = [];
+    let resolveShown: (request: NotificationShowRequest) => void = () =>
+      undefined;
+    const shown = new Promise<NotificationShowRequest>((resolve) => {
+      resolveShown = resolve;
+    });
     displayNotificationRows(
       [rowFromHostEntry(replyEntry())],
       {
         showNotification: vi.fn((input: NotificationShowRequest) => {
-          shown.push(input);
+          resolveShown(input);
           return Promise.resolve<NotificationShowOutcome>("presented");
         }),
         playChime: vi.fn(),
@@ -87,12 +91,10 @@ describe("a thread notification shown by the operating system", () => {
       },
       null,
     );
-    await vi.waitFor(() => {
-      expect(shown).toHaveLength(1);
-    });
+    const request = await shown;
 
     // The shell relays the payload as plain data.
-    const handedBack: unknown = JSON.parse(JSON.stringify(shown[0].payload));
+    const handedBack: unknown = JSON.parse(JSON.stringify(request.payload));
     const route = routeOf(handedBack);
 
     expect(botOf(route)).toEqual(THREAD_TARGET);

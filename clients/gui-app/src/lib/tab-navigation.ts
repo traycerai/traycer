@@ -50,10 +50,9 @@ import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { HOME_TAB_REF, isHomePath } from "@/stores/tabs/kinds/home";
 import { isTracySurfaceOpen, TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
 import {
-  tracySurfaceHostId,
+  tracyLandingsRetired,
   useTracySurfaceStore,
 } from "@/stores/bots/tracy-surface-store";
-import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import {
   tabCommandCoordinator,
@@ -206,35 +205,19 @@ interface QueuedActivation {
   readonly intent: TabActivationIntent;
   readonly options: TabNavigationOptions | undefined;
   readonly tracyOrigin: StampedTracyOrigin | null;
-  readonly tracyAsk: TracyAsk | null;
+  /**
+   * How many times the Tracy surface had withdrawn its landings when an
+   * opening of it was asked for while the tabs were hydrating; null for any
+   * other opening. It runs once they are ready only if that count still
+   * stands: after another account signs in, or the surface moves to another
+   * host or closes, it was asked of something the app no longer shows, and
+   * the surface coming back to the same host does not bring its landing back.
+   */
+  readonly tracyAsk: number | null;
 }
 
-/**
- * The account and the surface host an opening of the Tracy surface was asked
- * under while the tabs were hydrating. It runs once they are ready only if
- * both still stand: after another account signs in, or the surface moves to
- * another host or closes, it was asked of something the app no longer shows.
- */
-interface TracyAsk {
-  readonly botLifetime: number;
-  readonly surfaceHostId: string | null;
-}
-
-function tracyAskOf(intent: TabActivationIntent): TracyAsk | null {
-  return intent.kind === "tracy"
-    ? {
-        botLifetime: currentBotLifetime(),
-        surfaceHostId: tracySurfaceHostId(),
-      }
-    : null;
-}
-
-function tracyAskStands(ask: TracyAsk | null): boolean {
-  return (
-    ask === null ||
-    (ask.botLifetime === currentBotLifetime() &&
-      ask.surfaceHostId === tracySurfaceHostId())
-  );
+function tracyAskStands(ask: number | null): boolean {
+  return ask === null || ask === tracyLandingsRetired();
 }
 
 interface QueuedExternal {
@@ -819,7 +802,7 @@ export class TabNavigationController {
         intent,
         options,
         tracyOrigin,
-        tracyAsk: tracyAskOf(intent),
+        tracyAsk: intent.kind === "tracy" ? tracyLandingsRetired() : null,
       };
       this.notifyPendingListeners();
       superseded?.options?.onRejected?.(

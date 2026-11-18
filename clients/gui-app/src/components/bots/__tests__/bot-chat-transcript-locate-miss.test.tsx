@@ -45,6 +45,8 @@ const mocks = vi.hoisted(() => ({
   /** What `chat.locateRow` answers, per ask. */
   locate: null as (() => Promise<ChatLocateRowResponse>) | null,
   asked: 0,
+  /** The params of each `chat.locateRow` read, in the order they were asked. */
+  locateParams: [] as object[],
   /** Renders of the hook's host that have committed, whichever read they carry. */
   commits: 0,
   /** The commit count when the transcript first rendered with a settled `chat.locateRow` read (success or error, nothing in flight). */
@@ -95,6 +97,7 @@ vi.mock("@/hooks/host/use-host-query", async (importOriginal) => {
           ],
           queryFn: () => {
             mocks.asked += 1;
+            mocks.locateParams.push(args.params);
             if (mocks.locate === null) throw new Error("no locate scripted");
             return mocks.locate();
           },
@@ -158,6 +161,12 @@ const THREAD_SURFACE: BotTranscriptSurface = {
 /** A message the transcript has not hydrated: the second of the conversation's two. */
 const TARGET = "other-1";
 const WINDOW_EPOCH = 0;
+const FOUND_ROW: ChatLocateRowResponse = {
+  found: true,
+  ordinal: 5,
+  epoch: WINDOW_EPOCH,
+};
+const ABSENT_ROW: ChatLocateRowResponse = { found: false };
 
 let requestTranscriptOrdinal: Mock<(ordinal: number | null) => void>;
 let store: UseBoundStore<StoreApi<LandingState>>;
@@ -226,6 +235,10 @@ function ordinalsRequested(): ReadonlyArray<number> {
   return requestTranscriptOrdinal.mock.calls.flatMap(([ordinal]) =>
     ordinal === null ? [] : [ordinal],
   );
+}
+
+function isRendered(messageId: string): boolean {
+  return document.querySelector(`[data-message-id="${messageId}"]`) !== null;
 }
 
 function flashing(messageId: string): boolean {
@@ -309,6 +322,7 @@ beforeEach(() => {
   landing = null;
   paneVisible = true;
   mocks.asked = 0;
+  mocks.locateParams = [];
   mocks.commits = 0;
   mocks.settledAt = null;
   mocks.locate = null;
@@ -343,10 +357,19 @@ describe("a landing that reports a miss, on a message the transcript has not hyd
       await waitFor(() => {
         expect(toast.error).toHaveBeenCalledTimes(1);
       });
+      expect(mocks.locateParams).toEqual([
+        expect.objectContaining({
+          chatId: CHAT_ID,
+          target: { kind: "message", messageId: TARGET },
+        }),
+      ]);
       expect(ordinalsRequested()).toEqual([]);
 
       carryTheRow();
       await settleLegendList();
+      await waitFor(() => {
+        expect(isRendered(TARGET)).toBe(true);
+      });
 
       expect(flashing(TARGET)).toBe(false);
       expect(ordinalsRequested()).toEqual([]);
@@ -383,6 +406,12 @@ describe("a landing that reports a miss, on a message the transcript has not hyd
     view.rerender();
     await answered();
 
+    expect(mocks.locateParams).toEqual([
+      expect.objectContaining({
+        chatId: CHAT_ID,
+        target: { kind: "message", messageId: TARGET },
+      }),
+    ]);
     expect(ordinalsRequested()).toEqual([5]);
     expect(toast.error).not.toHaveBeenCalled();
 
@@ -433,6 +462,13 @@ describe("a landing that does not report a miss", () => {
     view.rerender();
     await answered();
 
+    // The card of the send is asked for first, by the post that wrote it.
+    expect(mocks.locateParams[0]).toEqual(
+      expect.objectContaining({
+        chatId: CHAT_ID,
+        target: { kind: "receipt", messageId: "post-without-a-card" },
+      }),
+    );
     await waitFor(() => {
       expect(flashing("ask-1")).toBe(true);
     });
@@ -441,20 +477,22 @@ describe("a landing that does not report a miss", () => {
 });
 
 describe("a landing that reports a miss, while its locate is held", () => {
-  function holdLocate(): { readonly release: () => void } {
+  function holdLocate(response: ChatLocateRowResponse): {
+    readonly release: () => void;
+  } {
     let release: () => void = () => undefined;
     const held = new Promise<ChatLocateRowResponse>((resolve) => {
-      release = () => resolve({ found: true, ordinal: 5, epoch: WINDOW_EPOCH });
+      release = () => resolve(response);
     });
     mocks.locate = () => held;
     return { release };
   }
 
-  async function landAndHold(): Promise<{
+  async function landAndHold(response: ChatLocateRowResponse): Promise<{
     readonly view: { readonly rerender: () => void };
     readonly release: () => void;
   }> {
-    const held = holdLocate();
+    const held = holdLocate(response);
     const view = mountTranscript();
     await settleLegendList();
     landing = landingOf(TARGET, { reportsMiss: true, sendPostId: null });
@@ -467,7 +505,7 @@ describe("a landing that reports a miss, while its locate is held", () => {
 
   it("waits for the pane to show when the landing arrives while it is hidden, then requests the ordinal and lands on the exact row", async () => {
     paneVisible = false;
-    const held = holdLocate();
+    const held = holdLocate(FOUND_ROW);
     const view = mountTranscript();
     await settleLegendList();
     landing = landingOf(TARGET, { reportsMiss: true, sendPostId: null });
@@ -492,7 +530,22 @@ describe("a landing that reports a miss, while its locate is held", () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
-  it.each([
+  /** The pane shows again, with no new landing, and the transcript has rendered with it. */
+  async function paneShownAgain(view: {
+    readonly rerender: () => void;
+  }): Promise<void> {
+    paneVisible = true;
+    const before = mocks.commits;
+    act(() => {
+      view.rerender();
+    });
+    await waitFor(() => {
+      expect(mocks.commits).toBeGreaterThan(before);
+    });
+    await settleLegendList();
+  }
+
+  const DEPARTURES = [
     [
       "the landing is withdrawn",
       (view: { readonly rerender: () => void }) => {
@@ -507,20 +560,61 @@ describe("a landing that reports a miss, while its locate is held", () => {
         view.rerender();
       },
     ],
-  ])(
-    "requests no ordinal, lands nothing and says nothing when the host answers after %s",
+  ] as const;
+
+  it.each(DEPARTURES)(
+    "requests no ordinal and lands nothing when the host answers a found row after %s",
     async (_name, depart) => {
-      const held = await landAndHold();
+      const held = await landAndHold(FOUND_ROW);
 
       depart(held.view);
       held.release();
       await answeredAfterDeparture(held.view);
       carryTheRow();
-      await settleLegendList();
+      await paneShownAgain(held.view);
+      await waitFor(() => {
+        expect(isRendered(TARGET)).toBe(true);
+      });
 
       expect(ordinalsRequested()).toEqual([]);
       expect(flashing(TARGET)).toBe(false);
       expect(toast.error).not.toHaveBeenCalled();
     },
   );
+
+  it.each(DEPARTURES)(
+    "says nothing, now or when the pane shows again, when the host answers that it has no such row after %s",
+    async (_name, depart) => {
+      const held = await landAndHold(ABSENT_ROW);
+
+      depart(held.view);
+      held.release();
+      await answeredAfterDeparture(held.view);
+      expect(toast.error).not.toHaveBeenCalled();
+
+      await paneShownAgain(held.view);
+      expect(toast.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it("waits for the pane when the host answers that it has no such row while the pane has not yet shown, then says so once when it shows", async () => {
+    paneVisible = false;
+    const held = holdLocate(ABSENT_ROW);
+    const view = mountTranscript();
+    await settleLegendList();
+    landing = landingOf(TARGET, { reportsMiss: true, sendPostId: null });
+    view.rerender();
+    await waitFor(() => {
+      expect(mocks.asked).toBeGreaterThan(0);
+    });
+
+    held.release();
+    await answeredAfterDeparture(view);
+    expect(toast.error).not.toHaveBeenCalled();
+
+    await paneShownAgain(view);
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledTimes(1);
+    });
+  });
 });

@@ -225,6 +225,17 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
 const stagedLandings = new Map<string, BotTabLanding>();
 
 /**
+ * How many times the surface has withdrawn its landings. An opening asked
+ * for at one count has lost its landing at any later one, whether or not the
+ * surface is on the same host again.
+ */
+let landingsRetired = 0;
+
+export function tracyLandingsRetired(): number {
+  return landingsRetired;
+}
+
+/**
  * Withdraws every landing asked of the surface, staged or already its
  * channel's to spend. Each was asked for under one account, of one surface
  * host: once the account changes, the surface moves to another host or it
@@ -232,6 +243,7 @@ const stagedLandings = new Map<string, BotTabLanding>();
  * nothing of them to land.
  */
 function retireTracyLandings(): void {
+  landingsRetired += 1;
   stagedLandings.clear();
   useBotTabLandingStore.getState().clearAll();
 }
