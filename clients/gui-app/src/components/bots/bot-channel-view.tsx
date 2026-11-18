@@ -30,6 +30,7 @@ import type {
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
+import { threadOpenOf } from "@/lib/bots/bot-trunk-model";
 import type {
   BotRecord,
   BotReplyMode,
@@ -936,6 +937,9 @@ export function BotChannelView(props: {
     conversationId: channel?.conversationId ?? null,
     messageId: railThreadPostId,
   });
+  // The whole thread list (`bot.thread.list`, unpaged) is there: read, or
+  // kept through a failed read.
+  const listLoaded = listed !== undefined;
   const panelThread = useMemo((): BotThreadPanelThread => {
     const noticeOf = (view: BotReadFailing): BotReadNotice => ({
       view,
@@ -965,7 +969,10 @@ export function BotChannelView(props: {
     if (open !== null && open.sent !== null) {
       return { kind: "posted", threadId: open.sent.threadId, retry, sendable };
     }
-    if (open?.announcement === true) {
+    if (
+      open?.announcement === true ||
+      startsItsThread(anchorRow, listLoaded, sendable)
+    ) {
       return { kind: "unopened", retry, sendable };
     }
     // No thread to show: any failure of the list is drawn in its place.
@@ -983,6 +990,7 @@ export function BotChannelView(props: {
   }, [
     anchorRow,
     channelStale,
+    listLoaded,
     open,
     openThread,
     refetchThreads,
@@ -1794,6 +1802,27 @@ function followedUnwritten(
  * Channel row `messageId` as the channel's session holds it; `null` while
  * it holds none, or there is no session or row to read.
  */
+/**
+ * Whether a thread with no post sent from here opens on `anchorRow` as the
+ * box whose first reply starts it, as the row's Create thread does
+ * (`threadOpenOf`): a post the bot answered in the channel, or a row of the
+ * bot, once the whole thread list is there without its thread, and only
+ * where it takes a send. Until then, and for a row the binding takes no
+ * reply under, it waits for the list.
+ */
+function startsItsThread(
+  anchorRow: OpenMessage | null,
+  listLoaded: boolean,
+  sendable: boolean,
+): boolean {
+  return (
+    listLoaded &&
+    sendable &&
+    anchorRow !== null &&
+    threadOpenOf(anchorRow).announcement
+  );
+}
+
 function useChannelRow(input: {
   readonly botId: string;
   readonly hostId: string;

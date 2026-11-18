@@ -21,6 +21,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
+import { conversationSendChatOf } from "@/hooks/bots/use-bot-mutations";
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
 import {
   useChatLocateRowAnswer,
@@ -218,14 +219,6 @@ const newestSendByClient = new WeakMap<QueryClient, Map<string, number>>();
 const sendLedgerListeners = new Set<() => void>();
 const CONVERSATION_SEND_KEY = hashKey(botMutationKeys.conversationSend());
 
-function conversationIdOf(variables: unknown): string | null {
-  if (typeof variables !== "object" || variables === null) return null;
-  if (!("conversationId" in variables)) return null;
-  return typeof variables.conversationId === "string"
-    ? variables.conversationId
-    : null;
-}
-
 /** The ledger of `queryClient`, which listens to its mutation cache from its first read. */
 function sendLedgerOf(queryClient: QueryClient): Map<string, number> {
   const existing = newestSendByClient.get(queryClient);
@@ -239,7 +232,7 @@ function sendLedgerOf(queryClient: QueryClient): Map<string, number> {
     if (hashKey(mutation.options.mutationKey ?? []) !== CONVERSATION_SEND_KEY) {
       return;
     }
-    const chatId = conversationIdOf(mutation.state.variables);
+    const chatId = conversationSendChatOf(mutation.state.variables);
     if (chatId === null) return;
     if ((ledger.get(chatId) ?? -1) >= mutation.mutationId) return;
     ledger.set(chatId, mutation.mutationId);

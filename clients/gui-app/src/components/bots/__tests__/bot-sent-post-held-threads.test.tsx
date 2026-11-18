@@ -566,16 +566,26 @@ describe("a place restored after the bot answered in the channel while the memor
 
   /** The stored row of the post, under the id its thread was opened on, in words other than the ones sent. */
   function storedRow(messageId: string): Message {
-    return memberPost({
+    const post = memberPost({
       messageId,
       requestId: "req-stored",
       lines: [STORED_TEXT],
       timestamp: 1_000,
       resolvedBy: null,
     });
+    // The host stores a post the bot answered in the channel as `direct`.
+    return {
+      ...post,
+      conversationRequest: {
+        requestId: "req-stored",
+        resolvedAt: null,
+        resolvedByMessageId: null,
+        direct: true,
+      },
+    };
   }
 
-  it("shows that post's thread as opened by hand, its origin the stored row with no mark and no Retry, and does not close it", async () => {
+  it("opens the box that starts the post's thread, its origin the stored row with no mark and no Retry, and does not close it", async () => {
     const route = await mountSurfaceOnRouteAs(USER_A, queryClient);
     await sendHeld(TEXT_A);
     await routeNames(route, "thread");
@@ -619,10 +629,12 @@ describe("a place restored after the bot answered in the channel while the memor
     expect(origin.textContent).not.toContain(TEXT_A);
     expect(within(origin).queryByText(/Not confirmed/)).toBeNull();
     expect(within(origin).queryByRole("button", { name: "Retry" })).toBeNull();
-    // The thread list names no thread for the post, so the panel is the post
-    // with its thread loading and no box to reply in.
-    expect(within(panel).getByTestId("bot-thread-loading")).toBeDefined();
-    expect(within(panel).queryByTestId("bot-thread-composer")).toBeNull();
+    // The post the bot answered in the channel has no thread: the panel is
+    // the post over the box that starts one.
+    expect(
+      within(panel).getByRole("group", { name: "Reply in a new thread" }),
+    ).toBeDefined();
+    expect(within(panel).queryByTestId("bot-thread-loading")).toBeNull();
   });
 });
 

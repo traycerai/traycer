@@ -22,6 +22,8 @@ import type {
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
 import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
+import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
+import { threadOpenOf } from "@/lib/bots/bot-trunk-model";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ChatBotMessage } from "@/components/chat/chat-bot-message";
@@ -439,6 +441,13 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
         // listed or sent here names either, ends: its thread closes.
         const unwritten =
           absent && props.thread.kind === "pending" && sent === null && !held;
+        // A post whose row says the bot answered it in the channel, while
+        // the thread its Send opened still waits on the send's answer.
+        const answeredInChannel = channelAnsweredSendOf(
+          post,
+          sent,
+          originMessageId,
+        );
         return (
           <>
             {unwritten ? (
@@ -447,6 +456,12 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
                 anchorMessageId={originMessageId}
               />
             ) : null}
+            {answeredInChannel === null ? null : (
+              <SettleChannelAnsweredPost
+                botId={props.botId}
+                requestId={answeredInChannel}
+              />
+            )}
             {origin === null ? null : (
               <ThreadOriginPost
                 {...props}
@@ -473,6 +488,46 @@ function CloseUnwrittenPostThread(props: {
   useEffect(() => {
     closeUnwrittenPostThread(botId, anchorMessageId);
   }, [anchorMessageId, botId]);
+  return null;
+}
+
+/**
+ * The send whose post's own thread, opened at Send, still waits on its
+ * answer while the post's stored row says the bot answered it in the
+ * channel (`direct`, read through `threadOpenOf`): a send whose row arrived
+ * before its answer, or that was left unconfirmed, hears none. `null` for
+ * any other post.
+ */
+function channelAnsweredSendOf(
+  post: OpenMessage | null,
+  sent: BotSentPost | null,
+  originMessageId: string,
+): string | null {
+  if (post === null || sent === null || !sent.provisional) return null;
+  if (conversationRequestMessageId(sent.requestId) !== originMessageId) {
+    return null;
+  }
+  return threadOpenOf(post).announcement ? sent.requestId : null;
+}
+
+/**
+ * Settles the thread a post's Send opened as the bot's answer in the
+ * channel does (`settleSentThread`): out of the rail, recorded over the
+ * entry. The row is the host's, so the post was written.
+ */
+function SettleChannelAnsweredPost(props: {
+  readonly botId: string;
+  readonly requestId: string;
+}): null {
+  const { botId, requestId } = props;
+  useEffect(() => {
+    settleSentThread(
+      botId,
+      requestId,
+      { kind: "answered", threadId: null, delivery: "written" },
+      currentBotLifetime(),
+    );
+  }, [botId, requestId]);
   return null;
 }
 

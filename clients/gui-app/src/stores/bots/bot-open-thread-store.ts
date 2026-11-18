@@ -4,6 +4,7 @@ import {
   retireAtBotLifetimeEdge,
 } from "@/lib/bots/bot-lifetime";
 import { useTracyPlaceStore } from "@/stores/bots/tracy-place-store";
+import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BotConversationSendDelivery,
@@ -383,7 +384,9 @@ export type BotSentThreadSettlement =
  * (T249), found by that request wherever the rail holds it: shown, or behind
  * memory, a pair's log or a search (`heldThreadsOf`). The host's answer is
  * what holds: the thread it names, or none where the bot answered in the
- * channel, and a refusal opened none. A thread the person closed or replaced
+ * channel, and a refusal opened none: a post's own thread leaves the rail,
+ * and one a reply started under a row goes back to its box. A thread the
+ * person closed or replaced
  * since is held nowhere, and nothing moves. Answers whether the rail shows
  * the thread, so its panel says the send's delivery. `lifetime` is the bot
  * lifetime the send was pressed in: an answer heard after it ended settles
@@ -406,15 +409,19 @@ export function settleSentThread(
   const sent = held?.thread.sent ?? null;
   if (held === undefined || sent === null) return false;
   const { thread } = held;
+  // The post's own thread, opened as the post was sent, or one a reply
+  // started under a row the channel already has.
+  const ownPost =
+    thread.anchorMessageId === conversationRequestMessageId(sent.requestId);
   const threadId = settlement.kind === "answered" ? settlement.threadId : null;
   if (settlement.kind === "refused" || threadId === null) {
-    // An announcement's box stays open to start its thread; a post's own
+    // A reply's box stays open to start its thread again; a post's own
     // thread was never opened, and taking it out of the rail, wherever it
     // sits, is nobody's own move: the route records it over its entry.
-    if (!thread.announcement) useTracyPlaceStore.getState().markAutomaticMove();
+    if (ownPost) useTracyPlaceStore.getState().markAutomaticMove();
     setRail(
       botId,
-      held.replace(thread.announcement ? { ...thread, sent: null } : null),
+      held.replace(ownPost ? null : { ...thread, sent: null }),
       lifetime,
     );
     return false;

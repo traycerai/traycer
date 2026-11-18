@@ -214,9 +214,35 @@ interface BotConversationSendContext {
   readonly hostId: string | null;
 }
 
-/** A member's message and who it goes out as, fixed at the press. */
-interface BotConversationSendVariables {
+/**
+ * What every `bot.conversation.send` mutation carries in its variables, a
+ * member's box's and a call's: the request it sends.
+ */
+export interface BotConversationSendMutationVariables {
   readonly request: BotConversationSendRequest;
+}
+
+/**
+ * The chat a `bot.conversation.send` mutation sent to, read off the mutation
+ * cache's untyped variables; `null` for any other shape. Its type is the
+ * variables both send hooks share, so reshaping them fails to compile here
+ * rather than counting no send.
+ */
+export function conversationSendChatOf(
+  variables: unknown,
+): BotConversationSendMutationVariables["request"]["conversationId"] | null {
+  if (typeof variables !== "object" || variables === null) return null;
+  if (!("request" in variables)) return null;
+  const { request } = variables;
+  if (typeof request !== "object" || request === null) return null;
+  if (!("conversationId" in request)) return null;
+  return typeof request.conversationId === "string"
+    ? request.conversationId
+    : null;
+}
+
+/** A member's message and who it goes out as, fixed at the press. */
+interface BotConversationSendVariables extends BotConversationSendMutationVariables {
   readonly sentAs: BotSentAs;
 }
 
@@ -308,7 +334,7 @@ export function useBotConversationSendMutation(
 }
 
 /** A call's send, the host it goes to and the account whose call it is. */
-export interface BotCallSendVariables {
+export interface BotCallSendVariables extends BotConversationSendMutationVariables {
   readonly hostId: string;
   /** The account signed in when the call started; `null` owns no call. */
   readonly account: string | null;
@@ -318,7 +344,6 @@ export interface BotCallSendVariables {
    * session.
    */
   readonly authority: VoiceCallAuthority | null;
-  readonly request: BotConversationSendRequest;
 }
 
 /**

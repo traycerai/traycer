@@ -1718,6 +1718,48 @@ describe("<BotChannelView /> a first post into a channel the host has not create
     ).toBe(1);
   });
 
+  it("subscribes the session again once for an accepted first post, and never again for repeated closes or a remount", async () => {
+    const session = await mountChannelNotCreatedYet();
+    pressSend(TEXT);
+    await waitFor(() => expect(sends).toHaveLength(1));
+
+    await act(async () => {
+      firstSend().resolve(null);
+      await Promise.resolve();
+    });
+
+    expect(
+      session.resubscribes(),
+      "an accepted first post did not subscribe the session again",
+    ).toBe(1);
+    // The host answers every subscribe that the channel is still not there.
+    act(() => {
+      session.store.setState({
+        connectionStatus: "closed",
+        fatalClose: NOT_VISIBLE,
+      });
+    });
+    act(() => {
+      session.store.setState({
+        connectionStatus: "closed",
+        fatalClose: { ...NOT_VISIBLE },
+      });
+    });
+    unmountChannel();
+    remountChannel();
+    act(() => {
+      session.store.setState({
+        connectionStatus: "closed",
+        fatalClose: { ...NOT_VISIBLE },
+      });
+    });
+
+    expect(
+      session.resubscribes(),
+      "repeated closes or a remount subscribed the session again",
+    ).toBe(1);
+  });
+
   it("hands an accepted first post off to the host's stored row under the same id: one row, the stored one", async () => {
     const session = await mountChannelNotCreatedYet();
     pressSend(TEXT);

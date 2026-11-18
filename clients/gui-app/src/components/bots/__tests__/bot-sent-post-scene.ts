@@ -5,6 +5,7 @@
  * still being imported, so everything it reaches is here and imports nothing
  * of the app but types.
  */
+import { useSyncExternalStore } from "react";
 import { vi } from "vitest";
 import type {
   HostClient,
@@ -13,6 +14,7 @@ import type {
 import type { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type {
   BotConversationSendRequest,
+  BotThreadAnchors,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -65,6 +67,10 @@ export const scene = {
   channelHandle: null as ChatSessionStoreHandle | null,
   threadHandle: null as ChatSessionStoreHandle | null,
   threads: [] as BotThreadSummary[],
+  /** Whether the thread list has answered; `false` reads as no data yet. */
+  threadListLoaded: true,
+  /** The rows the bound host opens their own thread under, as its thread list says. */
+  threadAnchors: null as BotThreadAnchors | null,
   /** Every commit of the surface, in order. */
   commits: [] as DomReading[],
   /** The `thread.kind` the real thread panel was rendered with, in order. */
@@ -146,13 +152,33 @@ export const botConversationListMock = {
   }),
 };
 
+const threadListListeners = new Set<() => void>();
+let threadListVersion = 0;
+
+/** Tells the mounted thread list that `scene.threads`, its loaded state or its anchors moved. */
+export function threadListChanged(): void {
+  threadListVersion += 1;
+  for (const listener of [...threadListListeners]) listener();
+}
+
 export const botThreadListChannelMock = {
-  useBotThreadListQuery: () => ({
-    data: { threads: scene.threads, threadAnchors: null },
-    isError: false,
-    isFetching: false,
-    refetch: vi.fn(),
-  }),
+  useBotThreadListQuery: () => {
+    useSyncExternalStore(
+      (listener) => {
+        threadListListeners.add(listener);
+        return () => threadListListeners.delete(listener);
+      },
+      () => threadListVersion,
+    );
+    return {
+      data: scene.threadListLoaded
+        ? { threads: scene.threads, threadAnchors: scene.threadAnchors }
+        : undefined,
+      isError: false,
+      isFetching: !scene.threadListLoaded,
+      refetch: vi.fn(),
+    };
+  },
 };
 
 export const notificationMarkReadMock = {

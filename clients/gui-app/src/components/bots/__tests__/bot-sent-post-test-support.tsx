@@ -352,6 +352,8 @@ export function startCase(
     store: createChannelStore([]),
   } as ChatSessionStoreHandle;
   scene.threads = [];
+  scene.threadListLoaded = true;
+  scene.threadAnchors = null;
   scene.locate = { status: "waiting" };
   scene.commits = [];
   scene.panelKinds = [];
