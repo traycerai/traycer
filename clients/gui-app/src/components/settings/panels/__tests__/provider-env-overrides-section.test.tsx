@@ -1178,6 +1178,49 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         });
       });
 
+      it("keeps the spinner up and the rows disabled through Use everywhere's save and the clearing of the computer's own value", async () => {
+        renderClaudeEnvTab(
+          { localOverrides: [ownBaseUrl(OWN_URL)], secrets: [] },
+          SHARED_URL,
+        );
+        const releaseSave = holdWrite(mocks.setOverrideMutate);
+        const clearing =
+          Promise.withResolvers<ConfigEnvLocalOverrideResponse>();
+        clearOverride.mockImplementationOnce(() => clearing.promise);
+        const valueField = (): HTMLInputElement =>
+          screen.getByLabelText<HTMLInputElement>(
+            "Value for ANTHROPIC_BASE_URL",
+          );
+        fireEvent.click(
+          await screen.findByRole("button", { name: "Use everywhere" }),
+        );
+
+        await waitFor(() => expect(spinnerShown()).toBe(true));
+        expect(valueField().disabled).toBe(true);
+        await releaseSave();
+        // The save has landed; the computer's own value is still being cleared.
+        await waitFor(() => expect(clearOverride).toHaveBeenCalledTimes(1));
+        expect(spinnerShown()).toBe(true);
+        expect(valueField().disabled).toBe(true);
+
+        await act(async () => {
+          clearing.resolve({ outcome: "saved", overrides: [] });
+          await clearing.promise;
+        });
+        await waitFor(() => expect(spinnerShown()).toBe(false));
+        await waitFor(() => expect(valueField().disabled).toBe(false));
+      });
+
+      it("says Couldn't save this variable. when the write fails with something that is not an Error", async () => {
+        renderProviderEnvTab("cursor", []);
+        mocks.setOverrideMutate.mockRejectedValueOnce("refused");
+        await typeVariable(REREAD_VARIABLE, "https://example.invalid");
+
+        const failure = await within(variablesSection()).findByRole("alert");
+        expect(failure.textContent).toBe("Couldn't save this variable.");
+        expect(spinnerShown()).toBe(false);
+      });
+
       it("shows the red failure line, with no spinner, when the write fails, and drops it when the next save starts", async () => {
         renderProviderEnvTab("cursor", []);
         mocks.setOverrideMutate.mockRejectedValueOnce(

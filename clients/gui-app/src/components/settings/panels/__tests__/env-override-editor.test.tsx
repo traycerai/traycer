@@ -224,6 +224,32 @@ describe("EnvOverrideEditor", () => {
       expect(screen.queryByRole("status")).toBeNull();
     });
 
+    // The editor's catch takes whatever the caller threw, and only a caller
+    // that wraps it hands back an Error.
+    it.each([
+      { reason: "a string", rejection: "refused" },
+      { reason: "nothing", rejection: undefined },
+    ])(
+      "says Couldn't save this variable. when the save fails with $reason",
+      async ({ rejection }) => {
+        const onCommit = vi.fn<EnvCommit>().mockRejectedValueOnce(rejection);
+        renderEditor({
+          overrides: [],
+          onCommit,
+          onDelete: vi.fn<EnvDelete>(),
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Add a variable" }));
+        fireEvent.change(screen.getByLabelText("New variable name"), {
+          target: { value: "ANTHROPIC_BASE_URL" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+
+        expect((await screen.findByRole("alert")).textContent).toBe(
+          "Couldn't save this variable.",
+        );
+      },
+    );
+
     it("clears the red line when the next save starts", async () => {
       const retry = Promise.withResolvers<void>();
       const onCommit = vi
