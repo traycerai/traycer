@@ -1224,8 +1224,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
       // model). A degraded / unavailable entry just browses the rail - the
       // panel shows its reauth / setup CTA, no commit. Nor does a provider
       // whose Terminal login is signed out beside two or more signed-in
-      // profiles: the person picks one. Nor does a provider a team sandbox
-      // does not offer: the panel says so.
+      // profiles (the person picks), nor one a team sandbox does not offer.
       const entry = railEntries.find(
         (candidate) => candidate.harness.id === providerId,
       );

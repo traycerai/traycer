@@ -1,11 +1,7 @@
 /**
- * A click on a provider's rail tab while its Terminal login is signed out.
- *
- * With exactly one enabled, signed-in managed profile the click commits that
- * profile; with two or more it only browses and commits nothing; with none
- * the tab is dimmed and commits nothing. Renders the whole `HarnessModelPicker`
- * with the host-backed hooks mocked at their boundaries, as
- * `team-sandbox-harness-rail.test.tsx` does.
+ * A click on a provider's rail tab while its Terminal login is signed out: one
+ * signed-in managed profile commits, two or more only browse, none dims the
+ * tab.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -44,8 +40,7 @@ const mocks = vi.hoisted(() => ({
   providers: [] as ProviderCliState[],
 }));
 
-// Its host-options read needs the runner-host provider; the mention it draws
-// is not what a click commits.
+// Mocked: its host-options read needs the runner-host provider.
 vi.mock("@/components/home/pickers/terminal-account-first-mention", () => ({
   TerminalAccountFirstMention: () => null,
 }));
@@ -185,8 +180,7 @@ vi.mock("react-virtuoso", () => ({
   ),
 }));
 
-// The picker's cloud read of Traycer's models, made only when a sandbox
-// refusal opens it; nothing here opens one.
+// Read only when a sandbox refusal opens it; nothing here does.
 vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
   useSandboxTraycerModels: () => ({
     data: undefined,
@@ -348,7 +342,6 @@ function installCatalog(): void {
   );
 }
 
-/** Claude Code with its Terminal login signed out and the given managed rows. */
 function claudeWithSignedOutTerminal(
   managed: ReadonlyArray<{
     readonly profileId: string;

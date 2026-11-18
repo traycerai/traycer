@@ -412,10 +412,7 @@ function disconnectAnswer(
   return json(200, { disconnected: deleted });
 }
 
-/**
- * Mirrors authn in the internal repository: managed-profile-projection.ts,
- * harness-binding-cas.ts, harness-connections.ts and families.ts.
- */
+/** Mirrors authn in the internal repository: managed-profile-projection.ts, harness-binding-cas.ts, harness-connections.ts, families.ts. */
 function modelAuthn(
   family: ModelledFamily,
 ): (request: EnvironmentTransportRequest) => EnvironmentTransportAnswer {

@@ -1482,9 +1482,8 @@ export function useProviderDestinationLoginFlow(
               });
               return;
             }
-            // The host refused the account as held by the environment: its
-            // own sentence is the answer, not the generic did-not-finish
-            // line.
+            // The host's own sentence answers a refusal as held by the
+            // environment.
             if (
               error instanceof HostRpcError &&
               error.code === "environment-managed"
