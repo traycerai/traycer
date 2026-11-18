@@ -1099,6 +1099,7 @@ describe("<BotThreadPanel /> a listed thread", () => {
     const group = screen.getByRole("group", { name: "Choices" });
 
     await user.dblClick(within(group).getByRole("button", { name: "Hold" }));
+    expect(sent).toEqual([{ ...HOLD_PICK, replyTo: offered.messageId }]);
     const settled = Promise.withResolvers<void>();
     const stopWatching = panelQueryClient
       .getMutationCache()
@@ -1107,11 +1108,14 @@ describe("<BotThreadPanel /> a listed thread", () => {
           event.type === "updated" ? event.mutation.state.status : null;
         if (status === "success" || status === "error") settled.resolve();
       });
-    land(SEND_RESPONSE);
-    await act(async () => {
-      await settled.promise;
-    });
-    stopWatching();
+    try {
+      land(SEND_RESPONSE);
+      await act(async () => {
+        await settled.promise;
+      });
+    } finally {
+      stopWatching();
+    }
 
     expect(sent).toEqual([{ ...HOLD_PICK, replyTo: offered.messageId }]);
   });
