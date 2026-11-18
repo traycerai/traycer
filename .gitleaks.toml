@@ -147,6 +147,8 @@ paths = [
   '''^clients/gui-app/src/components/settings/panels/__tests__/provider-env-overrides-section\.test\.tsx$''',
   '''^clients/gui-app/src/components/settings/secrets/__tests__/secret-remove-preview-computers\.test\.tsx$''',
   '''^clients/gui-app/src/components/settings/secrets/__tests__/secret-remove-preview\.test\.tsx$''',
+  '''^clients/gui-app/src/components/settings/environment/__tests__/environment-mcp-servers\.test\.tsx$''',
+  '''^clients/gui-app/src/components/settings/secrets/__tests__/secrets-page-own-environment-authn\.test\.tsx$''',
   '''^clients/gui-app/src/components/settings/secrets/__tests__/replace-dialog-and-versions-edges\.test\.tsx$''',
   '''^clients/gui-app/src/providers/__tests__/support-environment-bridge\.test\.tsx$''',
   '''^clients/gui-app/src/components/settings/personal/__tests__/shell-credential-question\.test\.tsx$''',
@@ -171,15 +173,3 @@ paths = [
   '''^clients/desktop/src/electron-main/ipc/__tests__/runner-ipc\.test\.ts$''',
 ]
 regexes = ['''^TRAYCER_API_KEY_PRIVACY_CANARY_7a56d9$''']
-
-[[allowlists]]
-description = "EnvironmentSecretV12 type annotations on secret-row fixtures in two gui-app settings suites (main 8ee8415d) - `const OWNED_MCP_SECRET: EnvironmentSecretV12 = {` and siblings, which the generic-api-key rule matches only because the constant's name contains SECRET and the type name follows the colon, the same identifier false positive as the scrollStateKey and scopeKey entries above. A type name, never a credential. The fixtures are now built by a typed function, but `gitleaks git` reads full history, so the declarations already on main still need this. Path-scoped to the two suites and the exact declaration shape."
-condition = "AND"
-regexTarget = "line"
-paths = [
-  '''^clients/gui-app/src/components/settings/environment/__tests__/environment-mcp-servers\.test\.tsx$''',
-  '''^clients/gui-app/src/components/settings/secrets/__tests__/secrets-page-own-environment-authn\.test\.tsx$''',
-]
-regexes = [
-  '''const (?:OWNED_MCP_|EXTERNAL_MCP_)?SECRET: EnvironmentSecretV12 = \{''',
-]
