@@ -249,6 +249,7 @@ function ProviderProfileSignInDialog({
   );
   const [emailRevealed, setEmailRevealed] = useState(false);
   const finalizeAttemptRef = useRef<string | null>(null);
+  const completedHandledRef = useRef(false);
   // Keep the committed name through recolor completion and retry, which still
   // receive the profile snapshot from before naming.
   const [namingCommittedProfile, setNamingCommittedProfile] =
@@ -402,16 +403,15 @@ function ProviderProfileSignInDialog({
       onOpenChange(false);
       return;
     }
-    if (
-      flow.state.kind === "completed" &&
-      finalizeAttemptRef.current !== flow.state.profileId
-    ) {
-      finalizeAttemptRef.current = flow.state.profileId;
+    if (flow.state.kind === "completed") {
+      if (completedHandledRef.current) return;
+      completedHandledRef.current = true;
       onFailedAttempt(null);
-      onProfileCreated(flow.state.profileId);
+      if (flow.state.profileId !== null) onProfileCreated(flow.state.profileId);
       onOpenChange(false);
       return;
     }
+    completedHandledRef.current = false;
     if (
       flow.state.kind !== "identity" ||
       flow.state.existingProfileId !== null ||
