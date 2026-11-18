@@ -86,6 +86,7 @@ import {
 } from "@/lib/composer/tiptap-json-content";
 import { botMemberText } from "@/lib/bots/bot-member-text";
 import { isRenderableSubAgentBlock } from "@/lib/chat/subagent-blocks";
+import { groupArtifactFolderChanges } from "@/lib/chat/artifact-folder-bundles";
 import {
   isTransientLiveAssistantMessageId,
   transientLiveAssistantMessageId,
@@ -97,6 +98,7 @@ import type {
   ChatMessage as ChatMessageModel,
   ChatMessageRunState,
   ChatMessageStoppedInfo,
+  ArtifactChangeEntry,
   ArtifactChangeRow,
   ChatMessageSteerBadge,
   FileChangeSegment,
@@ -4481,7 +4483,11 @@ function objectArtifactInsertionIndex(
   return insertion;
 }
 
-/** Deferred creation cards belong beside activity, before the closing reply. */
+/**
+ * HTML and canvas create / update cards can be emitted after the turn's later
+ * blocks (HTML ones at turn end), so they move back beside the activity that
+ * wrote them, before the closing reply.
+ */
 function placeObjectArtifactCards(
   blocks: ReadonlyArray<OpenContentBlock>,
 ): ReadonlyArray<OpenContentBlock> {
@@ -4489,7 +4495,7 @@ function placeObjectArtifactCards(
   for (const block of blocks) {
     if (
       block.type !== "artifact_operation" ||
-      block.operation !== "create" ||
+      block.operation === "delete" ||
       (block.kind !== "html" && block.kind !== "canvas")
     ) {
       ordered.push(block);
@@ -4597,13 +4603,14 @@ function buildAssistantSegments(
 }
 
 // Artifact rows for a turn's "Changes" group, from the manifest's tagged
-// entries (one entry per artifact index.md). One row per artifact, carrying the
-// merged before/after hashes for a click → diff.
-function artifactChangeRowsFromManifest(
+// entries: one row per markdown or file artifact, and one bundle per html or
+// canvas artifact holding each of its changed files with its merged
+// before/after hashes for a click → diff.
+function artifactChangeEntriesFromManifest(
   manifest: TurnCheckpointManifest | null,
-): ArtifactChangeRow[] {
+): ReadonlyArray<ArtifactChangeEntry> {
   if (manifest === null) return [];
-  return manifest.entries.flatMap((entry) => {
+  const rows = manifest.entries.flatMap((entry): ArtifactChangeRow[] => {
     if (!entry.artifact) return [];
     // A net-zero artifact (touched but left byte-identical this turn) is not a
     // change - drop it so the "Changes" group matches the Undo modal / restore,
@@ -4621,6 +4628,11 @@ function artifactChangeRowsFromManifest(
       },
     ];
   });
+  return groupArtifactFolderChanges(rows, (row) => ({
+    artifactId: row.artifactId,
+    kind: row.artifactKind,
+    title: row.title,
+  }));
 }
 
 function isSubagentChildSegment(
@@ -5111,10 +5123,10 @@ function groupFileChangeRuns(
   // Artifact rows come from the manifest's tagged entries (no inline
   // file_change segments exist for artifacts), so a turn that only touched
   // artifacts still gets a "Changes" group.
-  const artifactRows = artifactChangeRowsFromManifest(
+  const artifactEntries = artifactChangeEntriesFromManifest(
     checkpointView?.manifest ?? null,
   );
-  if (files.length === 0 && artifactRows.length === 0) {
+  if (files.length === 0 && artifactEntries.length === 0) {
     return flat;
   }
   // The aggregated "Changes" block only appears once the turn completes; while
@@ -5130,25 +5142,32 @@ function groupFileChangeRuns(
   // same file are merged into a single row whose diff spans the first edit's
   // pre-state to the last edit's post-state.
   const realChanges = mergeFileChangesByPath(files.filter(isRealFileChange));
-  if (realChanges.length === 0 && artifactRows.length === 0) {
+  if (realChanges.length === 0 && artifactEntries.length === 0) {
     return flat;
   }
   const groupId =
     realChanges.length > 0
       ? realChanges[0].id
-      : (checkpointView?.manifest.checkpointId ?? artifactRows[0].filePath);
+      : (checkpointView?.manifest.checkpointId ??
+        artifactEntryFilePath(artifactEntries[0]));
   return [
     ...flat,
     {
       id: `${groupId}:group`,
       kind: "file_change_group",
       files: realChanges,
-      artifacts: artifactRows,
+      artifacts: artifactEntries,
       checkpointManifest: checkpointView?.manifest ?? null,
       hasLaterOverlappingChanges:
         checkpointView?.hasLaterOverlappingChanges ?? false,
     },
   ];
+}
+
+function artifactEntryFilePath(entry: ArtifactChangeEntry): string {
+  return entry.kind === "single"
+    ? entry.item.filePath
+    : entry.members[0].item.filePath;
 }
 
 function fileChangesFromSegment(segment: MessageSegment): FileChangeSegment[] {
