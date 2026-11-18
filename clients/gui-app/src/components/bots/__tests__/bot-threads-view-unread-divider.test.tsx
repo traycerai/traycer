@@ -45,12 +45,14 @@ import {
 } from "./bot-channel-rows-test-support";
 import { mocks } from "./bot-threads-view-state";
 import {
+  foregroundWindow,
+  intersectTarget,
+} from "@/components/bots/__tests__/bot-read-observer-test-support";
+import {
   card,
   drawnReplies,
   FOLLOWING,
-  foregroundWindow,
   installBotThreadsViewCaseLifecycle,
-  intersectTarget,
   listed,
   mount,
   readRow,

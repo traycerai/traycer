@@ -10,6 +10,7 @@ import {
   openChatEventSchema,
   openChatEventSchemaPreProviderSelection,
   openMessageSchema,
+  openMessageSchemaPreFeedbackOrigin,
   openMessageSchemaPreConversationImages,
   openMessageSchemaPreFeedbackDraft,
   openMessageSchemaPreSlack,
@@ -22,7 +23,7 @@ import {
   openMessageSchemaPreDelivery,
 } from "@traycer/protocol/host/agent/gui/open-harness-wire";
 import {
-  messageSchema,
+  messageSchemaPreFeedbackOrigin,
   messageSchemaPreMessageDelivery,
   messageSchemaPreBrowser,
   messageSchemaPreFallback,
@@ -783,7 +784,7 @@ export const chatTranscriptWindowSchemaPreProviderSelection = lazySchema(() =>
     rowIds: z.array(z.string()).optional(),
     /** Rows whose required record set is incomplete in this tail. */
     incompleteRowIds: z.array(z.string()).optional(),
-    messages: z.array(messageSchema),
+    messages: z.array(messageSchemaPreFeedbackOrigin),
     events: z.array(chatEventSchemaPreProviderSelection),
     /**
      * What the tail's rows render WITH, by row id - see
@@ -860,13 +861,19 @@ export const openChatTranscriptWindowSchemaPreFeedbackDraft = lazySchema(() =>
   }),
 );
 /**
- * Provider dispatch provenance and a resume trigger's images first ride
- * chat.subscribe@1.44.
+ * The tail `chat.subscribe@1.44` ships: provider dispatch provenance and a
+ * resume trigger's images, no feedback draft projection or origin.
  */
-export const openChatTranscriptWindowSchema = lazySchema(() =>
+export const openChatTranscriptWindowSchemaPreFeedbackOrigin = lazySchema(() =>
   openChatTranscriptWindowSchemaPreProviderSelection.extend({
-    messages: z.array(openMessageSchema),
+    messages: z.array(openMessageSchemaPreFeedbackOrigin),
     events: z.array(openChatEventSchema),
+  }),
+);
+/** The live tail: `chat.subscribe@1.45` adds the feedback draft leaves. */
+export const openChatTranscriptWindowSchema = lazySchema(() =>
+  openChatTranscriptWindowSchemaPreFeedbackOrigin.extend({
+    messages: z.array(openMessageSchema),
   }),
 );
 export type OpenChatTranscriptWindow = z.infer<
@@ -1180,7 +1187,7 @@ export const chatRangeResponseSchemaPreProviderSelection = lazySchema(() =>
      * parallel array to `rowIds`. A turn's records appear once however many of
      * its slices are in the span.
      */
-    messages: z.array(messageSchema),
+    messages: z.array(messageSchemaPreFeedbackOrigin),
     events: z.array(chatEventSchemaPreProviderSelection),
     /**
      * What the served rows render WITH, by row id.
@@ -1285,13 +1292,20 @@ export const openChatRangeResponseSchemaPreProviderSelection = lazySchema(() =>
   }),
 );
 /**
- * Provider dispatch provenance and a resume trigger's images first ride
- * chat.subscribe@1.44.
+ * The range response `chat.subscribe@1.44` ships: provider dispatch
+ * provenance and a resume trigger's images, no feedback draft projection or
+ * origin.
  */
-export const openChatRangeResponseSchema = lazySchema(() =>
+export const openChatRangeResponseSchemaPreFeedbackOrigin = lazySchema(() =>
   openChatRangeResponseSchemaPreProviderSelection.extend({
-    messages: z.array(openMessageSchema),
+    messages: z.array(openMessageSchemaPreFeedbackOrigin),
     events: z.array(openChatEventSchema),
+  }),
+);
+/** The live range response: `chat.subscribe@1.45` adds the feedback draft leaves. */
+export const openChatRangeResponseSchema = lazySchema(() =>
+  openChatRangeResponseSchemaPreFeedbackOrigin.extend({
+    messages: z.array(openMessageSchema),
   }),
 );
 export type OpenChatRangeResponse = z.infer<typeof openChatRangeResponseSchema>;

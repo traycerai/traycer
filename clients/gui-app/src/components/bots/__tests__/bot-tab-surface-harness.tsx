@@ -285,6 +285,7 @@ export function resetBotTabSurfaceMocks(): void {
   mocks.state.listAppearance = new Map();
   mocks.state.mainBotIds = null;
   mocks.state.support = true;
+  mocks.state.threadListSupport = "inherit";
   mocks.state.onboardingSupport = true;
   mocks.state.onboardingVersion = { major: 1, minor: 1 };
   mocks.state.readAt = 1_000;

@@ -1,5 +1,6 @@
 import { BotUnreadPageNavigationContext } from "@/components/bots/bot-unread-boundary";
 import {
+  use,
   useCallback,
   useContext,
   useEffect,
@@ -39,7 +40,11 @@ import {
   BotQueuedNotice,
   BotSendFailedNotice,
 } from "@/components/bots/bot-channel-notices";
-import { BotReadFailure } from "@/components/bots/bot-read-failure";
+import {
+  BotReadNoticeView,
+  type BotReadNotice,
+} from "@/components/bots/bot-read-failure";
+import { BotThreadBoxWaitsContext } from "@/components/bots/bot-thread-box-waits-context";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
 import { useBotReplyingTurn } from "@/hooks/bots/use-bot-replying-turn";
 import { BotTaskList } from "@/components/bots/bot-task-list";
@@ -99,6 +104,12 @@ import {
  * or direct reply nobody has replied under; or unknown, because the read
  * failed.
  *
+ * `retry` is the list's read failing, as the panel says it: a line over what
+ * the list last returned, or in place of the thread's state when it returned
+ * nothing (`BotReadNoticeView`). `null` while it is not failing, or while the
+ * channel beside the panel already says the same. A `failed` thread's notice
+ * is the state drawn in place of the thread.
+ *
  * `sendable` says whether a thread with a box takes a send - a reply, a
  * picked option, a retry or an edit: `false` while its post is a row of the
  * bot the bot's binding does not open a thread under, or one not read yet.
@@ -108,28 +119,24 @@ export type BotThreadPanelThread =
   | {
       readonly kind: "listed";
       readonly thread: BotThreadSummary;
-      /**
-       * The list's last read failed, and this is what it returned before:
-       * Retry reads it again. `null` while it has not failed.
-       */
-      readonly retry: (() => void) | null;
+      /** The list's read failing over what it last returned, which stays. */
+      readonly retry: BotReadNotice | null;
       readonly sendable: boolean;
     }
   | {
       readonly kind: "posted";
       readonly threadId: string;
-      /** The list's read failed: Retry reads it again. `null` while it has not. */
-      readonly retry: (() => void) | null;
+      readonly retry: BotReadNotice | null;
       readonly sendable: boolean;
     }
   | { readonly kind: "pending" }
   | {
       readonly kind: "unopened";
       /** As for `posted`: the box and its draft stay through a failed read. */
-      readonly retry: (() => void) | null;
+      readonly retry: BotReadNotice | null;
       readonly sendable: boolean;
     }
-  | { readonly kind: "failed"; readonly retry: () => void };
+  | { readonly kind: "failed"; readonly retry: BotReadNotice };
 
 /**
  * Where a thread's post, replies and box are drawn: in the panel beside the
@@ -764,6 +771,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
     botId,
     originMessageId,
   );
+  const boxWaits = use(BotThreadBoxWaitsContext);
   // The box's slot keeps the picker its reading view opens, so a pick
   // outlives the read.
   const picker = useHeldDropPicker(hold);
@@ -787,6 +795,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
       <UnlistedThread
         origin={origin}
         thread={thread}
+        hostId={props.hostId}
         sendFailure={props.sendFailure}
         layout={props.layout}
         conversationId={props.conversationId}
@@ -794,6 +803,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
     );
   }
   const box = boxOf(thread, props.originMessageId, props.conversationId);
+  const boxSendable = thread.sendable && !boxWaits;
   return (
     <>
       {box.threadId === null ? (
@@ -804,7 +814,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
           >
             {origin}
           </ThreadPostScroll>
-          <ThreadListReadFailure retry={thread.retry} />
+          <ThreadListReadFailure notice={thread.retry} hostId={props.hostId} />
         </>
       ) : (
         <KnownThread
@@ -833,7 +843,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
           conversationId={box.conversationId}
           threadId={box.threadId}
           announcementId={box.announcementId}
-          sendable={thread.sendable}
+          sendable={boxSendable}
           imageReach={props.imageReach}
           placeholder="Reply…"
           label={edit === null ? box.label : IN_THREAD_LABEL}
@@ -942,7 +952,7 @@ function KnownThread(
     readonly origin: ReactNode;
     readonly threadId: string;
     readonly listed: BotThreadSummary | null;
-    readonly retry: (() => void) | null;
+    readonly retry: BotReadNotice | null;
     readonly sendable: boolean;
     /** Edit on a failed message: its text goes in the panel's box. */
     readonly onEdit: (edit: BotComposerEdit) => void;
@@ -956,6 +966,7 @@ function KnownThread(
     hostId,
     boundHostId,
     answerReach,
+    replyReach,
     botTitle,
     conversationId,
     originMessageId,
@@ -1069,13 +1080,15 @@ function KnownThread(
   // A reply's option, clicked, is the person's next message in the thread:
   // offered only while no earlier pick is still being sent and the thread
   // takes a send, and a pick that fails says so where a failed message does.
+  // Where the bot's host takes replies, it replies to the reply that offered
+  // it (T357).
   const surface = useMemo(
     () => ({
       kind: "thread" as const,
       chooseOption:
         sending || !sendable
           ? null
-          : (choice: string) => {
+          : (messageId: string | null, choice: string) => {
               clearSendFailure();
               send(
                 {
@@ -1087,6 +1100,9 @@ function KnownThread(
                   redeliver: null,
                   supersedes: null,
                   answer: null,
+                  ...(replyReach === "delivered" && messageId !== null
+                    ? { replyTo: messageId }
+                    : {}),
                 },
                 { onError: () => failSend(null) },
               );
@@ -1116,6 +1132,7 @@ function KnownThread(
       onReply,
       originMessageId,
       opening,
+      replyReach,
       send,
       sendable,
       sending,
@@ -1159,7 +1176,7 @@ function KnownThread(
           {origin}
         </ThreadPostScroll>
       )}
-      <ThreadListReadFailure retry={retry} />
+      <ThreadListReadFailure notice={retry} hostId={hostId} />
       {listed === null ? null : (
         <div
           className={cn(
@@ -1265,17 +1282,18 @@ function useThreadOpening(
   return { opening, ref, highlighted };
 }
 
-/** A failed read of the thread list, with Retry; nothing while it has not failed. */
+/** The thread list's read failing, with Retry; nothing while it is not. */
 function ThreadListReadFailure(props: {
-  readonly retry: (() => void) | null;
+  readonly notice: BotReadNotice | null;
+  readonly hostId: string;
 }): ReactNode {
-  if (props.retry === null) return null;
+  if (props.notice === null) return null;
   return (
     <div className="shrink-0 px-4 pt-2">
-      <BotReadFailure
-        message="Couldn't load this thread."
-        onRetry={props.retry}
-        testId="bot-thread-error"
+      <BotReadNoticeView
+        notice={props.notice}
+        surface="thread"
+        hostId={props.hostId}
       />
     </div>
   );
@@ -1291,6 +1309,7 @@ function UnlistedThread(props: {
     BotThreadPanelThread,
     { readonly kind: "pending" | "failed" }
   >;
+  readonly hostId: string;
   readonly sendFailure: BotSendFailure;
   readonly layout: BotThreadLayout;
   /** The channel's conversation, which holds the post. */
@@ -1312,10 +1331,10 @@ function UnlistedThread(props: {
         </ThreadPostScroll>
         {sendFailed}
         <div className="p-4">
-          <BotReadFailure
-            message="Couldn't load this thread."
-            onRetry={props.thread.retry}
-            testId="bot-thread-error"
+          <BotReadNoticeView
+            notice={props.thread.retry}
+            surface="thread"
+            hostId={props.hostId}
           />
         </div>
       </>
