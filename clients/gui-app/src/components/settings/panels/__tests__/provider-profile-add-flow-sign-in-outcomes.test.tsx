@@ -476,7 +476,7 @@ describe("Add a profile around one sign-in", () => {
     ).toBeNull();
   });
 
-  it("reads whether the computer offers sign-ins again when the Add dialog reopens", async () => {
+  it("rereads sign-in offers when the Add dialog reopens", async () => {
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
