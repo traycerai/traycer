@@ -1799,10 +1799,6 @@ function followedUnwritten(
 }
 
 /**
- * Channel row `messageId` as the channel's session holds it; `null` while
- * it holds none, or there is no session or row to read.
- */
-/**
  * Whether a thread with no post sent from here opens on `anchorRow` as the
  * box whose first reply starts it, as the row's Create thread does
  * (`threadOpenOf`): a post the bot answered in the channel, or a row of the
@@ -1823,6 +1819,10 @@ function startsItsThread(
   );
 }
 
+/**
+ * Channel row `messageId` as the channel's session holds it; `null` while
+ * it holds none, or there is no session or row to read.
+ */
 function useChannelRow(input: {
   readonly botId: string;
   readonly hostId: string;
