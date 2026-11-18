@@ -1,4 +1,5 @@
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import type { SelectionAuthorityClient } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import {
   createInProcessSelectionAuthority,
   inertLocalHostOutageSignal,
@@ -19,7 +20,10 @@ import {
  * suites that render through `HostRuntimeProvider` get a real derivation
  * instead of the always-refused inert double - see the doc comment below.
  */
-function createDefaultLocalSelectionAuthority(localHostId: string) {
+function createDefaultLocalSelectionAuthority(localHostId: string): {
+  readonly client: SelectionAuthorityClient;
+  readonly republish: () => void;
+} {
   const fleet = new InMemoryHostFleetSource({
     revision: 0,
     identityGeneration: 0,
@@ -40,7 +44,19 @@ function createDefaultLocalSelectionAuthority(localHostId: string) {
   fleet.publish(identity.current().generation, localHostId, [
     { hostId: localHostId, kind: "local" as const, teamOwned: false },
   ]);
-  return mount.client;
+  return {
+    client: mount.client,
+    // What a real shell's fleet refresh does when its read succeeds: publish
+    // the fleet it read, here the one this authority already serves.
+    republish: () => {
+      const current = fleet.snapshot();
+      fleet.publish(
+        current.identityGeneration,
+        current.localHostId,
+        current.hosts,
+      );
+    },
+  };
 }
 
 /**
@@ -52,6 +68,7 @@ function createDefaultLocalSelectionAuthority(localHostId: string) {
 export function createFakeRunnerHost(
   overrides: Partial<IRunnerHost>,
 ): IRunnerHost {
+  const authority = createDefaultLocalSelectionAuthority("fake-local-host");
   const base: IRunnerHost = {
     browserView: null,
     sandboxArtifacts: null,
@@ -67,10 +84,14 @@ export function createFakeRunnerHost(
     listRegisteredHosts: () =>
       Promise.resolve({ kind: "network-error" as const }),
     // The membership announcement the renderer makes when it observes a fleet
-    // change (redesign P1.2 F6). Result-free and idempotent by contract, so
-    // the inert default is the honest one; a test that cares overrides it to
-    // republish its own snapshot, exactly as a real shell does.
-    refreshHostFleet: () => Promise.resolve(),
+    // change (redesign P1.2 F6). It republishes the default authority's own
+    // fleet, so `published` is true of that authority; a test that overrides
+    // `selectionAuthority` overrides this with it, exactly as a real shell
+    // pairs the two.
+    refreshHostFleet: () => {
+      authority.republish();
+      return Promise.resolve({ kind: "published" as const });
+    },
     // `null` = this shell owns no registry cadence, so a consumer keeps its own
     // timer. The same answer the browser/dev topology gives.
     onRegisteredHostsChange: () => null,
@@ -216,7 +237,11 @@ export function createFakeRunnerHost(
     onNetworkPathChanged: () => ({ dispose: () => undefined }),
     // Voice is off for a shell with no server behind it: the dormant answers.
     getVoiceAvailability: () =>
-      Promise.resolve({ kind: "ok" as const, available: false }),
+      Promise.resolve({
+        kind: "ok" as const,
+        available: false,
+        voiceSelection: null,
+      }),
     mintVoiceSession: () => Promise.resolve({ kind: "dormant" as const }),
     endVoiceSession: () =>
       Promise.resolve({ kind: "ok" as const, closedAt: null }),
@@ -239,7 +264,7 @@ export function createFakeRunnerHost(
     // host instead of silently binding nothing. A test that wants NO
     // authority (e.g. to assert the detached/superseded UI) passes
     // `createInertSelectionAuthorityClient()` through `overrides` instead.
-    selectionAuthority: createDefaultLocalSelectionAuthority("fake-local-host"),
+    selectionAuthority: authority.client,
     zoom: null,
     // Desktop-shaped by default; a phone-shaped test passes its own
     // `pushPermission` double through `overrides`.

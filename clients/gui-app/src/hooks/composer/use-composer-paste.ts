@@ -10,6 +10,7 @@ import {
 } from "react";
 import type { Editor } from "@tiptap/core";
 import { closeHistory } from "@tiptap/pm/history";
+import { Selection } from "@tiptap/pm/state";
 import { v4 as uuidv4 } from "uuid";
 import type { IFileDropHost } from "@traycer-clients/shared/platform/runner-host";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -305,7 +306,7 @@ async function filesToImageAttrs(
   signal: AbortSignal,
   session: ImagePreparationSession,
 ): Promise<ComposerImageConversionResult> {
-  // This base64 ingest serves only chat / new-conversation surfaces.
+  // This base64 ingest serves only Tracy's message box.
   const trackRejected = (): void => {
     Analytics.getInstance().track(AnalyticsEvent.AttachmentRejected, {
       kind: "image",
@@ -350,7 +351,7 @@ async function filesToImageAttrs(
  * `release` (when supplied) is capacity a surface reserved across the
  * conversion writes above (landing's hash-only ingest) - `runImageIngest`
  * below calls it exactly once, only AFTER `insertAttrs` has run (or thrown),
- * never earlier. A surface with no such reservation (chat / new-conversation,
+ * never earlier. A surface with no such reservation (Tracy's message box,
  * whose base64 ingest owns no budget) simply omits it.
  */
 export interface ComposerImageConversionResult<Attrs = ImageAttachmentAttrs> {
@@ -454,9 +455,65 @@ export interface UseComposerPasteResult {
   isAttachingFiles: boolean;
 }
 
+/** A drop's or a pick's entries, taken at its event and held for a surface (T386). */
+export interface HeldFileTransfer {
+  readonly files: ReadonlyArray<File>;
+  readonly fileUrlPaths: ReadonlyArray<string>;
+}
+
+/**
+ * What a held transfer came to once its surface took it (T386): `settled`
+ * once its images were inserted or refused and the rest went the surface's
+ * file route, `interrupted` where none of it was taken because the surface
+ * went or no longer owned it as its images would land, so it can be taken
+ * again whole.
+ */
+export type HeldTransferOutcome = "settled" | "interrupted";
+
+/** Where and while a surface takes a held transfer's images (T386). */
+export interface HeldImagePlacement<Attrs> {
+  /** Puts the prepared images where held ones go; how many it took. */
+  readonly insert: (attrs: ReadonlyArray<Attrs>) => number;
+  /** Whether the surface still owns the transfer, read as its images would land. */
+  readonly stillOwned: () => boolean;
+}
+
+/** A surface's entry for a drop or a pick taken earlier and held for it (T386). */
+export interface ComposerHeldTransferIngest<Attrs = ImageAttachmentAttrs> {
+  /**
+   * Takes `transfer` as a drop of it would be taken, through the same
+   * admission, preparation, pending accounting and refusals, its images put
+   * where `placement` puts them, only while it says the surface owns them;
+   * its other entries go the file route only once its images are in or
+   * refused, so an interrupted transfer is taken again whole and nothing of
+   * it twice.
+   */
+  readonly attachHeldTransfer: (
+    transfer: HeldFileTransfer,
+    placement: HeldImagePlacement<Attrs>,
+  ) => Promise<HeldTransferOutcome>;
+}
+
+/** Where image attachments go: at the caret, or after everything the document holds. */
+export type ImageAttachmentPlace = "caret" | "end";
+
+const NO_FOLDERS: ReadonlySet<File> = new Set();
+
 interface ComposerDragState {
   readonly depth: number;
   readonly overlayVariant: FileTransferDragOverlayVariant | null;
+}
+
+/**
+ * Whether a drag event is over the zone's own DOM. A layer portalled out of
+ * the zone (a dialog, a menu) bubbles to the zone's handlers through React
+ * without being in it, and a drop there is not the zone's.
+ */
+export function dragIsInZone(
+  zone: HTMLElement | null,
+  target: EventTarget | null,
+): boolean {
+  return zone !== null && target instanceof Node && zone.contains(target);
 }
 
 const IDLE_COMPOSER_DRAG_STATE: ComposerDragState = {
@@ -793,11 +850,120 @@ async function resolveAndInsertNativeClipboardFilePaths(input: {
 }
 
 /**
+ * A drop zone's file-drag affordance: which overlay a file drag over the zone
+ * shows, from the transfer's type names, until the drag leaves or drops. The
+ * composer's paste events use it, and so does a zone that holds a drop for a
+ * composer not there yet (a Tracy box still reading its draft's images, T386).
+ */
+export function useComposerDragAffordance(): {
+  readonly onDragEnter: (event: DragEvent<HTMLElement>) => void;
+  readonly onDragLeave: (event: DragEvent<HTMLElement>) => void;
+  readonly onDragOver: (event: DragEvent<HTMLElement>) => void;
+  /** Ends the affordance: a drop does, before anything decides whose it is. */
+  readonly endDrag: () => void;
+  readonly isDragging: boolean;
+  /** The overlay a file drag over the zone shows; `null` while none is over it. */
+  readonly overlayVariant: FileTransferDragOverlayVariant | null;
+} {
+  const [dragState, setDragState] = useState<ComposerDragState>(
+    IDLE_COMPOSER_DRAG_STATE,
+  );
+  // The outermost element the handlers are on, as the drag entered it or,
+  // with no dragenter, first crossed it.
+  const dragZoneRef = useRef<HTMLElement | null>(null);
+
+  const onDragOver = useCallback((event: DragEvent<HTMLElement>) => {
+    if (!dragIsInZone(event.currentTarget, event.target)) return;
+    const overlayVariant = classifyFileTransferDrag(event.dataTransfer);
+    if (overlayVariant === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "copy";
+    // The editor's own dragover, inside the zone, never takes its place.
+    const zone = dragZoneRef.current;
+    if (zone === null || !zone.contains(event.currentTarget)) {
+      dragZoneRef.current = event.currentTarget;
+    }
+    setDragState((state) => {
+      // A drag already over the zone when these handlers took it (a Tracy box
+      // swapped for its reading view mid-drag, T386) is sent no dragenter:
+      // its next dragover starts the affordance, as the drop would be taken.
+      if (state.depth === 0) return { depth: 1, overlayVariant };
+      if (state.overlayVariant === overlayVariant) return state;
+      return { ...state, overlayVariant };
+    });
+  }, []);
+
+  const draggingOverZone = dragState.depth > 0;
+  // A zone that is hidden or loses its content under the pointer is sent no
+  // dragleave, so the affordance also ends when the drag is next seen outside
+  // the zone, and when it ends anywhere.
+  useEffect(() => {
+    if (!draggingOverZone) return;
+    const end = (): void => setDragState(IDLE_COMPOSER_DRAG_STATE);
+    const endOutsideZone = (event: Event): void => {
+      if (!dragIsInZone(dragZoneRef.current, event.target)) end();
+    };
+    window.addEventListener("dragover", endOutsideZone, true);
+    window.addEventListener("drop", end, true);
+    window.addEventListener("dragend", end, true);
+    return () => {
+      window.removeEventListener("dragover", endOutsideZone, true);
+      window.removeEventListener("drop", end, true);
+      window.removeEventListener("dragend", end, true);
+    };
+  }, [draggingOverZone]);
+
+  const onDragEnter = useCallback((event: DragEvent<HTMLElement>) => {
+    if (!dragIsInZone(event.currentTarget, event.target)) return;
+    const overlayVariant = classifyFileTransferDrag(event.dataTransfer);
+    if (overlayVariant === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragZoneRef.current = event.currentTarget;
+    setDragState((state) => ({
+      depth: state.depth + 1,
+      overlayVariant,
+    }));
+  }, []);
+
+  const onDragLeave = useCallback((event: DragEvent<HTMLElement>) => {
+    if (!dragIsInZone(event.currentTarget, event.target)) return;
+    if (classifyFileTransferDrag(event.dataTransfer) === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setDragState((state) => {
+      const depth = Math.max(0, state.depth - 1);
+      if (depth === state.depth) return state;
+      return {
+        depth,
+        overlayVariant: depth === 0 ? null : state.overlayVariant,
+      };
+    });
+  }, []);
+
+  const endDrag = useCallback(() => {
+    setDragState(IDLE_COMPOSER_DRAG_STATE);
+  }, []);
+
+  return {
+    onDragEnter,
+    onDragLeave,
+    onDragOver,
+    endDrag,
+    isDragging: draggingOverZone,
+    overlayVariant: draggingOverZone ? dragState.overlayVariant : null,
+  };
+}
+
+/**
  * Drag/drop/paste plumbing shared by every composer surface. The image ingest
  * (base64 vs hash-only) is delegated to `imageIngest`/`insertAttrs`; image
- * filtering + the 5MB cap belong to the ingest via `collectImages`. Surfaces
- * wrap this with their own ingest: `useComposerPasteAdapter` (base64) for
- * chat / new-conversation, `useLandingComposerPaste` (hash-only) for landing.
+ * filtering and the source ceiling belong to the ingest via `collectImages`.
+ * Surfaces wrap this with their own ingest: `useComposerPasteAdapter` (base64)
+ * for Tracy's message box, `useComposerHashPasteAdapter` (hash-only) for the
+ * chat surfaces, `useLandingComposerPaste` (hash-only) for landing and
+ * `useArtifactImagePaste` for artifacts.
  * Non-image file/URL entries resolve through `filePaths`, while images keep
  * their existing independent ingest behavior.
  */
@@ -809,7 +975,7 @@ export function useComposerPasteEvents<Attrs>(args: {
     | ComposerImageInsertionFactory<Attrs>
     | undefined;
   readonly fileAttach: ComposerFileAttachArgs | null;
-}): UseComposerPasteResult {
+}): UseComposerPasteResult & ComposerHeldTransferIngest<Attrs> {
   const {
     imageIngest,
     insertAttrs,
@@ -817,9 +983,8 @@ export function useComposerPasteEvents<Attrs>(args: {
     captureImageInsertion,
     fileAttach,
   } = args;
-  const [dragState, setDragState] = useState<ComposerDragState>(
-    IDLE_COMPOSER_DRAG_STATE,
-  );
+  const drag = useComposerDragAffordance();
+  const { endDrag } = drag;
   const [pendingImageCount, setPendingImageCount] = useState(0);
   const [pendingPathCount, setPendingPathCount] = useState(0);
   const [pendingFileCount, setPendingFileCount] = useState(0);
@@ -874,6 +1039,42 @@ export function useComposerPasteEvents<Attrs>(args: {
       );
     },
     [captureImageInsertion, imageIngest, insertAttrs, trackPendingImageJob],
+  );
+
+  const attachHeldImages = useCallback(
+    (
+      files: ReadonlyArray<File>,
+      placement: HeldImagePlacement<Attrs>,
+    ): Promise<HeldTransferOutcome> =>
+      new Promise((resolve) => {
+        let inserted = false;
+        let withheld = false;
+        const insertion: ComposerImageInsertion<Attrs> = {
+          insert: (attrs) => {
+            // Checked as the prepared batch would land, so a hold taken
+            // elsewhere meanwhile is never inserted twice.
+            if (!placement.stillOwned()) {
+              withheld = true;
+              return 0;
+            }
+            inserted = true;
+            return placement.insert(attrs);
+          },
+          release: () => undefined,
+        };
+        trackPendingImageJob(async (signal) => {
+          try {
+            await runImageIngest(files, signal, imageIngest, insertion);
+          } finally {
+            resolve(
+              !inserted && (withheld || signal.aborted)
+                ? "interrupted"
+                : "settled",
+            );
+          }
+        });
+      }),
+    [imageIngest, trackPendingImageJob],
   );
 
   // Admits `files` and attaches them through `insert`, the fence the gesture
@@ -1049,15 +1250,12 @@ export function useComposerPasteEvents<Attrs>(args: {
     });
   }, [filePaths, refuseUntypedEntries]);
 
-  const dispatchFileTransfer = useCallback(
+  const attachNonImages = useCallback(
     (
-      files: ReadonlyArray<File>,
+      nonImageFiles: ReadonlyArray<File>,
       fileUrlPaths: ReadonlyArray<string>,
       folders: ReadonlySet<File>,
     ) => {
-      const imageFiles = files.filter(isImageFile);
-      const nonImageFiles = files.filter(isNonImageFile);
-      if (imageFiles.length > 0) attachImageFiles(imageFiles);
       if (filePaths.pathsReachTarget) {
         attachFilePaths(nonImageFiles, fileUrlPaths, folders);
       } else {
@@ -1069,11 +1267,49 @@ export function useComposerPasteEvents<Attrs>(args: {
     },
     [
       attachFilePaths,
-      attachImageFiles,
       attachWithoutPaths,
       fileAttach,
       filePaths.pathsReachTarget,
     ],
+  );
+
+  const dispatchFileTransfer = useCallback(
+    (
+      files: ReadonlyArray<File>,
+      fileUrlPaths: ReadonlyArray<string>,
+      folders: ReadonlySet<File>,
+    ) => {
+      const imageFiles = files.filter(isImageFile);
+      if (imageFiles.length > 0) attachImageFiles(imageFiles);
+      attachNonImages(files.filter(isNonImageFile), fileUrlPaths, folders);
+    },
+    [attachImageFiles, attachNonImages],
+  );
+
+  const attachHeldTransfer = useCallback(
+    async (
+      transfer: HeldFileTransfer,
+      placement: HeldImagePlacement<Attrs>,
+    ): Promise<HeldTransferOutcome> => {
+      const imageFiles = transfer.files.filter(isImageFile);
+      let outcome: HeldTransferOutcome;
+      if (imageFiles.length > 0) {
+        outcome = await attachHeldImages(imageFiles, placement);
+      } else {
+        outcome = placement.stillOwned() ? "settled" : "interrupted";
+      }
+      if (outcome === "settled") {
+        // Folders were refused or walked when the transfer was taken; none
+        // is held.
+        attachNonImages(
+          transfer.files.filter(isNonImageFile),
+          transfer.fileUrlPaths,
+          NO_FOLDERS,
+        );
+      }
+      return outcome;
+    },
+    [attachHeldImages, attachNonImages],
   );
 
   const onPaste = useCallback(
@@ -1097,53 +1333,15 @@ export function useComposerPasteEvents<Attrs>(args: {
     [attachNativeClipboardFilePaths, dispatchFileTransfer],
   );
 
-  const onDragOver = useCallback((event: DragEvent<HTMLElement>) => {
-    const overlayVariant = classifyFileTransferDrag(event.dataTransfer);
-    if (overlayVariant === null) return;
-    event.preventDefault();
-    event.stopPropagation();
-    event.dataTransfer.dropEffect = "copy";
-    setDragState((state) => {
-      if (state.depth === 0 || state.overlayVariant === overlayVariant) {
-        return state;
-      }
-      return { ...state, overlayVariant };
-    });
-  }, []);
-
-  const onDragEnter = useCallback((event: DragEvent<HTMLElement>) => {
-    const overlayVariant = classifyFileTransferDrag(event.dataTransfer);
-    if (overlayVariant === null) return;
-    event.preventDefault();
-    event.stopPropagation();
-    setDragState((state) => ({
-      depth: state.depth + 1,
-      overlayVariant,
-    }));
-  }, []);
-
-  const onDragLeave = useCallback((event: DragEvent<HTMLElement>) => {
-    if (classifyFileTransferDrag(event.dataTransfer) === null) return;
-    event.preventDefault();
-    event.stopPropagation();
-    setDragState((state) => {
-      const depth = Math.max(0, state.depth - 1);
-      if (depth === state.depth) return state;
-      return {
-        depth,
-        overlayVariant: depth === 0 ? null : state.overlayVariant,
-      };
-    });
-  }, []);
-
   const onDrop = useCallback(
     (event: DragEvent<HTMLElement>) => {
+      if (!dragIsInZone(event.currentTarget, event.target)) return;
       // Drag-enter can only inspect the transfer's type names, so an ordinary
       // HTTPS URI is intentionally shown as potentially file-like until its
       // payload is readable here. A drop does not reliably emit dragleave,
       // therefore it must always clear the affordance before deciding whether
       // this hook owns the content.
-      setDragState(IDLE_COMPOSER_DRAG_STATE);
+      endDrag();
       if (!hasClaimableFileTransfer(event.dataTransfer)) return;
       event.preventDefault();
       event.stopPropagation();
@@ -1156,20 +1354,21 @@ export function useComposerPasteEvents<Attrs>(args: {
         findDroppedFolders(event.dataTransfer, files),
       );
     },
-    [dispatchFileTransfer],
+    [dispatchFileTransfer, endDrag],
   );
 
-  const overlayVariant = dragState.depth > 0 ? dragState.overlayVariant : null;
+  const overlayVariant = drag.overlayVariant;
   return {
     onPaste,
     onDrop,
-    onDragOver,
-    onDragEnter,
-    onDragLeave,
+    onDragOver: drag.onDragOver,
+    onDragEnter: drag.onDragEnter,
+    onDragLeave: drag.onDragLeave,
     attachImageFiles,
+    attachHeldTransfer,
     attachFiles,
     runPendingImageJob: trackPendingImageJob,
-    isDraggingFiles: dragState.depth > 0,
+    isDraggingFiles: drag.isDragging,
     dragOverlayVariant:
       overlayVariant === null || filePaths.pathsReachTarget
         ? overlayVariant
@@ -1181,14 +1380,20 @@ export function useComposerPasteEvents<Attrs>(args: {
 }
 
 /**
- * Base64 paste adapter for chat / new-conversation: accepted files are read as
- * base64 (`filesToImageAttrs`) and inserted as inline `b64content` nodes. This
- * is the behavior every non-landing surface relies on — do NOT change it.
+ * Base64 paste adapter for Tracy's message box: accepted files are read as
+ * base64 (`filesToImageAttrs`) and inserted as inline `b64content` nodes. The
+ * box sends each image's bytes from that inline content and refuses a node
+ * without it, so the images this adapter inserts stay inline.
+ *
+ * `admitImages` sees every image a paste, a drop or a pick hands the adapter,
+ * before the source ceiling and before a byte is read: only what it returns
+ * is read.
  */
 export function useComposerPasteAdapter(
   insertAttrs: (attrs: ReadonlyArray<ImageAttachmentAttrs>) => number,
   filePaths: ComposerFilePathIngestArgs,
-): UseComposerPasteResult {
+  admitImages: (files: ReadonlyArray<File>) => ReadonlyArray<File>,
+): UseComposerPasteResult & ComposerHeldTransferIngest {
   // One session per mount: each `attachImageFiles` call is its own background
   // job and they do not await one another, so the session is what keeps two
   // pastes into the same composer from decoding at the same time.
@@ -1199,7 +1404,7 @@ export function useComposerPasteAdapter(
   const imageIngest = useMemo(
     (): ComposerImageIngest => ({
       convert: (files, signal) =>
-        filesToImageAttrs(files, signal, preparationSession),
+        filesToImageAttrs(admitImages(files), signal, preparationSession),
       onSettled: (accepted) => {
         accepted.forEach(() => {
           Analytics.getInstance().track(AnalyticsEvent.AttachmentAdded, {
@@ -1229,7 +1434,7 @@ export function useComposerPasteAdapter(
         );
       },
     }),
-    [preparationSession],
+    [admitImages, preparationSession],
   );
   return useComposerPasteEvents({
     imageIngest,
@@ -1469,9 +1674,8 @@ async function hashImageAttrsFromFiles(
 }
 
 /**
- * Hash-only paste adapter for the three chat surfaces. A sibling of
- * {@link useComposerPasteAdapter}, which stays exactly as it is - other callers
- * depend on its inline behaviour and its own comment forbids changing it.
+ * Hash-only paste adapter for the three chat surfaces: the sibling of
+ * {@link useComposerPasteAdapter}, whose images stay inline for Tracy's box.
  */
 export function useComposerHashPasteAdapter(
   insertAttrs: (attrs: ReadonlyArray<ImageAttachmentAttrs>) => number,
@@ -1544,6 +1748,7 @@ export interface ComposerPasteEditorHandle {
   readonly isReady: () => boolean;
   readonly insertImageAttachments: (
     attrs: ReadonlyArray<ImageAttachmentAttrs>,
+    at: ImageAttachmentPlace,
   ) => void;
   readonly insertFileAttachment: (
     attrs: ComposerFileAttachmentAttrs,
@@ -1559,40 +1764,6 @@ export interface ComposerPasteEditorHandle {
   /** With `draftGeneration`, what a file pick is fenced to. */
   readonly getEditorIncarnation: () => ComposerEditorIncarnation | null;
   readonly draftGeneration: () => number;
-}
-
-export function useComposerPaste(
-  editorRef: {
-    readonly current: ComposerPasteEditorHandle | null;
-  },
-  fileDrops: IFileDropHost,
-  mentionRoots: ReadonlyArray<string>,
-): UseComposerPasteResult {
-  const insertAttrs = useCallback(
-    (attrs: ReadonlyArray<ImageAttachmentAttrs>): number => {
-      const handle = editorRef.current;
-      if (handle === null || !handle.isReady()) return 0;
-      handle.insertImageAttachments(attrs);
-      handle.focus();
-      return attrs.length;
-    },
-    [editorRef],
-  );
-  const beginPathInsertion = useCallback((): PathInsertionCommit | null => {
-    const handle = editorRef.current;
-    if (handle === null || !handle.isReady()) return null;
-    return handle.beginPathInsertion();
-  }, [editorRef]);
-  const filePaths = useMemo(
-    () => ({
-      fileDrops,
-      mentionRoots,
-      beginPathInsertion,
-      pathsReachTarget: true,
-    }),
-    [fileDrops, mentionRoots, beginPathInsertion],
-  );
-  return useComposerPasteAdapter(insertAttrs, filePaths);
 }
 
 /**
@@ -1695,9 +1866,10 @@ export function useComposerFileAttachArgs(
 }
 
 /**
- * {@link useComposerPaste}'s hash-only twin, for the three chat surfaces. Same
- * editor handle, same file-path ingest, same events - only the image channel
- * differs, which is the whole point of the `ComposerImageIngest` seam.
+ * The paste hook of the three chat surfaces, over their editor handle: the
+ * hash-only image ingest on the file-path ingest and events every surface
+ * shares. Only the image channel differs between surfaces, which is the whole
+ * point of the `ComposerImageIngest` seam.
  */
 // `editorRef` stays its own argument: a ref inside an object handed to a hook
 // stops the React Compiler from keeping the caller's own memoization.
@@ -1718,7 +1890,7 @@ export function useComposerHashPaste(
     (attrs: ReadonlyArray<ImageAttachmentAttrs>): number => {
       const handle = editorRef.current;
       if (handle === null || !handle.isReady()) return 0;
-      handle.insertImageAttachments(attrs);
+      handle.insertImageAttachments(attrs, "caret");
       handle.focus();
       return attrs.length;
     },
@@ -1735,6 +1907,26 @@ export function useComposerHashPaste(
   );
   const fileAttach = useComposerFileAttachArgs(editorRef, fileRoute);
   return useComposerHashPasteAdapter(insertAttrs, filePaths, fileAttach);
+}
+
+/**
+ * Inserts image attachments after everything the document holds, the
+ * selection mapped where it was: images held for an editor that was not there
+ * yet go after what it loaded, wherever the person's caret is.
+ */
+export function appendImageAttachmentsCommand(
+  editor: Editor,
+  attrs: ReadonlyArray<ImageAttachmentAttrs>,
+): void {
+  if (attrs.length === 0) return;
+  editor
+    .chain()
+    .insertContentAt(
+      Selection.atEnd(editor.state.doc).from,
+      attrs.map((attr) => ({ type: "imageAttachment", attrs: attr })),
+      { updateSelection: false },
+    )
+    .run();
 }
 
 export function insertImageAttachmentsCommand(

@@ -59,6 +59,7 @@ import {
   SESSION_CONTROL_STREAM_ID,
   decodeMuxFrame,
   encodeMuxFrame,
+  encodedSubscribeStreamId,
   SESSION_CAPABILITY_BODY_COMPRESSION,
   SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
   SESSION_CAPABILITY_MEMBER_CREDENTIAL,
@@ -69,6 +70,7 @@ import {
   type MuxFrameTypeValue,
   type QosClassValue,
 } from "@traycer/protocol/host-transport/mux";
+import { isTargetAnswer } from "@traycer/protocol/host-transport/remote/rpc-types";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
 import {
   clockCanMakeValidBearersLookExpired,
@@ -149,6 +151,9 @@ import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { BrowserSessionsClientFrame } from "@traycer/protocol/host/browser/contracts";
 import { BrowserSessionsStreamClient } from "../../browser-sessions-stream-client";
 import { WorktreeDeleteBatchStreamClient } from "../../worktree-delete-batch-stream-client";
+import { WorktreeDeleteStreamClient } from "../../worktree-delete-stream-client";
+import { SessionImportRunClient } from "../../session-import-run-client";
+import { NoiseChannel } from "@traycer/protocol/host-transport/remote/noise-channel";
 
 // Integration-style tests for the session lifecycle edges a cold audit found
 // unrecoverable: an UNAUTHORIZED session fatal (the wake-time expired-bearer
@@ -2287,6 +2292,85 @@ describe("RemoteSession pending unary dispatch provenance", () => {
     },
     TEST_BUDGET_MS,
   );
+
+  it.each(["FORBIDDEN", "E_HOST_UNSUPPORTED"])(
+    "marks the host's own %s answer as the target's",
+    async (code) => {
+      const relay = new FakeRelayHost();
+      relay.unaryError = { code, message: "answered by the host" };
+      const session = await readySession(relay);
+      try {
+        const error = await sendBindingUnary(session);
+
+        expect(error).toBeInstanceOf(HostRpcError);
+        expect(error).toMatchObject({ code });
+        expect(isTargetAnswer(error)).toBe(true);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "does not mark the refusal it remembers for the connection after the host answered E_HOST_UNSUPPORTED",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.unaryError = {
+        code: "E_HOST_UNSUPPORTED",
+        message: "not served here",
+      };
+      const session = await readySession(relay);
+      try {
+        const answered = await sendBindingUnary(session);
+        const remembered = await sendBindingUnary(session);
+
+        expect(isTargetAnswer(answered)).toBe(true);
+        expect(remembered).toBeInstanceOf(HostRpcError);
+        expect(remembered).toMatchObject({ code: "E_HOST_UNSUPPORTED" });
+        expect(isTargetAnswer(remembered)).toBe(false);
+        expect(relay.unaryRequests).toHaveLength(1);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "does not mark the refusal of a method version below the caller's floor",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.optionalRpcManifest = {
+        "epic.listTasks": { major: 1, minor: 5 },
+      };
+      const session = await readySession(relay);
+      try {
+        const error = await session
+          .sendUnary(
+            "worktree.getBinding",
+            BINDING_PARAMS,
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            { method: "epic.listTasks", version: { major: 1, minor: 6 } },
+          )
+          .then(
+            () => null,
+            (reason: unknown) => reason,
+          );
+
+        expect(error).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+        expect(isTargetAnswer(error)).toBe(false);
+        expect(relay.unaryRequests).toHaveLength(0);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
 });
 
 describe("RemoteSession reconnect ladder accounting", () => {
@@ -2826,8 +2910,7 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
           WAIT,
         );
         expect(onConnectionStatus).not.toHaveBeenCalledWith(
-          "closed",
-          expect.anything(),
+          expect.objectContaining({ status: "closed" }),
         );
         expect(goFatal).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -3821,6 +3904,10 @@ describe("RemoteSession absent optional method", () => {
           (error as HostRpcError).fatalDetails?.upgradeGuidance
             ?.hostShouldUpgrade,
         ).toBe(true);
+        // Raised here for a method the host never advertised, not the host's
+        // answer: nothing was sent.
+        expect(isTargetAnswer(error)).toBe(false);
+        expect(relay.unaryRequests).toHaveLength(0);
         expect(relay.errors).toEqual([]);
       } finally {
         session.close();
@@ -11678,6 +11765,373 @@ describe("RemoteSession member credential hand-off", () => {
         expect(relay.credentialUpdates).toEqual([]);
         expect(relay.errors).toEqual([]);
       } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+/**
+ * The remote carrier reports `open` only with the host's first frame, while
+ * the SUBSCRIBE went out earlier. These hosts receive the SUBSCRIBE and answer
+ * nothing, then the connection drops: the host has the start request, and a
+ * replay of it would start the work twice. Each case then opens a second
+ * subscription of the same method after the reconnect, so every subscribe the
+ * reconnect sent has reached the relay before the list is read.
+ */
+describe("RemoteSession: a start request sent and never answered", () => {
+  function startSession(): {
+    readonly relay: FakeRelayHost;
+    readonly session: RemoteSession<
+      VersionedRpcRegistry,
+      VersionedStreamRpcRegistry
+    >;
+    readonly streamClient: RemoteStreamClient<
+      VersionedRpcRegistry,
+      typeof hostStreamRpcRegistry
+    >;
+  } {
+    const relay = new FakeRelayHost();
+    relay.streamManifest = buildStreamManifest(
+      hostStreamRpcRegistry,
+      SERVES_EVERY_INSTALLED_MAJOR,
+    );
+    const session = new RemoteSession({
+      ...buildSessionOptions(
+        relay,
+        new MutableBearerLease("valid-token", "user-1"),
+        null,
+      ),
+      streamRegistry: hostStreamRpcRegistry,
+    });
+    const streamClient = new RemoteStreamClient<
+      VersionedRpcRegistry,
+      typeof hostStreamRpcRegistry
+    >(session);
+    session.start();
+    return { relay, session, streamClient };
+  }
+
+  /** Every import start the relay received, as each one's session ids. */
+  function sentSelections(relay: FakeRelayHost): string[][] {
+    return relay.subscribeParams.map((params) =>
+      (
+        params as { selections: readonly { nativeSessionId: string }[] }
+      ).selections.map((selection) => selection.nativeSessionId),
+    );
+  }
+
+  const importCallbacks = {
+    onStarted: () => undefined,
+    onProgress: () => undefined,
+    onComplete: () => undefined,
+    onRunEndedUnseen: () => undefined,
+    onConnectionStatus: () => undefined,
+  };
+
+  function startImport(
+    streamClient: RemoteStreamClient<
+      VersionedRpcRegistry,
+      typeof hostStreamRpcRegistry
+    >,
+    nativeSessionId: string,
+  ): SessionImportRunClient {
+    return new SessionImportRunClient({
+      wsStreamClient: streamClient,
+      selections: [{ harness: "claude", nativeSessionId }],
+      permissionMode: "supervised",
+      callbacks: importCallbacks,
+    });
+  }
+
+  /**
+   * Routes the seal of the first SUBSCRIBE through `sealFirstSubscribe`, and
+   * every other frame through the real seal.
+   */
+  function interceptFirstSubscribeSeal(
+    sealFirstSubscribe: (
+      seal: () => Promise<Uint8Array>,
+    ) => Promise<Uint8Array>,
+  ): { readonly intercepted: () => boolean; readonly restore: () => void } {
+    const seal = NoiseChannel.prototype.encrypt;
+    let intercepted = false;
+    const spy = vi
+      .spyOn(NoiseChannel.prototype, "encrypt")
+      .mockImplementation(function (this: NoiseChannel, frame: Uint8Array) {
+        if (!intercepted && encodedSubscribeStreamId(frame) !== null) {
+          intercepted = true;
+          return sealFirstSubscribe(() => seal.call(this, frame));
+        }
+        return seal.call(this, frame);
+      });
+    return { intercepted: () => intercepted, restore: () => spy.mockRestore() };
+  }
+
+  async function dropAndReconnect(
+    relay: FakeRelayHost,
+    session: RemoteSession<VersionedRpcRegistry, VersionedStreamRpcRegistry>,
+  ): Promise<void> {
+    relay.dropCurrentConnection();
+    await vi.waitFor(() => expect(relay.openBearers).toHaveLength(2), WAIT);
+    await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+  }
+
+  it(
+    "closes a single-target delete and reports its outcome unknown, never re-sending it",
+    async () => {
+      const { relay, session, streamClient } = startSession();
+      const onDroppedAfterStart = vi.fn();
+      const deleteCallbacks = {
+        onStarted: () => undefined,
+        onPhase: () => undefined,
+        onOutput: () => undefined,
+        onComplete: () => undefined,
+        onFailed: () => undefined,
+        onConnectionStatus: () => undefined,
+      };
+      const remove = new WorktreeDeleteStreamClient({
+        wsStreamClient: streamClient,
+        worktreePath: "/wt/a",
+        scripts: null,
+        stopOwners: false,
+        callbacks: { ...deleteCallbacks, onDroppedAfterStart },
+      });
+      const sentinel = new WorktreeDeleteStreamClient({
+        wsStreamClient: streamClient,
+        worktreePath: "/wt/sentinel",
+        scripts: null,
+        stopOwners: false,
+        callbacks: { ...deleteCallbacks, onDroppedAfterStart: () => undefined },
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeParams).toHaveLength(2),
+          WAIT,
+        );
+        sentinel.close();
+        await dropAndReconnect(relay, session);
+        const afterDrop = new WorktreeDeleteStreamClient({
+          wsStreamClient: streamClient,
+          worktreePath: "/wt/after-drop",
+          scripts: null,
+          stopOwners: false,
+          callbacks: {
+            ...deleteCallbacks,
+            onDroppedAfterStart: () => undefined,
+          },
+        });
+        try {
+          await vi.waitFor(
+            () =>
+              expect(relay.subscribeParams).toContainEqual(
+                expect.objectContaining({ worktreePath: "/wt/after-drop" }),
+              ),
+            WAIT,
+          );
+          expect(
+            relay.subscribeParams.map(
+              (params) => (params as { worktreePath: string }).worktreePath,
+            ),
+          ).toEqual(["/wt/a", "/wt/sentinel", "/wt/after-drop"]);
+          expect(onDroppedAfterStart).toHaveBeenCalledOnce();
+        } finally {
+          afterDrop.close();
+        }
+      } finally {
+        remove.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "re-opens a batch delete as observe, never re-sending its start",
+    async () => {
+      const { relay, session, streamClient } = startSession();
+      const onConnectionStatus = vi.fn();
+      const batchCallbacks = {
+        onTargetStarted: () => undefined,
+        onTargetPhase: () => undefined,
+        onTargetOutput: () => undefined,
+        onTargetComplete: () => undefined,
+        onTargetFailed: () => undefined,
+        onCommandComplete: () => undefined,
+        onCommandFailed: () => undefined,
+        onUnsupported: () => undefined,
+      };
+      const batch = new WorktreeDeleteBatchStreamClient({
+        wsStreamClient: streamClient,
+        commandId: "6f1a6a0e-1f0f-4a1e-9f0d-1b6f0c2c9f11",
+        source: "settings",
+        targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: false }],
+        callbacks: { ...batchCallbacks, onConnectionStatus },
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeParams).toHaveLength(1),
+          WAIT,
+        );
+        await dropAndReconnect(relay, session);
+        const sentinel = new WorktreeDeleteBatchStreamClient({
+          wsStreamClient: streamClient,
+          commandId: "0b6b8c1e-3a4d-4f2e-8c9a-5d7e6f1a2b3c",
+          source: "settings",
+          targets: [
+            { worktreePath: "/wt/sentinel", scripts: null, stopOwners: false },
+          ],
+          callbacks: { ...batchCallbacks, onConnectionStatus: () => undefined },
+        });
+        try {
+          await vi.waitFor(
+            () =>
+              expect(relay.subscribeParams).toContainEqual(
+                expect.objectContaining({
+                  commandId: "0b6b8c1e-3a4d-4f2e-8c9a-5d7e6f1a2b3c",
+                }),
+              ),
+            WAIT,
+          );
+          expect(
+            relay.subscribeParams.map((params) => {
+              const { mode, commandId } = params as {
+                mode: string;
+                commandId: string;
+              };
+              return { mode, commandId };
+            }),
+          ).toEqual([
+            {
+              mode: "start",
+              commandId: "6f1a6a0e-1f0f-4a1e-9f0d-1b6f0c2c9f11",
+            },
+            {
+              mode: "observe",
+              commandId: "6f1a6a0e-1f0f-4a1e-9f0d-1b6f0c2c9f11",
+            },
+            {
+              mode: "start",
+              commandId: "0b6b8c1e-3a4d-4f2e-8c9a-5d7e6f1a2b3c",
+            },
+          ]);
+          expect(onConnectionStatus).toHaveBeenCalledWith(
+            expect.objectContaining({
+              status: "reconnecting",
+              startSent: true,
+            }),
+          );
+        } finally {
+          sentinel.close();
+        }
+      } finally {
+        batch.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "re-opens a session import attach-only, never re-sending its selections",
+    async () => {
+      const { relay, session, streamClient } = startSession();
+      const run = startImport(streamClient, "session-a");
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeParams).toHaveLength(1),
+          WAIT,
+        );
+        await dropAndReconnect(relay, session);
+        const sentinel = startImport(streamClient, "sentinel");
+        try {
+          await vi.waitFor(
+            () => expect(relay.subscribeParams).toHaveLength(3),
+            WAIT,
+          );
+          expect(sentSelections(relay)).toEqual([
+            ["session-a"],
+            [],
+            ["sentinel"],
+          ]);
+        } finally {
+          sentinel.close();
+        }
+      } finally {
+        run.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "replays an import's selections whose start failed to seal, since nothing reached the host",
+    async () => {
+      const { relay, session, streamClient } = startSession();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      const seal = interceptFirstSubscribeSeal(() =>
+        Promise.reject(new Error("seal failed")),
+      );
+      const run = startImport(streamClient, "session-a");
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeParams).toHaveLength(1),
+          WAIT,
+        );
+        const sentinel = startImport(streamClient, "sentinel");
+        try {
+          await vi.waitFor(
+            () => expect(relay.subscribeParams).toHaveLength(2),
+            WAIT,
+          );
+          expect(seal.intercepted()).toBe(true);
+          expect(sentSelections(relay)).toEqual([["session-a"], ["sentinel"]]);
+        } finally {
+          sentinel.close();
+        }
+      } finally {
+        seal.restore();
+        run.close();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "replays an import's selections whose start was still sealing when the connection went",
+    async () => {
+      const { relay, session, streamClient } = startSession();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+      const gate = Promise.withResolvers<void>();
+      const seal = interceptFirstSubscribeSeal(async (sealNow) => {
+        await gate.promise;
+        return sealNow();
+      });
+      const run = startImport(streamClient, "session-a");
+      try {
+        await vi.waitFor(() => expect(seal.intercepted()).toBe(true), WAIT);
+        await dropAndReconnect(relay, session);
+        await vi.waitFor(
+          () => expect(relay.subscribeParams).toHaveLength(1),
+          WAIT,
+        );
+        gate.resolve();
+        const sentinel = startImport(streamClient, "sentinel");
+        try {
+          await vi.waitFor(
+            () => expect(relay.subscribeParams).toHaveLength(2),
+            WAIT,
+          );
+          expect(sentSelections(relay)).toEqual([["session-a"], ["sentinel"]]);
+        } finally {
+          sentinel.close();
+        }
+      } finally {
+        gate.resolve();
+        seal.restore();
+        run.close();
         session.close();
       }
     },

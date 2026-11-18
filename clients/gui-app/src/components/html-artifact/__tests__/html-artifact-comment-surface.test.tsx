@@ -115,8 +115,15 @@ function treeOn(
           hostId="host-1"
           viewTabId="tab-1"
           source={source}
+          caption={null}
+          height={null}
+          className="h-full w-full"
+          onSize={() => undefined}
+          onStatus={() => undefined}
           toolbarControls={null}
           menuItems={null}
+          raiseToComment={false}
+          commentable
         />
       </TooltipProvider>
     </QueryClientProvider>

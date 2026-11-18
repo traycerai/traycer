@@ -74,6 +74,9 @@ class MockStreamSession implements IStreamSession {
     // No-op for this test.
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {
     // No-op for this test; reconnect is owned by the real StreamSession.
   }

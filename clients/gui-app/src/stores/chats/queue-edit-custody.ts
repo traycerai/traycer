@@ -837,18 +837,6 @@ export function queueItemsInFlight(
   return inFlight;
 }
 
-/** The pill a row shows while its own mutation is unanswered. */
-export function queueItemInFlightLabel(stage: QueueItemInFlight): string {
-  switch (stage) {
-    case "saving":
-      return "Saving";
-    case "requesting_steer":
-      return "Requesting steer";
-    case "cancelling":
-      return "Cancelling";
-  }
-}
-
 /**
  * How long a `send` may stay unanswered on an open stream before the row stops
  * claiming it is on its way. A DISPLAY deadline only: nothing is rejected,

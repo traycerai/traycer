@@ -1,4 +1,6 @@
 import { historyCoverageIsReduced } from "@/lib/history-composition/compose-history-page";
+import { useWorktreeHostIndexForClient } from "@/hooks/worktree/use-task-worktree-metadata-query";
+import { useOptionalHostClient } from "@/lib/host/runtime";
 import { HistoryTaskOrganizationMenu } from "@/components/organization/task-organization-menu";
 import {
   memo,
@@ -29,7 +31,11 @@ import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { DeleteTasksDialog } from "@/components/epics/delete-tasks-dialog";
 import { SweepWorktreesFlow } from "@/components/epics/sweep-worktrees-flow";
-import { namesHostOutsideSurface } from "@/components/epics/sweep-host-model";
+import {
+  countTaskWorktrees,
+  namesHostOutsideSurface,
+  sweepOpeningHostId,
+} from "@/components/epics/sweep-host-model";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import {
   Tooltip,
@@ -393,6 +399,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     isFetching,
     error,
     hostId,
+    sort,
+    createdSortAvailable,
     refetch,
     refetchTasks,
     fetchNextPage,
@@ -432,16 +440,17 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // body's branch count grow with every field the query gained.
   const view = historyPanelView(data);
   const pageItems = view.items;
-  const hasActiveFilters = hasActiveHistoryFilters(search);
+  // Judged on the sort the rows are in: a saved Newest created that this host
+  // serves as Most recent narrows nothing.
+  const hasActiveFilters = hasActiveHistoryFilters({ ...search, sort });
   // The same bounded activity projection drives this panel and the drawer.
   // Its active edge covers the short gap before the cloud record stamp lands.
   const items = useOptimisticActivityHistoryItems({
     items: pageItems,
     userId: currentUserId,
     hostId,
-    enabled:
-      variant !== "picker" && !hasActiveFilters && search.sort === "recent",
-    refreshEnabled: search.sort === "recent",
+    enabled: variant !== "picker" && !hasActiveFilters && sort === "recent",
+    refreshEnabled: sort === "recent",
     refreshScope: activityRefreshScope,
     refetch: refetchTasks,
   });
@@ -491,12 +500,12 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   // collecting, so it cancels the walk. The one exemption is the run where
   // the sort itself just changed: a re-sort keeps the matching set, and any
   // fetch it starts is for the re-sorted request.
-  const sortRef = useRef(search.sort);
+  const sortRef = useRef(sort);
   useEffect(() => {
-    const resorted = sortRef.current !== search.sort;
-    sortRef.current = search.sort;
+    const resorted = sortRef.current !== sort;
+    sortRef.current = sort;
     if (isFetching && !resorted) abortSelectAll();
-  }, [abortSelectAll, isFetching, search.sort]);
+  }, [abortSelectAll, isFetching, sort]);
   const [pendingDeleteIds, setPendingDeleteIds] =
     useState<ReadonlyArray<string> | null>(null);
   // Explicit user overrides of the per-worktree checkbox. Absent entries fall
@@ -649,6 +658,48 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
     );
     return item === undefined ? null : historyItemDisplayTitle(item);
   }, [items, sweepEpicIds]);
+  // The history query's own index read, observed for its settledness: an
+  // empty list is "owns nothing" only from a completed listing - not one in
+  // flight, failed, or never started (a disabled read). Through the optional client: History can mount with no
+  // host runtime above it, and the history query's own read tolerates that.
+  const surfaceWorktreeIndex = useWorktreeHostIndexForClient(
+    useOptionalHostClient(),
+    true,
+  );
+  const surfaceWorktreesUnsettled =
+    !surfaceWorktreeIndex.isSuccess ||
+    surfaceWorktreeIndex.isFetching ||
+    surfaceWorktreeIndex.error !== null;
+  // Asked of the whole sweep target: one other machine has to account for
+  // every selected Task's agents, and a Task whose hosts are unknown makes the
+  // answer unknown.
+  const sweepPreferredHostId = useMemo(() => {
+    if (sweepEpicIds === null || surfaceWorktreesUnsettled) return null;
+    const hostIds = new Set<string>();
+    for (const epicId of sweepEpicIds) {
+      const chatHostIds =
+        items.find((candidate) => candidate.epicId === epicId)?.chatHostIds ??
+        null;
+      if (chatHostIds === null) return null;
+      for (const chatHostId of chatHostIds) hostIds.add(chatHostId);
+    }
+    // Counted from the listing itself rather than the history map, which
+    // covers only the base page and misses optimistic activity rows.
+    return sweepOpeningHostId({
+      hostIds,
+      surfaceHostId: hostId,
+      surfaceWorktreeCount: countTaskWorktrees(
+        surfaceWorktreeIndex.worktrees,
+        new Set(sweepEpicIds),
+      ),
+    });
+  }, [
+    hostId,
+    items,
+    surfaceWorktreeIndex.worktrees,
+    surfaceWorktreesUnsettled,
+    sweepEpicIds,
+  ]);
   // A Task whose deletion is still in flight is not deletable AGAIN: the
   // dialog closes at kickoff, so its row renders with its controls back while
   // the host is still working, and nothing on the wire deduplicates a second
@@ -1008,10 +1059,11 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           }),
           onStart: enterSelectionMode,
         },
-    sort: search.sort,
+    sort,
     onSortChange: (next) => {
       updateSearch({ sort: next, sortExplicit: true });
     },
+    createdSortAvailable,
     availableRepos: availableRepos,
     availableWorkspaces: availableWorkspaces,
     search: search,
@@ -1034,7 +1086,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       >
         <NotificationIndicatorsProvider indicators={notificationIndicators}>
           <HistoryListBody
-            sort={search.sort}
+            sort={sort}
             isCountPending={isCountPending}
             isBulkSelectionPending={selectAllPending}
             scope={selectionMode ? "tasks" : props.scope}
@@ -1130,6 +1182,7 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
         // client currently addresses, which is what `useHostClientForHostId(null)`
         // follows.
         surfaceHostId={hostId}
+        preferredHostId={sweepPreferredHostId}
         taskTitle={sweepTaskTitle}
         onOpenChange={(open) => {
           if (!open) setSweepEpicIds(null);

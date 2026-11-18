@@ -2,8 +2,10 @@ import { createFileRoute } from "@tanstack/react-router";
 import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import {
   cloudEpicTasksFirstPageQueryOptions,
+  historySortForHost,
   listCloudTasksRequestForHistorySearch,
   negotiatedListTasksServesLocalFirst,
+  negotiatedListTasksSortsByCreated,
   registerCloudEpicTasksClient,
 } from "@/lib/cloud-epic-tasks-query";
 import {
@@ -56,11 +58,13 @@ export const Route = createFileRoute("/epics/")({
     // gate a route navigation spent cloud capability the verdict withheld. A
     // manifest that has not arrived yet answers `null` and skips - the
     // component fetches the moment the host says `1.6`.
+    const listTasksVersion = getNegotiatedHostMethodVersion(
+      hostId,
+      "epic.listTasks",
+    );
     if (
       !authorizesCloudCapability(auth.status) &&
-      !negotiatedListTasksServesLocalFirst(
-        getNegotiatedHostMethodVersion(hostId, "epic.listTasks"),
-      )
+      !negotiatedListTasksServesLocalFirst(listTasksVersion)
     ) {
       return { historyNowMs };
     }
@@ -68,11 +72,17 @@ export const Route = createFileRoute("/epics/")({
     if (userId === null) return { historyNowMs };
     if (client.getRequestContextUserId() !== userId) return { historyNowMs };
     registerCloudEpicTasksClient(hostId, client);
+    // The sort `useHistoryQuery` will request on this host, so the prefetch
+    // fills the key the component reads.
+    const sort = historySortForHost(
+      deps.historySearch.sort,
+      negotiatedListTasksSortsByCreated(listTasksVersion),
+    );
     void context.queryClient.prefetchQuery(
       cloudEpicTasksFirstPageQueryOptions(
         hostId,
         userId,
-        listCloudTasksRequestForHistorySearch(deps.historySearch),
+        listCloudTasksRequestForHistorySearch({ ...deps.historySearch, sort }),
       ),
     );
     return { historyNowMs };

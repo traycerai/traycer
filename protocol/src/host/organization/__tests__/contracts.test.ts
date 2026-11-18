@@ -9,6 +9,7 @@ import {
   organizationRefreshV11,
   organizationHistoryV10,
   organizationHistoryV11,
+  organizationHistoryV12,
   organizationHistoryUpgradeV10ToV11,
   organizationSubscribeV10,
   organizationSubscribeV11,
@@ -91,7 +92,30 @@ describe("organization contract registry minors", () => {
     expect(v10.tasks[0]).not.toHaveProperty("recentAt");
     expect(v11.tasks[0]).toHaveProperty("recentAt", 1_234);
     expect(upgraded.tasks[0]).not.toHaveProperty("recentAt");
-    expect(line.latestMinor).toBe(1);
+    expect(line.versions[1].contract).toBe(organizationHistoryV11);
+  });
+
+  it("accepts created-desc from history v1.2 and keeps v1.0/v1.1 requests frozen", () => {
+    const request = {
+      limit: 20,
+      filters: { labelNames: ["urgent"] },
+      sort: "created-desc",
+      extensionPhaseVersion: "1.0.0",
+      extensionEpicVersion: "2.0.0",
+    };
+    const line = hostRpcRegistry["organization.history"][1];
+
+    expect(line.latestMinor).toBe(2);
+    expect(line.versions[2].contract).toBe(organizationHistoryV12);
+    expect(
+      organizationHistoryV10.requestSchema.safeParse(request).success,
+    ).toBe(false);
+    expect(
+      organizationHistoryV11.requestSchema.safeParse(request).success,
+    ).toBe(false);
+    expect(organizationHistoryV12.requestSchema.parse(request).sort).toBe(
+      "created-desc",
+    );
   });
 
   it("installs v1.0 and v1.1 for unary organization reads", () => {

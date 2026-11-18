@@ -295,6 +295,7 @@ function createInertStreamSession(closedReason: string): IStreamSession {
     // Never handshook, so it has no negotiated version - consumers take the
     // same conservative default they use before any session settles.
     getNegotiatedSchemaVersion: () => null,
+    hasSentOpenRequest: () => false,
     onStatusChange: (handler) => {
       statusHandler = handler;
       if (emissionScheduled) {
@@ -1765,6 +1766,8 @@ class StreamSession<
 
   private status: StreamConnectionStatus = "connecting";
   private negotiatedSchemaVersion: SchemaVersion | null = null;
+  /** {@link IStreamSession.hasSentOpenRequest}. */
+  private openRequestSent = false;
   private serverFrameHandler: ServerFrameHandler | null = null;
   private statusHandler: StatusChangeHandler | null = null;
   private reconnectAttempt = 0;
@@ -1984,6 +1987,10 @@ class StreamSession<
 
   getNegotiatedSchemaVersion(): SchemaVersion | null {
     return this.negotiatedSchemaVersion;
+  }
+
+  hasSentOpenRequest(): boolean {
+    return this.openRequestSent;
   }
 
   requestReconnect(): void {
@@ -3005,6 +3012,7 @@ class StreamSession<
       this.onSendFailure(socket);
       return;
     }
+    this.openRequestSent = true;
     this.negotiatedSchemaVersion = prepared.onWireVersion;
     this.config.onManifest(
       theirManifest,

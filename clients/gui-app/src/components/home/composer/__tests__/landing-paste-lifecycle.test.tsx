@@ -210,7 +210,8 @@ vi.mock(
       insertFileAttachment: (attrs) => instance.insertFileAttachment(attrs),
       settleFileAttachment: (id, settlement) =>
         instance.settleFileAttachment(id, settlement),
-      insertImageAttachments: (attrs) => instance.insertImageAttachments(attrs),
+      insertImageAttachments: (attrs, at) =>
+        instance.insertImageAttachments(attrs, at),
       insertMentionAttachment: (mention) =>
         instance.insertMentionAttachment(mention),
       beginPathInsertion: () => instance.beginPathInsertion(),

@@ -65,8 +65,11 @@ import {
 } from "@/lib/chats/cloud-chat-payloads";
 import { base64ToBytes } from "@/lib/composer/image-base64";
 import {
+  LandingImageRootsUnreadableError,
   landingLiveImageRootHashes,
   tryReserveLandingImageResidency,
+  tryReserveLandingImageResidencyIfRooted,
+  type LandingImageBudgetReservation,
 } from "@/lib/composer/landing-image-budget";
 import {
   getImageBytes,
@@ -416,7 +419,15 @@ function sameCloudDraftImageSource(
  */
 function evictUnrootedOverflow(): void {
   if (sourcesByHash.size <= CLOUD_DRAFT_IMAGE_SOURCE_LIMIT) return;
-  const rooted = landingLiveImageRootHashes();
+  let rooted: Set<string>;
+  try {
+    rooted = landingLiveImageRootHashes();
+  } catch (error) {
+    // Roots that cannot be read evict nothing: an evicted address is not had
+    // back. The next ingest over the cap tries again.
+    if (error instanceof LandingImageRootsUnreadableError) return;
+    throw error;
+  }
   for (const hash of [...sourcesByHash.keys()]) {
     if (sourcesByHash.size <= CLOUD_DRAFT_IMAGE_SOURCE_LIMIT) return;
     if (rooted.has(hash)) continue;
@@ -465,7 +476,15 @@ export async function prefetchRecordedCloudDraftImages(
   images: ReadonlyArray<{ readonly hash: string; readonly bytes: number }>,
   signal: AbortSignal,
 ): Promise<void> {
-  const liveRoots = landingLiveImageRootHashes();
+  let liveRoots: Set<string>;
+  try {
+    liveRoots = landingLiveImageRootHashes();
+  } catch (error) {
+    // Nothing is warmed while the roots cannot be read; a reader still fetches
+    // what it shows.
+    if (error instanceof LandingImageRootsUnreadableError) return;
+    throw error;
+  }
   const estimates = new Map(
     images
       .filter(({ hash }) => sourcesByHash.has(hash) && liveRoots.has(hash))
@@ -521,11 +540,18 @@ async function drainCloudDraftImages(
     // admission: it needs bytes before its row exists and its importer owns
     // the eventual batch reservation.
     const estimate = estimates?.get(hash);
-    const reservation =
-      estimate === undefined
-        ? null
-        : tryReserveLandingImageResidency([{ hash, bytes: estimate }]);
-    if (estimate !== undefined && reservation === null) continue;
+    let reservation: LandingImageBudgetReservation | null = null;
+    if (estimate !== undefined) {
+      try {
+        reservation = tryReserveLandingImageResidency([
+          { hash, bytes: estimate },
+        ]);
+      } catch (error) {
+        // As a refusal: no warming while the roots cannot be read.
+        if (!(error instanceof LandingImageRootsUnreadableError)) throw error;
+      }
+      if (reservation === null) continue;
+    }
     // This is a preflight only. Holding an estimated slot while the exact
     // writer reserves the same hash would dedupe its larger actual byte count
     // against the estimate. The writer rechecks with exact bytes after fetch.
@@ -781,9 +807,10 @@ async function verifyAndMaybeStoreCloudImage(
   // Verify before reserving so a concurrent corrupt reply cannot claim this
   // hash's residency at a smaller size than the valid bytes would need.
   if ((await sha256Hex(bytes)) !== hash) return "invalid";
-  const reservation = landingLiveImageRootHashes().has(hash)
-    ? tryReserveLandingImageResidency([{ hash, bytes: bytes.byteLength }])
-    : null;
+  const reservation = tryReserveLandingImageResidencyIfRooted(
+    hash,
+    bytes.byteLength,
+  );
   if (reservation === null) return "ephemeral";
   try {
     return (await putImageBytesAtHash(hash, bytes)) ? "stored" : "invalid";

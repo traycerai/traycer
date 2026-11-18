@@ -54,14 +54,15 @@ describe("selecting a Tracy channel", () => {
     expect(place().threadsShown).toBe(false);
   });
 
-  it("leaves the channel it selects, and every other channel, as it was", () => {
+  it("shows the channel it selects on Messages with no session in its place, and leaves every other channel as it was", () => {
     place().setView("bot-b", "activity");
+    place().setSession("bot-b", SESSION);
     place().setSession("bot-c", SESSION);
     surface().selectChannel("bot-a");
 
     surface().selectChannel("bot-b");
 
-    expect(placeOf("bot-b").view).toBe("activity");
+    expect(placeOf("bot-b")).toEqual({ view: "messages", session: null });
     expect(placeOf("bot-c").session).toEqual(SESSION);
   });
 

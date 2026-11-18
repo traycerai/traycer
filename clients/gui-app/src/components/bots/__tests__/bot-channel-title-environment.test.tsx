@@ -14,6 +14,7 @@ import {
   TWO_MAIN_BOTS_DIRECTORY,
 } from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
+import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 
 vi.mock("@/components/bots/bot-channel-sidebar", () => ({
@@ -21,14 +22,19 @@ vi.mock("@/components/bots/bot-channel-sidebar", () => ({
 }));
 
 function titleText(botId: string, level2: MobileLevel2Form | null): string {
+  // The picker's sheet reads the resolved theme, so it needs its provider.
   render(
-    <BotChannelTitle
-      level2={level2}
-      title="Tracy"
-      activeBotId={botId}
-      hostId="host-1"
-      threadsView={null}
-    />,
+    <ResolvedThemeContext.Provider
+      value={{ resolvedTheme: "dark", themePreset: "neutral" }}
+    >
+      <BotChannelTitle
+        level2={level2}
+        title="Tracy"
+        activeBotId={botId}
+        hostId="host-1"
+        threadsView={null}
+      />
+    </ResolvedThemeContext.Provider>,
   );
   return screen.getByTestId("bot-tab-title").textContent;
 }

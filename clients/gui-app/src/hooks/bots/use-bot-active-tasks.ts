@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
@@ -20,12 +21,20 @@ import {
   type NotificationIndicatorState,
 } from "@/stores/notifications/notification-indicator-state";
 
+type RecentObservation = {
+  readonly scope: string;
+  readonly source: ReadonlyArray<BotTaskEntry> | null;
+  readonly previous: ReadonlyMap<string, string>;
+  readonly ended: readonly string[];
+};
+
 const NO_CHAT_IDS: ReadonlyArray<string> = [];
 
 /** A bot's Activity list, read once for the tab's count and its page alike. */
 export type BotActiveTasks = {
   readonly rows: ReadonlyArray<BotActiveTask>;
   readonly roomFresh: boolean;
+  readonly recentRows: ReadonlyArray<BotActiveTask>;
   /** A listed task's own indicator: what its agents hold unread, together. */
   readonly indicatorOf: (taskId: string) => NotificationIndicatorState;
 };
@@ -39,7 +48,51 @@ export function useBotActiveTasks(
   tasks: ReadonlyArray<BotTaskEntry>,
   servingHostId: string,
   snapshotFresh: boolean,
+  botId: string,
 ): BotActiveTasks {
+  const viewerId = useAuthStore((state) => state.profile?.userId ?? null);
+  const scope = JSON.stringify([viewerId, servingHostId, botId]);
+  const [observed, setObserved] = useState<RecentObservation>(() => ({
+    scope,
+    source: null,
+    previous: new Map(),
+    ended: [],
+  }));
+  let currentObservation = observed;
+  if (
+    snapshotFresh &&
+    viewerId !== null &&
+    (observed.scope !== scope || observed.source !== tasks)
+  ) {
+    const current =
+      observed.scope === scope
+        ? observed
+        : { scope, previous: new Map<string, string>(), ended: [] };
+    const previous = new Map(tasks.map((task) => [task.taskId, task.state]));
+    const newEnds = tasks
+      .filter(
+        (task) =>
+          task.state === "ended" &&
+          current.previous.get(task.taskId) === "tracking",
+      )
+      .map((task) => task.taskId);
+    const newEndIds = new Set(newEnds);
+    const stillEnded = new Set(
+      tasks.filter((task) => task.state === "ended").map((task) => task.taskId),
+    );
+    currentObservation = {
+      scope,
+      source: tasks,
+      previous,
+      ended: [
+        ...newEnds.reverse(),
+        ...current.ended.filter(
+          (id) => stillEnded.has(id) && !newEndIds.has(id),
+        ),
+      ],
+    };
+    setObserved(currentObservation);
+  }
   const taskIds = useMemo(
     () =>
       tasks
@@ -90,12 +143,29 @@ export function useBotActiveTasks(
       snapshotFresh && servingReachability.status === "reachable";
     const indicatorOf = (taskId: string): NotificationIndicatorState =>
       indicatorByTask.get(taskId) ?? EMPTY_NOTIFICATION_INDICATOR_STATE;
+    const visibleTasks = roomFresh
+      ? tasks
+      : tasks.map((task) => ({ ...task, inputNeeded: null }));
+    const endedTasks = visibleTasks.filter(
+      (task) => task.state === "ended" && task.endedReason !== "deleted",
+    );
+    const byId = new Map(endedTasks.map((task) => [task.taskId, task]));
+    const observedIds =
+      currentObservation.scope === scope ? currentObservation.ended : [];
+    const ranked = observedIds.flatMap((id) => {
+      const task = byId.get(id);
+      return task === undefined ? [] : [task];
+    });
+    const observedSet = new Set(observedIds);
+    const recentRows: BotActiveTask[] = [
+      ...ranked,
+      ...endedTasks.filter((task) => !observedSet.has(task.taskId)).reverse(),
+    ].map((task) => ({ task, band: "ended", working: 0, at: null }));
     return {
       roomFresh,
+      recentRows,
       rows: activeTasksOf({
-        tasks: roomFresh
-          ? tasks
-          : tasks.map((task) => ({ ...task, inputNeeded: null })),
+        tasks: visibleTasks,
         evidenceFresh: activityFresh && notificationFresh && roomFresh,
         workingInTask: (taskId) => working.get(taskId) ?? 0,
         pendingInTask: (taskId) => {
@@ -124,5 +194,7 @@ export function useBotActiveTasks(
     reachability.status,
     servingReachability.status,
     snapshotFresh,
+    currentObservation,
+    scope,
   ]);
 }

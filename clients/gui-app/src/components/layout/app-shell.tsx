@@ -1,4 +1,5 @@
 import { isMobileApp } from "@/lib/mobile-app";
+import { SoundtrackPageControlsScope } from "@/components/soundtrack/soundtrack-page-controls-scope";
 import { useState, type ReactNode } from "react";
 import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
 import { DiffWorkerPoolProvider } from "@/components/diff-worker-pool-provider";
@@ -12,6 +13,7 @@ import { QuitInterceptBridge } from "@/components/layout/bridges/quit-intercept-
 import { MigrationBlockingModalHost } from "@/components/layout/dialogs/migration-blocking-modal-host";
 import { AppColumnFrame } from "@/components/layout/app-column-frame";
 import { AppHeader } from "@/components/layout/header/app-header";
+import { MobileBotHeaderSlotProvider } from "@/components/layout/header/mobile-bot-header-slot";
 import {
   appColumnChrome,
   PHONE_SHELL_STRIP_CHROME,
@@ -62,9 +64,13 @@ interface AppShellProps {
  */
 export function AppShell(props: AppShellProps) {
   return (
-    <MobileDrawerHistoryGateProvider>
-      <AppShellBody>{props.children}</AppShellBody>
-    </MobileDrawerHistoryGateProvider>
+    <MobileBotHeaderSlotProvider>
+      <MobileDrawerHistoryGateProvider>
+        <SoundtrackPageControlsScope>
+          <AppShellBody>{props.children}</AppShellBody>
+        </SoundtrackPageControlsScope>
+      </MobileDrawerHistoryGateProvider>
+    </MobileBotHeaderSlotProvider>
   );
 }
 

@@ -82,6 +82,7 @@ function historyItem(
     taskType: "epic",
     title: epicId,
     initialUserPrompt: "",
+    createdAtMs: updatedAtMs,
     updatedAtMs,
     updatedLabel: "old edit",
     updatedBucket: "earlier",

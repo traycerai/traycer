@@ -83,6 +83,7 @@ import {
   buildAttachmentsFromJSONContent,
   extractPlainTextFromComposerJSONContent,
 } from "@/lib/composer/tiptap-json-content";
+import { botMemberText } from "@/lib/bots/bot-member-text";
 import { isRenderableSubAgentBlock } from "@/lib/chat/subagent-blocks";
 import {
   isTransientLiveAssistantMessageId,
@@ -4079,7 +4080,10 @@ function renderUserMessage(
   ctx: RenderedMessagesDisplayContext,
   steerBadge: ChatMessageSteerBadge | null,
 ): ChatMessageModel {
-  const text = extractPlainTextFromComposerJSONContent(message.message.content);
+  const text =
+    message.conversationRequest === undefined
+      ? extractPlainTextFromComposerJSONContent(message.message.content)
+      : botMemberText(message.message.content);
   return {
     id: message.messageId,
     role: "user",
@@ -4122,6 +4126,9 @@ function renderUserMessage(
     ...(message.questionAnswers === undefined
       ? {}
       : { questionAnswers: message.questionAnswers }),
+    ...(message.repliesTo === undefined
+      ? {}
+      : { repliesTo: message.repliesTo }),
     ...(message.message.kind === "slack"
       ? { slackMessage: message.message }
       : {}),

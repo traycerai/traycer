@@ -1,4 +1,5 @@
 import { useArtifactEscape } from "@/components/artifacts/artifact-expanded-context";
+import { COMMENT_OPENER } from "@/lib/comments/comment-opener";
 import { ArtifactExpandButton } from "@/components/artifacts/artifact-expand-button";
 import { ArtifactExpansion } from "@/components/artifacts/artifact-expansion";
 import type { CanvasPageError } from "@/lib/sandbox/canvas-bridge";
@@ -98,6 +99,10 @@ function wheelUnit(mode: number, height: number): number {
   if (mode === 2) return height;
   return 1;
 }
+/** Whether fingers on the screen made this React Flow move, not a mouse or a sync. */
+function fingersMoved(event: MouseEvent | TouchEvent | null): boolean {
+  return event !== null && "touches" in event;
+}
 function canvasPanButtons(
   fullscreen: boolean,
   pan: boolean,
@@ -174,6 +179,12 @@ function canvasDrawingEnabled(
 }
 function canvasSelectionEnabled(readOnly: boolean, tool: CanvasTool): boolean {
   return !readOnly && tool === "select";
+}
+function canvasCommentMode(
+  tool: CanvasTool,
+  events: CanvasFrameEvents | null,
+): boolean {
+  return tool === "comment" && events?.commentsEnabled === true;
 }
 function handleCanvasUndo(
   event: KeyboardEvent,
@@ -349,7 +360,7 @@ function CanvasShownViewport({
  */
 export function CanvasArtifactEditor(props: CanvasArtifactEditorProps) {
   return (
-    <ArtifactExpansion title="Canvas">
+    <ArtifactExpansion title="Canvas" commentsInline>
       <CanvasEditorSurface {...props} />
     </ArtifactExpansion>
   );
@@ -596,6 +607,7 @@ function CanvasEditorSurface({
   );
   const {
     push: pushWheelStep,
+    follow: followPinch,
     cancel: cancelWheelSettlement,
     settling: wheelSettling,
     onShown: onShownViewport,
@@ -921,6 +933,7 @@ function CanvasEditorSurface({
       setFullscreen,
     ],
   );
+  const commentMode = canvasCommentMode(activeTool, frameEvents);
   const actions = useMemo<CanvasNodeActions>(
     () => ({
       sourceForBoard,
@@ -930,8 +943,7 @@ function CanvasEditorSurface({
         (!readOnly &&
           activeTool === "comment" &&
           frameEvents?.commentsEnabled === true),
-      commentMode:
-        activeTool === "comment" && frameEvents?.commentsEnabled === true,
+      commentMode,
       panMode: activeTool === "hand" && !readOnly,
       onAddError: (path, error) => {
         if (readOnly) return;
@@ -1017,6 +1029,7 @@ function CanvasEditorSurface({
       sourceForBoard,
       selectEnabled,
       activeTool,
+      commentMode,
       frameEvents,
       boardEvents,
       readOnly,
@@ -1242,6 +1255,9 @@ function CanvasEditorSurface({
                   }}
                 >
                   <ReactFlow<CanvasFlowNode>
+                    // A press on the pane pins a comment while comments are
+                    // on: the pin asks an open draft's question itself.
+                    {...(commentMode ? COMMENT_OPENER : {})}
                     // Transparent as well: React Flow's own fill would show
                     // as a box scaling with the layer. The backdrop below
                     // paints the same fill and stays put.
@@ -1305,11 +1321,16 @@ function CanvasEditorSurface({
                       // when controlled state catches up. Only input owns this.
                       if (event instanceof Event) cancelWheelSettlement();
                     }}
-                    onMove={(_event, value) => {
-                      if (activeFullscreen === null) setViewport(value);
-                    }}
-                    onMoveEnd={(_event, value) => {
+                    onMove={(event, value) => {
                       if (activeFullscreen !== null) return;
+                      if (fingersMoved(event) && followPinch(value)) return;
+                      setViewport(value);
+                    }}
+                    onMoveEnd={(event, value) => {
+                      if (activeFullscreen !== null) return;
+                      // Lifting the fingers is the pinch's last move: the
+                      // zoom is drawn once it has been quiet, not here.
+                      if (fingersMoved(event) && followPinch(value)) return;
                       setViewport(value);
                       // Programmatic wheel moves fire end on every frame.
                       // Animated moves still settle here when their glide ends.

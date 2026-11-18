@@ -1,16 +1,13 @@
 /**
  * A bot's picture: its mascot drawn straight in a squircle box, with no tile
- * behind it and no clip over it, from the bot's id alone. Every surface draws
- * one bot the same way, and a rename changes nothing. A person is still
- * initials or a photo in a circle.
+ * behind it and no clip over it. Its body and what it wears come from the
+ * bot's id, its colour from the one the bot holds. Every surface draws one
+ * bot the same way, and a rename changes nothing. A person is still initials
+ * or a photo in a circle.
  *
  * The ids are real derived main-bot ids, `personalAssistantBotId(envId)` in
  * the internal repository's `bot-schemas.ts`: the personal assistant of
  * `env_personal`, and the team main bots of `env_team_a` and `env_team_s`.
- * `env_team_s` was found by deriving `env_team_b`, `env_team_c`, ... in turn
- * and keeping the first whose FNV-1a hash lands on `env_team_a`'s hash mod 12
- * (the original 12-swatch palette) and off it mod 24, so the two
- * "Team Tracy" bots shared one colour then and differ now.
  */
 import type { ReactElement } from "react";
 import { act, cleanup, render, screen } from "@testing-library/react";
@@ -30,7 +27,7 @@ import {
   MASCOT_WORKING_BEATS,
   botMascot,
   drawMascotMark,
-  mascotRampAt,
+  mascotRampOf,
   type MascotPose,
 } from "@/lib/bots/mascot-mark";
 import {
@@ -42,6 +39,13 @@ import {
 } from "@/components/bots/bot-avatars";
 import { BotIdentityContext } from "@/components/bots/bot-identity-context";
 import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
+import {
+  deliveredLook,
+  drawsColouredMascot,
+  expectedTracyGlyph,
+  mascotPathsAt,
+  renderedTracyGlyphs,
+} from "@/components/bots/__tests__/mascot-drawing";
 import {
   EMPTY_DIRECTORY_STATE,
   ONE_TEAM_MAIN_BOT_DIRECTORY,
@@ -186,6 +190,31 @@ describe("a bot's picture", () => {
     },
   );
 
+  it("draws the Tracy glyph outside any bot's surface, and the surface's own coloured bot inside one", () => {
+    const { container, unmount } = render(<BotAvatar size="sm" />);
+
+    expect(renderedTracyGlyphs(container)).toEqual([expectedTracyGlyph(24)]);
+    expect(drawsColouredMascot(container)).toBe(false);
+    unmount();
+    const inside = render(
+      <InBotContext title="Team Tracy">
+        <BotAvatar size="sm" />
+      </InBotContext>,
+    );
+
+    expect(drawn()[0].paths).toEqual(
+      mascotPathsAt(TEAM_S_MAIN_BOT_ID, false, 24),
+    );
+    expect(renderedTracyGlyphs(inside.container)).toEqual([]);
+  });
+
+  it("draws the Tracy glyph at 40px on its larger grid for a large picture outside any bot's surface", () => {
+    const { container } = render(<BotAvatar size="lg" />);
+
+    expect(renderedTracyGlyphs(container)).toEqual([expectedTracyGlyph(40)]);
+    expect(drawsColouredMascot(container)).toBe(false);
+  });
+
   it("draws a bot's mascot with nothing behind or over it, which a person's picture has", () => {
     render(
       <>
@@ -252,20 +281,20 @@ describe("a bot's picture", () => {
     }
   });
 
-  it("draws the personal main bot and a team's main bot in different colours", () => {
+  it("draws the personal main bot and a team's main bot in one colour, the default, since neither holds one", () => {
     const [personal, team] = sideBySide([
       PERSONAL_MAIN_BOT_ID,
       TEAM_A_MAIN_BOT_ID,
     ]);
 
-    expect(personal.fills).not.toEqual(team.fills);
+    expect(personal.fills).toContain(DEFAULT_MASCOT_RAMP.tones[2]);
+    expect(team.fills).toContain(DEFAULT_MASCOT_RAMP.tones[2]);
   });
 
-  it("draws two bots of one name in different environments with different mascots and colours", () => {
+  it("draws two bots of one name in different environments with different mascots", () => {
     const [teamA, teamS] = sideBySide([TEAM_A_MAIN_BOT_ID, TEAM_S_MAIN_BOT_ID]);
 
     expect(teamA.paths).not.toEqual(teamS.paths);
-    expect(teamA.fills).not.toEqual(teamS.fills);
   });
 
   it("draws one bot the same in a sidebar row as on its own surface's header and message rows", () => {
@@ -282,7 +311,7 @@ describe("a bot's picture", () => {
     expect(row).toEqual(surface);
   });
 
-  it("keeps a bot's mascot and colours through a rename", () => {
+  it("keeps a bot's mascot and colour through a rename", () => {
     // The surface's identity is the one place a bot's title reaches its
     // picture.
     render(
@@ -305,7 +334,7 @@ describe("a bot's picture", () => {
 
 describe("a bot's chosen look", () => {
   const BOT_ID = TEAM_S_MAIN_BOT_ID;
-  const BARE: BotAppearance = { mark: null, color: null, background: null };
+  const BARE: BotAppearance = { mark: null, color: null };
 
   function looking(appearance: BotAppearance | undefined): ReactElement {
     return (
@@ -342,7 +371,7 @@ describe("a bot's chosen look", () => {
     expect(drawn()[0].paths).toEqual(pathsOf(BOT_ID, null, MASCOT_AT_REST));
   });
 
-  it("draws the mascot the person chose and keeps the bot's own colours", () => {
+  it("draws the mascot the person chose and keeps the bot's colour", () => {
     render(looking(BARE));
     const [derived] = drawn();
     cleanup();
@@ -362,12 +391,12 @@ describe("a bot's chosen look", () => {
     render(looking(BARE));
     const [derived] = drawn();
     cleanup();
-    render(looking({ ...BARE, color: 3 }));
+    render(looking({ ...BARE, color: "#4c8af0" }));
     const [chosen] = drawn();
 
     expect(chosen.fills).toEqual(
       drawMascotMark(
-        { ...botMascot(BOT_ID, null, false), ramp: mascotRampAt(3) },
+        { ...botMascot(BOT_ID, null, false), ramp: mascotRampOf("#4c8af0") },
         24,
         MASCOT_AT_REST,
       ).layers.map((layer) => layer.fill),
@@ -407,15 +436,73 @@ describe("a bot's chosen look", () => {
     expect(unreadable.paths).toEqual(pathsOf(BOT_ID, null, MASCOT_AT_REST));
   });
 
+  const DEFAULT_FILLS = drawMascotMark(
+    { ...botMascot(BOT_ID, null, false), ramp: DEFAULT_MASCOT_RAMP },
+    24,
+    MASCOT_AT_REST,
+  ).layers.map((layer) => layer.fill);
+
+  it.each([
+    [
+      "a number, as an older host saved it",
+      '{"mark":null,"color":3,"eyewear":null,"accessory":null}',
+    ],
+    [
+      "a string that is not a hex",
+      '{"mark":null,"color":"red","eyewear":null,"accessory":null}',
+    ],
+    [
+      "an uppercase hex",
+      '{"mark":null,"color":"#F04C4C","eyewear":null,"accessory":null}',
+    ],
+    [
+      "unrecognised",
+      '{"mark":null,"color":"unrecognised","eyewear":null,"accessory":null}',
+    ],
+    ["null", '{"mark":null,"color":null,"eyewear":null,"accessory":null}'],
+  ])(
+    "draws the default colours, without throwing, for a delivered colour that is %s",
+    (_name, json) => {
+      render(looking(deliveredLook(json)));
+
+      expect(drawn()[0].fills).toEqual(DEFAULT_FILLS);
+    },
+  );
+
+  it.each([
+    ["a number", "7"],
+    ["a name", '"red"'],
+    ["an object", "{}"],
+  ])(
+    "draws the colour the bot holds when the colour it was created with is %s",
+    (_name, junk) => {
+      render(
+        looking(
+          deliveredLook(
+            `{"mark":null,"color":"#4c8af0","createdColor":${junk},"eyewear":null,"accessory":null}`,
+          ),
+        ),
+      );
+
+      expect(drawn()[0].fills).toEqual(
+        drawMascotMark(
+          { ...botMascot(BOT_ID, null, false), ramp: mascotRampOf("#4c8af0") },
+          24,
+          MASCOT_AT_REST,
+        ).layers.map((layer) => layer.fill),
+      );
+      expect(drawn()[0].fills).not.toEqual(DEFAULT_FILLS);
+    },
+  );
+
   it.each([
     ["a mascot", { ...BARE, mark: { kind: "mascot", shape: "flame" } }],
-    ["a colour", { ...BARE, color: 17 }],
+    ["a colour", { ...BARE, color: "#f04c4c" }],
     [
-      "all three",
+      "both",
       {
         mark: { kind: "mascot", shape: "cat" },
-        color: 3,
-        background: 20,
+        color: "#7e4cf0",
       },
     ],
   ] as const)(

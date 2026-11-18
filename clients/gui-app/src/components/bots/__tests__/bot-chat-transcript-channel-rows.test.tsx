@@ -131,6 +131,12 @@ import {
 import { PersonAvatar } from "@/components/bots/bot-avatars";
 import { stubImmediateImage } from "@/__tests__/immediate-avatar-image";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { memberPost } from "@/components/bots/__tests__/bot-turn-test-support";
+import {
+  expectPlainLineOutsideQuote,
+  PLAIN_LINE,
+  QUOTE_LINE,
+} from "@/components/bots/__tests__/bot-channel-rows-test-support";
 import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-context";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -326,9 +332,10 @@ describe("<BotChatTranscript /> in the channel", () => {
       openAnnouncementThread,
       threadAnchorKinds: [],
       chooseOption,
+      reply: null,
       answerQuestion: null,
       answerQuestions: null,
-      discussQuestion: null,
+      questionBox: null,
       failedRequest: () => null,
       openTurn: null,
       sessionChatId: null,
@@ -346,7 +353,7 @@ describe("<BotChatTranscript /> in the channel", () => {
     );
 
     expect(screen.queryByTestId("bot-thread-line")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Reply in thread" }));
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
 
     expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
     expect(openAnnouncementThread).toHaveBeenCalledWith(QUESTION_ID, null);
@@ -408,9 +415,10 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
       openAnnouncementThread: vi.fn(),
       threadAnchorKinds: [],
       chooseOption,
+      reply: null,
       answerQuestion: null,
       answerQuestions: null,
-      discussQuestion: null,
+      questionBox: null,
       failedRequest: () => null,
       openTurn: null,
       sessionChatId: null,
@@ -465,6 +473,48 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
       ?.style.getPropertyValue("--avatar-fill");
     expect(rowFill).toBeTruthy();
     expect(rowFill).toBe(byId);
+  });
+
+  it("keeps a plain line typed under a quote out of the quote, as the post is stored in two paragraphs", () => {
+    mountTranscript(
+      [
+        memberPost({
+          messageId: POST_ID,
+          requestId: "req-1",
+          lines: [QUOTE_LINE, PLAIN_LINE],
+          timestamp: 1_000,
+          resolvedBy: null,
+        }),
+      ],
+      channel(null, () => null),
+    );
+
+    expectPlainLineOutsideQuote(
+      within(scrollStub()).getByTestId("bot-member-row"),
+    );
+  });
+
+  it("draws a post stored in two paragraphs as two paragraphs", () => {
+    mountTranscript(
+      [
+        memberPost({
+          messageId: POST_ID,
+          requestId: "req-1",
+          lines: ["First paragraph.", "Second paragraph."],
+          timestamp: 1_000,
+          resolvedBy: null,
+        }),
+      ],
+      channel(null, () => null),
+    );
+
+    const row = within(scrollStub()).getByTestId("bot-member-row");
+    expect(
+      Array.from(
+        row.querySelectorAll("p"),
+        (paragraph) => paragraph.textContent,
+      ),
+    ).toEqual(["First paragraph.", "Second paragraph."]);
   });
 
   it("draws no link to a direct post's answer two rows below it, and keeps the post's thread line", () => {
@@ -527,6 +577,28 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
     expect(
       within(replyRow).getByRole("button", {
         name: "Replying to Olive Owner: Please review",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("badges a member's message with the message it replies to, though that message is the row directly above", () => {
+    mountTranscript(
+      [
+        reply(),
+        {
+          ...otherUserMessage(),
+          messageId: "chosen-1",
+          timestamp: 3_000,
+          repliesTo: REPLY_ID,
+        },
+      ],
+      channel(null, () => null),
+    );
+
+    const memberRow = within(scrollStub()).getByTestId("bot-member-row");
+    expect(
+      within(memberRow).getByRole("button", {
+        name: "Replying to Release Bot: Here is my review",
       }),
     ).toBeTruthy();
   });
@@ -607,9 +679,10 @@ describe("<BotChatTranscript /> a member's answers to a bot's question card", ()
         openAnnouncementThread: null,
         threadAnchorKinds: [],
         chooseOption: null,
+        reply: null,
         answerQuestion: null,
         answerQuestions: null,
-        discussQuestion: null,
+        questionBox: null,
         failedRequest: () => null,
         openTurn: null,
         sessionChatId: null,
@@ -672,9 +745,10 @@ describe("<BotChatTranscript /> the pictures on members' rows", () => {
       openAnnouncementThread: null,
       threadAnchorKinds: [],
       chooseOption: null,
+      reply: null,
       answerQuestion: null,
       answerQuestions: null,
-      discussQuestion: null,
+      questionBox: null,
       failedRequest: () => null,
       openTurn: null,
       sessionChatId: null,

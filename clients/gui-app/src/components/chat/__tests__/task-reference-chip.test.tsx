@@ -1157,6 +1157,7 @@ describe("a task id in a bot's row", () => {
     openAnnouncementThread: null,
     threadAnchorKinds: [],
     chooseOption: null,
+    reply: null,
     questions: null,
     failedRequest: null,
     failedRecovery: null,

@@ -15,6 +15,8 @@ import {
   groupHistoryItems,
   historyPullRequestQueryNumber,
   historyPullRequestSearchEpicIds,
+  historyRowTimeLabel,
+  historyRowTimeMs,
   historyWorktreeSearchEpicIds,
   prioritizePinnedHistoryItems,
   sortHistoryItems,
@@ -26,28 +28,23 @@ function makeItem(
   overrides: Partial<HistoryItem> & { id: string; title: string },
 ): HistoryItem {
   return {
-    id: overrides.id,
-    epicId: overrides.epicId ?? overrides.id,
-    taskType: overrides.taskType ?? "epic",
-    title: overrides.title,
-    initialUserPrompt: overrides.initialUserPrompt ?? "",
-    updatedAtMs: overrides.updatedAtMs ?? 1,
-    updatedLabel: overrides.updatedLabel ?? "x",
-    updatedBucket: overrides.updatedBucket ?? "today",
-    linkedRepos: overrides.linkedRepos ?? [],
-    chatHostIds: overrides.chatHostIds ?? null,
-    linkedWorkspaces: overrides.linkedWorkspaces ?? [],
-    pullRequestNumbers: overrides.pullRequestNumbers ?? [],
-    worktreeBranches: overrides.worktreeBranches ?? [],
-    worktreePaths: overrides.worktreePaths ?? [],
-    ownership: overrides.ownership ?? "mine",
-    permissionRole:
-      overrides.permissionRole === undefined
-        ? "owner"
-        : overrides.permissionRole,
-    isPinned: overrides.isPinned ?? false,
-    isLocalHome: overrides.isLocalHome,
-    isPreservedOrphan: overrides.isPreservedOrphan,
+    epicId: overrides.id,
+    taskType: "epic",
+    initialUserPrompt: "",
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    updatedLabel: "x",
+    updatedBucket: "today",
+    linkedRepos: [],
+    chatHostIds: null,
+    linkedWorkspaces: [],
+    pullRequestNumbers: [],
+    worktreeBranches: [],
+    worktreePaths: [],
+    ownership: "mine",
+    permissionRole: "owner",
+    isPinned: false,
+    ...overrides,
   };
 }
 
@@ -122,6 +119,53 @@ describe("home-page history helpers", () => {
     expect(sortHistoryItems(items, "title-asc").map((item) => item.id)).toEqual(
       ["b", "z", "a", "c"],
     );
+  });
+
+  it("orders created-desc by creation, pinned first, id descending on a tie, ignoring activity", () => {
+    const items = [
+      makeItem({
+        id: "old-but-active",
+        title: "Old but active",
+        createdAtMs: 10,
+        updatedAtMs: 900,
+        recentAtMs: 900,
+      }),
+      makeItem({ id: "tie-a", title: "Tie A", createdAtMs: 50 }),
+      makeItem({ id: "tie-b", title: "Tie B", createdAtMs: 50 }),
+      makeItem({
+        id: "pinned-old",
+        title: "Pinned old",
+        createdAtMs: 5,
+        isPinned: true,
+      }),
+      makeItem({ id: "newest", title: "Newest", createdAtMs: 100 }),
+    ];
+
+    expect(
+      sortHistoryItems(items, "created-desc").map((item) => item.id),
+    ).toEqual(["pinned-old", "newest", "tie-b", "tie-a", "old-but-active"]);
+  });
+
+  it("describes a created-desc row by its creation time", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(100_000);
+      const item = makeItem({
+        id: "a",
+        title: "A",
+        createdAtMs: 40_000,
+        updatedAtMs: 99_000,
+        recentAtMs: 99_000,
+        recentLabel: "just now",
+      });
+
+      expect(historyRowTimeLabel(item, "created-desc")).toBe(
+        "created 1 minute ago",
+      );
+      expect(historyRowTimeMs(item, "created-desc")).toBe(40_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("preserves server last-viewed order while keeping pins first", () => {

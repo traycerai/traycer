@@ -58,6 +58,9 @@ export class MockStreamSession<
     return null;
   }
 
+  hasSentOpenRequest(): boolean {
+    return false;
+  }
   requestReconnect(): void {
     // No-op for these tests; reconnect is owned by the real StreamSession.
   }

@@ -27,12 +27,19 @@ const clients = vi.hoisted(() => ({
 const state = vi.hoisted<{
   worktreeCount: number;
   nodeHostIds: ReadonlySet<string>;
-}>(() => ({ worktreeCount: 1, nodeHostIds: new Set() }));
+  /** The session host's listing completed; `false` is a disabled read. */
+  listingSucceeded: boolean;
+}>(() => ({
+  worktreeCount: 1,
+  nodeHostIds: new Set(),
+  listingSucceeded: true,
+}));
 const captured = vi.hoisted<{
   metadataClients: unknown[];
   flowProps: {
     surfaceHostClient: unknown;
     surfaceHostId: string | null;
+    preferredHostId: string | null;
   }[];
 }>(() => ({ metadataClients: [], flowProps: [] }));
 
@@ -69,6 +76,7 @@ vi.mock("@/hooks/worktree/use-task-worktree-metadata-query", () => ({
         ],
       ]),
       isFetching: false,
+      isSuccess: state.listingSucceeded,
       error: null,
     };
   },
@@ -79,11 +87,13 @@ vi.mock("@/components/epics/sweep-worktrees-flow", () => ({
     readonly epicIds: ReadonlyArray<string> | null;
     readonly surfaceHostClient: unknown;
     readonly surfaceHostId: string | null;
+    readonly preferredHostId: string | null;
   }) => {
     if (props.epicIds !== null) {
       captured.flowProps.push({
         surfaceHostClient: props.surfaceHostClient,
         surfaceHostId: props.surfaceHostId,
+        preferredHostId: props.preferredHostId,
       });
     }
     return null;
@@ -108,6 +118,7 @@ describe("EpicSweepAction resolves through the Epic session host", () => {
   beforeEach(() => {
     state.worktreeCount = 1;
     state.nodeHostIds = new Set();
+    state.listingSucceeded = true;
   });
   afterEach(() => {
     cleanup();
@@ -160,5 +171,25 @@ describe("EpicSweepAction resolves through the Epic session host", () => {
     expect(button.getAttribute("aria-label")).toBe("No worktrees to sweep");
     fireEvent.click(button);
     expect(captured.flowProps).toEqual([]);
+  });
+
+  it("opens on the other agent host once the session host's listing has proved it empty", () => {
+    state.worktreeCount = 0;
+    state.nodeHostIds = new Set(["host-b"]);
+    renderAction();
+    fireEvent.click(screen.getByTestId("epic-sweep-action"));
+
+    expect(captured.flowProps.at(-1)?.preferredHostId).toBe("host-b");
+  });
+
+  it("prefers no other host while the session host's listing never completed", () => {
+    // A disabled read looks settled (not fetching, no error) with `[]` rows.
+    state.worktreeCount = 0;
+    state.listingSucceeded = false;
+    state.nodeHostIds = new Set(["host-b"]);
+    renderAction();
+    fireEvent.click(screen.getByTestId("epic-sweep-action"));
+
+    expect(captured.flowProps.at(-1)?.preferredHostId).toBeNull();
   });
 });

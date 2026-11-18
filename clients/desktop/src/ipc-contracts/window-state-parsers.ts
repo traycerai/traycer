@@ -134,6 +134,9 @@ export function parseLandingDraft(
     workspace: parseJsonValue(obj.workspace) ?? null,
     closed: typeof obj.closed === "boolean" ? obj.closed : null,
     ...(returnedSandbox === null ? {} : { returnedSandbox }),
+    ...(typeof obj.namedHostId === "string" && obj.namedHostId.length > 0
+      ? { namedHostId: obj.namedHostId }
+      : {}),
   };
 }
 

@@ -50,8 +50,7 @@ export function LogInfoLine(props: {
 }
 
 /**
- * The evidence viewer: a quiet external label (mirrors the Notifications
- * "Notification hooks" manager label) followed by a content-sized card. The
+ * The evidence viewer: a quiet external label followed by a content-sized card. The
  * card grows only as its rows need it, then caps at the section's remaining
  * height and becomes the page's primary scroll owner.
  */

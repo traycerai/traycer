@@ -231,7 +231,7 @@ export function isZoomRowAvailable(
   );
 }
 
-/** Sounds › OS notifications — the OS notification-settings pointer. */
+/** Alerts › System › OS notifications — the OS notification-settings pointer. */
 export function isSystemNotificationsRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
@@ -241,12 +241,22 @@ export function isSystemNotificationsRowAvailable(
   );
 }
 
-/** Sounds › Push notifications — the OS push permission of a phone shell. */
+/** Alerts › System › Push notifications — the OS push permission of a phone shell. */
 export function isPushPermissionRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
   return (
     context.runnerHost !== null && context.runnerHost.pushPermission !== null
+  );
+}
+
+/** Alerts › System — drawn where either of its rows is. */
+export function isAlertsSystemGroupAvailable(
+  context: SettingsAvailabilityContext,
+): boolean {
+  return (
+    isSystemNotificationsRowAvailable(context) ||
+    isPushPermissionRowAvailable(context)
   );
 }
 
