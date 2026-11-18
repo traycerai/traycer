@@ -1,0 +1,423 @@
+import { z } from "zod";
+import type {
+  HistoryMatchMode,
+  HistoryOwnershipScope,
+  HistorySortOption,
+  HistoryWorkspaceRef,
+} from "@/components/home/data/home-page.data";
+import {
+  dedupSortWorkspaces,
+  DEFAULT_SORT,
+} from "@/components/home/data/home-page.data";
+import { appLogger, describeLogError } from "@/lib/logger";
+
+const historyMatchModeSchema = z.enum(["any", "all"]);
+const historyOwnershipSchema = z.enum(["mine", "shared"]);
+// `oldest` left the menu for `created-desc`, and stays here so a saved search
+// or URL that carries it still parses: a sort this rejects drops the whole
+// persisted search, filters included.
+const historySortSchema = z.enum([
+  "recent",
+  "last-viewed",
+  "created-desc",
+  "oldest",
+  "title-asc",
+  "title-desc",
+  "relevance",
+]);
+
+export const historySearchParamsSchema = z.object({
+  historyQuery: z.string().optional(),
+  historyRepos: z.union([z.string(), z.array(z.string())]).optional(),
+  historyRepoMode: historyMatchModeSchema.optional(),
+  historyWorkspaces: z.union([z.string(), z.array(z.string())]).optional(),
+  historyWorkspaceMode: historyMatchModeSchema.optional(),
+  historyChatHosts: z.union([z.string(), z.array(z.string())]).optional(),
+  historyChatHostMode: historyMatchModeSchema.optional(),
+  historyOwnership: z
+    .union([historyOwnershipSchema, z.array(historyOwnershipSchema)])
+    .optional(),
+  historyLabels: z.union([z.string(), z.array(z.string())]).optional(),
+  historyLabelMode: historyMatchModeSchema.optional(),
+  historyGroups: z.union([z.string(), z.array(z.string())]).optional(),
+  historyUngrouped: z.boolean().optional(),
+  historySort: historySortSchema.optional(),
+});
+
+export interface HistorySearchState {
+  readonly labelNames?: ReadonlyArray<string>;
+  readonly labelMode?: HistoryMatchMode;
+  readonly groupIds?: ReadonlyArray<string>;
+  readonly includeUngrouped?: boolean;
+  readonly query: string;
+  readonly repos: ReadonlyArray<string>;
+  readonly repoMode: HistoryMatchMode;
+  readonly workspaces: ReadonlyArray<HistoryWorkspaceRef>;
+  readonly workspaceMode: HistoryMatchMode;
+  /**
+   * Hosts that own chats in the task (`chats.owner_host_id`), NOT the hosts
+   * named by `workspaces` - a workspace is bound at create, a chat host is
+   * where the work actually happens. Raw host ids; display names are resolved
+   * against the host directory at render time.
+   */
+  readonly chatHosts: ReadonlyArray<string>;
+  readonly chatHostMode: HistoryMatchMode;
+  readonly ownershipScopes: ReadonlyArray<HistoryOwnershipScope>;
+  readonly sort: HistorySortOption;
+  readonly sortExplicit: boolean;
+}
+
+export type HistorySearchPatch = Partial<
+  Pick<
+    HistorySearchState,
+    | "labelNames"
+    | "labelMode"
+    | "groupIds"
+    | "includeUngrouped"
+    | "query"
+    | "repos"
+    | "repoMode"
+    | "workspaces"
+    | "workspaceMode"
+    | "chatHosts"
+    | "chatHostMode"
+    | "ownershipScopes"
+    | "sort"
+  >
+> & {
+  readonly sortExplicit?: boolean;
+};
+
+export const DEFAULT_HISTORY_SEARCH: HistorySearchState = {
+  labelNames: [],
+  labelMode: "any",
+  groupIds: [],
+  includeUngrouped: false,
+  query: "",
+  repos: [],
+  repoMode: "any",
+  workspaces: [],
+  workspaceMode: "any",
+  chatHosts: [],
+  chatHostMode: "any",
+  ownershipScopes: [],
+  sort: "recent",
+  sortExplicit: false,
+};
+
+/**
+ * Is History showing anything other than the account's whole task feed, in its
+ * default order?
+ *
+ * The union of every narrowing the user can apply - the text query, the facet
+ * filters, and an explicitly chosen non-default sort. Callers that must not
+ * second-guess an explicit request read this: the empty state explains the
+ * narrowing, and the phone's in-progress lift stands down under it (see
+ * the optimistic activity projection), because reordering or backfilling a feed the
+ * user has deliberately narrowed contradicts what they asked for.
+ */
+export function hasActiveHistoryFilters(search: HistorySearchState): boolean {
+  return (
+    (search.labelNames?.length ?? 0) > 0 ||
+    (search.groupIds?.length ?? 0) > 0 ||
+    !!search.includeUngrouped ||
+    search.repos.length > 0 ||
+    search.workspaces.length > 0 ||
+    search.chatHosts.length > 0 ||
+    search.ownershipScopes.length > 0 ||
+    (search.sortExplicit && search.sort !== DEFAULT_SORT) ||
+    search.query.trim().length > 0
+  );
+}
+
+const persistedHistorySearchSchema = z.object({
+  labelNames: z.array(z.string()).optional(),
+  labelMode: historyMatchModeSchema.optional(),
+  groupIds: z.array(z.string()).optional(),
+  includeUngrouped: z.boolean().optional(),
+  query: z.string().optional(),
+  repos: z.array(z.string()).optional(),
+  repoMode: historyMatchModeSchema.optional(),
+  workspaces: z
+    .array(z.object({ hostId: z.string(), workspacePath: z.string() }))
+    .optional(),
+  workspaceMode: historyMatchModeSchema.optional(),
+  chatHosts: z.array(z.string()).optional(),
+  chatHostMode: historyMatchModeSchema.optional(),
+  ownershipScopes: z.array(historyOwnershipSchema).optional(),
+  sort: historySortSchema.optional(),
+  sortExplicit: z.boolean().optional(),
+});
+
+/**
+ * Total over unknown persisted shapes. A stored `search` written by a build
+ * that predates a field addition (e.g. `chatHosts`, #1303) is missing that
+ * field entirely, and zustand's default rehydration merge takes the nested
+ * object verbatim - so every reader of the new field would crash on
+ * `undefined`. Fill absent fields from defaults instead of trusting the
+ * persisted shape to match the current `HistorySearchState`.
+ */
+export function normalizePersistedHistorySearch(
+  value: unknown,
+): HistorySearchState {
+  const parsed = persistedHistorySearchSchema.safeParse(value);
+  if (!parsed.success) return DEFAULT_HISTORY_SEARCH;
+  return {
+    labelNames: parsed.data.labelNames ?? [],
+    labelMode: parsed.data.labelMode ?? "any",
+    groupIds: parsed.data.groupIds ?? [],
+    includeUngrouped: parsed.data.includeUngrouped ?? false,
+    query: parsed.data.query ?? DEFAULT_HISTORY_SEARCH.query,
+    repos: parsed.data.repos ?? DEFAULT_HISTORY_SEARCH.repos,
+    repoMode: parsed.data.repoMode ?? DEFAULT_HISTORY_SEARCH.repoMode,
+    workspaces: parsed.data.workspaces ?? DEFAULT_HISTORY_SEARCH.workspaces,
+    workspaceMode:
+      parsed.data.workspaceMode ?? DEFAULT_HISTORY_SEARCH.workspaceMode,
+    chatHosts: parsed.data.chatHosts ?? DEFAULT_HISTORY_SEARCH.chatHosts,
+    chatHostMode:
+      parsed.data.chatHostMode ?? DEFAULT_HISTORY_SEARCH.chatHostMode,
+    ownershipScopes:
+      parsed.data.ownershipScopes ?? DEFAULT_HISTORY_SEARCH.ownershipScopes,
+    sort: parsed.data.sort ?? DEFAULT_HISTORY_SEARCH.sort,
+    sortExplicit:
+      parsed.data.sortExplicit ?? DEFAULT_HISTORY_SEARCH.sortExplicit,
+  };
+}
+
+export function parseHistorySearch(
+  raw: Record<string, unknown>,
+): HistorySearchState {
+  const parsed = historySearchParamsSchema.safeParse(raw);
+  if (!parsed.success) return DEFAULT_HISTORY_SEARCH;
+  const query = normalizeQuery(parsed.data.historyQuery);
+  const sortExplicit = parsed.data.historySort !== undefined;
+  return {
+    labelNames: normalizeRepos(parsed.data.historyLabels),
+    labelMode: parsed.data.historyLabelMode ?? "any",
+    groupIds: normalizeChatHosts(parsed.data.historyGroups),
+    includeUngrouped: parsed.data.historyUngrouped ?? false,
+    query,
+    repos: normalizeRepos(parsed.data.historyRepos),
+    repoMode: parsed.data.historyRepoMode ?? DEFAULT_HISTORY_SEARCH.repoMode,
+    workspaces: normalizeWorkspaces(parsed.data.historyWorkspaces),
+    workspaceMode:
+      parsed.data.historyWorkspaceMode ?? DEFAULT_HISTORY_SEARCH.workspaceMode,
+    chatHosts: normalizeChatHosts(parsed.data.historyChatHosts),
+    chatHostMode:
+      parsed.data.historyChatHostMode ?? DEFAULT_HISTORY_SEARCH.chatHostMode,
+    ownershipScopes: normalizeArray(parsed.data.historyOwnership),
+    sort:
+      parsed.data.historySort ??
+      (query.trim().length > 0 ? "relevance" : DEFAULT_HISTORY_SEARCH.sort),
+    sortExplicit,
+  };
+}
+
+export function patchHistorySearch(
+  current: HistorySearchState,
+  patch: HistorySearchPatch,
+): HistorySearchState {
+  const query = patch.query ?? current.query;
+  const sortExplicit = patch.sortExplicit ?? current.sortExplicit;
+  const sort =
+    patch.sort ?? implicitHistorySort(current.sort, query, sortExplicit);
+  return {
+    ...patchOrganizationSearch(current, patch),
+    query,
+    repos: patch.repos ?? current.repos,
+    repoMode: patch.repoMode ?? current.repoMode,
+    workspaces: patch.workspaces ?? current.workspaces,
+    workspaceMode: patch.workspaceMode ?? current.workspaceMode,
+    chatHosts: patch.chatHosts ?? current.chatHosts,
+    chatHostMode: patch.chatHostMode ?? current.chatHostMode,
+    ownershipScopes: patch.ownershipScopes ?? current.ownershipScopes,
+    sort,
+    sortExplicit,
+  };
+}
+
+function patchOrganizationSearch(
+  current: HistorySearchState,
+  patch: HistorySearchPatch,
+) {
+  return {
+    labelNames: patch.labelNames ?? current.labelNames ?? [],
+    labelMode: patch.labelMode ?? current.labelMode ?? "any",
+    groupIds: patch.groupIds ?? current.groupIds ?? [],
+    includeUngrouped:
+      patch.includeUngrouped ?? current.includeUngrouped ?? false,
+  };
+}
+function organizationSearchParams(state: HistorySearchState) {
+  return {
+    historyLabels: state.labelNames?.length ? state.labelNames : undefined,
+    historyLabelMode:
+      (state.labelNames?.length ?? 0) > 1 ? state.labelMode : undefined,
+    historyGroups: state.groupIds?.length ? state.groupIds : undefined,
+    historyUngrouped: state.includeUngrouped || undefined,
+  };
+}
+
+export function historySearchToParams(
+  state: HistorySearchState,
+): Record<string, string | boolean | ReadonlyArray<string> | undefined> {
+  return {
+    ...organizationSearchParams(state),
+    historyQuery: state.query.length > 0 ? state.query : undefined,
+    historyRepos: state.repos.length > 0 ? state.repos : undefined,
+    historyRepoMode:
+      state.repos.length > 1 &&
+      state.repoMode !== DEFAULT_HISTORY_SEARCH.repoMode
+        ? state.repoMode
+        : undefined,
+    historyWorkspaces:
+      state.workspaces.length > 0
+        ? state.workspaces.map(serializeWorkspaceParam)
+        : undefined,
+    historyWorkspaceMode:
+      state.workspaces.length > 1 &&
+      state.workspaceMode !== DEFAULT_HISTORY_SEARCH.workspaceMode
+        ? state.workspaceMode
+        : undefined,
+    historyChatHosts: state.chatHosts.length > 0 ? state.chatHosts : undefined,
+    historyChatHostMode:
+      state.chatHosts.length > 1 &&
+      state.chatHostMode !== DEFAULT_HISTORY_SEARCH.chatHostMode
+        ? state.chatHostMode
+        : undefined,
+    historyOwnership:
+      state.ownershipScopes.length > 0 ? state.ownershipScopes : undefined,
+    historySort:
+      state.sortExplicit &&
+      (state.sort !== DEFAULT_HISTORY_SEARCH.sort || state.query.length > 0)
+        ? state.sort
+        : undefined,
+  };
+}
+
+export type HistorySearchParamKey =
+  | "historyLabels"
+  | "historyLabelMode"
+  | "historyGroups"
+  | "historyUngrouped"
+  | "historyQuery"
+  | "historyRepos"
+  | "historyRepoMode"
+  | "historyWorkspaces"
+  | "historyWorkspaceMode"
+  | "historyChatHosts"
+  | "historyChatHostMode"
+  | "historyOwnership"
+  | "historyDrafts"
+  | "historySort";
+
+export type HistorySearchParamsCleared<TPrev> = Omit<
+  TPrev,
+  HistorySearchParamKey
+>;
+
+type HistorySearchParamRecord = Partial<Record<HistorySearchParamKey, unknown>>;
+
+export function clearHistorySearchParams<
+  TPrev extends HistorySearchParamRecord,
+>(prev: TPrev): HistorySearchParamsCleared<TPrev> {
+  const {
+    historyLabels: _historyLabels,
+    historyLabelMode: _historyLabelMode,
+    historyGroups: _historyGroups,
+    historyUngrouped: _historyUngrouped,
+    historyQuery: _historyQuery,
+    historyRepos: _historyRepos,
+    historyRepoMode: _historyRepoMode,
+    historyWorkspaces: _historyWorkspaces,
+    historyWorkspaceMode: _historyWorkspaceMode,
+    historyChatHosts: _historyChatHosts,
+    historyChatHostMode: _historyChatHostMode,
+    historyOwnership: _historyOwnership,
+    historyDrafts: _historyDrafts,
+    historySort: _historySort,
+    ...rest
+  } = prev;
+  return rest;
+}
+
+function normalizeQuery(value: string | undefined): string {
+  return value ?? "";
+}
+
+function normalizeArray<T extends string>(
+  value: T | T[] | undefined,
+): ReadonlyArray<T> {
+  if (value === undefined) return [];
+  return Array.from(new Set(Array.isArray(value) ? value : [value]));
+}
+
+function normalizeRepos(
+  value: string | string[] | undefined,
+): ReadonlyArray<string> {
+  const names = normalizeArray(value).flatMap((name) => {
+    const trimmed = name.trim();
+    return trimmed.length > 0 ? [trimmed] : [];
+  });
+  return Array.from(new Set(names)).sort((left, right) =>
+    left.localeCompare(right),
+  );
+}
+
+function normalizeChatHosts(
+  value: string | string[] | undefined,
+): ReadonlyArray<string> {
+  // Dedupe AFTER trimming. `normalizeArray` dedupes raw values, so
+  // `"host-a"` and `" host-a "` survive it as two entries and then trim into
+  // the same id - which would serialize the same host twice into the URL and
+  // double its contribution to the active-filter count.
+  const hostIds = normalizeArray(value).flatMap((hostId) => {
+    const trimmed = hostId.trim();
+    return trimmed.length > 0 ? [trimmed] : [];
+  });
+  return Array.from(new Set(hostIds)).sort((left, right) =>
+    left.localeCompare(right),
+  );
+}
+
+function normalizeWorkspaces(
+  value: string | string[] | undefined,
+): ReadonlyArray<HistoryWorkspaceRef> {
+  return dedupSortWorkspaces(
+    normalizeArray(value).flatMap(parseWorkspaceParam),
+  );
+}
+
+function serializeWorkspaceParam(workspace: HistoryWorkspaceRef): string {
+  return `${encodeURIComponent(workspace.hostId)}:${encodeURIComponent(
+    workspace.workspacePath,
+  )}`;
+}
+
+function parseWorkspaceParam(value: string): HistoryWorkspaceRef[] {
+  const separatorIndex = value.indexOf(":");
+  if (separatorIndex <= 0 || separatorIndex === value.length - 1) return [];
+  try {
+    const hostId = decodeURIComponent(value.slice(0, separatorIndex));
+    const workspacePath = decodeURIComponent(value.slice(separatorIndex + 1));
+    return hostId.length > 0 && workspacePath.length > 0
+      ? [{ hostId, workspacePath }]
+      : [];
+  } catch (error) {
+    appLogger.warn("[history-search] workspace parameter parse failed", {
+      valueLength: value.length,
+      error: describeLogError(error),
+    });
+    return [];
+  }
+}
+
+function implicitHistorySort(
+  currentSort: HistorySortOption,
+  query: string,
+  sortExplicit: boolean,
+): HistorySortOption {
+  if (sortExplicit) return currentSort;
+  if (query.trim().length > 0) return "relevance";
+  return DEFAULT_HISTORY_SEARCH.sort;
+}

@@ -1,0 +1,396 @@
+/**
+ * What an OS back request does, in the order Android users expect: an open
+ * drawer closes, a covering modal dismisses, otherwise the app's own history
+ * steps back through the SAME `goBack` the edge swipe and the desktop arrows
+ * call, and with nothing behind the app steps out of the way.
+ *
+ * The shell is a fake `systemBack` capability; every other piece is real.
+ */
+import { useRef, useState } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  waitFor,
+} from "@testing-library/react";
+import { QueryClient } from "@tanstack/react-query";
+import {
+  RouterContextProvider,
+  createMemoryHistory,
+  createRouter,
+  type RouterHistory,
+} from "@tanstack/react-router";
+import type { ISystemBackHost } from "@traycer-clients/shared/platform/runner-host";
+import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
+import { routeTree } from "@/routeTree.gen";
+import type { AppRouter } from "@/router";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { OnboardingCoachmark } from "@/components/onboarding/onboarding-coachmark";
+import { useSystemBack } from "@/components/layout/shell/use-system-back";
+
+// Same stand-in the coachmark suites use: jsdom has no layout, so only the
+// element the card anchors to is real.
+vi.mock("@floating-ui/dom", () => ({
+  computePosition: vi.fn(() =>
+    Promise.resolve({
+      x: 24,
+      y: 48,
+      placement: "bottom-start",
+      strategy: "fixed",
+      middlewareData: {},
+    }),
+  ),
+  autoUpdate: (
+    _reference: Element,
+    _floating: Element,
+    update: () => void,
+  ): (() => void) => {
+    update();
+    return () => undefined;
+  },
+  offset: () => ({ name: "offset", fn: () => ({}) }),
+  flip: () => ({ name: "flip", fn: () => ({}) }),
+  shift: () => ({ name: "shift", fn: () => ({}) }),
+}));
+
+class FakeSystemBack implements ISystemBackHost {
+  private readonly handlers = new Set<() => void>();
+  readonly minimize = vi.fn(async (): Promise<void> => {});
+
+  onBack(handler: () => void): { dispose: () => void } {
+    this.handlers.add(handler);
+    return { dispose: () => this.handlers.delete(handler) };
+  }
+
+  press(): void {
+    for (const handler of this.handlers) handler();
+  }
+}
+
+function makeRouter(history: RouterHistory): AppRouter {
+  return createRouter({
+    routeTree,
+    history,
+    context: {
+      queryClient: new QueryClient(),
+      getAuthSnapshot: () => useAuthStore.getState(),
+      getHostClient: () => null,
+    },
+  });
+}
+
+function mount(history: RouterHistory): FakeSystemBack {
+  const systemBack = new FakeSystemBack();
+  const router = makeRouter(history);
+  renderHook(() => useSystemBack(), {
+    wrapper: ({ children }) => (
+      <RunnerHostProvider runnerHost={createFakeRunnerHost({ systemBack })}>
+        <RouterContextProvider router={router}>
+          {children}
+        </RouterContextProvider>
+      </RunnerHostProvider>
+    ),
+  });
+  return systemBack;
+}
+
+function stubGetClientRects(): () => void {
+  const original = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "getClientRects",
+  );
+  Object.defineProperty(HTMLElement.prototype, "getClientRects", {
+    configurable: true,
+    value: () => ({ length: 1 }),
+  });
+  return () => {
+    if (original !== undefined) {
+      Object.defineProperty(HTMLElement.prototype, "getClientRects", original);
+    }
+  };
+}
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  useMobileNavStore.setState({ open: false });
+});
+
+describe("useSystemBack", () => {
+  // The shell mounts under every route-level test, and not all of them stand
+  // up a runner host. No host is the same answer as a host with no capability:
+  // nothing to attach to, nothing attached.
+  it("attaches nothing when mounted outside a runner host provider", () => {
+    const router = makeRouter(createMemoryHistory({ initialEntries: ["/"] }));
+
+    expect(() =>
+      renderHook(() => useSystemBack(), {
+        wrapper: ({ children }) => (
+          <RouterContextProvider router={router}>
+            {children}
+          </RouterContextProvider>
+        ),
+      }),
+    ).not.toThrow();
+  });
+
+  it("steps the app's history back on an OS back press", () => {
+    const history = createMemoryHistory({ initialEntries: ["/", "/epics"] });
+    const backSpy = vi.spyOn(history, "back");
+    const systemBack = mount(history);
+
+    act(() => systemBack.press());
+
+    expect(backSpy).toHaveBeenCalledTimes(1);
+    expect(systemBack.minimize).not.toHaveBeenCalled();
+  });
+
+  it("closes the navigation drawer instead of navigating", () => {
+    const history = createMemoryHistory({ initialEntries: ["/", "/epics"] });
+    const backSpy = vi.spyOn(history, "back");
+    const systemBack = mount(history);
+    useMobileNavStore.setState({ open: true });
+
+    act(() => systemBack.press());
+
+    expect(useMobileNavStore.getState().open).toBe(false);
+    expect(backSpy).not.toHaveBeenCalled();
+  });
+
+  it("asks the shell to step out of the way when nothing is behind", () => {
+    const history = createMemoryHistory({ initialEntries: ["/"] });
+    const backSpy = vi.spyOn(history, "back");
+    const systemBack = mount(history);
+
+    act(() => systemBack.press());
+
+    expect(backSpy).not.toHaveBeenCalled();
+    expect(systemBack.minimize).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Driven through a REAL sheet, uncontrolled so that the dismissal the press
+   * triggers is the primitive's own. Setting the barrier style by hand would
+   * pass against a signal no surface ever produces.
+   */
+  it("dismisses a covering modal rather than navigating beneath it", async () => {
+    const history = createMemoryHistory({ initialEntries: ["/", "/epics"] });
+    const backSpy = vi.spyOn(history, "back");
+    const systemBack = new FakeSystemBack();
+    const router = makeRouter(history);
+    function UnderSheet() {
+      useSystemBack();
+      return (
+        <Sheet defaultOpen>
+          <SheetContent side="bottom">
+            <SheetTitle>Confirm</SheetTitle>
+          </SheetContent>
+        </Sheet>
+      );
+    }
+    const view = render(
+      <RunnerHostProvider runnerHost={createFakeRunnerHost({ systemBack })}>
+        <RouterContextProvider router={router}>
+          <UnderSheet />
+        </RouterContextProvider>
+      </RunnerHostProvider>,
+    );
+    await waitFor(() => {
+      expect(document.body.style.pointerEvents).toBe("none");
+    });
+
+    act(() => systemBack.press());
+
+    await waitFor(() => {
+      expect(view.queryByText("Confirm")).toBeNull();
+    });
+    expect(backSpy).not.toHaveBeenCalled();
+    expect(systemBack.minimize).not.toHaveBeenCalled();
+  });
+
+  it("collapses a pulled composer instead of navigating", () => {
+    const history = createMemoryHistory({ initialEntries: ["/", "/epics"] });
+    const backSpy = vi.spyOn(history, "back");
+    const systemBack = new FakeSystemBack();
+    const router = makeRouter(history);
+    function PulledComposer() {
+      useSystemBack();
+      const [expanded, setExpanded] = useState(true);
+      return (
+        <div data-composer-expanded>
+          <button
+            type="button"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((current) => !current)}
+          >
+            Composer
+          </button>
+        </div>
+      );
+    }
+    const view = render(
+      <RunnerHostProvider runnerHost={createFakeRunnerHost({ systemBack })}>
+        <RouterContextProvider router={router}>
+          <PulledComposer />
+        </RouterContextProvider>
+      </RunnerHostProvider>,
+    );
+
+    act(() => systemBack.press());
+
+    expect(
+      view
+        .getByRole("button", { name: "Composer" })
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(backSpy).not.toHaveBeenCalled();
+    expect(systemBack.minimize).not.toHaveBeenCalled();
+  });
+
+  it("closes a popover over a pulled composer first, then collapses the composer", async () => {
+    const systemBack = new FakeSystemBack();
+    const router = makeRouter(
+      createMemoryHistory({ initialEntries: ["/", "/epics"] }),
+    );
+    function PulledComposerWithPicker() {
+      useSystemBack();
+      const [expanded, setExpanded] = useState(true);
+      return (
+        <div data-composer-expanded>
+          <button
+            type="button"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((current) => !current)}
+          >
+            Composer
+          </button>
+          <Popover defaultOpen modal={false}>
+            <PopoverTrigger>Open</PopoverTrigger>
+            <PopoverContent>Picker body</PopoverContent>
+          </Popover>
+        </div>
+      );
+    }
+    const view = render(
+      <RunnerHostProvider runnerHost={createFakeRunnerHost({ systemBack })}>
+        <RouterContextProvider router={router}>
+          <PulledComposerWithPicker />
+        </RouterContextProvider>
+      </RunnerHostProvider>,
+    );
+    await waitFor(() => {
+      expect(view.getByText("Picker body")).toBeTruthy();
+    });
+    const composer = (): string | null =>
+      view
+        .getByRole("button", { name: "Composer", hidden: true })
+        .getAttribute("aria-expanded");
+
+    act(() => systemBack.press());
+
+    await waitFor(() => {
+      expect(view.queryByText("Picker body")).toBeNull();
+    });
+    expect(composer()).toBe("true");
+
+    act(() => systemBack.press());
+
+    expect(composer()).toBe("false");
+  });
+
+  it("closes an open non-modal popover instead of navigating", async () => {
+    const history = createMemoryHistory({ initialEntries: ["/", "/epics"] });
+    const backSpy = vi.spyOn(history, "back");
+    const systemBack = new FakeSystemBack();
+    const router = makeRouter(history);
+    function UnderPopover() {
+      useSystemBack();
+      return (
+        <Popover defaultOpen modal={false}>
+          <PopoverTrigger>Open</PopoverTrigger>
+          <PopoverContent>Picker body</PopoverContent>
+        </Popover>
+      );
+    }
+    const view = render(
+      <RunnerHostProvider runnerHost={createFakeRunnerHost({ systemBack })}>
+        <RouterContextProvider router={router}>
+          <UnderPopover />
+        </RouterContextProvider>
+      </RunnerHostProvider>,
+    );
+    await waitFor(() => {
+      expect(view.getByText("Picker body")).toBeTruthy();
+    });
+
+    act(() => systemBack.press());
+
+    await waitFor(() => {
+      expect(view.queryByText("Picker body")).toBeNull();
+    });
+    expect(backSpy).not.toHaveBeenCalled();
+    expect(systemBack.minimize).not.toHaveBeenCalled();
+  });
+
+  it("closes the guide when its coachmark is up instead of navigating or minimizing", async () => {
+    const restoreRects = stubGetClientRects();
+    const history = createMemoryHistory({ initialEntries: ["/"] });
+    const backSpy = vi.spyOn(history, "back");
+    const systemBack = new FakeSystemBack();
+    const router = makeRouter(history);
+    const onClose = vi.fn();
+    function GuideUp() {
+      useSystemBack();
+      const rootRef = useRef<HTMLDivElement>(null);
+      return (
+        <div ref={rootRef}>
+          <button type="button" data-guide-target>
+            Target
+          </button>
+          <OnboardingCoachmark
+            id="back-guide"
+            title="Guide"
+            content="Content"
+            progress={null}
+            rootRef={rootRef}
+            selector="[data-guide-target]"
+            onClose={onClose}
+            onTarget={null}
+            back={null}
+            action={null}
+          />
+        </div>
+      );
+    }
+    const view = render(
+      <RunnerHostProvider runnerHost={createFakeRunnerHost({ systemBack })}>
+        <RouterContextProvider router={router}>
+          <GuideUp />
+        </RouterContextProvider>
+      </RunnerHostProvider>,
+    );
+    try {
+      await waitFor(() => {
+        expect(view.getByTestId("guide-coachmark")).toBeTruthy();
+      });
+
+      act(() => systemBack.press());
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(backSpy).not.toHaveBeenCalled();
+      expect(systemBack.minimize).not.toHaveBeenCalled();
+    } finally {
+      restoreRects();
+    }
+  });
+});

@@ -1,0 +1,369 @@
+import { beforeEach, describe, expect, it } from "vitest";
+import { hashKey } from "@tanstack/react-query";
+import type {
+  ListTaskLight,
+  ListTasksResponse,
+} from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  useCloudEpicTasksPagesStore,
+  cloudEpicTasksPageGeneration,
+  cloudEpicTasksPageIdentity,
+  registerCloudEpicTasksPageIdentity,
+  resetCloudEpicTasksPageIdentity,
+  resetCloudEpicTasksPagesForScope,
+  resetLastViewedCloudEpicTasksPagesForScope,
+  setCloudEpicTasksPagePinned,
+  setCloudEpicTasksPageLocalHome,
+  setCloudEpicTasksPageLocalHomeForUser,
+} from "@/stores/epics/cloud-epic-tasks-pages-store";
+import { cloudEpicTasksQueryKey } from "@/lib/cloud-epic-tasks-query";
+
+const IDENTITY = "host-a|user-a|{}";
+
+function page(marker: string): ListTasksResponse {
+  return { tasks: [], hasMore: true, nextCursor: marker };
+}
+
+function epicTask(epicId: string, pinned: boolean): ListTaskLight {
+  return {
+    epic: {
+      light: {
+        id: epicId,
+        title: `Epic ${epicId}`,
+        initialUserPrompt: "",
+        ticketCount: 0,
+        specCount: 0,
+        storyCount: 0,
+        reviewCount: 0,
+        status: "in_progress",
+        createdAt: 0,
+        updatedAt: 0,
+        createdBy: "user-a",
+        version: "1",
+      },
+      permission: null,
+      repos: [],
+      workspaces: [],
+      roomInfo: null,
+    },
+    phase: null,
+    pinned,
+  };
+}
+
+function pagesFor(identity: string): readonly ListTasksResponse[] | undefined {
+  return useCloudEpicTasksPagesStore.getState().pagesByIdentity[identity];
+}
+
+describe("useCloudEpicTasksPagesStore", () => {
+  beforeEach(() => {
+    useCloudEpicTasksPagesStore.setState({
+      pagesByIdentity: {},
+      generationByIdentity: {},
+      deletedEpicIdsByScope: {},
+    });
+  });
+
+  it("appends a page tagged with the current generation", () => {
+    const generation = cloudEpicTasksPageGeneration(IDENTITY);
+    const first = page("a");
+
+    useCloudEpicTasksPagesStore
+      .getState()
+      .appendPage(IDENTITY, generation, first);
+
+    expect(pagesFor(IDENTITY)).toEqual([first]);
+  });
+
+  it("drops a late page whose generation was superseded by resetIdentity", () => {
+    // A "Show more" fetch starts and captures the generation...
+    const staleGeneration = cloudEpicTasksPageGeneration(IDENTITY);
+    // ...then a refresh resets the identity while that fetch is in flight...
+    useCloudEpicTasksPagesStore.getState().resetIdentity(IDENTITY);
+    // ...and the stale fetch finally resolves.
+    useCloudEpicTasksPagesStore
+      .getState()
+      .appendPage(IDENTITY, staleGeneration, page("stale"));
+
+    // The reset list must NOT be revived by the late response.
+    expect(pagesFor(IDENTITY)).toBeUndefined();
+  });
+
+  it("clears pages and bumps the generation on reset, then accepts a fresh fetch", () => {
+    const g0 = cloudEpicTasksPageGeneration(IDENTITY);
+    useCloudEpicTasksPagesStore.getState().appendPage(IDENTITY, g0, page("a"));
+
+    useCloudEpicTasksPagesStore.getState().resetIdentity(IDENTITY);
+    expect(pagesFor(IDENTITY)).toBeUndefined();
+
+    const g1 = cloudEpicTasksPageGeneration(IDENTITY);
+    expect(g1).toBe(g0 + 1);
+
+    const fresh = page("fresh");
+    useCloudEpicTasksPagesStore.getState().appendPage(IDENTITY, g1, fresh);
+    expect(pagesFor(IDENTITY)).toEqual([fresh]);
+  });
+
+  it("scopes the generation per identity", () => {
+    const otherGeneration = cloudEpicTasksPageGeneration("other-identity");
+
+    useCloudEpicTasksPagesStore.getState().resetIdentity(IDENTITY);
+
+    expect(cloudEpicTasksPageGeneration("other-identity")).toBe(
+      otherGeneration,
+    );
+  });
+
+  it("resets the same retained-tail bucket TanStack uses for reordered request keys", () => {
+    const forwardRequest = {
+      limit: 20,
+      filters: { query: "local" },
+      sort: "recent" as const,
+      extensionPhaseVersion: "1",
+      extensionEpicVersion: "1",
+    };
+    const reorderedRequest = {
+      sort: "recent" as const,
+      filters: { query: "local" },
+      limit: 20,
+      extensionEpicVersion: "1",
+      extensionPhaseVersion: "1",
+    };
+    const forwardIdentity = cloudEpicTasksPageIdentity(
+      "host-a",
+      "user-a",
+      forwardRequest,
+    );
+    const reorderedIdentity = cloudEpicTasksPageIdentity(
+      "host-a",
+      "user-a",
+      reorderedRequest,
+    );
+
+    // This is not just equal objects: TanStack gives these insertion-order
+    // variants one actual query cache slot. Their retained tails must use the
+    // exact same canonical request identity, or first-page refresh resets a
+    // different bucket and leaves the old tail renderable.
+    expect(
+      hashKey(cloudEpicTasksQueryKey("host-a", "user-a", forwardRequest)),
+    ).toBe(
+      hashKey(cloudEpicTasksQueryKey("host-a", "user-a", reorderedRequest)),
+    );
+    expect(forwardIdentity).toBe(
+      `host-a|user-a|${hashKey(
+        cloudEpicTasksQueryKey("host-a", "user-a", forwardRequest),
+      )}`,
+    );
+    expect(reorderedIdentity).toBe(forwardIdentity);
+
+    useCloudEpicTasksPagesStore
+      .getState()
+      .appendPage(forwardIdentity, 0, page("old-tail"));
+    resetCloudEpicTasksPageIdentity(reorderedIdentity);
+
+    expect(pagesFor(forwardIdentity)).toBeUndefined();
+    expect(cloudEpicTasksPageGeneration(forwardIdentity)).toBe(1);
+  });
+
+  it("rejects a stale first-tail response when a scope reset lands while it is still in flight", () => {
+    const hostId = "host-a";
+    const userId = "user-a";
+    const identity = `${hostId}|${userId}|recent`;
+
+    // `fetchNextPage` starting the FIRST "Show more" request for an identity
+    // that has never appended a page or been reset before: it must register
+    // the identity before capturing the generation it hands to the request,
+    // or a reset landing during this exact window has nothing to advance.
+    // This is the precise gap reproduced as
+    // `{"captured":0,"afterReset":0,"accepted":1}`.
+    registerCloudEpicTasksPageIdentity(identity);
+    const capturedGeneration = cloudEpicTasksPageGeneration(identity);
+    expect(capturedGeneration).toBe(0);
+
+    // A scope-level reset lands while that first tail request is still in
+    // flight.
+    resetCloudEpicTasksPagesForScope(hostId, userId);
+    expect(cloudEpicTasksPageGeneration(identity)).toBe(1);
+
+    // The stale tail finally resolves after the refreshed first page has
+    // already landed.
+    useCloudEpicTasksPagesStore
+      .getState()
+      .appendPage(identity, capturedGeneration, page("stale-tail"));
+
+    expect(pagesFor(identity)).toBeUndefined();
+  });
+
+  it("resets every pagination identity for one host and user", () => {
+    const matchingFirst = "host-a|user-a|recent";
+    const matchingSecond = "host-a|user-a|title";
+    const otherUser = "host-a|user-b|recent";
+    const state = useCloudEpicTasksPagesStore.getState();
+    [matchingFirst, matchingSecond, otherUser].forEach((identity) => {
+      state.appendPage(
+        identity,
+        cloudEpicTasksPageGeneration(identity),
+        page(identity),
+      );
+    });
+
+    resetCloudEpicTasksPagesForScope("host-a", "user-a");
+
+    expect(pagesFor(matchingFirst)).toBeUndefined();
+    expect(pagesFor(matchingSecond)).toBeUndefined();
+    expect(pagesFor(otherUser)).toHaveLength(1);
+    expect(cloudEpicTasksPageGeneration(matchingFirst)).toBe(1);
+    expect(cloudEpicTasksPageGeneration(matchingSecond)).toBe(1);
+    expect(cloudEpicTasksPageGeneration(otherUser)).toBe(0);
+  });
+
+  it("resets only last-viewed pagination identities for one host and user", () => {
+    const lastViewed =
+      'host-a|user-a|{"limit":20,"filters":null,"sort":"last-viewed"}';
+    const recent = 'host-a|user-a|{"limit":20,"filters":null,"sort":"recent"}';
+    const otherUser =
+      'host-a|user-b|{"limit":20,"filters":null,"sort":"last-viewed"}';
+    const state = useCloudEpicTasksPagesStore.getState();
+    [lastViewed, recent, otherUser].forEach((identity) => {
+      state.appendPage(identity, 0, page(identity));
+    });
+
+    resetLastViewedCloudEpicTasksPagesForScope("host-a", "user-a");
+
+    expect(pagesFor(lastViewed)).toBeUndefined();
+    expect(cloudEpicTasksPageGeneration(lastViewed)).toBe(1);
+    expect(pagesFor(recent)).toHaveLength(1);
+    expect(pagesFor(otherUser)).toHaveLength(1);
+  });
+
+  it("keeps a host id containing the separator inside its own scope", () => {
+    // `a|b` is a valid host id (`git-rich-slot-ordering.test.ts` uses it).
+    // Unencoded, the parsers read host `a` / user `b`: a scope reset for
+    // (`a|b`, `user-a`) matched nothing, and a delete tombstone recorded for
+    // that scope was looked up under the wrong one.
+    const identity = cloudEpicTasksPageIdentity("a|b", "user-a", {
+      limit: 20,
+      filters: {},
+      sort: "recent" as const,
+      extensionPhaseVersion: "1",
+      extensionEpicVersion: "1",
+    });
+    const state = useCloudEpicTasksPagesStore.getState();
+    state.registerIdentity(identity);
+    state.recordDeletedEpicIdsForScope("a|b", "user-a", ["epic-1"]);
+
+    // The tombstone reaches this identity's scope, not host `a` / user `b`.
+    state.appendPage(identity, 0, {
+      tasks: [epicTask("epic-1", false), epicTask("epic-2", false)],
+      hasMore: false,
+    });
+    expect(
+      pagesFor(identity)?.flatMap((p) =>
+        p.tasks.map((t) => t.epic?.light?.id ?? null),
+      ),
+    ).toEqual(["epic-2"]);
+
+    resetCloudEpicTasksPagesForScope("a|b", "user-a");
+    expect(pagesFor(identity)).toBeUndefined();
+    expect(cloudEpicTasksPageGeneration(identity)).toBe(1);
+  });
+
+  it("patches one epic's pin bit across a scope's tails without resetting them", () => {
+    const scopedIdentity = "host-a|user-a|recent";
+    const otherUserIdentity = "host-a|user-b|recent";
+    const state = useCloudEpicTasksPagesStore.getState();
+    state.appendPage(scopedIdentity, 0, {
+      tasks: [epicTask("epic-1", false), epicTask("epic-2", true)],
+      hasMore: true,
+      nextCursor: "next",
+    });
+    state.appendPage(otherUserIdentity, 0, {
+      tasks: [epicTask("epic-1", false)],
+      hasMore: false,
+    });
+    const untouchedBefore = pagesFor(otherUserIdentity);
+
+    setCloudEpicTasksPagePinned("host-a", "user-a", "epic-1", true);
+
+    const scopedPage = pagesFor(scopedIdentity)?.[0];
+    expect(scopedPage?.tasks.map((task) => task.pinned)).toEqual([true, true]);
+    // The page's non-task fields and the untouched scope keep their
+    // identities, and the patch action itself is generation-neutral -
+    // discarding the scope's tails after the pin commits is the mutation's
+    // success handler's job (via resetCloudEpicTasksPagesForScope), not
+    // this action's.
+    expect(scopedPage?.nextCursor).toBe("next");
+    expect(pagesFor(otherUserIdentity)).toBe(untouchedBefore);
+    expect(cloudEpicTasksPageGeneration(scopedIdentity)).toBe(0);
+  });
+
+  it("is an identity-preserving no-op when the epic is absent or already in the requested state", () => {
+    const scopedIdentity = "host-a|user-a|recent";
+    useCloudEpicTasksPagesStore.getState().appendPage(scopedIdentity, 0, {
+      tasks: [epicTask("epic-1", true)],
+      hasMore: false,
+    });
+    const before = pagesFor(scopedIdentity);
+
+    setCloudEpicTasksPagePinned("host-a", "user-a", "epic-1", true);
+    setCloudEpicTasksPagePinned("host-a", "user-a", "epic-missing", true);
+
+    expect(pagesFor(scopedIdentity)).toBe(before);
+  });
+
+  it("patches one epic's home marker across a scope's tails when promotion completes", () => {
+    // The home-marker twin of the pin patch. Promotion completion used to
+    // patch only the TanStack first page, so a row loaded through "Show
+    // more" kept `home: "local"` here and its cloud-only actions stayed
+    // disabled until a reset or refresh.
+    const scopedIdentity = "host-a|user-a|recent";
+    const state = useCloudEpicTasksPagesStore.getState();
+    state.appendPage(scopedIdentity, 0, {
+      tasks: [{ ...epicTask("epic-1", false), home: "local" }],
+      hasMore: true,
+      nextCursor: "next",
+    });
+
+    setCloudEpicTasksPageLocalHome("host-a", "user-a", "epic-1", false);
+
+    const scopedPage = pagesFor(scopedIdentity)?.[0];
+    // Promoted rows DROP the key rather than carrying `home: "cloud"`,
+    // matching what a refetched page would hold.
+    expect(scopedPage?.tasks[0]).not.toHaveProperty("home");
+    expect(scopedPage?.nextCursor).toBe("next");
+
+    setCloudEpicTasksPageLocalHome("host-a", "user-a", "epic-1", true);
+    expect(pagesFor(scopedIdentity)?.[0]?.tasks[0]).toMatchObject({
+      home: "local",
+    });
+  });
+
+  it("patches one epic's home marker across every host's tails for the user, and no other user's", () => {
+    // The open epic's session lives on one host; the History list showing
+    // the row can be served by another (the app-wide effective host). The
+    // fact is the epic's, so the user-scoped patch reaches both - and stops
+    // at the user boundary, where the same epic id names another account's
+    // view.
+    const state = useCloudEpicTasksPagesStore.getState();
+    const localRow = { ...epicTask("epic-1", false), home: "local" as const };
+    for (const identity of [
+      "host-a|user-a|recent",
+      "host-b|user-a|recent",
+      "host-a|user-b|recent",
+    ]) {
+      state.appendPage(identity, 0, { tasks: [localRow], hasMore: false });
+    }
+
+    setCloudEpicTasksPageLocalHomeForUser("user-a", "epic-1", false);
+
+    expect(pagesFor("host-a|user-a|recent")?.[0]?.tasks[0]).not.toHaveProperty(
+      "home",
+    );
+    expect(pagesFor("host-b|user-a|recent")?.[0]?.tasks[0]).not.toHaveProperty(
+      "home",
+    );
+    expect(pagesFor("host-a|user-b|recent")?.[0]?.tasks[0]).toMatchObject({
+      home: "local",
+    });
+  });
+});

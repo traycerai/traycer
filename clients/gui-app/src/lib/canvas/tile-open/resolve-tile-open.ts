@@ -1,0 +1,462 @@
+/**
+ * The one placement decision.
+ *
+ * Pure: everything it reads is an argument, so the whole placement contract is
+ * table-testable and the executor stays a dumb dispatcher.
+ */
+import { findPaneTabForRef } from "@/stores/epics/canvas/actions";
+import { TILE_KIND_BLANK } from "@/stores/epics/canvas/tile-kinds";
+import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
+import type { TilePane } from "@/stores/epics/canvas/tile-tree";
+import type { EpicCanvasState } from "@/stores/epics/canvas/types";
+import {
+  tilePlacementForCategory,
+  type BrowserTilePlacement,
+  type TilePlacementSettings,
+} from "@/stores/settings/settings-store";
+import {
+  tileCategoryOf,
+  type ExplicitTilePlacement,
+  type MobileTileOpenSlots,
+  type TileOpenGesture,
+  type TileOpenIntent,
+  type TileOpenMode,
+  type TileOpenModifiers,
+  type TileOpenPlan,
+  type TilePlacementCategory,
+} from "./intent";
+
+const NO_MODIFIERS: TileOpenModifiers = {
+  shift: false,
+  alt: false,
+  middle: false,
+};
+
+/** Step 3. Middle-click and host pushes are background; a single click
+ * previews; everything deliberate is permanent. */
+function resolveMode(
+  gesture: TileOpenGesture,
+  modifiers: TileOpenModifiers,
+): TileOpenMode {
+  if (gesture === "host" || modifiers.middle) return "background";
+  return gesture === "single" ? "preview" : "permanent";
+}
+
+/** Step 4. Setting for the category, then `shift` forces a split and
+ * `alt` inverts tab<->split. `pip` is untouched by `alt` - it inverts the two
+ * placements it names, not "whatever is configured". */
+function resolvePlacement(
+  settings: TilePlacementSettings,
+  category: TilePlacementCategory,
+  modifiers: TileOpenModifiers,
+): BrowserTilePlacement {
+  const configured = tilePlacementForCategory(settings, category);
+  const shifted = modifiers.shift ? "split" : configured;
+  if (!modifiers.alt) return shifted;
+  if (shifted === "tab") return "split";
+  if (shifted === "split") return "tab";
+  return shifted;
+}
+
+/**
+ * How recently `category` was looked at inside one pane: the smallest
+ * `activationHistory` index among its same-category tabs (0 = the pane's
+ * current tab). `null` when the pane hosts none.
+ */
+function categoryRecency(
+  canvas: EpicCanvasState,
+  pane: TilePane,
+  category: TilePlacementCategory,
+): number | null {
+  let best: number | null = null;
+  for (const instanceId of pane.tabInstanceIds) {
+    const ref = canvas.tilesByInstanceId[instanceId];
+    if (ref === undefined || tileCategoryOf(ref) !== category) continue;
+    const index = pane.activationHistory.indexOf(instanceId);
+    const rank = index === -1 ? pane.activationHistory.length : index;
+    if (best === null || rank < best) best = rank;
+  }
+  return best;
+}
+
+/**
+ * Step 6: the most recently active pane already hosting this category.
+ *
+ * ponytail: the store keeps no cross-pane activation order - only
+ * `activePaneId` and a per-pane tab `activationHistory` - so recency across
+ * panes is approximated by how recent the category is WITHIN each pane, with
+ * the active pane winning outright. Swap in a real pane-activation history if
+ * this ever picks wrong.
+ */
+function affinityPaneId(
+  canvas: EpicCanvasState,
+  category: TilePlacementCategory,
+): string | null {
+  let bestId: string | null = null;
+  let bestRank = 0;
+  for (const pane of collectPanes(canvas.root)) {
+    const rank = categoryRecency(canvas, pane, category);
+    if (rank === null) continue;
+    if (pane.id === canvas.activePaneId) return pane.id;
+    if (bestId === null || rank < bestRank) {
+      bestId = pane.id;
+      bestRank = rank;
+    }
+  }
+  return bestId;
+}
+
+/**
+ * A pane with nothing to show: no tabs at all (a fresh pane opener), or the
+ * blank "New tab" placeholder on top. Same tie-breaking as
+ * {@link affinityPaneId} - the active pane wins outright, else the first one
+ * found.
+ */
+function emptyPaneId(canvas: EpicCanvasState): string | null {
+  let firstId: string | null = null;
+  for (const pane of collectPanes(canvas.root)) {
+    const active = pane.activeTabId;
+    const onTop =
+      active === null ? undefined : canvas.tilesByInstanceId[active];
+    if (pane.tabInstanceIds.length > 0 && onTop?.type !== TILE_KIND_BLANK) {
+      continue;
+    }
+    if (pane.id === canvas.activePaneId) return pane.id;
+    firstId ??= pane.id;
+  }
+  return firstId;
+}
+
+/** The pane an unanchored open lands in: the active one, else the first. */
+function anchorPaneId(canvas: EpicCanvasState): string | null {
+  if (canvas.root === null) return null;
+  if (
+    canvas.activePaneId !== null &&
+    findPaneById(canvas.root, canvas.activePaneId) !== null
+  ) {
+    return canvas.activePaneId;
+  }
+  return collectPanes(canvas.root).at(0)?.id ?? null;
+}
+
+/**
+ * Steps 4a + 5: a placement the caller already decided. A single-tile
+ * viewport has nowhere to split into, and a background open never creates
+ * geometry, so both degrade a split to a tab in the pane that was named.
+ */
+function resolveExplicitPlan(
+  tabId: string,
+  placement: Exclude<ExplicitTilePlacement, { kind: "beside" }>,
+  mode: TileOpenMode,
+  singleTileViewport: boolean,
+): TileOpenPlan {
+  if (placement.kind === "tab") {
+    return {
+      kind: "open-in-pane",
+      tabId,
+      paneId: placement.paneId,
+      mode,
+      index: placement.index,
+    };
+  }
+  if (singleTileViewport || mode === "background") {
+    return {
+      kind: "open-in-pane",
+      tabId,
+      paneId: placement.paneId,
+      mode,
+      index: null,
+    };
+  }
+  return {
+    kind: "split",
+    tabId,
+    paneId: placement.paneId,
+    edge: placement.edge,
+    mode,
+  };
+}
+
+type BesidePlacement = Extract<ExplicitTilePlacement, { kind: "beside" }>;
+
+/**
+ * The `beside` placement to honour, or `null` when there is none or its pane
+ * is gone (closed before a forked chat projected). A gone pane still places
+ * under the placement's own row - unanchored, the way a side chat asked from
+ * a chat that is not on this canvas does.
+ */
+function anchoredBeside(
+  placement: ExplicitTilePlacement | null,
+  canvas: EpicCanvasState,
+): BesidePlacement | null {
+  if (placement === null || placement.kind !== "beside") return null;
+  if (canvas.root === null) return null;
+  return findPaneById(canvas.root, placement.paneId) === null
+    ? null
+    : placement;
+}
+
+/**
+ * A `beside` placement decided the pane but not the shape: its category's
+ * setting row (plus the same modifiers as any configured open) says whether
+ * the tile becomes a tab of that pane or a split to its right. Category
+ * grouping and empty-pane filling deliberately do NOT apply - the whole
+ * point of naming the pane is that the tile lands next to it, not in
+ * whichever pane last showed something similar.
+ */
+function resolveBesidePlan(args: {
+  readonly settings: TilePlacementSettings;
+  readonly placement: BesidePlacement;
+  readonly modifiers: TileOpenModifiers;
+  readonly tabId: string;
+  readonly mode: TileOpenMode;
+  readonly singleTileViewport: boolean;
+}): TileOpenPlan {
+  const { mode, tabId } = args;
+  const { paneId } = args.placement;
+  const configured = resolvePlacement(
+    args.settings,
+    args.placement.category,
+    args.modifiers,
+  );
+  if (
+    configured === "tab" ||
+    mode === "background" ||
+    args.singleTileViewport
+  ) {
+    return { kind: "open-in-pane", tabId, paneId, mode, index: null };
+  }
+  // `pip` cannot be configured for an anchored category (its row is a plain
+  // `TilePlacement`), so anything that is not `tab` is a split.
+  return { kind: "split", tabId, paneId, edge: "right", mode };
+}
+
+/** Steps 4b-7: the configured placement, once no caller has overridden it. */
+function resolveConfiguredPlan(args: {
+  readonly canvas: EpicCanvasState;
+  readonly settings: TilePlacementSettings;
+  readonly category: TilePlacementCategory;
+  readonly modifiers: TileOpenModifiers;
+  readonly tabId: string;
+  readonly mode: "preview" | "permanent";
+  readonly singleTileViewport: boolean;
+}): TileOpenPlan {
+  const { canvas, category, mode, tabId } = args;
+  const configured = resolvePlacement(args.settings, category, args.modifiers);
+  // 5. `pip` is browser-only; anything else asking for it splits instead.
+  const placement =
+    configured === "pip" && category !== "browser" ? "split" : configured;
+
+  if (args.singleTileViewport) {
+    return {
+      kind: "open-in-pane",
+      tabId,
+      paneId: anchorPaneId(canvas),
+      mode,
+      index: null,
+    };
+  }
+  if (placement === "pip") return { kind: "pip", tabId };
+
+  // 6. Split: group into the category's pane when there is one, else split
+  // right of the anchor.
+  if (placement === "split") {
+    // An empty pane is a split someone already made: fill it rather than
+    // stacking another one beside it.
+    const grouped = emptyPaneId(canvas) ?? affinityPaneId(canvas, category);
+    if (grouped !== null) {
+      return {
+        kind: "open-in-pane",
+        tabId,
+        paneId: grouped,
+        mode,
+        index: null,
+      };
+    }
+    const anchor = anchorPaneId(canvas);
+    if (anchor !== null) {
+      return { kind: "split", tabId, paneId: anchor, edge: "right", mode };
+    }
+  }
+
+  // 7. Tab (and the empty canvas, which has no pane to split off).
+  return {
+    kind: "open-in-pane",
+    tabId,
+    paneId: anchorPaneId(canvas),
+    mode,
+    index: null,
+  };
+}
+
+/**
+ * A dedupe hit, where two tiles fit. A tile already beside the current one stays
+ * where it is, whichever slot asked: focusing it would make it the current tile,
+ * and the two would collapse into one. `null` leaves the hit to the plain focus.
+ */
+function resolveMobileSlotHit(
+  slots: MobileTileOpenSlots | null,
+  instanceId: string,
+  tabId: string,
+): TileOpenPlan | null {
+  if (slots === null) return null;
+  const inSecondary = instanceId === slots.secondaryInstanceId;
+  if (
+    !inSecondary &&
+    (slots.target === "primary" || instanceId === slots.primaryInstanceId)
+  ) {
+    return null;
+  }
+  return {
+    kind: "show-in-mobile-secondary",
+    tabId,
+    existingInstanceId: instanceId,
+    transient: false,
+  };
+}
+
+function opensIntoMobileSecondary(
+  intent: TileOpenIntent,
+  mode: TileOpenMode,
+  slots: MobileTileOpenSlots | null,
+): boolean {
+  return (
+    slots?.target === "secondary" &&
+    mode !== "background" &&
+    intent.dedupe &&
+    (intent.placement === null || intent.placement.kind === "beside")
+  );
+}
+
+/**
+ * What a tile already on the canvas answers. A middle-click is explicitly asking
+ * for a SECOND, fresh background tab, so it never dedupes (B4). `null` is no hit.
+ */
+function resolveDedupeHit(args: {
+  readonly intent: TileOpenIntent;
+  readonly canvas: EpicCanvasState;
+  readonly modifiers: TileOpenModifiers;
+  readonly mode: TileOpenMode;
+  readonly mobileSlots: MobileTileOpenSlots | null;
+  readonly tabId: string;
+}): TileOpenPlan | null {
+  const { intent, canvas, modifiers, mode, mobileSlots, tabId } = args;
+  if (!intent.dedupe || modifiers.middle) return null;
+  const existing = findPaneTabForRef(canvas, intent.node);
+  if (existing === null) return null;
+  // A background open of an already-open tile changes nothing at all: it
+  // must not pull focus to the existing instance.
+  if (mode === "background") return { kind: "noop" };
+  const slotted = resolveMobileSlotHit(mobileSlots, existing.instanceId, tabId);
+  if (slotted !== null) return slotted;
+  return {
+    kind: "focus-existing",
+    tabId,
+    paneId: existing.pane.id,
+    instanceId: existing.instanceId,
+    promote:
+      mode !== "preview" && existing.pane.previewTabId === existing.instanceId,
+  };
+}
+
+export function resolveTileOpen(input: {
+  readonly intent: TileOpenIntent;
+  readonly settings: TilePlacementSettings;
+  readonly canvas: EpicCanvasState;
+  readonly resolveTargetTabForEpic: (epicId: string) => string;
+  readonly singleTileViewport: boolean;
+  /** `null` unless the phone shell has room for two tiles. */
+  readonly mobileSlots: MobileTileOpenSlots | null;
+}): TileOpenPlan {
+  const { canvas, intent, mobileSlots, settings, singleTileViewport } = input;
+
+  // 1. Target tab.
+  const tabId =
+    "tabId" in intent.target
+      ? intent.target.tabId
+      : input.resolveTargetTabForEpic(intent.target.epicId);
+
+  const modifiers = intent.modifiers ?? NO_MODIFIERS;
+  const beside = anchoredBeside(intent.placement, canvas);
+  const category: TilePlacementCategory =
+    intent.placement?.kind === "beside"
+      ? intent.placement.category
+      : tileCategoryOf(intent.node);
+
+  // 2. Mode. Needed before dedupe: a permanent hit on the pane's preview
+  // promotes it.
+  const mode = resolveMode(intent.gesture, modifiers);
+
+  // 3. Dedupe.
+  const hit = resolveDedupeHit({
+    intent,
+    canvas,
+    modifiers,
+    mode,
+    mobileSlots,
+    tabId,
+  });
+  if (hit !== null) return hit;
+
+  // Where two tiles fit, the slot takes what no caller placed (a pane's own
+  // opener and a drop did), and a side chat is beside its conversation by
+  // being in the other tile. Never a second view (`dedupe` off): that is the
+  // opener's, which names its pane. Never onto an empty canvas either: there
+  // is no first tile to be beside, and the plain open seeds the root pane.
+  if (
+    canvas.root !== null &&
+    opensIntoMobileSecondary(intent, mode, mobileSlots)
+  ) {
+    return {
+      kind: "show-in-mobile-secondary",
+      tabId,
+      existingInstanceId: null,
+      transient: mode === "preview",
+    };
+  }
+
+  // 4a. Explicit placement wins over the setting; a `beside` placement
+  // wins on the pane and defers to its row on the shape.
+  if (beside !== null) {
+    return resolveBesidePlan({
+      settings,
+      placement: beside,
+      modifiers,
+      tabId,
+      mode,
+      singleTileViewport,
+    });
+  }
+  if (intent.placement !== null && intent.placement.kind !== "beside") {
+    return resolveExplicitPlan(
+      tabId,
+      intent.placement,
+      mode,
+      singleTileViewport,
+    );
+  }
+
+  // A background open never creates geometry: `split` and `pip` carry no
+  // background mode by construction. Category grouping still applies -
+  // a middle-clicked link belongs beside the other browser tabs, not in
+  // whatever pane happens to be active.
+  if (mode === "background") {
+    return {
+      kind: "open-in-pane",
+      tabId,
+      paneId: affinityPaneId(canvas, category) ?? anchorPaneId(canvas),
+      mode,
+      index: null,
+    };
+  }
+
+  return resolveConfiguredPlan({
+    canvas,
+    settings,
+    category,
+    modifiers,
+    tabId,
+    mode,
+    singleTileViewport,
+  });
+}

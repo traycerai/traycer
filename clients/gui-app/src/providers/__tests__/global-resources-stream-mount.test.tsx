@@ -1,0 +1,340 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, render } from "@testing-library/react";
+import type { AvailabilityRecoveryKind } from "@traycer-clients/shared/host-transport/availability-recovery-kind";
+import type { ResourcesStreamCallbacks } from "@traycer-clients/shared/host-transport/resources-stream-client";
+import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import { GlobalResourcesStreamMount } from "@/providers/resources-stream-mount";
+import { __setResourcesStreamClientFactoryForTests } from "@/providers/resources-stream-factory-override";
+import { resourcesRegistry } from "@/stores/resources/resources-registry";
+import { setMobileApp } from "@/lib/mobile-app";
+import {
+  DESKTOP_RETENTION_PROFILE,
+  getRetentionProfile,
+  setRetentionProfile,
+} from "@/stores/replica-memory/retention-profile";
+
+// The two inputs the pre-check reads. Defaults are a REMOTE host as the
+// transport actually reports one — `"unknown"` support and no client-wide
+// schema version for any method — which is the state that leaves the pre-check
+// unable to convict, and the state this mount has to survive.
+// Typed through the factory's RETURN annotation, not an `as` on the value:
+// `eslint --fix` strips a redundant-looking assertion here, and `support` then
+// widens to `string`, which quietly accepts a typo'd verdict.
+const streamMock = vi.hoisted(
+  (): {
+    support: StreamMethodSupport;
+    version: { readonly major: number; readonly minor: number } | null;
+  } => ({
+    support: "unknown",
+    version: null,
+  }),
+);
+
+vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/host/stream-runtime-context")>();
+  return {
+    ...actual,
+    useWsStreamClient: () => fakeStreamClient,
+    useStreamHostId: () => "host-a",
+    useStreamMethodSupport: () => streamMock.support,
+    useStreamMethodSchemaVersion: () => streamMock.version,
+  };
+});
+
+// The transport, present only so the mount can subscribe to its recovery
+// signal. Nothing below ever calls through it — the resources stream itself is
+// driven by `__setResourcesStreamClientFactoryForTests`.
+const recoveryListeners = new Set<(kind: AvailabilityRecoveryKind) => void>();
+
+const fakeStreamClient: IHostStreamClient<HostStreamRpcRegistry> = {
+  subscribe: () => {
+    throw new Error("not exercised by this test");
+  },
+  subscribeWithParamsProvider: () => {
+    throw new Error("not exercised by this test");
+  },
+  close: () => undefined,
+  isClosed: () => false,
+  // Never-ready is the honest answer for a fake that carries no session.
+  isReady: () => false,
+  notifyBearerRotated: () => undefined,
+  notifyCloudVerdictChanged: () => undefined,
+  reconnectAll: () => undefined,
+  getMethodSupport: () => "unknown",
+  subscribeMethodSupport: () => () => undefined,
+  getMethodSchemaVersion: () => null,
+  subscribeAvailabilityRecovered: (listener) => {
+    recoveryListeners.add(listener);
+    return () => {
+      recoveryListeners.delete(listener);
+    };
+  },
+  getClosedReason: () => null,
+  onClosed: () => () => undefined,
+  instanceId: "fake-global-resources-stream-client",
+};
+
+/**
+ * The host came back — a resume, a restart, or an in-place upgrade. Fired as a
+ * reconnect; the mount ignores the kind.
+ */
+function fireAvailabilityRecovered(): void {
+  for (const listener of Array.from(recoveryListeners)) listener("reconnect");
+}
+
+describe("GlobalResourcesStreamMount", () => {
+  afterEach(() => {
+    __setResourcesStreamClientFactoryForTests(null);
+    resourcesRegistry.disposeAll();
+    cleanup();
+    streamMock.support = "unknown";
+    streamMock.version = null;
+  });
+
+  it("requests interactive cadence only while its monitor is visible", () => {
+    const demands: string[] = [];
+    __setResourcesStreamClientFactoryForTests(() => ({
+      close: () => undefined,
+      setDemand: (demand) => demands.push(demand),
+    }));
+
+    const view = render(<GlobalResourcesStreamMount interactive={false} />);
+    expect(demands).toEqual(["background"]);
+
+    view.rerender(<GlobalResourcesStreamMount interactive />);
+    expect(demands).toEqual(["background", "interactive"]);
+
+    view.rerender(<GlobalResourcesStreamMount interactive={false} />);
+    expect(demands).toEqual(["background", "interactive", "background"]);
+  });
+
+  /**
+   * A monitor whose host the pre-check convicted acquires nothing, so it has
+   * no stream of its own to speed up - and must not speed up the one another
+   * holder (a footer readout) is keeping at background.
+   */
+  it("adds no interactive demand from a mount that holds no lease", () => {
+    const demands: string[] = [];
+    __setResourcesStreamClientFactoryForTests(() => ({
+      close: () => undefined,
+      setDemand: (demand) => demands.push(demand),
+    }));
+    render(<GlobalResourcesStreamMount interactive={false} />);
+    expect(demands).toEqual(["background"]);
+
+    streamMock.support = "supported";
+    streamMock.version = { major: 1, minor: 0 };
+    render(<GlobalResourcesStreamMount interactive />);
+
+    expect(demands).toEqual(["background"]);
+  });
+
+  /**
+   * The other side of the gate, and the reason it is still the PRE-STREAM
+   * verdict: when the pre-check CAN convict — a local host, where the
+   * client-wide capability cache is real — nothing is dialled at all. That is
+   * what the pre-check buys, and it is only visible as an absence.
+   */
+  it("never opens a stream when the pre-check already convicted the host", () => {
+    streamMock.support = "supported";
+    streamMock.version = { major: 1, minor: 0 };
+    let builds = 0;
+    __setResourcesStreamClientFactoryForTests((_scope, _callbacks) => {
+      builds += 1;
+      return { close: () => undefined, setDemand: () => undefined };
+    });
+
+    render(<GlobalResourcesStreamMount interactive={false} />);
+
+    expect(builds).toBe(0);
+    expect(resourcesRegistry.getGlobal()).toBeNull();
+  });
+
+  /**
+   * The mount gates on the PRE-STREAM verdict, never the full one the panel
+   * reads — and this is what that buys.
+   *
+   * Gating on the full verdict is a loop with no exit: acquire → the stream
+   * negotiates `@1.0` and reports `unsupported` → the effect re-runs and
+   * releases → the store holding the verdict is disposed with it → the verdict
+   * reverts to `unknown` → acquire again. It would re-dial a host forever, on
+   * the strength of having successfully learned something about it.
+   *
+   * Asserted as "built once and still held", because a single rebuild is the
+   * first lap of that loop, not a lesser symptom of it.
+   */
+  it("keeps the stream it opened after that stream convicts its own host", () => {
+    let captured: ResourcesStreamCallbacks | null = null;
+    let builds = 0;
+    const emit = (): ResourcesStreamCallbacks => {
+      if (captured === null) throw new Error("stream callbacks not wired");
+      return captured;
+    };
+    __setResourcesStreamClientFactoryForTests((_scope, callbacks) => {
+      builds += 1;
+      captured = callbacks;
+      return { close: () => undefined, setDemand: () => undefined };
+    });
+
+    render(<GlobalResourcesStreamMount interactive={false} />);
+    expect(builds).toBe(1);
+
+    act(() => {
+      emit().onScopeSupport("unsupported");
+    });
+
+    expect(builds).toBe(1);
+    expect(resourcesRegistry.getGlobal()).not.toBeNull();
+    expect(resourcesRegistry.getGlobalScopeSupport("host-a")).toBe(
+      "unsupported",
+    );
+  });
+
+  /**
+   * The escape hatch for the one verdict that cannot clear itself.
+   *
+   * A version verdict self-heals — its stream stays open, so a drop takes the
+   * negotiated version with it and the resume re-negotiates. A TERMINAL
+   * incompatible close does not: it fails only the stream while the shared
+   * session stays healthy, so the transport identity never changes and nothing
+   * above would rebuild. Without this, a host upgraded in place goes on being
+   * called incapable for as long as the surface stays mounted.
+   */
+  it("re-probes a terminal verdict when the transport reports the host came back", () => {
+    let captured: ResourcesStreamCallbacks | null = null;
+    let builds = 0;
+    const emit = (): ResourcesStreamCallbacks => {
+      if (captured === null) throw new Error("stream callbacks not wired");
+      return captured;
+    };
+    __setResourcesStreamClientFactoryForTests((_scope, callbacks) => {
+      builds += 1;
+      captured = callbacks;
+      return { close: () => undefined, setDemand: () => undefined };
+    });
+
+    render(<GlobalResourcesStreamMount interactive={false} />);
+    act(() => {
+      emit().onScopeSupport("unsupported");
+    });
+    expect(builds).toBe(1);
+
+    act(() => {
+      fireAvailabilityRecovered();
+    });
+
+    // A fresh stream against the host that just came back, and the stale
+    // verdict gone with the store that held it.
+    expect(builds).toBe(2);
+    expect(resourcesRegistry.getGlobalScopeSupport("host-a")).toBe("unknown");
+  });
+
+  // The re-probe is gated on `unsupported` for this reason. Recovery fires on
+  // every ordinary resume — and on `RemoteStreamClient` even on the clean first
+  // open — so an ungated version would tear down and rebuild a perfectly good
+  // stream on every blip, dropping its projection each time.
+  it("leaves a working stream alone when the transport merely reconnects", () => {
+    let captured: ResourcesStreamCallbacks | null = null;
+    let builds = 0;
+    const emit = (): ResourcesStreamCallbacks => {
+      if (captured === null) throw new Error("stream callbacks not wired");
+      return captured;
+    };
+    __setResourcesStreamClientFactoryForTests((_scope, callbacks) => {
+      builds += 1;
+      captured = callbacks;
+      return { close: () => undefined, setDemand: () => undefined };
+    });
+
+    render(<GlobalResourcesStreamMount interactive={false} />);
+    act(() => {
+      emit().onScopeSupport("supported");
+    });
+
+    act(() => {
+      fireAvailabilityRecovered();
+    });
+
+    expect(builds).toBe(1);
+    expect(resourcesRegistry.getGlobalScopeSupport("host-a")).toBe("supported");
+  });
+});
+
+/**
+ * Cadence is counted across every holder of the one global stream: it runs
+ * interactive while ANY holder's panel is open and background otherwise, and
+ * a rebuilt stream inherits that aggregate rather than the last writer's.
+ * Pinned on the desktop profile, where the header glyph and the status bar's
+ * readout are both holders of this stream.
+ */
+describe("GlobalResourcesStreamMount · demand across holders (desktop)", () => {
+  /** Demands in arrival order, one list per stream the factory built. */
+  let demandsByStream: string[][] = [];
+
+  beforeEach(() => {
+    setMobileApp(false);
+    setRetentionProfile(DESKTOP_RETENTION_PROFILE);
+    demandsByStream = [];
+    __setResourcesStreamClientFactoryForTests(() => {
+      const demands: string[] = [];
+      demandsByStream.push(demands);
+      return {
+        close: () => undefined,
+        setDemand: (demand) => demands.push(demand),
+      };
+    });
+  });
+
+  afterEach(() => {
+    __setResourcesStreamClientFactoryForTests(null);
+    resourcesRegistry.disposeAll();
+    cleanup();
+  });
+
+  function liveDemand(): string | undefined {
+    return demandsByStream.at(-1)?.at(-1);
+  }
+
+  it("runs interactive while one of two holders is interactive", () => {
+    expect(getRetentionProfile()).toBe(DESKTOP_RETENTION_PROFILE);
+    const readout = render(<GlobalResourcesStreamMount interactive={false} />);
+    render(<GlobalResourcesStreamMount interactive />);
+    expect(liveDemand()).toBe("interactive");
+
+    // The background holder leaving changes nothing for the open panel.
+    readout.unmount();
+    expect(resourcesRegistry.getGlobal()).not.toBeNull();
+    expect(liveDemand()).toBe("interactive");
+  });
+
+  it("drops back to background when the interactive holder unmounts", () => {
+    render(<GlobalResourcesStreamMount interactive={false} />);
+    const panel = render(<GlobalResourcesStreamMount interactive />);
+    expect(liveDemand()).toBe("interactive");
+
+    panel.unmount();
+
+    expect(resourcesRegistry.getGlobal()).not.toBeNull();
+    expect(liveDemand()).toBe("background");
+  });
+
+  /**
+   * A second holder's acquire rebuilds the shared stream (each mount carries
+   * its own transport token), and a re-probe rebuilds it on its own. Either
+   * way the fresh stream must open at the cadence the holders are asking for,
+   * not at whatever the holder that acquired last would say alone.
+   */
+  it("keeps interactive cadence across a re-acquire", () => {
+    render(<GlobalResourcesStreamMount interactive />);
+    expect(demandsByStream).toHaveLength(1);
+    expect(liveDemand()).toBe("interactive");
+
+    render(<GlobalResourcesStreamMount interactive={false} />);
+
+    expect(demandsByStream).toHaveLength(2);
+    expect(liveDemand()).toBe("interactive");
+  });
+});

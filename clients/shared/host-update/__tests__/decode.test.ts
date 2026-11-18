@@ -1,0 +1,730 @@
+import { describe, expect, it } from "vitest";
+import type { DurableBytes } from "../decode";
+import { decodeHostUpdateAttempt } from "../decode";
+
+const missing: DurableBytes = { kind: "missing" };
+const unreadable: DurableBytes = { kind: "unreadable", cause: "EACCES" };
+const bytes = (text: string): DurableBytes => ({ kind: "bytes", text });
+
+// A minimally valid v2 record - `downloading` is active, so `execution` and
+// `continuation` are the values every other field-corruption test mutates
+// away from.
+const VALID_ACTIVE: Record<string, unknown> = {
+  schemaVersion: 2,
+  attemptId: "attempt-1",
+  generation: 1,
+  sequence: 1,
+  trigger: "manual",
+  targetVersion: "1.2.3",
+  phase: "downloading",
+  execution: "active",
+  continuation: null,
+  progress: null,
+  startedAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+  completedAt: null,
+  error: null,
+};
+
+const VALID_PARKED: Record<string, unknown> = {
+  ...VALID_ACTIVE,
+  phase: "waiting-for-work",
+  execution: "parked",
+  continuation: "resume-apply",
+};
+
+function json(overrides: Record<string, unknown>): string {
+  return JSON.stringify({ ...VALID_ACTIVE, ...overrides });
+}
+
+describe("decodeHostUpdateAttempt", () => {
+  it("reports absent for a missing file", () => {
+    expect(decodeHostUpdateAttempt(missing)).toEqual({ kind: "absent" });
+  });
+
+  it("reports unreadable with the cause for an fs read error", () => {
+    expect(decodeHostUpdateAttempt(unreadable)).toEqual({
+      kind: "unreadable",
+      cause: "EACCES",
+    });
+  });
+
+  it("decodes a fully populated valid active record", () => {
+    const result = decodeHostUpdateAttempt(bytes(json({})));
+    expect(result).toEqual({
+      kind: "valid",
+      version: 2,
+      value: VALID_ACTIVE,
+    });
+  });
+
+  it("decodes a valid parked record", () => {
+    const result = decodeHostUpdateAttempt(bytes(JSON.stringify(VALID_PARKED)));
+    expect(result).toEqual({
+      kind: "valid",
+      version: 2,
+      value: VALID_PARKED,
+    });
+  });
+
+  it("decodes a valid terminal record with completedAt and an error set", () => {
+    const record = {
+      ...VALID_ACTIVE,
+      phase: "failed",
+      execution: "terminal",
+      continuation: null,
+      completedAt: "2026-01-01T00:05:00.000Z",
+      error: { code: "download-failed", message: "boom", phase: "downloading" },
+    };
+    const result = decodeHostUpdateAttempt(bytes(JSON.stringify(record)));
+    expect(result).toEqual({ kind: "valid", version: 2, value: record });
+  });
+
+  it("decodes a valid record with populated progress", () => {
+    const record = {
+      ...VALID_ACTIVE,
+      progress: { percent: 42.5, bytes: 1024, totalBytes: 4096 },
+    };
+    const result = decodeHostUpdateAttempt(bytes(JSON.stringify(record)));
+    expect(result).toEqual({ kind: "valid", version: 2, value: record });
+  });
+
+  // ---- corrupt: malformed bytes / shape --------------------------------
+
+  it("reports corrupt for invalid JSON", () => {
+    expect(decodeHostUpdateAttempt(bytes("{not json"))).toEqual({
+      kind: "corrupt",
+    });
+  });
+
+  it("reports corrupt for a JSON array instead of an object", () => {
+    expect(decodeHostUpdateAttempt(bytes("[]"))).toEqual({ kind: "corrupt" });
+  });
+
+  it("reports corrupt for a JSON null", () => {
+    expect(decodeHostUpdateAttempt(bytes("null"))).toEqual({ kind: "corrupt" });
+  });
+
+  it("reports corrupt for a bare JSON string or number", () => {
+    expect(decodeHostUpdateAttempt(bytes('"hello"'))).toEqual({
+      kind: "corrupt",
+    });
+    expect(decodeHostUpdateAttempt(bytes("42"))).toEqual({ kind: "corrupt" });
+  });
+
+  it("reports corrupt when schemaVersion is missing or the wrong type", () => {
+    const { schemaVersion: _drop, ...withoutVersion } = VALID_ACTIVE;
+    expect(
+      decodeHostUpdateAttempt(bytes(JSON.stringify(withoutVersion))),
+    ).toEqual({ kind: "corrupt" });
+    expect(
+      decodeHostUpdateAttempt(bytes(json({ schemaVersion: "2" }))),
+    ).toEqual({ kind: "corrupt" });
+  });
+
+  // NaN/Infinity are not valid JSON syntax, so bytes carrying either fail
+  // JSON.parse itself and land here rather than in the progress parser -
+  // still `corrupt`, which is the contract that matters to callers.
+  it("reports corrupt for NaN or Infinity literals anywhere in the bytes", () => {
+    expect(
+      decodeHostUpdateAttempt(
+        bytes(
+          json({}).replace(
+            '"progress":null',
+            '"progress":{"percent":NaN,"bytes":null,"totalBytes":null}',
+          ),
+        ),
+      ),
+    ).toEqual({ kind: "corrupt" });
+    expect(
+      decodeHostUpdateAttempt(
+        bytes(
+          json({}).replace(
+            '"progress":null',
+            '"progress":{"percent":Infinity,"bytes":null,"totalBytes":null}',
+          ),
+        ),
+      ),
+    ).toEqual({ kind: "corrupt" });
+  });
+
+  it.each([
+    ["attemptId", { attemptId: 42 }],
+    ["attemptId empty", { attemptId: "" }],
+    ["generation zero", { generation: 0 }],
+    ["generation negative", { generation: -1 }],
+    ["generation non-integer", { generation: 1.5 }],
+    ["generation string", { generation: "1" }],
+    ["sequence zero", { sequence: 0 }],
+    ["sequence string", { sequence: "1" }],
+    ["trigger unknown", { trigger: "someone-clicked-it" }],
+    ["trigger wrong type", { trigger: 1 }],
+    ["targetVersion empty", { targetVersion: "" }],
+    ["targetVersion wrong type", { targetVersion: 123 }],
+    ["phase unknown", { phase: "downloading-but-not-really" }],
+    ["startedAt wrong type", { startedAt: 12345 }],
+    ["updatedAt wrong type", { updatedAt: null }],
+    ["completedAt wrong type", { completedAt: 12345 }],
+  ])("reports corrupt for %s", (_label, overrides) => {
+    expect(decodeHostUpdateAttempt(bytes(json(overrides)))).toEqual({
+      kind: "corrupt",
+    });
+  });
+
+  it("reports corrupt when continuation has an unrecognized string value", () => {
+    expect(
+      decodeHostUpdateAttempt(bytes(json({ continuation: "reboot" }))),
+    ).toEqual({ kind: "corrupt" });
+  });
+
+  it("reports corrupt when progress is not an object or array", () => {
+    expect(decodeHostUpdateAttempt(bytes(json({ progress: "half" })))).toEqual({
+      kind: "corrupt",
+    });
+    expect(decodeHostUpdateAttempt(bytes(json({ progress: [] })))).toEqual({
+      kind: "corrupt",
+    });
+  });
+
+  it.each([
+    ["percent", { percent: "50" }],
+    ["bytes", { bytes: "1024" }],
+    ["totalBytes", { totalBytes: "4096" }],
+  ])("reports corrupt when progress.%s has the wrong type", (key, patch) => {
+    expect(
+      decodeHostUpdateAttempt(
+        bytes(
+          json({
+            progress: {
+              percent: null,
+              bytes: null,
+              totalBytes: null,
+              ...patch,
+            },
+          }),
+        ),
+      ),
+    ).toEqual({ kind: "corrupt" });
+  });
+
+  it("reports corrupt when error is present but missing a required field", () => {
+    expect(
+      decodeHostUpdateAttempt(
+        bytes(json({ error: { code: "x", message: "y" } })),
+      ),
+    ).toEqual({ kind: "corrupt" });
+  });
+
+  it("reports corrupt when error is not an object", () => {
+    expect(decodeHostUpdateAttempt(bytes(json({ error: "boom" })))).toEqual({
+      kind: "corrupt",
+    });
+  });
+
+  // ---- corrupt: the two load-bearing semantic-consistency rejections -----
+
+  it("reports corrupt when the stored execution disagrees with executionForPhase(phase)", () => {
+    // `downloading` is active; a record claiming it is parked or terminal
+    // is a contradiction recovery must never resolve by trusting either half.
+    expect(
+      decodeHostUpdateAttempt(bytes(json({ execution: "parked" }))),
+    ).toEqual({ kind: "corrupt" });
+    expect(
+      decodeHostUpdateAttempt(bytes(json({ execution: "terminal" }))),
+    ).toEqual({ kind: "corrupt" });
+  });
+
+  it("reports corrupt when a terminal phase disagrees with its execution", () => {
+    expect(
+      decodeHostUpdateAttempt(
+        bytes(
+          json({
+            phase: "complete",
+            execution: "active",
+            completedAt: "2026-01-01T00:05:00.000Z",
+          }),
+        ),
+      ),
+    ).toEqual({ kind: "corrupt" });
+  });
+
+  it("reports corrupt when a parked phase carries the wrong continuation", () => {
+    expect(
+      decodeHostUpdateAttempt(
+        bytes(
+          JSON.stringify({
+            ...VALID_PARKED,
+            continuation: "activate",
+          }),
+        ),
+      ),
+    ).toEqual({ kind: "corrupt" });
+  });
+
+  it("reports corrupt when a parked phase carries a null continuation", () => {
+    expect(
+      decodeHostUpdateAttempt(
+        bytes(
+          JSON.stringify({
+            ...VALID_PARKED,
+            continuation: null,
+          }),
+        ),
+      ),
+    ).toEqual({ kind: "corrupt" });
+  });
+
+  it("reports corrupt when waiting-to-activate carries resume-apply instead of activate", () => {
+    expect(
+      decodeHostUpdateAttempt(
+        bytes(
+          JSON.stringify({
+            ...VALID_ACTIVE,
+            phase: "waiting-to-activate",
+            execution: "parked",
+            continuation: "resume-apply",
+          }),
+        ),
+      ),
+    ).toEqual({ kind: "corrupt" });
+  });
+
+  // ---- required nullable fields: a missing key is corrupt, not null --------
+
+  it.each([
+    ["continuation", { continuation: undefined }],
+    ["progress", { progress: undefined }],
+    ["completedAt", { completedAt: undefined }],
+    ["error", { error: undefined }],
+  ])(
+    "reports corrupt when the required nullable field %s is missing entirely",
+    (_label, overrides) => {
+      expect(decodeHostUpdateAttempt(bytes(json(overrides)))).toEqual({
+        kind: "corrupt",
+      });
+    },
+  );
+
+  it.each([
+    ["percent", { bytes: null, totalBytes: null }],
+    ["bytes", { percent: null, totalBytes: null }],
+    ["totalBytes", { percent: null, bytes: null }],
+  ])(
+    "reports corrupt when progress is present but missing the required key %s",
+    (_missingKey, partialProgress) => {
+      expect(
+        decodeHostUpdateAttempt(bytes(json({ progress: partialProgress }))),
+      ).toEqual({ kind: "corrupt" });
+    },
+  );
+
+  // ---- corrupt: counters beyond the safe-integer range ----------------------
+
+  it.each([
+    ["generation", { generation: Number.MAX_SAFE_INTEGER + 1 }],
+    ["sequence", { sequence: Number.MAX_SAFE_INTEGER + 1 }],
+  ])(
+    "reports corrupt when %s is a positive integer beyond Number.MAX_SAFE_INTEGER",
+    (_label, overrides) => {
+      expect(decodeHostUpdateAttempt(bytes(json(overrides)))).toEqual({
+        kind: "corrupt",
+      });
+    },
+  );
+
+  // ---- unsupported-version -------------------------------------------------
+
+  it("reports unsupported-version for schemaVersion 1 (the legacy coarse marker)", () => {
+    expect(decodeHostUpdateAttempt(bytes(json({ schemaVersion: 1 })))).toEqual({
+      kind: "unsupported-version",
+      version: 1,
+    });
+  });
+
+  it("reports unsupported-version for schemaVersion 3 (a future, unreleased schema)", () => {
+    expect(decodeHostUpdateAttempt(bytes(json({ schemaVersion: 3 })))).toEqual({
+      kind: "unsupported-version",
+      version: 3,
+    });
+  });
+
+  // ---- recovery provenance ---------------------------------------------
+
+  const VALID_COMPLETE_RECOVERY = {
+    recoveredBy: "attempt-executor" as const,
+    outcome: "complete" as const,
+    evidence: {
+      installed: { kind: "verified" as const, version: "1.2.3" },
+      staged: { kind: "absent" as const, version: null },
+      running: {
+        kind: "verified" as const,
+        version: "1.2.3",
+        ownerBound: true,
+      },
+    },
+  };
+
+  function completeTerminalJson(overrides: Record<string, unknown>): string {
+    return JSON.stringify({
+      ...VALID_ACTIVE,
+      phase: "complete",
+      execution: "terminal",
+      completedAt: "2026-01-01T00:05:00.000Z",
+      recovery: VALID_COMPLETE_RECOVERY,
+      ...overrides,
+    });
+  }
+
+  it("decodes a valid recovery-provenance object attached to a matching terminal outcome", () => {
+    const result = decodeHostUpdateAttempt(bytes(completeTerminalJson({})));
+    expect(result.kind).toBe("valid");
+    if (result.kind === "valid") {
+      expect(result.value.recovery).toEqual(VALID_COMPLETE_RECOVERY);
+    }
+  });
+
+  it.each([
+    ["installed", "absent"],
+    ["staged", "absent"],
+    ["running", "absent"],
+  ] as const)(
+    "reports corrupt when the %s leg is %s but carries a non-null version",
+    (leg, kind) => {
+      const evidence = {
+        ...VALID_COMPLETE_RECOVERY.evidence,
+        [leg]:
+          leg === "running"
+            ? { kind, version: "9.9.9", ownerBound: false }
+            : { kind, version: "9.9.9" },
+      };
+      const result = decodeHostUpdateAttempt(
+        bytes(
+          completeTerminalJson({
+            recovery: { ...VALID_COMPLETE_RECOVERY, evidence },
+          }),
+        ),
+      );
+      expect(result).toEqual({ kind: "corrupt" });
+    },
+  );
+
+  it.each(["installed", "staged"] as const)(
+    "reports corrupt when the %s leg is verified but carries a null version",
+    (leg) => {
+      const evidence = {
+        ...VALID_COMPLETE_RECOVERY.evidence,
+        [leg]: { kind: "verified", version: null },
+      };
+      const result = decodeHostUpdateAttempt(
+        bytes(
+          completeTerminalJson({
+            recovery: { ...VALID_COMPLETE_RECOVERY, evidence },
+          }),
+        ),
+      );
+      expect(result).toEqual({ kind: "corrupt" });
+    },
+  );
+
+  it("reports corrupt when recovery is attached to a live (non-terminal) phase", () => {
+    const result = decodeHostUpdateAttempt(
+      bytes(json({ recovery: VALID_COMPLETE_RECOVERY })),
+    );
+    expect(result).toEqual({ kind: "corrupt" });
+  });
+
+  it("reports corrupt when recovery.outcome disagrees with the record's own terminal phase", () => {
+    const result = decodeHostUpdateAttempt(
+      bytes(
+        completeTerminalJson({
+          recovery: { ...VALID_COMPLETE_RECOVERY, outcome: "failed" },
+        }),
+      ),
+    );
+    expect(result).toEqual({ kind: "corrupt" });
+  });
+
+  // ---- runtimeIdentity on the recovery running leg (D9/D16) ---------------
+
+  function failedTerminalJson(overrides: Record<string, unknown>): string {
+    return JSON.stringify({
+      ...VALID_ACTIVE,
+      phase: "failed",
+      execution: "terminal",
+      completedAt: "2026-01-01T00:05:00.000Z",
+      error: {
+        code: "recovery-evidence-insufficient",
+        message: "x",
+        phase: "downloading",
+      },
+      recovery: {
+        recoveredBy: "attempt-executor",
+        outcome: "failed",
+        evidence: {
+          installed: { kind: "absent", version: null },
+          staged: { kind: "absent", version: null },
+          running: {
+            kind: "unbound",
+            version: "C",
+            ownerBound: false,
+            runtimeIdentity: "C",
+          },
+        },
+      },
+      ...overrides,
+    });
+  }
+
+  it("decodes runtimeIdentity on a persisted unbound running leg - the one kind the encoder lowers a `foreign` process identity onto", () => {
+    const result = decodeHostUpdateAttempt(bytes(failedTerminalJson({})));
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") return;
+    expect(result.value.recovery?.evidence.running).toEqual({
+      kind: "unbound",
+      version: "C",
+      ownerBound: false,
+      runtimeIdentity: "C",
+    });
+  });
+
+  it("ignores (drops) a runtimeIdentity present on a verified leg rather than rejecting the record", () => {
+    const runningWithIdentity = {
+      ...VALID_COMPLETE_RECOVERY.evidence.running,
+      runtimeIdentity: "should-be-dropped",
+    };
+    const result = decodeHostUpdateAttempt(
+      bytes(
+        completeTerminalJson({
+          recovery: {
+            ...VALID_COMPLETE_RECOVERY,
+            evidence: {
+              ...VALID_COMPLETE_RECOVERY.evidence,
+              running: runningWithIdentity,
+            },
+          },
+        }),
+      ),
+    );
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") return;
+    expect(result.value.recovery?.evidence.running).toEqual(
+      VALID_COMPLETE_RECOVERY.evidence.running,
+    );
+    expect(
+      "runtimeIdentity" in (result.value.recovery?.evidence.running ?? {}),
+    ).toBe(false);
+  });
+
+  it("reports corrupt when runtimeIdentity is present but an empty string", () => {
+    const result = decodeHostUpdateAttempt(
+      bytes(
+        failedTerminalJson({
+          recovery: {
+            recoveredBy: "attempt-executor",
+            outcome: "failed",
+            evidence: {
+              installed: { kind: "absent", version: null },
+              staged: { kind: "absent", version: null },
+              running: {
+                kind: "unbound",
+                version: "C",
+                ownerBound: false,
+                runtimeIdentity: "",
+              },
+            },
+          },
+        }),
+      ),
+    );
+    expect(result).toEqual({ kind: "corrupt" });
+  });
+
+  // ---- the claim baseline (D19) -------------------------------------------
+
+  const VALID_CLAIM = {
+    installedVersion: "1.0.0",
+    installGeneration: "gen-a",
+    stageFingerprint: "fp-a",
+    allowDowngrade: true,
+    acceptStoreFormatLoss: false,
+  };
+
+  it("decodes a claim written before acceptStoreFormatLoss existed as consent not given, never as corrupt", () => {
+    const { acceptStoreFormatLoss: _drop, ...legacy } = VALID_CLAIM;
+    const result = decodeHostUpdateAttempt(bytes(json({ claim: legacy })));
+    expect(result.kind).toBe("valid");
+    if (result.kind === "valid") {
+      expect(result.value.claim).toEqual(VALID_CLAIM);
+    }
+  });
+
+  it("decodes as valid, with no claim key, when claim is explicitly undefined (i.e. omitted from the wire)", () => {
+    const result = decodeHostUpdateAttempt(bytes(json({ claim: undefined })));
+    expect(result.kind).toBe("valid");
+    if (result.kind === "valid") expect("claim" in result.value).toBe(false);
+  });
+
+  it("decodes the released-build fixture (no claim, no runtimeIdentity) with no claim key at all - not `claim: undefined`", () => {
+    const result = decodeHostUpdateAttempt(bytes(json({})));
+    expect(result).toEqual({ kind: "valid", version: 2, value: VALID_ACTIVE });
+    if (result.kind === "valid") {
+      expect("claim" in result.value).toBe(false);
+    }
+  });
+
+  it("reports corrupt when claim is explicitly null", () => {
+    expect(decodeHostUpdateAttempt(bytes(json({ claim: null })))).toEqual({
+      kind: "corrupt",
+    });
+  });
+
+  it("decodes a valid claim baseline attached to an ACTIVE record - unlike `recovery`, `claim` is legal on any phase, not only a terminal one", () => {
+    const result = decodeHostUpdateAttempt(bytes(json({ claim: VALID_CLAIM })));
+    expect(result.kind).toBe("valid");
+    if (result.kind === "valid")
+      expect(result.value.claim).toEqual(VALID_CLAIM);
+  });
+
+  it("decodes a valid claim baseline with a null stageFingerprint", () => {
+    const claim = { ...VALID_CLAIM, stageFingerprint: null };
+    const result = decodeHostUpdateAttempt(bytes(json({ claim })));
+    expect(result.kind).toBe("valid");
+    if (result.kind === "valid") expect(result.value.claim).toEqual(claim);
+  });
+
+  it.each([
+    ["installedVersion empty", { ...VALID_CLAIM, installedVersion: "" }],
+    ["installedVersion wrong type", { ...VALID_CLAIM, installedVersion: 1 }],
+    [
+      "installGeneration missing",
+      (() => {
+        const { installGeneration: _drop, ...rest } = VALID_CLAIM;
+        return rest;
+      })(),
+    ],
+    ["stageFingerprint wrong type", { ...VALID_CLAIM, stageFingerprint: 1 }],
+    ["stageFingerprint empty string", { ...VALID_CLAIM, stageFingerprint: "" }],
+    ["allowDowngrade wrong type", { ...VALID_CLAIM, allowDowngrade: "yes" }],
+    [
+      "acceptStoreFormatLoss wrong type",
+      { ...VALID_CLAIM, acceptStoreFormatLoss: "yes" },
+    ],
+    [
+      "allowDowngrade missing",
+      (() => {
+        const { allowDowngrade: _drop, ...rest } = VALID_CLAIM;
+        return rest;
+      })(),
+    ],
+    ["not an object", "nope"],
+    ["an array", []],
+  ])("reports corrupt for a malformed claim: %s", (_label, claim) => {
+    expect(decodeHostUpdateAttempt(bytes(json({ claim })))).toEqual({
+      kind: "corrupt",
+    });
+  });
+  // ---- verification report (Q1) ------------------------------------------
+
+  const VERSION_ONLY = {
+    mode: "version-only" as const,
+    reason: "pid-start-stamp-missing" as const,
+    floor: "1.3.0-rc.1",
+  };
+
+  function terminalJson(overrides: Record<string, unknown>): string {
+    return JSON.stringify({
+      ...VALID_ACTIVE,
+      phase: "complete",
+      execution: "terminal",
+      completedAt: "2026-01-01T00:05:00.000Z",
+      ...overrides,
+    });
+  }
+
+  it("decodes an identity verification on a terminal record", () => {
+    const result = decodeHostUpdateAttempt(
+      bytes(terminalJson({ verification: { mode: "identity" } })),
+    );
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") return;
+    expect(result.value.verification).toEqual({ mode: "identity" });
+  });
+
+  it("decodes a version-only verification, carrying its reason and floor", () => {
+    const result = decodeHostUpdateAttempt(
+      bytes(terminalJson({ verification: VERSION_ONLY })),
+    );
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") return;
+    expect(result.value.verification).toEqual(VERSION_ONLY);
+  });
+
+  it("a record with NO verification is valid, and the key is absent - a pre-Q1 writer", () => {
+    // The positive-write design's other half: absence means "written before
+    // this key existed", so it must decode cleanly and must NOT be filled in
+    // with a default. A decoder that substituted `identity` here would invent
+    // the exact claim the key exists to stop anyone inventing.
+    const result = decodeHostUpdateAttempt(bytes(terminalJson({})));
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") return;
+    expect(result.value.verification).toBeUndefined();
+    expect("verification" in result.value).toBe(false);
+  });
+
+  it("FORWARD COMPAT: an UNKNOWN but well-formed mode drops the key and keeps the record VALID", () => {
+    // The rule the whole key rests on. A newer build recording a mode this
+    // reader has never heard of has not damaged anything - it has spoken in a
+    // vocabulary this reader does not have yet. If this reported corrupt, the
+    // first `mode` anyone adds would make every record written by a newer
+    // build unreadable to every deployed older one: a diagnostic bricking the
+    // thing it was added to explain.
+    const result = decodeHostUpdateAttempt(
+      bytes(
+        terminalJson({
+          verification: { mode: "attested-by-something-later" },
+        }),
+      ),
+    );
+    expect(result.kind).toBe("valid");
+    if (result.kind !== "valid") return;
+    expect(result.value.verification).toBeUndefined();
+  });
+
+  it("reports corrupt when verification is attached to a live (non-terminal) phase", () => {
+    // Same reasoning as `recovery`: it reports how the verify leg CONCLUDED,
+    // so a partial or crashed writer must not be able to leave it on a live
+    // segment and make a running attempt look already verified.
+    expect(
+      decodeHostUpdateAttempt(
+        bytes(json({ verification: { mode: "identity" } })),
+      ),
+    ).toEqual({ kind: "corrupt" });
+  });
+
+  it.each([
+    ["a non-string mode", { mode: 7 }],
+    ["a missing mode", { reason: "pid-start-stamp-missing", floor: "1.3.0" }],
+    ["version-only with no reason", { mode: "version-only", floor: "1.3.0" }],
+    [
+      "version-only with an unknown reason",
+      { mode: "version-only", reason: "some-other-reason", floor: "1.3.0" },
+    ],
+    ["version-only with no floor", { ...VERSION_ONLY, floor: undefined }],
+    ["version-only with an EMPTY floor", { ...VERSION_ONLY, floor: "" }],
+    ["version-only with a non-string floor", { ...VERSION_ONLY, floor: 130 }],
+    ["not an object", "nope"],
+    ["an array", []],
+    ["null", null],
+  ])(
+    "reports corrupt for a MALFORMED verification: %s",
+    (_label, verification) => {
+      // The other side of the asymmetry above. These shapes cannot be produced
+      // by any writer, so they mean the file is damaged - unlike an unknown
+      // mode, which means the writer is newer. An empty `floor` is corrupt
+      // rather than absent because it is the value the decision turned on.
+      expect(
+        decodeHostUpdateAttempt(bytes(terminalJson({ verification }))),
+      ).toEqual({ kind: "corrupt" });
+    },
+  );
+});

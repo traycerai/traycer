@@ -1,0 +1,195 @@
+/**
+ * Single source of truth for this desktop build's deployment config.
+ *
+ * Flat config object: source always holds the dev values; the deploy
+ * script (this module's scripts/set-deploy-target.cjs) rewrites the
+ * `environment` field + the literal values in place for staging/production
+ * builds, then reverts.
+ * There is ONE runtime env-var lookup, and it is dead code in shipped
+ * builds: when the baked `environment` is `"dev"`, the backend base URLs
+ * may be overridden to a loopback http origin (`TRAYCER_DEV_*_BASE_URL`,
+ * validated in `@traycer-clients/shared/platform/dev-backend-urls`) so the
+ * internal `make dev-desktop` orchestrator can point a source run at its
+ * per-slot local backend without mutating this file. Staging/production
+ * builds have a non-`"dev"` literal baked in, so a stray `process.env`
+ * value cannot repoint a packaged app at a different backend - and even a
+ * dev build can only be pointed at the local machine.
+ *
+ * Dev-vs-shipped wiring (renderer/tray/icon paths, dev URL, dev CLI wrapper,
+ * updater, userData isolation, log verbosity) is derived from
+ * `config.environment` via `isDevBuild` below - NOT from `app.isPackaged`.
+ * `environment` is the single discriminator: the dev slot is the development
+ * build, staging/production are the shipped builds. DevTools policy is a
+ * separate production-only gate because staging installs need the inspector
+ * even though they use shipped renderer/runtime wiring. There is no separate
+ * packaged-vs-source axis (the only unpackaged build is the dev one), and
+ * keeping it on `environment` means behaviour is identical for a given slot
+ * whether or not the build happens to be packaged.
+ */
+
+// RELATIVE on purpose, not `@traycer-clients/shared/...`: the Vite renderer
+// config transitively loads this module (vite.renderer.config.ts -> the CSP
+// module -> here), and Vite's config loader inlines relative imports while
+// EXTERNALIZING bare specifiers - which Node's require then cannot resolve to
+// this workspace's TypeScript source. The app builds resolve both forms; the
+// config-loader context resolves only this one.
+import {
+  DEV_AUTHN_BASE_URL_ENV,
+  DEV_CLOUD_UI_BASE_URL_ENV,
+  DEV_POOL_BASE_URL_ENV,
+  DEV_RELAY_BASE_URL_ENV,
+  DEV_SERVER_BASE_URL_ENV,
+  devBackendUrlFromEnv,
+  devRelayBaseUrlFromEnv,
+} from "../../shared/platform/dev-backend-urls";
+
+export type Environment = string;
+
+const bakedConfig = {
+  environment: "dev" as Environment,
+  // Concrete per-build identity, stamped at install time by the deploy
+  // script (alongside `environment`). `0.0.0-dev` in source / after
+  // `--restore`; a real install bakes `<target>.<epochMs>.<gitSha>` into the
+  // Desktop and bundled CLI from the same release. Desktop bundles only the
+  // CLI; the CLI subprocess owns host install/update/restart decisions.
+  version: "0.0.0-dev",
+  authnBaseUrl: "https://authn.traycer.ai",
+  // traycer-server, which serves the sandbox control plane (`/api/sandboxes`).
+  // Mirrors the host build's own `traycerServerBaseUrl`; the deploy script
+  // stamps the target's value from the client target stamp's
+  // `cloud.traycerServerBaseUrl`.
+  serverBaseUrl: "https://server.traycer.ai",
+  // The Google IAP audience in front of a staging traycer-server, which the
+  // main process mints its `Proxy-Authorization` token for
+  // (`electron-main/auth/iap-proxy-token.ts`). Empty means not behind IAP:
+  // source, dev and production. The deploy script stamps a staging target's
+  // value from the client target stamp's `cloud.iapAudience`.
+  iapAudience: "",
+  cloudUiBaseUrl: "https://traycer.ai",
+  // Remote Host Support (ticket T14): the relay worker's WebSocket attach
+  // endpoint (`workers/relay-do`, ticket T10) — mirrors the host build's own
+  // `relayAttachUrl` (`traycer-host/src/config.ts`). The OSS source holds the
+  // production endpoint and release builds stamp the selected target. Overridable
+  // in dev via `TRAYCER_DEV_RELAY_BASE_URL` (see `devRelayBaseUrlFromEnv`
+  // below) so `make dev-remote` can point it at a local relay worker.
+  // Served via Cloudflare for SaaS custom hostnames: traycer.ai DNS stays on
+  // GCP Cloud DNS (CNAME into the helper zone) and a per-hostname Worker
+  // route delivers the traffic to the relay worker.
+  relayBaseUrl: "wss://relay.traycer.ai/attach",
+  // The server pool's session socket, dialed directly. Empty means this build
+  // has no pool, and no pool entry is ever synthesized (production, until the
+  // pool's production address is published). Release builds stamp the
+  // target's `cloud.poolUrl`; overridable in dev via
+  // `TRAYCER_DEV_POOL_BASE_URL`.
+  poolBaseUrl: "",
+  // Sentry crash-reporting DSN for the main process. Empty for local
+  // (reporting disabled); the deploy script bakes the staging/production DSN.
+  sentryDsn: "",
+  // Sentry DSN for the renderer process (separate project). Empty for local;
+  // the deploy script bakes the staging/production DSN.
+  sentryRendererDsn: "",
+  // Per-environment app identity. Drives the Electron app name (and therefore
+  // the userData directory + single-instance lock), the OAuth deep-link scheme,
+  // and the Windows AppUserModelId. Source holds the dev values so a
+  // `make dev-desktop` shell stays isolated from an installed build; the deploy
+  // script stamps the shipped values for a packaged build. Keeping each slot's
+  // identity distinct is what lets separate builds coexist without stealing one
+  // another's lock/state.
+  appName: "Traycer Dev",
+  protocolScheme: "traycer-dev",
+  appId: "ai.traycer.desktop",
+  // Release routing is baked alongside the native identity. Production keeps
+  // its historical repository and channel; staging points at the internal
+  // train's repository and discovers only its `-staging.*` releases.
+  releaseRepo: "traycerai/traycer",
+  releaseChannel: "dev",
+};
+
+// The dev-gated backend URL overrides resolve once, at module init, so every
+// consumer (main, preload, IPC-served desktop config) sees one consistent
+// value for the process's lifetime.
+export const config = {
+  ...bakedConfig,
+  authnBaseUrl: devBackendUrlFromEnv(
+    bakedConfig.environment,
+    DEV_AUTHN_BASE_URL_ENV,
+    bakedConfig.authnBaseUrl,
+    process.env,
+  ),
+  serverBaseUrl: devBackendUrlFromEnv(
+    bakedConfig.environment,
+    DEV_SERVER_BASE_URL_ENV,
+    bakedConfig.serverBaseUrl,
+    process.env,
+  ),
+  cloudUiBaseUrl: devBackendUrlFromEnv(
+    bakedConfig.environment,
+    DEV_CLOUD_UI_BASE_URL_ENV,
+    bakedConfig.cloudUiBaseUrl,
+    process.env,
+  ),
+  relayBaseUrl: devRelayBaseUrlFromEnv(
+    bakedConfig.environment,
+    DEV_RELAY_BASE_URL_ENV,
+    bakedConfig.relayBaseUrl,
+    process.env,
+  ),
+  poolBaseUrl: devRelayBaseUrlFromEnv(
+    bakedConfig.environment,
+    DEV_POOL_BASE_URL_ENV,
+    bakedConfig.poolBaseUrl,
+    process.env,
+  ),
+};
+
+// Single derived discriminator for "development build vs shipped build",
+// constructed from `environment` (the same pattern as the CLI's derived
+// `hostRegistryUrl`). Every dev-vs-shipped decision reads this: the dev
+// slot loads the Vite dev server, resolves assets/CLI from the workspace,
+// isolates userData, and skips the auto-updater/login-item; staging/production
+// are the shipped behaviours.
+export const isDevBuild = config.environment === "dev";
+
+// DevTools are available in dev + staging and disabled only for production.
+export const canOpenDevTools = config.environment !== "production";
+
+/**
+ * Whether a build of `environment` may record the music to disk: only a dev or
+ * a staging build, which is where the team listens. Any other value, production
+ * or one this file does not know, records nothing.
+ */
+export function soundtrackRecordingAllowed(environment: Environment): boolean {
+  return environment === "dev" || environment === "staging";
+}
+
+// Read by main at startup: a build this answers false for registers no
+// recording channel at all.
+export const canRecordSoundtrack = soundtrackRecordingAllowed(
+  config.environment,
+);
+
+// The sign-in flow opens the Cloud UI's sign-in route.
+export const DESKTOP_SIGN_IN_BASE_URL = config.cloudUiBaseUrl;
+
+// Custom URL scheme for the OAuth deep-link callback. Each build registers its
+// own scheme (dev `traycer-dev://`, production `traycer://`) so the cloud's
+// `${scheme}://auth/callback` redirect is routed by the OS to THIS app and not
+// a sibling install sharing a scheme. The value is per-environment in `config`
+// (`protocolScheme`); packaged builds register it via the bundle's Info.plist
+// (`protocols`), and the unpackaged dev build registers it at runtime via
+// `setAsDefaultProtocolClient`.
+export const DESKTOP_PROTOCOL_SCHEME = config.protocolScheme;
+
+// App display name - used as the Electron app name (which derives the userData
+// directory + single-instance lock) and for the Dock/menu/About panel - plus
+// the Windows AppUserModelId. Both are per-environment via `config` so each
+// build's identity is stamped at build time, not hardcoded per slot.
+export const DESKTOP_APP_NAME = config.appName;
+export const DESKTOP_APP_USER_MODEL_ID = config.appId;
+
+export const DESKTOP_RELEASE_CHANNEL = config.releaseChannel;
+
+export function configuredDesktopReleaseRepo(): string {
+  const repo = config.releaseRepo.trim();
+  return repo.length === 0 ? "traycerai/traycer" : repo;
+}

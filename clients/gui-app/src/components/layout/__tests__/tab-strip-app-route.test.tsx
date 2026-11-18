@@ -1,0 +1,416 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  RouterProvider,
+  createMemoryHistory,
+  createRouter,
+} from "@tanstack/react-router";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { routeTree } from "@/routeTree.gen";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
+import { useTabsStore } from "@/stores/tabs/store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
+
+// Reconciliation install is owned by `WindowsBridgeProvider` in
+// production. Test mounts skip the provider, so install once here.
+installTabSyncCoordinator({ readyPromise: Promise.resolve() });
+
+const pinTestState = vi.hoisted(() => ({
+  mutate: vi.fn(),
+}));
+const recordViewed = vi.hoisted(() => vi.fn());
+
+vi.mock("@/components/layout/dialogs/desktop-dialog-host", () => ({
+  DesktopDialogHost: () => null,
+}));
+
+vi.mock("@/components/layout/bridges/menu-command-listener", () => ({
+  MenuCommandListener: () => null,
+}));
+
+vi.mock("@/components/layout/host-ready-gate", () => ({
+  HostReadyGate: (props: { readonly children: ReactNode }) => props.children,
+}));
+
+vi.mock("@/components/layout/bridges/host-tray-command-listener", () => ({
+  HostTrayCommandListener: () => null,
+}));
+vi.mock("@/components/layout/bridges/host-unresponsive-prompt", () => ({
+  HostUnresponsivePrompt: () => null,
+}));
+
+vi.mock("@/components/layout/bridges/notification-focus-bridge", () => ({
+  NotificationFocusBridge: () => null,
+}));
+
+vi.mock("@/components/layout/bridges/notification-emission-controller", () => ({
+  NotificationEmissionController: () => null,
+}));
+
+vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
+  useHostNotificationIndicators: () => ({
+    data: { epics: {}, chats: {} },
+    isPending: false,
+    isFetching: false,
+    error: null,
+    refetch: () => Promise.resolve(),
+  }),
+}));
+
+// The app shell mounts the fork-episode poll (it feeds the `pendingFork`
+// indicator's open/close edge). Stubbed like every other host-runtime consumer
+// in this file: these tests own tab-strip layout and navigation, and the real
+// hook would need a host client this tree deliberately does not build.
+vi.mock("@/hooks/chats/use-chat-fork-queries", () => ({
+  useChatForkEventQuery: () => ({ data: undefined }),
+}));
+
+// This navigation fixture has no live host transport.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
+/**
+ * The organization provider the shell mounts rides a host stream, to hear a
+ * recovered host and resend a draft tab's group. Resolving either binding
+ * reaches the auth service, which needs the `<HostRuntimeProvider>` this tree
+ * does not build; with no transport there is no stream to report, and the
+ * pool tier resolves to the surface's own client.
+ */
+vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
+  useSurfaceHostStreamBinding: () => null,
+}));
+vi.mock("@/hooks/host/use-pool-tier", () => ({
+  usePoolTierHostClient: (surfaceClient: unknown) => surfaceClient,
+  usePoolTierStreamClient: () => null,
+}));
+vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
+  useEpicTaskPinnedStates: () => new Map(),
+  useRetryUnansweredTaskPinReading: () => () => undefined,
+}));
+
+vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
+  useEpicSetPinned: () => ({ mutate: pinTestState.mutate }),
+  usePendingSetPinnedEpicIds: () => new Set(),
+}));
+
+vi.mock("@/hooks/epic/use-epic-record-viewed-mutation", () => ({
+  useEpicRecordViewed: () => ({ mutate: recordViewed }),
+}));
+
+/**
+ * `useEpicPinLocalHomeSupported`, `tab-strip.tsx`'s own `useHostClient()`
+ * (for the Undo dispatch's `epicPinDispatchAdmitted` re-check) and the
+ * OrganizationProvider's `useAuthService()` (its membership-change identity
+ * read) all need a `<HostRuntimeProvider>` this tree does not build.
+ */
+vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
+  useEpicPinLocalHomeSupported: () => false,
+}));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => ({ getActiveHostId: () => null }),
+    useAuthService: () => ({
+      revalidateCurrentContextAfterInvalidation: () => Promise.resolve(null),
+    }),
+  };
+});
+
+vi.mock("@/components/layout/bridges/tray-open-epic-bridge", () => ({
+  TrayOpenEpicBridge: () => null,
+}));
+// The retrospective and move sheets RootComponent mounts app-wide read this
+// computer's host through a <HostRuntimeProvider> this tree does not build.
+vi.mock("@/components/settings/move/environment-sheets-host", () => ({
+  EnvironmentSheetsHost: () => null,
+}));
+// The app shell's Tracy entry resolves the main bot through the host runtime
+// too. Unmounted, it fixes no bot, so the strip draws no entry.
+vi.mock("@/components/layout/tabs/tracy-entry-controller", () => ({
+  TracyEntryController: () => null,
+}));
+// The voice layer resolves the runner host the same way, so it stays unmounted.
+vi.mock("@/components/layout/voice/call-controller", () => ({
+  CallController: () => null,
+}));
+
+// The shell's two-finger history swipe reads the desktop bridge through the
+// runner host, which this tree does not build. With no bridge it stays inert.
+vi.mock("@/hooks/runner/use-desktop-trackpad-scroll-phase-bridge", () => ({
+  useDesktopTrackpadScrollPhaseBridge: () => null,
+}));
+
+vi.mock("@/components/layout/host-status-footer", () => ({
+  HostStatusFooter: () => null,
+}));
+
+vi.mock("@/components/migration/migration-run-controller", () => ({
+  MigrationRunController: () => null,
+}));
+
+vi.mock("@/components/open-folder-dialog", () => ({
+  OpenFolderDialog: () => null,
+}));
+
+vi.mock("@/components/notifications/notifications-bell", () => ({
+  NotificationsBell: () => null,
+}));
+
+// Both header host-scoped surfaces resolve a `HostScope`, which reads the
+// ambient host client - a provider this route harness does not mount.
+vi.mock("@/components/layout/header/rate-limit-icon", () => ({
+  RateLimitIconButton: () => null,
+}));
+
+vi.mock("@/components/resources/resource-monitor-popover", () => ({
+  ResourceMonitorPopover: () => null,
+}));
+
+// The strip hosts the same two surfaces, and it is the DEFAULT placement, so
+// this route harness mounts it on every render and needs the same stub.
+vi.mock("@/components/layout/status-bar/app-status-bar", () => ({
+  AppStatusBar: () => null,
+}));
+
+vi.mock("@/components/auth/user-menu", () => ({
+  UserMenu: () => <div data-testid="user-menu" />,
+}));
+
+vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
+  useCloudEpicTasksQuery: () => ({ tasks: [] }),
+}));
+
+vi.mock("@/providers/epic-session-provider", () => ({
+  EpicSessionProvider: (props: {
+    readonly children: ReactNode;
+    readonly epicId: string;
+  }) => (
+    <div data-epic-id={props.epicId} data-testid="epic-session-provider">
+      {props.children}
+    </div>
+  ),
+}));
+
+vi.mock("@/components/epic-canvas/epic-route-session-body", () => ({
+  // Note: epic-route-session-body stays at root, not moved
+  EpicRouteSessionBody: (props: {
+    readonly epicId: string;
+    readonly tabId: string;
+  }) => (
+    <div
+      data-epic-id={props.epicId}
+      data-tab-id={props.tabId}
+      data-testid="epic-route-session-body"
+    />
+  ),
+}));
+
+vi.mock("@/components/epic-tabs/epic-surface", () => ({
+  EpicSurface: (props: { readonly epicId: string; readonly tabId: string }) => (
+    <div
+      data-epic-id={props.epicId}
+      data-tab-id={props.tabId}
+      data-testid="epic-route-session-body"
+    />
+  ),
+}));
+
+vi.mock("@/components/home/landing-draft-surface", () => ({
+  LandingDraftSurface: () => <div data-testid="draft-surface" />,
+}));
+
+vi.mock("@/components/epics/history-surface", () => ({
+  HistorySurface: () => <div data-testid="history-surface" />,
+}));
+
+vi.mock("@/components/settings/settings-surface", () => ({
+  SettingsSurface: () => <div data-testid="settings-surface" />,
+}));
+
+// The host wraps the panel in the gesture provider (the single live-value
+// reader); this route test does not exercise the terminal, so the provider is a
+// pass-through and the panel is inert.
+vi.mock(
+  "@/components/home/terminal-panel/landing-terminal-gesture-provider",
+  () => ({
+    LandingTerminalGestureProvider: (props: { readonly children: ReactNode }) =>
+      props.children,
+  }),
+);
+vi.mock("@/components/home/terminal-panel/landing-terminal-panel", () => ({
+  LandingTerminalPanel: () => null,
+}));
+
+vi.mock("@/components/settings/panels/general-settings-panel", () => ({
+  GeneralSettingsPanel: () => <div data-testid="settings-general-route" />,
+}));
+
+vi.mock("@/components/epics/epics-route", () => ({
+  EpicsRoute: () => <div data-testid="epics-history-route" />,
+}));
+
+vi.mock("@/components/layout/root-landing-page", () => ({
+  RootLandingPage: () => <div data-testid="landing-route" />,
+}));
+
+function resetStores(): void {
+  // The header strip these cases navigate from: the shipped left strip is
+  // side-tab-strip.test.tsx.s subject.
+  useLayoutStore.setState({
+    ...DEFAULT_LAYOUT_SNAPSHOT,
+    arrangement: {
+      ...DEFAULT_LAYOUT_SNAPSHOT.arrangement,
+      tabStripPlacement: "top",
+    },
+  });
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  useTabsStore.setState({
+    stripOrder: [],
+    systemTabs: { history: null, settings: null },
+  });
+  useAuthStore.getState().setSignedIn(
+    {
+      userId: "user-1",
+      userName: "User One",
+      email: "user@example.com",
+    },
+    { userId: "user-1", username: "User One" },
+    [],
+  );
+  // Past the one-time tour, so RootComponent's onboarding render gate is inert.
+  useOnboardingStore.setState({ completedAt: 1_700_000_000_000 });
+}
+
+function renderAppAt(initialPath: string) {
+  const queryClient = new QueryClient();
+  const router = createRouter({
+    routeTree,
+    history: createMemoryHistory({ initialEntries: [initialPath] }),
+    context: {
+      queryClient,
+      getAuthSnapshot: () => useAuthStore.getState(),
+      getHostClient: () => null,
+    },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <RouterProvider router={router} />
+      </TooltipProvider>
+    </QueryClientProvider>,
+  );
+  return router;
+}
+
+async function flushNav(): Promise<void> {
+  for (let i = 0; i < 5; i++) {
+    await Promise.resolve();
+  }
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+describe("app route tab-strip navigation", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    pinTestState.mutate.mockClear();
+    recordViewed.mockClear();
+    resetStores();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAuthStore.getState().setSignedOut();
+    resetStores();
+  });
+
+  it("switches from an epic tab to open settings, history, and draft tabs", async () => {
+    const epicTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-current", "Current Epic");
+    useTabsStore.getState().openSystemTab({
+      kind: "settings",
+      name: "Settings",
+      lastPath: "/settings/general",
+    });
+    useTabsStore.getState().openSystemTab({
+      kind: "history",
+      name: "History",
+      lastPath: "/epics",
+    });
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    const router = renderAppAt(`/epics/epic-current/${epicTabId}`);
+    await screen.findByTestId("epic-route-session-body");
+
+    fireEvent.click(screen.getByTestId("tab-settings-settings"));
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/settings/general");
+    });
+
+    await router.navigate({
+      to: "/epics/$epicId/$tabId",
+      params: { epicId: "epic-current", tabId: epicTabId },
+      search: {
+        focusedAt: undefined,
+        focusArtifactId: undefined,
+        focusThreadId: undefined,
+        migrationSource: undefined,
+        focusPaneId: undefined,
+        focusTileInstanceId: undefined,
+      },
+    });
+    await flushNav();
+    fireEvent.click(screen.getByTestId("tab-history-history"));
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/epics");
+    });
+
+    await router.navigate({
+      to: "/epics/$epicId/$tabId",
+      params: { epicId: "epic-current", tabId: epicTabId },
+      search: {
+        focusedAt: undefined,
+        focusArtifactId: undefined,
+        focusThreadId: undefined,
+        migrationSource: undefined,
+        focusPaneId: undefined,
+        focusTileInstanceId: undefined,
+      },
+    });
+    await flushNav();
+    fireEvent.click(screen.getByTestId(`tab-draft-${draftId}`));
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe(`/draft/${draftId}`);
+    });
+  });
+  it("draws the header's own hairline baseline", async () => {
+    const epicTabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-current", "Current Epic");
+    renderAppAt(`/epics/epic-current/${epicTabId}`);
+    await screen.findByTestId("epic-route-session-body");
+
+    const headerClassTokens = screen
+      .getByTestId("app-header")
+      .className.split(/\s+/);
+    expect(headerClassTokens).toContain("after:bg-border/90");
+    expect(headerClassTokens).toContain("after:h-px");
+  });
+});

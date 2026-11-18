@@ -1,0 +1,502 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderHook } from "@testing-library/react";
+import { readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
+import type { ListEpicCollaboratorsResponse } from "@traycer/protocol/host/epic/unary-schemas";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import {
+  EPIC_COLLABORATORS_CLOSED_STALE_TIME_MS,
+  EPIC_COLLABORATORS_OPEN_REFRESH_MS,
+  useEpicCollaboratorsQuery,
+} from "@/hooks/epics/use-epic-collaborators-query";
+import { useAuthStore } from "@/stores/auth/auth-store";
+
+const guiAppSrc = path.resolve(import.meta.dirname, "../..");
+
+interface CapturedHostQuery {
+  readonly client: unknown;
+  readonly method: string;
+  readonly params: { readonly epicId: string };
+  readonly preflight: (() => void) | undefined;
+  readonly options: {
+    readonly poll: boolean | undefined;
+    readonly staleTime: number | undefined;
+  } | null;
+}
+
+interface MockQueryResult {
+  readonly data: ListEpicCollaboratorsResponse | undefined;
+  readonly isLoading: boolean;
+  readonly isFetching: boolean;
+  readonly isError: boolean;
+  readonly error: Error | null;
+}
+
+const capturedQuery = vi.hoisted((): { current: CapturedHostQuery | null } => ({
+  current: null,
+}));
+const mockQueryResult = vi.hoisted((): { current: MockQueryResult } => ({
+  current: {
+    data: undefined,
+    error: null,
+    isError: false,
+    isFetching: false,
+    isLoading: false,
+  },
+}));
+
+// A complete-but-inert HostRequester: `useHostQuery` is mocked below, so no
+// member is ever invoked - the shape exists only to satisfy the options type.
+const fakeClient: HostRequester<HostRpcRegistry> = {
+  getRegistry: () => {
+    throw new Error("unused in this test");
+  },
+  getActiveHost: () => null,
+  getActiveHostId: () => "host-remote",
+  getRequestContext: () => null,
+  getRequestContextUserId: () => null,
+  onChange: () => () => undefined,
+  request: () => Promise.reject(new Error("unused in this test")),
+  requestWithIdempotencyKey: () =>
+    Promise.reject(new Error("unused in this test")),
+  requestWithSignal: () => Promise.reject(new Error("unused in this test")),
+  requestWithSignalRequiringHostMethodVersion: () =>
+    Promise.reject(new Error("unused in this test")),
+  requestWithResponseTimeout: () =>
+    Promise.reject(new Error("unused in this test")),
+  requestWithOptions: () => Promise.reject(new Error("unused in this test")),
+};
+
+vi.mock("@/hooks/host/use-host-query", () => ({
+  useHostQuery: (args: CapturedHostQuery) => {
+    capturedQuery.current = args;
+    return mockQueryResult.current;
+  },
+}));
+
+function makeCollaboratorResponse(
+  email: string,
+): ListEpicCollaboratorsResponse {
+  return {
+    collaborators: [
+      {
+        accessType: "direct",
+        grantedAt: 1,
+        grantedBy: "user-owner",
+        role: "editor",
+        user: {
+          userId: `user-${email}`,
+          profile: {
+            avatarUrl: "https://example.com/avatar.png",
+            displayName: email,
+            email,
+            handle: email,
+          },
+        },
+        environmentId: null,
+        team: null,
+      },
+    ],
+    collaboratorsAvailable: true,
+  };
+}
+
+function makeTeamCollaboratorResponse(): ListEpicCollaboratorsResponse {
+  return {
+    collaborators: [
+      {
+        accessType: "organization",
+        grantedAt: 1,
+        grantedBy: "user-owner",
+        role: "editor",
+        user: null,
+        environmentId: null,
+        team: {
+          teamId: "team-1",
+          teamName: "Acme Team",
+          teamMembers: [
+            {
+              userId: "user-org-member",
+              profile: {
+                avatarUrl: "",
+                displayName: "Org Member",
+                email: "member@example.com",
+                handle: "member",
+              },
+            },
+          ],
+        },
+      },
+    ],
+    collaboratorsAvailable: true,
+  };
+}
+
+function makeTeamEntry(input: {
+  readonly teamId: string;
+  readonly environmentId: string | null;
+  readonly memberId: string;
+}): ListEpicCollaboratorsResponse["collaborators"][number] {
+  return {
+    accessType: "organization",
+    grantedAt: 1,
+    grantedBy: "user-owner",
+    role: "owner",
+    user: null,
+    environmentId: input.environmentId,
+    team: {
+      teamId: input.teamId,
+      teamName: `Team ${input.teamId}`,
+      teamMembers: [
+        {
+          userId: input.memberId,
+          profile: {
+            avatarUrl: "",
+            displayName: `Member ${input.memberId}`,
+            email: `${input.memberId}@example.com`,
+            handle: input.memberId,
+          },
+        },
+      ],
+    },
+  };
+}
+
+describe("useEpicCollaboratorsQuery", () => {
+  beforeEach(() => {
+    capturedQuery.current = null;
+    mockQueryResult.current = {
+      data: undefined,
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+    };
+  });
+
+  it("opts the Sharing panel into table-owned fixed polling while open", () => {
+    renderHook(() =>
+      useEpicCollaboratorsQuery("epic-open", {
+        client: fakeClient,
+        enabled: true,
+        poll: true,
+        staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
+      }),
+    );
+
+    expect(capturedQuery.current?.method).toBe("epic.listCollaborators");
+    expect(capturedQuery.current?.params).toEqual({ epicId: "epic-open" });
+    expect(capturedQuery.current?.options).toMatchObject({
+      poll: true,
+      staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
+    });
+    // The caller-chosen client must reach the query untouched - host binding
+    // is this hook's caller's decision, never an ambient default.
+    expect(capturedQuery.current?.client).toBe(fakeClient);
+  });
+
+  it("keeps the closed-panel query relaxed and non-polling by default", () => {
+    renderHook(() =>
+      useEpicCollaboratorsQuery("epic-closed", {
+        client: fakeClient,
+        enabled: true,
+        poll: undefined,
+        staleTime: undefined,
+      }),
+    );
+
+    expect(capturedQuery.current?.options).toMatchObject({
+      poll: false,
+      staleTime: EPIC_COLLABORATORS_CLOSED_STALE_TIME_MS,
+    });
+  });
+
+  it("projects the latest collaborator list returned by the open-panel refetch", () => {
+    mockQueryResult.current = {
+      data: makeCollaboratorResponse("after@example.com"),
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+    };
+
+    const hook = renderHook(() =>
+      useEpicCollaboratorsQuery("epic-open", {
+        client: fakeClient,
+        enabled: true,
+        poll: true,
+        staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
+      }),
+    );
+
+    expect(hook.result.current.data?.directUsers[0]?.email).toBe(
+      "after@example.com",
+    );
+    expect(hook.result.current.data?.directUsers[0]?.accessSource).toBe(
+      "direct-user",
+    );
+    expect(hook.result.current.data?.directUsers[0]?.teamId).toBeNull();
+    expect(hook.result.current.data?.directUsers[0]?.avatarUrl).toBe(
+      "https://example.com/avatar.png",
+    );
+  });
+
+  it("projects team-derived members with their access source", () => {
+    mockQueryResult.current = {
+      data: makeTeamCollaboratorResponse(),
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+    };
+
+    const hook = renderHook(() =>
+      useEpicCollaboratorsQuery("epic-open", {
+        client: fakeClient,
+        enabled: true,
+        poll: true,
+        staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
+      }),
+    );
+
+    expect(hook.result.current.data?.teams[0]).toMatchObject({
+      teamId: "team-1",
+      teamName: "Acme Team",
+      role: "editor",
+      members: [
+        expect.objectContaining({
+          accessSource: "team",
+          displayName: "Org Member",
+          email: "member@example.com",
+          avatarUrl: null,
+          teamId: "team-1",
+          teamName: "Acme Team",
+          role: "editor",
+          userId: "user-org-member",
+        }),
+      ],
+    });
+  });
+
+  it("projects the team entry carrying an environment id as the owner team, not a shared team", () => {
+    mockQueryResult.current = {
+      data: {
+        collaborators: [
+          makeTeamEntry({
+            teamId: "team-owner",
+            environmentId: "env-1",
+            memberId: "user-in-owner-team",
+          }),
+        ],
+        collaboratorsAvailable: true,
+      },
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+    };
+
+    const hook = renderHook(() =>
+      useEpicCollaboratorsQuery("epic-open", {
+        client: fakeClient,
+        enabled: true,
+        poll: true,
+        staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
+      }),
+    );
+
+    expect(hook.result.current.data?.ownerTeam).toMatchObject({
+      teamId: "team-owner",
+      teamName: "Team team-owner",
+    });
+    expect(hook.result.current.data?.teams).toEqual([]);
+    // The owning team's members are still owners through it, so they stay in
+    // the flat list the mention picker and sender labels read.
+    expect(hook.result.current.data?.flatRows.map((row) => row.userId)).toEqual(
+      ["user-in-owner-team"],
+    );
+  });
+
+  it("keeps a team entry with no environment id a shared team beside the owner team", () => {
+    mockQueryResult.current = {
+      data: {
+        collaborators: [
+          makeTeamEntry({
+            teamId: "team-owner",
+            environmentId: "env-1",
+            memberId: "user-in-owner-team",
+          }),
+          makeTeamEntry({
+            teamId: "team-shared",
+            environmentId: null,
+            memberId: "user-in-shared-team",
+          }),
+        ],
+        collaboratorsAvailable: true,
+      },
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+    };
+
+    const hook = renderHook(() =>
+      useEpicCollaboratorsQuery("epic-open", {
+        client: fakeClient,
+        enabled: true,
+        poll: true,
+        staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
+      }),
+    );
+
+    expect(hook.result.current.data?.ownerTeam?.teamId).toBe("team-owner");
+    expect(hook.result.current.data?.teams.map((team) => team.teamId)).toEqual([
+      "team-shared",
+    ]);
+  });
+
+  it("leaves the owner team empty when no team entry carries an environment id", () => {
+    mockQueryResult.current = {
+      data: makeTeamCollaboratorResponse(),
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+    };
+
+    const hook = renderHook(() =>
+      useEpicCollaboratorsQuery("epic-open", {
+        client: fakeClient,
+        enabled: true,
+        poll: true,
+        staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
+      }),
+    );
+
+    expect(hook.result.current.data?.ownerTeam).toBeNull();
+    expect(hook.result.current.data?.teams).toHaveLength(1);
+  });
+
+  it("withholds the retained list once the caller's verdict gate closes", () => {
+    // `enabled: false` stops the next fetch, but TanStack keeps the last
+    // `data` on the shared cache entry. The sidebar's "Shared with task" glyph
+    // and the mention picker read this hook's `data`, so a demotion that only
+    // flipped `enabled` left both showing grants loaded under the verdict the
+    // session no longer holds.
+    mockQueryResult.current = {
+      data: makeCollaboratorResponse("retained@example.com"),
+      error: null,
+      isError: false,
+      isFetching: false,
+      isLoading: false,
+    };
+
+    const hook = renderHook(
+      ({ enabled }: { enabled: boolean }) =>
+        useEpicCollaboratorsQuery("epic-open", {
+          client: fakeClient,
+          enabled,
+          poll: undefined,
+          staleTime: undefined,
+        }),
+      { initialProps: { enabled: true } },
+    );
+    expect(hook.result.current.data?.directUsers).toHaveLength(1);
+
+    hook.rerender({ enabled: false });
+    expect(hook.result.current.data).toBeUndefined();
+    // The underlying query result is untouched: the withholding is this
+    // hook's projection, not a cache eviction.
+    expect(hook.result.current.query.data).toBeDefined();
+  });
+
+  it("refuses a dispatch at preflight while the session holds no cloud verdict", () => {
+    // The render-time gate above cannot reach a retry already in flight when
+    // the session is demoted; the preflight is what ends that episode.
+    renderHook(() =>
+      useEpicCollaboratorsQuery("epic-open", {
+        client: fakeClient,
+        enabled: true,
+        poll: undefined,
+        staleTime: undefined,
+      }),
+    );
+    const preflight = capturedQuery.current?.preflight;
+    if (preflight === undefined) {
+      throw new Error("the collaborators query must carry a preflight");
+    }
+
+    useAuthStore.getState().setSignedOut();
+    expect(() => preflight()).toThrow(/no longer holds a cloud verdict/);
+
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+        [],
+      );
+    try {
+      expect(() => preflight()).not.toThrow();
+    } finally {
+      useAuthStore.getState().setSignedOut();
+    }
+  });
+});
+
+describe("epic.listCollaborators fixed-path poll inventory", () => {
+  it("keeps Sharing opt-in and the two cache readers opt-out", () => {
+    const sharing = readFileSync(
+      path.join(
+        guiAppSrc,
+        "components/epic-canvas/panels/epic-sharing/use-controller.ts",
+      ),
+      "utf8",
+    );
+    expect(sharing).toMatch(/useEpicCollaboratorsQuery\([\s\S]*?poll:\s*true/);
+
+    const mention = readFileSync(
+      path.join(guiAppSrc, "hooks/comments/use-mention-collaborators.ts"),
+      "utf8",
+    );
+    expect(mention).toMatch(/useEpicCollaboratorsQuery\([\s\S]*?poll:\s*false/);
+
+    const chatTile = readFileSync(
+      path.join(guiAppSrc, "components/epic-canvas/renderers/chat-tile.tsx"),
+      "utf8",
+    );
+    expect(chatTile).toMatch(
+      /method:\s*"epic\.listCollaborators"[\s\S]*?poll:\s*false/,
+    );
+
+    const sourcePaths = sourceFiles(guiAppSrc);
+    const listCollaboratorsCallSites = sourcePaths.filter((relativePath) => {
+      const source = readFileSync(path.join(guiAppSrc, relativePath), "utf8");
+      return (
+        /method:\s*"epic\.listCollaborators"/.test(source) ||
+        /useEpicCollaboratorsQuery\(/.test(source)
+      );
+    });
+    // Mutation activation is not a Query observer and is out of inventory.
+    expect(listCollaboratorsCallSites).toEqual(
+      expect.arrayContaining([
+        "components/epic-canvas/panels/epic-sharing/use-controller.ts",
+        "components/epic-canvas/renderers/chat-tile.tsx",
+        "hooks/comments/use-mention-collaborators.ts",
+        "hooks/epics/use-epic-collaborators-query.ts",
+      ]),
+    );
+  });
+});
+
+function sourceFiles(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const absolutePath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      return entry.name === "__tests__" ? [] : sourceFiles(absolutePath);
+    }
+    if (!/\.tsx?$/.test(entry.name)) return [];
+    return [path.relative(guiAppSrc, absolutePath)];
+  });
+}

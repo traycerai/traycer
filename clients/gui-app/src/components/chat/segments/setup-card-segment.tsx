@@ -1,0 +1,821 @@
+import {
+  ArrowRight,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  GitBranch,
+  X,
+} from "lucide-react";
+import { useContext, useMemo, useState } from "react";
+import type {
+  WorktreeBindingOwnerKind,
+  WorktreeFolderIntent,
+} from "@traycer/protocol/host/worktree-schemas";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { FilePathTooltip } from "@/components/file-path-tooltip";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { StartTruncatedText } from "@/components/ui/start-truncated-text";
+import {
+  useFocusEpicTerminalSession,
+  type EpicTerminalRefOverrides,
+} from "@/components/epic-canvas/renderers/chat-tile-focus-terminal";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useTerminalListFor } from "@/hooks/terminal/use-terminal-list-for-query";
+import { useWorktreeRetrySetupFor } from "@/hooks/worktree/use-worktree-retry-setup-mutation";
+import { useWorktreeCreateForClient } from "@/hooks/worktree/use-worktree-create-mutation";
+import { worktreeCreateEntries } from "@/lib/worktree/worktree-create-request";
+import { DEFAULT_EPIC_NODE_NAMES } from "@/lib/artifacts/node-display";
+import { isVisibleRawTerminalSession } from "@/lib/terminals/terminal-session-filters";
+import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
+import { cn } from "@/lib/utils";
+import { useReadingWidthStyle } from "@/lib/layout-overrides";
+import { ChatStatusReadOnlyContext } from "@/components/chat/chat-status-capabilities";
+import { LiveElapsed } from "./segment-elapsed";
+
+/**
+ * Lifecycle state of a single workspace's worktree setup, projected from the
+ * persisted `setup.*` chat events (this component only
+ * renders).
+ *
+ * Two in-flight states: `creating` (the host's `git worktree add` is running
+ * - the "Creating worktree" step spins, "Setting up" is pending) then
+ * `setting-up` (the setup script runs - "Creating worktree" done, "Setting up"
+ * spins).
+ */
+export type SetupWorkspaceState =
+  | "creating"
+  | "setting-up"
+  | "ready"
+  | "failed"
+  | "cancelled";
+
+/** Per-workspace entry within one setup lifecycle. */
+export interface SetupCardWorkspace {
+  /** Absolute workspace path; the retry mutation's per-entry target. */
+  readonly workspacePath: string;
+  /** Human-facing label (folder / branch name) precomputed by the deriver. */
+  readonly label: string;
+  readonly state: SetupWorkspaceState;
+  /** Exit code for a `failed` workspace; `null` otherwise / when unknown. */
+  readonly setupExitCode: number | null;
+  /**
+   * Deterministic setup-terminal session id. `null` when no terminal was ever
+   * linked (no "Open terminal" affordance); a non-null id whose session is no
+   * longer live renders the action disabled as "session ended".
+   */
+  readonly terminalSessionId: string | null;
+  /**
+   * Absolute path of the created worktree and its branch, surfaced in the
+   * expanded view so the user knows WHERE and WHAT was created. Carried in the
+   * `setup.*` event metadata; `null` for events emitted before this was added
+   * or when the entry has no branch (detached).
+   */
+  readonly worktreePath: string | null;
+  readonly branch: string | null;
+  /**
+   * Failure reason from the failing `setup.*` event (a provision failure's
+   * git error). `null` for non-failed states and for script failures, which
+   * surface the exit code + terminal output instead.
+   */
+  readonly errorMessage: string | null;
+  /**
+   * Non-null only for a provision failure (`git worktree add` never ran or
+   * failed): the exact folder intent the failed create attempted. Retry
+   * re-provisions from it via `worktree.create` - `worktree.retrySetup` only
+   * re-runs setup scripts and rejects an entry with no worktree.
+   */
+  readonly retryFolderIntent: WorktreeFolderIntent | null;
+}
+
+/**
+ * Per-lifecycle rollup. `epicId` scopes the terminal-liveness query;
+ * `ownerId` / `ownerKind` route the retry mutation; `state` is the
+ * consolidated state across every workspace (resolves to `ready` only when
+ * all workspaces are ready, and reflects the most severe in-flight/terminal
+ * state otherwise).
+ */
+export interface SetupCardAggregate {
+  readonly epicId: string;
+  readonly ownerId: string;
+  readonly ownerKind: WorktreeBindingOwnerKind;
+  readonly state: SetupWorkspaceState;
+}
+
+/**
+ * The full view-model the setup card consumes - the contract produced by
+ * grouping `setup.*` events per `workspacePath` and taking the latest state.
+ * `createdAt` is the earliest setup event's wall-clock ms; it seeds the live
+ * elapsed counter (placement is pinned by the renderer, not sorted on it).
+ *
+ * `isActive` mirrors `SetupCardRow.isActive`: it is true only for the live
+ * (still-open) lifecycle window. A historical window can be stranded at
+ * `setting-up` (the worktree vanished mid-setup; the host emits no terminal
+ * setup event), so the live affordances - the ticking elapsed counter and the
+ * animated "setting up" icon - must key off `isActive && setting-up`, NOT the
+ * state alone, or a dead card would spin forever.
+ */
+export interface SetupCardViewModel {
+  readonly aggregate: SetupCardAggregate;
+  readonly workspaces: ReadonlyArray<SetupCardWorkspace>;
+  readonly createdAt: number;
+  readonly isActive: boolean;
+}
+
+// "live" -> action enabled; "ended" -> disabled "session ended"; "none" ->
+// no action at all (no terminal was ever linked).
+type TerminalLiveness = "live" | "ended" | "none";
+
+/**
+ * Compact, compaction-style setup line. Collapsed it is a single hairline-ruled
+ * row (icon + phase + branch + elapsed); it always expands to a dropdown - the
+ * two setup steps (Creating worktree / Setting up worktree, the latter with the
+ * Open-terminal action) for a single repo, or a per-workspace row for multi.
+ * Auto-expands on failure so Retry is one glance away. Pinned above the first
+ * user message by the renderer; see `rendered-messages.ts`.
+ *
+ * `variant` selects the presentation without changing any of the setup logic:
+ *  - `"card"` (chat transcript): the full-width, hairline-ruled line that
+ *    expands INLINE, pushing the messages below it.
+ *  - `"inline"` (terminal-agent status bar): a compact right-aligned trigger
+ *    whose detail opens as a downward Popover OVERLAY, so expanding it never
+ *    reflows the terminal session beneath the bar.
+ */
+export function SetupCardSegment(props: {
+  readonly model: SetupCardViewModel;
+  readonly viewTabId: string;
+  readonly variant: "card" | "inline";
+}) {
+  const { model, viewTabId, variant } = props;
+  const { aggregate, workspaces, createdAt, isActive } = model;
+  const readingWidth = useReadingWidthStyle();
+
+  // Open terminal, liveness, and Retry must all address the SAME host the tab
+  // is bound to (it can differ from the app-wide active host). Resolve one
+  // tab-scoped client and feed it to the liveness query and the retry mutation;
+  // `useFocusEpicTerminalSession` already scopes to the tab host.
+  const focusTerminal = useFocusEpicTerminalSession(viewTabId);
+  const tabClient = useTabHostClient();
+  const retrySetup = useWorktreeRetrySetupFor(tabClient);
+  const worktreeCreate = useWorktreeCreateForClient(tabClient, undefined);
+  const terminalList = useTerminalListFor(tabClient, {
+    kind: "epic",
+    epicId: aggregate.epicId,
+  });
+
+  const liveSessionIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const session of terminalList.data?.sessions ?? []) {
+      // `isVisibleRawTerminalSession` is the shared "session is openable"
+      // rule; reuse it so the card's liveness can't drift from the
+      // sidebar/bootstrap definition (it includes a completed setup terminal
+      // the host retains so its output stays reachable).
+      if (isVisibleRawTerminalSession(session)) ids.add(session.sessionId);
+    }
+    return ids;
+  }, [terminalList.data]);
+  // Until the first `terminal.list` settles we stay optimistic (treat sessions
+  // as live) so the common just-set-up case doesn't flash "session ended".
+  const livenessKnown = terminalList.data !== undefined;
+
+  const livenessFor = (sessionId: string | null): TerminalLiveness => {
+    if (sessionId === null || sessionId.length === 0) return "none";
+    if (liveSessionIds.has(sessionId)) return "live";
+    return livenessKnown ? "ended" : "live";
+  };
+
+  /**
+   * Release the queue a PROVISION failure paused, once Retry has made the
+   * worktree.
+   *
+   * The pause on this arm is not the user's: a failed materialization pauses
+   * the queue from the host side and every item with it, and a paused queue is
+   * not runnable - so without this the message the user already sent would sit
+   * there after a successful Retry, needing a second gesture to run work they
+   * never withdrew.
+   *
+   * The queue carries no pause REASON on the wire (`status` is the whole of it),
+   * so this cannot distinguish a host-side provision pause from one the user
+   * asked for. It resumes whenever there is a paused queue to resume, which is
+   * the trade this arm accepts: a user who paused deliberately AND then hit
+   * Retry on a provision failure gets their queue running. The script-failure
+   * arm below touches nothing.
+   *
+   * Read live through the registry rather than threaded down as a prop: the
+   * card is a transcript segment several layers below the tile that owns the
+   * handle, and this runs on a click, where a live read is the correct one.
+   * `ownerKind` gates it because only a chat has a queue.
+   */
+  const resumeQueueAfterProvisionRetry = (): void => {
+    if (aggregate.ownerKind !== "chat") return;
+    const hostId = tabClient?.getActiveHostId() ?? null;
+    if (hostId === null) return;
+    const handle = getChatSessionRegistry().peek(
+      aggregate.epicId,
+      aggregate.ownerId,
+      hostId,
+    );
+    if (handle === null) return;
+    const state = handle.store.getState();
+    if (state.queue.status !== "paused") return;
+    state.resumeQueue();
+  };
+
+  const handleRetry = (workspace: SetupCardWorkspace): void => {
+    // A provision failure has no worktree to re-run setup inside -
+    // `worktree.retrySetup` would reject it ("entry has no worktree"). Retry
+    // it by re-provisioning from the exact intent the failing event carried.
+    // Script failures keep the in-place `retrySetup` path: the worktree
+    // exists and only its setup script needs to re-run.
+    if (workspace.retryFolderIntent !== null) {
+      worktreeCreate.mutate(
+        {
+          epicId: aggregate.epicId,
+          ownerId: aggregate.ownerId,
+          ownerKind: aggregate.ownerKind,
+          entries: worktreeCreateEntries([workspace.retryFolderIntent]),
+        },
+        {
+          // A failed entry does NOT reject the RPC - it rides `perEntry` on a
+          // successful response, so the hook's `onError` toast never sees it.
+          // Surface it here; the host separately appends a fresh
+          // `setup.failed` event that refreshes this card's reason.
+          onSuccess: (response) => {
+            const failed = response.perEntry.find(
+              (entry) =>
+                entry.workspacePath === workspace.workspacePath && !entry.ok,
+            );
+            if (failed !== undefined) {
+              reportableErrorToast(
+                failed.errorMessage ?? "Couldn't create worktree.",
+                undefined,
+                createReportIssueContext({
+                  title: "Worktree re-provision failed",
+                  message: failed.errorMessage,
+                  code: null,
+                  source: "Setup",
+                }),
+              );
+              return;
+            }
+            resumeQueueAfterProvisionRetry();
+          },
+        },
+      );
+      return;
+    }
+    retrySetup.mutate({
+      epicId: aggregate.epicId,
+      ownerId: aggregate.ownerId,
+      ownerKind: aggregate.ownerKind,
+      workspacePath: workspace.workspacePath,
+    });
+  };
+
+  // Auto-expand on failure (Retry must be one glance away); otherwise the
+  // compact line is the resting state. A manual toggle overrides the default.
+  const defaultExpanded = aggregate.state === "failed";
+  const [manualExpanded, setManualExpanded] = useState<boolean | null>(null);
+  const expanded = manualExpanded ?? defaultExpanded;
+
+  if (workspaces.length === 0) return null;
+
+  const multi = workspaces.length > 1;
+  // Retry routes through `tabClient`; while it's null (tab directory entry not
+  // yet resolved) it would no-op + toast, so it doesn't render. Open terminal
+  // goes through the focus path, not `tabClient`, so it stays ungated.
+  const tabReady = tabClient !== null;
+  // Live == this is the open lifecycle window AND a workspace is still in
+  // flight (`creating` git-add OR `setting-up` script) - NOT the rolled-up
+  // `aggregate.state` (which ranks `failed` above the in-flight states, hiding
+  // the timer while a sibling repo is still running). A stranded historical
+  // window (active=false) shows no live affordances.
+  const isLive =
+    isActive &&
+    workspaces.some(
+      (workspace) =>
+        workspace.state === "creating" || workspace.state === "setting-up",
+    );
+
+  const total = workspaces.length;
+  const readyCount = workspaces.filter((w) => w.state === "ready").length;
+  const hasProvisionFailure = workspaces.some(isProvisionFailure);
+
+  const shared: SharedHandlers = {
+    focusTerminal,
+    livenessFor,
+    onRetry: handleRetry,
+    retryPending: retrySetup.isPending || worktreeCreate.isPending,
+    tabReady,
+    active: isActive,
+  };
+
+  const title = headerTitle({
+    state: aggregate.state,
+    multi,
+    total,
+    active: isActive,
+    hasProvisionFailure,
+  });
+  const provisionFailureDetail =
+    workspaces.find(isProvisionFailure)?.errorMessage ?? null;
+  const toggleAccessibleLabel =
+    provisionFailureDetail === null
+      ? title
+      : `${title}. ${provisionFailureDetail}`;
+  const secondary = multi
+    ? `${readyCount} of ${total} done`
+    : workspaceSecondary(workspaces[0]);
+  const ChevronIcon = expanded ? ChevronDown : ChevronRight;
+  const titleLabel = <span className="text-foreground/85">{title}</span>;
+
+  const labelInner = (
+    <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
+      <StatusIcon state={aggregate.state} active={isActive} />
+      {provisionFailureDetail === null ? (
+        titleLabel
+      ) : (
+        <Tooltip>
+          <TooltipTrigger asChild>{titleLabel}</TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-80 whitespace-normal">
+            {provisionFailureDetail}
+          </TooltipContent>
+        </Tooltip>
+      )}
+      {secondary.length > 0 ? (
+        <>
+          {/* Separate centered flex item so the dot aligns with the row's
+              baseline (a "· " text prefix sits off-center). */}
+          <span aria-hidden className="text-muted-foreground/40">
+            ·
+          </span>
+          <span className="text-muted-foreground/80">{secondary}</span>
+        </>
+      ) : null}
+      {isLive ? <LiveElapsed startedAt={createdAt} /> : null}
+      <ChevronIcon aria-hidden className="size-3 shrink-0" />
+    </div>
+  );
+
+  const workspaceDetail = multi ? (
+    // One block per worktree (branch · path header + create/setup steps).
+    // Capped to ~2 blocks tall and scrolls beyond, so many linked repos don't
+    // grow the surface unbounded.
+    <div
+      data-testid="setup-card-workspaces"
+      className="flex max-h-[min(45vh,13rem)] flex-col divide-y divide-border/50 overflow-y-auto pr-1"
+    >
+      {workspaces.map((entry) => (
+        <WorkspaceSetupDetail
+          key={entry.workspacePath}
+          entry={entry}
+          {...shared}
+        />
+      ))}
+    </div>
+  ) : (
+    <WorkspaceSetupDetail entry={workspaces[0]} {...shared} />
+  );
+
+  if (variant === "inline") {
+    // Compact status-bar trigger + downward Popover overlay: expanding it
+    // renders in a portal, so the terminal session under the bar never reflows.
+    return (
+      <Popover open={expanded} onOpenChange={setManualExpanded}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-expanded={expanded}
+            aria-label={toggleAccessibleLabel}
+            data-testid="setup-card-toggle"
+            className={cn(
+              "flex items-center rounded-sm px-1.5 py-0.5 outline-none transition-colors",
+              "hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
+            )}
+          >
+            {labelInner}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          align="end"
+          side="bottom"
+          data-testid="setup-card"
+          className="w-[min(90vw,36rem)]"
+        >
+          {workspaceDetail}
+        </PopoverContent>
+      </Popover>
+    );
+  }
+
+  return (
+    <div data-testid="setup-card" className="flex w-full flex-col gap-1">
+      <div className="flex items-center gap-3">
+        <span aria-hidden className="h-px flex-1 bg-border/60" />
+        <button
+          type="button"
+          data-find-include="true"
+          onClick={() => setManualExpanded(!expanded)}
+          aria-expanded={expanded}
+          aria-label={toggleAccessibleLabel}
+          data-testid="setup-card-toggle"
+          className={cn(
+            "rounded-sm outline-none transition-colors",
+            "hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
+          )}
+        >
+          {labelInner}
+        </button>
+        <span aria-hidden className="h-px flex-1 bg-border/60" />
+      </div>
+      {expanded ? (
+        // muted-fill-ok: card variant renders only in a canvas chat tile (inline variant is the Popover arm)
+        <div
+          className={cn(
+            "mx-auto w-full rounded-md border border-border/60 bg-muted/30 p-3",
+            readingWidth.className,
+          )}
+          style={{ maxWidth: readingWidth.maxWidth }}
+        >
+          {workspaceDetail}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+interface SharedHandlers {
+  readonly focusTerminal: (
+    terminalSessionId: string | null,
+    cwd: string,
+    overrides: EpicTerminalRefOverrides | null,
+  ) => void;
+  readonly livenessFor: (sessionId: string | null) => TerminalLiveness;
+  readonly onRetry: (workspace: SetupCardWorkspace) => void;
+  readonly retryPending: boolean;
+  /** Tab host client resolved - gates the `tabClient`-routed Retry. */
+  readonly tabReady: boolean;
+  /** True only for the live lifecycle window (drives the active-only affordances). */
+  readonly active: boolean;
+}
+
+// One worktree's setup block: a "branch - path" header (where + what was
+// created) above the two-step "create + setup" view - "Creating worktree"
+// (spins while `git worktree add` runs, then a done check) and "Setting up
+// worktree" (the script phase, carrying the Open-terminal / Retry actions;
+// Cancel is intentionally omitted). Rendered once for a single repo and once
+// per workspace (in the scroll list) for multi-repo, so the view is identical.
+function WorkspaceSetupDetail(
+  props: SharedHandlers & { readonly entry: SetupCardWorkspace },
+) {
+  const readOnly = useContext(ChatStatusReadOnlyContext);
+  const {
+    entry,
+    focusTerminal,
+    livenessFor,
+    onRetry,
+    retryPending,
+    tabReady,
+    active,
+  } = props;
+  const provisionFailed = isProvisionFailure(entry);
+  const creationState = creationStepState(entry, provisionFailed);
+  const setupState = setupStepState(entry, provisionFailed);
+  const setupActive = !provisionFailed && entry.state !== "creating" && active;
+  const liveness = livenessFor(entry.terminalSessionId);
+  const retry =
+    !readOnly &&
+    (entry.state === "failed" || entry.state === "cancelled") &&
+    tabReady ? (
+      <RetryButton
+        pending={retryPending}
+        onRetry={() => onRetry(entry)}
+        label={provisionFailed ? "Retry creation" : "Retry setup"}
+      />
+    ) : null;
+  const reportIssue =
+    !readOnly && entry.state === "failed" ? (
+      <ReportIssueAction
+        context={createReportIssueContext({
+          title: provisionFailed
+            ? "Worktree creation failed"
+            : "Worktree setup failed",
+          message: entry.errorMessage,
+          code: null,
+          source: "Setup",
+        })}
+        presentation="icon"
+        className={undefined}
+      />
+    ) : null;
+  return (
+    <div
+      data-testid={`setup-card-workspace-${entry.workspacePath}`}
+      className="flex flex-col gap-2 py-2.5 first:pt-0 last:pb-0"
+    >
+      <WorktreeLocation
+        branch={entry.branch}
+        worktreePath={entry.worktreePath}
+        fallbackLabel={entry.label}
+      />
+      <ol
+        data-testid="setup-card-steps"
+        className="m-0 flex list-none flex-col gap-2.5 pl-0 text-ui-sm"
+      >
+        <li className="flex items-center gap-2">
+          {/* Spins while `git worktree add` runs (state "creating"); flips to a
+              done check once the add finishes and the rest proceeds. */}
+          <StatusIcon state={creationState} active={active} />
+          <span className="text-foreground/85">Creating worktree</span>
+        </li>
+        <li className="flex items-center gap-2">
+          {/* Pending (static dot) until the worktree exists and the setup
+              script starts; then reflects the live setup state. */}
+          <StatusIcon state={setupState} active={setupActive} />
+          <span
+            className={cn(
+              "text-foreground/85",
+              provisionFailed && "text-muted-foreground",
+            )}
+          >
+            Setting up worktree
+          </span>
+          {entry.state === "failed" && entry.setupExitCode !== null ? (
+            <span className="text-muted-foreground">
+              (exit {entry.setupExitCode})
+            </span>
+          ) : null}
+          <span aria-hidden className="flex-1" />
+          <OpenTerminalButton
+            liveness={liveness}
+            onOpen={() =>
+              focusTerminal(
+                entry.terminalSessionId,
+                entry.worktreePath ?? entry.workspacePath,
+                {
+                  name: DEFAULT_EPIC_NODE_NAMES.terminal,
+                  origin: "setup",
+                  originProviderId: undefined,
+                },
+              )
+            }
+          />
+          {retry}
+          {reportIssue}
+        </li>
+      </ol>
+      {entry.state === "failed" && entry.errorMessage !== null ? (
+        // `role="alert"` announces the provisioning failure to assistive tech
+        // when it appears, and gives the message an accessible query handle.
+        <p
+          role="alert"
+          className="m-0 whitespace-pre-wrap break-words pl-6 text-ui-sm text-destructive"
+        >
+          {entry.errorMessage}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function creationStepState(
+  entry: SetupCardWorkspace,
+  provisionFailed: boolean,
+): SetupWorkspaceState {
+  if (provisionFailed) return "failed";
+  if (entry.state === "creating") return "creating";
+  return "ready";
+}
+
+function setupStepState(
+  entry: SetupCardWorkspace,
+  provisionFailed: boolean,
+): SetupWorkspaceState {
+  if (provisionFailed || entry.state === "creating") return "setting-up";
+  return entry.state;
+}
+
+function headerTitle(props: {
+  readonly state: SetupWorkspaceState;
+  readonly multi: boolean;
+  readonly total: number;
+  readonly active: boolean;
+  readonly hasProvisionFailure: boolean;
+}): string {
+  const { state, multi, total, active, hasProvisionFailure } = props;
+  if (state === "failed" && hasProvisionFailure) {
+    return "Worktree creation failed";
+  }
+  if (multi) {
+    if (state === "ready") return `${total} worktrees ready`;
+    if (state === "failed") return "Worktree setup failed";
+    if (state === "cancelled") return "Worktree setup cancelled";
+    if (state === "creating") return `Creating ${total} worktrees`;
+    return `Setting up ${total} worktrees`;
+  }
+  if (state === "ready") return "Worktree ready";
+  if (state === "failed") return "Setup failed";
+  if (state === "cancelled") return "Setup cancelled";
+  if (state === "creating") return "Creating worktree";
+  // `setting-up`: a stranded historical window is no longer in flight.
+  return active ? "Setting up worktree" : "Worktree setup incomplete";
+}
+
+function workspaceSecondary(entry: SetupCardWorkspace): string {
+  const parts: string[] = [];
+  if (entry.label.length > 0) parts.push(entry.label);
+  if (entry.state === "failed" && entry.setupExitCode !== null) {
+    parts.push(`(exit ${entry.setupExitCode})`);
+  }
+  return parts.join(" ");
+}
+
+function OpenTerminalButton(props: {
+  readonly liveness: TerminalLiveness;
+  readonly onOpen: () => void;
+}) {
+  if (props.liveness === "none") return null;
+  if (props.liveness === "ended") {
+    // "session ended" reads as a tooltip on the disabled button rather than
+    // an appended label. A disabled button emits no pointer events, so the
+    // tooltip trigger sits on an enabled wrapper span around it.
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex">
+            <Button
+              type="button"
+              variant="muted"
+              size="xs"
+              disabled
+              data-testid="setup-card-open-terminal-ended"
+            >
+              Open terminal
+              <ArrowRight aria-hidden />
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          Setup terminal session ended
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="xs"
+      onClick={props.onOpen}
+      data-testid="setup-card-open-terminal"
+    >
+      Open terminal
+      <ArrowRight aria-hidden />
+    </Button>
+  );
+}
+
+function RetryButton(props: {
+  readonly pending: boolean;
+  readonly onRetry: () => void;
+  readonly label: "Retry creation" | "Retry setup";
+}) {
+  return (
+    <Button
+      type="button"
+      variant="destructive-ghost"
+      size="xs"
+      disabled={props.pending}
+      onClick={props.onRetry}
+      data-testid="setup-card-retry"
+    >
+      {props.label}
+      {props.pending ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+      ) : null}
+    </Button>
+  );
+}
+
+function isProvisionFailure(entry: SetupCardWorkspace): boolean {
+  return entry.state === "failed" && entry.retryFolderIntent !== null;
+}
+
+/**
+ * The block header: "branch - worktree path" (what + where was created), muted.
+ * The path truncates from the START (leaf stays visible) like every other path
+ * in the app, with the full path on hover via `FilePathTooltip`. Falls back to
+ * the precomputed label when neither branch nor path is known (setup events
+ * emitted before this metadata was added).
+ */
+function WorktreeLocation(props: {
+  readonly branch: string | null;
+  readonly worktreePath: string | null;
+  readonly fallbackLabel: string;
+}) {
+  const branch =
+    props.branch !== null && props.branch.length > 0 ? props.branch : null;
+  const worktreePath =
+    props.worktreePath !== null && props.worktreePath.length > 0
+      ? props.worktreePath
+      : null;
+  if (branch === null && worktreePath === null) {
+    if (props.fallbackLabel.length === 0) return null;
+    return (
+      <div className="min-w-0 truncate text-ui-xs text-muted-foreground/80">
+        {props.fallbackLabel}
+      </div>
+    );
+  }
+  return (
+    <div className="flex min-w-0 items-center gap-2 text-ui-xs text-muted-foreground">
+      {branch !== null ? (
+        <span className="inline-flex min-w-0 shrink-0 items-center gap-1 text-foreground/80">
+          <GitBranch aria-hidden className="size-3 shrink-0" />
+          <span className="truncate" data-testid="setup-card-branch">
+            {branch}
+          </span>
+        </span>
+      ) : null}
+      {branch !== null && worktreePath !== null ? (
+        <span aria-hidden className="shrink-0 text-muted-foreground/40">
+          —
+        </span>
+      ) : null}
+      {worktreePath !== null ? (
+        <FilePathTooltip content={worktreePath} side="bottom">
+          <StartTruncatedText
+            className="min-w-0 flex-1 font-mono text-muted-foreground/80"
+            data-testid="setup-card-worktree-path"
+          >
+            {worktreePath}
+          </StartTruncatedText>
+        </FilePathTooltip>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Lightweight inline status glyph for the compact line + step / per-workspace
+ * rows (no filled circle - the compaction aesthetic is quiet). A live
+ * `setting-up` window spins; a stranded historical one (active=false) shows a
+ * static muted dot so a dead card never animates.
+ */
+function StatusIcon(props: {
+  readonly state: SetupWorkspaceState;
+  readonly active: boolean;
+}) {
+  const { state, active } = props;
+  if (state === "ready") {
+    return (
+      <Check
+        aria-hidden
+        className="size-3.5 shrink-0 text-success-foreground"
+      />
+    );
+  }
+  if (state === "failed") {
+    return <X aria-hidden className="size-3.5 shrink-0 text-destructive" />;
+  }
+  if (state === "cancelled") {
+    return (
+      <X aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+    );
+  }
+  if (!active) {
+    return (
+      <span
+        aria-hidden
+        className="flex size-3.5 shrink-0 items-center justify-center"
+      >
+        <span className="size-1.5 rounded-full bg-muted-foreground/60" />
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex shrink-0 text-primary">
+      <AgentSpinningDots
+        className={undefined}
+        testId={undefined}
+        variant={undefined}
+      />
+    </span>
+  );
+}

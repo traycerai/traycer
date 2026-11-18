@@ -1,0 +1,362 @@
+import type {
+  AuthenticatedUser,
+  TraycerTeamSubscription,
+  TraycerUserSubscription,
+} from "@traycer/protocol/auth";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setMobileApp } from "@/lib/mobile-app";
+import { useAccountContextStore } from "@/stores/auth/account-context-store";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+
+const mocks = vi.hoisted(() => ({
+  data: null as AuthenticatedUser | null,
+  isError: false,
+  refetch: vi.fn(() => Promise.resolve({})),
+  openLink: vi.fn(),
+}));
+
+vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => mocks.openLink }));
+
+vi.mock("@/hooks/auth/use-auth-user-query", () => ({
+  useAuthUser: () => ({
+    data: mocks.data,
+    isPending: false,
+    isError: mocks.isError,
+    isFetching: false,
+    error: mocks.isError
+      ? { message: "secret-token-should-never-render" }
+      : null,
+    refetch: mocks.refetch,
+  }),
+}));
+
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({
+    authnBaseUrl: "https://authn.traycer.ai",
+    // The platform origin is derived from `signInUrl`; without one this
+    // fixture would silently exercise the production fallback instead of the
+    // deployment it names.
+    signInUrl: "https://traycer.ai/sign-in",
+  }),
+}));
+
+// Pure side-effect hook (subscribes to turn completions to refetch credits);
+// no render output, and it needs a QueryClient this unit harness doesn't set up.
+vi.mock("@/hooks/auth/use-refresh-credits-on-traycer-turn", () => ({
+  useRefreshCreditsOnTraycerTurn: () => {},
+}));
+
+// Host RPC query + its turn-completion refresh, mounted by RateLimitView. Both
+// need a host client/QueryClient this unit harness doesn't set up, so stub them:
+// the query returns no data (totalTokens === 0 → "unavailable" text).
+vi.mock("@/hooks/host/use-host-rate-limit-usage-query", () => ({
+  useHostRateLimitUsageQuery: () => ({ data: undefined }),
+}));
+vi.mock("@/hooks/host/use-refresh-rate-limit-usage-on-traycer-turn", () => ({
+  useRefreshRateLimitUsageOnTraycerTurn: () => {},
+}));
+
+import { TraycerSubscriptionSection } from "../traycer-subscription-section";
+
+const EPOCH = new Date(0);
+
+function baseSubscription() {
+  return {
+    id: "sub",
+    userID: "u1",
+    orgID: null,
+    teamID: null,
+    customerId: "cus",
+    createdAt: EPOCH,
+    updatedAt: EPOCH,
+    subscriptionExpiry: null,
+    trialEndsAt: null,
+    hasPaymentMethod: true,
+    rechargeRateSeconds: 60,
+  };
+}
+
+const userSubscription: TraycerUserSubscription = {
+  ...baseSubscription(),
+  subscriptionStatus: "PRO_V3",
+  isInTrial: false,
+  totalPlanCredits: 100,
+  credit: {
+    id: "c1",
+    userId: "u1",
+    customerId: "cus",
+    bonusCredits: 0,
+    consumedFromPlan: 30,
+    consumedFromBonus: 0,
+    lastResetAt: EPOCH,
+  },
+};
+
+const teamSubscription: TraycerTeamSubscription = {
+  ...baseSubscription(),
+  subscriptionStatus: "ULTRA_1X_V3",
+  isInTrial: false,
+  totalPlanCredits: 500,
+  hasActiveBundle: false,
+  bundleSummary: { bundleTotal: 0, bundleConsumed: 0, bundleRemaining: 0 },
+  credit: {
+    id: "c2",
+    userId: "u1",
+    customerId: "cus",
+    orgId: "team-1",
+    bonusCredits: 0,
+    consumedFromPlan: 100,
+    consumedFromBonus: 0,
+    lastResetAt: EPOCH,
+  },
+  team: {
+    id: "team-1",
+    slug: "acme",
+    avatarUrl: null,
+    privacyMode: false,
+    createdAt: EPOCH,
+    updatedAt: EPOCH,
+  },
+};
+
+const user: AuthenticatedUser = {
+  user: {
+    id: "u1",
+    name: "Ada",
+    providerId: "p1",
+    providerHandle: "ada",
+    providerType: "GITHUB",
+    email: "ada@example.com",
+    avatarUrl: null,
+    activatedAt: EPOCH,
+    createdAt: EPOCH,
+    updatedAt: EPOCH,
+    lastSeenAt: EPOCH,
+    privacyMode: false,
+    isLearningEnabled: true,
+  },
+  userSubscription,
+  payAsYouGoUsage: { allowPayAsYouGo: false },
+  teamSubscriptions: [teamSubscription],
+  environments: { personal: null, teams: [] },
+  actingAs: null,
+};
+
+describe("TraycerSubscriptionSection", () => {
+  beforeEach(() => {
+    mocks.data = user;
+    mocks.isError = false;
+    mocks.openLink.mockClear();
+    useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
+  });
+
+  afterEach(() => {
+    cleanup();
+    setMobileApp(false);
+    useDesktopDialogStore.setState({
+      activeDialog: null,
+      reportIssueAvailable: false,
+      reportIssueContext: null,
+      reportIssueDraftId: 0,
+    });
+  });
+
+  it("opens the billing page as an always-external `account` link", () => {
+    render(<TraycerSubscriptionSection />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Manage subscription/ }),
+    );
+
+    // `account` is hard-external (A2): billing has no in-app meaning, so the
+    // link setting never applies to it.
+    // The click event travels too (L9): `account` never reclassifies today,
+    // but a dropped event would silently kill modifiers if it ever did.
+    // The platform origin's root is the marketing homepage, so the link names
+    // the personal Billing page for the personal context.
+    expect(mocks.openLink).toHaveBeenCalledWith(
+      "https://traycer.ai/billing",
+      "account",
+      expect.objectContaining({ type: "click" }),
+    );
+  });
+
+  it("opens the selected team's Billing page by its slug", () => {
+    useAccountContextStore.setState({
+      accountContext: { type: "TEAM", teamId: "team-1" },
+    });
+    render(<TraycerSubscriptionSection />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Manage subscription/ }),
+    );
+
+    expect(mocks.openLink).toHaveBeenCalledWith(
+      "https://traycer.ai/team/acme/billing",
+      "account",
+      expect.objectContaining({ type: "click" }),
+    );
+  });
+
+  it("opens the personal Billing page when the stored team is no longer the user's", () => {
+    // The picker falls back to Personal for a team the user left; the link
+    // must follow the picker rather than address a team page by a stale id.
+    useAccountContextStore.setState({
+      accountContext: { type: "TEAM", teamId: "team-left" },
+    });
+    render(<TraycerSubscriptionSection />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Manage subscription/ }),
+    );
+
+    expect(mocks.openLink).toHaveBeenCalledWith(
+      "https://traycer.ai/billing",
+      "account",
+      expect.objectContaining({ type: "click" }),
+    );
+  });
+
+  it("renders the personal subscription by default", () => {
+    render(<TraycerSubscriptionSection />);
+    // Plan bucket: 30 consumed of 100 total (extension's consumed/total wording).
+    expect(screen.getByText("$30.00 / $100.00")).toBeDefined();
+  });
+
+  it("renders the selected team's subscription", () => {
+    render(<TraycerSubscriptionSection />);
+    act(() => {
+      useAccountContextStore
+        .getState()
+        .setAccountContext({ type: "TEAM", teamId: "team-1" });
+    });
+    // Plan bucket: 100 consumed of 500 total.
+    expect(screen.getByText("$100.00 / $500.00")).toBeDefined();
+  });
+
+  it("renders the rate-limit view for a non-V3 (legacy/v2) plan", () => {
+    mocks.data = {
+      ...user,
+      userSubscription: {
+        ...userSubscription,
+        subscriptionStatus: "PRO_PLUS_V2",
+        totalPlanCredits: undefined,
+        credit: undefined,
+        rechargeRateSeconds: 1800,
+      },
+    };
+    render(<TraycerSubscriptionSection />);
+    expect(screen.getByText("Rate limit")).toBeDefined();
+    // 1800s → 30 minutes recharge.
+    expect(screen.getByText("30 minutes")).toBeDefined();
+    // Not credit-based: no credit-breakdown header.
+    expect(screen.queryByText("Credit breakdown")).toBeNull();
+    // Aperture usage mocked to no data (totalTokens === 0) → "unavailable"
+    // text, never a 0/0 bar (decision 2 / invariant I4).
+    expect(
+      screen.getByText("Live artifact usage is unavailable."),
+    ).toBeDefined();
+  });
+
+  // App Store review guideline 3.1.1: the installed app must not present or
+  // link to a subscription that cannot be bought through Apple. What survives
+  // is the half the user actually needs - how much credit has been used.
+  describe("installed mobile app", () => {
+    beforeEach(() => {
+      setMobileApp(true);
+    });
+
+    it("titles the card Usage and offers nothing that opens billing", () => {
+      render(<TraycerSubscriptionSection />);
+
+      expect(screen.getByText("Usage")).toBeDefined();
+      expect(screen.queryByText("Subscription")).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: /Manage subscription/ }),
+      ).toBeNull();
+      expect(mocks.openLink).not.toHaveBeenCalled();
+      // Refresh survives - it buys nothing - but stops naming the purchase.
+      expect(
+        screen.getByRole("button", { name: "Refresh usage" }),
+      ).toBeDefined();
+    });
+
+    it("states credit usage with no currency", () => {
+      render(<TraycerSubscriptionSection />);
+
+      // Same 30-of-100 reading as the desktop test above, denominated in
+      // credits rather than dollars. No spelled-out percent: the bar below
+      // the line already shows the ratio.
+      expect(screen.getByText("30.00 / 100.00 credits")).toBeDefined();
+      expect(screen.queryByText("$30.00 / $100.00")).toBeNull();
+      // The bucket labels are bucket names, not purchasable plans, and stay.
+      expect(screen.getByText("Plan")).toBeDefined();
+    });
+
+    it("keeps the account picker and the team reading", () => {
+      render(<TraycerSubscriptionSection />);
+      act(() => {
+        useAccountContextStore
+          .getState()
+          .setAccountContext({ type: "TEAM", teamId: "team-1" });
+      });
+
+      expect(screen.getByLabelText("Account")).toBeDefined();
+      expect(screen.getByText("100.00 / 500.00 credits")).toBeDefined();
+    });
+
+    it("leaves the legacy rate-limit view free of currency too", () => {
+      mocks.data = {
+        ...user,
+        userSubscription: {
+          ...userSubscription,
+          subscriptionStatus: "PRO_PLUS_V2",
+          totalPlanCredits: undefined,
+          credit: undefined,
+          rechargeRateSeconds: 1800,
+          bundleSummary: {
+            bundleTotal: 40,
+            bundleConsumed: 10,
+            bundleRemaining: 30,
+          },
+        },
+      };
+      render(<TraycerSubscriptionSection />);
+
+      expect(screen.getByText("Rate limit")).toBeDefined();
+      expect(screen.getByText("10.00 / 40.00 credits")).toBeDefined();
+      expect(screen.queryByText("$10.00 / $40.00")).toBeNull();
+    });
+  });
+
+  it("gates the subscription-error report action on capability and never forwards the raw query error", () => {
+    mocks.isError = true;
+
+    render(<TraycerSubscriptionSection />);
+
+    expect(screen.queryByText(/secret-token-should-never-render/)).toBeNull();
+    // Capability-gated off by default.
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    expect(useDesktopDialogStore.getState()).toMatchObject({
+      activeDialog: "report-issue",
+      reportIssueContext: {
+        title: "Couldn't load your subscription",
+        message: null,
+        code: null,
+        source: "Subscription",
+      },
+    });
+  });
+});

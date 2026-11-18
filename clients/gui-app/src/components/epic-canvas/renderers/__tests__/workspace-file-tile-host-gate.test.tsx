@@ -1,0 +1,378 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { WorkspaceFileRef } from "@/stores/epics/canvas/types";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+
+interface GateTestState {
+  activeHostId: string | null;
+  reachability: {
+    status: "checking" | "reachable" | "unreachable";
+    hostLabel: string;
+  };
+  readFile: {
+    data:
+      | {
+          content: string;
+          error: string | null;
+          truncated: boolean;
+        }
+      | undefined;
+    isLoading: boolean;
+    isError: boolean;
+    error: Error | null;
+  };
+}
+
+const state = vi.hoisted((): GateTestState => ({
+  activeHostId: "host-A",
+  reachability: {
+    status: "reachable",
+    hostLabel: "Host A",
+  },
+  readFile: {
+    data: undefined,
+    isLoading: true,
+    isError: false,
+    error: null,
+  },
+}));
+
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => state.activeHostId,
+}));
+
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/agent/use-host-reachability")
+  >()),
+  useHostReachability: () => state.reachability,
+}));
+
+vi.mock("@/hooks/workspace/use-read-file-query", () => ({
+  useWorkspaceReadFile: () => state.readFile,
+}));
+
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
+
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSchemaVersion: () => null,
+  useHostSupportsMethod: () => false,
+}));
+
+vi.mock("@/hooks/workspace/use-workspace-write-file-mutation", () => ({
+  useWorkspaceWriteFile: () => ({ isPending: false, mutateAsync: vi.fn() }),
+}));
+
+vi.mock("@tanstack/react-query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
+  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+}));
+
+vi.mock("@/providers/use-resolved-theme", () => ({
+  useResolvedTheme: () => ({ resolvedTheme: "dark" }),
+}));
+
+import { WorkspaceFileTile } from "../workspace-file-tile";
+import { TabHostProvider } from "../../tab-host-provider";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+
+const NODE = {
+  id: "workspace-file:host-A:/work/repo:src/index.ts",
+  instanceId: "inst-file-index",
+  type: "workspace-file" as const,
+  name: "index.ts",
+  hostId: "host-A",
+  workspacePath: "/work/repo",
+  filePath: "src/index.ts",
+};
+
+const MARKDOWN_NODE = {
+  id: "workspace-file:host-A:/work/repo:CONTACT.md",
+  instanceId: "inst-file-contact",
+  type: "workspace-file" as const,
+  name: "CONTACT.md",
+  hostId: "host-A",
+  workspacePath: "/work/repo",
+  filePath: "CONTACT.md",
+};
+
+const MARKDOWN_LONG_EXTENSION_NODE = {
+  id: "workspace-file:host-A:/work/repo:README.markdown",
+  instanceId: "inst-file-readme",
+  type: "workspace-file" as const,
+  name: "README.markdown",
+  hostId: "host-A",
+  workspacePath: "/work/repo",
+  filePath: "README.markdown",
+};
+
+function renderTile(boundHostId: string, node: WorkspaceFileRef): void {
+  render(
+    <TabHostProvider hostId={boundHostId}>
+      <WorkspaceFileTile node={node} viewTabId="tab-1" isActive />
+    </TabHostProvider>,
+  );
+}
+
+describe("<WorkspaceFileTile /> host-binding gate", () => {
+  beforeEach(() => {
+    state.activeHostId = "host-A";
+    state.reachability = { status: "reachable", hostLabel: "Host A" };
+    state.readFile = {
+      data: undefined,
+      isLoading: true,
+      isError: false,
+      error: null,
+    };
+    useDesktopDialogStore.setState({
+      activeDialog: null,
+      reportIssueAvailable: false,
+      reportIssueContext: null,
+    });
+  });
+  afterEach(() => {
+    cleanup();
+    useDesktopDialogStore.setState({
+      activeDialog: null,
+      reportIssueAvailable: false,
+      reportIssueContext: null,
+    });
+  });
+
+  it("shows the offline banner when the bound host is unreachable", () => {
+    state.reachability = { status: "unreachable", hostLabel: "Host A" };
+    renderTile("host-A", NODE);
+    expect(screen.getByText(/currently unreachable/)).toBeTruthy();
+  });
+
+  it("keeps the tile bound to its own host when another host is active", () => {
+    state.activeHostId = "host-B";
+    renderTile("host-A", NODE);
+    expect(screen.queryByText(/Switch your active host/)).toBeNull();
+    expect(screen.getByText("src/index.ts")).toBeTruthy();
+  });
+
+  it("keeps the tile bound when there is no app-wide active host", () => {
+    state.activeHostId = null;
+    renderTile("host-A", NODE);
+    expect(screen.queryByText(/Switch your active host/)).toBeNull();
+    expect(screen.getByText("src/index.ts")).toBeTruthy();
+  });
+
+  it("renders the live preview when the bound host is the active, reachable host", () => {
+    renderTile("host-A", NODE);
+    // Live body mounts; the read query is mocked into its loading state, so
+    // no host-binding banner is shown.
+    expect(screen.queryByText(/Switch your active host/)).toBeNull();
+    expect(screen.queryByText(/currently unreachable/)).toBeNull();
+    expect(screen.getByText("src/index.ts")).toBeTruthy();
+  });
+
+  it("reports a file-read failure without copying its raw path or error", () => {
+    state.readFile = {
+      data: {
+        content: "",
+        error: "Could not read /Users/me/private/api-key.txt",
+        truncated: false,
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    renderTile("host-A", NODE);
+
+    expect(
+      screen.getByText("Could not read /Users/me/private/api-key.txt"),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Folder file could not be read",
+      message: "The folder file preview could not be loaded.",
+      code: null,
+      source: "Folder file",
+    });
+  });
+
+  it("reports a transport failure against the host, not as a file-read failure", () => {
+    state.readFile = {
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new HostRpcError({
+        code: "UNAUTHORIZED",
+        message: "fetch failed",
+        requestId: "req-1",
+        method: "workspace.readFile",
+        fatalDetails: null,
+      }),
+    };
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    renderTile("host-A", NODE);
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+
+    // The host never answered, so this must not be filed as a file-read
+    // failure: that is what sent one field report's triage looking for an fs
+    // error that never happened.
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Folder file preview failed to load from the host",
+      message:
+        "The app could not reach the Traycer host to load the file preview.",
+      code: "UNAUTHORIZED",
+      source: "Host",
+    });
+  });
+
+  it("keeps host-supplied error text out of a transport report", () => {
+    state.readFile = {
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new HostRpcError({
+        code: "FORBIDDEN",
+        message: "denied reading /Users/me/private/api-key.txt",
+        requestId: "req-2",
+        method: "workspace.readFile",
+        fatalDetails: null,
+      }),
+    };
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    renderTile("host-A", NODE);
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+
+    const context = useDesktopDialogStore.getState().reportIssueContext;
+    expect(JSON.stringify(context)).not.toContain("api-key.txt");
+    expect(JSON.stringify(context)).not.toContain(
+      "denied reading /Users/me/private/api-key.txt",
+    );
+    expect(context?.code).toBe("FORBIDDEN");
+  });
+
+  it("survives a non-HostRpcError in the query error channel", () => {
+    // TanStack's error generic is an unchecked cast, so a bare `Error` can
+    // occupy this channel - reading `.code` off it must not crash the view.
+    state.readFile = {
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new Error("boom"),
+    };
+    useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    renderTile("host-A", NODE);
+
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+
+    expect(useDesktopDialogStore.getState().reportIssueContext).toEqual({
+      title: "Folder file preview failed to load from the host",
+      message:
+        "The app could not reach the Traycer host to load the file preview.",
+      code: null,
+      source: "Host",
+    });
+  });
+
+  it("shows markdown source and preview modes for markdown files", () => {
+    state.readFile = {
+      data: {
+        content: "# Contact Information\n\nReach us any time.",
+        error: null,
+        truncated: false,
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+    renderTile("host-A", MARKDOWN_NODE);
+
+    const markdownButton = screen.getByRole("button", { name: "Markdown" });
+    const previewButton = screen.getByRole("button", { name: "Preview" });
+    expect(markdownButton.getAttribute("aria-pressed")).toBe("true");
+    expect(previewButton.getAttribute("aria-pressed")).toBe("false");
+    expect(
+      document.querySelector("diffs-container")?.shadowRoot,
+    ).not.toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: "Contact Information" }),
+    ).toBeNull();
+
+    fireEvent.click(previewButton);
+
+    expect(screen.getByLabelText("CONTACT.md markdown preview")).toBeTruthy();
+    expect(markdownButton.getAttribute("aria-pressed")).toBe("false");
+    expect(previewButton.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      screen.getByRole("heading", { name: "Contact Information" }),
+    ).toBeTruthy();
+
+    fireEvent.click(markdownButton);
+
+    expect(markdownButton.getAttribute("aria-pressed")).toBe("true");
+    expect(previewButton.getAttribute("aria-pressed")).toBe("false");
+    expect(
+      screen.queryByRole("heading", { name: "Contact Information" }),
+    ).toBeNull();
+  });
+
+  it("shows markdown view modes for .markdown files", () => {
+    state.readFile = {
+      data: {
+        content: "# Readme",
+        error: null,
+        truncated: false,
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+    renderTile("host-A", MARKDOWN_LONG_EXTENSION_NODE);
+
+    expect(screen.getByRole("button", { name: "Markdown" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Preview" })).toBeTruthy();
+  });
+
+  it("disables markdown preview for large markdown files", () => {
+    state.readFile = {
+      data: {
+        content: "# Large\n\n" + "content ".repeat(15_000),
+        error: null,
+        truncated: false,
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+    renderTile("host-A", MARKDOWN_NODE);
+
+    const markdownButton = screen.getByRole("button", { name: "Markdown" });
+    const previewButton = screen.getByRole("button", { name: "Preview" });
+    expect(markdownButton.getAttribute("aria-pressed")).toBe("true");
+    expect(previewButton.getAttribute("disabled")).toBe("");
+
+    fireEvent.click(previewButton);
+
+    expect(markdownButton.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByLabelText("CONTACT.md markdown preview")).toBeNull();
+  });
+
+  it("does not show markdown view modes for non-markdown files", () => {
+    state.readFile = {
+      data: {
+        content: "export const value = 1;",
+        error: null,
+        truncated: false,
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+    renderTile("host-A", NODE);
+
+    expect(screen.queryByRole("button", { name: "Markdown" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Preview" })).toBeNull();
+  });
+});

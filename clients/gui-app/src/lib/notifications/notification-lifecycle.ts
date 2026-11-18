@@ -1,0 +1,107 @@
+import type { HostNotificationSeverity } from "@traycer/protocol/host/notifications/contracts";
+import type { MergedNotificationSource } from "@/stores/notifications/merged-notifications";
+
+/**
+ * Attention's classes, in order: prompts that block, failures, a bot's rows
+ * that need the person without anything having gone wrong (its answers,
+ * replies in threads they follow, and rows that mention them), then a task
+ * another person shared with them. An invitation is attention-grade without
+ * an agent waiting behind it, which is why it is not `blocking`: the
+ * surfaces that say "an agent is waiting" read that tier alone.
+ */
+export type NotificationAttentionTier =
+  | "blocking"
+  | "failure"
+  | "answer"
+  | "invitation";
+
+export interface NotificationLifecycleInput {
+  readonly source: MergedNotificationSource;
+  readonly severity: HostNotificationSeverity;
+  readonly readAt: number | null;
+  /**
+   * A bot's answer to the person (`isBotThreadVerdictNotification`), a reply
+   * in a thread they follow or a row that mentions them
+   * (`isBotConversationAttention`).
+   */
+  readonly botAnswer?: boolean;
+}
+
+export type NotificationLifecycleClassification =
+  | { readonly section: "attention"; readonly tier: NotificationAttentionTier }
+  | { readonly section: "recent" };
+
+/**
+ * The single lifecycle classifier: every feed row belongs to Attention or
+ * Recent, never both. Attention membership is unread host prompts,
+ * unread host failures, unread app-local failures and unread bot answers, as
+ * the hosts' summaries count them, and unread invitations to a task, the one
+ * collaboration row the room counts (`severityForGlobalEvent`); every other
+ * collaboration row is informational and stays in Recent.
+ */
+export function classifyNotificationLifecycle(
+  row: NotificationLifecycleInput,
+): NotificationLifecycleClassification {
+  if (row.severity === "needs_action") {
+    if (row.readAt !== null) return { section: "recent" };
+    return {
+      section: "attention",
+      tier: row.source === "global" ? "invitation" : "blocking",
+    };
+  }
+  if (row.severity === "failure") {
+    return row.readAt === null
+      ? { section: "attention", tier: "failure" }
+      : { section: "recent" };
+  }
+  if (row.botAnswer === true && row.readAt === null) {
+    return { section: "attention", tier: "answer" };
+  }
+  return { section: "recent" };
+}
+
+const ATTENTION_TIER_ORDER: Readonly<
+  Record<NotificationAttentionTier, number>
+> = {
+  blocking: 0,
+  failure: 1,
+  answer: 2,
+  invitation: 3,
+};
+
+export interface AttentionOrderCandidate {
+  readonly tier: NotificationAttentionTier;
+  readonly createdAt: number;
+  readonly feedId: string;
+}
+
+/** Deterministic byte-order ascending comparison, matching SQLite's `id ASC`
+ * tie-break - never locale-sensitive, so ordering can't drift by ICU version
+ * or system locale. */
+export function compareFeedIdAscending(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
+/** Negative when tier `a` lists before tier `b`. */
+export function compareAttentionTiers(
+  a: NotificationAttentionTier,
+  b: NotificationAttentionTier,
+): number {
+  return ATTENTION_TIER_ORDER[a] - ATTENTION_TIER_ORDER[b];
+}
+
+/** Blocking prompts, then failures, then answers; newest first within each
+ * tier; a stable `feedId` tie-break so equal timestamps still order
+ * deterministically. */
+export function compareAttentionOrder(
+  a: AttentionOrderCandidate,
+  b: AttentionOrderCandidate,
+): number {
+  const tierDelta = compareAttentionTiers(a.tier, b.tier);
+  if (tierDelta !== 0) return tierDelta;
+  const createdAtDelta = b.createdAt - a.createdAt;
+  if (createdAtDelta !== 0) return createdAtDelta;
+  return compareFeedIdAscending(a.feedId, b.feedId);
+}

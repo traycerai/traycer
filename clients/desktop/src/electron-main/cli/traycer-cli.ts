@@ -1,0 +1,1337 @@
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import {
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  rm,
+  type FileHandle,
+} from "node:fs/promises";
+import { join } from "node:path";
+import {
+  HOST_UPDATE_INITIATOR_DESKTOP,
+  HOST_UPDATE_INITIATOR_ENV_VAR,
+} from "@traycer-clients/shared/host-update";
+import { log } from "../app/logger";
+import {
+  CLI_INVOCATION_PROBE_TIMEOUT_MS,
+  cliBinaryName,
+  discoverCli,
+  resolveBundledCliPath,
+} from "./cli-discovery";
+
+/**
+ * Fixup A8: every lock-taking CLI command this wrapper still carries
+ * (`host stamp-runtime`, `host free-port`, `host purge-stage`; the
+ * long-running mutations - install / apply / ensure / restart / service
+ * install / service uninstall / uninstall [--all] - stream instead. Service
+ * install can wait for post-registration credential provisioning; restart
+ * and the two uninstall commands can stop the host through Windows'
+ * scan-then-kill loop, whose worst case is several 30 s scans)
+ * waits up to
+ * `waitMs: 30_000` internally on the shared `cli-lock` before terminally
+ * throwing `E_CLI_LOCK_BUSY` (every `withCliLock` call site under
+ * `traycer-cli/src/commands/`). `runTraycerCliJsonWithInvocation` used to
+ * SIGKILL at a flat 10s - well inside that 30s window - so desktop never
+ * saw the CLI's own busy classification (breaking the exhausted-lock ->
+ * `deferred` terminal contract) and, worse, could kill the CLI the instant
+ * AFTER it won the lock and entered its critical section: a torn
+ * install/staged/pid record, the single most dangerous defect class in
+ * this ticket. Must exceed the CLI's own lock wait with real margin for
+ * process spawn + stdio/IPC overhead, never merely match it.
+ *
+ * This bound only fits commands whose post-lock work is quick. `host
+ * service install` is no longer one of them - it follows registration with
+ * a credential-provisioning probe that can wait up to 30s for the host, so
+ * lock wait + installer + probe can legitimately exceed any flat total.
+ * Its call sites use `streamBundled` (idle-timeout, re-armed by the
+ * command's progress NDJSON) instead.
+ */
+const CLI_JSON_TIMEOUT_MS = 45_000;
+
+/**
+ * Streaming-path counterpart to the run path's 1 MiB `maxBuffer`: the cap on
+ * a single unterminated stdout "line". Real NDJSON events are tiny; a line
+ * that grows past this without a newline is a runaway child, killed rather
+ * than accumulated (see the stdout handler in
+ * `streamTraycerCliJsonWithInvocation`).
+ */
+const STREAM_LINE_CAP_BYTES = 1024 * 1024;
+
+/**
+ * Structured error thrown when the CLI subprocess exits non-zero or emits
+ * an NDJSON `error` event. Carries the CLI's stable error `code` (e.g.
+ * `CLI_UPGRADE_REPLACE_FAILED`) when present so Desktop can render a
+ * targeted recovery affordance instead of a generic toast.
+ */
+export interface TraycerCliErrorInit {
+  readonly message: string;
+  readonly code: string | null;
+  readonly details: unknown;
+  readonly exitCode: number | null;
+  readonly stderrTail: string;
+}
+
+export class TraycerCliError extends Error {
+  readonly code: string | null;
+  readonly details: unknown;
+  readonly exitCode: number | null;
+  readonly stderrTail: string;
+
+  constructor(init: TraycerCliErrorInit, legacyMessage: null);
+  constructor(code: string, message: string);
+  constructor(
+    initOrCode: TraycerCliErrorInit | string,
+    legacyMessage: string | null,
+  ) {
+    if (typeof initOrCode === "string") {
+      super(typeof legacyMessage === "string" ? legacyMessage : initOrCode);
+      this.name = "TraycerCliError";
+      this.code = initOrCode;
+      this.details = null;
+      this.exitCode = null;
+      this.stderrTail = "";
+      return;
+    }
+    super(initOrCode.message);
+    this.name = "TraycerCliError";
+    this.code = initOrCode.code;
+    this.details = initOrCode.details;
+    this.exitCode = initOrCode.exitCode;
+    this.stderrTail = initOrCode.stderrTail;
+  }
+}
+
+/**
+ * One NDJSON record emitted by a long-running CLI subcommand. The CLI
+ * writes one JSON document per line on stdout: `progress` events stream
+ * intermediate state, `result` events carry the terminal payload (with
+ * `status: "ok"` + `data` on success, or `status: "error"` + `error`
+ * shape on failure).
+ *
+ * The shared runner in `traycer-cli/src/runner/output.ts` is the
+ * canonical producer. Surface that envelope here verbatim so projector
+ * functions in `host-management-ipc.ts` can switch on `status`
+ * without re-reading raw lines.
+ */
+export type NdjsonEvent =
+  | {
+      readonly type: "progress";
+      readonly stage: string;
+      readonly percent: number | null;
+      readonly bytes: number | null;
+      readonly totalBytes: number | null;
+      readonly message: string | null;
+      // Monotonic count of completed units of work within the stage (archive
+      // entries). Absent from any CLI predating it, which the parser below
+      // normalises to `null` like every other numeric.
+      readonly workUnits: number | null;
+    }
+  | {
+      readonly type: "result";
+      readonly status: "ok";
+      readonly data: unknown;
+    }
+  | {
+      readonly type: "result";
+      readonly status: "error";
+      readonly error: {
+        readonly code: string | null;
+        readonly message: string;
+        readonly details: unknown;
+      };
+    };
+
+/**
+ * Locates the `traycer` CLI command for subprocess invocation.
+ *
+ * Resolution is identical in packaged and unpackaged builds (Tech Plan
+ * Decision 6):
+ *
+ *   1. CLI manifest (`~/.traycer/cli/manifest.json`) - package-manager
+ *      or Desktop-staged CLI is authoritative.
+ *   2. PATH fallback - `traycer` (or `traycer.exe` on Windows) on PATH.
+ *   3. Bundled CLI fallback (`resolveBundledCliPath`) - when packaged,
+ *      arch-scoped `<resourcesPath>/cli/<plat>-<arch>/` then flat
+ *      `<resourcesPath>/cli/`; when unpackaged (`make dev-desktop`), the
+ *      staged dev wrapper at the `cli/dev-wrapper-paths.json` layout.
+ *
+ * Returns the absolute command + leading args. Callers append subcommand
+ * args after.
+ */
+export interface TraycerCliInvocation {
+  readonly command: string;
+  readonly args: readonly string[];
+}
+
+export async function resolveTraycerCliInvocation(): Promise<TraycerCliInvocation> {
+  // The impatient deadline: this runs on every CLI invocation, status polls
+  // included, and nothing it decides can change who owns the slot - an
+  // unvetted candidate here only means this call uses the bundled binary.
+  const discovered = await discoverCli(CLI_INVOCATION_PROBE_TIMEOUT_MS);
+  if (discovered.kind !== "none") {
+    return { command: discovered.binaryPath, args: [] };
+  }
+  const bundled = await resolveBundledCliPath();
+  if (bundled !== null) {
+    return { command: bundled, args: [] };
+  }
+  throw new Error(
+    `traycer CLI: no CLI found via manifest, PATH, or bundled resources (looked for ${cliBinaryName()}). Packaged builds bundle the CLI under resources/cli; \`make dev-desktop\` stages the dev CLI wrapper.`,
+  );
+}
+
+/**
+ * Bundled-only resolution for `HostController` (Host Update Layer Redesign
+ * Tech Plan, D7: "The controller always invokes the desktop-bundled,
+ * version-matched CLI for host operations. The discovered
+ * package-manager/PATH CLI remains for terminal use and CLI
+ * self-management."). Skips the manifest/PATH steps `resolveTraycerCliInvocation`
+ * uses - a controller-driven host mutation must never race a differently
+ * versioned PATH/manifest CLI outside the lock's current-generation
+ * guarantee. `resolveBundledCliPath` already resolves to the staged dev
+ * wrapper in dev builds, so this covers both packaged and `make
+ * dev-desktop` transparently.
+ */
+export async function resolveBundledTraycerCliInvocation(): Promise<TraycerCliInvocation> {
+  const bundled = await resolveBundledCliPath();
+  if (bundled !== null) {
+    return { command: bundled, args: [] };
+  }
+  throw new Error(
+    `traycer CLI: no bundled CLI found (looked for ${cliBinaryName()} under app resources). This is a broken install - run \`traycer host doctor\` or reinstall Traycer.`,
+  );
+}
+
+export interface RunTraycerCliOptions {
+  /**
+   * Subcommand args appended after the resolved CLI command. E.g.
+   * `["host", "status"]` or `["config", "shell", "set", "--path", "/bin/bash"]`.
+   */
+  readonly args: readonly string[];
+  /**
+   * Bytes of stdout we'll buffer before treating it as an attack / runaway.
+   * The CLI emits small JSON blobs - anything past this is suspicious.
+   */
+  readonly maxBuffer: number;
+  /**
+   * How long to wait for the CLI to finish. Defaults to 10s - config
+   * reads/writes are nearly instant; host-start is invoked separately
+   * via launchd, not this helper, so 10s is comfortable.
+   */
+  readonly timeoutMs: number;
+}
+
+export interface TraycerCliResult {
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+/** Every CLI child Desktop starts says so, for the lock it may take. */
+function withDesktopInitiator(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    [HOST_UPDATE_INITIATOR_ENV_VAR]: HOST_UPDATE_INITIATOR_DESKTOP,
+  };
+}
+
+export async function runTraycerCli(
+  opts: RunTraycerCliOptions,
+): Promise<TraycerCliResult> {
+  const inv = await resolveTraycerCliInvocation();
+  return runTraycerCliWithInvocation(inv, opts);
+}
+
+/**
+ * Same as `runTraycerCli`, but the caller supplies an already-resolved
+ * `TraycerCliInvocation` instead of letting this module resolve one via
+ * `resolveTraycerCliInvocation()`. Extracted so `runBundledTraycerCliJson`
+ * (D7: bundled-only invocation for `HostController`) can reuse the exact
+ * same spawn/error-decoration logic without re-resolving through the
+ * manifest/PATH steps.
+ */
+async function runTraycerCliWithInvocation(
+  inv: TraycerCliInvocation,
+  opts: RunTraycerCliOptions,
+): Promise<TraycerCliResult> {
+  const allArgs = [...inv.args, ...opts.args];
+  return new Promise((resolve, reject) => {
+    execFile(
+      inv.command,
+      allArgs,
+      {
+        encoding: "utf8",
+        env: withDesktopInitiator(process.env),
+        maxBuffer: opts.maxBuffer,
+        timeout: opts.timeoutMs,
+        windowsHide: true,
+      },
+      (err, stdout, stderr) => {
+        if (err !== null) {
+          const stdoutStr = String(stdout);
+          const stderrStr = String(stderr);
+          log.warn("[traycer-cli] subprocess failed", {
+            command: inv.command,
+            args: allArgs,
+            stdout: stdoutStr.slice(-512),
+            stderr: stderrStr.slice(-512),
+            error: err.message,
+          });
+          // Build a fresh Error rather than mutating the rejected object
+          // in-place. Node's execFile is documented to decorate the
+          // callback Error with `.stdout` / `.stderr` on non-zero exit,
+          // but the property is sometimes a Buffer or missing in
+          // Electron's Node depending on the encoding negotiation - and
+          // the missing case made `runTraycerCliJson`'s envelope
+          // extraction fall through to the bare "Command failed: <cmd>"
+          // Node message instead of surfacing the CLI's real
+          // NDJSON error (e.g. `E_HOST_VERIFY_FAILED`). Wrapping in a
+          // new object force-attaches both fields as strings without
+          // mutating the original (which keeps the original observable
+          // to anyone holding a stale reference - logs, audit trails).
+          const wrapped = new Error(err.message);
+          wrapped.name = err.name;
+          wrapped.stack = err.stack;
+          const decorated = wrapped as Error & {
+            stdout: string;
+            stderr: string;
+            code: unknown;
+            killed: unknown;
+            signal: unknown;
+            cmd: unknown;
+          };
+          decorated.stdout = stdoutStr;
+          decorated.stderr = stderrStr;
+          decorated.code = (err as { code?: unknown }).code;
+          decorated.killed = (err as { killed?: unknown }).killed;
+          decorated.signal = (err as { signal?: unknown }).signal;
+          decorated.cmd = (err as { cmd?: unknown }).cmd;
+          reject(decorated);
+          return;
+        }
+        resolve({ stdout: String(stdout), stderr: String(stderr) });
+      },
+    );
+  });
+}
+
+/**
+ * Convenience: run a short-lived CLI subcommand whose `--json` output is
+ * a single plain JSON document (NOT the shared-runner NDJSON envelope).
+ *
+ * This helper exists as an escape hatch for any future CLI subcommand
+ * that intentionally emits plain JSON rather than the runner's NDJSON
+ * envelope. As of the Native Packaging legacy-JSON migration, none of
+ * the Desktop host-management or config IPC handlers route through
+ * here - `host status`, `config shell get`, `config env list`,
+ * `whoami`, and `config env get` all emit the shared runner envelope
+ * and are invoked through `runTraycerCliJson`.
+ *
+ * Keep this helper around for tests that pin the plain-JSON parsing
+ * contract; if a new plain-JSON command appears (e.g. a third-party
+ * extension command), invoke it through here and document the
+ * rationale at the call site.
+ */
+export async function runTraycerCliPlainJson<T>(
+  args: readonly string[],
+): Promise<T> {
+  const augmented = ensureJsonFlag(args);
+  let result: TraycerCliResult;
+  try {
+    result = await runTraycerCli({
+      args: augmented,
+      maxBuffer: 1024 * 1024,
+      timeoutMs: 10_000,
+    });
+  } catch (err) {
+    const stdout =
+      err !== null && typeof err === "object" && "stdout" in err
+        ? String((err as { stdout: unknown }).stdout ?? "")
+        : "";
+    const stderr =
+      err !== null && typeof err === "object" && "stderr" in err
+        ? String((err as { stderr: unknown }).stderr ?? "")
+        : "";
+    // Same rule the envelope wrappers apply, in the shape this one speaks:
+    // a complete, parseable document on stdout IS the answer, and a non-zero
+    // exit arriving behind it describes the CLI's teardown rather than the
+    // work (int#4840). Keyed on "stdout parses as complete JSON" - a positive
+    // test - so a truncated or absent payload still throws below.
+    //
+    // No production path routes through this helper today (see the docstring);
+    // this closes the seam so a future plain-JSON command does not have to
+    // rediscover the same failure.
+    const salvaged = parseCompleteJson<T>(stdout);
+    if (salvaged !== null) {
+      log.warn("[traycer-cli] non-zero exit after complete plain JSON", {
+        args: augmented,
+        stderrTail: stderr.slice(-512),
+      });
+      return salvaged.value;
+    }
+    const baseMessage = err instanceof Error ? err.message : String(err);
+    const stderrTail = stderr.slice(-2048);
+    // Node's child_process error message is just `Command failed: <cmd>`;
+    // append a short stderr excerpt so toasts/UIs surface the real cause
+    // instead of an opaque "Command failed" string.
+    const message = appendStderrSummary(baseMessage, stderrTail);
+    throw new TraycerCliError(
+      {
+        message,
+        code: null,
+        details: null,
+        exitCode:
+          err !== null && typeof err === "object" && "code" in err
+            ? toNumberOrNull((err as { code: unknown }).code)
+            : null,
+        stderrTail,
+      },
+      null,
+    );
+  }
+  const trimmed = result.stdout.trim();
+  if (trimmed.length === 0) {
+    throw new TraycerCliError(
+      {
+        message: `traycer-cli emitted no stdout for: ${augmented.join(" ")}`,
+        code: null,
+        details: null,
+        exitCode: 0,
+        stderrTail: result.stderr.slice(-2048),
+      },
+      null,
+    );
+  }
+  try {
+    return JSON.parse(trimmed) as T;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new TraycerCliError(
+      {
+        message: `traycer-cli stdout was not valid JSON for: ${augmented.join(" ")} (${reason})`,
+        code: null,
+        details: null,
+        exitCode: 0,
+        stderrTail: result.stderr.slice(-2048),
+      },
+      null,
+    );
+  }
+}
+
+/**
+ * Convenience: run a short-lived CLI subcommand in `--json` mode and
+ * return the *unwrapped* `result.data` payload. The shared runner emits
+ * one or more NDJSON lines on stdout - zero or more `progress` events
+ * followed by a single terminal `result` line. This helper:
+ *
+ *   - parses every non-empty line as NDJSON
+ *   - drops `progress` records (use `streamTraycerCliJson` to receive them)
+ *   - on `status: "ok"` resolves with the inner `data` field
+ *   - on `status: "error"` rejects with a `TraycerCliError` carrying the
+ *     CLI's stable error `code`, `details`, and the stderr tail
+ *
+ * If the subprocess exits non-zero but never emitted a terminal envelope
+ * (e.g. spawn error / crash) we still reject with a `TraycerCliError`
+ * so Desktop projectors never see a half-formed payload.
+ */
+export async function runTraycerCliJson<T>(
+  args: readonly string[],
+): Promise<T> {
+  const inv = await resolveTraycerCliInvocation();
+  return runTraycerCliJsonWithInvocation(inv, args);
+}
+
+/**
+ * Bundled-only counterpart to `runTraycerCliJson` (D7: `HostController`
+ * host operations always invoke the desktop-bundled, version-matched CLI -
+ * never the discovered manifest/PATH CLI `runTraycerCliJson` resolves).
+ * Same envelope contract; only the invocation resolution differs.
+ */
+export async function runBundledTraycerCliJson<T>(
+  args: readonly string[],
+): Promise<T> {
+  const inv = await resolveBundledTraycerCliInvocation();
+  return runTraycerCliJsonWithInvocation(inv, args);
+}
+
+async function runTraycerCliJsonWithInvocation<T>(
+  inv: TraycerCliInvocation,
+  args: readonly string[],
+): Promise<T> {
+  const augmented = ensureJsonFlag(args);
+  let result: TraycerCliResult;
+  try {
+    result = await runTraycerCliWithInvocation(inv, {
+      args: augmented,
+      maxBuffer: 1024 * 1024,
+      timeoutMs: CLI_JSON_TIMEOUT_MS,
+    });
+  } catch (err) {
+    // execFile rejects on non-zero exit with an Error that carries
+    // `stdout` / `stderr`. The CLI may still have emitted a terminal
+    // `result` line on stdout before exiting - surface that envelope
+    // verbatim so Desktop can pick the right recovery affordance.
+    // `traycer host doctor --json` is the canonical case: it emits a
+    // successful `{type:"result", status:"ok", data:{issues:[...]}}`
+    // envelope and *also* sets `exitCode=1` whenever any issue severity
+    // is `error`/`fatal`. The Desktop Doctor card must render those
+    // issues, so a successful envelope on a non-zero exit resolves with
+    // the unwrapped `data` payload rather than throwing it.
+    const stdout =
+      err !== null && typeof err === "object" && "stdout" in err
+        ? String((err as { stdout: unknown }).stdout ?? "")
+        : "";
+    const stderr =
+      err !== null && typeof err === "object" && "stderr" in err
+        ? String((err as { stderr: unknown }).stderr ?? "")
+        : "";
+    const fromEnvelope = extractTerminalEnvelope(stdout, stderr.slice(-2048));
+    if (fromEnvelope instanceof TraycerCliError) {
+      throw fromEnvelope;
+    }
+    if (fromEnvelope !== null) {
+      return fromEnvelope as T;
+    }
+    const baseMessage = err instanceof Error ? err.message : String(err);
+    const stderrTail = stderr.slice(-2048);
+    // Surface stderr in the message so the renderer's error toast / row
+    // shows the actual reason rather than a bare "Command failed: …".
+    const message = appendStderrSummary(baseMessage, stderrTail);
+    throw new TraycerCliError(
+      {
+        message,
+        code: null,
+        details: null,
+        exitCode:
+          err !== null && typeof err === "object" && "code" in err
+            ? toNumberOrNull((err as { code: unknown }).code)
+            : null,
+        stderrTail,
+      },
+      null,
+    );
+  }
+  const envelope = extractTerminalEnvelope(
+    result.stdout,
+    result.stderr.slice(-2048),
+  );
+  if (envelope === null) {
+    throw new TraycerCliError(
+      {
+        message: `traycer-cli emitted no terminal result line for: ${augmented.join(" ")}`,
+        code: null,
+        details: null,
+        exitCode: 0,
+        stderrTail: result.stderr.slice(-2048),
+      },
+      null,
+    );
+  }
+  if (envelope instanceof TraycerCliError) {
+    throw envelope;
+  }
+  return envelope as T;
+}
+
+export interface StreamTraycerCliOptions {
+  readonly args: readonly string[];
+  readonly onEvent: (event: NdjsonEvent) => void;
+  readonly env: Readonly<Record<string, string>> | null;
+  // INACTIVITY budget, not a wall-clock ceiling: the timer is armed at
+  // spawn and re-armed on every NDJSON event the child emits, so the child
+  // is only killed once it has gone quiet for this long.
+  //
+  // It used to be an absolute cap. That made a first install impossible on
+  // any connection slower than <archive size> / <cap> (traycer#585/#589):
+  // the CLI was SIGKILLed at exactly 10 minutes with bytes still flowing,
+  // and the partial download died with it. The CLI already guarantees a
+  // liveness signal well inside any sane window - a progress event per
+  // chunk, plus watchdog/backoff heartbeats while a transfer is stalled
+  // (`registry/fetch-resource.ts`'s 30s `DOWNLOAD_WATCHDOG_MS`) - so
+  // silence, not duration, is the real evidence that a child is wedged.
+  readonly idleTimeoutMs: number;
+  // Fixup C4: killed the moment this fires (SIGKILL, same as the idle-
+  // timeout path below) instead of only flipping `.aborted` on a controller
+  // nothing downstream ever consulted. `null` for callers with no
+  // cancellation surface (every mutation-lane call via `streamBundled` -
+  // only the download lane's `AbortController` ever aborts).
+  readonly signal: AbortSignal | null;
+}
+
+export interface StreamTraycerCliResult<T> {
+  readonly data: T;
+}
+
+/**
+ * Spawn a CLI subcommand that emits NDJSON on stdout, fan progress events
+ * to `onEvent`, and resolve with the unwrapped `result.data` payload. Used
+ * by host-management long-running operations (install / update /
+ * register-service) so Settings → Host and the Doctor failure card can
+ * render intermediate progress without polling.
+ *
+ * Always invokes the CLI in `--json` mode - the wrapper injects `--json`
+ * if the caller forgot it so progress NDJSON is guaranteed.
+ */
+export async function streamTraycerCliJson<T>(
+  opts: StreamTraycerCliOptions,
+): Promise<StreamTraycerCliResult<T>> {
+  const inv = await resolveTraycerCliInvocation();
+  return streamTraycerCliJsonWithInvocation(inv, opts);
+}
+
+/**
+ * Bundled-only counterpart to `streamTraycerCliJson` (D7: every CLI
+ * subprocess `HostController` spawns for a host mutation - apply, install,
+ * ensure, download, service register/deregister, restart, uninstall - uses
+ * the desktop-bundled, version-matched CLI, never the discovered
+ * manifest/PATH one). Same NDJSON progress/result contract; only the
+ * invocation resolution differs.
+ */
+export async function streamBundledTraycerCliJson<T>(
+  opts: StreamTraycerCliOptions,
+): Promise<StreamTraycerCliResult<T>> {
+  const inv = await resolveBundledTraycerCliInvocation();
+  return streamTraycerCliJsonWithInvocation(inv, opts);
+}
+
+/**
+ * How many detached runs' output files are kept per stem. Enough to diagnose
+ * the last few quits from a support bundle; the directory never grows past
+ * it, because every spawn prunes before it writes.
+ */
+const DETACHED_OUTPUT_RETENTION = 10;
+
+export interface DetachedTraycerCliOptions {
+  readonly args: readonly string[];
+  /** Directory the child's stdout/stderr files go to; created if missing. */
+  readonly outputDir: string;
+  /** File-name stem for this command's runs (e.g. `stop`). */
+  readonly outputStem: string;
+}
+
+export interface DetachedTraycerCliRun<T> {
+  readonly pid: number | null;
+  readonly stdoutPath: string;
+  readonly stderrPath: string;
+  /**
+   * Settles when the child exits, with the unwrapped `result.data` - or
+   * rejects with a `TraycerCliError` exactly where `runBundledTraycerCliJson`
+   * would, including the CLI's own error `code`. It never settles if this
+   * process exits first, which is the point: the child does not need it to.
+   */
+  readonly completion: Promise<T>;
+}
+
+/**
+ * Spawn a bundled-CLI command that must be able to OUTLIVE this process: its
+ * own process group (`detached`), not held open by this process (`unref`),
+ * and stdout/stderr written to files rather than pipes. A piped child dies on
+ * EPIPE, or blocks on a full pipe, the moment the app that spawned it exits;
+ * a file-backed one completes and leaves its NDJSON result on disk.
+ *
+ * For quit-time work only (the lifecycle stop the quit transaction admits
+ * before its deadline). Everything the app waits on uses the piped wrappers
+ * above, which also stream progress.
+ */
+export async function spawnDetachedBundledTraycerCliJson<T>(
+  opts: DetachedTraycerCliOptions,
+): Promise<DetachedTraycerCliRun<T>> {
+  const inv = await resolveBundledTraycerCliInvocation();
+  const augmentedArgs = ensureJsonFlag(opts.args);
+  await mkdir(opts.outputDir, { recursive: true });
+  await pruneDetachedOutput(opts.outputDir, opts.outputStem);
+  const runId = `${opts.outputStem}-${Date.now()}-${randomUUID().slice(0, 8)}`;
+  const stdoutPath = join(opts.outputDir, `${runId}.ndjson`);
+  const stderrPath = join(opts.outputDir, `${runId}.log`);
+  const { child, exited } = await spawnWithFileStdio(
+    inv.command,
+    [...inv.args, ...augmentedArgs],
+    stdoutPath,
+    stderrPath,
+  );
+  child.unref();
+  const completion = exited.then((exit): Promise<T> => {
+    if (exit.kind === "error") {
+      return Promise.reject(
+        new TraycerCliError(
+          {
+            message: exit.message,
+            code: null,
+            details: null,
+            exitCode: null,
+            stderrTail: "",
+          },
+          null,
+        ),
+      );
+    }
+    return readDetachedOutcome<T>({
+      stdoutPath,
+      stderrPath,
+      exitCode: exit.exitCode,
+      signal: exit.signal,
+      augmentedArgs,
+    });
+  });
+  return { pid: child.pid ?? null, stdoutPath, stderrPath, completion };
+}
+
+type DetachedChildExit =
+  | {
+      readonly kind: "exit";
+      readonly exitCode: number | null;
+      readonly signal: NodeJS.Signals | null;
+    }
+  | { readonly kind: "error"; readonly message: string };
+
+/**
+ * Spawn with stdout/stderr on freshly opened files. The exit listeners are
+ * attached in the same synchronous stretch as `spawn`, before any `await`:
+ * a spawn failure (`ENOENT`) is emitted as an `error` event on the next tick,
+ * and an `error` with no listener throws out of the emitter.
+ */
+async function spawnWithFileStdio(
+  command: string,
+  args: readonly string[],
+  stdoutPath: string,
+  stderrPath: string,
+): Promise<{
+  readonly child: ChildProcess;
+  readonly exited: Promise<DetachedChildExit>;
+}> {
+  const stdoutFile: FileHandle = await open(stdoutPath, "w", 0o600);
+  try {
+    const stderrFile: FileHandle = await open(stderrPath, "w", 0o600);
+    try {
+      const child = spawn(command, args, {
+        env: withDesktopInitiator(process.env),
+        detached: true,
+        stdio: ["ignore", stdoutFile.fd, stderrFile.fd],
+        windowsHide: true,
+      });
+      const exited = new Promise<DetachedChildExit>((resolve) => {
+        child.on("error", (err) => {
+          resolve({ kind: "error", message: err.message });
+        });
+        child.once("exit", (exitCode, signal) => {
+          resolve({ kind: "exit", exitCode, signal });
+        });
+      });
+      return { child, exited };
+    } finally {
+      // The child holds its own duplicates of both descriptors; ours are
+      // only the means of handing them over.
+      await stderrFile.close().catch(() => undefined);
+    }
+  } finally {
+    await stdoutFile.close().catch(() => undefined);
+  }
+}
+
+async function readDetachedOutcome<T>(input: {
+  readonly stdoutPath: string;
+  readonly stderrPath: string;
+  readonly exitCode: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly augmentedArgs: readonly string[];
+}): Promise<T> {
+  const stdout = await readFile(input.stdoutPath, "utf8").catch(() => "");
+  const stderrTail = (
+    await readFile(input.stderrPath, "utf8").catch(() => "")
+  ).slice(-2048);
+  const envelope = extractTerminalEnvelope(stdout, stderrTail);
+  if (envelope instanceof TraycerCliError) {
+    throw new TraycerCliError(
+      {
+        message: envelope.message,
+        code: envelope.code,
+        details: envelope.details,
+        exitCode: input.exitCode,
+        stderrTail,
+      },
+      null,
+    );
+  }
+  if (envelope !== null) {
+    return envelope as T;
+  }
+  const command = input.augmentedArgs.join(" ");
+  const base =
+    input.signal !== null
+      ? `traycer-cli was killed by ${input.signal}: ${command}`
+      : typeof input.exitCode === "number" && input.exitCode !== 0
+        ? `traycer-cli exited with code ${input.exitCode}: ${command}`
+        : `traycer-cli emitted no terminal result for: ${command}`;
+  throw new TraycerCliError(
+    {
+      message: appendStderrSummary(base, stderrTail),
+      code: null,
+      details: null,
+      exitCode: input.exitCode,
+      stderrTail,
+    },
+    null,
+  );
+}
+
+/** Keep only the newest runs for `stem` (minus the one about to be written). */
+async function pruneDetachedOutput(dir: string, stem: string): Promise<void> {
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return;
+  }
+  const runIds = new Set<string>();
+  for (const name of names) {
+    if (!name.startsWith(`${stem}-`)) continue;
+    if (name.endsWith(".ndjson")) runIds.add(name.slice(0, -".ndjson".length));
+    else if (name.endsWith(".log")) runIds.add(name.slice(0, -".log".length));
+  }
+  const ordered = [...runIds].sort();
+  const excess = ordered.length - (DETACHED_OUTPUT_RETENTION - 1);
+  for (const runId of ordered.slice(0, Math.max(0, excess))) {
+    await rm(join(dir, `${runId}.ndjson`), { force: true }).catch(
+      () => undefined,
+    );
+    await rm(join(dir, `${runId}.log`), { force: true }).catch(() => undefined);
+  }
+}
+
+async function streamTraycerCliJsonWithInvocation<T>(
+  inv: TraycerCliInvocation,
+  opts: StreamTraycerCliOptions,
+): Promise<StreamTraycerCliResult<T>> {
+  const augmentedArgs = ensureJsonFlag(opts.args);
+  const allArgs = [...inv.args, ...augmentedArgs];
+  return new Promise<StreamTraycerCliResult<T>>((resolve, reject) => {
+    const child = spawn(inv.command, allArgs, {
+      env: withDesktopInitiator({ ...process.env, ...opts.env }),
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let stdoutBuffer = "";
+    let stderrTail = "";
+    let terminalResult: T | null = null;
+    let sawTerminalOk = false;
+    let terminalError: TraycerCliError | null = null;
+    let abortError: TraycerCliError | null = null;
+    // Set when THIS wrapper killed the child for misbehaving - an idle wedge
+    // or an unterminated-line flood. Deliberately NEVER set once a terminal
+    // envelope has been parsed: the envelope is the work's outcome and
+    // `close` must report it, exactly as the run path salvages the envelope
+    // out of execFile's own timeout kill. Without that gate, a child that
+    // delivered `E_CLI_LOCK_BUSY` (or ok!) and then wedged in teardown
+    // would surface as a contentless timeout - degrading Desktop's
+    // lock-busy `deferred` contract to a generic failure.
+    let killError: TraycerCliError | null = null;
+    let settled = false;
+    // Set once THIS wrapper has killed the child, for whatever reason (idle,
+    // line flood, abort). From then on the child's `exit` settles the stream:
+    // `close` also waits for every other holder of its stdio pipes, and on
+    // Windows a grandchild that inherited them can hold them open for as long
+    // as it lives, which kept a killed command's lane job pending with no end.
+    // `exit` still means the child itself is gone, which is what the
+    // download drain's "never race a child still exiting" rule needs.
+    let killedHere = false;
+    const killChild = (): void => {
+      killedHere = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore - already exited
+      }
+    };
+    const cleanupAbortListener = (): void => {
+      if (opts.signal !== null) {
+        opts.signal.removeEventListener("abort", onAbort);
+      }
+    };
+    let timer: NodeJS.Timeout | null = null;
+    const onIdleTimeout = (): void => {
+      if (settled) return;
+      // Killing a timed-out child does not mean it has released its files.
+      // Keep this stream promise pending until the child exits, just like
+      // explicit cancellation, so Remove Traycer's download-drain cannot
+      // launch an uninstall while the child is still exiting.
+      if (!sawTerminalOk && terminalError === null) {
+        killError = new TraycerCliError(
+          {
+            message: appendStderrSummary(
+              `traycer-cli produced no output for ${opts.idleTimeoutMs}ms (${augmentedArgs.join(" ")})`,
+              stderrTail,
+            ),
+            code: null,
+            details: null,
+            exitCode: null,
+            stderrTail,
+          },
+          null,
+        );
+      }
+      killChild();
+    };
+    // Re-armed by `armIdleTimer` on every NDJSON event below. Deliberately
+    // driven by parsed events rather than raw stdout bytes: in `--json`
+    // mode every line the CLI writes is an event, so a child emitting
+    // anything else is not evidence of progress.
+    const armIdleTimer = (): void => {
+      if (settled || abortError !== null || killError !== null) return;
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(onIdleTimeout, opts.idleTimeoutMs);
+    };
+    const clearIdleTimer = (): void => {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+    };
+    armIdleTimer();
+    // Fixup C4: the ONLY current caller (`runDownloadLane`'s
+    // `abortInFlightDownload`) used to flip `AbortController.signal.aborted`
+    // with nothing downstream ever wired to it - the spawned CLI subprocess
+    // ran to completion regardless, so Remove Traycer's cancellation was
+    // cosmetic (a download could burn network/CPU for up to
+    // `CLI_JSON_TIMEOUT_MS` after removal). The child is killed immediately,
+    // but this promise settles only once it has exited so a follow-on
+    // uninstall cannot race a child still holding or promoting files.
+    const onAbort = (): void => {
+      if (settled || abortError !== null || killError !== null) return;
+      clearIdleTimer();
+      abortError = new TraycerCliError(
+        {
+          message: `traycer-cli aborted: ${augmentedArgs.join(" ")}`,
+          code: null,
+          details: null,
+          exitCode: null,
+          stderrTail,
+        },
+        null,
+      );
+      killChild();
+    };
+    if (opts.signal !== null) {
+      if (opts.signal.aborted) {
+        onAbort();
+      } else {
+        opts.signal.addEventListener("abort", onAbort, { once: true });
+      }
+    }
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdoutBuffer += chunk;
+      let newlineIndex = stdoutBuffer.indexOf("\n");
+      while (newlineIndex !== -1) {
+        const line = stdoutBuffer.slice(0, newlineIndex);
+        stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
+        newlineIndex = stdoutBuffer.indexOf("\n");
+        if (line.length === 0) continue;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          // Not JSON - the CLI shouldn't emit non-JSON in `--json` mode
+          // but be tolerant of stray output.
+          log.warn("[traycer-cli] ignored non-JSON stdout line", {
+            lineLength: line.length,
+          });
+          continue;
+        }
+        const event = parseNdjsonEvent(parsed);
+        if (event === null) continue;
+        // The child is demonstrably alive and reporting: restart its
+        // inactivity budget. This is what lets a multi-hour download on a
+        // throttled link run to completion.
+        armIdleTimer();
+        if (event.type === "progress") {
+          opts.onEvent(event);
+          continue;
+        }
+        if (event.status === "ok") {
+          terminalResult = event.data as T;
+          sawTerminalOk = true;
+          opts.onEvent(event);
+          continue;
+        }
+        terminalError = new TraycerCliError(
+          {
+            message: event.error.message,
+            code: event.error.code,
+            details: event.error.details,
+            exitCode: null,
+            stderrTail,
+          },
+          null,
+        );
+        opts.onEvent(event);
+      }
+      // Parity with the run path's 1 MiB `maxBuffer` anti-runaway guard: an
+      // unterminated "line" past any real NDJSON event's size is a defective
+      // child, and unparsed bytes deliberately never re-arm the idle timer -
+      // so without this cap a newline-free flood pumps heap in this process
+      // for the full idle window before anything kills it.
+      if (
+        !settled &&
+        abortError === null &&
+        killError === null &&
+        stdoutBuffer.length > STREAM_LINE_CAP_BYTES
+      ) {
+        if (!sawTerminalOk && terminalError === null) {
+          killError = new TraycerCliError(
+            {
+              message: `traycer-cli emitted an unterminated ${stdoutBuffer.length}-byte stdout line (${augmentedArgs.join(" ")})`,
+              code: null,
+              details: null,
+              exitCode: null,
+              stderrTail,
+            },
+            null,
+          );
+        }
+        stdoutBuffer = "";
+        killChild();
+      }
+    });
+
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderrTail = (stderrTail + chunk).slice(-2048);
+    });
+
+    child.on("error", (err) => {
+      if (settled || abortError !== null || killError !== null) return;
+      settled = true;
+      clearIdleTimer();
+      cleanupAbortListener();
+      reject(
+        new TraycerCliError(
+          {
+            message: err.message,
+            code: null,
+            details: null,
+            exitCode: null,
+            stderrTail,
+          },
+          null,
+        ),
+      );
+    });
+
+    // `close` normally, `exit` once this wrapper has killed the child (see
+    // `killedHere`).
+    child.on("exit", (exitCode, signal) => {
+      if (killedHere) settleOnEnd(exitCode, signal);
+    });
+    child.on("close", (exitCode, signal) => {
+      settleOnEnd(exitCode, signal);
+    });
+    // Both report `(code, signal)`, and a signal-killed child always has
+    // a null code. Ignoring `signal` collapsed every external kill into the
+    // "emitted no terminal result" branch below, which reads as "the CLI ran
+    // fine but stayed silent" - the opposite of what happened, and the reason
+    // flaky `host install` failures were undiagnosable from the message alone.
+    function settleOnEnd(
+      exitCode: number | null,
+      signal: NodeJS.Signals | null,
+    ): void {
+      if (settled) return;
+      settled = true;
+      clearIdleTimer();
+      cleanupAbortListener();
+      if (abortError !== null) {
+        reject(abortError);
+        return;
+      }
+      if (killError !== null) {
+        reject(killError);
+        return;
+      }
+      if (terminalError !== null) {
+        reject(
+          new TraycerCliError(
+            {
+              message: terminalError.message,
+              code: terminalError.code,
+              details: terminalError.details,
+              exitCode,
+              stderrTail,
+            },
+            null,
+          ),
+        );
+        return;
+      }
+      // A completed terminal `ok` line is the outcome, even if the process
+      // then exited non-zero OR was killed. The runner emits that line and
+      // calls its terminator on the very next statement (traycer-cli's
+      // runner.ts), so nothing meaningful runs afterwards that a later exit
+      // code or kill could be reporting - what arrives behind it describes
+      // the CLI's own teardown, not the work. `traycer host doctor` is the
+      // intentional non-zero case (ok envelope + exitCode 1 whenever an
+      // issue is error/fatal), the win32 SEA teardown abort was the
+      // accidental one (int#4840), and this wrapper's own idle kill of a
+      // child wedged in teardown is the signal-carrying one - all three
+      // used to surface here as a failed operation after it had already
+      // succeeded. Checked BEFORE the signal branch below for that reason.
+      //
+      // Keyed on `sawTerminalOk` - a positive test for the tolerated
+      // condition - rather than on "the exit code was non-zero, try to
+      // recover". A run that exits non-zero WITHOUT a terminal ok still
+      // fails below, exactly as before. `runTraycerCliJsonWithInvocation`
+      // has made the same call on the non-streaming path since it shipped.
+      if (sawTerminalOk) {
+        if (
+          (typeof exitCode === "number" && exitCode !== 0) ||
+          signal !== null
+        ) {
+          log.warn("[traycer-cli] non-zero exit after a successful result", {
+            args: augmentedArgs,
+            exitCode,
+            signal,
+            stderrTail: stderrTail.slice(-512),
+          });
+        }
+        resolve({ data: terminalResult as T });
+        return;
+      }
+      // Checked after the abort/kill paths above: those kill the child
+      // themselves and already carry a more specific cause, so only a kill
+      // this process did not ask for reaches here.
+      if (signal !== null) {
+        reject(
+          new TraycerCliError(
+            {
+              message: appendStderrSummary(
+                `traycer-cli was killed by ${signal}: ${augmentedArgs.join(" ")}`,
+                stderrTail,
+              ),
+              code: null,
+              details: null,
+              exitCode,
+              stderrTail,
+            },
+            null,
+          ),
+        );
+        return;
+      }
+      if (typeof exitCode === "number" && exitCode !== 0) {
+        reject(
+          new TraycerCliError(
+            {
+              message: appendStderrSummary(
+                `traycer-cli exited with code ${exitCode}: ${augmentedArgs.join(" ")}`,
+                stderrTail,
+              ),
+              code: null,
+              details: null,
+              exitCode,
+              stderrTail,
+            },
+            null,
+          ),
+        );
+        return;
+      }
+      // Exited 0 but never emitted a terminal line - the CLI ran and stayed
+      // silent. Distinct from the non-zero case above, and the message says so.
+      reject(
+        new TraycerCliError(
+          {
+            message: appendStderrSummary(
+              `traycer-cli emitted no terminal result for: ${augmentedArgs.join(" ")}`,
+              stderrTail,
+            ),
+            code: null,
+            details: null,
+            exitCode,
+            stderrTail,
+          },
+          null,
+        ),
+      );
+    }
+  });
+}
+
+function parseNdjsonEvent(value: unknown): NdjsonEvent | null {
+  if (value === null || typeof value !== "object") return null;
+  const obj = value as Record<string, unknown>;
+  const type = obj.type;
+  if (type === "progress") {
+    return {
+      type: "progress",
+      stage: typeof obj.stage === "string" ? obj.stage : "",
+      percent:
+        typeof obj.percent === "number" && Number.isFinite(obj.percent)
+          ? obj.percent
+          : null,
+      bytes:
+        typeof obj.bytes === "number" && Number.isFinite(obj.bytes)
+          ? obj.bytes
+          : null,
+      totalBytes:
+        typeof obj.totalBytes === "number" && Number.isFinite(obj.totalBytes)
+          ? obj.totalBytes
+          : null,
+      message: typeof obj.message === "string" ? obj.message : null,
+      // An older bundled CLI omits this entirely; the same numeric guard the
+      // other three use turns that into `null`, so skew degrades to the
+      // pre-field behaviour instead of breaking. That is the whole
+      // forward-compatibility story for this field.
+      workUnits:
+        typeof obj.workUnits === "number" && Number.isFinite(obj.workUnits)
+          ? obj.workUnits
+          : null,
+    };
+  }
+  if (type === "result") {
+    // The shared runner discriminates terminal events on `status`. Old
+    // pre-runner CLIs emitted a bare `{type:"result", data:...}` - treat
+    // an absent `status` as ok so a partial rollout doesn't break.
+    const status = obj.status;
+    if (status === "error") {
+      const errRaw =
+        obj.error !== null && typeof obj.error === "object"
+          ? (obj.error as Record<string, unknown>)
+          : {};
+      return {
+        type: "result",
+        status: "error",
+        error: {
+          code: typeof errRaw.code === "string" ? errRaw.code : null,
+          message:
+            typeof errRaw.message === "string" ? errRaw.message : "cli error",
+          details: errRaw.details ?? null,
+        },
+      };
+    }
+    return { type: "result", status: "ok", data: obj.data };
+  }
+  // Legacy `{type:"error", code, message, details}` shape (pre-runner
+  // CLI) - coerce into the unified result-error envelope.
+  if (type === "error") {
+    return {
+      type: "result",
+      status: "error",
+      error: {
+        code: typeof obj.code === "string" ? obj.code : null,
+        message: typeof obj.message === "string" ? obj.message : "cli error",
+        details: obj.details ?? null,
+      },
+    };
+  }
+  return null;
+}
+
+/**
+ * Walk an `--json` subprocess's stdout looking for the terminal `result`
+ * NDJSON line, ignoring progress events and any non-JSON noise. Returns:
+ *   - `unknown` (the unwrapped `data` payload) on a success envelope
+ *   - a `TraycerCliError` on an error envelope
+ *   - `null` when no terminal line is present at all
+ *
+ * Used by `runTraycerCliJson` so query commands get the same envelope
+ * contract as streamed long-running ones - projector functions never
+ * see the `{type:"result", status:"ok", data:...}` outer shape.
+ */
+/**
+ * Parse `stdout` as one complete JSON document, or return `null`.
+ *
+ * Wrapped in an object rather than returned bare so a payload that is itself
+ * `null` stays distinguishable from "did not parse" - the caller's salvage
+ * decision hinges on exactly that difference.
+ */
+function parseCompleteJson<T>(stdout: string): { readonly value: T } | null {
+  const trimmed = stdout.trim();
+  if (trimmed.length === 0) return null;
+  try {
+    return { value: JSON.parse(trimmed) as T };
+  } catch {
+    // Truncated or non-JSON: not a complete answer, so not salvageable.
+    return null;
+  }
+}
+
+function extractTerminalEnvelope(
+  stdout: string,
+  stderrTail: string,
+): unknown | TraycerCliError | null {
+  const lines = stdout.split(/\r?\n/);
+  type TerminalEvent = Extract<NdjsonEvent, { readonly type: "result" }>;
+  let terminal: TerminalEvent | null = null;
+  for (const line of lines) {
+    if (line.length === 0) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      log.warn("[traycer-cli] ignored non-JSON terminal stdout line", {
+        lineLength: line.length,
+      });
+      continue;
+    }
+    const event = parseNdjsonEvent(parsed);
+    if (event === null) continue;
+    if (event.type === "progress") continue;
+    terminal = event;
+  }
+  if (terminal === null) return null;
+  if (terminal.status === "error") {
+    return new TraycerCliError(
+      {
+        message: terminal.error.message,
+        code: terminal.error.code,
+        details: terminal.error.details,
+        exitCode: null,
+        stderrTail,
+      },
+      null,
+    );
+  }
+  return terminal.data;
+}
+
+/**
+ * Ensure the args list passes `--json` so the CLI emits NDJSON envelopes.
+ * Called once at the wrapper boundary so callers can omit the flag and
+ * never have to think about progress-streaming vs. envelope parsing.
+ */
+function ensureJsonFlag(args: readonly string[]): readonly string[] {
+  for (const arg of args) {
+    if (arg === "--json") return args;
+  }
+  return [...args, "--json"];
+}
+
+function toNumberOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Appends a one-line excerpt of the CLI's stderr to a base error message.
+ * Picks the last non-empty stderr line (usually the most specific error,
+ * e.g. `error: unknown option '--cli-bin'`) and trims it so the combined
+ * message fits in a single-line toast / error chip. No-ops when stderr is
+ * empty so messages that already carry detail stay unchanged.
+ */
+function appendStderrSummary(baseMessage: string, stderr: string): string {
+  const lines = stderr.split(/\r?\n/);
+  let lastNonEmpty = "";
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const trimmed = (lines[i] ?? "").trim();
+    if (trimmed.length > 0) {
+      lastNonEmpty = trimmed;
+      break;
+    }
+  }
+  if (lastNonEmpty.length === 0) return baseMessage;
+  const maxExcerpt = 240;
+  const excerpt =
+    lastNonEmpty.length <= maxExcerpt
+      ? lastNonEmpty
+      : `${lastNonEmpty.slice(0, maxExcerpt - 1)}…`;
+  if (baseMessage.includes(excerpt)) return baseMessage;
+  return `${baseMessage}: ${excerpt}`;
+}

@@ -1,0 +1,1374 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
+import { EpicConnectionPill } from "@/components/epic-canvas/panels/epic-connection-pill";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import type {
+  ArtifactSyncReading,
+  EpicSyncPillState,
+  EpicWriteCommandAlert,
+} from "@/lib/epic-sync-pill-state";
+import type { EpicChatBackupStatus } from "@/components/epic-canvas/panels/epic-chat-backup-status";
+import type { EpicDurabilityPlane } from "@/components/epic-canvas/panels/epic-durability-plane";
+import type { AgentActivityPresenceDegradedReason } from "@/hooks/agent/use-agent-activity-presence-degraded";
+import type { CommGraphFeedHealth } from "@/components/epic-canvas/comm-graph/use-comm-graph-feed-health";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
+
+const mocks = vi.hoisted(() => ({
+  useEpicSyncPillState: vi.fn(),
+  // Defaults to `open`: most existing tests pin durability/host-visible
+  // states that assume the GUI↔host transport is up. A host-link-down test
+  // overrides this to `connecting`/`reconnecting` so `useCloudLinkGrace`'s
+  // `hostTransportStatus === "open"` gate never applies to it.
+  hostTransportStatus: "open" as StreamConnectionStatus,
+  chatBackupStatus: null as EpicChatBackupStatus | null,
+  presenceDegraded: null as AgentActivityPresenceDegradedReason | null,
+  terminalCoverage: null as
+    | "partial-serving-host"
+    | "complete-fleet"
+    | "complete-local"
+    | null,
+  terminalCapability: {
+    status: "capable",
+    schemaVersion: { major: 2, minor: 1 },
+  },
+  commGraphFeedHealth: null as CommGraphFeedHealth | null,
+  writeCommandAlert: null as EpicWriteCommandAlert | null,
+  artifactSyncReading: null as ArtifactSyncReading | null,
+  // The host's routing truth, fed in as a prop the way the status row does
+  // it; `null` is "nothing to say", which is every case written before the
+  // plane joined the pill.
+  durability: null as EpicDurabilityPlane | null,
+}));
+
+vi.mock("@/hooks/agent/use-agent-activity-presence-degraded", () => ({
+  useAgentActivityPresenceDegraded: () => mocks.presenceDegraded,
+}));
+
+vi.mock("@/lib/epic-selectors", () => ({
+  useEpicSyncPillState: mocks.useEpicSyncPillState,
+  // Mirrors the derivation contract instead of a hand-set flag: every state
+  // that REQUIRES a genuine cloud frame this cycle implies the evidence bit,
+  // and `connected`/`syncing` default to the handshake-only (no-evidence)
+  // reading these tests exercise. Keeps each `mockReturnValue(state)` site
+  // self-consistent without threading a second knob through all of them.
+  useEpicHasFreshCloudSyncStatus: (): boolean => {
+    const state = mocks.useEpicSyncPillState() as EpicSyncPillState;
+    return (
+      state === "synced" ||
+      state === "hostPending" ||
+      state === "offlineWithUnsavedChanges" ||
+      state === "offlineWithHostPending" ||
+      state === "offlineChangesSavedLocally"
+    );
+  },
+  useEpicWriteCommandAlert: () => mocks.writeCommandAlert,
+  useEpicHostTransportStatus: () => mocks.hostTransportStatus,
+  useEpicArtifactSyncReading: () => mocks.artifactSyncReading,
+}));
+vi.mock("@/components/epic-canvas/panels/epic-chat-backup-status", () => ({
+  useEpicChatBackupStatus: () => mocks.chatBackupStatus,
+}));
+vi.mock(
+  "@/components/epic-canvas/comm-graph/use-comm-graph-feed-health",
+  () => ({
+    useCommGraphFeedHealth: () => mocks.commGraphFeedHealth,
+  }),
+);
+vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
+  useCanvasHostId: () => "host-a",
+}));
+vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({
+  useHostPlainTerminalAuthority: () => ({
+    hostId: "host-a",
+    coverage: mocks.terminalCoverage,
+    capability: mocks.terminalCapability,
+  }),
+}));
+
+const OFFLINE_COPY =
+  "Disconnected. Unsent changes stay in this window until it reconnects — keep it open.";
+const OFFLINE_UNSAVED_TOOLTIP =
+  "Offline, and some recent changes are still being saved. Keep this window open.";
+
+function pillTree() {
+  return (
+    <TooltipProvider>
+      <EpicConnectionPill epicId="epic-a" durability={mocks.durability} />
+    </TooltipProvider>
+  );
+}
+
+function renderPill(state: EpicSyncPillState) {
+  mocks.useEpicSyncPillState.mockReturnValue(state);
+  return render(pillTree());
+}
+
+/**
+ * Reads the claim off the pill's accessible name. Uses `getByRole` rather
+ * than `queryByTestId` deliberately: a missing pill must FAIL these
+ * assertions, not silently satisfy the negative ones - a rendering
+ * regression would otherwise read as "does not claim synced".
+ */
+function pillClaimsSynced(): boolean {
+  return (
+    screen.getByRole("button").getAttribute("aria-label") ===
+    "All changes synced"
+  );
+}
+
+async function expectTooltip(text: string) {
+  fireEvent.focus(screen.getByTestId("epic-connection-pill"));
+  expect((await screen.findByRole("tooltip")).textContent).toBe(text);
+}
+
+/**
+ * The hover, one entry per degraded plane: the selected plane's sentence
+ * first, then every other degraded plane in source order. A single-plane
+ * hover is a bare string, which reads here as one line.
+ */
+async function tooltipLines(): Promise<ReadonlyArray<string | null>> {
+  fireEvent.focus(screen.getByTestId("epic-connection-pill"));
+  const tooltip = await screen.findByRole("tooltip");
+  const entries = within(tooltip).queryAllByRole("listitem");
+  return entries.length === 0
+    ? [tooltip.textContent]
+    : entries.map((entry) => entry.textContent);
+}
+
+describe("<EpicConnectionPill />", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    vi.useRealTimers();
+    mocks.hostTransportStatus = "open";
+    mocks.chatBackupStatus = null;
+    mocks.presenceDegraded = null;
+    mocks.durability = null;
+    mocks.terminalCoverage = null;
+    mocks.terminalCapability = {
+      status: "capable",
+      schemaVersion: { major: 2, minor: 1 },
+    };
+    mocks.commGraphFeedHealth = null;
+    mocks.writeCommandAlert = null;
+    mocks.artifactSyncReading = null;
+  });
+
+  it("renders the synced state icon-only with the claim on the accessible name", () => {
+    vi.useFakeTimers();
+    renderPill("synced");
+
+    act(() => {
+      vi.advanceTimersByTime(750);
+    });
+
+    // Icon-only in the steady state: the claim moved off the visible copy and
+    // onto the accessible name + tooltip, so the status row stays compact.
+    expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
+    // No label, so no element to hold one: the row cuts a label by this class.
+    expect(
+      screen.getByTestId("epic-connection-pill").querySelector(".truncate"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("aria-label"),
+    ).toBe("All changes synced");
+    expect(screen.getByTestId("epic-connection-pill").className).toContain(
+      "text-muted-foreground",
+    );
+    expect(screen.getByTestId("epic-connection-pill").className).toContain(
+      "italic",
+    );
+    expect(screen.getByTestId("epic-connection-pill").innerHTML).toContain(
+      "bg-emerald-500",
+    );
+    expect(screen.getByTestId("epic-connection-pill").innerHTML).toContain(
+      "status-ping",
+    );
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+    ).toBe("synced");
+    // The tooltip carries the same claim; it is asserted in the real-timer
+    // test below (a fake-timer clock cannot settle `findByRole`).
+    expect(pillClaimsSynced()).toBe(true);
+  });
+
+  // Real timers: the icon-only steady state must still expose its claim to a
+  // sighted user, and the tooltip is now the only place that copy lives.
+  it("surfaces the synced claim through the tooltip", async () => {
+    renderPill("synced");
+
+    await expectTooltip("All changes synced");
+  });
+
+  it("renders connecting as the amber bootstrap pill", async () => {
+    // Host-link-down reading: the GUI↔host transport itself is coming up, so
+    // `useCloudLinkGrace`'s `hostTransportStatus === "open"` gate must not
+    // apply and the pill reads amber immediately.
+    mocks.hostTransportStatus = "connecting";
+    renderPill("connecting");
+
+    expect(screen.getByText("Connecting…")).not.toBeNull();
+    expect(screen.queryByText("Reconnecting…")).toBeNull();
+    expect(screen.getByTestId("epic-connection-pill").className).toContain(
+      "bg-amber-500/10",
+    );
+    expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
+      "text-amber-500",
+    );
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+    ).toBe("connecting");
+    await expectTooltip("Connecting to server");
+  });
+
+  it("renders reconnecting as the amber pill", async () => {
+    // Host-link-down reading: gets no grace.
+    mocks.hostTransportStatus = "reconnecting";
+    renderPill("reconnecting");
+
+    expect(screen.getByText("Reconnecting…")).not.toBeNull();
+    expect(screen.getByTestId("epic-connection-pill").className).toContain(
+      "bg-amber-500/10",
+    );
+    expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
+      "text-amber-500",
+    );
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+    ).toBe("reconnecting");
+    await expectTooltip("Reconnecting to server");
+  });
+
+  // A stream failure the host cannot classify now closes RETRYABLE and the
+  // client reconnects forever, so "Reconnecting…" alone no longer implies
+  // "back in a moment". After a minute down the copy escalates to say the
+  // retry is not converging - same amber severity, and the screen-reader
+  // announcement follows the same threshold so a routine reconnect stays
+  // silent.
+  describe("stalled-link escalation (60s)", () => {
+    it("reads Reconnecting… before the escalation threshold, with a silent status region", () => {
+      vi.useFakeTimers();
+      // Host-link-down reading: no cloud grace applies.
+      mocks.hostTransportStatus = "reconnecting";
+      renderPill("reconnecting");
+
+      expect(screen.getByText("Reconnecting…")).not.toBeNull();
+      expect(screen.queryByText("Still reconnecting…")).toBeNull();
+      expect(screen.getByRole("status").textContent).toBe("");
+
+      act(() => {
+        vi.advanceTimersByTime(59_000);
+      });
+
+      expect(screen.getByText("Reconnecting…")).not.toBeNull();
+      expect(screen.queryByText("Still reconnecting…")).toBeNull();
+      expect(screen.getByRole("status").textContent).toBe("");
+    });
+
+    it("escalates to Still reconnecting… at 60s and announces it through role=status", () => {
+      vi.useFakeTimers();
+      mocks.hostTransportStatus = "reconnecting";
+      renderPill("reconnecting");
+
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+
+      expect(screen.getByText("Still reconnecting…")).not.toBeNull();
+      expect(screen.queryByText("Reconnecting…")).toBeNull();
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("aria-label"),
+      ).toBe(
+        "Still reconnecting… Still reconnecting. This keeps retrying on its own — unsent changes stay in this window, so keep it open.",
+      );
+      expect(screen.getByRole("status").textContent).toBe(
+        "Still reconnecting. This keeps retrying on its own — unsent changes stay in this window, so keep it open.",
+      );
+    });
+
+    it("resets the escalation clock once the link recovers, staying silent on a fresh reconnect", () => {
+      vi.useFakeTimers();
+      mocks.hostTransportStatus = "reconnecting";
+      const { rerender } = renderPill("reconnecting");
+
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(screen.getByText("Still reconnecting…")).not.toBeNull();
+
+      // The link recovers, then drops again - a fresh outage must start its
+      // own clock rather than inheriting the earlier escalation.
+      mocks.useEpicSyncPillState.mockReturnValue("synced");
+      rerender(pillTree());
+      mocks.useEpicSyncPillState.mockReturnValue("reconnecting");
+      rerender(pillTree());
+
+      expect(screen.getByText("Reconnecting…")).not.toBeNull();
+      expect(screen.queryByText("Still reconnecting…")).toBeNull();
+      expect(screen.getByRole("status").textContent).toBe("");
+    });
+  });
+
+  describe("cloud-only grace (15s)", () => {
+    // `reconnecting` with the GUI↔host transport `open` is the cloud-down
+    // reading (see `deriveEpicSyncPillState`): the host is reachable and
+    // edits stay durable there, so `useCloudLinkGrace` holds the pill at the
+    // quiet neutral `syncing` reading for `CLOUD_LINK_GRACE_MS` before it may
+    // say "Reconnecting…".
+    it("renders the quiet syncing indicator for 14_999ms, then amber Reconnecting at 15_000, with a silent aria-live region throughout the grace", () => {
+      vi.useFakeTimers();
+      mocks.hostTransportStatus = "open";
+      renderPill("reconnecting");
+
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+      ).toBe("syncing");
+      expect(screen.queryByText("Reconnecting…")).toBeNull();
+      expect(
+        screen.getByTestId("epic-connection-pill").className,
+      ).not.toContain("bg-amber-500/10");
+      expect(screen.getByRole("status").textContent).toBe("");
+
+      act(() => {
+        vi.advanceTimersByTime(14_999);
+      });
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+      ).toBe("syncing");
+      expect(screen.queryByText("Reconnecting…")).toBeNull();
+      expect(screen.getByRole("status").textContent).toBe("");
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+      ).toBe("reconnecting");
+      expect(screen.getByText("Reconnecting…")).not.toBeNull();
+      expect(screen.getByTestId("epic-connection-pill").className).toContain(
+        "bg-amber-500/10",
+      );
+    });
+  });
+
+  it("renders the offline state as a red pill with disconnect tooltip text", async () => {
+    renderPill("offline");
+
+    expect(screen.getByText("Offline")).not.toBeNull();
+    expect(screen.getByTestId("epic-connection-pill").className).toContain(
+      "bg-red-500/10",
+    );
+    expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
+      "bg-red-500",
+    );
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+    ).toBe("offline");
+    await expectTooltip(OFFLINE_COPY);
+  });
+
+  // `offline` is the ONE state where an unsent edit exists only in this
+  // window's memory, so it is the one state that must not promise the edit is
+  // safe. Both surfaces are pinned: the tooltip a sighted user hovers and the
+  // aria-label a screen-reader user hears.
+  it("offline promises nothing about durability in either the tooltip or the aria-label", async () => {
+    renderPill("offline");
+
+    const label = screen
+      .getByTestId("epic-connection-pill")
+      .getAttribute("aria-label");
+    expect(label).toBe(`Offline. ${OFFLINE_COPY}`);
+    expect(label).not.toContain("will sync");
+    await expectTooltip(OFFLINE_COPY);
+  });
+
+  it("keeps normal renderer-to-host saving quiet and makes no synced claim", () => {
+    renderPill("syncing");
+
+    expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
+    expect(pillClaimsSynced()).toBe(false);
+    expect(screen.getByTestId("epic-connection-pill").innerHTML).not.toContain(
+      "status-ping",
+    );
+    expect(screen.getByTestId("epic-connection-pill").innerHTML).not.toContain(
+      "bg-emerald-500",
+    );
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+    ).toBe("syncing");
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("aria-label"),
+    ).toBe("Saving changes");
+  });
+
+  it("keeps ordinary host-pending churn quiet indefinitely", () => {
+    renderPill("hostPending");
+    expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+    ).toBe("hostPending");
+  });
+
+  it("moves active chat backup into the top-right dot tooltip", async () => {
+    mocks.chatBackupStatus = {
+      severity: "activity",
+      tooltip: "Backing up chats",
+      ariaLabel: "Backing up chats",
+    };
+    renderPill("synced");
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.textContent).toBe("");
+    expect(pill.getAttribute("aria-label")).toBe("Backing up chats");
+    await expectTooltip("Backing up chats");
+  });
+
+  it("turns the dot amber when chat backup is failing", async () => {
+    mocks.chatBackupStatus = {
+      severity: "warning",
+      tooltip: "Chat backup failing · 1 chat not backed up",
+      ariaLabel: "Chat backup failing · 1 chat not backed up",
+    };
+    renderPill("syncing");
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("chat-backup");
+    expect(pill.textContent).toBe("");
+    expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
+      "bg-amber-500",
+    );
+    expect(screen.getByRole("status").textContent).toBe(
+      "Chat backup failing · 1 chat not backed up",
+    );
+    await expectTooltip("Chat backup failing · 1 chat not backed up");
+  });
+
+  it("turns amber for sustained remote-terminal catalog degradation without flashing during the local-first frame", () => {
+    vi.useFakeTimers();
+    mocks.terminalCoverage = "partial-serving-host";
+    renderPill("hostPending");
+
+    expect(screen.getByRole<HTMLButtonElement>("button").dataset.source).toBe(
+      "artifact",
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(749);
+    });
+    expect(screen.getByRole<HTMLButtonElement>("button").dataset.source).toBe(
+      "artifact",
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("terminal-catalog");
+    // Dot-only, like the other read-only degradations: the sentence is on
+    // hover and in the accessible name, never a permanent label in the row.
+    expect(pill.textContent).toBe("");
+    expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
+      "bg-amber-500",
+    );
+    expect(pill.className).not.toContain("bg-amber-500/10");
+    expect(pill.getAttribute("aria-label")).toBe(
+      "Remote terminal discovery is unavailable. Showing terminals from this host only. It will recover automatically.",
+    );
+    expect(screen.getByRole("status").textContent).toBe(
+      "Remote terminal discovery is unavailable. Showing terminals from this host only. It will recover automatically.",
+    );
+  });
+
+  it("shows one plane's copy and lists every other degraded plane on hover", async () => {
+    // Two warnings at once: the catalog gap (earlier source, so it wins the
+    // tie) and degraded presence, which carries a label of its own. The row
+    // must not concatenate them - one light, the selected plane's copy only -
+    // while the hover and the accessible name carry both, selected first, so
+    // the second outage is not hidden behind the first.
+    vi.useFakeTimers();
+    mocks.terminalCoverage = "partial-serving-host";
+    mocks.presenceDegraded = "cloud-down";
+    renderPill("hostPending");
+    act(() => {
+      vi.advanceTimersByTime(750);
+    });
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("terminal-catalog");
+    expect(pill.textContent).toBe("");
+    const catalogCopy =
+      "Remote terminal discovery is unavailable. Showing terminals from this host only. It will recover automatically.";
+    const presenceCopy =
+      "This device can’t reach the cloud right now, so agents on other devices may show as idle. Agents on this device are live.";
+    expect(pill.getAttribute("aria-label")).toBe(
+      `${catalogCopy} ${presenceCopy}`,
+    );
+    expect(screen.getByRole("status").textContent).toBe(
+      `${catalogCopy} ${presenceCopy}`,
+    );
+    vi.useRealTimers();
+    expect(await tooltipLines()).toEqual([catalogCopy, presenceCopy]);
+  });
+
+  it("does not list a merely busy plane beside a degraded one on hover", async () => {
+    // "Backing up chats" is activity, not an outage: when the graph feed is
+    // the one degraded plane, the hover stays a single sentence.
+    mocks.chatBackupStatus = {
+      severity: "activity",
+      tooltip: "Backing up chats",
+      ariaLabel: "Backing up chats",
+    };
+    mocks.commGraphFeedHealth = {
+      severity: "warning",
+      tooltip: "Communication graph feed: reconnecting…",
+      ariaLabel: "Communication graph feed: reconnecting…",
+    };
+    renderPill("synced");
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("comm-graph");
+    expect(pill.getAttribute("aria-label")).toBe(
+      "Communication graph feed: reconnecting…",
+    );
+    await expectTooltip("Communication graph feed: reconnecting…");
+  });
+
+  it("does not report a fleet outage for a local-only RC host", () => {
+    vi.useFakeTimers();
+    mocks.terminalCoverage = "partial-serving-host";
+    mocks.terminalCapability = {
+      status: "capable",
+      schemaVersion: { major: 1, minor: 0 },
+    };
+    renderPill("hostPending");
+
+    act(() => {
+      vi.advanceTimersByTime(750);
+    });
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("artifact");
+    expect(pill.textContent).not.toContain("Remote terminals unavailable");
+  });
+
+  it("shows the highest severity across artifact sync and chat backup", async () => {
+    mocks.chatBackupStatus = {
+      severity: "warning",
+      tooltip: "Chat backup failing · 1 chat not backed up",
+      ariaLabel: "Chat backup failing · 1 chat not backed up",
+    };
+    renderPill("offline");
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("artifact");
+    expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
+      "bg-red-500",
+    );
+    // The row shows the winner alone; the loser is not dropped, it follows
+    // on hover.
+    expect(await tooltipLines()).toEqual([
+      OFFLINE_COPY,
+      "Chat backup failing · 1 chat not backed up",
+    ]);
+  });
+
+  it("keeps artifact status when warning severities tie", async () => {
+    mocks.chatBackupStatus = {
+      severity: "warning",
+      tooltip: "Chat backup failing · 1 chat not backed up",
+      ariaLabel: "Chat backup failing · 1 chat not backed up",
+    };
+    mocks.hostTransportStatus = "connecting";
+    renderPill("connecting");
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("artifact");
+    expect(pill.textContent).toContain("Connecting…");
+    expect(await tooltipLines()).toEqual([
+      "Connecting to server",
+      "Chat backup failing · 1 chat not backed up",
+    ]);
+  });
+
+  const COMM_GRAPH_HEALTH: CommGraphFeedHealth = {
+    severity: "warning",
+    tooltip: "Communication graph feed: reconnecting…",
+    ariaLabel: "Communication graph feed: reconnecting…",
+  };
+
+  it("shows the comm-graph feed health as a quiet amber dot when nothing else is degraded", async () => {
+    mocks.commGraphFeedHealth = COMM_GRAPH_HEALTH;
+    renderPill("synced");
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("comm-graph");
+    expect(pill.getAttribute("aria-label")).toBe(COMM_GRAPH_HEALTH.tooltip);
+    expect(pill.innerHTML).toContain("bg-amber-500");
+    expect(pill.textContent).toBe("");
+    await expectTooltip(COMM_GRAPH_HEALTH.tooltip);
+  });
+
+  it("keeps the artifact indicator when it is danger and the comm-graph feed is only a warning", () => {
+    mocks.commGraphFeedHealth = COMM_GRAPH_HEALTH;
+    renderPill("offline");
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("artifact");
+  });
+
+  it("keeps chat backup when it ties with the comm-graph feed - the earlier source wins", () => {
+    mocks.chatBackupStatus = {
+      severity: "warning",
+      tooltip: "Chat backup failing · 1 chat not backed up",
+      ariaLabel: "Chat backup failing · 1 chat not backed up",
+    };
+    mocks.commGraphFeedHealth = COMM_GRAPH_HEALTH;
+    renderPill("syncing");
+
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("chat-backup");
+  });
+
+  it("shows the unsafe overlap warning immediately, with no cloud-only grace", async () => {
+    // `offlineWithUnsavedChanges` derives with the GUI↔host transport open,
+    // but an open transport is not host ACKNOWLEDGEMENT: this is the
+    // deriver's divergence arm, so the work is renderer-only and the copy
+    // below ("Keep this window open") is the only thing telling the user the
+    // edit dies with the window. It is excluded from the cloud-link grace for
+    // exactly that reason, so it must read amber on the first frame.
+    vi.useFakeTimers();
+    renderPill("offlineWithUnsavedChanges");
+
+    expect(screen.getByText("Offline — saving changes…")).not.toBeNull();
+    vi.useRealTimers();
+
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+    ).toBe("offlineWithUnsavedChanges");
+    expect(screen.getByTestId("epic-connection-pill").className).toContain(
+      "bg-amber-500/10",
+    );
+    const offlineWithUnsavedChangesLabel = screen
+      .getByTestId("epic-connection-pill")
+      .getAttribute("aria-label");
+    expect(offlineWithUnsavedChangesLabel).toBe(
+      "Offline — saving changes… Offline. Some recent changes are still being saved. Keep this window open.",
+    );
+    expect(offlineWithUnsavedChangesLabel).not.toMatch(
+      /\bcloud\b|\blocally\b|this device/i,
+    );
+    await expectTooltip(OFFLINE_UNSAVED_TOOLTIP);
+    expect(OFFLINE_UNSAVED_TOOLTIP).not.toMatch(
+      /\bcloud\b|\blocally\b|this device/i,
+    );
+    expect(screen.getByRole("status").textContent).toContain(
+      "Some recent changes are still being saved",
+    );
+    expect(
+      screen
+        .getByTestId("epic-connection-pill")
+        .contains(screen.getByRole("status")),
+    ).toBe(false);
+  });
+
+  it("shows host-pending offline work immediately, without claiming it is durable", async () => {
+    // Cloud-down, but never quieted: the aria-label and tooltip below say
+    // "keep that host running", an instruction about the SERVING HOST. The
+    // host has acked this replica's work, so the window is not its last
+    // holder - but the host's own durable flush is unknown, and a 15s quiet
+    // window is exactly when a shutdown would interrupt it.
+    vi.useFakeTimers();
+    renderPill("offlineWithHostPending");
+    vi.useRealTimers();
+
+    expect(screen.getByText("Offline — changes pending")).not.toBeNull();
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+    ).toBe("offlineWithHostPending");
+    expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
+      "bg-amber-500",
+    );
+    expect(screen.getByTestId("epic-connection-pill-dot").textContent).toBe("");
+    const offlineWithHostPendingLabel = screen
+      .getByTestId("epic-connection-pill")
+      .getAttribute("aria-label");
+    expect(offlineWithHostPendingLabel).toBe(
+      "Offline — changes pending. Offline. Pending changes are still being processed on the host serving this task; keep that host running.",
+    );
+    expect(offlineWithHostPendingLabel).not.toMatch(
+      /\bcloud\b|\blocally\b|this device/i,
+    );
+    const offlineWithHostPendingTooltip =
+      "Offline. Pending changes are still being processed on the host serving this task; keep that host running.";
+    await expectTooltip(offlineWithHostPendingTooltip);
+    expect(offlineWithHostPendingTooltip).not.toMatch(
+      /\bcloud\b|\blocally\b|this device/i,
+    );
+    expect(screen.getByRole("status").textContent).toContain(
+      "still being processed",
+    );
+  });
+
+  it("keeps every unprotected string prospective — the state is reached with nothing typed", async () => {
+    // `unprotected` derives on protection alone - `epic-sync-pill-state.ts`
+    // consults no dirty bit for it - so a freshly opened task with nothing
+    // typed can be in this state. All three strings must stay prospective
+    // ("anything you edit") rather than claim edits already exist ("recent
+    // changes", "changes not saved", "changes are"): that shape is a false
+    // data-loss alarm about work that was never done. The
+    // tooltip drifted prospective while the aria-label still claimed
+    // existing edits; this pins all three so it cannot slip again.
+    vi.useFakeTimers();
+    renderPill("unprotected");
+    vi.useRealTimers();
+
+    expect(
+      screen.getByText("Offline — new edits not backed up"),
+    ).not.toBeNull();
+
+    const unprotectedLabel = screen
+      .getByTestId("epic-connection-pill")
+      .getAttribute("aria-label");
+    expect(unprotectedLabel).toBe(
+      "Offline — new edits not backed up. Offline. Anything you edit now is not backed up and exists only in this window; it is lost if the window closes.",
+    );
+
+    const unprotectedTooltip =
+      "Offline. Anything you edit now is not backed up and exists only in this window. Reconnect, or copy anything you cannot lose.";
+    await expectTooltip(unprotectedTooltip);
+
+    expect(unprotectedLabel).not.toContain("Recent changes");
+    expect(unprotectedLabel).not.toContain("changes not saved");
+    expect(unprotectedLabel).not.toContain("changes are");
+    expect(unprotectedTooltip).not.toContain("Recent changes");
+    expect(unprotectedTooltip).not.toContain("changes not saved");
+    expect(unprotectedTooltip).not.toContain("changes are");
+    expect("Offline — new edits not backed up").not.toContain("Recent changes");
+    expect("Offline — new edits not backed up").not.toContain(
+      "changes not saved",
+    );
+    expect("Offline — new edits not backed up").not.toContain("changes are");
+  });
+
+  it("preserves keyboard focus when a quiet save becomes an offline warning", () => {
+    const { rerender } = renderPill("syncing");
+    const before = screen.getByTestId("epic-connection-pill");
+    before.focus();
+
+    mocks.useEpicSyncPillState.mockReturnValue("offlineWithUnsavedChanges");
+    rerender(pillTree());
+
+    const after = screen.getByTestId("epic-connection-pill");
+    expect(after).toBe(before);
+    expect(document.activeElement).toBe(after);
+  });
+
+  it("renders neutral Connected without a synced or durability assertion", () => {
+    renderPill("connected");
+
+    expect(screen.getByText("Connected")).not.toBeNull();
+    expect(pillClaimsSynced()).toBe(false);
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("aria-label"),
+    ).not.toBe("Offline — changes saved");
+    expect(screen.getByTestId("epic-connection-pill").innerHTML).not.toContain(
+      "status-ping",
+    );
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+    ).toBe("connected");
+  });
+
+  it("renders offlineChangesSavedLocally with its label, tooltip, and no spinner", async () => {
+    // Cloud-only outage: held back for the grace before it may read amber.
+    vi.useFakeTimers();
+    renderPill("offlineChangesSavedLocally");
+    expect(screen.queryByText("Offline — changes saved")).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+    vi.useRealTimers();
+
+    expect(screen.getByText("Offline — changes saved")).not.toBeNull();
+    // The spinner (AgentSpinningDots) writes a braille glyph into the dot's
+    // textContent via layout effect; the plain-dot fallback renders no
+    // children at all. An empty dot is the behavioral signal that no
+    // spinner mounted, matching `showAgentSpinner: false` for this state.
+    expect(screen.getByTestId("epic-connection-pill-dot").textContent).toBe("");
+    // ...and the plain-dot branch is the one that rendered: it is the only
+    // branch that puts the state's own dot colour on a `rounded-full` span.
+    expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
+      "rounded-full",
+    );
+    expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
+      "bg-amber-500",
+    );
+    expect(
+      screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+    ).toBe("offlineChangesSavedLocally");
+    const offlineChangesSavedLocallyLabel = screen
+      .getByTestId("epic-connection-pill")
+      .getAttribute("aria-label");
+    expect(offlineChangesSavedLocallyLabel).toBe(
+      "Offline — changes saved. Offline. Your changes are saved and sync when the connection is back.",
+    );
+    expect(offlineChangesSavedLocallyLabel).not.toMatch(
+      /\bcloud\b|\blocally\b|this device/i,
+    );
+    const offlineChangesSavedLocallyTooltip =
+      "Offline. Your changes are saved and sync when the connection is back.";
+    await expectTooltip(offlineChangesSavedLocallyTooltip);
+    expect(offlineChangesSavedLocallyTooltip).not.toMatch(
+      /\bcloud\b|\blocally\b|this device/i,
+    );
+  });
+
+  describe("settle behavior (750ms hold before claiming synced)", () => {
+    it("settles the synced visuals while exposing the raw accessible verdict", () => {
+      vi.useFakeTimers();
+      renderPill("synced");
+
+      expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
+      expect(pillClaimsSynced()).toBe(true);
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+      ).toBe("syncing");
+
+      act(() => {
+        vi.advanceTimersByTime(750);
+      });
+      expect(pillClaimsSynced()).toBe(true);
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+      ).toBe("synced");
+    });
+
+    it("flips syncing -> synced only after holding for 750ms, staying quiet in between", () => {
+      vi.useFakeTimers();
+      const { rerender } = renderPill("syncing");
+      expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
+
+      mocks.useEpicSyncPillState.mockReturnValue("synced");
+      rerender(pillTree());
+
+      expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
+      expect(pillClaimsSynced()).toBe(true);
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+      ).toBe("syncing");
+
+      act(() => {
+        vi.advanceTimersByTime(750);
+      });
+
+      expect(pillClaimsSynced()).toBe(true);
+    });
+
+    it("never renders synced visuals for a synced window shorter than the settle delay", () => {
+      vi.useFakeTimers();
+      const { rerender } = renderPill("syncing");
+
+      mocks.useEpicSyncPillState.mockReturnValue("synced");
+      rerender(pillTree());
+
+      act(() => {
+        vi.advanceTimersByTime(300);
+      });
+      expect(pillClaimsSynced()).toBe(true);
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
+      ).toBe("syncing");
+
+      mocks.useEpicSyncPillState.mockReturnValue("syncing");
+      rerender(pillTree());
+      expect(pillClaimsSynced()).toBe(false);
+      expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
+
+      // The abandoned settle timer from the earlier synced window must not
+      // fire later and flash the stale claim.
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(pillClaimsSynced()).toBe(false);
+    });
+
+    it("exposes the truthful synced tooltip during the visual settle hold", () => {
+      vi.useFakeTimers();
+      const { rerender } = renderPill("syncing");
+
+      mocks.useEpicSyncPillState.mockReturnValue("synced");
+      rerender(pillTree());
+
+      expect(screen.getByTestId("epic-connection-pill").textContent).toBe("");
+      fireEvent.focus(screen.getByTestId("epic-connection-pill"));
+      expect(screen.queryByRole("tooltip")?.textContent).toBe(
+        "All changes synced",
+      );
+
+      // ...and once the hold expires the pill catches up to the verdict.
+      act(() => {
+        vi.advanceTimersByTime(750);
+      });
+      expect(pillClaimsSynced()).toBe(true);
+    });
+
+    it.each<EpicSyncPillState>([
+      "syncing",
+      "hostPending",
+      "offlineWithUnsavedChanges",
+      "offlineWithHostPending",
+      "connected",
+      "offline",
+      "offlineChangesSavedLocally",
+    ])(
+      "one-directional guard: from a displayed synced, a derived %s shows immediately with no timer advance at all",
+      (nextState) => {
+        vi.useFakeTimers();
+        // This test pins the SETTLE guard, not the cloud-only grace: a
+        // cloud-down reading of the offline* states would otherwise hold
+        // them back as `syncing` for 15s and contradict "no timer advance at
+        // all". Take the host-link-down reading throughout so
+        // `useCloudLinkGrace` never applies.
+        mocks.hostTransportStatus = "reconnecting";
+        const { rerender } = renderPill("synced");
+        act(() => {
+          vi.advanceTimersByTime(750);
+        });
+        expect(pillClaimsSynced()).toBe(true);
+
+        mocks.useEpicSyncPillState.mockReturnValue(nextState);
+        rerender(pillTree());
+
+        expect(pillClaimsSynced()).toBe(false);
+        expect(
+          screen
+            .getByTestId("epic-connection-pill")
+            .getAttribute("data-status"),
+        ).toBe(nextState);
+      },
+    );
+  });
+
+  describe("agent-activity presence degraded", () => {
+    const PRESENCE_DEGRADED_ARIA =
+      "Live agent activity is unavailable. Agent status may be stale or unknown until it reconnects.";
+    const CLOUD_DOWN_ARIA =
+      "This device can’t reach the cloud right now, so agents on other devices may show as idle. Agents on this device are live.";
+
+    it("shows the amber agent-activity warning over a synced artifact state", () => {
+      vi.useFakeTimers();
+      mocks.presenceDegraded = "stream-down";
+      renderPill("synced");
+
+      act(() => {
+        vi.advanceTimersByTime(750);
+      });
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.textContent).toContain("Agent status may be stale");
+      expect(pill.dataset.source).toBe("agent-activity");
+      expect(pill.className).toContain("bg-amber-500/10");
+      expect(
+        screen.getByTestId("epic-connection-pill-dot").className,
+      ).toContain("bg-amber-500");
+      expect(screen.getByRole("status").textContent).toContain(
+        PRESENCE_DEGRADED_ARIA,
+      );
+    });
+
+    it("loses to an artifact-sync warning like reconnecting", () => {
+      mocks.presenceDegraded = "stream-down";
+      // Host-link-down reading, so no cloud grace holds the artifact leg back.
+      mocks.hostTransportStatus = "reconnecting";
+      renderPill("reconnecting");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("artifact");
+      expect(screen.getByText("Reconnecting…")).not.toBeNull();
+    });
+
+    it("loses to a chat-backup warning", () => {
+      mocks.presenceDegraded = "stream-down";
+      mocks.chatBackupStatus = {
+        severity: "warning",
+        tooltip: "Chat backup failing · 1 chat not backed up",
+        ariaLabel: "Chat backup failing · 1 chat not backed up",
+      };
+      renderPill("synced");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("chat-backup");
+    });
+
+    it("surfaces the presence-degraded message through the tooltip", async () => {
+      mocks.presenceDegraded = "stream-down";
+      renderPill("synced");
+
+      await expectTooltip(PRESENCE_DEGRADED_ARIA);
+    });
+
+    it("shows the cloud-down amber warning over a synced artifact state", () => {
+      vi.useFakeTimers();
+      mocks.presenceDegraded = "cloud-down";
+      renderPill("synced");
+
+      act(() => {
+        vi.advanceTimersByTime(750);
+      });
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.textContent).toContain("Remote agent status unavailable");
+      expect(pill.dataset.source).toBe("agent-activity");
+      expect(pill.className).toContain("bg-amber-500/10");
+      expect(
+        screen.getByTestId("epic-connection-pill-dot").className,
+      ).toContain("bg-amber-500");
+      expect(screen.getByRole("status").textContent).toContain(CLOUD_DOWN_ARIA);
+    });
+
+    it("surfaces the cloud-down message through the tooltip", async () => {
+      mocks.presenceDegraded = "cloud-down";
+      renderPill("synced");
+
+      await expectTooltip(CLOUD_DOWN_ARIA);
+    });
+  });
+
+  describe("write-command alert (input v)", () => {
+    const REJECTED_MESSAGE =
+      "A recent change was refused and has not been applied. Make it again to retry.";
+    const SUPERSEDED_MESSAGE =
+      "A newer change from another device replaced a recent change of yours. Make it again if you still want it.";
+    const OUTCOME_UNKNOWN_MESSAGE =
+      "A recent change was sent but its result is unknown, so it may not have been applied. It settles on its own once the server confirms.";
+
+    it("a rejected write is visible while the artifact leg reads synced", async () => {
+      mocks.writeCommandAlert = "rejected";
+      renderPill("synced");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pillClaimsSynced()).toBe(false);
+      expect(pill.dataset.source).toBe("write-command");
+      expect(screen.getByText("Change not saved")).not.toBeNull();
+      expect(pill.className).toContain("bg-red-500/10");
+      expect(
+        screen.getByTestId("epic-connection-pill-dot").className,
+      ).toContain("bg-red-500");
+      expect(pill.getAttribute("aria-label")).toBe(
+        `Change not saved. ${REJECTED_MESSAGE}`,
+      );
+      // Load-bearing: `warningAnnouncement` used to test `severity ===
+      // "warning"` exactly, so a `danger` non-artifact plane beside a healthy
+      // link announced nothing at all.
+      expect(screen.getByRole("status").textContent).toBe(REJECTED_MESSAGE);
+      await expectTooltip(REJECTED_MESSAGE);
+    });
+
+    it("a superseded write is visible (amber/warning) while the artifact leg reads synced", async () => {
+      mocks.writeCommandAlert = "superseded";
+      renderPill("synced");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pillClaimsSynced()).toBe(false);
+      expect(pill.dataset.source).toBe("write-command");
+      expect(screen.getByText("Change replaced")).not.toBeNull();
+      expect(pill.className).toContain("bg-amber-500/10");
+      expect(
+        screen.getByTestId("epic-connection-pill-dot").className,
+      ).toContain("bg-amber-500");
+      expect(pill.getAttribute("aria-label")).toBe(
+        `Change replaced. ${SUPERSEDED_MESSAGE}`,
+      );
+      expect(screen.getByRole("status").textContent).toBe(SUPERSEDED_MESSAGE);
+      await expectTooltip(SUPERSEDED_MESSAGE);
+    });
+
+    it("an outcomeUnknown write outranks a busy artifact syncing state and takes the light", async () => {
+      mocks.writeCommandAlert = "outcomeUnknown";
+      renderPill("syncing");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("write-command");
+      expect(screen.getByText("Change may not be saved")).not.toBeNull();
+      expect(pill.className).toContain("bg-amber-500/10");
+      expect(pill.getAttribute("aria-label")).toBe(
+        `Change may not be saved. ${OUTCOME_UNKNOWN_MESSAGE}`,
+      );
+      expect(screen.getByRole("status").textContent).toBe(
+        OUTCOME_UNKNOWN_MESSAGE,
+      );
+      await expectTooltip(OUTCOME_UNKNOWN_MESSAGE);
+    });
+
+    // "A second outage is never hidden behind the first": the artifact leg's
+    // own danger (a down link) wins the light on source order, but the
+    // rejected write must still ride `alsoDegraded` into the tooltip and the
+    // aria-label rather than disappearing behind the link outage.
+    it("a rejected write is not hidden behind a down link - both ride the tooltip and aria-label", async () => {
+      mocks.writeCommandAlert = "rejected";
+      renderPill("offline");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("artifact");
+      expect(screen.getByText("Offline")).not.toBeNull();
+      expect(pill.getAttribute("aria-label")).toBe(
+        `Offline. ${OFFLINE_COPY} ${REJECTED_MESSAGE}`,
+      );
+      expect(screen.getByRole("status").textContent).toBe(
+        `${OFFLINE_COPY} ${REJECTED_MESSAGE}`,
+      );
+      expect(await tooltipLines()).toEqual([OFFLINE_COPY, REJECTED_MESSAGE]);
+    });
+
+    it("a null alert changes nothing - the existing single-plane synced case still reads exactly as it did", () => {
+      mocks.writeCommandAlert = null;
+      renderPill("synced");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("artifact");
+      expect(pillClaimsSynced()).toBe(true);
+    });
+
+    it("a null alert changes nothing - the existing single-plane offline case still reads exactly as it did", () => {
+      mocks.writeCommandAlert = null;
+      renderPill("offline");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("artifact");
+      expect(pill.getAttribute("aria-label")).toBe(`Offline. ${OFFLINE_COPY}`);
+    });
+  });
+
+  describe("durability plane", () => {
+    it("selects a warning durability plane over a synced artifact leg, dot-only with its sentence as the tooltip and aria-label", async () => {
+      const sentence =
+        "Offline — sync paused · New edits only in this window until synced";
+      mocks.durability = { severity: "warning", sentence };
+      renderPill("synced");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("durability");
+      // Dot-only: the routing truth used to be its own labelled pill, and now
+      // rides the hover and the accessible name instead of the visible copy.
+      expect(pill.textContent).toBe("");
+      expect(pill.getAttribute("aria-label")).toBe(sentence);
+      await expectTooltip(sentence);
+    });
+
+    it("outranks a warning chat-backup plane when durability reads danger", () => {
+      mocks.durability = {
+        severity: "danger",
+        sentence: "Sync blocked — access revoked",
+      };
+      mocks.chatBackupStatus = {
+        severity: "warning",
+        tooltip: "Chat backup failing · 1 chat not backed up",
+        ariaLabel: "Chat backup failing · 1 chat not backed up",
+      };
+      renderPill("synced");
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("durability");
+      expect(
+        screen.getByTestId("epic-connection-pill-dot").className,
+      ).toContain("bg-red-500");
+    });
+
+    it("loses the tie to an offlineChangesSavedLocally artifact leg and rides the tooltip as a second entry", async () => {
+      // `offlineChangesSavedLocally` is itself a warning, so it ties the
+      // durability plane's severity - and the artifact leg keeps the light on
+      // a tie. It is also a cloud-link-down state, so it is held at the quiet
+      // neutral reading until `CLOUD_LINK_GRACE_MS` passes.
+      vi.useFakeTimers();
+      const sentence =
+        "Offline — sync paused · New edits only in this window until synced";
+      mocks.durability = { severity: "warning", sentence };
+      renderPill("offlineChangesSavedLocally");
+
+      act(() => {
+        vi.advanceTimersByTime(15_000);
+      });
+      vi.useRealTimers();
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("artifact");
+      expect(await tooltipLines()).toEqual([
+        "Offline. Your changes are saved and sync when the connection is back.",
+        sentence,
+      ]);
+    });
+
+    it("leaves the LIGHT with the artifact leg when the durability plane is merely steady, and still says the plane's sentence", async () => {
+      // A steady plane never takes the light or the label - that part is
+      // unchanged. What it does NOT do any more is disappear: the plane
+      // decides for itself whether it has anything to say, so a sentence that
+      // reached this far rides the hover and the accessible name however calm
+      // it is. Dropping it is what left a mirror-first cloud epic's "Local
+      // copy · never synced" invisible behind `connected`.
+      vi.useFakeTimers();
+      mocks.durability = { severity: "steady", sentence: "Not synced yet" };
+      renderPill("synced");
+
+      act(() => {
+        vi.advanceTimersByTime(750);
+      });
+      vi.useRealTimers();
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("artifact");
+      expect(pill.getAttribute("aria-label")).toBe(
+        "All changes synced Not synced yet",
+      );
+      expect(await tooltipLines()).toEqual([
+        "All changes synced",
+        "Not synced yet",
+      ]);
+    });
+
+    it("selects an activity durability plane over a synced artifact leg, with the idle pulse and no amber/red dot class", () => {
+      vi.useFakeTimers();
+      mocks.durability = {
+        severity: "activity",
+        sentence: "Checking for updates",
+      };
+      renderPill("synced");
+
+      // Settle past the 750ms hold so the artifact leg's own severity drops
+      // from the transitional `syncing` reading (itself "activity", which
+      // would tie) down to its true steady `synced` reading.
+      act(() => {
+        vi.advanceTimersByTime(750);
+      });
+
+      const pill = screen.getByRole<HTMLButtonElement>("button");
+      expect(pill.dataset.source).toBe("durability");
+      expect(pill.textContent).toBe("");
+      expect(pill.innerHTML).toContain("bg-muted-foreground/50");
+      expect(pill.innerHTML).not.toContain("bg-amber-500");
+      expect(pill.innerHTML).not.toContain("bg-red-500");
+    });
+  });
+});
+
+describe("artifact sync in the connection pill", () => {
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    mocks.artifactSyncReading = null;
+    mocks.writeCommandAlert = null;
+    vi.clearAllMocks();
+  });
+
+  it("announces a stopped warning as a dot whose name is the sentence", async () => {
+    vi.useFakeTimers();
+    mocks.artifactSyncReading = {
+      rooms: "stopped",
+      waitingNewArtifacts: 0,
+      pillState: "hostPending",
+    };
+    renderPill("hostPending");
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+    const sentence =
+      "Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet.";
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("artifact-sync");
+    expect(pill.textContent).toBe("");
+    expect(pill.getAttribute("aria-label")).toBe(sentence);
+    expect(screen.getByTestId("epic-connection-pill-dot").className).toContain(
+      "bg-warning",
+    );
+    expect(screen.getByRole("status").textContent).toContain(sentence);
+    vi.useRealTimers();
+    await expectTooltip(sentence);
+  });
+
+  it("renders a retrying warning as the quiet saving dot with the sentence as its name", async () => {
+    vi.useFakeTimers();
+    mocks.artifactSyncReading = {
+      rooms: "retrying",
+      waitingNewArtifacts: 0,
+      pillState: "hostPending",
+    };
+    renderPill("hostPending");
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+    const sentence =
+      "Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet. Retrying on its own.";
+    const pill = screen.getByRole<HTMLButtonElement>("button");
+    expect(pill.dataset.source).toBe("artifact-sync");
+    expect(pill.textContent).toBe("");
+    expect(pill.getAttribute("aria-label")).toBe(sentence);
+    expect(pill.className).toContain("h-5");
+    expect(pill.innerHTML).toContain("bg-muted-foreground/50");
+    expect(pill.innerHTML).not.toContain("bg-warning");
+    vi.useRealTimers();
+    await expectTooltip(sentence);
+  });
+
+  it("keeps a rejected write above the warning", () => {
+    vi.useFakeTimers();
+    mocks.artifactSyncReading = {
+      rooms: "retrying",
+      waitingNewArtifacts: 0,
+      pillState: "hostPending",
+    };
+    mocks.writeCommandAlert = "rejected";
+    renderPill("hostPending");
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+    expect(screen.getByRole<HTMLButtonElement>("button").dataset.source).toBe(
+      "write-command",
+    );
+  });
+
+  it("returns to the synced claim with no recovery flash", () => {
+    vi.useFakeTimers();
+    mocks.artifactSyncReading = {
+      rooms: "retrying",
+      waitingNewArtifacts: 0,
+      pillState: "hostPending",
+    };
+    const { rerender } = renderPill("hostPending");
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+    mocks.artifactSyncReading = {
+      rooms: "current",
+      waitingNewArtifacts: 0,
+      pillState: "hostPending",
+    };
+    rerender(pillTree());
+    expect(screen.getByRole("button").textContent).not.toContain(
+      "Artifacts synced",
+    );
+    mocks.artifactSyncReading = {
+      rooms: "current",
+      waitingNewArtifacts: 0,
+      pillState: "synced",
+    };
+    mocks.useEpicSyncPillState.mockReturnValue("synced");
+    rerender(pillTree());
+    expect(screen.getByRole("button").textContent).not.toContain(
+      "Artifacts synced",
+    );
+    act(() => {
+      vi.advanceTimersByTime(750);
+    });
+    const pill = screen.getByRole("button");
+    expect(pill.textContent).not.toContain("Artifacts synced");
+    expect(pill.getAttribute("aria-label")).toBe("All changes synced");
+  });
+});

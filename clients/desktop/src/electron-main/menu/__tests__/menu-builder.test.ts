@@ -1,0 +1,756 @@
+import { describe, expect, it, vi } from "vitest";
+import type { MenuCommandId } from "../../../ipc-contracts/window-types";
+import type { MenuState } from "../menu-state";
+
+interface CapturedMenuItem {
+  readonly id?: string;
+  readonly label?: string;
+  readonly role?: string;
+  readonly type?: string;
+  readonly accelerator?: string;
+  readonly registerAccelerator?: boolean;
+  readonly enabled?: boolean;
+  readonly submenu?: readonly CapturedMenuItem[];
+  readonly click?: (menuItem: unknown, browserWindow: unknown) => void;
+}
+
+vi.mock("electron", () => ({
+  app: { isPackaged: false },
+  Menu: {
+    buildFromTemplate: (template: readonly CapturedMenuItem[]) => ({
+      template,
+    }),
+  },
+}));
+
+const reloadFocusedPage = vi.hoisted(() => vi.fn());
+
+vi.mock("../reload-focused-page", () => ({ reloadFocusedPage }));
+
+import { buildApplicationMenu } from "../menu-builder";
+import {
+  TRAYCER_DOCUMENTATION_URL,
+  TRAYCER_RELEASE_NOTES_URL,
+} from "../../app/support-links";
+
+function buildState(platform: NodeJS.Platform): MenuState {
+  return {
+    appName: "Traycer",
+    platform,
+    authSession: {
+      status: "signed-in",
+      token: "token",
+      profile: {
+        userId: "test-user",
+        userName: "Test User",
+        email: "test@example.com",
+      },
+    },
+    host: { status: "ready", version: "0.1.0" },
+    windows: [
+      {
+        windowId: "window-a",
+        title: "Main",
+        isFocused: true,
+        isVisible: true,
+      },
+    ],
+    focusedWindowId: "window-a",
+    canCloseTab: true,
+    canCheckForUpdates: true,
+    canOpenDevTools: true,
+    hostUpdateAvailableVersion: null,
+    offerRestartHost: true,
+  };
+}
+
+/**
+ * Flattens every reachable label in the built menu template, recursing into
+ * submenus. Used to assert Restart Host's absence/presence across the WHOLE
+ * tree (macOS app menu, Help menu, and anywhere a future item might move it)
+ * rather than pinning the assertion to one submenu.
+ */
+function collectLabels(items: readonly CapturedMenuItem[]): string[] {
+  const labels: string[] = [];
+  for (const item of items) {
+    if (item.label !== undefined) {
+      labels.push(item.label);
+    }
+    if (item.submenu !== undefined) {
+      labels.push(...collectLabels(item.submenu));
+    }
+  }
+  return labels;
+}
+
+function template(menu: Electron.Menu): readonly CapturedMenuItem[] {
+  const value = Reflect.get(menu, "template");
+  if (!Array.isArray(value)) {
+    throw new Error("captured menu template missing");
+  }
+  return value.filter(isCapturedMenuItem);
+}
+
+function isCapturedMenuItem(value: unknown): value is CapturedMenuItem {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function menuByLabel(
+  items: readonly CapturedMenuItem[],
+  label: string,
+): CapturedMenuItem {
+  const item = items.find((entry) => entry.label === label);
+  if (item === undefined) {
+    throw new Error(`missing menu ${label}`);
+  }
+  return item;
+}
+
+function menuByRole(
+  items: readonly CapturedMenuItem[],
+  role: string,
+): CapturedMenuItem {
+  const item = items.find((entry) => entry.role === role);
+  if (item === undefined) {
+    throw new Error(`missing menu role ${role}`);
+  }
+  return item;
+}
+
+describe("buildApplicationMenu", () => {
+  it("assigns stable ids to every renderer-visible Windows submenu", () => {
+    const items = template(
+      buildApplicationMenu(buildState("win32"), {
+        command: () => undefined,
+        focusWindow: () => undefined,
+        openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
+      }),
+    );
+
+    expect(items.map((item) => item.id)).toEqual([
+      "traycer.top-level-menu.file",
+      "traycer.top-level-menu.edit",
+      "traycer.top-level-menu.view",
+      "traycer.top-level-menu.window",
+      "traycer.top-level-menu.help",
+    ]);
+  });
+
+  it("renders the exact pending host-update version only when one is available", () => {
+    const commands: MenuCommandId[] = [];
+    const state = buildState("darwin");
+    const withUpdate: MenuState = {
+      ...state,
+      hostUpdateAvailableVersion: "2.0.0",
+    };
+    const actions = {
+      command: (command: MenuCommandId) => commands.push(command),
+      focusWindow: () => undefined,
+      openExternal: () => undefined,
+      toggleAppDevTools: () => undefined,
+    };
+    const appMenu =
+      menuByLabel(
+        template(buildApplicationMenu(withUpdate, actions)),
+        "Traycer",
+      ).submenu ?? [];
+
+    const update = menuByLabel(appMenu, "Update to 2.0.0");
+    update.click?.(null, null);
+    expect(commands).toEqual(["host.installUpdate"]);
+
+    const withoutUpdate =
+      menuByLabel(template(buildApplicationMenu(state, actions)), "Traycer")
+        .submenu ?? [];
+    expect(
+      withoutUpdate.some((item) => item.label?.startsWith("Update to ")),
+    ).toBe(false);
+  });
+
+  it("maps macOS app and Help About to the rich details command", () => {
+    const commands: MenuCommandId[] = [];
+    const externalUrls: string[] = [];
+    const items = template(
+      buildApplicationMenu(buildState("darwin"), {
+        command: (command) => {
+          commands.push(command);
+        },
+        focusWindow: () => undefined,
+        openExternal: (url) => {
+          externalUrls.push(url);
+        },
+        toggleAppDevTools: () => undefined,
+      }),
+    );
+
+    const appMenu = menuByLabel(items, "Traycer").submenu ?? [];
+    const appAbout = menuByLabel(appMenu, "About Traycer");
+    const helpMenu = menuByLabel(items, "Help").submenu ?? [];
+    const documentation = menuByLabel(helpMenu, "Documentation");
+    const releaseNotes = menuByLabel(helpMenu, "Release Notes");
+    const helpAbout = menuByLabel(helpMenu, "About Traycer");
+    expect(appAbout.role).toBeUndefined();
+    appAbout.click?.(null, null);
+    documentation.click?.(null, null);
+    releaseNotes.click?.(null, null);
+    helpAbout.click?.(null, null);
+    expect(commands).toEqual(["app.aboutDetails", "app.aboutDetails"]);
+    expect(externalUrls).toEqual([
+      TRAYCER_DOCUMENTATION_URL,
+      TRAYCER_RELEASE_NOTES_URL,
+    ]);
+  });
+
+  it("maps Windows and Linux Help About to the rich details command", () => {
+    for (const platform of ["win32", "linux"] as const) {
+      const commands: MenuCommandId[] = [];
+      const items = template(
+        buildApplicationMenu(buildState(platform), {
+          command: (command) => {
+            commands.push(command);
+          },
+          focusWindow: () => undefined,
+          openExternal: () => undefined,
+          toggleAppDevTools: () => undefined,
+        }),
+      );
+      const helpMenu = menuByLabel(items, "Help").submenu ?? [];
+      const about = menuByLabel(helpMenu, "About Traycer");
+      about.click?.(null, null);
+      expect(commands).toEqual(["app.aboutDetails"]);
+    }
+  });
+
+  it("routes the File menu Epic picker through the renderer command path", () => {
+    const commands: MenuCommandId[] = [];
+    const items = template(
+      buildApplicationMenu(buildState("darwin"), {
+        command: (command) => {
+          commands.push(command);
+        },
+        focusWindow: () => undefined,
+        openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
+      }),
+    );
+    const fileMenu = menuByLabel(items, "File").submenu ?? [];
+    const item = menuByLabel(fileMenu, "Open Epic in New Window...");
+    expect(item.enabled).toBe(true);
+    item.click?.(null, null);
+    expect(commands).toEqual(["epic.openInNewWindow"]);
+  });
+
+  it("enables and dispatches File Close Tab when the state has a closable tab", () => {
+    const commands: MenuCommandId[] = [];
+    const items = template(
+      buildApplicationMenu(buildState("darwin"), {
+        command: (command) => {
+          commands.push(command);
+        },
+        focusWindow: () => undefined,
+        openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
+      }),
+    );
+    const fileMenu = menuByLabel(items, "File").submenu ?? [];
+    const item = menuByLabel(fileMenu, "Close Tab");
+    expect(item.enabled).toBe(true);
+    expect(item.accelerator).toBe("CmdOrCtrl+Shift+W");
+    item.click?.(null, null);
+    expect(commands).toEqual(["epic.closeTab"]);
+  });
+
+  it("leaves undo and redo accelerators with the focused renderer", () => {
+    const actions = {
+      command: () => undefined,
+      focusWindow: () => undefined,
+      openExternal: () => undefined,
+      toggleAppDevTools: () => undefined,
+    };
+    const macEditMenu =
+      menuByLabel(
+        template(buildApplicationMenu(buildState("darwin"), actions)),
+        "Edit",
+      ).submenu ?? [];
+    const macUndo = macEditMenu.find((item) => item.role === "undo");
+    const macRedo = macEditMenu.find((item) => item.role === "redo");
+    expect(macUndo?.accelerator).toBe("");
+    expect(macRedo?.accelerator).toBe("");
+
+    for (const platform of ["win32", "linux"] as const) {
+      const editMenu =
+        menuByLabel(
+          template(buildApplicationMenu(buildState(platform), actions)),
+          "Edit",
+        ).submenu ?? [];
+      expect(
+        editMenu.find((item) => item.role === "undo")?.registerAccelerator,
+      ).toBe(false);
+      expect(
+        editMenu.find((item) => item.role === "redo")?.registerAccelerator,
+      ).toBe(false);
+    }
+  });
+
+  it("omits the obsolete Switch Host file menu item", () => {
+    const items = template(
+      buildApplicationMenu(buildState("darwin"), {
+        command: () => undefined,
+        focusWindow: () => undefined,
+        openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
+      }),
+    );
+    const fileMenu = menuByLabel(items, "File").submenu ?? [];
+
+    expect(fileMenu.some((item) => item.label === "Switch Host...")).toBe(
+      false,
+    );
+  });
+
+  it("lets macOS provide the native View fullscreen item", () => {
+    const items = template(
+      buildApplicationMenu(buildState("darwin"), {
+        command: () => undefined,
+        focusWindow: () => undefined,
+        openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
+      }),
+    );
+    const viewMenu = menuByLabel(items, "View").submenu ?? [];
+
+    expect(
+      viewMenu.filter((item) => item.role === "togglefullscreen"),
+    ).toHaveLength(0);
+    expect(viewMenu.at(-1)?.type).not.toBe("separator");
+  });
+
+  it("keeps the View fullscreen role on Windows and Linux", () => {
+    for (const platform of ["win32", "linux"] as const) {
+      const items = template(
+        buildApplicationMenu(buildState(platform), {
+          command: () => undefined,
+          focusWindow: () => undefined,
+          openExternal: () => undefined,
+          toggleAppDevTools: () => undefined,
+        }),
+      );
+      const viewMenu = menuByLabel(items, "View").submenu ?? [];
+
+      expect(
+        viewMenu.filter((item) => item.role === "togglefullscreen"),
+      ).toHaveLength(1);
+    }
+  });
+
+  it("routes View zoom items through app-specific commands without native accelerators", () => {
+    const commands: MenuCommandId[] = [];
+    const items = template(
+      buildApplicationMenu(buildState("darwin"), {
+        command: (command) => {
+          commands.push(command);
+        },
+        focusWindow: () => undefined,
+        openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
+      }),
+    );
+    const viewMenu = menuByLabel(items, "View").submenu ?? [];
+    const actualSize = menuByLabel(viewMenu, "Actual Size");
+    const zoomIn = menuByLabel(viewMenu, "Zoom In");
+    const zoomOut = menuByLabel(viewMenu, "Zoom Out");
+
+    expect(viewMenu.some((item) => item.role === "resetZoom")).toBe(false);
+    expect(viewMenu.some((item) => item.role === "zoomIn")).toBe(false);
+    expect(viewMenu.some((item) => item.role === "zoomOut")).toBe(false);
+    expect(actualSize.accelerator).toBeUndefined();
+    expect(zoomIn.accelerator).toBeUndefined();
+    expect(zoomOut.accelerator).toBeUndefined();
+
+    actualSize.click?.(null, null);
+    zoomIn.click?.(null, null);
+    zoomOut.click?.(null, null);
+    expect(commands).toEqual(["view.resetZoom", "view.zoomIn", "view.zoomOut"]);
+  });
+
+  it("routes macOS Window actions through app-specific commands", () => {
+    const commands: MenuCommandId[] = [];
+    const items = template(
+      buildApplicationMenu(buildState("darwin"), {
+        command: (command) => {
+          commands.push(command);
+        },
+        focusWindow: () => undefined,
+        openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
+      }),
+    );
+    const fileMenu = menuByLabel(items, "File").submenu ?? [];
+    const windowMenu = menuByLabel(items, "Window").submenu ?? [];
+    const closeTab = menuByLabel(fileMenu, "Close Tab");
+    const minimize = menuByLabel(windowMenu, "Minimize");
+    const zoom = menuByLabel(windowMenu, "Zoom");
+    const closeWindow = menuByLabel(windowMenu, "Close Window");
+
+    expect(fileMenu.some((item) => item.role === "close")).toBe(false);
+    expect(windowMenu.some((item) => item.role === "minimize")).toBe(false);
+    expect(windowMenu.some((item) => item.role === "zoom")).toBe(false);
+    expect(windowMenu.some((item) => item.role === "front")).toBe(false);
+    expect(closeTab.accelerator).toBe("CmdOrCtrl+Shift+W");
+    expect(minimize.accelerator).toBe("CmdOrCtrl+M");
+    expect(closeWindow.accelerator).toBeUndefined();
+    expect(minimize.enabled).toBe(true);
+    expect(zoom.enabled).toBe(true);
+    expect(closeWindow.enabled).toBe(true);
+
+    closeTab.click?.(null, null);
+    minimize.click?.(null, null);
+    zoom.click?.(null, null);
+    closeWindow.click?.(null, null);
+    expect(commands).toEqual([
+      "epic.closeTab",
+      "window.minimizeWindow",
+      "window.zoomWindow",
+      "window.closeWindow",
+    ]);
+  });
+
+  it("keeps macOS window actions enabled without focus when an MRU window exists", () => {
+    const state = {
+      ...buildState("darwin"),
+      focusedWindowId: null,
+      canCloseTab: false,
+      windows: [
+        {
+          windowId: "window-a",
+          title: "Main",
+          isFocused: false,
+          isVisible: false,
+        },
+      ],
+    };
+    const items = template(
+      buildApplicationMenu(state, {
+        command: () => undefined,
+        focusWindow: () => undefined,
+        openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
+      }),
+    );
+    const fileMenu = menuByLabel(items, "File").submenu ?? [];
+    const windowMenu = menuByLabel(items, "Window").submenu ?? [];
+
+    expect(menuByLabel(fileMenu, "Open Epic in New Window...").enabled).toBe(
+      true,
+    );
+    expect(menuByLabel(fileMenu, "Close Tab").enabled).toBe(false);
+    expect(menuByLabel(windowMenu, "Minimize").enabled).toBe(true);
+    expect(menuByLabel(windowMenu, "Zoom").enabled).toBe(true);
+    expect(menuByLabel(windowMenu, "Close Window").enabled).toBe(true);
+  });
+
+  it("disables app-specific macOS Window actions when no windows exist", () => {
+    const state = {
+      ...buildState("darwin"),
+      focusedWindowId: null,
+      windows: [],
+    };
+    const items = template(
+      buildApplicationMenu(state, {
+        command: () => undefined,
+        focusWindow: () => undefined,
+        openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
+      }),
+    );
+    const windowMenu = menuByLabel(items, "Window").submenu ?? [];
+
+    expect(menuByLabel(windowMenu, "Minimize").enabled).toBe(false);
+    expect(menuByLabel(windowMenu, "Zoom").enabled).toBe(false);
+    expect(menuByLabel(windowMenu, "Close Window").enabled).toBe(false);
+  });
+
+  it("forwards Electron's sender window to app-specific command handlers", () => {
+    const senderWindows: unknown[] = [];
+    const senderWindow = { marker: "focused-window" };
+    const items = template(
+      buildApplicationMenu(buildState("darwin"), {
+        command: (_command, browserWindow) => {
+          senderWindows.push(browserWindow);
+        },
+        focusWindow: () => undefined,
+        openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
+      }),
+    );
+    const windowMenu = menuByLabel(items, "Window").submenu ?? [];
+
+    menuByLabel(windowMenu, "Minimize").click?.(null, senderWindow);
+    menuByLabel(windowMenu, "Zoom").click?.(null, senderWindow);
+    menuByLabel(windowMenu, "Close Window").click?.(null, senderWindow);
+
+    expect(senderWindows).toEqual([senderWindow, senderWindow, senderWindow]);
+  });
+
+  it("keeps Windows and Linux native close and quit roles", () => {
+    for (const platform of ["win32", "linux"] as const) {
+      const items = template(
+        buildApplicationMenu(buildState(platform), {
+          command: () => undefined,
+          focusWindow: () => undefined,
+          openExternal: () => undefined,
+          toggleAppDevTools: () => undefined,
+        }),
+      );
+      const fileMenu = menuByLabel(items, "File").submenu ?? [];
+      const windowMenu = menuByLabel(items, "Window").submenu ?? [];
+
+      expect(menuByLabel(fileMenu, "Close Tab").accelerator).toBe(
+        "CmdOrCtrl+Shift+W",
+      );
+      expect(fileMenu.some((item) => item.role === "quit")).toBe(true);
+      expect(fileMenu.some((item) => item.role === "close")).toBe(false);
+      expect(windowMenu.some((item) => item.role === "minimize")).toBe(false);
+      expect(menuByLabel(windowMenu, "Minimize").accelerator).toBe(
+        "CmdOrCtrl+M",
+      );
+      expect(windowMenu.some((item) => item.role === "close")).toBe(true);
+      expect(windowMenu.some((item) => item.label === "Close Window")).toBe(
+        false,
+      );
+    }
+  });
+
+  it("keeps terminal-conflicting accelerator labels visible but unregisters them off macOS", () => {
+    (["win32", "linux"] as const).forEach((platform) => {
+      const items = template(
+        buildApplicationMenu(buildState(platform), {
+          command: () => undefined,
+          focusWindow: () => undefined,
+          openExternal: () => undefined,
+          toggleAppDevTools: () => undefined,
+        }),
+      );
+      const fileMenu = menuByLabel(items, "File").submenu ?? [];
+      const editMenu = menuByLabel(items, "Edit").submenu ?? [];
+      const viewMenu = menuByLabel(items, "View").submenu ?? [];
+      const windowMenu = menuByLabel(items, "Window").submenu ?? [];
+
+      const closeTab = menuByLabel(fileMenu, "Close Tab");
+      const settings = menuByLabel(fileMenu, "Settings...");
+      const find = menuByLabel(editMenu, "Find");
+      const findNext = menuByLabel(editMenu, "Find Next");
+      const findPrevious = menuByLabel(editMenu, "Find Previous");
+      const minimize = menuByLabel(windowMenu, "Minimize");
+
+      expect(closeTab.accelerator).toBe("CmdOrCtrl+Shift+W");
+      expect(settings.accelerator).toBe("CmdOrCtrl+,");
+      expect(find.accelerator).toBe("CommandOrControl+F");
+      expect(findNext.accelerator).toBe("CommandOrControl+G");
+      expect(minimize.accelerator).toBe("CmdOrCtrl+M");
+      expect(closeTab.registerAccelerator).toBe(false);
+      expect(settings.registerAccelerator).toBe(false);
+      expect(find.registerAccelerator).toBe(false);
+      expect(findNext.registerAccelerator).toBe(false);
+      expect(minimize.registerAccelerator).toBe(false);
+      expect(findPrevious.registerAccelerator).toBeUndefined();
+      expect(menuByRole(fileMenu, "quit").registerAccelerator).toBe(false);
+      expect(menuByRole(editMenu, "selectAll").registerAccelerator).toBe(false);
+      const reload = menuByLabel(viewMenu, "Reload");
+      expect(reload.accelerator).toBe("CmdOrCtrl+R");
+      expect(reload.registerAccelerator).toBe(false);
+      expect(menuByRole(windowMenu, "close").registerAccelerator).toBe(false);
+    });
+  });
+
+  it("keeps terminal-conflicting accelerators registered on macOS", () => {
+    const items = template(
+      buildApplicationMenu(buildState("darwin"), {
+        command: () => undefined,
+        focusWindow: () => undefined,
+        openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
+      }),
+    );
+    const appMenu = menuByLabel(items, "Traycer").submenu ?? [];
+    const fileMenu = menuByLabel(items, "File").submenu ?? [];
+    const editMenu = menuByLabel(items, "Edit").submenu ?? [];
+    const viewMenu = menuByLabel(items, "View").submenu ?? [];
+    const windowMenu = menuByLabel(items, "Window").submenu ?? [];
+
+    expect(menuByLabel(appMenu, "Settings...").registerAccelerator).toBe(true);
+    expect(menuByLabel(fileMenu, "Close Tab").registerAccelerator).toBe(true);
+    expect(menuByLabel(editMenu, "Find").registerAccelerator).toBe(true);
+    expect(menuByLabel(editMenu, "Find Next").registerAccelerator).toBe(true);
+    expect(menuByLabel(windowMenu, "Minimize").registerAccelerator).toBe(true);
+    expect(menuByRole(editMenu, "selectAll").registerAccelerator).toBe(true);
+    expect(menuByLabel(viewMenu, "Reload").registerAccelerator).toBe(true);
+  });
+
+  it("routes View Reload and Force Reload to the focused page instead of native roles", () => {
+    reloadFocusedPage.mockClear();
+    const senderWindow = { id: 7 };
+    for (const platform of ["darwin", "win32", "linux"] as const) {
+      const items = template(
+        buildApplicationMenu(buildState(platform), {
+          command: () => undefined,
+          focusWindow: () => undefined,
+          openExternal: () => undefined,
+          toggleAppDevTools: () => undefined,
+        }),
+      );
+      const viewMenu = menuByLabel(items, "View").submenu ?? [];
+      const reload = menuByLabel(viewMenu, "Reload");
+      const forceReload = menuByLabel(viewMenu, "Force Reload");
+
+      expect(viewMenu.some((item) => item.role === "reload")).toBe(false);
+      expect(viewMenu.some((item) => item.role === "forceReload")).toBe(false);
+      expect(reload.accelerator).toBe("CmdOrCtrl+R");
+      expect(forceReload.accelerator).toBe("Shift+CmdOrCtrl+R");
+
+      reloadFocusedPage.mockClear();
+      reload.click?.(null, senderWindow);
+      expect(reloadFocusedPage).toHaveBeenCalledExactlyOnceWith(
+        senderWindow,
+        false,
+      );
+
+      reloadFocusedPage.mockClear();
+      forceReload.click?.(null, senderWindow);
+      expect(reloadFocusedPage).toHaveBeenCalledExactlyOnceWith(
+        senderWindow,
+        true,
+      );
+    }
+  });
+
+  it("disables File Close Tab when no target window tab is closable", () => {
+    const state = { ...buildState("darwin"), canCloseTab: false };
+    const items = template(
+      buildApplicationMenu(state, {
+        command: () => undefined,
+        focusWindow: () => undefined,
+        openExternal: () => undefined,
+        toggleAppDevTools: () => undefined,
+      }),
+    );
+    const fileMenu = menuByLabel(items, "File").submenu ?? [];
+    expect(menuByLabel(fileMenu, "Close Tab").enabled).toBe(false);
+  });
+
+  it("installs an app-only Toggle Developer Tools item instead of the native role", () => {
+    for (const platform of ["darwin", "win32", "linux"] as const) {
+      const commands: MenuCommandId[] = [];
+      const toggled: unknown[] = [];
+      const senderWindow = { id: 3 };
+      const items = template(
+        buildApplicationMenu(
+          { ...buildState(platform), canOpenDevTools: true },
+          {
+            command: (command) => {
+              commands.push(command);
+            },
+            focusWindow: () => undefined,
+            openExternal: () => undefined,
+            toggleAppDevTools: (window) => {
+              toggled.push(window);
+            },
+          },
+        ),
+      );
+      const helpMenu = menuByLabel(items, "Help").submenu ?? [];
+      const devTools = menuByLabel(helpMenu, "Toggle Developer Tools");
+
+      expect(devTools.role).toBeUndefined();
+      expect(helpMenu.some((item) => item.role === "toggleDevTools")).toBe(
+        false,
+      );
+      expect(devTools.accelerator).toBe(
+        platform === "darwin" ? "Alt+Command+I" : "Ctrl+Shift+I",
+      );
+
+      devTools.click?.(null, senderWindow);
+      devTools.click?.(null, undefined);
+
+      expect(toggled).toEqual([senderWindow, undefined]);
+      expect(commands).toEqual([]);
+    }
+  });
+
+  it("omits Toggle Developer Tools entirely when the production policy disables it", () => {
+    for (const platform of ["darwin", "win32", "linux"] as const) {
+      const items = template(
+        buildApplicationMenu(
+          { ...buildState(platform), canOpenDevTools: false },
+          {
+            command: () => undefined,
+            focusWindow: () => undefined,
+            openExternal: () => undefined,
+            toggleAppDevTools: () => undefined,
+          },
+        ),
+      );
+      const helpMenu = menuByLabel(items, "Help").submenu ?? [];
+
+      expect(
+        helpMenu.some((item) => item.label === "Toggle Developer Tools"),
+      ).toBe(false);
+      expect(helpMenu.some((item) => item.role === "toggleDevTools")).toBe(
+        false,
+      );
+    }
+  });
+
+  describe("Restart Host (offerRestartHost)", () => {
+    it("omits Restart Host everywhere in the tree when offerRestartHost is false, on every platform", () => {
+      for (const platform of ["darwin", "win32", "linux"] as const) {
+        const items = template(
+          buildApplicationMenu(
+            { ...buildState(platform), offerRestartHost: false },
+            {
+              command: () => undefined,
+              focusWindow: () => undefined,
+              openExternal: () => undefined,
+              toggleAppDevTools: () => undefined,
+            },
+          ),
+        );
+        expect(collectLabels(items)).not.toContain("Restart Host");
+      }
+    });
+
+    it("shows Restart Host in Help (and the app menu on darwin) when offerRestartHost is true, and dispatches host.restart", () => {
+      for (const platform of ["darwin", "win32", "linux"] as const) {
+        const commands: MenuCommandId[] = [];
+        const items = template(
+          buildApplicationMenu(
+            { ...buildState(platform), offerRestartHost: true },
+            {
+              command: (command) => {
+                commands.push(command);
+              },
+              focusWindow: () => undefined,
+              openExternal: () => undefined,
+              toggleAppDevTools: () => undefined,
+            },
+          ),
+        );
+
+        const helpMenu = menuByLabel(items, "Help").submenu ?? [];
+        const helpRestart = menuByLabel(helpMenu, "Restart Host");
+        helpRestart.click?.(null, null);
+        expect(commands).toEqual(["host.restart"]);
+
+        if (platform === "darwin") {
+          const appMenu = menuByLabel(items, "Traycer").submenu ?? [];
+          expect(appMenu.some((item) => item.label === "Restart Host")).toBe(
+            true,
+          );
+        } else {
+          expect(items.some((item) => item.label === "Traycer")).toBe(false);
+        }
+      }
+    });
+  });
+});

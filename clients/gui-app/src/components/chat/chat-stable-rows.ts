@@ -1,0 +1,346 @@
+import type {
+  BackgroundEventEnding,
+  ChatMessage,
+} from "@/stores/composer/chat-store";
+import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
+
+/**
+ * Structural-sharing state for the chat timeline: the last row array handed
+ * to LegendList plus a lookup from message id to the row object it produced.
+ * Kept separate from the component so row-reference stability is explicit
+ * and unit-testable.
+ */
+export interface StableChatTimelineRowsState {
+  readonly byId: ReadonlyMap<string, ChatMessage>;
+  readonly result: ReadonlyArray<ChatMessage>;
+}
+
+export const EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE: StableChatTimelineRowsState =
+  {
+    byId: new Map(),
+    result: [],
+  };
+
+/** The row keys in order, as the list will see them. */
+export function chatTimelineKeySequence(
+  rows: ReadonlyArray<ChatMessage>,
+): ReadonlyArray<string> {
+  return rows.map((row) => row.id);
+}
+
+/**
+ * Whether `rows` presents a different sequence of row KEYS than `committed` -
+ * a row inserted, removed, or moved, as opposed to a row whose content changed
+ * in place. A streaming reply produces a continuous run of the latter, and
+ * `ChatTimeline` reads this to decide whether that commit needs MVCP's data
+ * channel.
+ *
+ * `committed` must be the sequence the list last actually RENDERED, never one
+ * a render merely computed: React discards renders, and a baseline advanced by
+ * a discarded one makes a real insertion that follows it look like settled
+ * content. `undefined` is a first population, which no reader is positioned
+ * within and so cannot have shifted.
+ */
+export function didChatTimelineKeySequenceChange(
+  committed: ReadonlyArray<string> | undefined,
+  rows: ReadonlyArray<ChatMessage>,
+): boolean {
+  if (committed === undefined || committed.length === 0) return false;
+  if (committed.length !== rows.length) return true;
+  // By INDEX, so a reorder counts even when the set of ids is identical - the
+  // timeline moves rows as well as adding and dropping them.
+  return rows.some((row, index) => committed[index] !== row.id);
+}
+
+/**
+ * Reuses the previous message object reference wherever a message is
+ * unchanged, so `ChatMessage`'s `memo` boundary (and LegendList's own item
+ * diffing) can skip re-rendering rows a given store update didn't touch -
+ * the store rebuilds the `messages` array wholesale on every change, so
+ * without this every row would otherwise see a fresh object identity on
+ * every keystroke of a streaming reply.
+ */
+export function computeStableChatTimelineRows(
+  rows: ReadonlyArray<ChatMessage>,
+  previous: StableChatTimelineRowsState,
+): StableChatTimelineRowsState {
+  const next = new Map<string, ChatMessage>();
+  let anyChanged = rows.length !== previous.byId.size;
+
+  const result = rows.map((row, index) => {
+    const prevRow = previous.byId.get(row.id);
+    const nextRow =
+      prevRow !== undefined && isChatMessageUnchanged(prevRow, row)
+        ? prevRow
+        : row;
+    next.set(row.id, nextRow);
+    if (!anyChanged && previous.result[index] !== nextRow) {
+      anyChanged = true;
+    }
+    return nextRow;
+  });
+
+  return anyChanged ? { byId: next, result } : previous;
+}
+
+type ChatMessageComparableField = Exclude<keyof ChatMessage, "id">;
+
+/**
+ * One `===` check per `ChatMessage` field except `id` (the dedup key, which
+ * the caller has already matched via the `byId` lookup before this runs).
+ * Keyed as a mapped-type record - not a bare array - so the compiler
+ * enforces coverage: adding, removing, or renaming a `ChatMessage` field
+ * fails this file's build until the table is updated. Mirrors the
+ * `Record<U, true>` idiom `makeLiteralGuard` uses in `lib/type-guard.ts`,
+ * adapted to comparators so `Object.values` below stays fully typed with no
+ * cast (`Object.keys` widens to `string[]` and would need one).
+ *
+ * Deliberate audit disposition: keep this table because this codebase's
+ * giant, heterogeneous assistant rows need per-field row-reference
+ * stability. The compile-time
+ * exhaustiveness this table buys (a field add/remove/rename fails the build
+ * until this table is updated) is worth the upkeep, since silently missing a
+ * field here would make an actually-changed row look unchanged to LegendList
+ * and freeze a row's rendered content mid-stream.
+ */
+const CHAT_MESSAGE_FIELD_UNCHANGED: {
+  readonly [K in ChatMessageComparableField]: (
+    a: ChatMessage,
+    b: ChatMessage,
+  ) => boolean;
+} = {
+  workingVerbSeed: (a, b) => a.workingVerbSeed === b.workingVerbSeed,
+  role: (a, b) => a.role === b.role,
+  content: (a, b) => a.content === b.content,
+  segments: (a, b) => a.segments === b.segments,
+  structuredContent: (a, b) => a.structuredContent === b.structuredContent,
+  attachments: (a, b) => a.attachments === b.attachments,
+  browserAnnotations: (a, b) => a.browserAnnotations === b.browserAnnotations,
+  settings: (a, b) => a.settings === b.settings,
+  createdAt: (a, b) => a.createdAt === b.createdAt,
+  sentAt: (a, b) => a.sentAt === b.sentAt,
+  elapsedStartedAt: (a, b) => a.elapsedStartedAt === b.elapsedStartedAt,
+  turnHasOnlyAutonomousResumeSegments: (a, b) =>
+    a.turnHasOnlyAutonomousResumeSegments ===
+    b.turnHasOnlyAutonomousResumeSegments,
+  autonomousResumeOwed: (a, b) =>
+    a.autonomousResumeOwed === b.autonomousResumeOwed,
+  // Rebuilt by every fold pass, so compared by content, like `turnMessageIds`.
+  foldedBackgroundEvents: (a, b) =>
+    sameFoldedBackgroundEvents(
+      a.foldedBackgroundEvents,
+      b.foldedBackgroundEvents,
+    ),
+  turnId: (a, b) => a.turnId === b.turnId,
+  manualRungAnchorId: (a, b) => a.manualRungAnchorId === b.manualRungAnchorId,
+  routingSettledNoticeId: (a, b) =>
+    a.routingSettledNoticeId === b.routingSettledNoticeId,
+  showCompletionFooter: (a, b) =>
+    a.showCompletionFooter === b.showCompletionFooter,
+  completedAt: (a, b) => a.completedAt === b.completedAt,
+  stopped: (a, b) => a.stopped === b.stopped,
+  pausedDurationMs: (a, b) => a.pausedDurationMs === b.pausedDurationMs,
+  pausedSinceMs: (a, b) => a.pausedSinceMs === b.pausedSinceMs,
+  persistentMessageId: (a, b) =>
+    a.persistentMessageId === b.persistentMessageId,
+  // Rebuilt every pass for a multi-record turn, so compared by content: an
+  // identity check would re-render that turn's rows on every token.
+  turnMessageIds: (a, b) => sameMessageIds(a.turnMessageIds, b.turnMessageIds),
+  senderLabel: (a, b) => a.senderLabel === b.senderLabel,
+  // A member's picture can resolve after the row first painted.
+  senderAvatarUrl: (a, b) => a.senderAvatarUrl === b.senderAvatarUrl,
+  senderUserId: (a, b) => a.senderUserId === b.senderUserId,
+  // The row-level request state is carried by reference from the open
+  // message, so a resolve arrives as a new object and identity is enough.
+  conversationRequest: (a, b) =>
+    a.conversationRequest === b.conversationRequest,
+  // Written once with the row, so carried by reference.
+  questionAnswers: (a, b) => a.questionAnswers === b.questionAnswers,
+  slackMessage: (a, b) => a.slackMessage === b.slackMessage,
+  announcement: (a, b) => a.announcement === b.announcement,
+  options: (a, b) => a.options === b.options,
+  // A settlement arrives as a new question object on the same row.
+  question: (a, b) => a.question === b.question,
+  // A resolution arrives as a new surface object on the same row.
+  surface: (a, b) => a.surface === b.surface,
+  feedbackDraft: (a, b) => a.feedbackDraft === b.feedbackDraft,
+  repliesTo: (a, b) => a.repliesTo === b.repliesTo,
+  assistantMeta: (a, b) => a.assistantMeta === b.assistantMeta,
+  statusLabel: (a, b) => a.statusLabel === b.statusLabel,
+  agentSenderInfo: (a, b) => a.agentSenderInfo === b.agentSenderInfo,
+  agentMessage: (a, b) => a.agentMessage === b.agentMessage,
+  runState: (a, b) => a.runState === b.runState,
+  sessionAnchor: (a, b) => a.sessionAnchor === b.sessionAnchor,
+  steerBadge: (a, b) => a.steerBadge === b.steerBadge,
+};
+
+const CHAT_MESSAGE_FIELD_CHECKS = Object.values(CHAT_MESSAGE_FIELD_UNCHANGED);
+
+function sameMessageIds(
+  a: ReadonlyArray<string> | undefined,
+  b: ReadonlyArray<string> | undefined,
+): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined || a.length !== b.length) {
+    return false;
+  }
+  return a.every((id, index) => id === b[index]);
+}
+
+function sameFoldedBackgroundEvents(
+  a: ChatMessage["foldedBackgroundEvents"],
+  b: ChatMessage["foldedBackgroundEvents"],
+): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined || a.length !== b.length) {
+    return false;
+  }
+  return a.every((event, index) => {
+    const other = b[index];
+    return (
+      event.key === other.key &&
+      event.trigger === other.trigger &&
+      sameBackgroundEventEnding(event.ending, other.ending)
+    );
+  });
+}
+
+function sameBackgroundEventEnding(
+  a: BackgroundEventEnding,
+  b: BackgroundEventEnding,
+): boolean {
+  if (a.kind === "no-reply") {
+    return b.kind === "no-reply" && a.elapsedMs === b.elapsedMs;
+  }
+  return a.kind === b.kind;
+}
+
+/** Shallow field comparison - avoids the cost of a deep equality check. */
+function isChatMessageUnchanged(a: ChatMessage, b: ChatMessage): boolean {
+  if (a === b) return true;
+  return CHAT_MESSAGE_FIELD_CHECKS.every((isFieldUnchanged) =>
+    isFieldUnchanged(a, b),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The windowed line: the same structural sharing over rows that may be
+// placeholders.
+//
+// Added ALONGSIDE the `ChatMessage` functions above rather than replacing
+// them. The field table is the part that must not be disturbed - it is
+// compile-time exhaustive, and its whole purpose is that a missed field
+// freezes a row's content mid-stream. So the hydrated case still runs through
+// `isChatMessageUnchanged` unchanged, and this layer only decides which rows
+// are comparable in the first place.
+// ---------------------------------------------------------------------------
+
+export interface StableTranscriptListRowsState {
+  readonly byKey: ReadonlyMap<string, TranscriptListRow>;
+  readonly result: ReadonlyArray<TranscriptListRow>;
+}
+
+export const EMPTY_STABLE_TRANSCRIPT_LIST_ROWS_STATE: StableTranscriptListRowsState =
+  {
+    byKey: new Map(),
+    result: [],
+  };
+
+/**
+ * The row shape in order, as the list will see it: each row's key AND kind.
+ * A placeholder is keyed by the row id it stands for, so its hydrated
+ * replacement keeps the key and changes only the kind - a size change of up to
+ * the placeholder's cap in one commit, which a key-only sequence would call
+ * settled content.
+ */
+export function transcriptListKeySequence(
+  rows: ReadonlyArray<TranscriptListRow>,
+): ReadonlyArray<string> {
+  return rows.map(transcriptListRowShape);
+}
+
+function transcriptListRowShape(row: TranscriptListRow): string {
+  return `${row.key}:${row.kind}`;
+}
+
+/** {@link didChatTimelineKeySequenceChange} for the windowed row union,
+ *  compared on {@link transcriptListKeySequence}'s key-and-kind shape. */
+export function didTranscriptListKeySequenceChange(
+  committed: ReadonlyArray<string> | undefined,
+  rows: ReadonlyArray<TranscriptListRow>,
+): boolean {
+  if (committed === undefined || committed.length === 0) return false;
+  if (committed.length !== rows.length) return true;
+  return rows.some(
+    (row, index) => committed[index] !== transcriptListRowShape(row),
+  );
+}
+
+/**
+ * Whether two rows under the same key describe the same thing.
+ *
+ * The `kind` check is the load-bearing one and it comes first: a placeholder
+ * that hydrated is NEVER unchanged, however its fields compare. That is the
+ * whole reason a placeholder is its own row type - the alternative, a
+ * `ChatMessage` whose content merely filled in, is a row the field table can
+ * legitimately call unchanged, and LegendList would keep rendering the empty
+ * one.
+ */
+function isTranscriptListRowUnchanged(
+  a: TranscriptListRow,
+  b: TranscriptListRow,
+): boolean {
+  if (a === b) return true;
+  if (a.ordinal !== b.ordinal) return false;
+  if (a.kind === "hydrated") {
+    if (b.kind !== "hydrated") return false;
+    if (a.part === null || b.part === null) {
+      // One side splits and the other does not: the row changed shape, so it
+      // is never unchanged however its fields compare.
+      if (a.part !== b.part) return false;
+      return isChatMessageUnchanged(a.model, b.model);
+    }
+    if (a.part.index !== b.part.index || a.part.count !== b.part.count) {
+      return false;
+    }
+    // A part is compared on the WHOLE turn, not on its own slice of segments.
+    // `buildChatActivityTimeline` has whole-turn inputs - the question tools an
+    // interview later in the turn suppresses, the trailing group it marks
+    // active, the routing notice a part away from its error - so a later
+    // segment can change what an EARLIER part draws, and a slice comparison
+    // would freeze that part's body. See `assistant-turn-parts.ts`.
+    return isChatMessageUnchanged(a.model, b.model);
+  }
+  if (b.kind !== "placeholder") return false;
+  // Skeleton entries arrive whole and are never mutated in place, so reference
+  // equality is the right test - and a redelivered chunk that genuinely
+  // replaces an entry SHOULD re-render the row it describes. A void carries
+  // the very entry objects the index held, so the same entry can come back as
+  // a carried row: reusing the indexed row would publish a carried one as
+  // authoritative.
+  return a.entry === b.entry && a.provenance === b.provenance;
+}
+
+/** {@link computeStableChatTimelineRows} for the windowed row union. */
+export function computeStableTranscriptListRows(
+  rows: ReadonlyArray<TranscriptListRow>,
+  previous: StableTranscriptListRowsState,
+): StableTranscriptListRowsState {
+  const next = new Map<string, TranscriptListRow>();
+  let anyChanged = rows.length !== previous.byKey.size;
+
+  const result = rows.map((row, index) => {
+    const prevRow = previous.byKey.get(row.key);
+    const nextRow =
+      prevRow !== undefined && isTranscriptListRowUnchanged(prevRow, row)
+        ? prevRow
+        : row;
+    next.set(row.key, nextRow);
+    if (!anyChanged && previous.result[index] !== nextRow) {
+      anyChanged = true;
+    }
+    return nextRow;
+  });
+
+  return anyChanged ? { byKey: next, result } : previous;
+}

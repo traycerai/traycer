@@ -1,0 +1,170 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { isRedirect } from "@tanstack/react-router";
+import { Route as IndexRoute } from "@/routes/index";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+import { useTabsStore } from "@/stores/tabs/store";
+
+const draftRouteMocks = vi.hoisted(() => ({
+  openNewEpicIntent: vi.fn(() => ({ kind: "new-draft", settings: null })),
+  navigateToTabIntent: vi.fn(),
+}));
+
+vi.mock("@/lib/commands/actions/new-epic", () => ({
+  openNewEpicIntent: draftRouteMocks.openNewEpicIntent,
+}));
+
+vi.mock("@/lib/tab-navigation", () => ({
+  navigateToTabIntent: draftRouteMocks.navigateToTabIntent,
+}));
+
+function invokeIndexBeforeLoad(status: string): unknown {
+  const beforeLoad = IndexRoute.options.beforeLoad;
+  expect(beforeLoad).toBeTypeOf("function");
+  const invoke = beforeLoad as (args: {
+    context: { getAuthSnapshot: () => { status: string } };
+  }) => void;
+  try {
+    invoke({ context: { getAuthSnapshot: () => ({ status }) } });
+    return null;
+  } catch (err) {
+    return err;
+  }
+}
+
+describe("draft entry routes", () => {
+  beforeEach(() => {
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    useTabsStore.setState({
+      stripOrder: [],
+      systemTabs: { history: null, settings: null },
+    });
+    // Default to "tour completed" so signed-in cases exercise the app path;
+    // the first-launch case overrides this explicitly.
+    useOnboardingStore.setState({ completedAt: 1 });
+  });
+
+  it("/ redirects signed-in users (tour done, no restored tabs) to the committed draft creation route", () => {
+    const thrown = invokeIndexBeforeLoad("signed-in");
+    expect(thrown).not.toBeNull();
+    expect(isRedirect(thrown)).toBe(true);
+    const response = thrown as Response & {
+      options: { to: string; replace: boolean };
+    };
+    expect(response.options.to).toBe("/draft/new");
+    expect(response.options.replace).toBe(true);
+  });
+
+  it("/ keeps signed-in users on root when tabs have already been restored", () => {
+    useTabsStore.setState({
+      stripOrder: [{ kind: "history", id: "history" }],
+      systemTabs: {
+        history: {
+          id: "history",
+          kind: "history",
+          name: "History",
+          lastPath: null,
+        },
+        settings: null,
+      },
+    });
+    expect(invokeIndexBeforeLoad("signed-in")).toBeNull();
+  });
+
+  it("/ sends a signed-in user with no restored tabs to /draft/new (onboarding is gated in RootComponent)", () => {
+    useOnboardingStore.setState({ completedAt: null });
+
+    const thrown = invokeIndexBeforeLoad("signed-in");
+    expect(thrown).not.toBeNull();
+    expect(isRedirect(thrown)).toBe(true);
+    const response = thrown as Response & {
+      options: { to: string; replace: boolean };
+    };
+    expect(response.options.to).toBe("/draft/new");
+    expect(response.options.replace).toBe(true);
+  });
+
+  it("/ keeps signed-out users on the auth landing surface", () => {
+    useOnboardingStore.setState({ completedAt: null });
+    expect(invokeIndexBeforeLoad("signed-out")).toBeNull();
+  });
+
+  // `beforeLoad` moved from `status !== "signed-in"` to
+  // `!admitsLocalPlane(status)`. Before the fix, an `unverified` user (a
+  // stored session identity with no held `/api/v3/user` verdict) with no
+  // restored tabs got NO redirect here, and `RootLandingPage` renders `null`
+  // for any status `admitsLocalPlane` admits - so that cohort landed on an
+  // empty app shell with no composer, no draft, nothing to do. Widening the
+  // gate sends them to the same committed-draft route a `signed-in` user with
+  // no restored tabs gets.
+  it("/ redirects unverified users (no restored tabs) to the committed draft creation route", () => {
+    const thrown = invokeIndexBeforeLoad("unverified");
+    expect(thrown).not.toBeNull();
+    expect(isRedirect(thrown)).toBe(true);
+    const response = thrown as Response & {
+      options: { to: string; replace: boolean };
+    };
+    expect(response.options.to).toBe("/draft/new");
+    expect(response.options.replace).toBe(true);
+  });
+
+  it("/ keeps unverified users on root when tabs have already been restored", () => {
+    useTabsStore.setState({
+      stripOrder: [{ kind: "history", id: "history" }],
+      systemTabs: {
+        history: {
+          id: "history",
+          kind: "history",
+          name: "History",
+          lastPath: null,
+        },
+        settings: null,
+      },
+    });
+    expect(invokeIndexBeforeLoad("unverified")).toBeNull();
+  });
+
+  // A retained (closed) draft is not a visible tab: closing or moving away the
+  // last tab navigates to `/`, which must still send the window to a fresh
+  // draft instead of leaving it empty.
+  it.each(["signed-in", "unverified"])(
+    "/ redirects a %s user whose only landing draft is retained closed",
+    (status) => {
+      const id = useLandingDraftStore.getState().createDraft(null);
+      useLandingDraftStore.setState((state) => ({
+        drafts: state.drafts.map((d) =>
+          d.id === id ? { ...d, closed: true } : d,
+        ),
+        activeDraftId: null,
+      }));
+
+      const thrown = invokeIndexBeforeLoad(status);
+      expect(isRedirect(thrown)).toBe(true);
+      const response = thrown as Response & { options: { to: string } };
+      expect(response.options.to).toBe("/draft/new");
+      expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    },
+  );
+
+  it("/ keeps a signed-in user on root while an open landing draft exists", () => {
+    useLandingDraftStore.getState().createDraft(null);
+    expect(invokeIndexBeforeLoad("signed-in")).toBeNull();
+  });
+
+  it("/draft/new requests a controller-owned draft creation and replace", async () => {
+    const { createDraftAndReplaceRoute } =
+      await import("@/lib/draft-entry-route");
+    const navigate = vi.fn();
+
+    createDraftAndReplaceRoute(navigate);
+
+    expect(draftRouteMocks.openNewEpicIntent).toHaveBeenCalledTimes(1);
+    expect(draftRouteMocks.navigateToTabIntent).toHaveBeenCalledWith(
+      navigate,
+      { kind: "new-draft", settings: null },
+      { replace: true },
+    );
+  });
+});

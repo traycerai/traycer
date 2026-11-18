@@ -1,0 +1,103 @@
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+import type { GitChangedFile } from "@traycer/protocol/host";
+import { PanelSearchField } from "@/components/epic-canvas/sidebar/epic-sidebar-search-field";
+import { FileList } from "./file-list";
+
+// Mirrors the file-tree explorer panel: the controlled input updates
+// immediately while the applied query (which drives filtering) is debounced.
+const GIT_PANEL_SEARCH_DEBOUNCE_MS = 150;
+
+export interface GitChangedFilesViewProps {
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly hostId: string;
+  readonly runningDir: string;
+  readonly files: ReadonlyArray<GitChangedFile>;
+}
+
+export function GitChangedFilesView(
+  props: GitChangedFilesViewProps,
+): ReactNode {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState("");
+  const debounceTimerRef = useRef<number | null>(null);
+
+  const clearPendingDebounce = useCallback(() => {
+    if (debounceTimerRef.current === null) return;
+    window.clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = null;
+  }, []);
+
+  const handleSearchChange = useCallback(
+    (next: string) => {
+      setSearchQuery(next);
+      clearPendingDebounce();
+      debounceTimerRef.current = window.setTimeout(() => {
+        debounceTimerRef.current = null;
+        setAppliedQuery(next);
+      }, GIT_PANEL_SEARCH_DEBOUNCE_MS);
+    },
+    [clearPendingDebounce],
+  );
+
+  const handleClear = useCallback(() => {
+    clearPendingDebounce();
+    setSearchQuery("");
+    setAppliedQuery("");
+  }, [clearPendingDebounce]);
+
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLInputElement>) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      handleClear();
+      event.currentTarget.blur();
+    },
+    [handleClear],
+  );
+
+  useEffect(() => clearPendingDebounce, [clearPendingDebounce]);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="shrink-0 bg-background/50 px-2 py-1.5">
+        <PanelSearchField
+          value={searchQuery}
+          onValueChange={handleSearchChange}
+          onClear={handleClear}
+          onClose={null}
+          onKeyDown={handleKeyDown}
+          ref={null}
+          combobox={null}
+          placeholder="Filter changed files..."
+          label="Filter changed files"
+          clearLabel="Clear filter"
+          closeLabel=""
+          testIdPrefix="git-changed-files-filter"
+          variant="filter"
+          className="h-7"
+        />
+      </div>
+      <FileList
+        epicId={props.epicId}
+        viewTabId={props.viewTabId}
+        hostId={props.hostId}
+        runningDir={props.runningDir}
+        repositoryContext={null}
+        files={props.files}
+        query={appliedQuery}
+        onClearQuery={handleClear}
+        hideEmptySections={false}
+        sectionCollapseController={null}
+        virtualized
+      />
+    </div>
+  );
+}

@@ -1,0 +1,457 @@
+import type { SharedCommentComposerDraft } from "./canvas-comment-drafts";
+import {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type Ref,
+} from "react";
+import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import { Placeholder } from "@tiptap/extensions";
+import Mention from "@tiptap/extension-mention";
+import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useEpicDraftGuard } from "@/lib/epics/use-epic-draft-guard";
+import { useMentionCollaboratorsForClient } from "@/hooks/comments/use-mention-collaborators";
+import {
+  MentionSuggestionList,
+  type MentionSuggestionListHandle,
+} from "./collaborator-mention-suggestion";
+import { filterCollaborators, useStableCollaboratorRef } from "./mention-utils";
+
+const MAX_MENTION_RESULTS = 8;
+
+interface MentionAttrs {
+  readonly id: string | null;
+  readonly label: string | null;
+}
+
+/**
+ * Type-guarded narrowing for a Tiptap mention node's `attrs` bag. Tiptap
+ * types `node.attrs` as `Record<string, any>` and there is no schema-level
+ * guarantee that a third-party render pass left the expected mention keys
+ * in place. Read each field defensively so a malformed mention can't crash
+ * the renderText path.
+ */
+function readMentionAttrs(attrs: unknown): MentionAttrs {
+  if (attrs === null || typeof attrs !== "object") {
+    return { id: null, label: null };
+  }
+  const bag: Record<string, unknown> = { ...attrs };
+  const id = typeof bag.id === "string" ? bag.id : null;
+  const label = typeof bag.label === "string" ? bag.label : null;
+  return { id, label };
+}
+
+export interface CommentComposerProps {
+  /** Epic the composer is mounted under - drives the mention picker source. */
+  readonly epicId: string;
+  /** The host serving the surface this composer was mounted from - the tab's
+   *  client under a collab tile, the Epic session's under the sidebar. Passed
+   *  rather than read here because this component is mounted from BOTH, and an
+   *  ambient app-wide read would offer the wrong machine's collaborators
+   *  (D15). */
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+  /** Initial JSONContent. Pass `null` for a blank composer (most flows). */
+  readonly initialContent: JsonContent | null;
+  readonly sharedDraft?: SharedCommentComposerDraft;
+  readonly placeholder: string;
+  /** Whether to grab focus on mount. Used by the floating draft popover and
+   *  by inline reply composers. */
+  readonly focusOnMount: boolean;
+  readonly submitLabel: string;
+  readonly isPending: boolean;
+  /** Called with the parsed JSONContent on submit. The composer leaves
+   *  network state to the caller - it does not clear itself, so the caller
+   *  should `reset()` via the imperative handle on success. */
+  readonly onSubmit: (content: JsonContent) => Promise<void>;
+  /** Optional cancel hook. Receives `isDirty` so callers can decide whether
+   *  to confirm before discarding. */
+  readonly onCancel: ((isDirty: boolean) => void) | null;
+  /**
+   * Controls on the footer's left, apart from Cancel and Submit on the right:
+   * a destination the text can go to instead of becoming a comment.
+   */
+  readonly leadingActions: ReactNode;
+  readonly className: string | undefined;
+  readonly ref?: Ref<CommentComposerHandle>;
+}
+
+export interface CommentComposerHandle {
+  /** Empty the editor doc back to a single empty paragraph. */
+  reset(): void;
+  isDirty(): boolean;
+  /** The document as typed so far, for a destination other than Submit. */
+  getContent(): JsonContent;
+  /** Imperatively focus the editor (used after Submit so the user can keep
+   *  typing in the next reply slot without click-fishing). */
+  focus(): void;
+}
+
+interface SuggestionRenderState {
+  readonly items: ReadonlyArray<{
+    readonly userId: string;
+    readonly displayName: string;
+    readonly email: string;
+  }>;
+  readonly command: (attrs: { id: string; label: string }) => void;
+  readonly clientRect: (() => DOMRect | null) | null;
+}
+
+/**
+ * Small Tiptap editor used to author comment-thread content.
+ *
+ * Storage shape mirrors Views: the host RPC payloads carry `JSONContent`,
+ * so a comment authored here renders identically in Views and vice versa.
+ * `Collaboration` is intentionally absent - the composer is private to the
+ * local user until they hit Submit; the thread Y.Map only learns about it
+ * through the host RPC.
+ *
+ * Mention picker uses the canonical Tiptap v3 suggestion → React bridge:
+ * the suggestion plugin's `render` lifecycle lifts state into the
+ * composer's React tree (`setSuggestionState`), and a ref-forwarded list
+ * component handles arrow / Enter / Escape via `onKeyDown`. Positioning
+ * uses `@floating-ui/dom` (Tippy was removed in Tiptap v3).
+ */
+export function CommentComposer(props: CommentComposerProps) {
+  const {
+    epicId,
+    hostClient,
+    initialContent,
+    placeholder,
+    focusOnMount,
+    submitLabel,
+    isPending,
+    onSubmit,
+    onCancel,
+    leadingActions,
+    className,
+    ref,
+  } = props;
+
+  const sharedDraftRef = useRef(props.sharedDraft);
+  useEffect(() => {
+    sharedDraftRef.current = props.sharedDraft;
+  }, [props.sharedDraft]);
+  const collaborators = useMentionCollaboratorsForClient(hostClient, epicId);
+  const collaboratorsRef = useStableCollaboratorRef(collaborators);
+  const suggestionHandleRef = useRef<MentionSuggestionListHandle | null>(null);
+  const [suggestionState, setSuggestionState] =
+    useState<SuggestionRenderState | null>(null);
+  // "The user has changed this document", which is NOT "the document is
+  // non-empty": an edit composer opens holding a saved comment, and closing it
+  // untouched loses nothing. Tiptap fires `onUpdate` only for a transaction
+  // that actually changed the doc - never for the initial `content`, and never
+  // for a caret move - so the first call IS the first user edit.
+  const [hasUserEdits, setHasUserEdits] = useState(false);
+  // The park veto (`lib/epics/epic-draft-guard.ts`). This editor is the only
+  // place its text exists until Submit fires the host RPC, and every one of
+  // this composer's mount points sits inside the subtree a park unmounts - the
+  // sidebar's thread cards, the collab tile's floating draft popover.
+  //
+  // EMPTY IS NOT THE SAME FACT IN THE TWO COMPOSERS, and treating it as one
+  // discarded work. For a NEW comment, emptying really does leave nothing to
+  // lose, so the guard releases. For an EDIT composer, emptying IS the edit:
+  // the deletion exists only here, and a park that unmounts it remounts the
+  // editor holding `initialContent` again - the saved comment the user was in
+  // the middle of clearing or replacing, silently restored over their work.
+  //
+  // So `hasUserEdits` gates both (a pristine edit composer holds nothing), and
+  // only a new composer that has returned to its opening empty state is
+  // released.
+  const isEditingSavedComment = initialContent !== null;
+
+  // Stable refs so closures inside `useEditor`'s deps-`[]` capture do not
+  // see a stale callback once the parent re-renders with new handlers.
+  const onSubmitRef = useRef(onSubmit);
+  // Close the gap before Query's pending state renders, for both clicks and
+  // keyboard shortcuts. Keep the latch until the caller finishes saving.
+  const submittingRef = useRef(false);
+  const isPendingRef = useRef(isPending);
+  const onCancelRef = useRef(onCancel);
+  // Editor's `handleKeyDown` is captured under `useEditor`'s `[]` deps so it
+  // would see a stale `suggestionState`. Mirror it in a ref so Escape can
+  // distinguish "close suggestion popup" from "cancel composer".
+  const suggestionActiveRef = useRef(false);
+
+  useEffect(() => {
+    onSubmitRef.current = onSubmit;
+  }, [onSubmit]);
+
+  useEffect(() => {
+    isPendingRef.current = isPending;
+  }, [isPending]);
+
+  useEffect(() => {
+    onCancelRef.current = onCancel;
+  }, [onCancel]);
+
+  useEffect(() => {
+    suggestionActiveRef.current = suggestionState !== null;
+  }, [suggestionState]);
+
+  const mentionExtension = useMemo(
+    () =>
+      // eslint-disable-next-line react-hooks/refs -- Tiptap invokes suggestion callbacks outside React render; the ref keeps the editor instance stable while reading the latest collaborators.
+      Mention.configure({
+        HTMLAttributes: { class: "comment-mention" },
+        renderText({ node }) {
+          const attrs = readMentionAttrs(node.attrs);
+          const display =
+            attrs.label !== null && attrs.label.length > 0
+              ? attrs.label
+              : (attrs.id ?? "");
+          return `@${display}`;
+        },
+        deleteTriggerWithBackspace: true,
+        suggestion: {
+          char: "@",
+          allowSpaces: false,
+          items: ({ query }) =>
+            filterCollaborators(collaboratorsRef.current, query, {
+              maxResults: MAX_MENTION_RESULTS,
+            }).slice(),
+          render: () => ({
+            onStart(p) {
+              if (submittingRef.current) return;
+              setSuggestionState({
+                items: p.items,
+                command: p.command,
+                clientRect: p.clientRect ?? null,
+              });
+            },
+            onUpdate(p) {
+              if (submittingRef.current) return;
+              setSuggestionState({
+                items: p.items,
+                command: p.command,
+                clientRect: p.clientRect ?? null,
+              });
+            },
+            onKeyDown(p) {
+              if (submittingRef.current) return false;
+              if (p.event.key === "Escape") {
+                setSuggestionState(null);
+                return false;
+              }
+              return suggestionHandleRef.current?.onKeyDown(p.event) ?? false;
+            },
+            onExit() {
+              setSuggestionState(null);
+            },
+          }),
+        },
+      }),
+    [collaboratorsRef],
+  );
+
+  const editor = useEditor(
+    {
+      extensions: [
+        StarterKit.configure({
+          // Default `link` mark + heading + horizontal rule are noisy inside a
+          // comment box; the editor still supports bold/italic/code/lists.
+          heading: false,
+          horizontalRule: false,
+          link: false,
+          blockquote: false,
+          codeBlock: false,
+        }),
+        Placeholder.configure({
+          placeholder,
+          showOnlyCurrent: false,
+          emptyEditorClass: "is-editor-empty",
+        }),
+        mentionExtension,
+      ],
+      content: props.sharedDraft?.content ?? initialContent ?? "",
+      autofocus: focusOnMount ? "end" : false,
+      immediatelyRender: false,
+      editorProps: {
+        attributes: {
+          class: cn(
+            "tc-editor-prose prose prose-sm dark:prose-invert md-prose max-w-none",
+            "min-h-[3.5rem] w-full rounded-md border border-input bg-background px-3 py-2",
+            "text-ui-sm leading-relaxed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          ),
+          "data-slot": "comment-composer-editor",
+          "aria-label": placeholder,
+        },
+        handleKeyDown(_view, event) {
+          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault();
+            void submitFromEditor();
+            return true;
+          }
+          if (event.key === "Escape" && !suggestionActiveRef.current) {
+            event.preventDefault();
+            cancelFromEditor();
+            return true;
+          }
+          return false;
+        },
+      },
+      onUpdate({ editor: e }) {
+        setHasUserEdits(true);
+        sharedDraftRef.current?.onChange(e.getJSON(), e.isEmpty);
+      },
+    },
+    // Editor identity is intentionally tile-stable: rebuilding would lose
+    // draft text. Mention extension closes over refs so it picks up fresh
+    // collaborator data without a teardown.
+    [],
+  );
+
+  const isEmpty = useEditorState({
+    editor,
+    // Before the editor mounts, answer from the content it will open with:
+    // an edit composer's Save must not flash disabled on the first frames.
+    selector: ({ editor: current }) =>
+      current?.isEmpty ??
+      (props.sharedDraft?.content ?? initialContent) === null,
+  });
+  useEpicDraftGuard(
+    epicId,
+    (props.sharedDraft?.dirty ?? hasUserEdits) &&
+      (isEditingSavedComment || !isEmpty),
+  );
+
+  useEffect(() => {
+    const draft = props.sharedDraft;
+    if (editor === null || draft === undefined) return;
+    const content = draft.content ?? {
+      type: "doc",
+      content: [{ type: "paragraph" }],
+    };
+    if (JSON.stringify(editor.getJSON()) !== JSON.stringify(content))
+      editor.commands.setContent(content, { emitUpdate: false });
+    editor.setEditable(!draft.pending, false);
+  }, [editor, props.sharedDraft]);
+
+  const submitFromEditor = useCallback(async () => {
+    const e = editor;
+    if (
+      e === null ||
+      e.isEmpty ||
+      submittingRef.current ||
+      isPendingRef.current ||
+      sharedDraftRef.current?.pending === true
+    )
+      return;
+    submittingRef.current = true;
+    setSuggestionState(null);
+    // Freeze only the editor whose content was submitted. Otherwise typing
+    // during a slow save produces unsent text that success would discard.
+    e.setEditable(false, false);
+    const releaseSubmission = () => {
+      submittingRef.current = false;
+      if (!e.isDestroyed) e.setEditable(true, false);
+    };
+    try {
+      await onSubmitRef.current(e.getJSON());
+    } catch (error) {
+      releaseSubmission();
+      // Mutation hooks report RPC failures. Unexpected completion errors must
+      // still reach the application's error reporting.
+      if (!(error instanceof HostRpcError)) throw error;
+      return;
+    }
+    releaseSubmission();
+  }, [editor, setSuggestionState]);
+
+  const cancelFromEditor = useCallback(() => {
+    const handler = onCancelRef.current;
+    if (handler === null) return;
+    const isDirty = editor !== null && !editor.isEmpty;
+    handler(isDirty);
+  }, [editor]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      isDirty() {
+        return editor !== null && !editor.isEmpty;
+      },
+      getContent() {
+        return editor?.getJSON() ?? { type: "doc", content: [] };
+      },
+      reset() {
+        if (editor === null || sharedDraftRef.current !== undefined) return;
+        editor.commands.clearContent();
+        // AFTER the command: whether `clearContent` emits an update is
+        // Tiptap's business, and if it does,
+        // its `onUpdate` has already latched `hasUserEdits` by the time this
+        // line runs. Stating the post-reset answer here is what makes the
+        // caller's success path withdraw the park veto rather than hold it
+        // over an editor that is now empty.
+        setHasUserEdits(false);
+      },
+      focus() {
+        editor?.commands.focus("end");
+      },
+    }),
+    [editor],
+  );
+
+  if (editor === null) return null;
+
+  return (
+    <div
+      data-slot="comment-composer"
+      className={cn("flex w-full flex-col gap-2", className)}
+    >
+      <EditorContent editor={editor} />
+      <div className="flex items-center justify-end gap-2">
+        {leadingActions === null ? null : (
+          <div className="flex min-w-0 flex-1 items-center">
+            {leadingActions}
+          </div>
+        )}
+        {onCancel === null ? null : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={cancelFromEditor}
+          >
+            Cancel
+          </Button>
+        )}
+        <Button
+          type="button"
+          size="sm"
+          disabled={isEmpty || isPending}
+          onClick={() => void submitFromEditor()}
+        >
+          {isPending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          {submitLabel}
+        </Button>
+      </div>
+      {suggestionState === null ? null : (
+        <MentionSuggestionList
+          ref={suggestionHandleRef}
+          items={suggestionState.items}
+          command={(attrs) => {
+            if (!submittingRef.current) suggestionState.command(attrs);
+          }}
+          getReferenceClientRect={suggestionState.clientRect}
+        />
+      )}
+    </div>
+  );
+}

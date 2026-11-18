@@ -1,0 +1,135 @@
+import type {
+  AuthnSecretsCreateResponse,
+  AuthnSecretsReplaceValueResponse,
+} from "@traycer-clients/shared/environment/configuration-secrets";
+import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type {
+  HostRpcError,
+  RequestOfMethod,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
+import {
+  useSecretsEnvironment,
+  useSecretsOperationMutation,
+} from "@/hooks/environment/use-environment-secrets-calls";
+import type { HostRpcRegistry } from "@/lib/host";
+import { SECRET_READS } from "@/lib/environment/delta-fed-reads";
+import { settingsDetailsMutationKeys } from "@/lib/query-keys/settings-details-query-keys";
+import { replaceOutcome } from "@/lib/sandboxes/secret-replace-outcome";
+
+/**
+ * The writes that carry a typed secret value: Add a secret's Verify and Save,
+ * and Replace value. Each takes a reader the dialog fills, called at
+ * dispatch, so the value never becomes the mutation's variables and reaches
+ * no query or mutation cache.
+ *
+ * Each is the app's own call to authn on the person's sign-in, naming the
+ * environment the page's secrets calls name (`useSecretsEnvironment`). Its
+ * sign-in is captured at the press, before the mutation can yield; the typed
+ * value is still read only when its request is dispatched.
+ */
+
+interface CapturedHost {
+  readonly hostId: string | null;
+}
+
+export function useEnvironmentSecretsCreateMutation(
+  client: HostClient<HostRpcRegistry>,
+  readRequest: () => RequestOfMethod<
+    HostRpcRegistry,
+    "environment.secrets.create"
+  >,
+): UseMutationResult<
+  AuthnSecretsCreateResponse,
+  HostRpcError,
+  void,
+  CapturedHost
+> {
+  const { environmentId } = useSecretsEnvironment(client);
+  const queryClient = useQueryClient();
+  return useSecretsOperationMutation<
+    AuthnSecretsCreateResponse,
+    void,
+    CapturedHost
+  >({
+    mutationKey: settingsDetailsMutationKeys.secretCreate(),
+    mutationFn: (_variables, send) =>
+      send("environment.secrets.create", {
+        ...readRequest(),
+        environmentId,
+      }),
+    onMutate: () => ({ hostId: null }),
+    onSuccess: (outcome) => {
+      if (outcome.outcome !== "refused") {
+        void invalidateEnvironmentReads(queryClient, SECRET_READS);
+      }
+    },
+  });
+}
+
+export function useEnvironmentSecretsVerifyCandidateMutation(
+  client: HostClient<HostRpcRegistry>,
+  readRequest: () => RequestOfMethod<
+    HostRpcRegistry,
+    "environment.secrets.verify"
+  >,
+): UseMutationResult<
+  ResponseOfMethod<HostRpcRegistry, "environment.secrets.verify">,
+  HostRpcError,
+  void
+> {
+  const { environmentId } = useSecretsEnvironment(client);
+  return useSecretsOperationMutation<
+    ResponseOfMethod<HostRpcRegistry, "environment.secrets.verify">,
+    void
+  >({
+    mutationKey: settingsDetailsMutationKeys.secretVerifyCandidate(),
+    mutationFn: (_variables, send) =>
+      send("environment.secrets.verify", {
+        ...readRequest(),
+        environmentId,
+      }),
+  });
+}
+
+/** The compare-and-set a replacement names; the value is read at dispatch. */
+export interface SecretReplaceTarget {
+  readonly secretId: string;
+  readonly expectedVersionId: string;
+}
+
+export function useEnvironmentSecretsReplaceValueMutation(
+  client: HostClient<HostRpcRegistry>,
+  readValue: () => string,
+): UseMutationResult<
+  AuthnSecretsReplaceValueResponse,
+  HostRpcError,
+  SecretReplaceTarget,
+  CapturedHost
+> {
+  const { environmentId } = useSecretsEnvironment(client);
+  const queryClient = useQueryClient();
+  return useSecretsOperationMutation<
+    AuthnSecretsReplaceValueResponse,
+    SecretReplaceTarget,
+    CapturedHost
+  >({
+    mutationKey: settingsDetailsMutationKeys.secretReplaceValue(),
+    mutationFn: (target, send) =>
+      send("environment.secrets.replaceValue", {
+        ...target,
+        value: readValue(),
+        environmentId,
+      }),
+    onMutate: () => ({ hostId: null }),
+    onSuccess: (answer) => {
+      // Accepted, or changed elsewhere: either way the list moved.
+      const outcome = replaceOutcome(answer);
+      if (outcome.kind === "accepted" || outcome.reread) {
+        void invalidateEnvironmentReads(queryClient, SECRET_READS);
+      }
+    },
+  });
+}

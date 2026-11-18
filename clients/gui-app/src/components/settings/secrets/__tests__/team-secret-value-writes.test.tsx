@@ -1,0 +1,430 @@
+// The form's links are not opened here; the mock only keeps the real opener
+// (which needs the app shell) out of the render.
+const openLinkMock = vi.hoisted(() => vi.fn<OpenLink>());
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => openLinkMock,
+}));
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  () => ({
+    useHostsRunningPersonal: () => ({
+      hosts: [],
+      state: "ready",
+      collisions: [],
+      retry: () => undefined,
+    }),
+  }),
+);
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
+}));
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-me",
+}));
+
+import type { QueryClient } from "@tanstack/react-query";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MockHandlerMap } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import type {
+  EnvironmentSecretV12,
+  EnvironmentSecretsCreateResponse,
+  EnvironmentSecretsReplaceValueResponse,
+  EnvironmentSecretsRotationResponse,
+  SecretVerifyResult,
+  SecretVersion,
+} from "@traycer/protocol/host/environment-schemas";
+import {
+  mountTeamPage,
+  poolSource,
+  requireTeamEnvironmentAuthnBinding,
+  requireTeamHostClient,
+  resetTeamPageHarness,
+  type TeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import { SecretsPage } from "@/components/settings/secrets/secrets-page";
+import type { HostRpcRegistry } from "@/lib/host";
+import type { OpenLink } from "@/lib/links/open-link";
+import { settingsDetailsMutationKeys } from "@/lib/query-keys/settings-details-query-keys";
+import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
+
+/**
+ * A team's Add a secret (Verify and Save) and Replace value are the app's own
+ * calls to authn on the person's sign-in: each request names the team's
+ * environment, the mutation's variables never carry the typed value, the
+ * button stays disabled while the request is in flight, and a save re-reads
+ * the team's secrets.
+ */
+
+const AT = Date.UTC(2026, 9, 20, 9, 30);
+const TYPED_VALUE = 'team"s\\ecret-UNIQUE-4410';
+
+function secretFixture(): EnvironmentSecretV12 {
+  return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
+    secretId: "sec-1",
+    name: "STRIPE_KEY",
+    kind: "api_key",
+    protocol: null,
+    destinations: [],
+    currentVersionId: "ver-2",
+    revoked: false,
+    updatedAt: AT,
+    variables: [],
+  };
+}
+
+function versionsFixture(): SecretVersion[] {
+  return [
+    {
+      versionId: "ver-2",
+      ordinal: 2,
+      createdAt: AT,
+      supersededAt: null,
+      destroyedAt: null,
+      current: true,
+      rotationState: null,
+    },
+  ];
+}
+
+/** A host answer the test releases by hand, so the in-flight state is seen. */
+interface Held<Response> {
+  readonly promise: Promise<Response>;
+  readonly release: (response: Response) => void;
+}
+
+function held<Response>(): Held<Response> {
+  let release: (response: Response) => void = () => undefined;
+  const promise = new Promise<Response>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
+interface TeamSecretsHost {
+  readonly create: Held<EnvironmentSecretsCreateResponse>;
+  readonly verify: Held<SecretVerifyResult>;
+  readonly replace: Held<EnvironmentSecretsReplaceValueResponse>;
+  rotation: EnvironmentSecretsRotationResponse["rotation"];
+}
+
+function teamSecretsHost(): TeamSecretsHost {
+  return {
+    create: held(),
+    verify: held(),
+    replace: held(),
+    rotation: null,
+  };
+}
+
+function handlersFor(host: TeamSecretsHost): MockHandlerMap<HostRpcRegistry> {
+  return {
+    "environment.list": () => ({ environments: [] }),
+    "environment.secrets.list": () => ({
+      secrets: [secretFixture()],
+      removed: [],
+    }),
+    "environment.secrets.versions": () => ({
+      versions: versionsFixture(),
+      removal: null,
+    }),
+    "environment.secrets.rotation": () => ({
+      rotation: host.rotation,
+      lastVerify: null,
+    }),
+    "environment.secrets.create": () => host.create.promise,
+    "environment.secrets.verify": () => host.verify.promise,
+    "environment.secrets.replaceValue": () => host.replace.promise,
+  };
+}
+
+function renderPage(harness: TeamPageHarness): void {
+  const client = requireTeamHostClient();
+  render(
+    <SecretsPage
+      client={client}
+      hostId={client.getActiveHostId()}
+      emptyText={SECRETS_EMPTY_TEXT}
+      hostName={(hostId) => hostId}
+    />,
+    { wrapper: harness.Wrapper },
+  );
+}
+
+function mountTeam(host: TeamSecretsHost): TeamPageHarness {
+  useSettingsEnvironmentPickStore.setState({
+    pick: { kind: "team", environmentId: "env-a" },
+  });
+  const harness = mountTeamPage(poolSource("editor"), handlersFor(host));
+  renderPage(harness);
+  return harness;
+}
+
+function buttonOf(testId: string): HTMLButtonElement {
+  const element = screen.getByTestId(testId);
+  if (!(element instanceof HTMLButtonElement)) {
+    throw new Error(`${testId} is not a button`);
+  }
+  return element;
+}
+
+async function openFilledApiKeyForm(): Promise<void> {
+  fireEvent.click(await screen.findByTestId("secrets-add"));
+  fireEvent.click(await screen.findByTestId("secret-kind-option-api_key"));
+  fireEvent.change(await screen.findByTestId("secret-form-name"), {
+    target: { value: "STRIPE_KEY" },
+  });
+  fireEvent.change(screen.getByTestId("secret-form-hosts"), {
+    target: { value: "api.stripe.com" },
+  });
+  fireEvent.change(screen.getByTestId("secret-form-value"), {
+    target: { value: TYPED_VALUE },
+  });
+}
+
+async function openReplaceWithValue(): Promise<void> {
+  fireEvent.click(await screen.findByTestId("secret-row-replace"));
+  fireEvent.change(await screen.findByTestId("replace-secret-value"), {
+    target: { value: TYPED_VALUE },
+  });
+}
+
+function authnWrites(
+  harness: TeamPageHarness,
+  verb: string,
+  pathSuffix: string,
+): string[] {
+  return harness.cloudRequests
+    .filter(
+      (request) =>
+        request.method === verb &&
+        new URL(request.url).pathname.endsWith(pathSuffix),
+    )
+    .map((request) => new URL(request.url).pathname);
+}
+
+/** The one mutation under `mutationKey`, with nothing of the typed value. */
+function onlyMutation(
+  queryClient: QueryClient,
+  mutationKey: readonly string[],
+) {
+  const mutations = queryClient
+    .getMutationCache()
+    .findAll({ mutationKey, exact: true });
+  expect(mutations).toHaveLength(1);
+  const [mutation] = mutations;
+  const serialized = JSON.stringify(mutation.state);
+  expect(serialized).not.toContain(TYPED_VALUE);
+  expect(serialized).not.toContain(JSON.stringify(TYPED_VALUE).slice(1, -1));
+  return mutation;
+}
+
+function listReads(harness: TeamPageHarness): number {
+  return harness.paramsOf("environment.secrets.list").length;
+}
+
+beforeEach(() => {
+  openLinkMock.mockResolvedValue(undefined);
+  useSettingsEnvironmentPickStore.setState({ pick: null });
+});
+
+afterEach(() => {
+  cleanup();
+  resetTeamPageHarness();
+  openLinkMock.mockReset();
+  useSettingsEnvironmentPickStore.setState({ pick: null });
+});
+
+describe("a team secret's writes go to authn on the person's sign-in", () => {
+  it("shows a team's rotation from its selected environment read", async () => {
+    const host = teamSecretsHost();
+    host.rotation = {
+      rotationId: "rot-team",
+      fromVersionId: "ver-1",
+      toVersionId: "ver-2",
+      state: "enforcing",
+      issuedAt: 1,
+      producers: [
+        {
+          producer: "worker",
+          workerClass: "https",
+          incarnation: "worker-1",
+          status: "missing",
+          evidence: null,
+        },
+      ],
+    };
+    const harness = mountTeam(host);
+    await openReplaceWithValue();
+    fireEvent.click(buttonOf("replace-secret-confirm"));
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.secrets.replaceValue")).toHaveLength(
+        1,
+      );
+    });
+    host.replace.release({
+      outcome: "accepted",
+      rotationId: "rot-team",
+      versionId: "ver-3",
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("replace-secret-dialog")).toBeNull();
+    });
+
+    expect(
+      (await screen.findByTestId("secret-rotation-headline")).textContent,
+    ).toBe("New value accepted, closing old sessions.");
+    expect(
+      screen
+        .getAllByTestId("secret-rotation-producer")
+        .map((line) => line.textContent),
+    ).toEqual(["https: not confirmed yet"]);
+    expect(harness.paramsOf("environment.secrets.rotation")).toEqual([
+      { secretId: "sec-1", environmentId: "env-a" },
+    ]);
+  });
+
+  it("saves through the create mutation, disabled while in flight, then re-reads the team's secrets", async () => {
+    const host = teamSecretsHost();
+    const harness = mountTeam(host);
+    await openFilledApiKeyForm();
+    fireEvent.click(buttonOf("secret-form-continue"));
+    fireEvent.click(await screen.findByTestId("secret-save"));
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.secrets.create")).toHaveLength(1);
+    });
+    const [params] = harness.paramsOf("environment.secrets.create");
+    expect(params).toMatchObject({
+      environmentId: "env-a",
+      name: "STRIPE_KEY",
+      value: TYPED_VALUE,
+    });
+    expect(authnWrites(harness, "POST", "/environments/env-a/secrets")).toEqual(
+      ["/api/v3/environments/env-a/secrets"],
+    );
+    const mutation = onlyMutation(
+      harness.queryClient,
+      settingsDetailsMutationKeys.secretCreate(),
+    );
+    expect(mutation.state.status).toBe("pending");
+    expect(buttonOf("secret-save").disabled).toBe(true);
+    const readsBefore = listReads(harness);
+
+    host.create.release({ outcome: "created", secret: secretFixture() });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("add-secret-dialog")).toBeNull();
+    });
+    await waitFor(() => {
+      expect(listReads(harness)).toBe(readsBefore + 1);
+    });
+    expect(
+      onlyMutation(
+        harness.queryClient,
+        settingsDetailsMutationKeys.secretCreate(),
+      ).state.status,
+    ).toBe("success");
+  });
+
+  it("verifies the typed value through the candidate verify mutation, disabled while in flight", async () => {
+    const host = teamSecretsHost();
+    const harness = mountTeam(host);
+    await openFilledApiKeyForm();
+    fireEvent.click(buttonOf("secret-form-verify"));
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.secrets.verify")).toHaveLength(1);
+    });
+    const [params] = harness.paramsOf("environment.secrets.verify");
+    expect(params).toMatchObject({
+      target: "candidate",
+      environmentId: "env-a",
+      value: TYPED_VALUE,
+    });
+    expect(
+      authnWrites(harness, "POST", "/environments/env-a/secrets/verify"),
+    ).toEqual(["/api/v3/environments/env-a/secrets/verify"]);
+    const mutation = onlyMutation(
+      harness.queryClient,
+      settingsDetailsMutationKeys.secretVerifyCandidate(),
+    );
+    expect(mutation.state.status).toBe("pending");
+    expect(buttonOf("secret-form-verify").disabled).toBe(true);
+    expect(buttonOf("secret-form-continue").disabled).toBe(true);
+
+    host.verify.release({ evidence: "probe_accepted" });
+
+    expect(
+      (await screen.findByTestId("secret-form-verify-line")).textContent,
+    ).toBe(
+      "Reached the destination. The key is checked the first time an agent uses it.",
+    );
+    expect(buttonOf("secret-form-verify").disabled).toBe(false);
+  });
+
+  it("replaces through the replace mutation, disabled while in flight, then re-reads the team's secrets", async () => {
+    const host = teamSecretsHost();
+    const harness = mountTeam(host);
+    await openReplaceWithValue();
+    fireEvent.click(buttonOf("replace-secret-confirm"));
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.secrets.replaceValue")).toHaveLength(
+        1,
+      );
+    });
+    const [params] = harness.paramsOf("environment.secrets.replaceValue");
+    expect(params).toEqual({
+      secretId: "sec-1",
+      value: TYPED_VALUE,
+      expectedVersionId: "ver-2",
+      environmentId: "env-a",
+    });
+    expect(
+      authnWrites(harness, "PATCH", "/environments/env-a/secrets/sec-1"),
+    ).toEqual(["/api/v3/environments/env-a/secrets/sec-1"]);
+    const mutation = onlyMutation(
+      harness.queryClient,
+      settingsDetailsMutationKeys.secretReplaceValue(),
+    );
+    expect(mutation.state.status).toBe("pending");
+    expect(mutation.state.variables).toEqual({
+      secretId: "sec-1",
+      expectedVersionId: "ver-2",
+    });
+    expect(buttonOf("replace-secret-confirm").disabled).toBe(true);
+    const readsBefore = listReads(harness);
+
+    host.replace.release({
+      outcome: "accepted",
+      rotationId: "rot-1",
+      versionId: "ver-3",
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("replace-secret-dialog")).toBeNull();
+    });
+    await waitFor(() => {
+      expect(listReads(harness)).toBe(readsBefore + 1);
+    });
+  });
+});

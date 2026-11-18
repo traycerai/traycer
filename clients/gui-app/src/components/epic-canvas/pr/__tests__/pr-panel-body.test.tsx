@@ -1,0 +1,911 @@
+import { nestedFocusBoundaryMock } from "@/__tests__/nested-focus-boundary-mock";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type {
+  PrLightItem,
+  PrSubscribeListForEpicServerFrame,
+} from "@traycer/protocol/host/pr-schemas";
+import {
+  MockStreamSession as SharedMockStreamSession,
+  MockWsStreamClient as SharedMockWsStreamClient,
+} from "@/components/epic-canvas/pr/__tests__/pr-stream-test-fixtures";
+import {
+  StreamRuntimeContext,
+  type StreamRuntimeBinding,
+} from "@/lib/host/stream-runtime-context";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { prDetailTileId } from "@/lib/pr/pr-detail-tile";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { usePrPanelStore } from "@/stores/epics/pr-panel-store";
+import type { TilePane } from "@/stores/epics/canvas/tile-tree";
+import {
+  requestSidebarNodeReveal,
+  useSidebarNodeRevealStore,
+} from "@/stores/epics/sidebar-node-reveal-store";
+import {
+  prPresenceScopeKey,
+  usePrPresenceStore,
+} from "@/stores/epics/pr-presence-store";
+
+const canvasHostState = vi.hoisted(() => ({ id: "host-a" }));
+let streamBindingsByHost: Record<string, StreamRuntimeBinding | null> = {};
+
+vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
+  useCanvasHostId: () => canvasHostState.id,
+}));
+
+vi.mock("@/hooks/host/use-surface-host-stream-binding", () => ({
+  useSurfaceHostStreamBinding: (hostId: string | null) =>
+    hostId === null ? null : (streamBindingsByHost[hostId] ?? null),
+}));
+
+// `PrRow` pulls in the per-Epic owner-label chain (`useChatById` /
+// `useEpicTerminalAgent`, which resolve titles off `OpenEpicState.chats` and so
+// need a live `OpenEpicStoreHandle`) that has nothing to do with the panel
+// wiring under test here. Stub it to a minimal clickable row that still exercises the
+// REAL row-click -> tile-open wiring in `pr-panel-body.tsx`, keeping the WS
+// transport as the only faked external boundary plus this one unrelated
+// presentational seam. Linked (nested submodule) rows render as their own
+// buttons so the panel's nesting decisions stay observable here.
+vi.mock("@/components/epic-canvas/pr/pr-row", () => {
+  const mockLabel = (item: PrLightItem): string =>
+    item.base !== null
+      ? `${item.base.owner}/${item.base.repo}#${item.base.prNumber}`
+      : (item.headRefName ?? "unknown-head");
+  const mockEntry = (
+    entry: {
+      readonly item: PrLightItem;
+      readonly tileId: string | null;
+      readonly onOpen: (() => void) | null;
+    },
+    prefix: string,
+  ) => (
+    <div data-sidebar-node-id={entry.tileId ?? undefined}>
+      <button
+        type="button"
+        key={mockLabel(entry.item)}
+        data-testid={`${prefix}-${mockLabel(entry.item)}`}
+        data-openable={entry.onOpen !== null ? "true" : "false"}
+        data-tile-id={entry.tileId ?? ""}
+        onClick={() => entry.onOpen?.()}
+      >
+        {mockLabel(entry.item)}
+      </button>
+    </div>
+  );
+  return {
+    PrRow: (props: {
+      readonly entry: {
+        readonly item: PrLightItem;
+        readonly tileId: string | null;
+        readonly onOpen: (() => void) | null;
+      };
+    }) => <div>{mockEntry(props.entry, "mock-pr-card")}</div>,
+  };
+});
+
+import { PrPanelBody } from "@/components/epic-canvas/pr/pr-panel-body";
+
+type MockStreamSession =
+  SharedMockStreamSession<PrSubscribeListForEpicServerFrame>;
+type MockWsStreamClient =
+  SharedMockWsStreamClient<PrSubscribeListForEpicServerFrame>;
+// Instantiation expression: binds the shared generic class to THIS
+// suite's frame type, so `new MockWsStreamClient()` needs no argument.
+const MockWsStreamClient =
+  SharedMockWsStreamClient<PrSubscribeListForEpicServerFrame>;
+
+/** Minimal, fully-populated `PrLightItem` fixture builder - every required
+ * field gets a realistic default; callers override only what the case cares
+ * about. */
+function railRowKind(row: HTMLElement): string {
+  if (row.querySelector("[data-testid=pr-stack-absent]") !== null) {
+    return "absent";
+  }
+  if (row.querySelector("[data-testid=pr-stack-base]") !== null) return "base";
+  const card = row.querySelector("[data-testid^=mock-pr-card-]");
+  return card?.getAttribute("data-testid")?.replace("mock-pr-card-", "") ?? "?";
+}
+
+function buildPrItem(overrides: Partial<PrLightItem>): PrLightItem {
+  return {
+    githubHost: null,
+    base: null,
+    prUrl: null,
+    state: "open",
+    liveness: "live",
+    observedAt: null,
+    isDraft: false,
+    title: "Test PR",
+    baseRefName: "main",
+    headRefName: "feature/test",
+    additions: 10,
+    deletions: 2,
+    checksRollup: null,
+    reviewDecision: null,
+    commentCount: 0,
+    updatedAt: 1_000,
+    repoIdentifier: { owner: "acme", repo: "widgets" },
+    repoRole: "superproject",
+    linkGroupKey: null,
+    owners: [],
+    ...overrides,
+  };
+}
+
+function resetCanvas(): void {
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+}
+
+describe("PrPanelBody card list", () => {
+  let queryClient: QueryClient;
+  let mockWsStreamClient: MockWsStreamClient;
+
+  const panelTree = (props: { epicId: string; tabId: string }) => (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <StreamRuntimeContext.Provider
+          value={{
+            wsStreamClient: mockWsStreamClient,
+            hostId: null,
+            retain: null,
+          }}
+        >
+          <PrPanelBody epicId={props.epicId} tabId={props.tabId} />
+        </StreamRuntimeContext.Provider>
+      </TooltipProvider>
+    </QueryClientProvider>
+  );
+
+  const renderPanel = (props: { epicId: string; tabId: string }) => {
+    return render(panelTree(props));
+  };
+
+  const emitSnapshot = async (
+    epicId: string,
+    items: readonly PrLightItem[],
+  ): Promise<MockStreamSession> => {
+    return emitSnapshotFrom(mockWsStreamClient, epicId, items);
+  };
+
+  const emitSnapshotFrom = async (
+    client: MockWsStreamClient,
+    epicId: string,
+    items: readonly PrLightItem[],
+  ): Promise<MockStreamSession> => {
+    await waitFor(() => {
+      expect(client.subscribeCallCount).toBe(1);
+    });
+    const session = client.getSession("pr.subscribeListForEpic", {
+      epicId,
+      mode: "foreground",
+    });
+    expect(session).toBeDefined();
+    if (session === undefined) throw new Error("missing list session");
+    session.emitFrame({
+      kind: "snapshot",
+      hasBinaryPayload: false,
+      sourceStatus: "ok",
+      notice: null,
+      items: [...items],
+    });
+    return session;
+  };
+
+  beforeEach(() => {
+    canvasHostState.id = "host-a";
+    usePrPanelStore.setState({ stateFilter: "all", searchQueryByTabId: {} });
+    usePrPresenceStore.setState({ hasItemsByScopeKey: {} });
+    resetCanvas();
+    useSidebarNodeRevealStore.setState(
+      { requestsByViewTabId: {}, visibleByViewTabId: {} },
+      true,
+    );
+    nestedFocusBoundaryMock.navigateNested.mockClear();
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    mockWsStreamClient = new MockWsStreamClient();
+    streamBindingsByHost = {
+      "host-a": {
+        wsStreamClient: mockWsStreamClient,
+        hostId: "host-a",
+        retain: null,
+      },
+    };
+  });
+
+  afterEach(() => {
+    cleanup();
+    usePrPanelStore.setState({ stateFilter: "all", searchQueryByTabId: {} });
+    resetCanvas();
+    useSidebarNodeRevealStore.setState(
+      { requestsByViewTabId: {}, visibleByViewTabId: {} },
+      true,
+    );
+    usePrPresenceStore.setState({ hasItemsByScopeKey: {} });
+    streamBindingsByHost = {};
+    queryClient.clear();
+  });
+
+  it("renders a worktrees-style repo header (label + count) over one always-expanded card per PR", async () => {
+    const epicId = "epic-h1";
+    renderPanel({ epicId, tabId: "tab-h1" });
+    await emitSnapshot(epicId, [
+      buildPrItem({
+        base: { owner: "acme", repo: "widgets", prNumber: 1 },
+        githubHost: "github.com",
+        prUrl: "https://github.com/acme/widgets/pull/1",
+      }),
+      buildPrItem({
+        headRefName: "feature/unknown-base",
+        repoIdentifier: { owner: "acme", repo: "widgets" },
+      }),
+    ]);
+
+    const header = await screen.findByTestId("pr-repo-group-header");
+    expect(header.textContent).toContain("acme/widgets");
+    expect(header.textContent).toContain("2");
+    // Both cards render directly - no expansion affordance exists anymore.
+    expect(screen.getByTestId("mock-pr-card-acme/widgets#1")).toBeTruthy();
+    expect(
+      screen.getByTestId("mock-pr-card-feature/unknown-base"),
+    ).toBeTruthy();
+  });
+
+  it("scrolls to and flash-highlights a revealed PR row", async () => {
+    const epicId = "epic-reveal";
+    const tabId = "tab-reveal";
+    const item = buildPrItem({
+      base: { owner: "acme", repo: "widgets", prNumber: 42 },
+      githubHost: "github.com",
+    });
+    const tileId = prDetailTileId({
+      hostId: "host-a",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 42,
+    });
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    requestSidebarNodeReveal(tabId, tileId);
+    renderPanel({ epicId, tabId });
+
+    await emitSnapshot(epicId, [item]);
+
+    const row = screen
+      .getByTestId("mock-pr-card-acme/widgets#42")
+      .closest<HTMLElement>("[data-sidebar-node-id]");
+    await waitFor(() => {
+      expect(scrollIntoView.mock.instances).toContain(row);
+    });
+    expect(row?.dataset.sidebarRevealHighlighted).toBe("true");
+    expect(
+      useSidebarNodeRevealStore.getState().requestsByViewTabId[tabId],
+    ).toBeUndefined();
+  });
+
+  it("gives an owned-submodule PR its own repo group directly under its superproject's", async () => {
+    const epicId = "epic-l1";
+    renderPanel({ epicId, tabId: "tab-l1" });
+    await emitSnapshot(epicId, [
+      buildPrItem({
+        base: { owner: "acme", repo: "widgets", prNumber: 1 },
+        githubHost: "github.com",
+        prUrl: "https://github.com/acme/widgets/pull/1",
+        linkGroupKey: "/w/one",
+      }),
+      buildPrItem({
+        base: { owner: "acme", repo: "widgets-oss", prNumber: 9 },
+        githubHost: "github.com",
+        prUrl: "https://github.com/acme/widgets-oss/pull/9",
+        repoIdentifier: { owner: "acme", repo: "widgets-oss" },
+        repoRole: "submodule",
+        linkGroupKey: "/w/one",
+      }),
+    ]);
+
+    // Each side gets its own repo dropdown; the shared link group only decides
+    // that the submodule's lands directly beneath its superproject's.
+    const headers = await screen.findAllByTestId("pr-repo-group-header");
+    expect(headers.map((header) => header.textContent)).toEqual([
+      expect.stringContaining("acme/widgets"),
+      expect.stringContaining("acme/widgets-oss"),
+    ]);
+    expect(screen.getByTestId("mock-pr-card-acme/widgets#1")).toBeTruthy();
+    expect(screen.getByTestId("mock-pr-card-acme/widgets-oss#9")).toBeTruthy();
+  });
+
+  it("a submodule row opens its own pr-detail tile", async () => {
+    const epicId = "epic-l2";
+    renderPanel({ epicId, tabId: "tab-l2" });
+    await emitSnapshot(epicId, [
+      buildPrItem({
+        base: { owner: "acme", repo: "widgets", prNumber: 1 },
+        githubHost: "github.com",
+        prUrl: "https://github.com/acme/widgets/pull/1",
+        linkGroupKey: "/w/one",
+      }),
+      buildPrItem({
+        base: { owner: "acme", repo: "widgets-oss", prNumber: 9 },
+        githubHost: "github.com",
+        prUrl: "https://github.com/acme/widgets-oss/pull/9",
+        repoIdentifier: { owner: "acme", repo: "widgets-oss" },
+        repoRole: "submodule",
+        linkGroupKey: "/w/one",
+      }),
+    ]);
+
+    fireEvent.click(
+      await screen.findByTestId("mock-pr-card-acme/widgets-oss#9"),
+    );
+
+    const canvasState = useEpicCanvasStore.getState();
+    const tabId = Object.keys(canvasState.tabsById).find(
+      (id) => canvasState.tabsById[id]?.epicId === epicId,
+    );
+    expect(tabId).toBeDefined();
+    if (tabId === undefined) return;
+    const canvas = canvasState.canvasByTabId[tabId];
+    if (canvas?.root?.kind !== "pane") throw new Error("expected a pane");
+    const tile = canvas.tilesByInstanceId[canvas.root.tabInstanceIds[0]];
+    if (tile?.type !== "pr-detail")
+      throw new Error("expected a pr-detail tile");
+    expect(tile.repo).toBe("widgets-oss");
+    expect(tile.prNumber).toBe(9);
+  });
+
+  it("collapsing a repo header hides its rows and keeps the count visible", async () => {
+    const epicId = "epic-c1";
+    renderPanel({ epicId, tabId: "tab-c1" });
+    await emitSnapshot(epicId, [
+      buildPrItem({
+        base: { owner: "acme", repo: "widgets", prNumber: 1 },
+        githubHost: "github.com",
+        prUrl: "https://github.com/acme/widgets/pull/1",
+      }),
+    ]);
+
+    const header = await screen.findByTestId("pr-repo-group-header");
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(header);
+
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByTestId("mock-pr-card-acme/widgets#1")).toBeNull();
+    expect(header.textContent).toContain("1");
+  });
+
+  it("clicking a fully-identified card opens a pr-detail tile via the real canvas store", async () => {
+    const epicId = "epic-d1";
+    const item = buildPrItem({
+      base: { owner: "acme", repo: "widgets", prNumber: 55 },
+      githubHost: "github.com",
+      prUrl: "https://github.com/acme/widgets/pull/55",
+      headRefName: "feature/full-view",
+      title: "Full view PR",
+    });
+
+    renderPanel({ epicId, tabId: "tab-d1" });
+    await emitSnapshot(epicId, [item]);
+
+    const card = await screen.findByTestId("mock-pr-card-acme/widgets#55");
+    expect(card.getAttribute("data-openable")).toBe("true");
+    fireEvent.click(card);
+
+    const expectedTileId: string = prDetailTileId({
+      hostId: "host-a",
+      githubHost: "github.com",
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 55,
+    });
+
+    const canvasState = useEpicCanvasStore.getState();
+    const tabId = Object.keys(canvasState.tabsById).find(
+      (id) => canvasState.tabsById[id]?.epicId === epicId,
+    );
+    expect(tabId).toBeDefined();
+    if (tabId === undefined) return;
+
+    const canvas = canvasState.canvasByTabId[tabId];
+    if (canvas?.root?.kind !== "pane") throw new Error("expected a pane");
+    const pane: TilePane = canvas.root;
+    expect(pane.tabInstanceIds).toHaveLength(1);
+    const tile = canvas.tilesByInstanceId[pane.tabInstanceIds[0]];
+    expect(tile).toBeDefined();
+    if (tile === undefined) return;
+
+    expect(tile.id).toBe(expectedTileId);
+    expect(tile.type).toBe("pr-detail");
+    if (tile.type !== "pr-detail") throw new Error("expected a pr-detail tile");
+    expect(tile.hostId).toBe("host-a");
+    expect(tile.githubHost).toBe("github.com");
+    expect(tile.owner).toBe("acme");
+    expect(tile.repo).toBe("widgets");
+    expect(tile.prNumber).toBe(55);
+    // The row advertises the SAME id it opens - that equality is what lets the
+    // row light up when its tile is the one showing.
+    expect(card.getAttribute("data-tile-id")).toBe(expectedTileId);
+  });
+
+  it("an unknown-base card is not openable and clicking it opens no tile", async () => {
+    const epicId = "epic-u1";
+    renderPanel({ epicId, tabId: "tab-u1" });
+    await emitSnapshot(epicId, [
+      buildPrItem({ headRefName: "feature/unknown-base" }),
+    ]);
+
+    const card = await screen.findByTestId("mock-pr-card-feature/unknown-base");
+    expect(card.getAttribute("data-openable")).toBe("false");
+    // No tile means nothing to highlight against, ever.
+    expect(card.getAttribute("data-tile-id")).toBe("");
+    fireEvent.click(card);
+
+    const canvasState = useEpicCanvasStore.getState();
+    const tabId = Object.keys(canvasState.tabsById).find(
+      (id) => canvasState.tabsById[id]?.epicId === epicId,
+    );
+    expect(tabId).toBeUndefined();
+  });
+
+  it("re-binds rows, refresh, presence, and detail tiles when the canvas host switches", async () => {
+    const epicId = "epic-cross-host";
+    const tabId = "tab-cross-host";
+    const hostBClient = new MockWsStreamClient();
+    streamBindingsByHost["host-b"] = {
+      wsStreamClient: hostBClient,
+      hostId: "host-b",
+      retain: null,
+    };
+    const rendered = renderPanel({ epicId, tabId });
+
+    const hostASession = await emitSnapshot(epicId, [
+      buildPrItem({
+        base: { owner: "acme", repo: "widgets", prNumber: 1 },
+        githubHost: "github.com",
+      }),
+    ]);
+    expect(screen.getByTestId("mock-pr-card-acme/widgets#1")).toBeTruthy();
+    expect(
+      usePrPresenceStore.getState().hasItemsByScopeKey[
+        prPresenceScopeKey("host-a", epicId)
+      ],
+    ).toBe(true);
+
+    canvasHostState.id = "host-b";
+    rendered.rerender(panelTree({ epicId, tabId }));
+    await waitFor(() => {
+      expect(hostASession.closed).toBe(true);
+    });
+    const hostBItem = buildPrItem({
+      base: { owner: "acme", repo: "widgets", prNumber: 2 },
+      githubHost: "github.com",
+      title: "Host B PR",
+    });
+    const hostBSession = await emitSnapshotFrom(hostBClient, epicId, [
+      hostBItem,
+    ]);
+
+    expect(screen.queryByTestId("mock-pr-card-acme/widgets#1")).toBeNull();
+    const hostBRow = screen.getByTestId("mock-pr-card-acme/widgets#2");
+    expect(
+      usePrPresenceStore.getState().hasItemsByScopeKey[
+        prPresenceScopeKey("host-b", epicId)
+      ],
+    ).toBe(true);
+
+    fireEvent.click(screen.getByTestId("pr-panel-refresh"));
+    expect(hostBSession.sentClientFrames).toEqual([
+      { kind: "refresh", hasBinaryPayload: false },
+    ]);
+
+    fireEvent.click(hostBRow);
+    const state = useEpicCanvasStore.getState();
+    const detailTabId = Object.keys(state.tabsById).find(
+      (id) => state.tabsById[id]?.epicId === epicId,
+    );
+    expect(detailTabId).toBeDefined();
+    if (detailTabId === undefined) return;
+    const canvas = state.canvasByTabId[detailTabId];
+    if (canvas?.root?.kind !== "pane") throw new Error("expected a pane");
+    const tile = canvas.tilesByInstanceId[canvas.root.tabInstanceIds[0]];
+    expect(tile?.type).toBe("pr-detail");
+    if (tile?.type !== "pr-detail") return;
+    expect(tile.hostId).toBe("host-b");
+    expect(tile.prNumber).toBe(2);
+  });
+
+  it("asks for a host update when the canvas host lacks the PR list stream", () => {
+    const unsupportedClient = new MockWsStreamClient();
+    vi.spyOn(unsupportedClient, "getMethodSupport").mockReturnValue(
+      "unsupported",
+    );
+    streamBindingsByHost["host-a"] = {
+      wsStreamClient: unsupportedClient,
+      hostId: "host-a",
+      retain: null,
+    };
+    renderPanel({ epicId: "epic-unsupported", tabId: "tab-unsupported" });
+    expect(screen.getByTestId("pr-panel-host-update-required")).toBeTruthy();
+    expect(unsupportedClient.subscribeCallCount).toBe(0);
+  });
+
+  it("keeps the header actions while the canvas host reports a recoverable stream error", async () => {
+    const epicId = "epic-header-recovery";
+    renderPanel({ epicId, tabId: "tab-header-recovery" });
+    await waitFor(() => {
+      expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+    });
+    const session = mockWsStreamClient.getSession("pr.subscribeListForEpic", {
+      epicId,
+      mode: "foreground",
+    });
+    expect(session).toBeDefined();
+    if (session === undefined) return;
+    session.emitFrame({
+      kind: "error",
+      hasBinaryPayload: false,
+      message: "temporary failure",
+      isFatal: false,
+    });
+    expect(await screen.findByTestId("pr-panel-error-notice")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("pr-panel-refresh"));
+    expect(session.sentClientFrames).toEqual([
+      { kind: "refresh", hasBinaryPayload: false },
+    ]);
+  });
+  describe("state filter", () => {
+    const hiddenByOpen = (): readonly PrLightItem[] => [
+      buildPrItem({ headRefName: "merged-head", state: "merged" }),
+      buildPrItem({ headRefName: "closed-head", state: "closed" }),
+    ];
+
+    it("lists only the rows in the chosen state", async () => {
+      usePrPanelStore.setState({ stateFilter: "merged" });
+      const epicId = "epic-sf1";
+      renderPanel({ epicId, tabId: "tab-sf1" });
+      await emitSnapshot(epicId, [
+        buildPrItem({ headRefName: "open-head", state: "open" }),
+        ...hiddenByOpen(),
+      ]);
+
+      expect(
+        await screen.findByTestId("mock-pr-card-merged-head"),
+      ).toBeTruthy();
+      expect(screen.queryByTestId("mock-pr-card-open-head")).toBeNull();
+      expect(screen.queryByTestId("mock-pr-card-closed-head")).toBeNull();
+      // The repo count follows what is shown.
+      expect(screen.getByTestId("pr-repo-group-header").textContent).toContain(
+        "1",
+      );
+      expect(screen.queryByTestId("pr-panel-filtered-empty")).toBeNull();
+    });
+
+    it("says the filter hid every row and Show all brings them back", async () => {
+      usePrPanelStore.setState({ stateFilter: "open" });
+      const epicId = "epic-sf2";
+      renderPanel({ epicId, tabId: "tab-sf2" });
+      await emitSnapshot(epicId, hiddenByOpen());
+
+      const empty = await screen.findByTestId("pr-panel-filtered-empty");
+      expect(empty.textContent).toContain("No open pull requests");
+      expect(screen.queryByTestId("pr-panel-empty")).toBeNull();
+      expect(screen.queryByTestId("pr-repo-group")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+
+      expect(usePrPanelStore.getState().stateFilter).toBe("all");
+      expect(
+        await screen.findByTestId("mock-pr-card-merged-head"),
+      ).toBeTruthy();
+      expect(screen.getByTestId("mock-pr-card-closed-head")).toBeTruthy();
+      expect(screen.queryByTestId("pr-panel-filtered-empty")).toBeNull();
+    });
+
+    it("keeps a refresh banner above the filtered empty state", async () => {
+      usePrPanelStore.setState({ stateFilter: "open" });
+      const epicId = "epic-sf3";
+      renderPanel({ epicId, tabId: "tab-sf3" });
+      await waitFor(() => {
+        expect(mockWsStreamClient.subscribeCallCount).toBe(1);
+      });
+      mockWsStreamClient
+        .getSession("pr.subscribeListForEpic", { epicId, mode: "foreground" })
+        ?.emitFrame({
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sourceStatus: "gh-unavailable",
+          notice: null,
+          items: [...hiddenByOpen()],
+        });
+
+      const banner = await screen.findByTestId("pr-panel-gh-unavailable");
+      const empty = screen.getByTestId("pr-panel-filtered-empty");
+      expect(
+        banner.compareDocumentPosition(empty) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it("still shows the generic empty state when the list itself is empty", async () => {
+      usePrPanelStore.setState({ stateFilter: "merged" });
+      const epicId = "epic-sf4";
+      renderPanel({ epicId, tabId: "tab-sf4" });
+      await emitSnapshot(epicId, []);
+
+      expect(await screen.findByTestId("pr-panel-empty")).toBeTruthy();
+      expect(screen.queryByTestId("pr-panel-filtered-empty")).toBeNull();
+    });
+  });
+
+  describe("search", () => {
+    const searchRows = (): readonly PrLightItem[] => [
+      buildPrItem({ headRefName: "fix/login", title: "Fix login redirect" }),
+      buildPrItem({ headRefName: "feat/export", title: "CSV export" }),
+      buildPrItem({
+        headRefName: "fix/old-login",
+        title: "Old login fix",
+        state: "merged",
+      }),
+    ];
+
+    const typeQuery = (query: string): void => {
+      fireEvent.change(screen.getByTestId("pr-panel-search-input"), {
+        target: { value: query },
+      });
+    };
+
+    it("lists only rows the query matches, within the state filter", async () => {
+      usePrPanelStore.setState({ stateFilter: "open" });
+      const epicId = "epic-s1";
+      renderPanel({ epicId, tabId: "tab-s1" });
+      await emitSnapshot(epicId, searchRows());
+      await screen.findByTestId("mock-pr-card-feat/export");
+
+      typeQuery("LOGIN");
+
+      expect(screen.getByTestId("mock-pr-card-fix/login")).toBeTruthy();
+      expect(screen.queryByTestId("mock-pr-card-feat/export")).toBeNull();
+      expect(screen.queryByTestId("mock-pr-card-fix/old-login")).toBeNull();
+      expect(screen.getByTestId("pr-repo-group-header").textContent).toContain(
+        "1",
+      );
+    });
+
+    it("holds a collapsed repo group open while a query is typed, keeping its fold", async () => {
+      const epicId = "epic-s2";
+      renderPanel({ epicId, tabId: "tab-s2" });
+      await emitSnapshot(epicId, searchRows());
+      fireEvent.click(await screen.findByTestId("pr-repo-group-header"));
+      expect(screen.queryByTestId("mock-pr-card-fix/login")).toBeNull();
+
+      typeQuery("export");
+      expect(screen.getByTestId("mock-pr-card-feat/export")).toBeTruthy();
+      const header = screen.getByTestId("pr-repo-group-header");
+      expect(header.hasAttribute("disabled")).toBe(true);
+      fireEvent.click(header);
+
+      fireEvent.keyDown(screen.getByTestId("pr-panel-search-input"), {
+        key: "Escape",
+      });
+      expect(usePrPanelStore.getState().searchQueryByTabId).toEqual({});
+      expect(screen.queryByTestId("mock-pr-card-feat/export")).toBeNull();
+    });
+
+    it("offers Show all when the only matches are in hidden states", async () => {
+      usePrPanelStore.setState({ stateFilter: "open" });
+      const epicId = "epic-s3";
+      renderPanel({ epicId, tabId: "tab-s3" });
+      await emitSnapshot(epicId, searchRows());
+      await screen.findByTestId("mock-pr-card-feat/export");
+
+      typeQuery("old-login");
+
+      const empty = screen.getByTestId("pr-panel-search-empty");
+      expect(empty.textContent).toContain(
+        "No open pull requests match “old-login”",
+      );
+      expect(empty.textContent).toContain("1 match in other states");
+      fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+      expect(screen.getByTestId("mock-pr-card-fix/old-login")).toBeTruthy();
+    });
+
+    it("offers Clear search when nothing matches anywhere", async () => {
+      const epicId = "epic-s4";
+      renderPanel({ epicId, tabId: "tab-s4" });
+      await emitSnapshot(epicId, searchRows());
+      await screen.findByTestId("mock-pr-card-feat/export");
+
+      typeQuery("nothing-like-this");
+      expect(screen.queryByTestId("pr-panel-filtered-empty")).toBeNull();
+      fireEvent.click(
+        within(screen.getByTestId("pr-panel-search-empty")).getByRole(
+          "button",
+          { name: "Clear search" },
+        ),
+      );
+
+      expect(screen.getByTestId("mock-pr-card-feat/export")).toBeTruthy();
+      expect(screen.queryByTestId("pr-panel-search-empty")).toBeNull();
+    });
+
+    it("keeps each tab's query to itself", async () => {
+      const epicId = "epic-s5";
+      usePrPanelStore.getState().setSearchQuery("other-tab", "export");
+      renderPanel({ epicId, tabId: "tab-s5" });
+      await emitSnapshot(epicId, searchRows());
+
+      expect(await screen.findByTestId("mock-pr-card-fix/login")).toBeTruthy();
+      expect(screen.queryByDisplayValue("export")).toBeNull();
+    });
+  });
+
+  describe("stacks", () => {
+    it("draws a stack header above two rows chained by base and head", async () => {
+      const epicId = "epic-st1";
+      renderPanel({ epicId, tabId: "tab-st1" });
+      await emitSnapshot(epicId, [
+        buildPrItem({
+          headRefName: "stack-top",
+          baseRefName: "stack-bottom",
+        }),
+        buildPrItem({ headRefName: "stack-bottom", baseRefName: "main" }),
+      ]);
+
+      const header = await screen.findByTestId("pr-stack-header");
+      expect(header.textContent).toContain("Stack → main");
+      expect(header.textContent).toContain("2");
+      expect(screen.getAllByTestId("pr-stack-header")).toHaveLength(1);
+      // Top layer first beneath the header, the base branch at the foot.
+      const bottom = screen.getByTestId("mock-pr-card-stack-bottom");
+      const top = screen.getByTestId("mock-pr-card-stack-top");
+      expect(
+        header.compareDocumentPosition(top) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(screen.getByTestId("pr-stack-base").textContent).toBe("main");
+      expect(screen.queryByTestId("pr-stack-absent")).toBeNull();
+      expect(
+        top.compareDocumentPosition(bottom) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it("counts a native stack against its full size when only some layers are listed", async () => {
+      const epicId = "epic-st2";
+      renderPanel({ epicId, tabId: "tab-st2" });
+      await emitSnapshot(epicId, [
+        buildPrItem({
+          headRefName: "native-1",
+          stack: {
+            number: 7,
+            baseRefName: "development",
+            size: 5,
+            position: 1,
+          },
+        }),
+        buildPrItem({
+          headRefName: "native-2",
+          stack: {
+            number: 7,
+            baseRefName: "development",
+            size: 5,
+            position: 2,
+          },
+        }),
+      ]);
+
+      const header = await screen.findByTestId("pr-stack-header");
+      expect(header.textContent).toContain("Stack #7 → development");
+      expect(header.textContent).toContain("2 of 5");
+      // Drawn top first down the rail: the three absent upper layers, then
+      // layer 2, layer 1, and the base at the foot.
+      const rail = screen.getAllByTestId("pr-stack-rail-row");
+      expect(rail.map((row) => railRowKind(row))).toEqual([
+        "absent",
+        "native-2",
+        "native-1",
+        "base",
+      ]);
+      expect(screen.getByTestId("pr-stack-absent").textContent).toBe(
+        "3 layers not in this task",
+      );
+      expect(screen.getByTestId("pr-stack-base").textContent).toBe(
+        "development",
+      );
+    });
+
+    it("does not invent a stack when the Open filter hides a fan-in row", async () => {
+      const epicId = "epic-filter-fanin";
+      renderPanel({ epicId, tabId: "tab-filter-fanin" });
+      await emitSnapshot(epicId, [
+        buildPrItem({
+          headRefName: "development",
+          baseRefName: "main",
+          state: "open",
+        }),
+        buildPrItem({
+          headRefName: "feat-open",
+          baseRefName: "development",
+          state: "open",
+        }),
+        buildPrItem({
+          headRefName: "feat-merged",
+          baseRefName: "development",
+          state: "merged",
+        }),
+      ]);
+      await screen.findByTestId("mock-pr-card-feat-open");
+      expect(screen.queryByTestId("pr-stack-header")).toBeNull();
+
+      act(() => {
+        usePrPanelStore.getState().setStateFilter("open");
+      });
+
+      expect(screen.queryByTestId("mock-pr-card-feat-merged")).toBeNull();
+      expect(screen.queryByTestId("pr-stack-header")).toBeNull();
+      expect(screen.queryByTestId("pr-stack-rail-row")).toBeNull();
+    });
+
+    it("keeps a hidden layer's neighbours in their stack places", async () => {
+      const epicId = "epic-filter-stack";
+      renderPanel({ epicId, tabId: "tab-filter-stack" });
+      await emitSnapshot(epicId, [
+        buildPrItem({
+          headRefName: "layer-1",
+          baseRefName: "main",
+          state: "merged",
+        }),
+        buildPrItem({
+          headRefName: "layer-2",
+          baseRefName: "layer-1",
+          state: "open",
+        }),
+        buildPrItem({
+          headRefName: "layer-3",
+          baseRefName: "layer-2",
+          state: "open",
+        }),
+      ]);
+      await screen.findByTestId("pr-stack-header");
+      const railKinds = () =>
+        screen
+          .getAllByTestId("pr-stack-rail-row")
+          .map((row) => railRowKind(row));
+      expect(railKinds()).toEqual(["layer-3", "layer-2", "layer-1", "base"]);
+
+      act(() => {
+        usePrPanelStore.getState().setStateFilter("open");
+      });
+
+      expect(screen.queryByTestId("mock-pr-card-layer-1")).toBeNull();
+      expect(screen.getByTestId("pr-stack-header").textContent).toContain(
+        "2 of 3",
+      );
+      // The hidden bottom layer leaves the rail; the rest keep their order
+      // and the base stays at the foot.
+      expect(railKinds()).toEqual(["layer-3", "layer-2", "base"]);
+    });
+
+    it("draws no stack header for unrelated rows", async () => {
+      const epicId = "epic-st3";
+      renderPanel({ epicId, tabId: "tab-st3" });
+      await emitSnapshot(epicId, [
+        buildPrItem({ headRefName: "solo-a" }),
+        buildPrItem({ headRefName: "solo-b" }),
+      ]);
+
+      await screen.findByTestId("mock-pr-card-solo-a");
+      expect(screen.queryByTestId("pr-stack-header")).toBeNull();
+    });
+  });
+});

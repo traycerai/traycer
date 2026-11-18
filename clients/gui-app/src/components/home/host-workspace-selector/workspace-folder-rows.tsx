@@ -1,0 +1,328 @@
+import { useMemo, type ReactNode } from "react";
+import { FolderPlus, RotateCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { useWorktreeHostListingForClient } from "@/hooks/worktree/use-worktree-host-listing";
+import { useDialogOverlayBoundaryEl } from "@/providers/dialog-overlay-boundary-context";
+import { cn } from "@/lib/utils";
+import { FolderRow } from "./folder-row";
+import type { WorkspaceRunItem } from "./workspace-run-item";
+
+export type AddFolderHandler = () => Promise<boolean>;
+
+/**
+ * The flat one-folder-per-row renderer shared by both surfaces. The folders are
+ * laid out in one shared grid: pin / folder / location / branch / actions.
+ * The "＋ Add folder" button sits left-aligned below. `trailingSlot` (the
+ * device chip on landing, `null` in-epic) is pushed to the far right to match
+ * the composer's alignment. All controls call the EXISTING item handlers — this
+ * component never owns binding, staging, or mutation logic.
+ */
+export function WorkspaceFolderRows(props: {
+  readonly items: ReadonlyArray<WorkspaceRunItem>;
+  readonly trailingSlot: ReactNode;
+  readonly onAddFolder: AddFolderHandler;
+  readonly addFolderPending: boolean;
+  readonly addFolderDisabled: boolean;
+  readonly addFolderDisabledReason: string | null;
+  // Terminal-agent "Update": applies the staged folder edits and resumes the
+  // PTY. `null` on chat / landing surfaces (no live session to resume), where
+  // the button is hidden. When set, it renders to the right of "Add folder".
+  readonly onUpdate: (() => void) | null;
+  readonly updateEnabled: boolean;
+  readonly updatePending: boolean;
+  readonly onDiscardStaged?: (() => void) | null;
+  readonly discardDisabled: boolean;
+  readonly draftPending?: boolean;
+  readonly onEditEnvironment: (workspacePath: string) => void;
+  readonly readOnly: boolean;
+  readonly bindingResolved: boolean;
+  /** Recent tier; null for read-only and terminal-agent binding surfaces. */
+  readonly recentWorkspaces: ReactNode;
+  readonly moveToRecent: boolean;
+}) {
+  const { items } = props;
+  const nestedBoundaryEl = useDialogOverlayBoundaryEl();
+
+  // Per-worktree uncommitted counts for the Location submenu annotation. Shares
+  // the warm host-wide `worktree.listAllForHost` query key (same source as
+  // Settings ▸ Worktrees). Keyed to the surface's host via the first item.
+  const hostClient = items[0]?.hostClient ?? null;
+  const hasAnyWorktrees = items.some(
+    (item) =>
+      (item.summary?.worktrees.filter((w) => !w.isMain).length ?? 0) > 0,
+  );
+  const hostWorktrees = useWorktreeHostListingForClient(
+    hostClient,
+    hasAnyWorktrees && !props.readOnly,
+  );
+  const uncommittedByPath = useMemo(() => {
+    const byPath = new Map<string, number>();
+    for (const entry of hostWorktrees.worktrees) {
+      byPath.set(entry.worktreePath, entry.uncommittedCount);
+    }
+    return byPath;
+  }, [hostWorktrees.worktrees]);
+
+  const trailing =
+    props.trailingSlot === null ? null : (
+      <div className="ml-auto shrink-0">{props.trailingSlot}</div>
+    );
+  const addFolder = props.readOnly ? null : (
+    <AddFolderButton
+      onAddFolder={props.onAddFolder}
+      pending={props.addFolderPending}
+      disabled={props.addFolderDisabled}
+      disabledReason={props.addFolderDisabledReason}
+      iconOnly={false}
+    />
+  );
+  // Terminal-agent "Update" action: pinned to the far right of the folder block
+  // (opposite "Add folder"), styled like the row's select controls.
+  const updateButton =
+    props.onUpdate === null ? null : (
+      <UpdateFoldersButton
+        onUpdate={props.onUpdate}
+        enabled={props.updateEnabled}
+        pending={props.updatePending}
+      />
+    );
+  const discardButton = (
+    <DiscardStagedButton
+      onDiscardStaged={props.onDiscardStaged}
+      discardDisabled={props.discardDisabled}
+      draftPending={props.draftPending === true}
+    />
+  );
+
+  const workspaceActions = (
+    <div className="flex w-full min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+      {addFolder}
+      {props.recentWorkspaces}
+      {discardButton}
+      {updateButton === null ? null : (
+        <div className="ml-auto shrink-0">{updateButton}</div>
+      )}
+    </div>
+  );
+
+  if (items.length === 0) {
+    return (
+      <div
+        className="flex w-full min-w-0 items-start gap-3"
+        data-testid="workspace-folder-rows"
+      >
+        <div className="flex min-w-0 flex-1 flex-col items-stretch gap-1.5">
+          {props.bindingResolved ? (
+            workspaceActions
+          ) : (
+            <>
+              <span
+                className="inline-flex items-center gap-2 text-ui-sm text-muted-foreground"
+                data-testid="workspace-folder-rows-linking"
+              >
+                <AgentSpinningDots
+                  className="size-4 shrink-0"
+                  testId={undefined}
+                  variant="dots"
+                />
+                Linking folder…
+              </span>
+              {props.recentWorkspaces}
+            </>
+          )}
+        </div>
+        {trailing}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="flex w-full min-w-0 items-start gap-3"
+      data-testid="workspace-folder-rows"
+    >
+      <div className="@container flex min-w-0 flex-1 flex-col items-stretch gap-1.5">
+        <div
+          className="grid w-full min-w-0 grid-cols-[1.5rem_minmax(0,1.35fr)_minmax(0,0.85fr)_minmax(0,1.1fr)_auto] items-center gap-x-1.5 gap-y-1.5 @max-[28rem]:grid-cols-[1.5rem_minmax(0,1fr)_auto]"
+          data-testid="workspace-folder-grid"
+        >
+          {items.map((item) => (
+            <FolderRow
+              key={item.key}
+              item={item}
+              onEditEnvironment={props.onEditEnvironment}
+              uncommittedByPath={uncommittedByPath}
+              boundaryEl={nestedBoundaryEl}
+              readOnly={props.readOnly}
+              moveToRecent={props.moveToRecent}
+            />
+          ))}
+        </div>
+        {workspaceActions}
+      </div>
+      {trailing}
+    </div>
+  );
+}
+
+function DiscardStagedButton(props: {
+  readonly onDiscardStaged: (() => void) | null | undefined;
+  readonly discardDisabled: boolean;
+  readonly draftPending: boolean;
+}) {
+  const discardStaged = props.onDiscardStaged;
+  if (
+    discardStaged === undefined ||
+    discardStaged === null ||
+    !props.draftPending
+  ) {
+    return null;
+  }
+  return (
+    <button
+      type="button"
+      data-testid="folder-discard-staged"
+      disabled={props.discardDisabled}
+      aria-disabled={props.discardDisabled ? true : undefined}
+      tabIndex={props.discardDisabled ? -1 : undefined}
+      onClick={discardStaged}
+      className={cn(
+        "inline-flex shrink-0 items-center rounded-md px-2 py-1 text-ui-sm text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45",
+        props.discardDisabled &&
+          "pointer-events-none cursor-not-allowed opacity-50",
+      )}
+    >
+      Discard changes
+    </button>
+  );
+}
+
+export const ADD_FOLDER_LABEL = "Add folder";
+
+/**
+ * `iconOnly` drops the visible word for a row too narrow to spare it; the
+ * button keeps its name through `aria-label` and a hover tooltip. A disabled
+ * reason still owns the tooltip when there is one - a button gets one tooltip.
+ */
+export function AddFolderButton(props: {
+  readonly onAddFolder: AddFolderHandler;
+  readonly pending: boolean;
+  readonly disabled: boolean;
+  readonly disabledReason: string | null;
+  readonly iconOnly: boolean;
+}) {
+  const buttonDisabled = props.pending || props.disabled;
+  const button = (
+    <Button
+      type="button"
+      size={props.iconOnly ? "icon-sm" : "sm"}
+      variant="muted"
+      data-testid="folder-add"
+      aria-label={props.iconOnly ? ADD_FOLDER_LABEL : undefined}
+      disabled={buttonDisabled}
+      onClick={() => {
+        void props.onAddFolder();
+      }}
+    >
+      {props.pending ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant="dots"
+        />
+      ) : (
+        <FolderPlus data-icon="inline-start" />
+      )}
+      {props.iconOnly ? null : (
+        <span className="truncate">{ADD_FOLDER_LABEL}</span>
+      )}
+    </Button>
+  );
+  const tooltipLabel = addFolderTooltipLabel(props);
+  if (tooltipLabel === null) return button;
+  return (
+    <TooltipWrapper
+      label={tooltipLabel}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      {/* A disabled button fires no pointer events, so a wrapper takes the
+          hover in its place. */}
+      {buttonDisabled ? (
+        <span className="inline-flex w-fit">{button}</span>
+      ) : (
+        button
+      )}
+    </TooltipWrapper>
+  );
+}
+
+function addFolderTooltipLabel(input: {
+  readonly disabled: boolean;
+  readonly disabledReason: string | null;
+  readonly iconOnly: boolean;
+}): string | null {
+  if (input.disabled && input.disabledReason !== null) {
+    return input.disabledReason;
+  }
+  return input.iconOnly ? ADD_FOLDER_LABEL : null;
+}
+
+/**
+ * Applies the staged terminal-agent folder edits and resumes the PTY against
+ * the new binding. Pinned to the far right of the folder block (opposite "Add
+ * folder"), styled like the row's select controls. Disabled (muted) until there
+ * is at least one staged change, so an accidental click can't pointlessly
+ * restart the terminal; the tooltip explains the gated state.
+ */
+function UpdateFoldersButton(props: {
+  readonly onUpdate: () => void;
+  readonly enabled: boolean;
+  readonly pending: boolean;
+}) {
+  const button = (
+    <button
+      type="button"
+      data-testid="folder-update"
+      disabled={!props.enabled || props.pending}
+      onClick={props.onUpdate}
+      className={cn(
+        // Select-like chip matching the location / branch controls: bordered,
+        // rounded, far-right. Primary accent when there are changes to apply;
+        // muted + inert otherwise.
+        "inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-ui-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/45",
+        props.enabled && !props.pending
+          ? "border-primary/40 bg-primary/5 text-primary hover:bg-primary/10"
+          : "cursor-not-allowed border-border/60 text-muted-foreground opacity-60",
+      )}
+    >
+      {props.pending ? (
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant="dots"
+        />
+      ) : (
+        <RotateCw className="size-4" />
+      )}
+      <span className="truncate">Update</span>
+    </button>
+  );
+  return (
+    <TooltipWrapper
+      label={
+        props.enabled
+          ? "Apply folder changes and restart the terminal"
+          : "No folder changes to apply"
+      }
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <span className="inline-flex w-fit">{button}</span>
+    </TooltipWrapper>
+  );
+}

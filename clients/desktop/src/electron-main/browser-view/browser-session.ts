@@ -1,0 +1,630 @@
+import {
+  app,
+  session,
+  type Certificate,
+  type Session,
+  type WebPreferences,
+} from "electron";
+import { randomUUID } from "node:crypto";
+import type {
+  BrowserCookieKey,
+  BrowserPrimaryProfileDelta,
+} from "@traycer/protocol/host/browser/contracts";
+import { describeLogError, log } from "../app/logger";
+import { confirmDestructiveInMain } from "../app/confirm-destructive";
+import {
+  setBrowserCertificateErrorHandler,
+  type CertificateErrorReport,
+} from "../app/cert-trust";
+import {
+  BrowserViewDownloads,
+  type BrowserDownloadItem,
+  type BrowserDownloadWebContents,
+  type BrowserSessionDownloadChange,
+} from "./browser-download";
+import { nodeBrowserDownloadFiles } from "./browser-download-files";
+import { isBrowserSavedLoginsEnabled } from "./storage/browser-saved-logins";
+import { releaseHeadlessOriginCookieKeys } from "./storage/browser-forget-ledger";
+import {
+  BrowserCookieChangeObserver,
+  BROWSER_COOKIE_DELTA_WINDOW_MS,
+} from "./storage/browser-cookie-change-observer";
+
+export const BROWSER_VIEW_PARTITION = "persist:traycer-browser";
+export const BROWSER_VIEW_EPHEMERAL_PARTITION = "traycer-browser-ephemeral";
+const BROWSER_VIEW_ISOLATED_PARTITION_PREFIX = "traycer-isolated-";
+
+/**
+ * Which jar a browser guest gets. `primary` is the one shared identity (user
+ * tabs, agent Electron tabs, popups); `isolated` is a per-session throwaway
+ * partition that shares cookies with nothing and dies with the session.
+ */
+export type BrowserSessionProfile = "primary" | "isolated";
+
+export interface BrowserSessionProfileRequest {
+  readonly profile: BrowserSessionProfile;
+  readonly sessionId: string;
+}
+
+type BrowserPermissionRequestHandler = (
+  webContents: unknown,
+  permission: string,
+  callback: (permissionGranted: boolean) => void,
+  details: unknown,
+) => void;
+
+type BrowserPermissionCheckHandler = (
+  webContents: unknown,
+  permission: string,
+  requestingOrigin: string,
+  details: unknown,
+) => boolean;
+
+type BrowserDownloadListener = (
+  event: unknown,
+  item: BrowserDownloadItem,
+  webContents: BrowserDownloadWebContents,
+) => void;
+
+type BrowserDisplayMediaRequestHandler = (
+  request: unknown,
+  callback: (streams: object) => void,
+) => void;
+
+interface BrowserViewBeforeRequestDetails {
+  readonly url: string;
+  readonly webContentsId?: number;
+}
+
+type BrowserViewBeforeRequestListener = (
+  details: BrowserViewBeforeRequestDetails,
+  callback: (response: { readonly cancel?: boolean }) => void,
+) => void;
+
+interface BrowserViewPolicySession {
+  setPermissionRequestHandler(
+    handler: BrowserPermissionRequestHandler | null,
+  ): void;
+  setPermissionCheckHandler(
+    handler: BrowserPermissionCheckHandler | null,
+  ): void;
+  setDevicePermissionHandler(
+    handler: ((details: unknown) => boolean) | null,
+  ): void;
+  setUSBProtectedClassesHandler(
+    handler: ((details: unknown) => unknown[]) | null,
+  ): void;
+  setBluetoothPairingHandler(
+    handler:
+      | ((
+          details: unknown,
+          callback: (response: { readonly confirmed: boolean }) => void,
+        ) => void)
+      | null,
+  ): void;
+  setDisplayMediaRequestHandler(
+    handler: BrowserDisplayMediaRequestHandler | null,
+  ): void;
+  on(event: "will-download", listener: BrowserDownloadListener): void;
+  readonly webRequest: {
+    onBeforeRequest(listener: BrowserViewBeforeRequestListener): void;
+  };
+}
+
+interface BrowserViewTrackedWebContents {
+  readonly id: number;
+  once(event: "destroyed", listener: () => void): void;
+}
+
+export type { BrowserSessionDownloadChange } from "./browser-download";
+
+export interface BrowserSessionCertificateErrorChange {
+  readonly webContentsId: number;
+  readonly certificateErrorId: string;
+  readonly url: string;
+  readonly hostname: string;
+  readonly error: string;
+  readonly fingerprint: string;
+  readonly subject: string;
+  readonly issuer: string;
+}
+
+interface BrowserSessionPendingCertificateError extends BrowserSessionCertificateErrorChange {
+  readonly certificate: Certificate;
+}
+
+const BROWSER_ALLOWED_PERMISSIONS: ReadonlySet<string> = new Set([
+  "clipboard-sanitized-write",
+  "fullscreen",
+  "mediaKeySystem",
+  "pointerLock",
+  "storage-access",
+  "top-level-storage-access",
+]);
+
+const installedPolicySessions = new WeakSet<BrowserViewPolicySession>();
+const browserWebContentsIds = new Set<number>();
+/**
+ * Exact webview guests whose non-`about:blank` requests stay cancelled until
+ * main finishes policy/seed/CDP. One process set; each session policy installs
+ * the same `onBeforeRequest` listener once.
+ */
+const gatedGuestWebContentsIds = new Set<number>();
+const BLANK_GUEST_REQUEST_URL = "about:blank";
+const browserDownloadListeners = new Set<
+  (change: BrowserSessionDownloadChange) => void
+>();
+const browserCertificateListeners = new Set<
+  (change: BrowserSessionCertificateErrorChange) => void
+>();
+/**
+ * Whether a person can see the tab a WebContents belongs to. The view manager
+ * owns that reading and installs it; until it does, and after it is gone,
+ * nothing is on screen, so a dangerous download is refused rather than asked
+ * about on a desktop nobody may be at.
+ */
+let browserViewOnScreenProbe: (webContentsId: number) => boolean = () => false;
+const browserViewDownloads = new BrowserViewDownloads({
+  downloadsDirectory: () => app.getPath("downloads"),
+  files: nodeBrowserDownloadFiles,
+  confirm: confirmDestructiveInMain,
+  isOnScreen: (webContentsId) => browserViewOnScreenProbe(webContentsId),
+  emit: (change) => {
+    browserDownloadListeners.forEach((listener) => listener(change));
+  },
+});
+const pendingCertificateErrorsById = new Map<
+  string,
+  BrowserSessionPendingCertificateError
+>();
+
+/**
+ * Sessions are memoised per partition name, not globally: toggling saved logins
+ * mid-process moves new guests between the persistent and ephemeral partitions,
+ * and each partition needs the hardening installed exactly once.
+ * `session.defaultSession` is never touched here - the app shell owns it.
+ */
+const sessionsByPartition = new Map<string, Session>();
+/**
+ * Isolated partitions whose jar is being cleared right now, keyed by partition
+ * name.
+ *
+ * `releaseBrowserViewSession` drops the memo synchronously and only STARTS the
+ * clear, and every caller of it is fire-and-forget (the IPC's
+ * `releaseSessionStorage` is typed `void`). Electron hands `fromPartition` the
+ * same in-memory partition for the same NAME, and a partition name is derived
+ * from the session id - so a tab of the same isolated session opened while a
+ * clear is in flight is born into the very jar that clear is about to empty,
+ * and loses its cookies and localStorage seconds after it starts.
+ *
+ * The promise is the barrier that stops that: whoever is about to materialize
+ * an isolated guest waits on it first. It is stored here rather than in the
+ * manager because the hazard is a property of the PARTITION - it is the same
+ * whichever path re-acquires it - and because the callers who start a release
+ * drop its promise on the floor by design.
+ */
+const pendingReleasesByPartition = new Map<string, Promise<void>>();
+const browserCookieDeltaListeners = new Set<
+  (delta: BrowserPrimaryProfileDelta) => void
+>();
+/** One per process: the durable `primary` jar is the only observed partition. */
+let primaryCookieObserver: BrowserCookieChangeObserver | null = null;
+
+export function ensureBrowserViewSession(
+  request: BrowserSessionProfileRequest,
+): Session {
+  return ensureBrowserViewSessionForPartition(
+    partitionForProfile(request.profile, request.sessionId),
+  );
+}
+
+/** The named jar, bypassing the saved-logins pref. */
+export function ensureBrowserViewSessionForPartition(
+  partition: string,
+): Session {
+  const existing = sessionsByPartition.get(partition);
+  if (existing !== undefined) return existing;
+  // A TRIPWIRE, not a guard: this function is synchronous and cannot wait, so
+  // it can only report that someone reached the jar around the barrier. Every
+  // isolated partition is acquired through one guest birth, which awaits
+  // `pendingBrowserViewPartitionRelease` before it mints; a line here means a
+  // new path bypassed it and that guest is about to have its storage cleared
+  // out from under it.
+  if (pendingReleasesByPartition.has(partition)) {
+    log.warn("[browser-view] partition acquired while its clear is running", {
+      partition,
+    });
+  }
+  const browserSession = session.fromPartition(partition, { cache: true });
+  installBrowserViewSessionPolicy(browserSession);
+  sessionsByPartition.set(partition, browserSession);
+  observePrimaryProfileCookieChanges(partition, browserSession);
+  return browserSession;
+}
+
+/**
+ * Cookie deltas come from the durable `primary` jar and nowhere else: the
+ * ephemeral jar's logins are gone at quit, and an isolated partition shares
+ * nothing by construction (spec §6.1).
+ *
+ * This runs on the FIRST materialization of that partition, not at app start:
+ * the observer's startup grace window is therefore anchored to the user's
+ * first browser tile of the run. See `attach()` for what that costs.
+ */
+function observePrimaryProfileCookieChanges(
+  partition: string,
+  browserSession: Session,
+): void {
+  if (partition !== BROWSER_VIEW_PARTITION || primaryCookieObserver !== null) {
+    return;
+  }
+  const observer = new BrowserCookieChangeObserver({
+    cookies: browserSession.cookies,
+    emit: (delta) => {
+      browserCookieDeltaListeners.forEach((listener) => listener(delta));
+    },
+    now: () => Date.now(),
+    monotonicNow: () => performance.now(),
+    coalesceWindowMs: BROWSER_COOKIE_DELTA_WINDOW_MS,
+    // The handler is synchronous, so the promise cannot be awaited here. It
+    // is not dropped work: the transfer is in memory the moment the call
+    // returns, the file write behind it is queued on the ledger's own write
+    // chain, and a failure to reach disk is warned about there rather than
+    // rejecting into nothing.
+    onLocalCookieWrite: (key) => void releaseHeadlessOriginCookieKeys([key]),
+  });
+  observer.attach();
+  primaryCookieObserver = observer;
+}
+
+/**
+ * Every coalesced cookie delta from the durable `primary` jar. The IPC layer
+ * fans these out to the renderer, which forwards them to the host as
+ * `primaryProfileDelta`.
+ */
+export function onBrowserPrimaryProfileDelta(
+  listener: (delta: BrowserPrimaryProfileDelta) => void,
+): () => void {
+  browserCookieDeltaListeners.add(listener);
+  return () => {
+    browserCookieDeltaListeners.delete(listener);
+  };
+}
+
+/**
+ * Runs a deliberate whole-jar change without it echoing back to the host as a
+ * delta: ticket 08's "forget all browser logins". A `clearStorageData()` fires
+ * a removal for every cookie there is, and those deltas would reach the host
+ * after it had already shredded the slice - re-creating an entry for the
+ * identity just forgotten.
+ *
+ * The whole jar is the only granularity this comes in. A per-domain form
+ * existed for the host-driven evict, which universal-sign-in ticket 08 retired
+ * along with the frame that drove it; the local "clear cookies for this site"
+ * deliberately does NOT suppress, because its removals are exactly the delta
+ * that tells the host the slice is empty.
+ */
+export async function suppressAllBrowserPrimaryProfileDeltas<T>(
+  action: () => Promise<T>,
+): Promise<T> {
+  if (primaryCookieObserver === null) return await action();
+  return await primaryCookieObserver.suppressAll(action);
+}
+
+/**
+ * The observed-sign-in applier is about to write these keys into the DURABLE
+ * jar (universal-sign-in ticket 08). Their insert events belong to the
+ * applier, not to this machine's browsing, so the observer must not read them
+ * as the desktop taking the key back.
+ *
+ * A no-op when that jar has never been materialised this run - there is no
+ * observer, and therefore no insert to attribute either way. The applier never
+ * calls this for a write bound for the ephemeral jar: that jar is watched by
+ * nobody, and marking keys on the durable observer would make it miss a local
+ * write there.
+ */
+export function noteBrowserPrimaryProfileAppliedKeys(
+  keys: readonly BrowserCookieKey[],
+): void {
+  primaryCookieObserver?.noteAppliedKeys(keys);
+}
+
+/** The jar refused those writes, so the marks will never be answered. */
+export function forgetBrowserPrimaryProfileAppliedKeys(
+  keys: readonly BrowserCookieKey[],
+): void {
+  primaryCookieObserver?.forgetAppliedKeys(keys);
+}
+
+export function createBrowserViewWebPreferences(
+  request: BrowserSessionProfileRequest,
+): WebPreferences {
+  return {
+    partition: partitionForProfile(request.profile, request.sessionId),
+    contextIsolation: true,
+    nodeIntegration: false,
+    sandbox: true,
+  };
+}
+
+/**
+ * The single place that decides whether a guest gets a durable jar. `primary`
+ * is durable unless the user turned saved logins off on this machine.
+ */
+export function partitionForProfile(
+  profile: BrowserSessionProfile,
+  sessionId: string,
+): string {
+  // No `persist:` prefix, and the session id in the name: the jar lives in
+  // memory only, is shared by nothing else, and is cleared outright when the
+  // session's last tab goes away (spec §6.1, decision #24). The saved-logins
+  // pref is deliberately not consulted - an isolated session is ephemeral
+  // whether or not the user saves logins.
+  if (profile === "isolated") {
+    return `${BROWSER_VIEW_ISOLATED_PARTITION_PREFIX}${sessionId}`;
+  }
+  return isBrowserSavedLoginsEnabled()
+    ? BROWSER_VIEW_PARTITION
+    : BROWSER_VIEW_EPHEMERAL_PARTITION;
+}
+
+/**
+ * Drops a partition's jar and its memoised session. Only an isolated session's
+ * partition is ever released: the shared `primary` jars outlive every guest,
+ * and clearing one would sign the user out of the whole app.
+ */
+export async function releaseBrowserViewSession(
+  partition: string,
+): Promise<void> {
+  if (!partition.startsWith(BROWSER_VIEW_ISOLATED_PARTITION_PREFIX)) {
+    throw new Error(
+      `Refusing to clear the shared browser partition "${partition}".`,
+    );
+  }
+  const browserSession = sessionsByPartition.get(partition);
+  sessionsByPartition.delete(partition);
+  if (browserSession === undefined) return;
+  // Swallowed inside the barrier rather than around it: a clear that REJECTS
+  // still ends the window in which the jar is being emptied, so the awaiters
+  // must be let through either way. A barrier that could reject would also
+  // make every waiter's `await` a second failure path for a fault this
+  // function has always handled by logging.
+  const clearing = (async (): Promise<void> => {
+    try {
+      await browserSession.clearStorageData();
+    } catch (error) {
+      log.warn("[browser-view] isolated partition clear failed", {
+        partition,
+        error: describeLogError(error),
+      });
+    }
+  })();
+  pendingReleasesByPartition.set(partition, clearing);
+  try {
+    await clearing;
+  } finally {
+    // Identity-checked: a second release of the same partition registers its
+    // own barrier, and this one must not delete that. Unconditional otherwise,
+    // so a partition nobody ever re-acquires leaves no entry behind.
+    if (pendingReleasesByPartition.get(partition) === clearing) {
+      pendingReleasesByPartition.delete(partition);
+    }
+  }
+}
+
+/**
+ * The in-flight clear of this partition's jar, or `null` when nothing is being
+ * cleared.
+ *
+ * Await it before materializing a guest into an isolated partition. It never
+ * rejects - see the release above - so a waiter needs no failure branch, and a
+ * partition with no pending clear costs a map lookup and no microtask.
+ */
+export function pendingBrowserViewPartitionRelease(
+  partition: string,
+): Promise<void> | null {
+  return pendingReleasesByPartition.get(partition) ?? null;
+}
+
+function installBrowserViewSessionPolicy(
+  target: BrowserViewPolicySession,
+): void {
+  if (installedPolicySessions.has(target)) return;
+  installedPolicySessions.add(target);
+
+  target.setPermissionRequestHandler(
+    (_webContents, permission, callback, _details) => {
+      const allowed = isBrowserPermissionAllowed(permission);
+      if (!allowed) {
+        log.info("[browser-view] permission denied", { permission });
+      }
+      callback(allowed);
+    },
+  );
+  target.setPermissionCheckHandler(
+    (_webContents, permission, _requestingOrigin, _details) =>
+      isBrowserPermissionAllowed(permission),
+  );
+  target.setDevicePermissionHandler(() => false);
+  target.setUSBProtectedClassesHandler(() => []);
+  target.setBluetoothPairingHandler((_details, callback) => {
+    callback({ confirmed: false });
+  });
+  target.setDisplayMediaRequestHandler((_request, callback) => {
+    callback({});
+  });
+  target.webRequest.onBeforeRequest((details, callback) => {
+    const webContentsId = details.webContentsId;
+    if (
+      webContentsId !== undefined &&
+      gatedGuestWebContentsIds.has(webContentsId) &&
+      details.url !== BLANK_GUEST_REQUEST_URL
+    ) {
+      callback({ cancel: true });
+      return;
+    }
+    callback({});
+  });
+  target.on("will-download", (_event, item, webContents) => {
+    browserViewDownloads.handle(item, webContents);
+  });
+}
+
+/**
+ * Cancel this guest's non-`about:blank` requests until the disposer runs.
+ * Called once for each guest birth; the returned disposer is idempotent.
+ */
+export function gateBrowserViewGuestRequests(
+  webContentsId: number,
+): () => void {
+  gatedGuestWebContentsIds.add(webContentsId);
+  return () => {
+    gatedGuestWebContentsIds.delete(webContentsId);
+  };
+}
+
+function isBrowserPermissionAllowed(permission: string): boolean {
+  return BROWSER_ALLOWED_PERMISSIONS.has(permission);
+}
+
+export function registerBrowserViewWebContents(
+  webContents: BrowserViewTrackedWebContents,
+): void {
+  browserWebContentsIds.add(webContents.id);
+  webContents.once("destroyed", () => {
+    browserWebContentsIds.delete(webContents.id);
+    for (const [id, pending] of pendingCertificateErrorsById) {
+      if (pending.webContentsId === webContents.id) {
+        pendingCertificateErrorsById.delete(id);
+      }
+    }
+  });
+}
+
+export function isBrowserViewWebContents(
+  webContents: { readonly id: number } | null,
+): boolean {
+  return webContents !== null && browserWebContentsIds.has(webContents.id);
+}
+
+export function onBrowserViewDownloadChange(
+  listener: (change: BrowserSessionDownloadChange) => void,
+): () => void {
+  browserDownloadListeners.add(listener);
+  return () => {
+    browserDownloadListeners.delete(listener);
+  };
+}
+
+export function onBrowserViewCertificateError(
+  listener: (change: BrowserSessionCertificateErrorChange) => void,
+): () => void {
+  browserCertificateListeners.add(listener);
+  return () => {
+    browserCertificateListeners.delete(listener);
+  };
+}
+
+export function cancelBrowserViewDownload(downloadId: string): boolean {
+  return browserViewDownloads.cancel(downloadId);
+}
+
+export function setBrowserViewOnScreenProbe(
+  probe: (webContentsId: number) => boolean,
+): void {
+  browserViewOnScreenProbe = probe;
+}
+
+/**
+ * Discards every dangerous download whose question is still open. Called as
+ * the browser plane goes away, when no answer can arrive any more.
+ */
+export function discardHeldBrowserViewDownloads(): void {
+  browserViewDownloads.discardHeld();
+}
+
+export function readBrowserViewPendingCertificateError(
+  certificateErrorId: string,
+): BrowserSessionPendingCertificateError | null {
+  return pendingCertificateErrorsById.get(certificateErrorId) ?? null;
+}
+
+export function clearBrowserViewPendingCertificateError(
+  certificateErrorId: string,
+): void {
+  pendingCertificateErrorsById.delete(certificateErrorId);
+}
+
+export function handleBrowserViewCertificateError(
+  input: CertificateErrorReport,
+): boolean {
+  const existing = findPendingCertificateError(input);
+  if (existing !== null) {
+    emitBrowserCertificateError(existing);
+    return false;
+  }
+  const pending: BrowserSessionPendingCertificateError = {
+    webContentsId: input.webContentsId,
+    certificateErrorId: randomUUID(),
+    url: input.url,
+    hostname: input.hostname,
+    error: input.error,
+    fingerprint: input.fingerprint,
+    subject: input.certificate.subject.commonName,
+    issuer: input.certificate.issuer.commonName,
+    certificate: input.certificate,
+  };
+  pendingCertificateErrorsById.set(pending.certificateErrorId, pending);
+  emitBrowserCertificateError(pending);
+  log.warn("[browser-view] certificate error rejected", {
+    hostname: input.hostname,
+    fingerprint: input.fingerprint,
+    error: input.error,
+    subject: input.certificate.subject.commonName,
+    issuer: input.certificate.issuer.commonName,
+  });
+  return false;
+}
+
+/**
+ * The app-shell owns Electron's `certificate-error` event; this tells it
+ * which webContents are native browser tiles and where their rejected certs
+ * go, so `app/cert-trust` never has to reach into browser-view.
+ */
+setBrowserCertificateErrorHandler({
+  owns: (webContentsId) => isBrowserViewWebContents({ id: webContentsId }),
+  report: (input) => {
+    handleBrowserViewCertificateError(input);
+  },
+});
+
+function emitBrowserCertificateError(
+  pending: BrowserSessionPendingCertificateError,
+): void {
+  const change: BrowserSessionCertificateErrorChange = {
+    webContentsId: pending.webContentsId,
+    certificateErrorId: pending.certificateErrorId,
+    url: pending.url,
+    hostname: pending.hostname,
+    error: pending.error,
+    fingerprint: pending.fingerprint,
+    subject: pending.subject,
+    issuer: pending.issuer,
+  };
+  browserCertificateListeners.forEach((listener) => listener(change));
+}
+
+function findPendingCertificateError(
+  input: CertificateErrorReport,
+): BrowserSessionPendingCertificateError | null {
+  for (const pending of pendingCertificateErrorsById.values()) {
+    if (
+      pending.webContentsId === input.webContentsId &&
+      pending.fingerprint === input.fingerprint &&
+      pending.hostname === input.hostname
+    ) {
+      return pending;
+    }
+  }
+  return null;
+}

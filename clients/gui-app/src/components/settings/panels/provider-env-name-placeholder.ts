@@ -1,0 +1,53 @@
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+
+type ProviderId = ProviderCliState["providerId"];
+
+// Example variable name shown as the add-row placeholder, per provider, so the
+// hint matches the harness being configured (illustrative only). Also read by
+// `ProviderApiKeySection` for its "using X from your shell" copy.
+// PI is BYOK; final auth UX is host-side — `ANTHROPIC_API_KEY` is a temporary
+// placeholder only.
+const ENV_NAME_PLACEHOLDER: Record<ProviderId, string> = {
+  "claude-code": "ANTHROPIC_API_KEY",
+  codex: "OPENAI_API_KEY",
+  opencode: "ANTHROPIC_API_KEY",
+  traycer: "ANTHROPIC_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+  huggingface: "HF_TOKEN",
+  cursor: "CURSOR_API_KEY",
+  grok: "XAI_API_KEY",
+  qwen: "OPENAI_API_KEY",
+  kiro: "KIRO_API_KEY",
+  droid: "FACTORY_API_KEY",
+  kimi: "KIMI_API_KEY",
+  copilot: "COPILOT_GITHUB_TOKEN",
+  kilocode: "KILO_API_KEY",
+  amp: "AMP_API_KEY",
+  devin: "WINDSURF_API_KEY",
+  pi: "ANTHROPIC_API_KEY",
+  // Hermes is subscription/credential-store class; the env name is
+  // illustrative only (Hermes drives provider accounts such as OpenRouter).
+  hermes: "OPENROUTER_API_KEY",
+  // omp aggregates several provider subscriptions/keys (Anthropic, OpenAI,
+  // OpenRouter, ...) in its own credential store; the env name is illustrative
+  // only, same as Hermes above.
+  omp: "OPENROUTER_API_KEY",
+  // Reasonix names a DIFFERENT env var per configured provider - the config's
+  // `api_key_env` key chooses it, and the value lives in Reasonix's own global
+  // `.env`, not in the shell. There is no single well-known variable to show,
+  // so this is the default provider preset's name and is illustrative only.
+  reasonix: "DEEPSEEK_API_KEY",
+  // Antigravity is subscription/credential-store class (a Google account), so
+  // Traycer offers it no API-key method at all. `GEMINI_API_KEY` is the name
+  // the server itself reads when a user configures a Gemini key outside
+  // Traycer, and is illustrative only - same as Hermes and omp above.
+  antigravity: "GEMINI_API_KEY",
+  // Command Code is subscription class (a browser sign-in from `cmd login`),
+  // so Traycer offers it no API-key method. `COMMAND_CODE_API_KEY` is the one
+  // variable the CLI itself reads as an override of its stored sign-in.
+  commandcode: "COMMAND_CODE_API_KEY",
+};
+
+export function envNamePlaceholder(providerId: ProviderId): string {
+  return ENV_NAME_PLACEHOLDER[providerId];
+}

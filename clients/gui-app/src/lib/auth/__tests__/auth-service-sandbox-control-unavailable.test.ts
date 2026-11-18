@@ -1,0 +1,289 @@
+/**
+ * A build that cannot reach the sandbox control plane (staging: its server is
+ * fronted by IAP, which refuses the app's bearer) sends no sandbox call at all.
+ * `AuthService` is the floor under every surface: each of the ten sandbox
+ * methods answers `{ kind: "unavailable" }` BEFORE it reads a bearer, and the
+ * runner host's method is never reached.
+ */
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  SandboxCreateRequest,
+  SandboxPatchRequest,
+} from "@traycer/protocol/host/sandbox-control";
+import { SLACK_SETTINGS_UNAVAILABLE_IN_STAGING } from "@traycer-clients/shared/host-client/slack-app";
+import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import { AuthService } from "@/lib/auth/auth-service";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
+
+/** What the card's verbs wait; the value is not under test here. */
+const VERB_TIMEOUT_MS = 370_000;
+const REASON = "Sandboxes aren't available in staging builds.";
+
+const CREATE_REQUEST: SandboxCreateRequest = {
+  os: "linux",
+  cpus: 2,
+  memoryMb: 2560,
+  diskMb: null,
+  region: "us-east",
+  displayName: "build-box",
+  idleMinutes: 30,
+  burst: false,
+  createdByHostId: null,
+  createdByAgentId: null,
+  environmentId: null,
+  destroyAfterRestingMinutes: null,
+  createdByTaskId: null,
+  clientRequestId: null,
+};
+
+const PATCH_REQUEST: SandboxPatchRequest = {
+  displayName: "renamed",
+  idleMinutes: null,
+  destroyAfterRestingMinutes: null,
+};
+
+const SLACK_REGISTER_REQUEST: SlackAppRegisterRequest = {
+  botId: "bot-1",
+  appId: "A07K2M9QX4T",
+  clientId: "123.456",
+  clientSecret: "client-secret-value",
+  signingSecret: "signing-secret-value",
+};
+
+const SLACK_DMS_REQUEST = { botId: "bot-1", dmsEnabled: false };
+
+const trackedServices: AuthService[] = [];
+
+function slackSpies() {
+  return {
+    readSlackApp: vi.fn<IRunnerHost["readSlackApp"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    getSlackAppManifest: vi.fn<IRunnerHost["getSlackAppManifest"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    registerSlackApp: vi.fn<IRunnerHost["registerSlackApp"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    mintSlackAppInstallUrl: vi.fn<IRunnerHost["mintSlackAppInstallUrl"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    disconnectSlackApp: vi.fn<IRunnerHost["disconnectSlackApp"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    setSlackAppDms: vi.fn<IRunnerHost["setSlackAppDms"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+  };
+}
+
+function sandboxSpies() {
+  return {
+    listSandboxes: vi.fn<IRunnerHost["listSandboxes"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    getSandboxCosts: vi.fn<IRunnerHost["getSandboxCosts"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    getSandboxCatalogue: vi.fn<IRunnerHost["getSandboxCatalogue"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    getTraycerModels: vi.fn<IRunnerHost["getTraycerModels"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    createSandbox: vi.fn<IRunnerHost["createSandbox"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    destroySandbox: vi.fn<IRunnerHost["destroySandbox"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    patchSandbox: vi.fn<IRunnerHost["patchSandbox"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    keepSandbox: vi.fn<IRunnerHost["keepSandbox"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    runSandboxVerb: vi.fn<IRunnerHost["runSandboxVerb"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    getSandboxAutomation: vi.fn<IRunnerHost["getSandboxAutomation"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+    openSandboxAutomation: vi.fn<IRunnerHost["openSandboxAutomation"]>(() =>
+      Promise.resolve({ kind: "network-error" as const, detail: "unscripted" }),
+    ),
+  };
+}
+
+function makeService(reason: string | null) {
+  const spies = sandboxSpies();
+  const slack = slackSpies();
+  const service = new AuthService({
+    runnerHost: createFakeRunnerHost({
+      ...spies,
+      ...slack,
+      sandboxControlUnavailableReason: reason,
+    }),
+  });
+  trackedServices.push(service);
+  return { service, spies, slack };
+}
+
+afterEach(() => {
+  while (trackedServices.length > 0) {
+    trackedServices.pop()?.dispose();
+  }
+  useAuthStore.getState().setSignedOut();
+});
+
+describe("AuthService sandbox control on a build that cannot reach it", () => {
+  it("exposes the runner host's reason", () => {
+    expect(makeService(REASON).service.sandboxControlUnavailableReason()).toBe(
+      REASON,
+    );
+    expect(
+      makeService(null).service.sandboxControlUnavailableReason(),
+    ).toBeNull();
+  });
+
+  it("answers every one of the eleven calls with the unavailable failure and never reaches the runner host", async () => {
+    const { service, spies } = makeService(REASON);
+    const unavailable = { kind: "unavailable", reason: REASON };
+
+    expect(await service.listSandboxes()).toEqual(unavailable);
+    expect(await service.getSandboxCosts()).toEqual(unavailable);
+    expect(await service.getSandboxCatalogue(null)).toEqual(unavailable);
+    expect(await service.getTraycerModels()).toEqual(unavailable);
+    expect(await service.createSandbox(CREATE_REQUEST)).toEqual(unavailable);
+    expect(await service.destroySandbox("sbx_1", false)).toEqual(unavailable);
+    expect(await service.patchSandbox("sbx_1", PATCH_REQUEST)).toEqual(
+      unavailable,
+    );
+    expect(await service.keepSandbox("sbx_1")).toEqual(unavailable);
+    expect(
+      await service.runSandboxVerb("sbx_1", "resume", null, VERB_TIMEOUT_MS),
+    ).toEqual(unavailable);
+    expect(await service.getSandboxAutomation(null)).toEqual(unavailable);
+    expect(await service.openSandboxAutomation(null)).toEqual(unavailable);
+
+    expect(spies.listSandboxes).not.toHaveBeenCalled();
+    expect(spies.getSandboxCosts).not.toHaveBeenCalled();
+    expect(spies.getSandboxCatalogue).not.toHaveBeenCalled();
+    expect(spies.getTraycerModels).not.toHaveBeenCalled();
+    expect(spies.createSandbox).not.toHaveBeenCalled();
+    expect(spies.destroySandbox).not.toHaveBeenCalled();
+    expect(spies.patchSandbox).not.toHaveBeenCalled();
+    expect(spies.keepSandbox).not.toHaveBeenCalled();
+    expect(spies.runSandboxVerb).not.toHaveBeenCalled();
+    expect(spies.getSandboxAutomation).not.toHaveBeenCalled();
+    expect(spies.openSandboxAutomation).not.toHaveBeenCalled();
+  });
+
+  it("refuses before it reads a bearer: a signed-out build is told it is unavailable, not unauthorized, and the writes do not throw", async () => {
+    const { service } = makeService(REASON);
+
+    expect(await service.listSandboxes()).toEqual({
+      kind: "unavailable",
+      reason: REASON,
+    });
+    await expect(service.createSandbox(CREATE_REQUEST)).resolves.toEqual({
+      kind: "unavailable",
+      reason: REASON,
+    });
+    await expect(service.destroySandbox("sbx_1", false)).resolves.toEqual({
+      kind: "unavailable",
+      reason: REASON,
+    });
+  });
+
+  it("control: with no reason set, the same signed-out calls take the ordinary unauthorized / sign-in paths", async () => {
+    const { service, spies } = makeService(null);
+
+    expect(await service.listSandboxes()).toEqual({ kind: "unauthorized" });
+    expect(await service.getSandboxCosts()).toEqual({ kind: "unauthorized" });
+    expect(await service.getSandboxCatalogue(null)).toEqual({
+      kind: "unauthorized",
+    });
+    expect(
+      await service.runSandboxVerb("sbx_1", "resume", null, VERB_TIMEOUT_MS),
+    ).toEqual({
+      kind: "unauthorized",
+    });
+    await expect(service.createSandbox(CREATE_REQUEST)).rejects.toThrow(
+      "Sign in to create a sandbox.",
+    );
+    await expect(service.destroySandbox("sbx_1", false)).rejects.toThrow(
+      "Sign in to destroy this sandbox.",
+    );
+    await expect(service.patchSandbox("sbx_1", PATCH_REQUEST)).rejects.toThrow(
+      "Sign in to change this sandbox.",
+    );
+    await expect(service.keepSandbox("sbx_1")).rejects.toThrow(
+      "Sign in to keep this sandbox.",
+    );
+    expect(await service.getSandboxAutomation(null)).toEqual({
+      kind: "unauthorized",
+    });
+    await expect(service.openSandboxAutomation(null)).rejects.toThrow(
+      "Sign in to start Automations.",
+    );
+    // Signed out, the bearer read stops them before the runner host too.
+    expect(spies.listSandboxes).not.toHaveBeenCalled();
+    expect(spies.getSandboxAutomation).not.toHaveBeenCalled();
+    expect(spies.openSandboxAutomation).not.toHaveBeenCalled();
+  });
+  it("answers every Slack app call with the staging failure and never reaches the runner host", async () => {
+    const { service, slack } = makeService(REASON);
+    const unavailable = {
+      kind: "unavailable",
+      reason: SLACK_SETTINGS_UNAVAILABLE_IN_STAGING,
+    };
+
+    expect(await service.readSlackApp("bot-1")).toEqual(unavailable);
+    expect(await service.getSlackAppManifest("bot-1")).toEqual(unavailable);
+    expect(await service.registerSlackApp(SLACK_REGISTER_REQUEST)).toEqual(
+      unavailable,
+    );
+    expect(await service.mintSlackAppInstallUrl("bot-1")).toEqual(unavailable);
+    expect(await service.disconnectSlackApp("bot-1")).toEqual(unavailable);
+    expect(await service.setSlackAppDms(SLACK_DMS_REQUEST)).toEqual(
+      unavailable,
+    );
+
+    expect(slack.readSlackApp).not.toHaveBeenCalled();
+    expect(slack.getSlackAppManifest).not.toHaveBeenCalled();
+    expect(slack.registerSlackApp).not.toHaveBeenCalled();
+    expect(slack.mintSlackAppInstallUrl).not.toHaveBeenCalled();
+    expect(slack.disconnectSlackApp).not.toHaveBeenCalled();
+    expect(slack.setSlackAppDms).not.toHaveBeenCalled();
+  });
+
+  it("control: with no reason set, signed-out Slack calls answer unauthorized instead of unavailable", async () => {
+    const { service, slack } = makeService(null);
+
+    expect(await service.readSlackApp("bot-1")).toEqual({
+      kind: "unauthorized",
+    });
+    expect(await service.getSlackAppManifest("bot-1")).toEqual({
+      kind: "unauthorized",
+    });
+    expect(await service.registerSlackApp(SLACK_REGISTER_REQUEST)).toEqual({
+      kind: "unauthorized",
+    });
+    expect(await service.mintSlackAppInstallUrl("bot-1")).toEqual({
+      kind: "unauthorized",
+    });
+    expect(await service.disconnectSlackApp("bot-1")).toEqual({
+      kind: "unauthorized",
+    });
+    expect(await service.setSlackAppDms(SLACK_DMS_REQUEST)).toEqual({
+      kind: "unauthorized",
+    });
+    // Signed out, the bearer read stops them before the runner host.
+    expect(slack.readSlackApp).not.toHaveBeenCalled();
+    expect(slack.disconnectSlackApp).not.toHaveBeenCalled();
+    expect(slack.setSlackAppDms).not.toHaveBeenCalled();
+  });
+});

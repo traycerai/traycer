@@ -1,0 +1,327 @@
+import { app, BrowserWindow, crashReporter } from "electron";
+import * as SentryElectron from "@sentry/electron/main";
+import { config } from "../../config";
+import { log } from "./logger";
+import { isSentryEnabled, markSentryEnabled } from "./crash-reporter-state";
+import { desktopSentryBeforeSend } from "./crash-reporter-guest-scope";
+import {
+  scrubSentryBreadcrumbInPlace,
+  scrubSentrySpanInPlace,
+  scrubSentryTransactionInPlace,
+} from "@traycer-clients/shared/platform/sentry-scrub";
+import {
+  observeSentryTransportFeedback,
+  sentryOfflineQueuePath,
+  sentryReportRateLimitWindow,
+} from "./sentry-delivery-observer";
+import {
+  boundFeedbackEvent,
+  FEEDBACK_EVENT_BUDGET_BYTES,
+} from "./support-report-size-guard";
+
+export { isSentryEnabled } from "./crash-reporter-state";
+
+/**
+ * Keeps a support report's `feedback` event under Relay's event size limit,
+ * which `beforeSend` cannot do: core applies it to error events only. An
+ * event processor on the global scope runs for every event type from every
+ * scope, inside `prepareEvent`, before the SDK reads `hint.attachments` for
+ * the envelope - so the guard can move an oversize report text into an
+ * attachment on the same hint. (The bare `addEventProcessor` export registers
+ * on the current isolation scope instead; that is the same thing only as
+ * long as nothing forks one.) See `support-report-size-guard.ts` for why the
+ * drop it prevents is invisible to the client otherwise.
+ *
+ * A guard that throws would make the SDK drop the report, which is the one
+ * outcome worse than an unbounded one, so a failure inside it is logged and
+ * the event goes out as it was.
+ */
+function installSupportReportSizeGuard(): void {
+  SentryElectron.getGlobalScope().addEventProcessor((event, hint) => {
+    if (event.type !== "feedback") return event;
+    const reportId = event.tags?.reportId ?? null;
+    try {
+      const bounded = boundFeedbackEvent(event, hint);
+      if (bounded.trimmed !== null) {
+        log.warn("[support] report trimmed to fit Sentry's event size limit", {
+          reportId,
+          trimmed: bounded.trimmed,
+          droppedContexts: bounded.droppedContexts,
+          originalBytes: bounded.originalBytes,
+          sentBytes: bounded.sentBytes,
+        });
+      }
+      if (bounded.sentBytes > FEEDBACK_EVENT_BUDGET_BYTES) {
+        // Only when something the guard does not trim (a tag, `extra`,
+        // `user`) is large: see the guard's module comment. The budget is
+        // 256 KiB under Relay's limit, so this is a warning sign, not yet a
+        // discard; it is logged so the next too_large has a trail.
+        log.error("[support] report still over the event size budget", {
+          reportId,
+          sentBytes: bounded.sentBytes,
+        });
+      }
+      return bounded.event;
+    } catch (err) {
+      log.error("[support] report size guard failed, sending as is", {
+        reportId,
+        err,
+      });
+      return event;
+    }
+  });
+}
+
+/**
+ * Wires native crash collection. `crashReporter.start()` must be called before
+ * `app.whenReady()` resolves so that early renderer/main crashes are captured.
+ * `@sentry/electron/main` extends crashReporter with Sentry's collector and
+ * unhandled JS errors. The Sentry DSN + environment come from the
+ * source-controlled `config` (the deploy script bakes the prod/staging DSN).
+ */
+export function initCrashReporter(): void {
+  const dsn = config.sentryDsn;
+  // Sentry environment label = the build's environment (dev / staging /
+  // production).
+  const environment = config.environment;
+  const hasDsn = typeof dsn === "string" && dsn.length > 0;
+
+  crashReporter.start({
+    productName: "Traycer",
+    companyName: "Traycer AI",
+    submitURL: "",
+    uploadToServer: false,
+    compress: true,
+  });
+
+  // Init Sentry only when a DSN is set. Sentry's `async_hooks`-based
+  // integrations have historically conflicted with DevTools attaching to
+  // the main process (EXC_BREAKPOINT in `async_hooks_callback_trampoline`
+  // when devtools breakpoints intersect Sentry's hook chain) - skipping
+  // init when no DSN is set keeps dev devtools usable.
+  if (!hasDsn) {
+    log.info("[crash-reporter] sentry disabled (no DSN)", { environment });
+    return;
+  }
+  const isProd = environment === "production";
+  const sampleRate = isProd ? 0.1 : 1.0;
+  SentryElectron.init({
+    dsn,
+    environment,
+    release: app.getVersion(),
+    tracesSampleRate: sampleRate,
+    profilesSampleRate: sampleRate,
+    // ERROR sample rate, distinct from the trace/profile rates above, which
+    // never applied to events. It was absent - i.e. 100% - and one machine
+    // in an error storm can spend the whole org's DSN quota, which is how a
+    // user's bug report earns a 429 it had nothing to do with (the RCA's
+    // four `sentry rejected the report { statusCode: 429 }` lines). Kept at
+    // 1.0 outside production, where volume is a handful of events and every
+    // one of them is being looked at deliberately.
+    //
+    // It cannot drop a bug report, which is the thing to check before
+    // believing this is safe: core gates sampling on `isErrorEvent`, i.e.
+    // `event.type === undefined`, and `captureFeedback` builds its event
+    // with `type: "feedback"`. So this thins exactly the volume that was
+    // eating the quota and leaves the user-submitted reports at 100%.
+    sampleRate: isProd ? 0.25 : 1.0,
+    transport: SentryElectron.makeElectronOfflineTransport((options) =>
+      observeSentryTransportFeedback(
+        options,
+        SentryElectron.makeElectronTransport,
+      ),
+    ),
+    // The default offline transport already queues to exactly this path
+    // (`createOfflineStore` defaults `queuePath` to
+    // `join(getSentryCachePath(), 'queue')`, and `getSentryCachePath()` is
+    // `<userData>/sentry`). Stated so that `support.ts` can read that queue
+    // and tell "stored, will send later" from "we have no idea" - and
+    // stated as THE SAME path, because pointing the store somewhere else
+    // would strand every envelope an earlier build queued under the
+    // default, with nothing left to replay them.
+    transportOptions: {
+      queuePath: sentryOfflineQueuePath(app.getPath("userData")),
+    },
+    attachStacktrace: true,
+    // Stated, not inherited: the SDK default is already false, but "no PII
+    // off this machine" is the policy every Traycer Sentry init writes down.
+    sendDefaultPii: false,
+    // No renderer minidump uploads at all. `sentryMinidumpIntegration` loads
+    // every pending dump in the crashpad directory and captures each one
+    // under the identity of whichever renderer crashed just now, so a browser
+    // guest's dump - decrypted cookie-jar memory, live DOM, anything typed
+    // into a form - would upload tagged as ours; crashpad's per-dump
+    // annotations say only `renderer`, so telling them apart is not possible.
+    // App-shell JavaScript errors still report through the renderer SDK. See
+    // `crash-reporter-guest-scope.ts`.
+    beforeSend: desktopSentryBeforeSend,
+    // Breadcrumbs are scrubbed at record time, not only at send time: they
+    // are persisted to `scope_v3.json` as they accumulate and a native crash
+    // event is assembled from that persisted scope on the next launch.
+    beforeBreadcrumb: (breadcrumb) => {
+      scrubSentryBreadcrumbInPlace(breadcrumb);
+      return breadcrumb;
+    },
+    // `beforeSend` never sees a transaction, and child spans travel outside
+    // the transaction event.
+    beforeSendTransaction: (event) => {
+      scrubSentryTransactionInPlace(event);
+      return event;
+    },
+    beforeSendSpan: (span) => {
+      scrubSentrySpanInPlace(span);
+      return span;
+    },
+  });
+  installSupportReportSizeGuard();
+  installSentryRateLimitObserver();
+  markSentryEnabled();
+  log.info("[crash-reporter] sentry initialized", { environment });
+}
+
+/**
+ * Feeds every transport response into the process-wide rate-limit window.
+ *
+ * Client-wide on purpose. A per-event hook cannot see a 429 earned by a
+ * different event, and that is the case that matters: the rate limit a bug
+ * report runs into is almost always one the app's own error volume earned.
+ * Installed once, right after `init`, and never removed - it holds a few
+ * numbers and outlives every individual report.
+ */
+function installSentryRateLimitObserver(): void {
+  const client = SentryElectron.getClient();
+  if (client === undefined) {
+    log.warn("[crash-reporter] no sentry client to observe rate limits on");
+    return;
+  }
+  client.on("afterSendEvent", (_event, sendResponse) => {
+    sentryReportRateLimitWindow.observe(sendResponse, Date.now());
+  });
+}
+
+/**
+ * Listens for renderer + child process crashes and logs structured details.
+ * `@sentry/electron` already reports these to Sentry when DSN is set; the
+ * local log line ensures we have actionable diagnostics in `electron-log`
+ * regardless of Sentry availability.
+ */
+export function installProcessGoneListeners(): void {
+  // Only `will-quit` (fires when the app is actually quitting) flips this.
+  // `before-quit` can be preventDefault'd while desktop-startup awaits a quit
+  // decision, so a canceled quit would leave the flag stuck true and disable
+  // crash recovery for the rest of the session.
+  app.once("will-quit", () => {
+    appIsQuitting = true;
+  });
+  app.on("render-process-gone", (_event, webContents, details) => {
+    log.error("[crash-reporter] render-process-gone", {
+      reason: details.reason,
+      exitCode: details.exitCode,
+      url: webContents.getURL(),
+    });
+    recoverCrashedRenderer(webContents, details.reason);
+  });
+  app.on("child-process-gone", (_event, details) => {
+    log.error("[crash-reporter] child-process-gone", {
+      type: details.type,
+      reason: details.reason,
+      exitCode: details.exitCode,
+      serviceName: details.serviceName,
+      name: details.name,
+    });
+  });
+}
+
+const RENDERER_RELOAD_WINDOW_MS = 60_000;
+const RENDERER_MAX_RELOADS_PER_WINDOW = 2;
+const rendererReloadHistoryByWebContents = new Map<number, number[]>();
+let appIsQuitting = false;
+
+/**
+ * Self-heals a crashed renderer. Without this, a renderer OOM/crash leaves the
+ * user on a dead window. The renderer is local-first (it rehydrates from the
+ * host + SQLite), so a reload is a safe, idempotent recovery. A crash-loop
+ * cap stops us from reloading endlessly when the renderer crashes on boot.
+ */
+function recoverCrashedRenderer(
+  webContents: Electron.WebContents,
+  reason: Electron.RenderProcessGoneDetails["reason"],
+): void {
+  if (reason === "clean-exit") return;
+  // Never resurrect a renderer during app shutdown: a normal `app.quit()`
+  // tears renderers down with reasons like "killed"/"abnormal-exit", and a
+  // reload here would spawn a fresh renderer mid-quit.
+  if (appIsQuitting) return;
+  const window = BrowserWindow.fromWebContents(webContents);
+  if (window === null || window.isDestroyed()) return;
+
+  const now = Date.now();
+  const existing = rendererReloadHistoryByWebContents.get(webContents.id);
+  const recent = (existing ?? []).filter(
+    (at) => now - at < RENDERER_RELOAD_WINDOW_MS,
+  );
+  if (recent.length >= RENDERER_MAX_RELOADS_PER_WINDOW) {
+    log.error("[crash-reporter] renderer crash-loop, leaving window dead", {
+      webContentsId: webContents.id,
+      reason,
+      reloadsInWindow: recent.length,
+    });
+    return;
+  }
+  recent.push(now);
+  if (existing === undefined) {
+    // Free the history entry when the renderer goes away so the Map can't
+    // grow unbounded across renderer churn.
+    webContents.once("destroyed", () => {
+      rendererReloadHistoryByWebContents.delete(webContents.id);
+    });
+  }
+  rendererReloadHistoryByWebContents.set(webContents.id, recent);
+  log.warn("[crash-reporter] reloading crashed renderer", {
+    webContentsId: webContents.id,
+    reason,
+    attempt: recent.length,
+  });
+  window.reload();
+}
+
+/**
+ * Installs the main-process error net. Without these, an uncaught exception
+ * or unhandled promise rejection in the main process - e.g. a menu-command
+ * handler whose fire-and-forget promise rejects - escapes to Node's default
+ * handler, which under `--unhandled-rejections=throw` fatally aborts the
+ * process with `SIGTRAP` / `EXC_BREAKPOINT` and no application-level log
+ * (the renderer/child `*-process-gone` listeners do NOT cover the main
+ * process itself). We log structured diagnostics and forward to Sentry when
+ * enabled, and deliberately do not re-throw or exit: a single handler bug
+ * should degrade to a logged event, not tear down the shell. Install this
+ * pre-`whenReady`, right after `initCrashReporter()`, so the net is live
+ * before any window or menu can dispatch.
+ */
+export function installGlobalErrorHandlers(): void {
+  process.on("uncaughtException", (err, origin) => {
+    log.error("[crash-reporter] uncaughtException", { origin, err });
+    if (isSentryEnabled()) {
+      SentryElectron.captureException(err, { tags: { origin } });
+    }
+  });
+  process.on("unhandledRejection", (reason) => {
+    log.error("[crash-reporter] unhandledRejection", { reason });
+    if (isSentryEnabled()) {
+      SentryElectron.captureException(reason);
+    }
+  });
+}
+
+/**
+ * Captures GPU info into the startup log. Useful when triaging GPU-driver
+ * crashes - attach this to bug reports alongside the crash dump.
+ */
+export async function logGpuInfo(): Promise<void> {
+  try {
+    const info = await app.getGPUInfo("basic");
+    log.info("[crash-reporter] gpu info", { info });
+  } catch (err) {
+    log.warn("[crash-reporter] gpu info unavailable", { err });
+  }
+}

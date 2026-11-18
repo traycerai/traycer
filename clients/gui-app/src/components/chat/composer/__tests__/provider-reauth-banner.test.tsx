@@ -1,0 +1,3034 @@
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as baseRender,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement, ReactNode } from "react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { ReportIssueContext } from "@/lib/report-issue-context";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  buildEnvironmentClient,
+  environmentStatusFixture,
+} from "@/lib/environment/__tests__/environment-test-support";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import {
+  providerMutationCliStateSchemaV21,
+  providersBeginApiKeyChangeResponseSchema,
+  providersSettleApiKeyChangeResponseSchema,
+  providersAwaitLoginResponseSchema,
+  type ProvidersAwaitLoginResponse,
+  type ProviderCliState,
+  type ProviderLoginCapability,
+  type ProviderLoginRefusal,
+  type ProvidersSettleApiKeyChangeResponse,
+} from "@traycer/protocol/host/provider-schemas";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { hostV115MutationV20Fixtures } from "@traycer/protocol/host/__tests__/__fixtures__/host-v1.1.5-mutation-v20";
+import type { AuthService } from "@/lib/auth/auth-service";
+import { createAppQueryClient } from "@/lib/query-client";
+import { __resetAppLocalNotificationsStoreForTests } from "@/stores/notifications/app-local-notifications-store";
+import {
+  FORBIDDEN_SIGN_IN_REQUEST_REPLY,
+  installSignInRequestFetchHarness,
+  RECORDED_SIGN_IN_REQUEST_REPLY,
+  SIGN_IN_REQUEST_FIXTURE,
+  type SignInRequestFetchHarness,
+} from "@traycer-clients/shared/test-fixtures/provider-sign-in-request-test-support";
+import { signInRequestAuthService } from "@/lib/auth/__tests__/provider-sign-in-request-test-support";
+import {
+  createVerifiedTeamAuthService,
+  resetTeamPageHarness,
+  teamProviderKeyHttpBoundary,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import { z } from "zod";
+
+// The banner shows only for web-login providers; it receives live provider
+// `state` as a prop (from the composer's re-auth gate). Reconnect methods are
+// OAuth (browser login) and/or pasting a fresh credential into an env var. A
+// *rejected* credential never reaches the banner (it surfaces as a generic error
+// row); API-key-only providers (Cursor) have no capability and no banner.
+//
+// Mirrors `AwaitLoginVariables` (`use-providers-await-login-mutation.ts`): the
+// wire request plus the attempt's own `AbortSignal`.
+type AwaitLoginVariables = {
+  readonly request: {
+    readonly providerId: string;
+    readonly profileId: string | null;
+  };
+  readonly signal: AbortSignal | undefined;
+  readonly readsProfileOutcome: boolean;
+};
+// Mirrors `providers.cancelLogin`'s request fields the mocked hook forwards -
+// same rationale as `AwaitLoginVariables` above.
+type CancelLoginVariables = {
+  readonly providerId: string;
+  readonly profileId: string | null;
+  readonly holderId: string | null;
+};
+// Mirrors only the fields the ambient flow hook actually reads off
+// `providers.awaitLogin`'s response (`codeRejected`, `state.auth.status`,
+// `refusal`) - not the full `ProviderCliState` schema, since the mocked hook
+// below never goes through real schema parsing. `refusal` is absent from a
+// host before `providers.awaitLogin@2.2`.
+type AwaitLoginResult = {
+  readonly codeRejected: boolean;
+  readonly state:
+    | { readonly auth: { readonly status: string } }
+    | null
+    | undefined;
+  readonly refusal?: ProviderLoginRefusal | null;
+};
+type AwaitLoginOptions = {
+  readonly onSuccess: (result: AwaitLoginResult) => void;
+  readonly onError: () => void;
+};
+type AwaitLoginMutate = (
+  variables: AwaitLoginVariables,
+  options: AwaitLoginOptions,
+) => void;
+
+type SubmitLoginCodeRequest = {
+  readonly providerId: string;
+  readonly profileId: string | null;
+  readonly code: string;
+};
+type SubmitLoginCodeVariables = Omit<SubmitLoginCodeRequest, "code">;
+type SetEnvOverrideVariables = {
+  readonly providerId: string;
+  readonly key: string;
+};
+type SubmitLoginCodeOptions = {
+  readonly onSuccess: (result: {
+    readonly outcome: "accepted" | "noActiveLogin";
+  }) => void;
+  readonly onError: () => void;
+};
+type SubmitLoginCodeMutate = (
+  variables: SubmitLoginCodeRequest,
+  options: SubmitLoginCodeOptions,
+) => void;
+
+function submitLoginCodeRequestMatches(
+  actual: SubmitLoginCodeRequest,
+  expected: SubmitLoginCodeRequest,
+): boolean {
+  const actualKeys = Object.keys(actual).sort();
+  const expectedKeys = Object.keys(expected).sort();
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every((key, index) => key === expectedKeys[index]) &&
+    actual.providerId === expected.providerId &&
+    actual.profileId === expected.profileId &&
+    actual.code === expected.code
+  );
+}
+
+const setApiKeyMutationVariablesSchema = z.strictObject({
+  providerId: z.string(),
+  keyMatches: z.boolean(),
+});
+const setApiKeyMutationCallsSchema = z.array(
+  z.tuple([setApiKeyMutationVariablesSchema]).rest(z.unknown()),
+);
+const setEnvOverrideMutationVariablesSchema = z.strictObject({
+  providerId: z.string(),
+  key: z.string(),
+  value: z.string(),
+});
+const setEnvOverrideMutationCallsSchema = z.array(
+  z.tuple([setEnvOverrideMutationVariablesSchema]).rest(z.unknown()),
+);
+
+function hasSingleSetApiKeyMutation(
+  calls: unknown,
+  providerId: string,
+  apiKey: string,
+): boolean {
+  const parsed = setApiKeyMutationCallsSchema.safeParse(calls);
+  if (!parsed.success || parsed.data.length !== 1) return false;
+  const variables = parsed.data.at(0)?.[0];
+  return (
+    variables?.providerId === providerId &&
+    variables.keyMatches &&
+    mocks.expectedApiKey === apiKey
+  );
+}
+
+function hasSingleSetEnvOverrideMutation(
+  calls: unknown,
+  providerId: string,
+  key: string,
+  value: string,
+): boolean {
+  const parsed = setEnvOverrideMutationCallsSchema.safeParse(calls);
+  if (!parsed.success || parsed.data.length !== 1) return false;
+  const variables = parsed.data.at(0)?.[0];
+  return (
+    variables?.providerId === providerId &&
+    variables.key === key &&
+    variables.value === value
+  );
+}
+
+function hasSingleProviderKeyHttpSet(): boolean {
+  const call = teamProviderKeyHttpBoundary.calls.at(0);
+  return (
+    teamProviderKeyHttpBoundary.calls.length === 1 &&
+    call !== undefined &&
+    call.action === "set" &&
+    call.routeMatches &&
+    call.authorized &&
+    call.keyMatches === true
+  );
+}
+
+const mocks = vi.hoisted(() => ({
+  startLoginMutate: vi.fn(),
+  awaitLoginMutate: vi.fn<AwaitLoginMutate>(),
+  cancelLoginMutate: vi.fn(),
+  cancelLoginPending: false,
+  submitLoginCodeMutate: vi.fn<SubmitLoginCodeMutate>(),
+  submitLoginCodeVariables:
+    vi.fn<(variables: SubmitLoginCodeVariables) => void>(),
+  submitLoginCodeReset: vi.fn(),
+  submitLoginCodePending: false,
+  submitLoginCodeSuccess: false,
+  submitLoginCodeData: undefined as
+    | { readonly outcome: "accepted" | "noActiveLogin" }
+    | undefined,
+  submitLoginCodeError: null as Error | null,
+  touchLoginMutate: vi.fn(),
+  touchLoginReset: vi.fn(),
+  setEnvOverrideMutate: vi.fn(),
+  setEnvOverrideVariables:
+    vi.fn<(variables: SetEnvOverrideVariables) => void>(),
+  setApiKeyMutate: vi.fn(),
+  useRealKeyChange: false,
+  hostClient: null as HostClient<HostRpcRegistry> | null,
+  authService: null as AuthService | null,
+  tabClient: { id: "tab-client" } as
+    | { id: string }
+    | HostClient<HostRpcRegistry>
+    | null,
+  toastError: vi.fn(),
+  refreshProviders: vi.fn(() => Promise.resolve()),
+  openLink: vi.fn(),
+  reportableErrorToast: vi.fn(),
+  expectedApiKey: null as string | null,
+  openSettings: vi.fn(),
+  reportContexts: new Array<ReportIssueContext>(),
+  hostKind: "local",
+  realAwaitClient: null as HostClient<HostRpcRegistry> | null,
+  useRealAwaitLogin: false,
+  realAwaitLoginSuccess: false,
+  /** What `useHostCredentialRefusal` answers for the tab's host; `null` takes sign-ins. */
+  credentialRefusal: null as string | null,
+}));
+
+let authServiceForTest: AuthService | null = null;
+let activeSignInFetch: SignInRequestFetchHarness | null = null;
+
+function currentAuthService(): AuthService {
+  if (authServiceForTest === null) {
+    throw new Error("sign-in request AuthService was not set up");
+  }
+  return authServiceForTest;
+}
+
+function selectedAuthService(): AuthService {
+  if (!mocks.useRealKeyChange) return currentAuthService();
+  if (mocks.authService === null) {
+    throw new Error("The provider-key test service is unavailable.");
+  }
+  return mocks.authService;
+}
+
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => mocks.credentialRefusal,
+}));
+
+beforeEach(() => {
+  activeSignInFetch = installSignInRequestFetchHarness();
+  authServiceForTest = signInRequestAuthService(activeSignInFetch.client);
+});
+
+afterEach(() => {
+  mocks.credentialRefusal = null;
+  mocks.tabClient = { id: "tab-client" };
+  mocks.realAwaitClient = null;
+  mocks.useRealAwaitLogin = false;
+  mocks.realAwaitLoginSuccess = false;
+  mocks.useRealKeyChange = false;
+  mocks.hostClient = null;
+  mocks.authService = null;
+});
+
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: (): HostClient<HostRpcRegistry> => {
+      if (!mocks.useRealKeyChange) return actual.useHostClient();
+      if (mocks.hostClient === null) {
+        throw new Error("The provider-key test client is unavailable.");
+      }
+      return mocks.hostClient;
+    },
+    useAuthService: selectedAuthService,
+  };
+});
+
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
+}));
+
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
+  useTabHostId: () => "host-1",
+}));
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({
+    data: [{ hostId: "host-1", kind: mocks.hostKind }],
+  }),
+}));
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => {
+    if (mocks.useRealKeyChange) return mocks.hostClient;
+    if (mocks.useRealAwaitLogin) return mocks.realAwaitClient;
+    return mocks.tabClient;
+  },
+}));
+vi.mock("@/lib/host/runtime", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/host/runtime")>();
+  return {
+    ...actual,
+    useHostBinding: () => ({ hostClient: { id: "real-client" } }),
+    useAuthService: selectedAuthService,
+  };
+});
+// The login flow starts through `mutateAsync` (its promise settles even where
+// StrictMode detached the observer); this adapts it onto the recorded
+// `(variables, { onSuccess, onError })` fake every test drives.
+vi.mock("@/hooks/providers/use-providers-start-login-mutation", () => ({
+  useProvidersStartLogin: () => ({
+    mutateAsync: (variables: unknown) =>
+      new Promise((resolve, reject) => {
+        mocks.startLoginMutate(variables, {
+          onSuccess: resolve,
+          onError: reject,
+        });
+      }),
+    isPending: false,
+  }),
+}));
+vi.mock(
+  "@/hooks/providers/use-providers-await-login-mutation",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/providers/use-providers-await-login-mutation")
+      >();
+    return {
+      ...actual,
+      useProvidersAwaitLogin: () => {
+        if (mocks.useRealAwaitLogin) {
+          const result = actual.useProvidersAwaitLogin();
+          mocks.realAwaitLoginSuccess = result.isSuccess;
+          return result;
+        }
+        return { mutate: mocks.awaitLoginMutate };
+      },
+    };
+  },
+);
+vi.mock("@/hooks/providers/use-providers-cancel-login-mutation", () => ({
+  useProvidersCancelLogin: () => ({
+    mutate: mocks.cancelLoginMutate,
+    mutateAsync: (variables: CancelLoginVariables) => {
+      mocks.cancelLoginMutate(variables);
+      return Promise.resolve({ cancelled: true });
+    },
+    isPending: mocks.cancelLoginPending,
+  }),
+}));
+vi.mock("@/hooks/providers/use-providers-login-ownership", () => ({
+  useProvidersLoginOwnership: () => false,
+  useProvidersLoginOwnershipForClient: () => false,
+}));
+vi.mock("@/hooks/providers/use-providers-submit-login-code-mutation", () => ({
+  useProvidersSubmitLoginCode: (
+    readCode: () => string,
+    clearCodeInput: () => void,
+  ) => ({
+    mutate: (
+      variables: SubmitLoginCodeVariables,
+      options: SubmitLoginCodeOptions,
+    ) => {
+      mocks.submitLoginCodeVariables(variables);
+      mocks.submitLoginCodeMutate({ ...variables, code: readCode() }, options);
+      clearCodeInput();
+    },
+    isPending: mocks.submitLoginCodePending,
+    isSuccess: mocks.submitLoginCodeSuccess,
+    data: mocks.submitLoginCodeData,
+    error: mocks.submitLoginCodeError,
+    reset: mocks.submitLoginCodeReset,
+  }),
+}));
+vi.mock("@/hooks/providers/use-providers-touch-login-mutation", () => ({
+  useProvidersTouchLogin: () => ({
+    mutate: mocks.touchLoginMutate,
+    isPending: false,
+    error: null,
+    reset: mocks.touchLoginReset,
+  }),
+}));
+vi.mock("@/hooks/providers/use-providers-set-env-override-mutation", () => ({
+  useProvidersSetEnvOverride: (
+    readValue: () => string | null,
+    clearValueInput: () => void,
+  ) => ({
+    mutate: (variables: SetEnvOverrideVariables) => {
+      mocks.setEnvOverrideVariables(variables);
+      mocks.setEnvOverrideMutate({ ...variables, value: readValue() });
+      clearValueInput();
+    },
+    isPending: false,
+  }),
+}));
+vi.mock(
+  "@/hooks/providers/use-providers-set-api-key-mutation",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/providers/use-providers-set-api-key-mutation")
+      >();
+    return {
+      ...actual,
+      useProvidersSetApiKey: (
+        expectedEnvironmentId: string | null,
+        readApiKey: () => string,
+        clearApiKeyInput: () => void,
+      ) => {
+        if (mocks.useRealKeyChange)
+          return actual.useProvidersSetApiKey(
+            expectedEnvironmentId,
+            readApiKey,
+            clearApiKeyInput,
+          );
+        return {
+          mutate: (variables: { readonly providerId: string }) => {
+            let keyMatches = false;
+            try {
+              keyMatches =
+                mocks.expectedApiKey !== null &&
+                readApiKey() === mocks.expectedApiKey;
+            } finally {
+              clearApiKeyInput();
+            }
+            mocks.setApiKeyMutate({
+              providerId: variables.providerId,
+              keyMatches,
+            });
+          },
+          isPending: false,
+        };
+      },
+    };
+  },
+);
+vi.mock("@/hooks/providers/use-tab-refresh-providers", () => ({
+  useTabRefreshProviders: () => mocks.refreshProviders,
+}));
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => mocks.openLink,
+}));
+vi.mock("@/components/report-issue/report-issue-action", () => ({
+  ReportIssueAction: (props: { readonly context: ReportIssueContext }) => {
+    mocks.reportContexts.push(props.context);
+    return null;
+  },
+}));
+vi.mock("sonner", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("sonner")>();
+  return {
+    ...actual,
+    toast: { ...actual.toast, error: mocks.toastError },
+  };
+});
+vi.mock("@/lib/reportable-error-toast", () => ({
+  reportableErrorToast: mocks.reportableErrorToast,
+}));
+
+import { ProviderReauthBanner } from "../provider-reauth-banner";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+
+// TokenReauthForm reads/writes the TanStack Query cache (useQueryClient +
+// useTabRefreshProviders), so every banner render needs a QueryClient in scope.
+// One client per render() call, held by a stable wrapper, so view.rerender keeps
+// the same client (and its per-client coordinator) as the retained observer.
+const renderedClients: QueryClient[] = [];
+const realKeyChangeRigs: Array<{
+  readonly spine: HostClient<HostRpcRegistry>;
+}> = [];
+
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+  __resetAppLocalNotificationsStoreForTests();
+  for (const client of renderedClients) client.clear();
+  renderedClients.length = 0;
+  for (const rig of realKeyChangeRigs.splice(0)) {
+    rig.spine.dispose();
+  }
+  resetNegotiatedManifests();
+  resetTeamPageHarness();
+  activeSignInFetch?.restore();
+  activeSignInFetch = null;
+  authServiceForTest?.dispose();
+  authServiceForTest = null;
+});
+
+function render(ui: ReactElement) {
+  const client = new QueryClient();
+  renderedClients.push(client);
+  function QueryWrapper({ children }: { children: ReactNode }) {
+    return (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+  }
+  return baseRender(ui, { wrapper: QueryWrapper });
+}
+
+function RealProviderListObserver(): null {
+  useProvidersListForClient(mocks.realAwaitClient, {
+    enabled: true,
+    subscribed: true,
+  });
+  return null;
+}
+
+function renderWithRealListObserver(ui: ReactElement) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  renderedClients.push(client);
+  function QueryWrapper({ children }: { readonly children: ReactNode }) {
+    return (
+      <QueryClientProvider client={client}>
+        <RealProviderListObserver />
+        {children}
+      </QueryClientProvider>
+    );
+  }
+  return baseRender(ui, { wrapper: QueryWrapper });
+}
+
+async function makeRealKeyChangeRig(
+  result: ProvidersSettleApiKeyChangeResponse["result"],
+): Promise<void> {
+  const state = providerMutationCliStateSchemaV21.parse({
+    ...hostV115MutationV20Fixtures.minimalStatesByProviderId.cursor,
+    profiles: [],
+  });
+  const fixture = buildEnvironmentClient({
+    hostId: "host-1",
+    handlers: {
+      "environment.status": () =>
+        environmentStatusFixture({ principal: { kind: "personal" } }),
+      "providers.beginApiKeyChange": () =>
+        providersBeginApiKeyChangeResponseSchema.parse({
+          mode: "record",
+          changeToken: "opaque",
+          environmentId: "env-a",
+        }),
+      "providers.settleApiKeyChange": () =>
+        providersSettleApiKeyChangeResponseSchema.parse({ state, result }),
+    },
+  });
+  recordNegotiatedHostMethods("host-1", [
+    "environment.status",
+    "providers.beginApiKeyChange",
+    "providers.settleApiKeyChange",
+  ]);
+  const authQueryClient = createAppQueryClient();
+  renderedClients.push(authQueryClient);
+  const signInFetch = activeSignInFetch;
+  if (signInFetch === null) throw new Error("Sign-in fetch was not installed");
+  const service = await createVerifiedTeamAuthService(
+    authQueryClient,
+    signInFetch.fetchMock,
+  );
+  mocks.useRealKeyChange = true;
+  mocks.hostClient = fixture.client;
+  mocks.tabClient = fixture.client;
+  mocks.authService = service;
+  teamProviderKeyHttpBoundary.matchesKey = (key) =>
+    key === "synthetic-provider-key";
+  realKeyChangeRigs.push({ spine: fixture.spine });
+}
+
+function mockStartLoginAlwaysSucceeds(): void {
+  mocks.startLoginMutate.mockImplementation(
+    (
+      _vars: {
+        readonly providerId: string;
+        readonly profileId: string | null;
+        readonly createProfile: unknown;
+      },
+      opts: {
+        readonly onSuccess: (data: {
+          readonly url: string;
+          readonly started: boolean;
+          readonly profileId: string | null;
+        }) => void;
+      },
+    ) => {
+      opts.onSuccess({
+        url: "http://localhost:56988/callback",
+        started: true,
+        profileId: null,
+      });
+    },
+  );
+}
+
+/** Presses Sign in and lets the start's answer land: the flow reads it
+ *  from `mutateAsync`'s promise, a microtask after the fake settles. */
+async function clickAuthenticate(): Promise<void> {
+  await act(() => {
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    return Promise.resolve();
+  });
+}
+
+function latestAwaitLoginCall(): readonly [
+  AwaitLoginVariables,
+  AwaitLoginOptions,
+] {
+  const call = mocks.awaitLoginMutate.mock.calls.at(-1);
+  if (call === undefined) throw new Error("Expected an awaitLogin call.");
+  return call;
+}
+
+function latestSubmitLoginCodeCall(): readonly [
+  SubmitLoginCodeVariables,
+  SubmitLoginCodeOptions,
+] {
+  const call = mocks.submitLoginCodeMutate.mock.calls.at(-1);
+  if (call === undefined) throw new Error("Expected a submitLoginCode call.");
+  return call;
+}
+
+const CLAUDE_CAP: ProviderLoginCapability = {
+  oauthArgs: ["auth", "login"],
+  token: { vars: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] },
+  codePaste: null,
+  terminalLogin: null,
+  remoteSafe: null,
+  selfOpensBrowser: null,
+};
+
+// Droid has no headless login subcommand (bare `droid` is an interactive TUI
+// that can't browser-OAuth over piped stdio), so it advertises no OAuth args -
+// reauth is the FACTORY_API_KEY paste form only.
+const DROID_CAP: ProviderLoginCapability = {
+  oauthArgs: null,
+  token: { vars: ["FACTORY_API_KEY"] },
+  codePaste: null,
+  terminalLogin: null,
+  remoteSafe: null,
+  selfOpensBrowser: null,
+};
+
+const CODE_PASTE_CLAUDE_CAP: ProviderLoginCapability = {
+  oauthArgs: ["auth", "login"],
+  token: { vars: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] },
+  codePaste: {},
+  terminalLogin: null,
+  remoteSafe: null,
+  selfOpensBrowser: null,
+};
+
+// Copilot's device-code login cannot be driven headlessly, so its capability
+// carries a non-null `terminalLogin` alongside real `oauthArgs` - the banner
+// must offer the terminal button and suppress the (unusable) headless one.
+const COPILOT_TERMINAL_CAP: ProviderLoginCapability = {
+  oauthArgs: ["auth", "login"],
+  token: null,
+  codePaste: null,
+  terminalLogin: {},
+  remoteSafe: null,
+  selfOpensBrowser: null,
+};
+
+// Reasonix is also a terminal-login provider (its own credential wizard, not
+// a device-code sign-in), but it has setup guidance
+// (`provider-setup-guidance.ts`) - the one live entry today - so
+// `TerminalLoginRow` must swap in the guidance's button label and hint
+// instead of the generic "Sign in from a terminal" copy.
+const REASONIX_CAP: ProviderLoginCapability = {
+  oauthArgs: ["setup"],
+  token: null,
+  codePaste: null,
+  terminalLogin: {},
+  remoteSafe: null,
+  selfOpensBrowser: null,
+};
+
+// Antigravity is an ACP-authenticate provider: the host spawns
+// `agy_acp_server` and drives the ACP `authenticate` method, so its headless
+// sign-in carries no login subcommand at all and its argv is legitimately
+// EMPTY - the one shape `canOauth` used to reject as "no OAuth".
+const ANTIGRAVITY_ACP_AUTH_CAP: ProviderLoginCapability = {
+  oauthArgs: [],
+  token: null,
+  codePaste: null,
+  terminalLogin: null,
+  remoteSafe: null,
+  selfOpensBrowser: null,
+};
+
+// The unreachable case this used to model: an old host's payload cannot
+// decode with `terminalLogin` genuinely absent - the v6 -> v7 upgrade bridge
+// (`registry.ts`) fills it to `null` on that exact hop. What DOES leave
+// `providerSupportsTerminalLogin` reading "not a terminal-login provider" for
+// a real reason is the provider's whole `loginCapability` being `null`
+// (Cursor, Traycer) - the case below.
+
+function copilotState(
+  loginCapability: ProviderLoginCapability | null,
+): ProviderCliState {
+  return { ...claudeState(loginCapability), providerId: "copilot" };
+}
+
+function reasonixState(
+  loginCapability: ProviderLoginCapability | null,
+): ProviderCliState {
+  return { ...claudeState(loginCapability), providerId: "reasonix" };
+}
+
+function antigravityState(
+  loginCapability: ProviderLoginCapability | null,
+): ProviderCliState {
+  return { ...claudeState(loginCapability), providerId: "antigravity" };
+}
+
+function claudeState(
+  loginCapability: ProviderLoginCapability | null,
+): ProviderCliState {
+  return {
+    providerId: "claude-code",
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    // Capable by default: a runnable candidate, so `providerHostBlock` reads
+    // null and every OAuth/terminal button in this file is gated by the fact
+    // it is actually testing, not by whether the host has found a CLI. The
+    // one test that models "the pack is preparing and nothing else can run"
+    // overrides `candidates` back to `[]` itself.
+    candidates: [
+      {
+        kind: "bundled",
+        path: "/opt/traycer/bin/claude",
+        version: "1.0.0",
+        available: true,
+        versionPending: false,
+      },
+    ],
+    auth: {
+      status: "unauthenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability,
+    availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
+    profiles: [],
+  };
+}
+
+function codexState(
+  loginCapability: ProviderLoginCapability | null,
+): ProviderCliState {
+  return { ...claudeState(loginCapability), providerId: "codex" };
+}
+
+function cursorState(): ProviderCliState {
+  return {
+    providerId: "cursor",
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    auth: {
+      status: "unauthenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: true, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    // API-key-only provider: no OAuth session to reconnect → no banner capability.
+    loginCapability: null,
+    availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
+    profiles: [],
+  };
+}
+
+function droidState(): ProviderCliState {
+  return {
+    providerId: "droid",
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    auth: {
+      status: "unauthenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: true, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: DROID_CAP,
+    availabilityPending: false,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
+    profiles: [],
+  };
+}
+
+describe("<ProviderReauthBanner />", () => {
+  beforeEach(() => {
+    resetNegotiatedManifests();
+    mocks.startLoginMutate.mockReset();
+    mocks.awaitLoginMutate.mockClear();
+    mocks.cancelLoginMutate.mockClear();
+    mocks.cancelLoginPending = false;
+    mocks.submitLoginCodeMutate.mockReset();
+    mocks.submitLoginCodeVariables.mockClear();
+    mocks.submitLoginCodePending = false;
+    mocks.submitLoginCodeSuccess = false;
+    mocks.submitLoginCodeData = undefined;
+    mocks.submitLoginCodeError = null;
+    mocks.expectedApiKey = null;
+    mocks.submitLoginCodeMutate.mockImplementation(() => {
+      mocks.submitLoginCodePending = true;
+      mocks.submitLoginCodeSuccess = false;
+      mocks.submitLoginCodeData = undefined;
+      mocks.submitLoginCodeError = null;
+    });
+    mocks.submitLoginCodeReset.mockReset();
+    mocks.submitLoginCodeReset.mockImplementation(() => {
+      mocks.submitLoginCodePending = false;
+      mocks.submitLoginCodeSuccess = false;
+      mocks.submitLoginCodeData = undefined;
+      mocks.submitLoginCodeError = null;
+    });
+    mocks.touchLoginMutate.mockReset();
+    mocks.touchLoginReset.mockClear();
+    mocks.setEnvOverrideMutate.mockClear();
+    mocks.setEnvOverrideVariables.mockClear();
+    mocks.setApiKeyMutate.mockClear();
+    mocks.refreshProviders.mockClear();
+    mocks.openLink.mockClear();
+    mocks.reportableErrorToast.mockClear();
+    mocks.hostKind = "local";
+    mocks.reportContexts.length = 0;
+    useProvidersFocusStore.getState().clearFocusHarnessId();
+  });
+
+  it("offers the OAuth button on a local host", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+  });
+
+  it("asks for a sign-in to run the provider, never a reconnect, for the terminal login", () => {
+    const { container } = render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.getByText("Sign in to Claude Code to run it.")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+    expect(container.textContent).not.toMatch(/reconnect/i);
+    expect(screen.queryByRole("button", { name: /Authenticate/ })).toBeNull();
+  });
+
+  it("says the host is unavailable, and to sign in once it is back, when the tab's host cannot be reached", () => {
+    mocks.tabClient = null;
+    const { container } = render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "This agent's host is unavailable. Sign in once it's back online.",
+      ),
+    ).toBeDefined();
+    expect(container.textContent).not.toMatch(/reconnect/i);
+  });
+
+  // The host-gating redesign: a control that spawns a CLI is refused for a
+  // provider that is off, whatever its login capability says. The banner
+  // shows the block's own sentence where the button would be, and no OAuth
+  // form at all.
+  it("shows the host-block status line and no OAuth form for a disabled provider", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={{ ...claudeState(CLAUDE_CAP), enabled: false }}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe(
+      "Claude Code is turned off. Turn it on to sign in or manage its profiles.",
+    );
+  });
+
+  // `canOauth` required `oauthArgs.length > 0`, so the banner offered
+  // antigravity the API-key paste form and no reconnect button at all - the
+  // one affordance that actually signs it back in. Rendered AS antigravity,
+  // not as a stand-in provider: the id reaches `providerDisplayName` and the
+  // setup-guidance lookup, so a future antigravity-specific branch in either
+  // would silently escape a test that claimed to cover it.
+  it("offers the OAuth button when oauthArgs is empty but non-null", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="antigravity"
+        state={antigravityState(ANTIGRAVITY_ACP_AUTH_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+  });
+
+  it("still withholds the OAuth button on a remote host when oauthArgs is empty but non-null", () => {
+    // The loopback constraint is orthogonal to the argv relaxation and must
+    // survive it: an empty argv is still a browser sign-in the HOST performs.
+    mocks.hostKind = "remote";
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="antigravity"
+        state={antigravityState(ANTIGRAVITY_ACP_AUTH_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+  });
+
+  // The host settled that nothing can run Antigravity on this Mac. The banner
+  // is one of three sign-in surfaces fed by `providerHostBlock`, so it must show
+  // the sentence instead of an action that could only end in a failed start.
+  it("shows the macOS sentence instead of Authenticate when the host says nothing can run here", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="antigravity"
+        state={{
+          ...antigravityState(ANTIGRAVITY_ACP_AUTH_CAP),
+          candidates: [],
+          cliBinaryResolved: false,
+          macosRequirement: {
+            runningMacos: "13.6",
+            managed: { requiredMacos: "14.0" },
+            launch: { requiredMacos: "14.0" },
+            refusedVersions: [],
+          },
+        }}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "Antigravity needs macOS 14.0 or later. This Mac runs macOS 13.6.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(mocks.startLoginMutate).not.toHaveBeenCalled();
+  });
+
+  it("keeps offering Sign in when a host that omits the field has a runnable CLI", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="antigravity"
+        state={antigravityState(ANTIGRAVITY_ACP_AUTH_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+  });
+
+  // Row 1 of the terminal-login contract table: the banner is one of three
+  // consumers of `providerSupportsTerminalLogin` - see
+  // `provider-signin-availability.test.ts` for the other two
+  // (`providerSignInUnavailableHint`, `resolveCreateProfileGate`).
+  it("offers 'Sign in from a terminal' instead of the headless OAuth button for a terminal-login provider", () => {
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="copilot"
+        state={copilotState(COPILOT_TERMINAL_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: /Sign in from a terminal/ }),
+    ).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+  });
+
+  // Reasonix is a terminal-login provider with its own setup guidance
+  // (`provider-setup-guidance.ts`): the generic "Sign in from a terminal" /
+  // "prints a sign-in code" copy is wrong for its credential-paste wizard, so
+  // `TerminalLoginRow` swaps in the guidance's own label and hint instead.
+  it("offers 'Set up in terminal' with the API-key hint for a provider with setup guidance (reasonix)", () => {
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="reasonix"
+        state={reasonixState(REASONIX_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Set up in terminal" }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("button", { name: "Sign in from a terminal" }),
+    ).toBeNull();
+    expect(
+      screen.getByText(
+        "Reasonix asks for your provider API key in that terminal. Finish there, then use Refresh above.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText(/sign-in code/)).toBeNull();
+  });
+
+  // The banner resolves its copy through the SAME resolver the picker's setup
+  // CTA uses (`providerTerminalGuidance`), so a launch-the-CLI provider's
+  // in-CLI instruction reaches it. It used to fall back to its own inline copy
+  // of the generic sentences whenever the override table returned null, which
+  // told a Qwen user to read a sign-in code that nothing prints.
+  it("shows the in-CLI instruction, not the generic sign-in-code hint, for a launch-the-CLI provider (qwen)", () => {
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="qwen"
+        state={{
+          ...copilotState({
+            oauthArgs: null,
+            token: null,
+            codePaste: null,
+            terminalLogin: {},
+            remoteSafe: null,
+            selfOpensBrowser: null,
+          }),
+          providerId: "qwen",
+        }}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Sign in from a terminal" }),
+    ).toBeDefined();
+    expect(
+      screen.getByText(
+        "Qwen Code opens in that terminal. Type /auth and complete the sign-in there, then use Refresh above.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByText(/sign-in code/)).toBeNull();
+  });
+
+  // Row 2: a provider whose whole `loginCapability` is `null` (Cursor,
+  // Traycer, or any CLI with no OAuth session to reconnect) makes the
+  // helper's optional chain yield `undefined` for `terminalLogin` -
+  // `providerSupportsTerminalLogin` must read that as "not a terminal-login
+  // provider" the same as an explicit `null`. copilotState's own capability
+  // has real `oauthArgs`, so a null capability here also exercises the "no
+  // reconnect method at all" branch rather than the headless button; assert
+  // on the absence of the terminal button, which is Row 2's actual claim.
+  it("shows the pack's preparing state instead of the terminal button while the provider cannot spawn", () => {
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="copilot"
+        state={{
+          ...copilotState(COPILOT_TERMINAL_CAP),
+          // Nothing to fall back to - this is the one test in the file where
+          // the CLI itself, not just the pack, is unavailable.
+          candidates: [],
+          managedInstallState: { status: "downloading", percent: 30 },
+        }}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    // A terminal login spawns the provider's CLI exactly as a turn does, so
+    // a pack with nothing to fall back to gates it the same way - the row
+    // stays (the wait is the thing to show), the button does not.
+    expect(
+      screen.queryByRole("button", { name: /Sign in from a terminal/ }),
+    ).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe(
+      "Preparing Copilot… 30%",
+    );
+    // And not the CLI-only stub either: this is not a provider with no route.
+    expect(
+      screen.queryByText(/Sign in from Copilot's own CLI, then check again/),
+    ).toBeNull();
+  });
+
+  it("does not offer 'Sign in from a terminal' when loginCapability is null", () => {
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="copilot"
+        state={copilotState(null)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /Sign in from a terminal/ }),
+    ).toBeNull();
+  });
+
+  // A launch-the-CLI provider (Qwen, Droid, OMP, OpenCode) declares
+  // `terminalLogin` with `oauthArgs: null`: there is no headless command, the
+  // host launches the CLI itself. The banner must offer the terminal button
+  // (never the headless one) - the same answer `providerSupportsTerminalLogin`
+  // and `resolveCreateProfileGate` give, so this surface cannot fall through
+  // to the CLI stub for a provider Traycer can open the CLI for.
+  // `[]` is covered beside `null` to prove `canTerminalLogin` decides this
+  // BEFORE the argv is read. The two no longer mean the same thing past that
+  // point - an empty argv is a real headless sign-in for an ACP-authenticate
+  // provider (see the empty-argv tests above) - so a regression that dropped
+  // the `!canTerminalLogin` guard would change this row's answer for `[]`
+  // alone, and only this parameterisation catches that.
+  it.each([{ oauthArgs: null }, { oauthArgs: [] }])(
+    "offers the terminal button, not the headless one, when terminalLogin is present and there is no oauthArgs (%o)",
+    ({ oauthArgs }) => {
+      render(
+        <ProviderReauthBanner
+          epicId="epic-1"
+          viewTabId="tab-1"
+          providerId="qwen"
+          state={{
+            ...copilotState({
+              oauthArgs,
+              token: null,
+              codePaste: null,
+              terminalLogin: {},
+              remoteSafe: null,
+              selfOpensBrowser: null,
+            }),
+            providerId: "qwen",
+          }}
+          reason="provider_unauthenticated"
+          profileId={null}
+          profileLabel={null}
+          onContinueOnAmbient={null}
+        />,
+      );
+
+      expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: /Sign in from a terminal/ }),
+      ).not.toBeNull();
+      expect(screen.queryByText(/from its CLI to continue/)).toBeNull();
+    },
+  );
+
+  // Row 3: unlike browser OAuth (a localhost loopback that only a local host
+  // can serve), a device-code terminal login needs no loopback, so it must be
+  // offered on a REMOTE host too.
+  it("still offers 'Sign in from a terminal' on a remote host", () => {
+    mocks.hostKind = "remote";
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="copilot"
+        state={copilotState(COPILOT_TERMINAL_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: /Sign in from a terminal/ }),
+    ).toBeDefined();
+  });
+
+  // The other half of the `showTerminalLogin` gate. Every other terminal-login
+  // case here passes a real epic + view tab; this one pins the home-composer
+  // fallback, where there is no canvas to open a terminal into. Dropping the
+  // `epicId !== null && viewTabId !== null` conjunct would draw a button that
+  // fires an RPC the host honours - a live sign-in PTY with no tile.
+  it("falls through to the paste form for a terminal-login provider outside a canvas", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="copilot"
+        state={copilotState(COPILOT_TERMINAL_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /Sign in from a terminal/ }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+  });
+
+  it("offers only the token paste form (no Authenticate) for a CLI with no headless login (Droid)", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="droid"
+        state={droidState()}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    // Droid has no spawnable OAuth login, so no Authenticate button is offered -
+    // it would only hang on "Waiting for browser sign-in…".
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    // The FACTORY_API_KEY paste form is the reconnect path instead.
+    expect(
+      screen.getByPlaceholderText("Paste your FACTORY_API_KEY"),
+    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
+    expect(mocks.startLoginMutate).not.toHaveBeenCalled();
+  });
+
+  it("stores a pasted Droid key as the encrypted API-key secret, not an env override", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="droid"
+        state={droidState()}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    const input = screen.getByPlaceholderText("Paste your FACTORY_API_KEY");
+    fireEvent.change(input, { target: { value: "  fk-droid-123  " } });
+    mocks.expectedApiKey = "fk-droid-123";
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    // Droid has an encrypted host-side key store, so the banner persists the key
+    // as that secret (`providers.setApiKey`) — exactly like Settings > Providers —
+    // rather than a plaintext env override.
+    expect(
+      hasSingleSetApiKeyMutation(
+        mocks.setApiKeyMutate.mock.calls,
+        "droid",
+        "fk-droid-123",
+      ),
+    ).toBe(true);
+    expect(mocks.setEnvOverrideMutate).not.toHaveBeenCalled();
+  });
+
+  it("re-checks sign-in status via the manual Refresh button", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Check sign-in status" }),
+    );
+    expect(mocks.refreshProviders).toHaveBeenCalled();
+  });
+
+  it("awaits the login-completion edge on Sign in (no polling)", async () => {
+    mocks.startLoginMutate.mockImplementation(
+      (
+        _vars: { providerId: string },
+        opts: {
+          onSuccess: (data: {
+            readonly url: string;
+            readonly started: boolean;
+            readonly profileId: string | null;
+          }) => void;
+        },
+      ) => {
+        opts.onSuccess({
+          url: "http://localhost:56988/callback",
+          started: true,
+          profileId: null,
+        });
+      },
+    );
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    await clickAuthenticate();
+    // Spinner shows, and we await the host's completion edge instead of a
+    // 2s `forceAuthRefresh` poll.
+    expect(screen.getByText(/Approve sign-in in your browser/)).toBeDefined();
+    const [awaitVariables, awaitOptions] = latestAwaitLoginCall();
+    expect(awaitVariables.request).toEqual({
+      providerId: "claude-code",
+      profileId: null,
+      lastSeenReaderCount: null,
+    });
+    expect(awaitVariables.signal).toBeInstanceOf(AbortSignal);
+    expect(awaitVariables.readsProfileOutcome).toBe(false);
+    expect(typeof awaitOptions.onSuccess).toBe("function");
+  });
+
+  it("does not re-read providers.list for a named completion on the real reauth await path", async () => {
+    mocks.useRealAwaitLogin = true;
+    const { client, messenger } = buildEnvironmentClient({
+      hostId: "host-1",
+      handlers: {
+        "providers.list": () => ({ providers: [], native: null }),
+        "providers.awaitLogin": () =>
+          providersAwaitLoginResponseSchema.parse({
+            state: null,
+            profileOutcome: {
+              kind: "signed-in",
+              profileId: "not-in-list",
+            },
+          }),
+      },
+    });
+    mocks.realAwaitClient = client;
+    mockStartLoginAlwaysSucceeds();
+    renderWithRealListObserver(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+    await waitFor(() => {
+      expect(
+        messenger.calls.filter((call) => call.method === "providers.list"),
+      ).toHaveLength(1);
+    });
+
+    await clickAuthenticate();
+    await waitFor(() => expect(mocks.realAwaitLoginSuccess).toBe(true));
+
+    expect(
+      messenger.calls.filter((call) => call.method === "providers.list"),
+    ).toHaveLength(1);
+    expect(
+      messenger.calls.filter((call) => call.method === "providers.awaitLogin"),
+    ).toHaveLength(1);
+  });
+
+  it("does not show a code-paste field for a provider without the codePaste capability", async () => {
+    mockStartLoginAlwaysSucceeds();
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    await clickAuthenticate();
+    expect(screen.getByText(/Approve sign-in in your browser/)).toBeDefined();
+    expect(screen.queryByLabelText("Paste the code")).toBeNull();
+  });
+
+  it("expands into a compact code-paste row and submits with the ambient (null) profile id", async () => {
+    mockStartLoginAlwaysSucceeds();
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CODE_PASTE_CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    await clickAuthenticate();
+    expect(screen.getByText(/Approve sign-in in your browser/)).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: /Open browser/ }));
+    expect(mocks.openLink).toHaveBeenCalledWith(
+      "http://localhost:56988/callback",
+      "auth",
+      null,
+    );
+
+    const input = screen.getByLabelText("Paste the code");
+    fireEvent.paste(input, {
+      clipboardData: { getData: () => "abc123#xyz789" },
+    });
+
+    const recordedSubmitLoginCodeCall =
+      mocks.submitLoginCodeMutate.mock.calls.at(-1);
+    expect(
+      recordedSubmitLoginCodeCall !== undefined &&
+        submitLoginCodeRequestMatches(recordedSubmitLoginCodeCall[0], {
+          providerId: "claude-code",
+          profileId: null,
+          code: "abc123#xyz789",
+        }),
+    ).toBe(true);
+    expect(mocks.submitLoginCodeVariables).toHaveBeenCalledWith({
+      providerId: "claude-code",
+      profileId: null,
+    });
+  });
+
+  it("offers Authenticate with a paste field on a remote host when codePaste is set", async () => {
+    mocks.hostKind = "remote";
+    mockStartLoginAlwaysSucceeds();
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CODE_PASTE_CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    await clickAuthenticate();
+    expect(screen.getByLabelText("Paste the code")).toBeDefined();
+    expect(mocks.openLink).toHaveBeenCalledWith(
+      "http://localhost:56988/callback",
+      "auth",
+      null,
+    );
+  });
+
+  it("surfaces device_auth_unavailable instead of provider-unavailable copy", async () => {
+    mocks.startLoginMutate.mockImplementation(
+      (
+        _vars: unknown,
+        opts: {
+          readonly onSuccess: (data: {
+            readonly url: string | null;
+            readonly started: boolean;
+            readonly profileId: string | null;
+            readonly userCode: string | null;
+            readonly failure: "device_auth_unavailable";
+          }) => void;
+        },
+      ) => {
+        opts.onSuccess({
+          url: null,
+          started: false,
+          profileId: null,
+          userCode: null,
+          failure: "device_auth_unavailable",
+        });
+      },
+    );
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="codex"
+        state={codexState({
+          oauthArgs: ["login", "--device-auth"],
+          token: null,
+          codePaste: null,
+          terminalLogin: null,
+          remoteSafe: null,
+          selfOpensBrowser: null,
+        })}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    await clickAuthenticate();
+    expect(screen.getByText(/Device-code login is not enabled/)).toBeDefined();
+    expect(screen.queryByText(/did not start/)).toBeNull();
+  });
+
+  it("touches the keepalive with the ambient (null) profile id when the paste field is focused", async () => {
+    mockStartLoginAlwaysSucceeds();
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CODE_PASTE_CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    await clickAuthenticate();
+    fireEvent.focus(screen.getByLabelText("Paste the code"));
+
+    expect(mocks.touchLoginMutate).toHaveBeenCalledWith({
+      providerId: "claude-code",
+      profileId: null,
+    });
+  });
+
+  it("keeps an untouched browser-approval leg alive beyond three minutes and stops after settlement", async () => {
+    vi.useFakeTimers();
+    try {
+      mockStartLoginAlwaysSucceeds();
+      render(
+        <ProviderReauthBanner
+          epicId={null}
+          viewTabId={null}
+          providerId="claude-code"
+          state={claudeState(CODE_PASTE_CLAUDE_CAP)}
+          reason="provider_unauthenticated"
+          profileId={null}
+          profileLabel={null}
+          onContinueOnAmbient={null}
+        />,
+      );
+
+      await clickAuthenticate();
+      await act(() => vi.advanceTimersByTimeAsync(181_000));
+
+      expect(mocks.touchLoginMutate).toHaveBeenCalledTimes(3);
+      expect(mocks.touchLoginMutate).toHaveBeenLastCalledWith({
+        providerId: "claude-code",
+        profileId: null,
+      });
+
+      const [, awaitOptions] = latestAwaitLoginCall();
+      act(() => {
+        awaitOptions.onSuccess({
+          codeRejected: false,
+          state: { auth: { status: "authenticated" } },
+        });
+      });
+      await act(() => vi.advanceTimersByTimeAsync(120_000));
+      expect(mocks.touchLoginMutate).toHaveBeenCalledTimes(3);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops the waiting-state keepalive after cancellation", async () => {
+    vi.useFakeTimers();
+    try {
+      mockStartLoginAlwaysSucceeds();
+      render(
+        <ProviderReauthBanner
+          epicId={null}
+          viewTabId={null}
+          providerId="claude-code"
+          state={claudeState(CODE_PASTE_CLAUDE_CAP)}
+          reason="provider_unauthenticated"
+          profileId={null}
+          profileLabel={null}
+          onContinueOnAmbient={null}
+        />,
+      );
+
+      await clickAuthenticate();
+      await act(() => vi.advanceTimersByTimeAsync(61_000));
+      expect(mocks.touchLoginMutate).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await act(() => vi.advanceTimersByTimeAsync(120_000));
+      expect(mocks.touchLoginMutate).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a clipboard failure from the banner copy action", async () => {
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(
+      navigator,
+      "clipboard",
+    );
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn(() => Promise.reject(new Error("denied"))) },
+    });
+
+    try {
+      mockStartLoginAlwaysSucceeds();
+      render(
+        <ProviderReauthBanner
+          epicId={null}
+          viewTabId={null}
+          providerId="claude-code"
+          state={claudeState(CODE_PASTE_CLAUDE_CAP)}
+          reason="provider_unauthenticated"
+          profileId={null}
+          profileLabel={null}
+          onContinueOnAmbient={null}
+        />,
+      );
+
+      await clickAuthenticate();
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Copy sign-in link" }),
+        );
+        await Promise.resolve();
+      });
+
+      expect(mocks.reportableErrorToast).toHaveBeenCalledWith(
+        "Couldn't copy the sign-in link.",
+        undefined,
+        {
+          title: "Could not copy sign-in link",
+          message: null,
+          code: null,
+          source: "Provider sign-in",
+        },
+      );
+    } finally {
+      cleanup();
+      if (clipboardDescriptor === undefined) {
+        Reflect.deleteProperty(navigator, "clipboard");
+      } else {
+        Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+      }
+    }
+  });
+
+  it("allows the fresh child's first keepalive immediately after an auto-restart", async () => {
+    mockStartLoginAlwaysSucceeds();
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CODE_PASTE_CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    await clickAuthenticate();
+    fireEvent.focus(screen.getByLabelText("Paste the code"));
+    expect(mocks.touchLoginMutate).toHaveBeenCalledTimes(1);
+
+    const [, firstAwaitOptions] = latestAwaitLoginCall();
+    await act(() => {
+      firstAwaitOptions.onSuccess({ codeRejected: true, state: undefined });
+      return Promise.resolve();
+    });
+    expect(mocks.startLoginMutate).toHaveBeenCalledTimes(2);
+
+    fireEvent.focus(screen.getByLabelText("Paste the code"));
+    expect(mocks.touchLoginMutate).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps an authenticated ambient result terminal even when awaitLogin also reports codeRejected", async () => {
+    mockStartLoginAlwaysSucceeds();
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CODE_PASTE_CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    await clickAuthenticate();
+    const [, awaitOptions] = latestAwaitLoginCall();
+    act(() => {
+      awaitOptions.onSuccess({
+        codeRejected: true,
+        state: { auth: { status: "authenticated" } },
+      });
+    });
+
+    expect(mocks.startLoginMutate).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByText(
+        "That code didn't work - a new sign-in link was generated.",
+      ),
+    ).toBeNull();
+  });
+
+  it("auto-restarts with a fresh sign-in link when the submitted code is rejected, keeping the user in the banner", async () => {
+    mockStartLoginAlwaysSucceeds();
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CODE_PASTE_CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    await clickAuthenticate();
+    const input = screen.getByLabelText("Paste the code");
+    fireEvent.paste(input, {
+      clipboardData: { getData: () => "abc123#xyz789" },
+    });
+
+    const [, awaitOptions] = latestAwaitLoginCall();
+    await act(() => {
+      awaitOptions.onSuccess({ codeRejected: true, state: undefined });
+      return Promise.resolve();
+    });
+
+    // The rejection triggered a fresh `startLogin` call and stayed in the
+    // banner's waiting UI, instead of dropping back to the Authenticate
+    // button or leaving the user with a dead child.
+    expect(mocks.startLoginMutate).toHaveBeenCalledTimes(2);
+    expect(
+      screen.getByText(
+        "That code didn't work - a new sign-in link was generated.",
+      ),
+    ).toBeDefined();
+    // Fresh, unmasked field for the new attempt.
+    expect(screen.getByLabelText("Paste the code")).toHaveProperty("value", "");
+  });
+
+  it("restarts with a session-expired notice when awaitLogin resolves not-authenticated before a late noActiveLogin submit response arrives (fixup settlement join, ambient await-first ordering)", async () => {
+    mockStartLoginAlwaysSucceeds();
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CODE_PASTE_CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    await clickAuthenticate();
+    const input = screen.getByLabelText("Paste the code");
+    fireEvent.paste(input, {
+      clipboardData: { getData: () => "abc123#xyz789" },
+    });
+
+    const [, awaitOptions] = latestAwaitLoginCall();
+    // `awaitLogin` resolves not-authenticated first - previously this
+    // reverted straight to the Authenticate button, dropping the later
+    // `noActiveLogin` verdict on the floor instead of restarting.
+    act(() => {
+      awaitOptions.onSuccess({
+        codeRejected: false,
+        state: { auth: { status: "unauthenticated" } },
+      });
+    });
+
+    // The submit's verdict arrives late and must still settle the attempt.
+    const [, submitOptions] = latestSubmitLoginCodeCall();
+    await act(() => {
+      submitOptions.onSuccess({ outcome: "noActiveLogin" });
+      return Promise.resolve();
+    });
+
+    expect(mocks.startLoginMutate).toHaveBeenCalledTimes(2);
+    expect(
+      screen.getByText("That sign-in link expired - a new one was generated."),
+    ).toBeDefined();
+  });
+
+  it("restarts with a session-expired notice when a noActiveLogin submit response is followed by a fulfilled-but-unauthenticated awaitLogin (fixup settlement join, ambient submit-first ordering)", async () => {
+    mockStartLoginAlwaysSucceeds();
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CODE_PASTE_CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    await clickAuthenticate();
+    const input = screen.getByLabelText("Paste the code");
+    fireEvent.paste(input, {
+      clipboardData: { getData: () => "abc123#xyz789" },
+    });
+
+    const [, submitOptions] = latestSubmitLoginCodeCall();
+    act(() => {
+      submitOptions.onSuccess({ outcome: "noActiveLogin" });
+    });
+
+    // `awaitLogin` then resolves - the call went through, but the re-probed
+    // status is still not authenticated. Presence of a completed call is
+    // not success; only an authenticated status is.
+    const [, awaitOptions] = latestAwaitLoginCall();
+    await act(() => {
+      awaitOptions.onSuccess({
+        codeRejected: false,
+        state: { auth: { status: "unauthenticated" } },
+      });
+      return Promise.resolve();
+    });
+
+    expect(mocks.startLoginMutate).toHaveBeenCalledTimes(2);
+    expect(
+      screen.getByText("That sign-in link expired - a new one was generated."),
+    ).toBeDefined();
+  });
+
+  it("shows a verifying header and locks the field once the relay is accepted and the exchange is still pending (statefulness fixup)", async () => {
+    mockStartLoginAlwaysSucceeds();
+    const view = render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CODE_PASTE_CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    await clickAuthenticate();
+    const input = screen.getByLabelText("Paste the code");
+    fireEvent.paste(input, {
+      clipboardData: { getData: () => "abc123#xyz789" },
+    });
+    view.rerender(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CODE_PASTE_CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+    expect(input).toHaveProperty("readOnly", true);
+
+    const [, submitOptions] = latestSubmitLoginCodeCall();
+    act(() => {
+      mocks.submitLoginCodePending = false;
+      mocks.submitLoginCodeSuccess = true;
+      mocks.submitLoginCodeData = { outcome: "accepted" };
+      submitOptions.onSuccess({ outcome: "accepted" });
+    });
+    view.rerender(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CODE_PASTE_CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.getByText("Checking approval…")).toBeDefined();
+    expect(input).toHaveProperty("readOnly", true);
+    expect(screen.queryByRole("button", { name: /Open browser/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+  });
+
+  it("shows the Cancel button's pending state per the AGENTS.md recipe (disabled, unchanged label, inline spinner)", async () => {
+    mocks.cancelLoginPending = true;
+    mockStartLoginAlwaysSucceeds();
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    await clickAuthenticate();
+
+    const cancelButton = screen.getByRole("button", { name: "Cancel" });
+    expect(cancelButton.textContent).toContain("Cancel");
+    expect(cancelButton).toHaveProperty("disabled", true);
+  });
+
+  // A start that outlasts "a moment" - the host answered `pending: "starting"`
+  // - swaps the Authenticate button for the dedicated row, which says so and
+  // still lets the user back out. `startProviderLoginUntilSettled` attaches to
+  // the still-running child with a second `providers.startLogin` call; that
+  // one is left hanging here, since only the row and its Cancel are under
+  // test.
+  it("shows the starting row with title/guidance and a working Cancel for a slow start", async () => {
+    let calls = 0;
+    mocks.startLoginMutate.mockImplementation(
+      (
+        _vars: { providerId: string },
+        opts: {
+          readonly onSuccess: (data: {
+            readonly url: string | null;
+            readonly started: boolean;
+            readonly profileId: string | null;
+            readonly pending: "starting" | null;
+          }) => void;
+        },
+      ) => {
+        calls += 1;
+        if (calls === 1) {
+          opts.onSuccess({
+            url: null,
+            started: false,
+            profileId: null,
+            pending: "starting",
+          });
+        }
+        // The attaching call is left unanswered on purpose.
+      },
+    );
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    await clickAuthenticate();
+
+    expect(screen.getByText("Starting Claude Code…")).toBeDefined();
+    expect(
+      screen.getByText(
+        "This can take up to a minute. The sign-in page opens as soon as it is ready.",
+      ),
+    ).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(mocks.cancelLoginMutate).toHaveBeenCalledWith({
+      providerId: "claude-code",
+      profileId: null,
+      holderId: null,
+    });
+  });
+
+  // The ordinary case - no `pending` on the first answer, so the flow's
+  // `startingCopy` stays null the whole time and the original single-button
+  // rendering is what shows while the call is in flight.
+  it("keeps the plain Authenticate button with spinner for an ordinary start", () => {
+    mocks.startLoginMutate.mockImplementation(() => {
+      // Never answers: this is the very first call, before the host has said
+      // anything, which is `startingCopy === null` for the whole test.
+    });
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    const authenticateButton = screen.getByRole("button", {
+      name: "Sign in",
+    });
+    expect(authenticateButton).toHaveProperty("disabled", true);
+    expect(screen.queryByText("Starting Claude Code…")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+  });
+
+  it("saves a pasted token as an env override for the first credential var", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    // Two vars → a credential-type select is offered alongside the OAuth button.
+    expect(
+      screen.getByRole("combobox", { name: "Credential type" }),
+    ).toBeDefined();
+
+    const input = screen.getByPlaceholderText("Paste your ANTHROPIC_API_KEY");
+    fireEvent.change(input, { target: { value: "  sk-ant-123  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(
+      hasSingleSetEnvOverrideMutation(
+        mocks.setEnvOverrideMutate.mock.calls,
+        "claude-code",
+        "ANTHROPIC_API_KEY",
+        "sk-ant-123",
+      ),
+    ).toBe(true);
+    expect(mocks.setEnvOverrideVariables).toHaveBeenCalledWith({
+      providerId: "claude-code",
+      key: "ANTHROPIC_API_KEY",
+    });
+  });
+
+  it("kills the login child on explicit Cancel but not on teardown", async () => {
+    // Drive the OAuth flow into its awaiting state by completing startLogin.
+    mocks.startLoginMutate.mockImplementation(
+      (
+        _vars: { providerId: string },
+        opts: {
+          onSuccess: (data: {
+            readonly url: string;
+            readonly started: boolean;
+            readonly profileId: string | null;
+          }) => void;
+        },
+      ) => {
+        opts.onSuccess({
+          url: "http://localhost:56988/callback",
+          started: true,
+          profileId: null,
+        });
+      },
+    );
+    const { unmount } = render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    await clickAuthenticate();
+    // Now waiting on the browser loopback; the child must stay alive.
+    expect(screen.getByText(/Approve sign-in in your browser/)).toBeDefined();
+
+    // Teardown (remount/fast-refresh/gate re-render) must NOT kill the child -
+    // doing so drops the loopback port mid-sign-in.
+    unmount();
+    expect(mocks.cancelLoginMutate).not.toHaveBeenCalled();
+
+    // Only an explicit Cancel tears down the host-side login child.
+    mocks.startLoginMutate.mockImplementation(
+      (
+        _vars: { providerId: string },
+        opts: {
+          onSuccess: (data: {
+            readonly url: string;
+            readonly started: boolean;
+            readonly profileId: string | null;
+          }) => void;
+        },
+      ) => {
+        opts.onSuccess({
+          url: "http://localhost:56988/callback",
+          started: true,
+          profileId: null,
+        });
+      },
+    );
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+    await clickAuthenticate();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(mocks.cancelLoginMutate).toHaveBeenCalledWith({
+      providerId: "claude-code",
+      profileId: null,
+      holderId: null,
+    });
+  });
+
+  it("shows a no-method stub for an OAuth-only provider (no paste vars) on a remote host", () => {
+    mocks.hostKind = "remote";
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState({
+          oauthArgs: ["auth", "login"],
+          token: null,
+          codePaste: null,
+          terminalLogin: null,
+          remoteSafe: null,
+          selfOpensBrowser: null,
+        })}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    // Remote host → no OAuth loopback; no token vars → no paste form either.
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(
+      screen.getByText(/Sign in from .*'s own CLI, then check again/),
+    ).toBeDefined();
+  });
+
+  it("still offers the paste form on a remote host when OAuth is unavailable", () => {
+    mocks.hostKind = "remote";
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    // OAuth needs a local host, but pasting a credential works on any host.
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
+  });
+
+  it("offers the paste form for an API-key-only provider (Cursor) with no OAuth", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="cursor"
+        state={cursorState()}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.getByPlaceholderText("Paste your API key")).toBeDefined();
+    expect(screen.getByText("Sign in with an API key or token")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+
+    fireEvent.change(screen.getByPlaceholderText("Paste your API key"), {
+      target: { value: "  cursor-key  " },
+    });
+    mocks.expectedApiKey = "cursor-key";
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(
+      hasSingleSetApiKeyMutation(
+        mocks.setApiKeyMutate.mock.calls,
+        "cursor",
+        "cursor-key",
+      ),
+    ).toBe(true);
+  });
+
+  it("clears a refused record-backed paste and shows the partial-success notice without probing", async () => {
+    await makeRealKeyChangeRig("refused");
+    mocks.refreshProviders.mockClear();
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="cursor"
+        state={cursorState()}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+    const keyInput = screen.getByPlaceholderText("Paste your API key");
+    fireEvent.change(keyInput, {
+      target: { value: "synthetic-provider-key" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(
+        keyInput instanceof HTMLInputElement && keyInput.value === "",
+      ).toBe(true);
+      expect(mocks.reportableErrorToast.mock.calls.length === 1).toBe(true);
+    });
+    const notice = mocks.reportableErrorToast.mock.calls.at(0);
+    expect(
+      hasSingleProviderKeyHttpSet() &&
+        mocks.refreshProviders.mock.calls.length === 0 &&
+        screen.queryByText(/Token not accepted/) === null &&
+        notice !== undefined &&
+        notice[0] ===
+          "The API key was saved, but this computer is not using it.",
+    ).toBe(true);
+  });
+
+  it("probes sign-in after an installed record-backed paste", async () => {
+    await makeRealKeyChangeRig("installed");
+    mocks.refreshProviders.mockClear();
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="cursor"
+        state={cursorState()}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+    const keyInput = screen.getByPlaceholderText("Paste your API key");
+    fireEvent.change(keyInput, {
+      target: { value: "synthetic-provider-key" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(mocks.refreshProviders.mock.calls.length === 1).toBe(true);
+      expect(
+        keyInput instanceof HTMLInputElement && keyInput.value === "",
+      ).toBe(true);
+    });
+    expect(
+      hasSingleProviderKeyHttpSet() &&
+        mocks.reportableErrorToast.mock.calls.length === 0,
+    ).toBe(true);
+  });
+
+  describe("profile-specific reasons", () => {
+    it("offers only the ambient fallback (no OAuth/token form) for a missing profile", () => {
+      const onContinueOnAmbient = vi.fn();
+      render(
+        <ProviderReauthBanner
+          epicId={null}
+          viewTabId={null}
+          providerId="claude-code"
+          state={claudeState(CLAUDE_CAP)}
+          reason="profile_missing"
+          profileId="removed-profile"
+          profileLabel={null}
+          onContinueOnAmbient={onContinueOnAmbient}
+        />,
+      );
+
+      expect(
+        screen.getByText(
+          "This agent's Claude Code profile is no longer available.",
+        ),
+      ).toBeDefined();
+      expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+      fireEvent.click(
+        screen.getByRole("button", { name: "Continue on Terminal account" }),
+      );
+      expect(onContinueOnAmbient).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Manage in Settings" }),
+      );
+      expect(useProvidersFocusStore.getState()).toEqual(
+        expect.objectContaining({
+          focusHarnessId: "claude",
+          focusHostId: "host-1",
+          focusProfileId: "removed-profile",
+          startSignIn: false,
+        }),
+      );
+      expect(mocks.openSettings).toHaveBeenCalledWith({
+        section: "providers",
+        resetToGeneral: false,
+        tab: null,
+        draft: null,
+        hostId: null,
+      });
+    });
+
+    it("names the profile for profile_unauthenticated and still offers the ambient fallback", () => {
+      const onContinueOnAmbient = vi.fn();
+      render(
+        <ProviderReauthBanner
+          epicId={null}
+          viewTabId={null}
+          providerId="claude-code"
+          state={claudeState(CLAUDE_CAP)}
+          reason="profile_unauthenticated"
+          profileId="work-profile"
+          profileLabel="Work"
+          onContinueOnAmbient={onContinueOnAmbient}
+        />,
+      );
+
+      expect(screen.getByText('"Work" is signed out.')).toBeDefined();
+      fireEvent.click(
+        screen.getByRole("button", { name: "Continue on Terminal account" }),
+      );
+      expect(onContinueOnAmbient).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+      expect(useProvidersFocusStore.getState()).toEqual(
+        expect.objectContaining({
+          focusHarnessId: "claude",
+          focusHostId: "host-1",
+          focusProfileId: "work-profile",
+          startSignIn: true,
+        }),
+      );
+      expect(mocks.openSettings).toHaveBeenCalledWith({
+        section: "providers",
+        resetToGeneral: false,
+        tab: null,
+        draft: null,
+        hostId: null,
+      });
+    });
+
+    it("opens the exact signed-out Codex profile in Settings", () => {
+      render(
+        <ProviderReauthBanner
+          epicId={null}
+          viewTabId={null}
+          providerId="codex"
+          state={codexState(CLAUDE_CAP)}
+          reason="profile_unauthenticated"
+          profileId="codex-work-profile"
+          profileLabel="Codex Work"
+          onContinueOnAmbient={vi.fn()}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+      expect(useProvidersFocusStore.getState()).toEqual(
+        expect.objectContaining({
+          focusHarnessId: "codex",
+          focusHostId: "host-1",
+          focusProfileId: "codex-work-profile",
+          startSignIn: true,
+        }),
+      );
+      expect(mocks.openSettings).toHaveBeenCalledWith({
+        section: "providers",
+        resetToGeneral: false,
+        tab: null,
+        draft: null,
+        hostId: null,
+      });
+    });
+  });
+});
+
+// A provider that accepts the browser consent and then refuses the account
+// (`providers.awaitLogin@2.2` `refusal`) ends the ambient reconnect on the
+// provider's own words, not on a quiet return to the Authenticate button.
+describe("<ProviderReauthBanner /> when the provider refuses the sign-in", () => {
+  const REFUSAL: ProviderLoginRefusal = {
+    reason:
+      "Your current account is not eligible for Antigravity. Verify your account to continue.",
+    actionUrl: "https://accounts.google.com/signin/continue?sarp=1&scc=1",
+  };
+  const HEADLINE = "Antigravity turned down this sign-in.";
+
+  beforeEach(() => {
+    mocks.startLoginMutate.mockReset();
+    mocks.awaitLoginMutate.mockClear();
+    mocks.openLink.mockClear();
+    mocks.hostKind = "local";
+    mockStartLoginAlwaysSucceeds();
+  });
+
+  function renderAntigravityBanner(): void {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="antigravity"
+        state={antigravityState(ANTIGRAVITY_ACP_AUTH_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+  }
+
+  async function refuseWith(refusal: ProviderLoginRefusal): Promise<void> {
+    await clickAuthenticate();
+    const [, awaitOptions] = latestAwaitLoginCall();
+    await act(() => {
+      awaitOptions.onSuccess({ codeRejected: false, state: null, refusal });
+      return Promise.resolve();
+    });
+  }
+
+  it("says which provider refused, gives its reason, and offers Verify account and 'Try another account'", async () => {
+    renderAntigravityBanner();
+
+    await refuseWith(REFUSAL);
+
+    expect(screen.getByText(HEADLINE)).toBeDefined();
+    expect(screen.getByText(REFUSAL.reason)).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Verify account" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Try another account" }),
+    ).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+  });
+
+  it("opens the provider's verification link through the auth link opener", async () => {
+    renderAntigravityBanner();
+    await refuseWith(REFUSAL);
+    // Waiting on the consent page opened it once already; count only the
+    // press.
+    mocks.openLink.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "Verify account" }));
+
+    expect(mocks.openLink).toHaveBeenCalledTimes(1);
+    expect(mocks.openLink).toHaveBeenCalledWith(
+      REFUSAL.actionUrl,
+      "auth",
+      expect.anything(),
+    );
+  });
+
+  it("starts a fresh sign-in from 'Try another account'", async () => {
+    renderAntigravityBanner();
+    await refuseWith(REFUSAL);
+    expect(mocks.startLoginMutate).toHaveBeenCalledTimes(1);
+
+    await act(() => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Try another account" }),
+      );
+      return Promise.resolve();
+    });
+
+    expect(mocks.startLoginMutate).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers no Verify account button when the provider offered no link", async () => {
+    renderAntigravityBanner();
+
+    await refuseWith({
+      reason: "This account cannot be used.",
+      actionUrl: null,
+    });
+
+    expect(screen.getByText(HEADLINE)).toBeDefined();
+    expect(screen.getByText("This account cannot be used.")).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Verify account" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Try another account" }),
+    ).toBeDefined();
+  });
+
+  it("keeps the flow's own wording and 'Try again' for a failure that is not a refusal", async () => {
+    mocks.startLoginMutate.mockImplementation(
+      (_vars: unknown, opts: { readonly onError: (error: Error) => void }) => {
+        opts.onError(new Error("host refused"));
+      },
+    );
+    renderAntigravityBanner();
+
+    await clickAuthenticate();
+
+    expect(screen.getByText("Sign-in did not start. Try again.")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeDefined();
+    expect(screen.queryByText(HEADLINE)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Verify account" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Try another account" }),
+    ).toBeNull();
+  });
+
+  it("treats an answer from a host before 2.2, which carries no refusal, as the ordinary not-authenticated return to Authenticate", async () => {
+    renderAntigravityBanner();
+    await clickAuthenticate();
+    const [, awaitOptions] = latestAwaitLoginCall();
+
+    await act(() => {
+      awaitOptions.onSuccess({ codeRejected: false, state: null });
+      return Promise.resolve();
+    });
+
+    expect(screen.queryByText(HEADLINE)).toBeNull();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+  });
+});
+
+// The tab's host is a sandbox: it takes no credential, so no reconnect form
+// that would send one is offered; the Terminal-account fallback is not a
+// credential and stays.
+describe("<ProviderReauthBanner /> on a host that takes no credentials", () => {
+  const REFUSAL = "Sandboxes don't take sign-ins";
+
+  beforeEach(() => {
+    mocks.startLoginMutate.mockReset();
+    mocks.setApiKeyMutate.mockClear();
+    mocks.setEnvOverrideMutate.mockClear();
+    mocks.openSettings.mockClear();
+    mocks.hostKind = "local";
+    mocks.credentialRefusal = REFUSAL;
+  });
+
+  it("renders the provider's message plus the refusal, and no OAuth, terminal or token form, for provider_unauthenticated", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.getByText("Claude Code is signed out.")).toBeDefined();
+    expect(screen.getByTestId("credential-refusal").textContent).toBe(REFUSAL);
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /terminal/i })).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByLabelText(/token|key/i)).toBeNull();
+    expect(mocks.startLoginMutate).not.toHaveBeenCalled();
+    expect(mocks.setApiKeyMutate).not.toHaveBeenCalled();
+    expect(mocks.setEnvOverrideMutate).not.toHaveBeenCalled();
+  });
+
+  it("offers no terminal sign-in either for a terminal-login provider", () => {
+    render(
+      <ProviderReauthBanner
+        epicId="epic-1"
+        viewTabId="tab-1"
+        providerId="copilot"
+        state={copilotState(COPILOT_TERMINAL_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.getByTestId("credential-refusal").textContent).toBe(REFUSAL);
+    expect(screen.queryByRole("button", { name: /terminal/i })).toBeNull();
+  });
+
+  it("disables Sign in for profile_unauthenticated, shows the refusal, and keeps Continue on Terminal account enabled", () => {
+    const onContinueOnAmbient = vi.fn();
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="profile_unauthenticated"
+        profileId="work-profile"
+        profileLabel="Work"
+        onContinueOnAmbient={onContinueOnAmbient}
+      />,
+    );
+
+    const signIn = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Sign in",
+    });
+    expect(signIn.disabled).toBe(true);
+    expect(screen.getByTestId("credential-refusal").textContent).toBe(REFUSAL);
+    const fallback = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Continue on Terminal account",
+    });
+    expect(fallback.disabled).toBe(false);
+
+    fireEvent.click(signIn);
+    expect(mocks.openSettings).not.toHaveBeenCalled();
+    fireEvent.click(fallback);
+    expect(onContinueOnAmbient).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Manage in Settings enabled for profile_missing: nothing is signed in from there", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="profile_missing"
+        profileId="removed-profile"
+        profileLabel={null}
+        onContinueOnAmbient={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: "Manage in Settings",
+      }).disabled,
+    ).toBe(false);
+    expect(screen.queryByTestId("credential-refusal")).toBeNull();
+  });
+
+  it("control: on a host that takes sign-ins the same banner offers Authenticate and no refusal", () => {
+    mocks.credentialRefusal = null;
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(screen.queryByTestId("credential-refusal")).toBeNull();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
+  });
+});
+
+describe("<ProviderReauthBanner /> report action code", () => {
+  beforeEach(() => {
+    mocks.reportContexts.length = 0;
+  });
+
+  function lastReportCode(): string | null {
+    const context = mocks.reportContexts.at(-1);
+    if (context === undefined) throw new Error("no report action rendered");
+    return context.code;
+  }
+
+  it("carries the provider and reason so a report says what was blocked", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="codex"
+        state={codexState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    expect(lastReportCode()).toBe("codex:provider_unauthenticated");
+  });
+
+  it("never carries the profile id", () => {
+    render(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="codex"
+        state={codexState(CLAUDE_CAP)}
+        reason="profile_unauthenticated"
+        profileId="prof-SECRET-123"
+        profileLabel="Work"
+        onContinueOnAmbient={vi.fn()}
+      />,
+    );
+
+    const code = lastReportCode();
+    expect(code).toBe("codex:profile_unauthenticated");
+    expect(code ?? "").not.toContain("prof-SECRET-123");
+  });
+});
+
+describe("ProviderReauthBanner sign-in request recording", () => {
+  function signInRequestAnswer(): ProvidersAwaitLoginResponse {
+    return providersAwaitLoginResponseSchema.parse({
+      state: null,
+      existingProfileId: null,
+      codeRejected: false,
+      refusal: null,
+      signInRequest: SIGN_IN_REQUEST_FIXTURE,
+    });
+  }
+
+  function finalAuthenticatedAnswer(): ProvidersAwaitLoginResponse {
+    const state = claudeState(CLAUDE_CAP);
+    return providersAwaitLoginResponseSchema.parse({
+      state: {
+        ...state,
+        auth: {
+          status: "authenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+      },
+      existingProfileId: null,
+      codeRejected: false,
+      refusal: null,
+    });
+  }
+
+  function realAwaitClient(answers: readonly ProvidersAwaitLoginResponse[]) {
+    let answerIndex = 0;
+    return buildEnvironmentClient({
+      hostId: "host-1",
+      handlers: {
+        "providers.list": () => ({
+          providers: [claudeState(CLAUDE_CAP)],
+          native: null,
+        }),
+        "providers.awaitLogin": () => {
+          if (answerIndex >= answers.length)
+            throw new Error("banner scenario has no await answer");
+          const answer = answers[answerIndex];
+          answerIndex += 1;
+          return answer;
+        },
+      },
+    });
+  }
+
+  function renderRealBanner() {
+    mocks.useRealAwaitLogin = true;
+    const { client, messenger } = realAwaitClient([signInRequestAnswer()]);
+    mocks.realAwaitClient = client;
+    mockStartLoginAlwaysSucceeds();
+    renderWithRealListObserver(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+    return messenger;
+  }
+
+  it("records before the second await and settles from its final answer", async () => {
+    mocks.useRealAwaitLogin = true;
+    const { client, messenger } = realAwaitClient([
+      signInRequestAnswer(),
+      finalAuthenticatedAnswer(),
+    ]);
+    mocks.realAwaitClient = client;
+    mockStartLoginAlwaysSucceeds();
+    activeSignInFetch?.enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+    renderWithRealListObserver(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+    await waitFor(() => {
+      expect(
+        messenger.calls.filter((call) => call.method === "providers.list"),
+      ).toHaveLength(1);
+    });
+
+    await clickAuthenticate();
+    await waitFor(() => expect(mocks.realAwaitLoginSuccess).toBe(true));
+
+    const awaitCalls = messenger.calls.filter(
+      (call) => call.method === "providers.awaitLogin",
+    );
+    expect(awaitCalls).toHaveLength(2);
+    expect(awaitCalls[0]?.params).not.toHaveProperty("recordedOperationId");
+    expect(awaitCalls[1]?.params).toMatchObject({
+      recordedOperationId: SIGN_IN_REQUEST_FIXTURE.operationId,
+    });
+    expect(activeSignInFetch?.fetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Sign-in did not finish. Try again.")).toBeNull();
+    expect(screen.queryByText(/Approve sign-in in your browser/)).toBeNull();
+  });
+
+  it("returns to its start banner when recording is forbidden", async () => {
+    const harness = activeSignInFetch;
+    if (harness === null)
+      throw new Error("sign-in request fetch harness is missing");
+    harness.enqueue(FORBIDDEN_SIGN_IN_REQUEST_REPLY);
+    const messenger = renderRealBanner();
+
+    await clickAuthenticate();
+
+    await waitFor(() => {
+      expect(mocks.realAwaitLoginSuccess).toBe(true);
+      expect(
+        screen.getByText("Sign in to Claude Code to run it."),
+      ).toBeTruthy();
+    });
+    expect(screen.queryByText("Sign-in did not finish. Try again.")).toBeNull();
+    expect(
+      messenger.calls.filter((call) => call.method === "providers.awaitLogin"),
+    ).toHaveLength(1);
+    expect(harness.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an older computer's await unchanged without recording", async () => {
+    mocks.useRealAwaitLogin = true;
+    const { client, messenger } = realAwaitClient([
+      providersAwaitLoginResponseSchema.parse({
+        state: null,
+        existingProfileId: null,
+        codeRejected: false,
+        refusal: null,
+      }),
+    ]);
+    mocks.realAwaitClient = client;
+    mockStartLoginAlwaysSucceeds();
+    renderWithRealListObserver(
+      <ProviderReauthBanner
+        epicId={null}
+        viewTabId={null}
+        providerId="claude-code"
+        state={claudeState(CLAUDE_CAP)}
+        reason="provider_unauthenticated"
+        profileId={null}
+        profileLabel={null}
+        onContinueOnAmbient={null}
+      />,
+    );
+
+    await clickAuthenticate();
+    await waitFor(() => expect(mocks.realAwaitLoginSuccess).toBe(true));
+
+    const awaitCalls = messenger.calls.filter(
+      (call) => call.method === "providers.awaitLogin",
+    );
+    expect(awaitCalls).toHaveLength(1);
+    expect(awaitCalls[0]?.params).not.toHaveProperty("recordedOperationId");
+    expect(activeSignInFetch?.fetchMock).not.toHaveBeenCalled();
+  });
+});

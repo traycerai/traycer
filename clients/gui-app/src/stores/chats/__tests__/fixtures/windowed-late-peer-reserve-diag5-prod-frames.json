@@ -1,0 +1,1150 @@
+{
+  "variant": "prod",
+  "textBlockId": "text-1",
+  "reserves": [
+    {
+      "lateFrameCount": -1,
+      "hostText": "alpha bravo charlie ",
+      "at": "+  410ms"
+    },
+    {
+      "lateFrameCount": -1,
+      "hostText": "alpha bravo charlie ",
+      "at": "+  828ms"
+    },
+    {
+      "lateFrameCount": -1,
+      "hostText": "alpha bravo charlie ",
+      "at": "+  829ms"
+    },
+    {
+      "lateFrameCount": -1,
+      "hostText": "alpha bravo charlie delta echo foxtrot",
+      "at": "+ 1238ms"
+    },
+    {
+      "lateFrameCount": -1,
+      "hostText": "alpha bravo charlie delta echo foxtrot",
+      "at": "+ 1244ms"
+    },
+    {
+      "lateFrameCount": -1,
+      "hostText": "alpha bravo charlie delta echo foxtrot",
+      "at": "+ 1244ms"
+    }
+  ],
+  "hostTextFinal": "alpha bravo charlie delta echo foxtrot",
+  "frames": [
+    {
+      "i": 0,
+      "at": "+  823ms",
+      "envelope": {
+        "kind": "snapshot",
+        "hasBinaryPayload": false,
+        "epicId": "epic-windowed-emit",
+        "chatId": "chat-windowed-emit",
+        "snapshot": {
+          "chat": {
+            "parentId": null,
+            "id": "chat-windowed-emit",
+            "userId": "owner-1",
+            "hostId": "host-1",
+            "title": "Windowed emit",
+            "createdAt": 1000,
+            "updatedAt": 2004,
+            "isTitleEditedByUser": false,
+            "settings": {
+              "harnessId": "claude",
+              "model": "test-model",
+              "permissionMode": "full_access",
+              "reasoningEffort": null,
+              "serviceTier": null,
+              "agentMode": "epic",
+              "profileId": null
+            },
+            "activeSessionChain": {
+              "harnessId": "claude",
+              "sessionId": "session-1",
+              "sessionWorkspaceSnapshot": {
+                "workspaceKind": "session-snapshot",
+                "primaryWorkspace": "/tmp/project",
+                "secondaryWorkspaces": ["/tmp/traycer-home"]
+              },
+              "coveredUntilMessageId": null,
+              "profileId": null
+            },
+            "claudePendingWakes": [],
+            "archivedAt": null,
+            "pinnedUserProviderHandle": null,
+            "lastDeliveredRolesDigest": null
+          },
+          "access": {
+            "role": "owner",
+            "ownerUserId": "owner-1",
+            "canAct": true
+          },
+          "queue": {
+            "status": "idle",
+            "items": []
+          },
+          "runStatus": "running",
+          "activeTurn": {
+            "turnId": "turn-1",
+            "status": "running",
+            "harnessId": "claude",
+            "model": "test-model",
+            "reasoningEffort": null,
+            "serviceTier": null,
+            "agentMode": "epic",
+            "profileId": null,
+            "sameTurnSteeringSupported": true,
+            "userMessageId": "u1",
+            "startedAt": 1790215208600,
+            "updatedAt": 2001
+          },
+          "pendingApprovals": [],
+          "pendingInterviews": [],
+          "worktreeBinding": {
+            "entries": [
+              {
+                "workspacePath": "/tmp/project",
+                "mode": "local",
+                "repoIdentifier": null,
+                "worktreePath": null,
+                "branch": null,
+                "isPrimary": true,
+                "isImported": false,
+                "setupState": "not_required",
+                "setupTerminalSessionId": null,
+                "setupExitCode": null,
+                "setupFailedAt": null,
+                "createdAt": 1,
+                "ownedSubmodules": []
+              }
+            ]
+          },
+          "missingWorktreePaths": [],
+          "pendingFileEditApprovals": [],
+          "accumulatedFileChangeCount": 0,
+          "backgroundItems": [],
+          "managedCommands": [],
+          "heldUpdates": [],
+          "turnInProgress": true,
+          "transcriptEpoch": 1,
+          "rowCount": 2,
+          "indexRevision": null,
+          "tail": {
+            "fromOrdinal": 0,
+            "rowIds": ["u1", "assistant:turn-1"],
+            "messages": [
+              {
+                "role": "user",
+                "messageId": "u1",
+                "sender": {
+                  "type": "user",
+                  "userId": "owner-1"
+                },
+                "message": {
+                  "kind": "user",
+                  "content": {
+                    "type": "doc",
+                    "content": [
+                      {
+                        "type": "paragraph",
+                        "content": [
+                          {
+                            "type": "text",
+                            "text": "stream"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "browserAnnotations": []
+                },
+                "timestamp": 1790215208584,
+                "sessionAnchor": null
+              },
+              {
+                "imageResolutions": [],
+                "role": "assistant",
+                "messageId": "564eeccc-3fb8-4cd1-b7da-588f5818072e",
+                "sender": {
+                  "type": "agent",
+                  "harnessId": "claude",
+                  "agentId": "test-model",
+                  "displayName": "test-model",
+                  "reply": {
+                    "expectsReply": false
+                  },
+                  "inReplyTo": null
+                },
+                "blocks": [],
+                "startedAt": 1790215208600,
+                "blocksVersion": 0,
+                "timestamp": 2001,
+                "turnId": "turn-1",
+                "usage": null,
+                "reasoningEffort": null,
+                "serviceTier": null,
+                "envCredentialVar": null,
+                "turnProfile": {
+                  "profileId": null,
+                  "labelSnapshot": null
+                }
+              }
+            ],
+            "events": [
+              {
+                "eventId": "8b2f6834-c5bd-45aa-8dd8-9e874c79f42a",
+                "type": "turn.started",
+                "timestamp": 1790215208616,
+                "clientActionId": null,
+                "actor": null,
+                "message": "Turn started.",
+                "turnId": "turn-1",
+                "messageId": "u1",
+                "queueItemId": null,
+                "approvalId": null,
+                "blockId": null,
+                "severity": "info",
+                "metadata": null
+              }
+            ],
+            "rowContext": {}
+          },
+          "derived": {
+            "latestAssistantUsage": null,
+            "pinnedTodo": null,
+            "pinnedTaskTodoItems": [],
+            "latestForkableAssistantMessageId": null,
+            "restorableSetupInterruption": null,
+            "interviewAnswerability": [],
+            "latestAssistantAuthFailureTurnKey": null,
+            "setupCardWindows": []
+          }
+        }
+      }
+    },
+    {
+      "i": 1,
+      "at": "+  823ms",
+      "envelope": {
+        "kind": "accumulatedChanges",
+        "hasBinaryPayload": false,
+        "epicId": "epic-windowed-emit",
+        "chatId": "chat-windowed-emit",
+        "chunk": {
+          "epoch": 1,
+          "generation": 1,
+          "fromIndex": 0,
+          "summaries": [],
+          "isFinal": true
+        }
+      }
+    },
+    {
+      "i": 2,
+      "at": "+  828ms",
+      "envelope": {
+        "kind": "skeletonChunk",
+        "hasBinaryPayload": false,
+        "epicId": "epic-windowed-emit",
+        "chatId": "chat-windowed-emit",
+        "chunk": {
+          "epoch": 1,
+          "fromOrdinal": 0,
+          "entries": [
+            {
+              "rowId": "u1",
+              "createdAt": 1790215208584,
+              "role": "user",
+              "byteLength": 275,
+              "bodyDigest": "2k8e360str5y2",
+              "preview": "stream"
+            }
+          ],
+          "isFinal": false
+        }
+      }
+    },
+    {
+      "i": 3,
+      "at": "+  828ms",
+      "envelope": {
+        "kind": "skeletonChunk",
+        "hasBinaryPayload": false,
+        "epicId": "epic-windowed-emit",
+        "chatId": "chat-windowed-emit",
+        "chunk": {
+          "epoch": 1,
+          "fromOrdinal": 1,
+          "entries": [
+            {
+              "rowId": "assistant:turn-1",
+              "createdAt": 1790215208600,
+              "role": "assistant",
+              "byteLength": 124,
+              "bodyDigest": "1t3z4u11s587lt"
+            }
+          ],
+          "isFinal": true
+        }
+      }
+    },
+    {
+      "i": 4,
+      "at": "+  835ms",
+      "envelope": {
+        "kind": "snapshot",
+        "hasBinaryPayload": false,
+        "epicId": "epic-windowed-emit",
+        "chatId": "chat-windowed-emit",
+        "snapshot": {
+          "chat": {
+            "parentId": null,
+            "id": "chat-windowed-emit",
+            "userId": "owner-1",
+            "hostId": "host-1",
+            "title": "Windowed emit",
+            "createdAt": 1000,
+            "updatedAt": 2004,
+            "isTitleEditedByUser": false,
+            "settings": {
+              "harnessId": "claude",
+              "model": "test-model",
+              "permissionMode": "full_access",
+              "reasoningEffort": null,
+              "serviceTier": null,
+              "agentMode": "epic",
+              "profileId": null
+            },
+            "activeSessionChain": {
+              "harnessId": "claude",
+              "sessionId": "session-1",
+              "sessionWorkspaceSnapshot": {
+                "workspaceKind": "session-snapshot",
+                "primaryWorkspace": "/tmp/project",
+                "secondaryWorkspaces": ["/tmp/traycer-home"]
+              },
+              "coveredUntilMessageId": null,
+              "profileId": null
+            },
+            "claudePendingWakes": [],
+            "archivedAt": null,
+            "pinnedUserProviderHandle": null,
+            "lastDeliveredRolesDigest": null
+          },
+          "access": {
+            "role": "owner",
+            "ownerUserId": "owner-1",
+            "canAct": true
+          },
+          "queue": {
+            "status": "idle",
+            "items": []
+          },
+          "runStatus": "running",
+          "activeTurn": {
+            "turnId": "turn-1",
+            "status": "running",
+            "harnessId": "claude",
+            "model": "test-model",
+            "reasoningEffort": null,
+            "serviceTier": null,
+            "agentMode": "epic",
+            "profileId": null,
+            "sameTurnSteeringSupported": true,
+            "userMessageId": "u1",
+            "startedAt": 1790215208600,
+            "updatedAt": 2001
+          },
+          "pendingApprovals": [],
+          "pendingInterviews": [],
+          "worktreeBinding": {
+            "entries": [
+              {
+                "workspacePath": "/tmp/project",
+                "mode": "local",
+                "repoIdentifier": null,
+                "worktreePath": null,
+                "branch": null,
+                "isPrimary": true,
+                "isImported": false,
+                "setupState": "not_required",
+                "setupTerminalSessionId": null,
+                "setupExitCode": null,
+                "setupFailedAt": null,
+                "createdAt": 1,
+                "ownedSubmodules": []
+              }
+            ]
+          },
+          "missingWorktreePaths": [],
+          "pendingFileEditApprovals": [],
+          "accumulatedFileChangeCount": 0,
+          "backgroundItems": [],
+          "managedCommands": [],
+          "heldUpdates": [],
+          "turnInProgress": true,
+          "transcriptEpoch": 1,
+          "rowCount": 2,
+          "indexRevision": 3,
+          "tail": {
+            "fromOrdinal": 0,
+            "rowIds": ["u1", "assistant:turn-1"],
+            "messages": [
+              {
+                "role": "user",
+                "messageId": "u1",
+                "sender": {
+                  "type": "user",
+                  "userId": "owner-1"
+                },
+                "message": {
+                  "kind": "user",
+                  "content": {
+                    "type": "doc",
+                    "content": [
+                      {
+                        "type": "paragraph",
+                        "content": [
+                          {
+                            "type": "text",
+                            "text": "stream"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "browserAnnotations": []
+                },
+                "timestamp": 1790215208584,
+                "sessionAnchor": null
+              },
+              {
+                "role": "assistant",
+                "messageId": "564eeccc-3fb8-4cd1-b7da-588f5818072e",
+                "sender": {
+                  "type": "agent",
+                  "harnessId": "claude",
+                  "agentId": "test-model",
+                  "displayName": "test-model",
+                  "reply": {
+                    "expectsReply": false
+                  },
+                  "inReplyTo": null
+                },
+                "blocks": [
+                  {
+                    "blockId": "text-1",
+                    "status": "streaming",
+                    "timestamp": 2004,
+                    "type": "text",
+                    "text": "alpha bravo charlie ",
+                    "providerNotice": null
+                  }
+                ],
+                "startedAt": 1790215208600,
+                "blocksVersion": 3,
+                "timestamp": 2004,
+                "turnId": "turn-1",
+                "usage": null,
+                "reasoningEffort": null,
+                "serviceTier": null,
+                "envCredentialVar": null,
+                "imageResolutions": [],
+                "turnProfile": {
+                  "profileId": null,
+                  "labelSnapshot": null
+                }
+              }
+            ],
+            "events": [
+              {
+                "eventId": "8b2f6834-c5bd-45aa-8dd8-9e874c79f42a",
+                "type": "turn.started",
+                "timestamp": 1790215208616,
+                "clientActionId": null,
+                "actor": null,
+                "message": "Turn started.",
+                "turnId": "turn-1",
+                "messageId": "u1",
+                "queueItemId": null,
+                "approvalId": null,
+                "blockId": null,
+                "severity": "info",
+                "metadata": null
+              }
+            ],
+            "rowContext": {}
+          },
+          "derived": {
+            "latestAssistantUsage": null,
+            "pinnedTodo": null,
+            "pinnedTaskTodoItems": [],
+            "latestForkableAssistantMessageId": null,
+            "restorableSetupInterruption": null,
+            "interviewAnswerability": [],
+            "latestAssistantAuthFailureTurnKey": null,
+            "setupCardWindows": []
+          }
+        }
+      }
+    },
+    {
+      "i": 5,
+      "at": "+  835ms",
+      "envelope": {
+        "kind": "indexChanged",
+        "hasBinaryPayload": false,
+        "epicId": "epic-windowed-emit",
+        "chatId": "chat-windowed-emit",
+        "epoch": 1,
+        "rowCount": 2,
+        "indexRevision": 4,
+        "changes": [
+          {
+            "type": "updated",
+            "entries": [
+              {
+                "ordinal": 1,
+                "entry": {
+                  "rowId": "assistant:turn-1",
+                  "createdAt": 1790215208600,
+                  "role": "assistant",
+                  "byteLength": 124,
+                  "bodyDigest": "1t3z4u11s587lt"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "i": 6,
+      "at": "+ 1251ms",
+      "envelope": {
+        "kind": "blockDelta",
+        "hasBinaryPayload": false,
+        "epicId": "epic-windowed-emit",
+        "chatId": "chat-windowed-emit",
+        "event": {
+          "type": "text.delta",
+          "blockId": "text-1",
+          "timestamp": 2005,
+          "delta": "delta "
+        }
+      }
+    },
+    {
+      "i": 7,
+      "at": "+ 1251ms",
+      "envelope": {
+        "kind": "blockDelta",
+        "hasBinaryPayload": false,
+        "epicId": "epic-windowed-emit",
+        "chatId": "chat-windowed-emit",
+        "event": {
+          "type": "text.delta",
+          "blockId": "text-1",
+          "timestamp": 2006,
+          "delta": "echo "
+        }
+      }
+    },
+    {
+      "i": 8,
+      "at": "+ 1251ms",
+      "envelope": {
+        "kind": "blockDelta",
+        "hasBinaryPayload": false,
+        "epicId": "epic-windowed-emit",
+        "chatId": "chat-windowed-emit",
+        "event": {
+          "type": "text.delta",
+          "blockId": "text-1",
+          "timestamp": 2007,
+          "delta": "foxtrot"
+        }
+      }
+    },
+    {
+      "i": 9,
+      "at": "+ 1251ms",
+      "envelope": {
+        "kind": "blockDelta",
+        "hasBinaryPayload": false,
+        "epicId": "epic-windowed-emit",
+        "chatId": "chat-windowed-emit",
+        "event": {
+          "type": "turn.completed",
+          "blockId": "turn-1",
+          "timestamp": 2008,
+          "turnId": "turn-1"
+        }
+      }
+    },
+    {
+      "i": 10,
+      "at": "+ 1251ms",
+      "envelope": {
+        "kind": "turnStateChanged",
+        "hasBinaryPayload": false,
+        "epicId": "epic-windowed-emit",
+        "chatId": "chat-windowed-emit",
+        "runStatus": "running",
+        "activeTurn": {
+          "turnId": "turn-1",
+          "status": "completed",
+          "harnessId": "claude",
+          "model": "test-model",
+          "reasoningEffort": null,
+          "serviceTier": null,
+          "agentMode": "epic",
+          "profileId": null,
+          "sameTurnSteeringSupported": true,
+          "userMessageId": "u1",
+          "startedAt": 1790215208600,
+          "updatedAt": 2008
+        },
+        "backgroundItems": [],
+        "turnInProgress": true
+      }
+    },
+    {
+      "i": 11,
+      "at": "+ 1251ms",
+      "envelope": {
+        "kind": "eventAppended",
+        "hasBinaryPayload": false,
+        "epicId": "epic-windowed-emit",
+        "chatId": "chat-windowed-emit",
+        "event": {
+          "eventId": "5f5cd7d2-751d-4725-8182-debe441ae6ac",
+          "type": "turn.completed",
+          "timestamp": 1790215209855,
+          "clientActionId": null,
+          "actor": null,
+          "message": "Turn completed.",
+          "turnId": "turn-1",
+          "messageId": "u1",
+          "queueItemId": null,
+          "approvalId": null,
+          "blockId": null,
+          "severity": "info",
+          "metadata": null
+        }
+      }
+    },
+    {
+      "i": 12,
+      "at": "+ 1251ms",
+      "envelope": {
+        "kind": "snapshot",
+        "hasBinaryPayload": false,
+        "epicId": "epic-windowed-emit",
+        "chatId": "chat-windowed-emit",
+        "snapshot": {
+          "chat": {
+            "parentId": null,
+            "id": "chat-windowed-emit",
+            "userId": "owner-1",
+            "hostId": "host-1",
+            "title": "Windowed emit",
+            "createdAt": 1000,
+            "updatedAt": 2008,
+            "isTitleEditedByUser": false,
+            "settings": {
+              "harnessId": "claude",
+              "model": "test-model",
+              "permissionMode": "full_access",
+              "reasoningEffort": null,
+              "serviceTier": null,
+              "agentMode": "epic",
+              "profileId": null
+            },
+            "activeSessionChain": {
+              "harnessId": "claude",
+              "sessionId": "session-1",
+              "sessionWorkspaceSnapshot": {
+                "workspaceKind": "session-snapshot",
+                "primaryWorkspace": "/tmp/project",
+                "secondaryWorkspaces": ["/tmp/traycer-home"]
+              },
+              "coveredUntilMessageId": null,
+              "profileId": null
+            },
+            "claudePendingWakes": [],
+            "archivedAt": null,
+            "pinnedUserProviderHandle": null,
+            "lastDeliveredRolesDigest": null
+          },
+          "access": {
+            "role": "owner",
+            "ownerUserId": "owner-1",
+            "canAct": true
+          },
+          "queue": {
+            "status": "idle",
+            "items": []
+          },
+          "runStatus": "running",
+          "activeTurn": {
+            "turnId": "turn-1",
+            "status": "completed",
+            "harnessId": "claude",
+            "model": "test-model",
+            "reasoningEffort": null,
+            "serviceTier": null,
+            "agentMode": "epic",
+            "profileId": null,
+            "sameTurnSteeringSupported": true,
+            "userMessageId": "u1",
+            "startedAt": 1790215208600,
+            "updatedAt": 2008
+          },
+          "pendingApprovals": [],
+          "pendingInterviews": [],
+          "worktreeBinding": {
+            "entries": [
+              {
+                "workspacePath": "/tmp/project",
+                "mode": "local",
+                "repoIdentifier": null,
+                "worktreePath": null,
+                "branch": null,
+                "isPrimary": true,
+                "isImported": false,
+                "setupState": "not_required",
+                "setupTerminalSessionId": null,
+                "setupExitCode": null,
+                "setupFailedAt": null,
+                "createdAt": 1,
+                "ownedSubmodules": []
+              }
+            ]
+          },
+          "missingWorktreePaths": [],
+          "pendingFileEditApprovals": [],
+          "accumulatedFileChangeCount": 0,
+          "backgroundItems": [],
+          "managedCommands": [],
+          "heldUpdates": [],
+          "turnInProgress": true,
+          "transcriptEpoch": 1,
+          "rowCount": 2,
+          "indexRevision": 4,
+          "tail": {
+            "fromOrdinal": 0,
+            "rowIds": ["u1", "assistant:turn-1"],
+            "messages": [
+              {
+                "role": "user",
+                "messageId": "u1",
+                "sender": {
+                  "type": "user",
+                  "userId": "owner-1"
+                },
+                "message": {
+                  "kind": "user",
+                  "content": {
+                    "type": "doc",
+                    "content": [
+                      {
+                        "type": "paragraph",
+                        "content": [
+                          {
+                            "type": "text",
+                            "text": "stream"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "browserAnnotations": []
+                },
+                "timestamp": 1790215208584,
+                "sessionAnchor": null
+              },
+              {
+                "imageResolutions": [],
+                "role": "assistant",
+                "messageId": "564eeccc-3fb8-4cd1-b7da-588f5818072e",
+                "sender": {
+                  "type": "agent",
+                  "harnessId": "claude",
+                  "agentId": "test-model",
+                  "displayName": "test-model",
+                  "reply": {
+                    "expectsReply": false
+                  },
+                  "inReplyTo": null
+                },
+                "blocks": [
+                  {
+                    "type": "text",
+                    "blockId": "text-1",
+                    "status": "completed",
+                    "timestamp": 2008,
+                    "text": "alpha bravo charlie delta echo foxtrot",
+                    "providerNotice": null
+                  }
+                ],
+                "startedAt": 1790215208600,
+                "blocksVersion": 7,
+                "timestamp": 2008,
+                "turnId": "turn-1",
+                "usage": null,
+                "reasoningEffort": null,
+                "serviceTier": null,
+                "envCredentialVar": null,
+                "turnProfile": {
+                  "profileId": null,
+                  "labelSnapshot": null
+                }
+              }
+            ],
+            "events": [
+              {
+                "eventId": "8b2f6834-c5bd-45aa-8dd8-9e874c79f42a",
+                "type": "turn.started",
+                "timestamp": 1790215208616,
+                "clientActionId": null,
+                "actor": null,
+                "message": "Turn started.",
+                "turnId": "turn-1",
+                "messageId": "u1",
+                "queueItemId": null,
+                "approvalId": null,
+                "blockId": null,
+                "severity": "info",
+                "metadata": null
+              },
+              {
+                "eventId": "5f5cd7d2-751d-4725-8182-debe441ae6ac",
+                "type": "turn.completed",
+                "timestamp": 1790215209855,
+                "clientActionId": null,
+                "actor": null,
+                "message": "Turn completed.",
+                "turnId": "turn-1",
+                "messageId": "u1",
+                "queueItemId": null,
+                "approvalId": null,
+                "blockId": null,
+                "severity": "info",
+                "metadata": null
+              }
+            ],
+            "rowContext": {}
+          },
+          "derived": {
+            "latestAssistantUsage": null,
+            "pinnedTodo": null,
+            "pinnedTaskTodoItems": [],
+            "latestForkableAssistantMessageId": null,
+            "restorableSetupInterruption": null,
+            "interviewAnswerability": [],
+            "latestAssistantAuthFailureTurnKey": null,
+            "setupCardWindows": []
+          }
+        }
+      }
+    },
+    {
+      "i": 13,
+      "at": "+ 1251ms",
+      "envelope": {
+        "kind": "indexChanged",
+        "hasBinaryPayload": false,
+        "epicId": "epic-windowed-emit",
+        "chatId": "chat-windowed-emit",
+        "epoch": 1,
+        "rowCount": 2,
+        "indexRevision": 5,
+        "changes": [
+          {
+            "type": "updated",
+            "entries": [
+              {
+                "ordinal": 1,
+                "entry": {
+                  "rowId": "assistant:turn-1",
+                  "createdAt": 1790215208600,
+                  "role": "assistant",
+                  "byteLength": 142,
+                  "bodyDigest": "dez0tk11ioig4"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "i": 14,
+      "at": "+ 1251ms",
+      "envelope": {
+        "kind": "turnStateChanged",
+        "hasBinaryPayload": false,
+        "epicId": "epic-windowed-emit",
+        "chatId": "chat-windowed-emit",
+        "runStatus": "idle",
+        "activeTurn": null,
+        "backgroundItems": [],
+        "turnInProgress": false
+      }
+    },
+    {
+      "i": 15,
+      "at": "+ 1251ms",
+      "envelope": {
+        "kind": "snapshot",
+        "hasBinaryPayload": false,
+        "epicId": "epic-windowed-emit",
+        "chatId": "chat-windowed-emit",
+        "snapshot": {
+          "chat": {
+            "parentId": null,
+            "id": "chat-windowed-emit",
+            "userId": "owner-1",
+            "hostId": "host-1",
+            "title": "Windowed emit",
+            "createdAt": 1000,
+            "updatedAt": 1790215209863,
+            "isTitleEditedByUser": false,
+            "settings": {
+              "harnessId": "claude",
+              "model": "test-model",
+              "permissionMode": "full_access",
+              "reasoningEffort": null,
+              "serviceTier": null,
+              "agentMode": "epic",
+              "profileId": null
+            },
+            "activeSessionChain": {
+              "harnessId": "claude",
+              "sessionId": "session-1",
+              "sessionWorkspaceSnapshot": {
+                "workspaceKind": "session-snapshot",
+                "primaryWorkspace": "/tmp/project",
+                "secondaryWorkspaces": ["/tmp/traycer-home"]
+              },
+              "coveredUntilMessageId": null,
+              "profileId": null
+            },
+            "claudePendingWakes": [],
+            "archivedAt": null,
+            "pinnedUserProviderHandle": null,
+            "lastDeliveredRolesDigest": null
+          },
+          "access": {
+            "role": "owner",
+            "ownerUserId": "owner-1",
+            "canAct": true
+          },
+          "queue": {
+            "status": "idle",
+            "items": []
+          },
+          "runStatus": "idle",
+          "activeTurn": null,
+          "pendingApprovals": [],
+          "pendingInterviews": [],
+          "worktreeBinding": {
+            "entries": [
+              {
+                "workspacePath": "/tmp/project",
+                "mode": "local",
+                "repoIdentifier": null,
+                "worktreePath": null,
+                "branch": null,
+                "isPrimary": true,
+                "isImported": false,
+                "setupState": "not_required",
+                "setupTerminalSessionId": null,
+                "setupExitCode": null,
+                "setupFailedAt": null,
+                "createdAt": 1,
+                "ownedSubmodules": []
+              }
+            ]
+          },
+          "missingWorktreePaths": [],
+          "pendingFileEditApprovals": [],
+          "accumulatedFileChangeCount": 0,
+          "backgroundItems": [],
+          "managedCommands": [],
+          "heldUpdates": [],
+          "turnInProgress": false,
+          "transcriptEpoch": 1,
+          "rowCount": 2,
+          "indexRevision": 5,
+          "tail": {
+            "fromOrdinal": 0,
+            "rowIds": ["u1", "assistant:turn-1"],
+            "messages": [
+              {
+                "role": "user",
+                "messageId": "u1",
+                "sender": {
+                  "type": "user",
+                  "userId": "owner-1"
+                },
+                "message": {
+                  "kind": "user",
+                  "content": {
+                    "type": "doc",
+                    "content": [
+                      {
+                        "type": "paragraph",
+                        "content": [
+                          {
+                            "type": "text",
+                            "text": "stream"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "browserAnnotations": []
+                },
+                "timestamp": 1790215208584,
+                "sessionAnchor": null
+              },
+              {
+                "role": "assistant",
+                "messageId": "564eeccc-3fb8-4cd1-b7da-588f5818072e",
+                "sender": {
+                  "type": "agent",
+                  "harnessId": "claude",
+                  "agentId": "test-model",
+                  "displayName": "test-model",
+                  "reply": {
+                    "expectsReply": false
+                  },
+                  "inReplyTo": null
+                },
+                "blocks": [
+                  {
+                    "blockId": "text-1",
+                    "status": "completed",
+                    "timestamp": 2008,
+                    "type": "text",
+                    "text": "alpha bravo charlie delta echo foxtrot",
+                    "providerNotice": null
+                  }
+                ],
+                "startedAt": 1790215208600,
+                "blocksVersion": 7,
+                "timestamp": 1790215209863,
+                "turnId": "turn-1",
+                "usage": null,
+                "reasoningEffort": null,
+                "serviceTier": null,
+                "envCredentialVar": null,
+                "imageResolutions": [],
+                "turnProfile": {
+                  "profileId": null,
+                  "labelSnapshot": null
+                }
+              }
+            ],
+            "events": [
+              {
+                "eventId": "8b2f6834-c5bd-45aa-8dd8-9e874c79f42a",
+                "type": "turn.started",
+                "timestamp": 1790215208616,
+                "clientActionId": null,
+                "actor": null,
+                "message": "Turn started.",
+                "turnId": "turn-1",
+                "messageId": "u1",
+                "queueItemId": null,
+                "approvalId": null,
+                "blockId": null,
+                "severity": "info",
+                "metadata": null
+              },
+              {
+                "eventId": "5f5cd7d2-751d-4725-8182-debe441ae6ac",
+                "type": "turn.completed",
+                "timestamp": 1790215209855,
+                "clientActionId": null,
+                "actor": null,
+                "message": "Turn completed.",
+                "turnId": "turn-1",
+                "messageId": "u1",
+                "queueItemId": null,
+                "approvalId": null,
+                "blockId": null,
+                "severity": "info",
+                "metadata": null
+              }
+            ],
+            "rowContext": {}
+          },
+          "derived": {
+            "latestAssistantUsage": null,
+            "pinnedTodo": null,
+            "pinnedTaskTodoItems": [],
+            "latestForkableAssistantMessageId": "564eeccc-3fb8-4cd1-b7da-588f5818072e",
+            "restorableSetupInterruption": null,
+            "interviewAnswerability": [],
+            "latestAssistantAuthFailureTurnKey": null,
+            "setupCardWindows": []
+          }
+        }
+      }
+    },
+    {
+      "i": 16,
+      "at": "+ 1251ms",
+      "envelope": {
+        "kind": "accumulatedChanges",
+        "hasBinaryPayload": false,
+        "epicId": "epic-windowed-emit",
+        "chatId": "chat-windowed-emit",
+        "chunk": {
+          "epoch": 1,
+          "generation": 2,
+          "fromIndex": 0,
+          "summaries": [],
+          "isFinal": true
+        }
+      }
+    },
+    {
+      "i": 17,
+      "at": "+ 1251ms",
+      "envelope": {
+        "kind": "indexChanged",
+        "hasBinaryPayload": false,
+        "epicId": "epic-windowed-emit",
+        "chatId": "chat-windowed-emit",
+        "epoch": 1,
+        "rowCount": 2,
+        "indexRevision": 6,
+        "changes": [
+          {
+            "type": "updated",
+            "entries": [
+              {
+                "ordinal": 1,
+                "entry": {
+                  "rowId": "assistant:turn-1",
+                  "createdAt": 1790215208600,
+                  "role": "assistant",
+                  "byteLength": 142,
+                  "bodyDigest": "1i0aj7u08f9mgq"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

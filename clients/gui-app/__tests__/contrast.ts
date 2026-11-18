@@ -1,0 +1,406 @@
+/// <reference types="node" />
+/**
+ * WCAG contrast-ratio calculator for `oklch(...)`/hex color strings, plus
+ * shared per-preset surface fixtures. Lets tests assert real contrast ratios
+ * against resolved theme colors instead of only checking Tailwind classes.
+ *
+ * The surface tables intentionally cover the full palettes; accent-only
+ * presets inherit the neutral background/canvas/popover values.
+ *
+ * `resolveThemeTokens` reads the canonical built-in palette registry. Only
+ * opaque colors are measurable; read them through `themeToken`, which rejects
+ * the rest by name.
+ */
+
+import { THEME_PRESETS, type ThemePreset } from "@/lib/theme-presets";
+import { getBuiltinThemeColors } from "@/lib/themes/builtin-palettes";
+import type { ThemeToken } from "@/lib/themes/theme-definition";
+
+export interface ThemeSurfaces {
+  readonly background: string;
+  readonly canvas: string;
+  readonly popover: string;
+  /**
+   * `--accent`. Carried because selection surfaces wash it over the row and
+   * then composite a state tint on top, so it decides whether a tinted glyph
+   * survives being selected.
+   */
+  readonly accent: string;
+}
+
+export const LIGHT_THEME_SURFACES: Readonly<Record<string, ThemeSurfaces>> = {
+  default: {
+    background: "oklch(0.985 0 0)",
+    canvas: "oklch(1 0 0)",
+    popover: "oklch(1 0 0)",
+    accent: "oklch(0.97 0 0)",
+  },
+  amoled: {
+    background: "#fafafa",
+    canvas: "#ffffff",
+    popover: "#ffffff",
+    accent: "#ebebeb",
+  },
+  "traycer-green": {
+    background: "#f6f9f8",
+    canvas: "#ffffff",
+    popover: "#ffffff",
+    accent: "#eaeaea",
+  },
+  dracula: {
+    background: "#efefef",
+    canvas: "#f8f8f2",
+    popover: "#ffffff",
+    accent: "#eaeaee",
+  },
+  catppuccin: {
+    background: "#e6e9ef",
+    canvas: "#eff1f5",
+    popover: "#e6e9ef",
+    accent: "#ccd0da",
+  },
+  github: {
+    background: "#f6f8fa",
+    canvas: "#ffffff",
+    popover: "#ffffff",
+    accent: "#eaeef2",
+  },
+  gruvbox: {
+    background: "#f2e5bc",
+    canvas: "#fbf1c7",
+    popover: "#f2e5bc",
+    accent: "#ebdbb2",
+  },
+  "tokyo-night": {
+    background: "#d0d5e3",
+    canvas: "#e1e2e7",
+    popover: "#d0d5e3",
+    accent: "#b7c1e3",
+  },
+  nord: {
+    background: "#e5e9f0",
+    canvas: "#eceff4",
+    popover: "#e5e9f0",
+    accent: "#d8dee9",
+  },
+  ayu: {
+    background: "#f8f9fa",
+    canvas: "#fcfcfc",
+    popover: "#f8f9fa",
+    accent: "#eef0f3",
+  },
+  everforest: {
+    background: "#f4f0d9",
+    canvas: "#fdf6e3",
+    popover: "#f4f0d9",
+    accent: "#efebd4",
+  },
+};
+
+export const DARK_THEME_SURFACES: Readonly<Record<string, ThemeSurfaces>> = {
+  default: {
+    background: "oklch(0.205 0 0)",
+    canvas: "oklch(0.145 0 0)",
+    popover: "oklch(0.205 0 0)",
+    accent: "oklch(0.269 0 0)",
+  },
+  amoled: {
+    background: "#000000",
+    canvas: "#000000",
+    popover: "#1a1a1a",
+    accent: "#1f1f1f",
+  },
+  "traycer-green": {
+    background: "#121715",
+    canvas: "#0f0f0f",
+    popover: "#1a2421",
+    accent: "#202c28",
+  },
+  dracula: {
+    background: "#21222c",
+    canvas: "#282a36",
+    popover: "#343746",
+    accent: "#44475a",
+  },
+  catppuccin: {
+    background: "#181825",
+    canvas: "#1e1e2e",
+    popover: "#313244",
+    accent: "#45475a",
+  },
+  github: {
+    background: "#010409",
+    canvas: "#0d1117",
+    popover: "#161b22",
+    accent: "#21262d",
+  },
+  gruvbox: {
+    background: "#1d2021",
+    canvas: "#282828",
+    popover: "#32302f",
+    accent: "#3c3836",
+  },
+  "tokyo-night": {
+    background: "#16161e",
+    canvas: "#1a1b26",
+    popover: "#24283b",
+    accent: "#2a2e41",
+  },
+  nord: {
+    background: "#242933",
+    canvas: "#2e3440",
+    popover: "#3b4252",
+    accent: "#434c5e",
+  },
+  ayu: {
+    background: "#080b10",
+    canvas: "#0b0e14",
+    popover: "#11151c",
+    accent: "#1c222b",
+  },
+  everforest: {
+    background: "#232a2e",
+    canvas: "#2d353b",
+    popover: "#343f44",
+    accent: "#3d484d",
+  },
+};
+
+// `--destructive` and `--success-foreground` remain shared by presets.
+export const DESTRUCTIVE_FOREGROUND = {
+  light: "oklch(0.577 0.245 27.325)",
+  dark: "oklch(0.704 0.191 22.216)",
+} as const;
+
+export const SUCCESS_FOREGROUND = {
+  light: "oklch(0.42 0.13 145)",
+  dark: "oklch(0.75 0.15 145)",
+} as const;
+
+function linearChannel(normalized: number): number {
+  return normalized <= 0.04045
+    ? normalized / 12.92
+    : ((normalized + 0.055) / 1.055) ** 2.4;
+}
+
+function hexToLinearSrgb(hex: string): readonly [number, number, number] {
+  const normalized = hex.replace("#", "");
+  const byteAt = (start: number): number =>
+    parseInt(normalized.slice(start, start + 2), 16) / 255;
+  return [
+    linearChannel(byteAt(0)),
+    linearChannel(byteAt(2)),
+    linearChannel(byteAt(4)),
+  ];
+}
+
+// OKLab -> linear sRGB, per the CSS Color 4 / Björn Ottosson reference
+// matrices used by browsers to resolve `oklch(...)`.
+function oklchToLinearSrgb(
+  lightness: number,
+  chroma: number,
+  hueDegrees: number,
+): readonly [number, number, number] {
+  const hueRadians = (hueDegrees * Math.PI) / 180;
+  const a = chroma * Math.cos(hueRadians);
+  const b = chroma * Math.sin(hueRadians);
+  const l_ = lightness + 0.3963377774 * a + 0.2158037573 * b;
+  const m_ = lightness - 0.1055613458 * a - 0.0638541728 * b;
+  const s_ = lightness - 0.0894841775 * a - 1.291485548 * b;
+  const l3 = l_ ** 3;
+  const m3 = m_ ** 3;
+  const s3 = s_ ** 3;
+  return [
+    4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3,
+    -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3,
+    -0.0041960863 * l3 - 0.7034186147 * m3 + 1.707614701 * s3,
+  ];
+}
+
+function parseColorToLinearSrgb(
+  value: string,
+): readonly [number, number, number] {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("#")) return hexToLinearSrgb(trimmed);
+  const match = /^oklch\(([\d.]+)\s+([\d.]+)\s+([\d.]+)\)$/.exec(trimmed);
+  if (match === null) {
+    throw new Error(`Unsupported color for contrast calculation: ${value}`);
+  }
+  return oklchToLinearSrgb(
+    Number(match[1]),
+    Number(match[2]),
+    Number(match[3]),
+  );
+}
+
+function relativeLuminance(
+  linearSrgb: readonly [number, number, number],
+): number {
+  const clamp = (channel: number): number => Math.min(1, Math.max(0, channel));
+  const [r, g, b] = linearSrgb;
+  return 0.2126 * clamp(r) + 0.7152 * clamp(g) + 0.0722 * clamp(b);
+}
+
+/** WCAG 2.x contrast ratio (1:1 to 21:1) between two `oklch(...)`/hex colors. */
+export function contrastRatio(foreground: string, background: string): number {
+  const fgLuminance = relativeLuminance(parseColorToLinearSrgb(foreground));
+  const bgLuminance = relativeLuminance(parseColorToLinearSrgb(background));
+  const lighter = Math.max(fgLuminance, bgLuminance);
+  const darker = Math.min(fgLuminance, bgLuminance);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+/**
+ * Alpha-composites `foreground` at `alpha` over `background` in sRGB gamma
+ * space (matching how browsers paint a translucent CSS background color),
+ * returning a hex string usable with `contrastRatio`.
+ */
+export function compositeOverBackground(
+  foreground: string,
+  alpha: number,
+  background: string,
+): string {
+  const toSrgbByte = (linear: number): number => {
+    const clamped = Math.min(1, Math.max(0, linear));
+    const encoded =
+      clamped <= 0.0031308
+        ? clamped * 12.92
+        : 1.055 * clamped ** (1 / 2.4) - 0.055;
+    return Math.round(encoded * 255);
+  };
+  const mixChannel = (fgLinear: number, bgLinear: number): string => {
+    const fgByte = toSrgbByte(fgLinear);
+    const bgByte = toSrgbByte(bgLinear);
+    const mixedByte = Math.round(fgByte * alpha + bgByte * (1 - alpha));
+    return mixedByte.toString(16).padStart(2, "0");
+  };
+  const [fgR, fgG, fgB] = parseColorToLinearSrgb(foreground);
+  const [bgR, bgG, bgB] = parseColorToLinearSrgb(background);
+  return `#${mixChannel(fgR, bgR)}${mixChannel(fgG, bgG)}${mixChannel(fgB, bgB)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Theme resolution from the canonical built-in palette registry
+// ---------------------------------------------------------------------------
+
+/**
+ * Which of the two palettes is on `<html>`. Named after `theme-applier`'s
+ * `ResolvedTheme` rather than reusing `ThemeMode`, which the settings store
+ * already exports as the THREE-member `"system" | "light" | "dark"`.
+ */
+export type ResolvedThemeMode = "light" | "dark";
+
+/** The only color shapes the math below can consume. Shared with `themeToken`. */
+const MEASURABLE_COLOR =
+  /^(?:#[0-9a-f]{6}|oklch\([\d.]+\s+[\d.]+\s+[\d.]+\))$/i;
+/**
+ * The custom properties in effect on `<html>` for a given preset and mode,
+ * resolved from the canonical built-in palette registry.
+ */
+export function resolveThemeTokens(
+  theme: string,
+  mode: ResolvedThemeMode,
+): ReadonlyMap<string, string> {
+  const preset: ThemePreset =
+    theme === "default"
+      ? "neutral"
+      : (THEME_PRESETS.find((entry) => entry.id === theme)?.id ?? "neutral");
+  const colors = getBuiltinThemeColors(preset, mode);
+  const resolve = (value: string, seen: Set<string>): string => {
+    const reference = /^var\(--([\w-]+)\)$/.exec(value)?.[1];
+    if (reference === undefined || seen.has(reference)) return value;
+    const next = colors[reference as ThemeToken];
+    return next === undefined
+      ? value
+      : resolve(next, new Set([...seen, reference]));
+  };
+  return new Map(
+    Object.entries(colors).map(([token, value]) => [
+      `--${token}`,
+      resolve(value, new Set([token])),
+    ]),
+  );
+}
+
+/**
+ * Reads a token that must exist AND must be an opaque color the math here can
+ * consume. Both halves matter: the resolver returns raw declaration text, so
+ * plenty of real tokens may be alpha-carrying or use `var()` indirection.
+ * Failing here names the token; failing inside
+ * `parseColorToLinearSrgb` does not - which is why both gates share
+ * `MEASURABLE_COLOR` rather than keeping two patterns that can drift.
+ */
+export function themeToken(
+  tokens: ReadonlyMap<string, string>,
+  name: string,
+): string {
+  const value = tokens.get(name);
+  if (value === undefined) throw new Error(`Theme token ${name} is undefined`);
+  if (!MEASURABLE_COLOR.test(value)) {
+    throw new Error(
+      `Theme token ${name} is not an opaque color this module can measure: ${value}`,
+    );
+  }
+  return value;
+}
+
+/**
+ * `"default"` plus every registered built-in preset. The list is derived from
+ * the app's own registry so a newly registered preset is swept automatically.
+ */
+export function themePresets(): ReadonlyArray<string> {
+  return [
+    "default",
+    ...THEME_PRESETS.filter((preset) => preset.id !== "neutral").map(
+      (preset) => preset.id,
+    ),
+  ];
+}
+
+/**
+ * A full-palette preset repaints the surfaces; an accent-only one
+ * (rose/blue/violet/green/orange/pink) overrides `--primary` and friends on
+ * top of the default light/dark palette.
+ *
+ * Decided on the RESOLVED `--background` for the mode asked about, not on
+ * which token a preset happens to override: surface palettes are full when
+ * their resolved background differs from the neutral palette.
+ */
+export function isFullPalettePreset(
+  theme: string,
+  mode: ResolvedThemeMode,
+): boolean {
+  if (theme === "default") return true;
+  return (
+    resolveThemeTokens(theme, mode).get("--background") !==
+    resolveThemeTokens("default", mode).get("--background")
+  );
+}
+
+/**
+ * `--muted-foreground` per preset, keyed like the surface tables above so a
+ * caller can pair each value with its surfaces. Read from the palette registry
+ * rather than copied: presets override it alongside their own hue, and a
+ * copy has to be hand-synced every time one moves. Declared last because it
+ * runs at module load and `themeToken` reads `MEASURABLE_COLOR`.
+ */
+function mutedForegroundByPreset(
+  mode: ResolvedThemeMode,
+  surfaces: Readonly<Record<string, ThemeSurfaces>>,
+): Readonly<Record<string, string>> {
+  return Object.fromEntries(
+    Object.keys(surfaces).map((preset) => [
+      preset,
+      themeToken(resolveThemeTokens(preset, mode), "--muted-foreground"),
+    ]),
+  );
+}
+
+export const MUTED_FOREGROUND_LIGHT = mutedForegroundByPreset(
+  "light",
+  LIGHT_THEME_SURFACES,
+);
+export const MUTED_FOREGROUND_DARK = mutedForegroundByPreset(
+  "dark",
+  DARK_THEME_SURFACES,
+);

@@ -1,0 +1,229 @@
+import type {
+  BotDirectoryRecord,
+  BotRecord,
+  BotTaskEntry,
+} from "@traycer/protocol/host/bot/schemas";
+import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
+import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
+import { mainBotIdOf, type MainBotIds } from "@/lib/bots/bot-main";
+
+/**
+ * The Home bots section's data contract (Tracy Bots), built by pure functions
+ * from the reads the section makes: `environment.list` and `bot.list` for the
+ * groups, and each row's own `bot.subscribe` snapshot for its live facts.
+ *
+ * EVERY environment is a group, side by side and in the list's order (the
+ * personal one first, then one per team), whether or not it holds a bot: the
+ * create form lives inside each group, so an empty environment is still a
+ * place the reader can act. There is no default and no "current" environment
+ * anywhere here. A bot whose environment the list does not name (the user
+ * left that team) is kept, under a group labelled by its id, rather than
+ * dropped from a page that says it lists every bot.
+ */
+export interface HomeBotRowModel {
+  readonly botId: string;
+  readonly title: string;
+  readonly environmentId: string;
+  /** The host the bot's trunk runs on, from the cloud row; the snapshot's
+   * `boundHost` restates it and wins when present, being the fresher read.
+   * `null` when no host runs the bot until a member claims it onto one. */
+  readonly boundHostId: string | null;
+  readonly harness: string;
+  readonly model: string;
+  /**
+   * The stream's open-request hint, `null` when unknown. The conversation's
+   * own rows are authoritative for what is open.
+   */
+  readonly openRequestCount: number | null;
+  /** Tasks the bot spun and still runs, `null` until a snapshot arrives. */
+  readonly tasksSpun: number | null;
+  /** Whether the serving host is the bound one, `null` before a snapshot. */
+  readonly boundHere: boolean | null;
+}
+
+export interface HomeBotsGroup {
+  readonly environmentId: string;
+  readonly label: string;
+  readonly ownerKind: EnvironmentDescriptor["ownerKind"] | null;
+  /** False for the trailing group of bots whose environment is not listed:
+   * nothing can be created into an environment the user is not in. */
+  readonly canCreate: boolean;
+  /** Live (unarchived) bots of this environment, by title. */
+  readonly bots: ReadonlyArray<BotDirectoryRecord>;
+  /** The environment's main bot, `null` when the list names none (its host
+   * predates the field). */
+  readonly mainBotId: string | null;
+}
+
+export interface HomeBotsModel {
+  readonly groups: ReadonlyArray<HomeBotsGroup>;
+  readonly botCount: number;
+}
+
+export interface HomeBotsModelInput {
+  readonly environments: ReadonlyArray<EnvironmentDescriptor>;
+  readonly bots: ReadonlyArray<BotDirectoryRecord>;
+  readonly mainBotIds: MainBotIds;
+}
+
+export const EMPTY_HOME_BOTS_MODEL: HomeBotsModel = Object.freeze({
+  groups: [],
+  botCount: 0,
+});
+
+/**
+ * The tasks the bot spun and still runs (Tracy Bots T82): an entry from a host
+ * that does not say whether the bot spun it counts, as every entry did
+ * before.
+ */
+export function countSpunTasks(tasks: ReadonlyArray<BotTaskEntry>): number {
+  let count = 0;
+  for (const task of tasks) {
+    if (task.state === "tracking" && task.spun !== false) count += 1;
+  }
+  return count;
+}
+
+export function buildHomeBotRow(
+  bot: BotRecord,
+  snapshot: BotSubscriptionSnapshot | null,
+): HomeBotRowModel {
+  // Two reads of the same bot, each possibly stale: the `bot.list` record
+  // and the stream's last snapshot. A claim made from another host bumps
+  // `hostEpoch`, so the read carrying the higher epoch is the fresher one
+  // for the bound host and the title; on a tie the snapshot wins, being the
+  // live reading. Neither is authoritative by its channel alone - a stream
+  // that opened before the claim keeps restating the old host.
+  const snapshotWins =
+    snapshot !== null && snapshot.bot.hostEpoch >= bot.hostEpoch;
+  const live = snapshotWins ? snapshot.bot : bot;
+  return {
+    botId: bot.botId,
+    title: live.title,
+    environmentId: live.environmentId,
+    boundHostId: snapshotWins ? snapshot.boundHost.hostId : bot.boundHostId,
+    harness: live.harness,
+    model: live.model,
+    openRequestCount: snapshot?.openRequestCount ?? null,
+    tasksSpun: snapshot === null ? null : countSpunTasks(snapshot.tasks),
+    boundHere: snapshot?.boundHost.isThisHost ?? null,
+  };
+}
+
+export type HomeBotState = "working" | "idle" | "paused";
+
+/**
+ * What a Home row says about a bot (Tracy Bots): working, idle, or paused -
+ * never which machine it runs on. Paused means the bot's host cannot be
+ * reached, and is said only on evidence this client has:
+ * - no host runs the bot;
+ * - the bound host is one of the reader's own and cannot be dialled now;
+ * - the bound host is in no list the reader can see: not theirs, and not a
+ *   machine of the bot's environment (another member's machine, whose
+ *   reachability this account cannot observe - the tab's `bot.open` answers
+ *   the same).
+ * - a TEAM bot whose bound host is one of the reader's own personal
+ *   machines: a team's bots run only on the team's machines, so a binding to
+ *   a laptop (made before that rule) runs nothing - the tab's `bot.open` on
+ *   a team machine takes the bot back, and on a personal one pauses it.
+ * Working means the bot's activity says a turn is running, its trunk's or a
+ * thread's: that reading is the bound host's own, so it beats any
+ * reachability this client can infer, the registry not having answered
+ * included. Only the two bindings that run nothing (no host, a team bot on
+ * a personal machine) stay paused while a reading says otherwise.
+ * A machine of the environment the reader cannot dial (a team machine
+ * another member added) has unknown reachability here; the row says idle
+ * and opening the tab decides. So does an environment whose machine list
+ * has not answered (`environmentHostIds` null), and a host directory that
+ * has not answered (`connectableResolved` false): until then the reader's
+ * own machines are not known, so nothing about them is evidence.
+ */
+export function homeBotState(input: {
+  /** The bot's activity has its trunk or a thread replying. */
+  readonly working: boolean;
+  readonly boundHostId: string | null;
+  /** Hosts in the reader's own directory. */
+  readonly directoryHostIds: ReadonlySet<string>;
+  /** Of those, the ones this client can dial now. */
+  readonly connectableHostIds: ReadonlySet<string>;
+  /** Whether the directory has answered; until it has, the two sets above
+   * are empty for want of an answer, not because there are no hosts. */
+  readonly connectableResolved: boolean;
+  /** The machines of the bot's environment the reader may see beyond their
+   * own (empty for a personal environment, which has none), or null while a
+   * team environment's list has not answered. */
+  readonly environmentHostIds: ReadonlySet<string> | null;
+  /** The bot's environment's owner kind; `null` when the environment is not
+   * listed (the reader left it). */
+  readonly environmentOwnerKind: EnvironmentDescriptor["ownerKind"] | null;
+  /** The reader's own hosts the registry calls `personal`, or null while
+   * the registry has not answered. */
+  readonly personalHostIds: ReadonlySet<string> | null;
+}): HomeBotState {
+  const { boundHostId } = input;
+  if (boundHostId === null) return "paused";
+  const team = input.environmentOwnerKind === "organization";
+  if (team && input.personalHostIds?.has(boundHostId) === true) {
+    return "paused";
+  }
+  if (input.working) return "working";
+  return reachabilityState(input, boundHostId);
+}
+
+/** Paused when the answered lists prove the bound host away; idle otherwise. */
+function reachabilityState(
+  input: {
+    readonly directoryHostIds: ReadonlySet<string>;
+    readonly connectableHostIds: ReadonlySet<string>;
+    readonly connectableResolved: boolean;
+    readonly environmentHostIds: ReadonlySet<string> | null;
+  },
+  boundHostId: string,
+): "idle" | "paused" {
+  if (!input.connectableResolved) return "idle";
+  if (input.directoryHostIds.has(boundHostId)) {
+    return input.connectableHostIds.has(boundHostId) ? "idle" : "paused";
+  }
+  if (input.environmentHostIds === null) return "idle";
+  return input.environmentHostIds.has(boundHostId) ? "idle" : "paused";
+}
+
+function compareBots(a: BotDirectoryRecord, b: BotDirectoryRecord): number {
+  const byTitle = a.title.localeCompare(b.title);
+  return byTitle !== 0 ? byTitle : a.botId.localeCompare(b.botId);
+}
+
+export function buildHomeBotsModel(input: HomeBotsModelInput): HomeBotsModel {
+  const botsByEnvironment = new Map<string, BotDirectoryRecord[]>();
+  for (const bot of input.bots) {
+    if (bot.archivedAt !== null) continue;
+    const rows = botsByEnvironment.get(bot.environmentId);
+    if (rows === undefined) botsByEnvironment.set(bot.environmentId, [bot]);
+    else rows.push(bot);
+  }
+  const groups: HomeBotsGroup[] = input.environments.map((environment) => ({
+    environmentId: environment.environmentId,
+    label: environment.label,
+    ownerKind: environment.ownerKind,
+    canCreate: true,
+    bots: (botsByEnvironment.get(environment.environmentId) ?? []).sort(
+      compareBots,
+    ),
+    mainBotId: mainBotIdOf(input.mainBotIds, environment.environmentId),
+  }));
+  const listed = new Set(input.environments.map((e) => e.environmentId));
+  for (const [environmentId, bots] of botsByEnvironment) {
+    if (listed.has(environmentId)) continue;
+    groups.push({
+      environmentId,
+      label: environmentId,
+      ownerKind: null,
+      canCreate: false,
+      bots: bots.sort(compareBots),
+      mainBotId: mainBotIdOf(input.mainBotIds, environmentId),
+    });
+  }
+  let botCount = 0;
+  for (const group of groups) botCount += group.bots.length;
+  return { groups, botCount };
+}

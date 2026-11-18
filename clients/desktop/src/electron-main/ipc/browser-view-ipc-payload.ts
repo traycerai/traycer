@@ -1,0 +1,303 @@
+import { z } from "zod";
+import {
+  BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS,
+  browserSessionsClientFrameSchema,
+} from "@traycer/protocol/host/browser/contracts";
+import { registrableDomain } from "@traycer/protocol/host/browser/registrable-domain";
+import { hostResourceScopeSchema } from "@traycer/protocol/host/resource-scope";
+import type {
+  BrowserAnnotationAttachResultInput,
+  BrowserAnnotationSetTargetChatLabelInput,
+  BrowserAnnotationStartInput,
+} from "../../ipc-contracts/browser-annotation-types";
+import type {
+  BrowserSessionsStreamKey,
+  BrowserSessionsStreamSend,
+  BrowserViewAttachSurface,
+  BrowserViewCertificateTrust,
+  BrowserViewDetachSurface,
+  BrowserViewDownloadCancel,
+  BrowserViewElectronTabControl,
+  BrowserViewGuestDrawHoldApplied,
+  BrowserViewGuestViewportResult,
+  BrowserViewFindRequest,
+  BrowserViewFindStop,
+  LoginImportRequest,
+  BrowserViewReservedChord,
+} from "@traycer-clients/shared/platform/browser-view";
+import type { PipCaptureStartInput } from "@traycer-clients/shared/platform/browser-view";
+
+const nonEmptyStringSchema = z.string().min(1);
+const tileKeySchema = z.object({
+  viewTabId: nonEmptyStringSchema,
+  paneId: nonEmptyStringSchema,
+  tileInstanceId: nonEmptyStringSchema,
+  pageSessionId: nonEmptyStringSchema,
+});
+const annotationThemeSchema = z.object({
+  appearance: z.enum(["light", "dark"]),
+  background: nonEmptyStringSchema,
+  foreground: nonEmptyStringSchema,
+  popover: nonEmptyStringSchema,
+  popoverForeground: nonEmptyStringSchema,
+  mutedForeground: nonEmptyStringSchema,
+  border: nonEmptyStringSchema,
+  input: nonEmptyStringSchema,
+  ring: nonEmptyStringSchema,
+  primary: nonEmptyStringSchema,
+  primaryForeground: nonEmptyStringSchema,
+  accent: nonEmptyStringSchema,
+  accentForeground: nonEmptyStringSchema,
+  destructive: nonEmptyStringSchema,
+  warning: nonEmptyStringSchema,
+  warningForeground: nonEmptyStringSchema,
+  fontFamily: nonEmptyStringSchema,
+});
+const nativeTabKeySchema = z.object({
+  hostId: nonEmptyStringSchema,
+  sessionId: nonEmptyStringSchema,
+  tabId: nonEmptyStringSchema,
+});
+const nativeTabCapabilitySchema = nativeTabKeySchema.extend({
+  registrationId: nonEmptyStringSchema,
+});
+const electronTabControlActionSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("navigate"), url: nonEmptyStringSchema }),
+  z.object({ kind: z.literal("reload") }),
+  z.object({ kind: z.literal("stop") }),
+  z.object({ kind: z.literal("goBack") }),
+  z.object({ kind: z.literal("goForward") }),
+  z.object({ kind: z.literal("zoomIn") }),
+  z.object({ kind: z.literal("zoomOut") }),
+  z.object({ kind: z.literal("resetZoom") }),
+  z.object({ kind: z.literal("openDevTools") }),
+]);
+
+const annotationStartSchema: z.ZodType<BrowserAnnotationStartInput> =
+  tileKeySchema.extend({ theme: annotationThemeSchema });
+const annotationTargetChatLabelSchema: z.ZodType<BrowserAnnotationSetTargetChatLabelInput> =
+  tileKeySchema.extend({
+    targets: z.preprocess(
+      (value) => (Array.isArray(value) ? value : []),
+      z.array(z.object({ chatId: z.string(), label: z.string() })),
+    ),
+    defaultChatId: z.string().nullable(),
+  });
+const annotationAttachResultSchema: z.ZodType<BrowserAnnotationAttachResultInput> =
+  z.object({
+    annotationId: z.string(),
+    status: z.enum(["attached", "failed"]),
+  });
+const guestViewportResultSchema: z.ZodType<BrowserViewGuestViewportResult> = z
+  .object({
+    requestId: nonEmptyStringSchema,
+    registrationId: nonEmptyStringSchema,
+    revision: z.number().int().nonnegative(),
+    applied: z.boolean(),
+  })
+  .strict();
+const guestDrawHoldAppliedSchema: z.ZodType<BrowserViewGuestDrawHoldApplied> = z
+  .object({
+    holdId: nonEmptyStringSchema,
+    registrationId: nonEmptyStringSchema,
+    applied: z.boolean(),
+  })
+  .strict();
+const findRequestSchema: z.ZodType<BrowserViewFindRequest> =
+  tileKeySchema.extend({
+    requestId: z.number(),
+    query: z.string(),
+    matchCase: z.boolean(),
+    forward: z.boolean(),
+    findNext: z.boolean(),
+  });
+const findStopSchema: z.ZodType<BrowserViewFindStop> = tileKeySchema.extend({
+  requestId: z.number(),
+});
+const downloadCancelSchema: z.ZodType<BrowserViewDownloadCancel> = z.object({
+  downloadId: z.string(),
+});
+const certificateTrustSchema: z.ZodType<BrowserViewCertificateTrust> =
+  tileKeySchema.extend({ certificateErrorId: z.string() });
+const attachSurfaceSchema: z.ZodType<BrowserViewAttachSurface> =
+  nativeTabCapabilitySchema.extend({
+    bindingId: nonEmptyStringSchema,
+    surface: tileKeySchema,
+  });
+const detachSurfaceSchema: z.ZodType<BrowserViewDetachSurface> =
+  nativeTabCapabilitySchema.extend({ bindingId: nonEmptyStringSchema });
+const electronTabControlSchema: z.ZodType<BrowserViewElectronTabControl> =
+  nativeTabCapabilitySchema.extend({ action: electronTabControlActionSchema });
+const pipCaptureStartSchema: z.ZodType<PipCaptureStartInput> =
+  nativeTabCapabilitySchema.extend({
+    maxWidth: z.number().int().positive(),
+    maxHeight: z.number().int().positive(),
+    quality: z.number().int().min(0).max(100),
+  });
+
+/** The saved-logins toggle's new value. */
+const saveLoginsSchema = z.boolean();
+
+/**
+ * The renderer-supplied resource scope, DERIVED from the protocol's own union
+ * rather than restated here.
+ *
+ * The restatement it replaces was a second definition of an authorization
+ * scope, which is the thing `host/resource-scope.ts` exists to prevent: the
+ * field is typed `HostResourceScope`, so a scope kind added there would
+ * type-check at every call site in this process and then be rejected at
+ * runtime by this parser alone - a mismatch no compile can see.
+ *
+ * The 128-character bound survives as a refinement instead of a re-typed
+ * member, because the reason for it is local to this file and not a protocol
+ * fact: a renderer-supplied epic id is echoed into a map key and a log line
+ * here, and the fields beside it are bounded for the same reason. Applying it
+ * outside the union is what lets the union stay derived.
+ */
+const MAX_RENDERER_EPIC_ID_LENGTH = 128;
+const sessionsStreamScopeSchema = hostResourceScopeSchema.refine(
+  (scope) =>
+    scope.kind !== "epic" || scope.epicId.length <= MAX_RENDERER_EPIC_ID_LENGTH,
+  {
+    message: `epicId must be at most ${String(MAX_RENDERER_EPIC_ID_LENGTH)} characters`,
+  },
+);
+
+/**
+ * Which main-owned `browser.sessions` stream a renderer means.
+ *
+ * A host ID, never a directory row: the row carries the host's static Noise
+ * key, and accepting one from a renderer would let a compromised renderer aim
+ * main's jar stream at a host it controls. Bounded because every field is
+ * echoed into a map key and a log line.
+ */
+const sessionsStreamKeySchema: z.ZodType<BrowserSessionsStreamKey> =
+  z.strictObject({
+    scope: sessionsStreamScopeSchema,
+    hostId: nonEmptyStringSchema.max(128),
+    identityKey: nonEmptyStringSchema.max(512),
+  });
+
+/**
+ * One user-initiated request onto that stream, parsed against the PROTOCOL's
+ * own client-frame schema and then narrowed to the kinds a renderer may ask
+ * for.
+ *
+ * The narrowing is the gate, not the parse: `forgetLogins` and `clearSite`
+ * shred every connected host's slice of the user's logins, so they are
+ * produced in main behind its own confirmation and refused here.
+ */
+const sessionsStreamSendSchema = z
+  .strictObject({
+    key: sessionsStreamKeySchema,
+    frame: browserSessionsClientFrameSchema,
+  })
+  .refine(
+    (value): value is BrowserSessionsStreamSend =>
+      UX_CLIENT_FRAME_KINDS.has(value.frame.kind),
+    { message: "Only tab requests may be sent from a renderer." },
+  );
+
+/** The protocol's own list, so this gate cannot drift from the type it guards. */
+const UX_CLIENT_FRAME_KINDS: ReadonlySet<string> = new Set(
+  BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS,
+);
+
+/**
+ * One saved-login row's domain, as Settings names it.
+ *
+ * A REGISTRABLE domain and nothing else. It is interpolated into a native
+ * confirmation dialog and it is the blast radius of the clear that dialog
+ * authorises, so a renderer that could name `x` could write the sentence the
+ * user is answering. Anything that does not collapse to itself - a subdomain, a
+ * url, a sentence - is refused rather than narrowed, because narrowing would
+ * clear a scope the caller did not name.
+ */
+const savedLoginSiteSchema = z.strictObject({
+  domain: nonEmptyStringSchema
+    .max(253)
+    .refine((domain) => registrableDomain(domain) === domain, {
+      message: "A saved-login site is a registrable domain.",
+    }),
+});
+
+/**
+ * A source id the desktop listed for this renderer: a 32-hex digest of the
+ * source's location (`sourceIdFor`). The bound is loose on purpose so a
+ * future id shape does not have to touch the IPC contract; the service still
+ * refuses any id it did not mint.
+ */
+const loginImportSourceIdSchema = nonEmptyStringSchema.max(128);
+const loginImportScanSchema = z.strictObject({
+  sourceId: loginImportSourceIdSchema,
+});
+
+/**
+ * The import request: registrable domains from the scan's own site list. A
+ * ceiling bounds the write; a real jar has a few hundred sites at most. Each
+ * entry is bounded like `savedLoginSiteSchema`'s domain (a DNS name is at
+ * most 253 characters); the service intersects the list with the scan the
+ * request quotes, so an unknown domain is dropped there, not narrowed here.
+ */
+const LOGIN_IMPORT_MAX_DOMAINS = 5_000;
+const loginImportRunSchema: z.ZodType<LoginImportRequest> = z.strictObject({
+  sourceId: loginImportSourceIdSchema,
+  // The scan's own token (32 hex), bounded like the source id.
+  scanId: loginImportSourceIdSchema,
+  domains: z.array(nonEmptyStringSchema.max(253)).max(LOGIN_IMPORT_MAX_DOMAINS),
+  includeDeviceBound: z.boolean(),
+});
+export const browserViewIpcPayload = {
+  annotationAttachResult: annotationAttachResultSchema,
+  annotationStart: annotationStartSchema,
+  annotationTargetChatLabel: annotationTargetChatLabelSchema,
+  attachSurface: attachSurfaceSchema,
+  certificateTrust: certificateTrustSchema,
+  detachSurface: detachSurfaceSchema,
+  downloadCancel: downloadCancelSchema,
+  electronTabControl: electronTabControlSchema,
+  guestDrawHoldApplied: guestDrawHoldAppliedSchema,
+  guestViewportResult: guestViewportResultSchema,
+  findRequest: findRequestSchema,
+  findStop: findStopSchema,
+  loginImportRun: loginImportRunSchema,
+  loginImportScan: loginImportScanSchema,
+  nativeTabCapability: nativeTabCapabilitySchema,
+  pipCaptureStart: pipCaptureStartSchema,
+  savedLoginSite: savedLoginSiteSchema,
+  saveLogins: saveLoginsSchema,
+  sessionsStreamKey: sessionsStreamKeySchema,
+  sessionsStreamSend: sessionsStreamSendSchema,
+  tileKey: tileKeySchema,
+} as const;
+
+/**
+ * Per-ROW catch, deliberately. A newer renderer may list a command this build
+ * has never heard of; catching on the ARRAY would discard the whole policy
+ * table over that one row and leave every chord unclaimed.
+ */
+const reservedChordRowSchema = z
+  .object({
+    token: z.string(),
+    command: z
+      .union([
+        z.literal("closeTab"),
+        z.literal("newTab"),
+        z.literal("focusAddressBar"),
+      ])
+      .nullable(),
+  })
+  .nullable()
+  .catch(null);
+
+const reservedChordsSchema = z.object({
+  chords: z.array(reservedChordRowSchema).catch([]),
+});
+
+export function parseReservedChords(
+  payload: unknown,
+): readonly BrowserViewReservedChord[] {
+  const parsed = reservedChordsSchema.safeParse(payload);
+  if (!parsed.success) return [];
+  return parsed.data.chords.filter((row) => row !== null);
+}

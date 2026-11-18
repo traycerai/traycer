@@ -1,0 +1,25 @@
+# Native build outputs.
+android/.gradle/
+android/app/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+
+# Ops-provisioned Firebase config. Its ABSENCE is the supported default:
+# android/app/build.gradle skips the google-services plugin and the build still
+# succeeds. See android/app/google-services.json.example for the shape.
+android/app/google-services.json
+
+ios/Pods/
+ios/App/Pods/
+ios/App/build/
+ios/DerivedData/
+
+# TypeScript
+dist/
+*.tsbuildinfo
+
+# Misc
+.eslintcache
+.env
+.env.local

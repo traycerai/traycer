@@ -1,0 +1,303 @@
+/**
+ * One agent on the communication-graph canvas.
+ *
+ * Icons come from the SAME renderers the nav surfaces use
+ * (`EpicNodeTabIcon` → `StaticEpicNodeIcon` / `HarnessIcon`), so a chat, a
+ * Claude terminal agent, and a Codex terminal agent read identically here and
+ * in the sidebar, per-kind icon-color settings included. `variant="live"` also
+ * gives the node the existing progress/awareness icon for free.
+ *
+ * HOVER IS THE SIDEBAR'S HOVER, not a lookalike: `AgentHoverTooltip` is the
+ * component the Agents tree rows use, reading the same epic selectors, so an
+ * agent cannot describe itself one way in the navigator and another on the
+ * canvas. Two things make it safe here:
+ *
+ * - It PORTALS. `TooltipContent` renders inside `TooltipPrimitive.Portal`, so
+ *   the card escapes `.react-flow__viewport` - which carries a CSS
+ *   `transform: scale()` for zoom, and would otherwise scale and clip it.
+ * - It does not eat the click. The trigger attaches to this button, but the
+ *   MOUSE path to the detail panel is React Flow's `onNodeClick` on the node
+ *   wrapper above it; Radix's trigger adds pointer handlers without stopping
+ *   propagation, so the click still reaches the wrapper and the button keeps
+ *   its keyboard role.
+ */
+import { memo } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import { Handle, Position, type NodeProps, type Node } from "@xyflow/react";
+import { cn } from "@/lib/utils";
+import { EpicNodeTabIcon } from "@/components/epic-canvas/epic-node-tab-icon";
+import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
+import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import {
+  useEpicAgentRoleClaims,
+  useEpicNodeHostId,
+  useEpicNodeOwnerKind,
+  useRegisteredEpicTitle,
+} from "@/lib/epic-selectors";
+import {
+  navigateToTabIntent,
+  openOrFocusEpicIntent,
+} from "@/lib/tab-navigation";
+import type { CommGraphAgentKind } from "@/lib/comm-graph/comm-graph-model";
+import type { CommGraphHostStatus } from "@/lib/comm-graph/comm-graph-events";
+import type { AgentActivityTier } from "@/lib/epic-selectors";
+
+export const COMM_GRAPH_AGENT_NODE_TYPE = "commGraphAgent";
+
+/**
+ * A node's edge-data state. Adds one value to the per-host subscription
+ * status: `host-unknown`, for a legacy chat whose record predates
+ * `Chat.hostId`. Such an agent is deliberately left unattributed rather than
+ * guessed at from the app's active host, so it has no subscription at all -
+ * a distinct situation from a host that exists but cannot be reached.
+ */
+export type CommGraphNodeHostStatus = CommGraphHostStatus | "host-unknown";
+
+export interface CommGraphLocalAgentNodeData extends Record<string, unknown> {
+  readonly variant: "agent";
+  readonly epicId: string;
+  readonly agentId: string;
+  readonly kind: CommGraphAgentKind;
+  readonly name: string;
+  readonly archived: boolean;
+  readonly hostStatus: CommGraphNodeHostStatus;
+  readonly activityTier: AgentActivityTier | null;
+  /** This agent's name matches the tile's current find query. */
+  readonly searchMatched: boolean;
+  /** Changes for each search so the finite blink restarts on repeat searches. */
+  readonly searchHighlightNonce: number;
+  /**
+   * The cursor sits on a message whose OTHER endpoint is not on this canvas, so
+   * there is no edge for it to travel along. Every drawable exchange pulses its
+   * edge instead.
+   */
+  readonly pulsing: boolean;
+  /** Opens this agent's activity detail beside the canvas. */
+  readonly onSelect: (agentId: string) => void;
+}
+
+/**
+ * The stand-in for an agent in ANOTHER task that a cross-task message reached
+ * (see `commGraphPeerTaskStubs`). Named by that task, not by the agent: this
+ * task has no record of the agent, only of where it lives.
+ */
+export interface CommGraphPeerTaskNodeData extends Record<string, unknown> {
+  readonly variant: "peer-task";
+  /** The foreign agent's id; the node id. */
+  readonly agentId: string;
+  readonly peerEpicId: string;
+  /** The id-prefix label, used whenever the task's title is not known here. */
+  readonly name: string;
+  readonly searchMatched: boolean;
+  readonly searchHighlightNonce: number;
+  readonly pulsing: boolean;
+}
+
+export type CommGraphAgentNodeData =
+  | CommGraphLocalAgentNodeData
+  | CommGraphPeerTaskNodeData;
+
+export type CommGraphAgentFlowNode = Node<
+  CommGraphAgentNodeData,
+  typeof COMM_GRAPH_AGENT_NODE_TYPE
+>;
+
+export const CommGraphAgentNodeView = memo(function CommGraphAgentNodeView(
+  props: NodeProps<CommGraphAgentFlowNode>,
+) {
+  const { data } = props;
+  return data.variant === "peer-task" ? (
+    <CommGraphPeerTaskNode data={data} />
+  ) : (
+    <CommGraphLocalAgentNode data={data} />
+  );
+});
+
+/**
+ * A task stand-in. The title comes from this client's open-epic registry when
+ * the task is open here; otherwise the id prefix. Clicking opens the task, and
+ * a task the user cannot open is refused by navigation itself.
+ */
+function CommGraphPeerTaskNode(props: {
+  readonly data: CommGraphPeerTaskNodeData;
+}) {
+  const { data } = props;
+  const navigate = useNavigate();
+  const title = useRegisteredEpicTitle(data.peerEpicId);
+  const label = title !== null && title.length > 0 ? title : data.name;
+  return (
+    <button
+      key={data.searchHighlightNonce}
+      type="button"
+      onClick={() =>
+        navigateToTabIntent(
+          navigate,
+          openOrFocusEpicIntent({ epicId: data.peerEpicId, focus: undefined }),
+          undefined,
+        )
+      }
+      data-testid={`comm-graph-peer-task-node-${data.agentId}`}
+      data-peer-epic-id={data.peerEpicId}
+      data-pulsing={data.pulsing ? "true" : "false"}
+      data-search-match={data.searchMatched ? "true" : "false"}
+      aria-label={`Agent in another task: ${label}`}
+      className={cn(
+        // muted-fill-ok: the dashed border delimits the stub; the /40 wash only tints it
+        "flex w-full flex-col gap-1 rounded-lg border border-dashed bg-muted/40 px-3 py-2 text-left text-ui-xs text-muted-foreground shadow-sm hover:border-primary/50",
+        data.pulsing && "animate-pulse border-primary ring-2 ring-primary/60",
+        data.searchMatched &&
+          "comm-graph-search-match border-primary ring-2 ring-primary/60",
+      )}
+    >
+      <Handle
+        type="target"
+        position={Position.Top}
+        isConnectable={false}
+        className="pointer-events-none opacity-0"
+      />
+      <span className="uppercase tracking-wide">Other task</span>
+      <span className="min-w-0 truncate font-medium text-foreground">
+        {label}
+      </span>
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        isConnectable={false}
+        className="pointer-events-none opacity-0"
+      />
+    </button>
+  );
+}
+
+function CommGraphLocalAgentNode(props: {
+  readonly data: CommGraphLocalAgentNodeData;
+}) {
+  const { data } = props;
+  // A node reports what is true of THIS AGENT, and nothing about a socket.
+  //
+  // The transport statuses (`reconnecting`, `unreachable`, `failed`,
+  // `unsupported`) are facts about a SUBSCRIPTION, and the cloud relay stamps
+  // one relay status onto every origin host - so captioning them here read
+  // "Reconnecting…" under every agent at once for a single wobbly socket. They
+  // now roll up to the Epic header's status dot (`useCommGraphFeedHealth`) and
+  // survive here only as `data-host-status` for tests and tooling.
+  //
+  // `host-unknown` is the exception, and stays: it is a property of the agent's
+  // own record (a legacy chat predating `Chat.hostId`), not of any subscription.
+  // It is deliberately unattributed rather than guessed at, so it has no host to
+  // dial and therefore CANNOT appear in either manager's `snapshot.hosts` - the
+  // header has no way to learn about it. Dropping it here would leave such a
+  // node looking healthy while it can never receive an edge.
+  const unattributedHost = data.hostStatus === "host-unknown";
+  // Read from the epic selectors, exactly as the sidebar row does - the node's
+  // own `data` carries only what the CANVAS needs, and duplicating hover facts
+  // into it is how the two surfaces would drift apart.
+  const hoverHostId = useEpicNodeHostId(data.agentId);
+  // The hover's owner-metadata outcome is a live RPC chain against this host,
+  // so an unreachable one has to fall back rather than spin. The sidebar reads
+  // the same verdict for its offline lock; here there is no lock, so this is
+  // the only consumer and the hook is resolved at the call site.
+  const hoverHostReachability = useHostReachability(
+    hoverHostId ?? UNKNOWN_HOST_PLACEHOLDER,
+  );
+  const hoverOwnerKind = useEpicNodeOwnerKind(data.agentId);
+  const roleClaims = useEpicAgentRoleClaims(data.agentId);
+  const button = (
+    <button
+      key={data.searchHighlightNonce}
+      type="button"
+      // This is the KEYBOARD path, and only incidentally a mouse one. React
+      // Flow's `onNodeClick` (wired on the canvas) is what handles the mouse:
+      // its keydown handler only ever drives React Flow's own selection and
+      // never calls the user callback, so without a real <button> here the node
+      // would be unreachable without a pointer. Both paths land on the same
+      // idempotent setter, so the duplicate call a mouse click makes is a no-op.
+      onClick={() => data.onSelect(data.agentId)}
+      data-testid={`comm-graph-node-${data.agentId}`}
+      data-archived={data.archived ? "true" : "false"}
+      data-host-status={data.hostStatus}
+      data-pulsing={data.pulsing ? "true" : "false"}
+      data-search-match={data.searchMatched ? "true" : "false"}
+      className={cn(
+        "flex w-full flex-col gap-1 rounded-lg border bg-card px-3 py-2 text-left text-ui-xs shadow-sm hover:border-primary/50",
+        data.archived && "border-dashed opacity-50",
+        unattributedHost && "opacity-60",
+        data.activityTier === "turn" && "border-primary ring-2 ring-primary/30",
+        data.activityTier === "background" && "border-primary/50",
+        data.pulsing && "animate-pulse border-primary ring-2 ring-primary/60",
+        data.searchMatched &&
+          "comm-graph-search-match border-primary ring-2 ring-primary/60",
+      )}
+    >
+      {/* React Flow requires handles to exist, but the edges are FLOATING -
+          they compute their own endpoints from the two node boxes, so these
+          carry no geometry. Invisible so the default port dots never read as
+          interactive affordances, and so nothing appears anchored to a fixed
+          side of the node. */}
+      <Handle
+        type="target"
+        position={Position.Top}
+        isConnectable={false}
+        className="pointer-events-none opacity-0"
+      />
+      <div className="flex min-w-0 items-center gap-2">
+        <EpicNodeTabIcon
+          node={{
+            id: data.agentId,
+            instanceId: data.agentId,
+            type: data.kind,
+            name: data.name,
+            hostId: "",
+          }}
+          epicId={data.epicId}
+          variant="live"
+          className="size-3.5 shrink-0"
+          defaultIcon={undefined}
+        />
+        <span className="min-w-0 flex-1 truncate font-medium">{data.name}</span>
+      </div>
+      {data.archived || unattributedHost ? (
+        <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
+          {data.archived ? <span>Archived</span> : null}
+          {unattributedHost ? (
+            <span
+              className="truncate"
+              data-testid={`comm-graph-node-notice-${data.agentId}`}
+            >
+              Host unknown
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        isConnectable={false}
+        className="pointer-events-none opacity-0"
+      />
+    </button>
+  );
+  return (
+    <AgentHoverTooltip
+      trigger={button}
+      epicId={data.epicId}
+      nodeId={data.agentId}
+      nodeName={data.name}
+      hostId={hoverHostId}
+      // `unreachable` ALONE, not `!== "reachable"`: `checking` and
+      // `host-starting` are pending states the metadata card renders through,
+      // and collapsing on them would flicker the richer card away and back
+      // while a local host finishes booting.
+      ownerHostUnreachable={hoverHostReachability.status === "unreachable"}
+      ownerKind={hoverOwnerKind}
+      roleClaims={roleClaims}
+      // The graph node adds nothing of its own: everything it knows about an
+      // agent is already in the shared card.
+      extraContent={null}
+      // Upward: a node can sit anywhere on the canvas, and the space below it
+      // is where the transport bar is docked.
+      side="top"
+    />
+  );
+}

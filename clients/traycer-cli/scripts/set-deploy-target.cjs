@@ -1,0 +1,168 @@
+#!/usr/bin/env bun
+/* eslint-disable @typescript-eslint/no-require-imports */
+"use strict";
+
+// Stamp the release-time values onto `clients/traycer-cli/src/config.ts` for a
+// production or staging build, then `--restore` back to the source defaults.
+// See ../../scripts/rewrite-config-target.cjs.
+//
+// The OSS build commits its production endpoints AND the host trust root
+// (`hostTrustedPubkeys`) directly in source, so this script no longer rewrites
+// them - `--restore` leaves them untouched. It only stamps the values that
+// genuinely vary per release: `environment`, `version`, `supportedHostVersion`
+// (the exact host this CLI installs by default), and `releaseRepo` (so a
+// forked/relocated build fetches from the repo it publishes to, via
+// RELEASE_REPO), plus the verified host and CLI feed revision floors.
+
+const path = require("node:path");
+const {
+  runConfigTargetCli,
+} = require("../../scripts/rewrite-config-target.cjs");
+const {
+  ClientTargetStampError,
+  PRODUCTION_RELEASE_REPO,
+  resolveReleaseRepoForTarget,
+  targetInputFromArg,
+} = require("../../scripts/release-target-stamp.cjs");
+
+function parseSupportedHostVersion(argv, raw) {
+  const arg = argv.find((item) => item.startsWith("--supported-host-version="));
+  const value =
+    arg === undefined ? raw : arg.slice("--supported-host-version=".length);
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? null : trimmed;
+}
+
+const supportedHostVersion = parseSupportedHostVersion(
+  process.argv,
+  process.env.TRAYCER_SUPPORTED_HOST_VERSION,
+);
+
+const allowUnpinnedHost = process.argv.includes("--allow-unpinned-host");
+const targetArg = process.argv.find((arg) => arg.startsWith("--target="));
+const target =
+  targetArg === undefined ? null : targetArg.slice("--target=".length);
+// `--restore` puts the committed config back and needs no coordinate, so it
+// must not be blocked by a resolution the restore does not use.
+const releaseRepoResult = resolveReleaseRepoForTarget(
+  process.env.TRAYCER_RELEASE_REPO ?? process.env.RELEASE_REPO,
+  target,
+);
+if (!releaseRepoResult.ok && !process.argv.includes("--restore")) {
+  console.error(`[set-deploy-target] ${releaseRepoResult.reason}`);
+  process.exit(2);
+}
+const releaseRepo = releaseRepoResult.ok ? releaseRepoResult.repo : null;
+
+if (
+  !allowUnpinnedHost &&
+  (target === "production" || target === "staging") &&
+  supportedHostVersion === null
+) {
+  console.error(
+    "[set-deploy-target] TRAYCER_SUPPORTED_HOST_VERSION or --supported-host-version=<version> is required for released CLI builds. Pass --allow-unpinned-host only for local dogfood installs that side-load an unsigned host.",
+  );
+  process.exit(2);
+}
+
+let targetInput = null;
+try {
+  if (!process.argv.includes("--restore") && target !== null) {
+    targetInput = targetInputFromArg(
+      process.argv,
+      target,
+      target === "staging",
+      "cli",
+    );
+  }
+} catch (error) {
+  console.error(
+    `[set-deploy-target] ${error instanceof ClientTargetStampError ? error.message : String(error)}`,
+  );
+  process.exit(2);
+}
+
+function readFeedFloor(name) {
+  const flag = `--${name}=`;
+  const arg = process.argv.find((value) => value.startsWith(flag));
+  const releaseTarget = target === "production" || target === "staging";
+  if (process.argv.includes("--restore") || !releaseTarget) return null;
+  const value = arg === undefined ? null : arg.slice(flag.length);
+  if (
+    value === null ||
+    !/^[1-9][0-9]*$/.test(value) ||
+    !Number.isSafeInteger(Number(value))
+  ) {
+    console.error(
+      `[set-deploy-target] FEED_AUTHORITY_FLOOR_REQUIRED: --${name}=<policyRevision> must come from a verified authority read`,
+    );
+    process.exit(2);
+  }
+  return value;
+}
+
+const hostFeedFloor = readFeedFloor("host-feed-floor");
+const cliFeedFloor = readFeedFloor("cli-feed-floor");
+
+const production = {
+  cloud: {
+    authnApiUrl: "https://authn.traycer.ai",
+    cloudUiBaseUrl: "https://traycer.ai",
+  },
+  hostDiscoveryTag: "released-host-versions",
+  cliFeedTag: "cli-manifest",
+};
+
+runConfigTargetCli({
+  sourcePath: path.resolve(__dirname, "..", "src", "config.ts"),
+  stringFields: {
+    releaseCdnBaseUrl: {
+      dev: "https://releases.traycer.ai",
+      staging: "https://releases.dev.traycer.ai",
+      production: "https://releases.traycer.ai",
+    },
+    authnBaseUrl: {
+      dev: production.cloud.authnApiUrl,
+      staging: targetInput === null ? "" : targetInput.cloud.authnApiUrl,
+      production: production.cloud.authnApiUrl,
+    },
+    cloudUiBaseUrl: {
+      dev: production.cloud.cloudUiBaseUrl,
+      staging: targetInput === null ? "" : targetInput.cloud.cloudUiBaseUrl,
+      production: production.cloud.cloudUiBaseUrl,
+    },
+    releaseRepo: {
+      dev: PRODUCTION_RELEASE_REPO,
+      staging: releaseRepo ?? "",
+      production: releaseRepo ?? PRODUCTION_RELEASE_REPO,
+    },
+    hostDiscoveryTag: {
+      dev: production.hostDiscoveryTag,
+      staging: targetInput === null ? "" : targetInput.hostDiscoveryTag,
+      production: production.hostDiscoveryTag,
+    },
+    cliFeedTag: {
+      dev: production.cliFeedTag,
+      staging: targetInput === null ? "" : targetInput.cliFeedTag,
+      production: production.cliFeedTag,
+    },
+  },
+  nullableStringFields: {
+    hostFeedFloor: {
+      dev: null,
+      staging: hostFeedFloor,
+      production: hostFeedFloor,
+    },
+    cliFeedFloor: {
+      dev: null,
+      staging: cliFeedFloor,
+      production: cliFeedFloor,
+    },
+    supportedHostVersion: {
+      dev: null,
+      staging: supportedHostVersion,
+      production: supportedHostVersion,
+    },
+  },
+});

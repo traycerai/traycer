@@ -1,0 +1,21 @@
+dist/
+release/
+node_modules/
+.DS_Store
+*.log
+# Bundled CLI SEA staging - release workflows write the signed/staged
+# binary into a per-arch directory such as
+# `resources/cli/darwin-arm64/`. These directories contain a large
+# signed binary plus a `version.json` and must not be committed. We
+# match arch directories specifically so the explanatory placeholders
+# in `resources/cli/` itself (`.gitkeep`, `README.md`) stay tracked.
+resources/cli/*/
+# Temp fixture dirs created (and normally cleaned up) by the
+# inject-host-launch-agent tests under scripts/prepack/__tests__/ and
+# scripts/prepack/__integration_tests__/.
+.tmp-*/
+.release-target-stamp.json
+resources/bundle/.release-target-uninstall-host-autostart.nsh
+# The staging IAP service-account key, written from the release secret by
+# scripts/set-deploy-target.cjs. Never committed.
+resources/keys/

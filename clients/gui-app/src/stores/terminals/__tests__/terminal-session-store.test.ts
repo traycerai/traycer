@@ -1,0 +1,1750 @@
+import { describe, expect, it, vi } from "vitest";
+import type {
+  TerminalSubscribeClientFrameV17,
+  TerminalSubscribeServerFrame,
+  TerminalSubscribeViewer,
+} from "@traycer/protocol/host/terminal/subscribe";
+import type { TerminalSessionInfo } from "@traycer/protocol/host/terminal/unary-schemas";
+import type { TerminalStreamCallbacks } from "@traycer-clients/shared/host-transport/terminal-stream-client";
+import {
+  createTerminalSessionStore,
+  type TerminalWrite,
+} from "@/stores/terminals/terminal-session-store";
+import { isTerminalCrashExit } from "@/hooks/terminal/use-terminal-crash-notification";
+
+type TerminalSnapshotFrame = Extract<
+  TerminalSubscribeServerFrame,
+  { readonly kind: "snapshot" }
+>;
+type TerminalDataFrame = Extract<
+  TerminalSubscribeServerFrame,
+  { readonly kind: "data" }
+>;
+type TerminalSessionUpdatedFrame = Extract<
+  TerminalSubscribeServerFrame,
+  { readonly kind: "sessionUpdated" }
+>;
+type TerminalExitFrame = Extract<
+  TerminalSubscribeServerFrame,
+  { readonly kind: "exit" }
+>;
+
+function terminalInfoWithSize(cols: number, rows: number): TerminalSessionInfo {
+  return {
+    sessionId: "terminal-1",
+    epicId: "epic-1",
+    sessionKind: "terminal",
+    cwd: "/repo",
+    shellCommand: "zsh",
+    shellArgs: [],
+    cols,
+    rows,
+    status: "running",
+    exitCode: null,
+    createdAt: 1,
+    title: null,
+  };
+}
+
+function snapshot(scrollback: string): TerminalSnapshotFrame {
+  return snapshotWithSize(scrollback, 80, 24);
+}
+
+function snapshotWithSize(
+  scrollback: string,
+  cols: number,
+  rows: number,
+): TerminalSnapshotFrame {
+  return {
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    sessionId: "terminal-1",
+    session: terminalInfoWithSize(cols, rows),
+    scrollback,
+  };
+}
+
+function data(chunk: string): TerminalDataFrame {
+  return {
+    kind: "data",
+    hasBinaryPayload: false,
+    sessionId: "terminal-1",
+    chunk,
+  };
+}
+
+function sessionUpdated(
+  activeProcessName: string | null,
+): TerminalSessionUpdatedFrame {
+  return {
+    kind: "sessionUpdated",
+    hasBinaryPayload: false,
+    sessionId: "terminal-1",
+    session: {
+      ...terminalInfoWithSize(80, 24),
+      activeProcessName,
+    },
+  };
+}
+
+function exit(exitCode: number): TerminalExitFrame {
+  return {
+    kind: "exit",
+    hasBinaryPayload: false,
+    sessionId: "terminal-1",
+    exitCode,
+  };
+}
+
+// A snapshot from a host that negotiated ack-credit support. The renderer
+// gates sending `ack` frames on having seen this confirmed at least once
+// (see `ackCreditSupported` in `terminal-session-store.ts`), so ack-credit
+// tests must send one before exercising the accounting.
+function snapshotWithAckCredit(scrollback: string): TerminalSnapshotFrame {
+  return { ...snapshot(scrollback), ackCreditSupported: true };
+}
+
+// `onSnapshot`/`onData` take the content as a second, separate argument (see
+// `TerminalStreamCallbacks`'s doc comment) so a `@1.2` binary connection can
+// pass a `Uint8Array` instead of reading it off the frame. These test frame
+// builders still carry the content inline for readability, so route through
+// these to derive the second argument automatically.
+function emitSnapshot(
+  callbacks: TerminalStreamCallbacks,
+  frame: TerminalSnapshotFrame,
+): void {
+  callbacks.onSnapshot(frame, frame.scrollback);
+}
+
+function emitData(
+  callbacks: TerminalStreamCallbacks,
+  frame: TerminalDataFrame,
+): void {
+  callbacks.onData(frame, frame.chunk);
+}
+
+function createHarness() {
+  let callbacks: TerminalStreamCallbacks | null = null;
+  const sendAction = vi.fn(
+    (_frame: TerminalSubscribeClientFrameV17) => undefined,
+  );
+  const close = vi.fn();
+  const handle = createTerminalSessionStore({
+    scope: { kind: "epic", epicId: "epic-1" },
+    sessionId: "terminal-1",
+    cols: 80,
+    rows: 24,
+    reattachMode: "fresh",
+    kind: "terminal",
+    viewer: "presentation",
+    streamClientFactory: (streamArgs) => {
+      callbacks = streamArgs.callbacks;
+      return { supportsViewerFrames: () => false, sendAction, close };
+    },
+  });
+  return {
+    handle,
+    callbacks: () => {
+      if (callbacks === null) throw new Error("Expected stream callbacks");
+      return callbacks;
+    },
+    sendAction,
+    close,
+  };
+}
+
+describe("createTerminalSessionStore", () => {
+  it("tags snapshot scrollback (with grid) and live data writes", () => {
+    const harness = createHarness();
+    const writes: TerminalWrite[] = [];
+
+    harness.handle.store.getState().setWriter((write) => {
+      writes.push(write);
+    });
+
+    emitSnapshot(harness.callbacks(), snapshot("\x1b[6n"));
+    emitData(harness.callbacks(), data("live output"));
+
+    expect(writes).toHaveLength(2);
+    expect(writes).toMatchObject([
+      { kind: "snapshot", chunk: "\x1b[6n", cols: 80, rows: 24 },
+      { kind: "live", chunk: "live output" },
+    ]);
+    expect(writes.every((write) => typeof write.onAckable === "function")).toBe(
+      true,
+    );
+  });
+
+  it("preserves write order and the snapshot grid while buffering before xterm registers", () => {
+    const harness = createHarness();
+    const writes: TerminalWrite[] = [];
+
+    emitSnapshot(harness.callbacks(), snapshot("historical output"));
+    emitData(harness.callbacks(), data("live output"));
+    harness.handle.store.getState().setWriter((write) => {
+      writes.push(write);
+    });
+
+    expect(writes).toHaveLength(2);
+    expect(writes).toMatchObject([
+      { kind: "snapshot", chunk: "historical output", cols: 80, rows: 24 },
+      { kind: "live", chunk: "live output" },
+    ]);
+    expect(writes.every((write) => typeof write.onAckable === "function")).toBe(
+      true,
+    );
+  });
+
+  it("adopts exit code and reason from a reattach snapshot of an exited session", () => {
+    const harness = createHarness();
+
+    const base = snapshot("");
+    emitSnapshot(harness.callbacks(), {
+      ...base,
+      session: {
+        ...base.session,
+        status: "exited",
+        exitCode: -1,
+        exitReason: "reaped",
+      },
+    });
+
+    expect(harness.handle.store.getState()).toMatchObject({
+      status: "exited",
+      exitCode: -1,
+      exitReason: "reaped",
+    });
+  });
+
+  it("treats a snapshot missing exitReason (host predating the field) as null", () => {
+    const harness = createHarness();
+
+    const base = snapshot("");
+    emitSnapshot(harness.callbacks(), {
+      ...base,
+      session: { ...base.session, status: "exited", exitCode: 1 },
+    });
+
+    expect(harness.handle.store.getState()).toMatchObject({
+      status: "exited",
+      exitCode: 1,
+      exitReason: null,
+    });
+  });
+
+  it("a live exit frame does not clobber a snapshot-set exitReason (snapshot is authoritative)", () => {
+    const harness = createHarness();
+
+    // Seed a non-null reason via the authoritative snapshot path first...
+    const base = snapshot("");
+    emitSnapshot(harness.callbacks(), {
+      ...base,
+      session: {
+        ...base.session,
+        status: "exited",
+        exitCode: -1,
+        exitReason: "reaped",
+      },
+    });
+
+    // ...then a live exit frame (which carries no reason) must leave it intact.
+    const frame: TerminalExitFrame = {
+      kind: "exit",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      exitCode: 1,
+    };
+    harness.callbacks().onExit(frame);
+
+    expect(harness.handle.store.getState()).toMatchObject({
+      status: "exited",
+      exitCode: 1,
+      exitReason: "reaped",
+    });
+  });
+
+  it("marks the session lost when the stream closes before a snapshot", () => {
+    const harness = createHarness();
+
+    expect(harness.handle.store.getState().status).toBe("creating");
+
+    harness.callbacks().onConnectionStatus("closed", null, null, null);
+
+    expect(harness.handle.store.getState()).toMatchObject({
+      connectionStatus: "closed",
+      snapshotLoaded: false,
+      status: "lost",
+    });
+  });
+
+  it("marks the session 'reaped' (definitive) on a TERMINAL_NOT_FOUND fatal, not the recoverable 'lost'", () => {
+    const harness = createHarness();
+    harness.callbacks().onConnectionStatus("open", null, null, null);
+    emitSnapshot(harness.callbacks(), snapshot(""));
+
+    harness.callbacks().onConnectionStatus(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code: "TERMINAL_NOT_FOUND",
+          reason: "TERMINAL_NOT_FOUND: gone",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      },
+      null,
+      null,
+    );
+
+    expect(harness.handle.store.getState().status).toBe("reaped");
+  });
+
+  it("marks the session the recoverable 'lost' for any other closed reason (plain transport drop)", () => {
+    const harness = createHarness();
+    harness.callbacks().onConnectionStatus("open", null, null, null);
+    emitSnapshot(harness.callbacks(), snapshot(""));
+
+    harness
+      .callbacks()
+      .onConnectionStatus("closed", { kind: "caller" }, null, null);
+
+    expect(harness.handle.store.getState().status).toBe("lost");
+  });
+
+  it("re-flushes a remembered resize after a reconnect snapshot reports stale dimensions", () => {
+    const harness = createHarness();
+
+    harness.callbacks().onConnectionStatus("open", null, null, null);
+    harness.handle.store.getState().requestResize(105, 91);
+    expect(harness.sendAction).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        kind: "resize",
+        cols: 105,
+        rows: 91,
+      }),
+    );
+
+    harness.callbacks().onResized({
+      kind: "resized",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      cols: 105,
+      rows: 91,
+    });
+    harness.sendAction.mockClear();
+
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
+    harness.callbacks().onConnectionStatus("open", null, null, null);
+    expect(harness.sendAction).not.toHaveBeenCalled();
+
+    emitSnapshot(harness.callbacks(), snapshotWithSize("", 80, 24));
+
+    expect(harness.handle.store.getState()).toMatchObject({
+      requestedCols: 105,
+      requestedRows: 91,
+      effectiveCols: 80,
+      effectiveRows: 24,
+    });
+    expect(harness.sendAction).toHaveBeenCalledTimes(1);
+    expect(harness.sendAction).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        kind: "resize",
+        cols: 105,
+        rows: 91,
+      }),
+    );
+  });
+
+  describe("terminal action protocol (T13): replay + honest input-lost", () => {
+    it("replays an unacked write verbatim (same clientActionId) after a reconnect", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null, null, null);
+      emitSnapshot(harness.callbacks(), snapshot(""));
+
+      const clientActionId = harness.handle.store
+        .getState()
+        .writeInput("echo hi\r");
+      expect(clientActionId).not.toBeNull();
+      harness.sendAction.mockClear();
+
+      // Transport blip: the actionAck never arrived before the drop.
+      harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
+      harness.callbacks().onConnectionStatus("open", null, null, null);
+
+      expect(harness.sendAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "write",
+          clientActionId,
+          data: "echo hi\r",
+        }),
+      );
+      // Still pending until the host (re-)acks it.
+      expect(
+        Object.keys(harness.handle.store.getState().pendingActions),
+      ).toContain(clientActionId);
+    });
+
+    it("does not replay a write once its actionAck has landed", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null, null, null);
+      emitSnapshot(harness.callbacks(), snapshot(""));
+
+      const clientActionId = harness.handle.store
+        .getState()
+        .writeInput("echo hi\r");
+      if (clientActionId === null) throw new Error("expected an action id");
+      harness.callbacks().onActionAck({
+        kind: "actionAck",
+        hasBinaryPayload: false,
+        sessionId: "terminal-1",
+        clientActionId,
+        action: "write",
+        status: "accepted",
+        reason: null,
+        code: null,
+      });
+      harness.sendAction.mockClear();
+
+      harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
+      harness.callbacks().onConnectionStatus("open", null, null, null);
+
+      expect(harness.sendAction).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "write", clientActionId }),
+      );
+    });
+
+    it("drops a stale pending resize on reconnect instead of replaying it verbatim", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null, null, null);
+      emitSnapshot(harness.callbacks(), snapshotWithSize("", 80, 24));
+
+      const resizeId = harness.handle.store.getState().requestResize(120, 40);
+      expect(resizeId).not.toBeNull();
+      harness.sendAction.mockClear();
+
+      harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
+      harness.callbacks().onConnectionStatus("open", null, null, null);
+      // A fresh snapshot reports the still-stale effective size, so
+      // `flushRequestedResize` reissues its own fresh resize action.
+      emitSnapshot(harness.callbacks(), snapshotWithSize("", 80, 24));
+
+      // The OLD resize id must never be replayed verbatim...
+      expect(harness.sendAction).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "resize", clientActionId: resizeId }),
+      );
+      // ...only a fresh one reflecting the current requested size.
+      expect(harness.sendAction).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "resize", cols: 120, rows: 40 }),
+      );
+      expect(
+        Object.keys(harness.handle.store.getState().pendingActions),
+      ).not.toContain(resizeId);
+    });
+
+    it("surfaces an honest 'input lost' signal when the pending-action ring evicts an unacked write", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null, null, null);
+      emitSnapshot(harness.callbacks(), snapshot(""));
+
+      expect(harness.handle.store.getState().lastInputLostAt).toBeNull();
+
+      // Never ack anything - every write stays pending until the ring's
+      // MAX_PENDING_ACTIONS (64) cap forces an eviction.
+      for (let i = 0; i < 65; i += 1) {
+        harness.handle.store.getState().writeInput(`keystroke-${i}`);
+      }
+
+      expect(harness.handle.store.getState().lastInputLostAt).not.toBeNull();
+      expect(
+        Object.keys(harness.handle.store.getState().pendingActions),
+      ).toHaveLength(64);
+    });
+  });
+
+  it("stashes a resize arriving while the session is lost and flushes it after the reconnect snapshot", () => {
+    const harness = createHarness();
+
+    harness.callbacks().onConnectionStatus("open", null, null, null);
+    emitSnapshot(harness.callbacks(), snapshotWithSize("", 80, 24));
+    harness.sendAction.mockClear();
+
+    // Stream drops -> "lost". A container resize landing now (pane relayout
+    // while disconnected) must be remembered, not dropped: the xterm engine
+    // records every report in its own dedupe before the store sees it, so a
+    // drop here is never re-offered and the session stays latched at the
+    // pre-disconnect grid after the reconnect.
+    harness.callbacks().onConnectionStatus("closed", null, null, null);
+    expect(harness.handle.store.getState().status).toBe("lost");
+    const actionId = harness.handle.store.getState().requestResize(132, 40);
+    expect(actionId).toBeNull();
+    expect(harness.sendAction).not.toHaveBeenCalled();
+    expect(harness.handle.store.getState()).toMatchObject({
+      requestedCols: 132,
+      requestedRows: 40,
+    });
+
+    // Reconnect: on "open" the session is still "lost", so nothing flushes
+    // yet; the snapshot restores it to running and flushes the stashed size.
+    harness.callbacks().onConnectionStatus("open", null, null, null);
+    expect(harness.sendAction).not.toHaveBeenCalled();
+    emitSnapshot(harness.callbacks(), snapshotWithSize("", 80, 24));
+    expect(harness.sendAction).toHaveBeenCalledTimes(1);
+    expect(harness.sendAction).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        kind: "resize",
+        cols: 132,
+        rows: 40,
+      }),
+    );
+  });
+
+  it("re-dispatches a repeated resize while the host never adopted it, and dedupes once it did", () => {
+    const harness = createHarness();
+
+    harness.callbacks().onConnectionStatus("open", null, null, null);
+    emitSnapshot(harness.callbacks(), snapshotWithSize("", 80, 24));
+    harness.sendAction.mockClear();
+
+    // First report: dispatched, but suppose the frame was lost in flight -
+    // the host's grid never becomes 132x40.
+    harness.handle.store.getState().requestResize(132, 40);
+    expect(harness.sendAction).toHaveBeenCalledTimes(1);
+
+    // The engine's latch self-heal re-reports the SAME size. Deduping on
+    // `requested` alone would strand it; it must reach the wire to retry.
+    harness.handle.store.getState().requestResize(132, 40);
+    expect(harness.sendAction).toHaveBeenCalledTimes(2);
+
+    // Once the host adopts the size (echo), the same request is redundant
+    // and dedupes again.
+    harness.callbacks().onResized({
+      kind: "resized",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      cols: 132,
+      rows: 40,
+    });
+    expect(harness.handle.store.getState().requestResize(132, 40)).toBeNull();
+    expect(harness.sendAction).toHaveBeenCalledTimes(2);
+  });
+
+  it("stores active process metadata from session updates", () => {
+    const harness = createHarness();
+
+    emitSnapshot(harness.callbacks(), snapshot(""));
+    harness.callbacks().onSessionUpdated(sessionUpdated("vim"));
+
+    expect(harness.handle.store.getState()).toMatchObject({
+      status: "running",
+      title: null,
+      activeProcessName: "vim",
+    });
+  });
+
+  it("stores live current-directory metadata from v1.5 session updates", () => {
+    const harness = createHarness();
+
+    emitSnapshot(harness.callbacks(), snapshot(""));
+    harness.callbacks().onSessionUpdated({
+      kind: "sessionUpdated",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      session: {
+        sessionId: "terminal-1",
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionKind: "terminal",
+        cwd: "/repo",
+        currentCwd: "/repo/packages/gui",
+        shellCommand: "zsh",
+        shellArgs: [],
+        cols: 80,
+        rows: 24,
+        status: "running",
+        exitCode: null,
+        createdAt: 1,
+        title: null,
+        activeProcessName: null,
+      },
+    });
+
+    expect(harness.handle.store.getState().currentCwd).toBe(
+      "/repo/packages/gui",
+    );
+
+    harness.callbacks().onSessionUpdated(sessionUpdated("vim"));
+    expect(harness.handle.store.getState().currentCwd).toBe(
+      "/repo/packages/gui",
+    );
+
+    harness.callbacks().onSessionUpdated({
+      kind: "sessionUpdated",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      session: {
+        sessionId: "terminal-1",
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionKind: "terminal",
+        cwd: "/repo",
+        currentCwd: "",
+        shellCommand: "zsh",
+        shellArgs: [],
+        cols: 80,
+        rows: 24,
+        status: "running",
+        exitCode: null,
+        createdAt: 1,
+        title: null,
+        activeProcessName: null,
+      },
+    });
+
+    expect(harness.handle.store.getState().currentCwd).toBeNull();
+  });
+
+  it("clears active process metadata when the session exits", () => {
+    const harness = createHarness();
+
+    emitSnapshot(harness.callbacks(), snapshot(""));
+    harness.callbacks().onSessionUpdated(sessionUpdated("vim"));
+    harness.callbacks().onExit(exit(0));
+
+    expect(harness.handle.store.getState()).toMatchObject({
+      status: "exited",
+      exitCode: 0,
+      activeProcessName: null,
+    });
+  });
+
+  it("keeps a live-delivered reaped exit reason so the kill is not a crash", () => {
+    const harness = createHarness();
+
+    emitSnapshot(harness.callbacks(), snapshot(""));
+    // The host's setup-terminal reap kills a session its canvas tile is
+    // actively subscribed to: `handlePtyExit` broadcasts a `sessionUpdated`
+    // frame carrying the reason, then a reasonless `exit` frame. The store
+    // must keep the reason across both, or the tile reports the reap as
+    // "exited unexpectedly".
+    harness.callbacks().onSessionUpdated({
+      kind: "sessionUpdated",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      session: {
+        ...terminalInfoWithSize(80, 24),
+        status: "exited",
+        exitCode: -1,
+        exitReason: "reaped",
+      },
+    });
+    harness.callbacks().onExit(exit(-1));
+
+    const state = harness.handle.store.getState();
+    expect(state).toMatchObject({
+      status: "exited",
+      exitCode: -1,
+      exitReason: "reaped",
+    });
+    expect(
+      isTerminalCrashExit({
+        status: state.status,
+        exitCode: state.exitCode,
+        exitReason: state.exitReason,
+        isExitSuppressed: () => false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not clobber a learned exit reason with a reason-less session update", () => {
+    const harness = createHarness();
+
+    emitSnapshot(harness.callbacks(), snapshot(""));
+    harness.callbacks().onSessionUpdated({
+      kind: "sessionUpdated",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      session: {
+        ...terminalInfoWithSize(80, 24),
+        status: "exited",
+        exitCode: -1,
+        exitReason: "killed",
+      },
+    });
+    // e.g. from a host predating the field, or a frame built without it.
+    harness.callbacks().onSessionUpdated({
+      kind: "sessionUpdated",
+      hasBinaryPayload: false,
+      sessionId: "terminal-1",
+      session: {
+        ...terminalInfoWithSize(80, 24),
+        status: "exited",
+        exitCode: -1,
+      },
+    });
+
+    expect(harness.handle.store.getState().exitReason).toBe("killed");
+  });
+
+  describe("ack-credit (terminal.subscribe@1.1)", () => {
+    it("never sends an ack frame until a snapshot confirms ack-credit support", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null, null, null);
+      // Old-host-style snapshot: no `ackCreditSupported` field at all, so
+      // the renderer must never send an `ack` frame - a `1.0` host's frame
+      // schema can't parse "ack" and would just log malformed-frame warnings.
+      emitSnapshot(harness.callbacks(), snapshot(""));
+      const writes: TerminalWrite[] = [];
+      harness.handle.store.getState().setWriter((write) => {
+        writes.push(write);
+      });
+
+      emitData(harness.callbacks(), data("x".repeat(64 * 1024)));
+      const liveWrites = writes.filter((write) => write.kind === "live");
+      liveWrites[0].onAckable();
+
+      expect(harness.sendAction).not.toHaveBeenCalled();
+    });
+
+    it("flushes a coalesced ack once accumulated bytes cross the coalesce threshold", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null, null, null);
+      emitSnapshot(harness.callbacks(), snapshotWithAckCredit(""));
+      const writes: TerminalWrite[] = [];
+      harness.handle.store.getState().setWriter((write) => {
+        writes.push(write);
+      });
+
+      const bigChunk = "x".repeat(64 * 1024);
+      emitData(harness.callbacks(), data(bigChunk));
+      const liveWrites = writes.filter((write) => write.kind === "live");
+      expect(liveWrites).toHaveLength(1);
+
+      // Simulate xterm's own `write(data, callback)` firing once parsed.
+      liveWrites[0].onAckable();
+
+      expect(harness.sendAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "ack",
+          sessionId: "terminal-1",
+          bytes: 64 * 1024,
+        }),
+      );
+    });
+
+    it("coalesces multiple small acks and flushes them together after the debounce window", () => {
+      vi.useFakeTimers();
+      try {
+        const harness = createHarness();
+        harness.callbacks().onConnectionStatus("open", null, null, null);
+        emitSnapshot(harness.callbacks(), snapshotWithAckCredit(""));
+        const writes: TerminalWrite[] = [];
+        harness.handle.store.getState().setWriter((write) => {
+          writes.push(write);
+        });
+
+        emitData(harness.callbacks(), data("a".repeat(1000)));
+        emitData(harness.callbacks(), data("b".repeat(2000)));
+        const liveWrites = writes.filter((write) => write.kind === "live");
+        liveWrites[0].onAckable();
+        liveWrites[1].onAckable();
+
+        expect(harness.sendAction).not.toHaveBeenCalled();
+
+        vi.advanceTimersByTime(50);
+
+        expect(harness.sendAction).toHaveBeenCalledTimes(1);
+        expect(harness.sendAction).toHaveBeenCalledWith(
+          expect.objectContaining({ kind: "ack", bytes: 3000 }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("credits bytes immediately when the pre-writer queue evicts a write, without ever reaching a writer", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null, null, null);
+      emitSnapshot(harness.callbacks(), snapshotWithAckCredit(""));
+      // No writer registered - both writes land in the pre-writer queue.
+
+      // Exceeds MAX_PENDING_BYTES (1 MiB) on the second push, forcing the
+      // queue to evict the first (oldest) write.
+      emitData(harness.callbacks(), data("x".repeat(700 * 1024)));
+      emitData(harness.callbacks(), data("y".repeat(700 * 1024)));
+
+      // The evicted write's bytes are credited immediately - it will never
+      // reach a writer to fire its own `onAckable`.
+      expect(harness.sendAction).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "ack", bytes: 700 * 1024 }),
+      );
+    });
+
+    it("clears pending ack accounting when the connection drops before the coalesce window fires", () => {
+      vi.useFakeTimers();
+      try {
+        const harness = createHarness();
+        harness.callbacks().onConnectionStatus("open", null, null, null);
+        emitSnapshot(harness.callbacks(), snapshotWithAckCredit(""));
+        const writes: TerminalWrite[] = [];
+        harness.handle.store.getState().setWriter((write) => {
+          writes.push(write);
+        });
+
+        emitData(harness.callbacks(), data("small chunk"));
+        writes.filter((write) => write.kind === "live")[0].onAckable();
+
+        harness
+          .callbacks()
+          .onConnectionStatus("reconnecting", null, null, null);
+        vi.advanceTimersByTime(1000);
+
+        expect(harness.sendAction).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps ack accounting across a held reconnect: credit earned and timer fired during the hold is sent once on the continued open", () => {
+      vi.useFakeTimers();
+      try {
+        const harness = createHarness();
+        harness.callbacks().onConnectionStatus("open", null, null, null);
+        emitSnapshot(harness.callbacks(), snapshotWithAckCredit(""));
+        const writes: TerminalWrite[] = [];
+        harness.handle.store.getState().setWriter((write) => {
+          writes.push(write);
+        });
+
+        // One write parsed (timer armed) before the hold, one parsed during it.
+        emitData(harness.callbacks(), data("before"));
+        emitData(harness.callbacks(), data("during"));
+        const liveWrites = writes.filter((write) => write.kind === "live");
+        liveWrites[0].onAckable();
+
+        harness
+          .callbacks()
+          .onConnectionStatus("reconnecting", null, null, "held");
+        liveWrites[1].onAckable();
+        // The coalesce window elapses while the stream is not open: nothing
+        // may be sent, and the credit must not be dropped.
+        vi.advanceTimersByTime(1000);
+        expect(harness.sendAction).not.toHaveBeenCalled();
+
+        // No snapshot follows a continued open; the open itself pays the debt.
+        harness.callbacks().onConnectionStatus("open", null, null, "continued");
+        vi.advanceTimersByTime(1000);
+
+        expect(harness.sendAction).toHaveBeenCalledTimes(1);
+        expect(harness.sendAction).toHaveBeenCalledWith(
+          expect.objectContaining({
+            kind: "ack",
+            bytes: "before".length + "during".length,
+          }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("drops ack accounting when a hold ends in a null reconnect", () => {
+      vi.useFakeTimers();
+      try {
+        const harness = createHarness();
+        harness.callbacks().onConnectionStatus("open", null, null, null);
+        emitSnapshot(harness.callbacks(), snapshotWithAckCredit(""));
+        const writes: TerminalWrite[] = [];
+        harness.handle.store.getState().setWriter((write) => {
+          writes.push(write);
+        });
+
+        emitData(harness.callbacks(), data("lost chunk"));
+        const lostWrite = writes.filter((write) => write.kind === "live")[0];
+
+        harness
+          .callbacks()
+          .onConnectionStatus("reconnecting", null, null, "held");
+        harness
+          .callbacks()
+          .onConnectionStatus("reconnecting", null, null, null);
+        harness.callbacks().onConnectionStatus("open", null, null, null);
+        emitSnapshot(harness.callbacks(), snapshotWithAckCredit(""));
+        lostWrite.onAckable();
+        vi.advanceTimersByTime(1000);
+
+        expect(harness.sendAction).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("ignores a stale onAckable callback that fires after a reconnect (late xterm write callback)", () => {
+      vi.useFakeTimers();
+      try {
+        const harness = createHarness();
+        harness.callbacks().onConnectionStatus("open", null, null, null);
+        emitSnapshot(harness.callbacks(), snapshotWithAckCredit(""));
+        const writes: TerminalWrite[] = [];
+        harness.handle.store.getState().setWriter((write) => {
+          writes.push(write);
+        });
+
+        // Written before the drop; xterm's own write callback for this
+        // chunk hasn't fired yet.
+        emitData(harness.callbacks(), data("stale chunk"));
+        const staleWrite = writes.filter((write) => write.kind === "live")[0];
+
+        // Reconnect: the host mints a fresh subscriber with unackedBytes
+        // reset to 0, and its own snapshot re-confirms ack-credit support -
+        // isolating this test to the generation check, not the capability
+        // gate, as the reason the stale callback is ignored.
+        harness
+          .callbacks()
+          .onConnectionStatus("reconnecting", null, null, null);
+        harness.callbacks().onConnectionStatus("open", null, null, null);
+        emitSnapshot(harness.callbacks(), snapshotWithAckCredit(""));
+
+        // The stale write's parse-completion callback finally fires late,
+        // after the reconnect - it must not start a new coalescing window
+        // or ever be acked against the fresh subscriber.
+        staleWrite.onAckable();
+        vi.advanceTimersByTime(1000);
+
+        expect(harness.sendAction).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("binary framing (terminal.subscribe@1.2)", () => {
+    function binarySnapshotFrame(): Extract<
+      TerminalSubscribeServerFrame,
+      { readonly kind: "binarySnapshot" }
+    > {
+      return {
+        kind: "binarySnapshot",
+        hasBinaryPayload: true,
+        sessionId: "terminal-1",
+        session: terminalInfoWithSize(80, 24),
+      };
+    }
+
+    function binaryDataFrame(): Extract<
+      TerminalSubscribeServerFrame,
+      { readonly kind: "binaryData" }
+    > {
+      return {
+        kind: "binaryData",
+        hasBinaryPayload: true,
+        sessionId: "terminal-1",
+      };
+    }
+
+    it("passes Uint8Array content straight through to the writer without decoding it", () => {
+      const harness = createHarness();
+      const writes: TerminalWrite[] = [];
+      harness.handle.store.getState().setWriter((write) => {
+        writes.push(write);
+      });
+
+      const scrollbackBytes = new TextEncoder().encode("hello");
+      harness.callbacks().onSnapshot(binarySnapshotFrame(), scrollbackBytes);
+      const chunkBytes = new TextEncoder().encode("world");
+      harness.callbacks().onData(binaryDataFrame(), chunkBytes);
+
+      expect(writes).toHaveLength(2);
+      expect(writes[0]).toMatchObject({
+        kind: "snapshot",
+        chunk: scrollbackBytes,
+      });
+      expect(writes[1]).toMatchObject({ kind: "live", chunk: chunkBytes });
+    });
+
+    it("treats a binarySnapshot as confirming ack-credit support with no explicit field", () => {
+      const harness = createHarness();
+      harness.callbacks().onConnectionStatus("open", null, null, null);
+      harness.callbacks().onSnapshot(binarySnapshotFrame(), new Uint8Array());
+      const writes: TerminalWrite[] = [];
+      harness.handle.store.getState().setWriter((write) => {
+        writes.push(write);
+      });
+
+      harness.callbacks().onData(binaryDataFrame(), new Uint8Array(64 * 1024));
+      const liveWrites = writes.filter((write) => write.kind === "live");
+      liveWrites[0].onAckable();
+
+      expect(harness.sendAction).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "ack", bytes: 64 * 1024 }),
+      );
+    });
+
+    it("accounts ack-credit bytes as UTF-8 byte length, not UTF-16 string length", () => {
+      vi.useFakeTimers();
+      try {
+        const harness = createHarness();
+        harness.callbacks().onConnectionStatus("open", null, null, null);
+        harness.callbacks().onSnapshot(binarySnapshotFrame(), new Uint8Array());
+        const writes: TerminalWrite[] = [];
+        harness.handle.store.getState().setWriter((write) => {
+          writes.push(write);
+        });
+
+        // "héllo" is 5 UTF-16 code units but 6 UTF-8 bytes (é is 2 bytes) -
+        // discriminates byteLength accounting from a leftover .length mistake.
+        const chunkBytes = new TextEncoder().encode("héllo");
+        expect(chunkBytes.byteLength).toBe(6);
+        harness.callbacks().onData(binaryDataFrame(), chunkBytes);
+        const liveWrites = writes.filter((write) => write.kind === "live");
+        liveWrites[0].onAckable();
+        vi.advanceTimersByTime(50);
+
+        expect(harness.sendAction).toHaveBeenCalledWith(
+          expect.objectContaining({ kind: "ack", bytes: 6 }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("viewer intent (terminal.subscribe@1.6)", () => {
+    it("opens its first stream as the presentation intent it was created with", () => {
+      const viewers: TerminalSubscribeViewer[] = [];
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal-agent",
+        viewer: "presentation",
+        streamClientFactory: (streamArgs) => {
+          viewers.push(streamArgs.viewer);
+          return {
+            supportsViewerFrames: () => false,
+            sendAction: () => undefined,
+            close: () => undefined,
+          };
+        },
+      });
+
+      expect(viewers).toEqual(["presentation"]);
+      expect(handle.store.getState().viewer).toBe("presentation");
+      handle.dispose();
+    });
+
+    it("reopens the stream on viewer change without mapping the old close to lost", () => {
+      const viewers: TerminalSubscribeViewer[] = [];
+      let callbacks: TerminalStreamCallbacks | null = null;
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal-agent",
+        viewer: "presentation",
+        streamClientFactory: (streamArgs) => {
+          callbacks = streamArgs.callbacks;
+          viewers.push(streamArgs.viewer);
+          return {
+            supportsViewerFrames: () => false,
+            sendAction: () => undefined,
+            close: () => {
+              // Production TerminalStreamClient.close() reports closed.
+              streamArgs.callbacks.onConnectionStatus(
+                "closed",
+                {
+                  kind: "caller",
+                },
+                null,
+                null,
+              );
+            },
+          };
+        },
+      });
+      const opened = (): TerminalStreamCallbacks => {
+        if (callbacks === null) throw new Error("Expected stream callbacks");
+        return callbacks;
+      };
+      opened().onConnectionStatus("open", null, null, null);
+      emitSnapshot(opened(), snapshot(""));
+      expect(handle.store.getState()).toMatchObject({
+        status: "running",
+        connectionStatus: "open",
+        viewer: "presentation",
+      });
+
+      handle.store.getState().setViewer("cache");
+
+      expect(viewers).toEqual(["presentation", "cache"]);
+      expect(handle.store.getState()).toMatchObject({
+        status: "running",
+        connectionStatus: "open",
+        viewer: "cache",
+      });
+
+      handle.store.getState().setViewer("presentation");
+      expect(viewers).toEqual(["presentation", "cache", "presentation"]);
+      expect(handle.store.getState().viewer).toBe("presentation");
+      handle.dispose();
+    });
+
+    it("does not reopen when setViewer is given the current intent", () => {
+      const viewers: TerminalSubscribeViewer[] = [];
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal",
+        viewer: "presentation",
+        streamClientFactory: (streamArgs) => {
+          viewers.push(streamArgs.viewer);
+          return {
+            supportsViewerFrames: () => false,
+            sendAction: () => undefined,
+            close: () => undefined,
+          };
+        },
+      });
+
+      handle.store.getState().setViewer("presentation");
+      expect(viewers).toEqual(["presentation"]);
+      handle.dispose();
+    });
+
+    it("forwards an empty replacement snapshot after a viewer reopen so a retained engine can reset", () => {
+      const writes: TerminalWrite[] = [];
+      let callbacks: TerminalStreamCallbacks | null = null;
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal-agent",
+        viewer: "presentation",
+        streamClientFactory: (streamArgs) => {
+          callbacks = streamArgs.callbacks;
+          return {
+            supportsViewerFrames: () => false,
+            sendAction: () => undefined,
+            close: () => {
+              streamArgs.callbacks.onConnectionStatus(
+                "closed",
+                {
+                  kind: "caller",
+                },
+                null,
+                null,
+              );
+            },
+          };
+        },
+      });
+      const opened = (): TerminalStreamCallbacks => {
+        if (callbacks === null) throw new Error("Expected stream callbacks");
+        return callbacks;
+      };
+      handle.store.getState().setWriter((write) => {
+        writes.push(write);
+      });
+      opened().onConnectionStatus("open", null, null, null);
+      emitSnapshot(opened(), snapshot("stale data"));
+      expect(writes).toMatchObject([
+        { kind: "snapshot", chunk: "stale data", cols: 80, rows: 24 },
+      ]);
+
+      // Lease-free keep-warm reopens as cache; the xterm engine is retained.
+      handle.store.getState().setViewer("cache");
+      opened().onConnectionStatus("open", null, null, null);
+      // Host serializes a cleared screen to an empty string. The store must
+      // still deliver a snapshot write so writerProxy can RIS-reset.
+      emitSnapshot(opened(), snapshot(""));
+
+      expect(writes).toHaveLength(2);
+      expect(writes[1]).toMatchObject({
+        kind: "snapshot",
+        chunk: "",
+        cols: 80,
+        rows: 24,
+      });
+      handle.dispose();
+    });
+
+    it("queues an empty replacement snapshot until a retained engine re-registers its writer", () => {
+      const writes: TerminalWrite[] = [];
+      let callbacks: TerminalStreamCallbacks | null = null;
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal-agent",
+        viewer: "presentation",
+        streamClientFactory: (streamArgs) => {
+          callbacks = streamArgs.callbacks;
+          return {
+            supportsViewerFrames: () => false,
+            sendAction: () => undefined,
+            close: () => {
+              streamArgs.callbacks.onConnectionStatus(
+                "closed",
+                {
+                  kind: "caller",
+                },
+                null,
+                null,
+              );
+            },
+          };
+        },
+      });
+      const opened = (): TerminalStreamCallbacks => {
+        if (callbacks === null) throw new Error("Expected stream callbacks");
+        return callbacks;
+      };
+      handle.store.getState().setWriter((write) => {
+        writes.push(write);
+      });
+      opened().onConnectionStatus("open", null, null, null);
+      emitSnapshot(opened(), snapshot("stale data"));
+
+      handle.store.getState().setViewer("cache");
+      // Tile unmounted, engine kept warm: writer gone, empty snapshot arrives.
+      handle.store.getState().setWriter(null);
+      opened().onConnectionStatus("open", null, null, null);
+      emitSnapshot(opened(), snapshot(""));
+      expect(writes).toHaveLength(1);
+
+      handle.store.getState().setWriter((write) => {
+        writes.push(write);
+      });
+      expect(writes).toHaveLength(2);
+      expect(writes[1]).toMatchObject({
+        kind: "snapshot",
+        chunk: "",
+        cols: 80,
+        rows: 24,
+      });
+      handle.dispose();
+    });
+
+    it("does not attach a new stream when the session is already dead", () => {
+      const viewers: TerminalSubscribeViewer[] = [];
+      let callbacks: TerminalStreamCallbacks | null = null;
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal-agent",
+        viewer: "presentation",
+        streamClientFactory: (streamArgs) => {
+          callbacks = streamArgs.callbacks;
+          viewers.push(streamArgs.viewer);
+          return {
+            supportsViewerFrames: () => false,
+            sendAction: () => undefined,
+            close: () => undefined,
+          };
+        },
+      });
+      const opened = (): TerminalStreamCallbacks => {
+        if (callbacks === null) throw new Error("Expected stream callbacks");
+        return callbacks;
+      };
+      opened().onConnectionStatus("closed", { kind: "caller" }, null, null);
+      expect(handle.store.getState().status).toBe("lost");
+
+      handle.store.getState().setViewer("cache");
+      expect(viewers).toEqual(["presentation"]);
+      expect(handle.store.getState().viewer).toBe("cache");
+      handle.dispose();
+    });
+  });
+  describe("viewer intent restated on the live stream (terminal.subscribe@1.7)", () => {
+    function createViewerHarness(viewer: TerminalSubscribeViewer) {
+      const viewers: TerminalSubscribeViewer[] = [];
+      const frames: TerminalSubscribeClientFrameV17[] = [];
+      let callbacks: TerminalStreamCallbacks | null = null;
+      const factory = vi.fn();
+      const close = vi.fn();
+      const handle = createTerminalSessionStore({
+        scope: { kind: "epic", epicId: "epic-1" },
+        sessionId: "terminal-1",
+        cols: 80,
+        rows: 24,
+        reattachMode: "fresh",
+        kind: "terminal-agent",
+        viewer,
+        streamClientFactory: (streamArgs) => {
+          factory();
+          callbacks = streamArgs.callbacks;
+          viewers.push(streamArgs.viewer);
+          return {
+            supportsViewerFrames: () => false,
+            sendAction: (frame) => {
+              frames.push(frame);
+            },
+            close: () => {
+              close();
+              // Production TerminalStreamClient.close() reports closed.
+              streamArgs.callbacks.onConnectionStatus(
+                "closed",
+                {
+                  kind: "caller",
+                },
+                null,
+                null,
+              );
+            },
+          };
+        },
+      });
+      return {
+        handle,
+        viewers,
+        frames,
+        factory,
+        close,
+        opened: (): TerminalStreamCallbacks => {
+          if (callbacks === null) throw new Error("Expected stream callbacks");
+          return callbacks;
+        },
+      };
+    }
+
+    function viewerFrame(
+      viewer: TerminalSubscribeViewer,
+    ): TerminalSubscribeClientFrameV17 {
+      return {
+        kind: "viewer",
+        hasBinaryPayload: false,
+        sessionId: "terminal-1",
+        viewer,
+      };
+    }
+
+    it("opens its first stream as cache when created as cache, with no viewer frame", () => {
+      const harness = createViewerHarness("cache");
+
+      expect(harness.viewers).toEqual(["cache"]);
+      expect(harness.factory).toHaveBeenCalledTimes(1);
+      expect(harness.handle.store.getState().viewer).toBe("cache");
+      expect(harness.frames).toEqual([]);
+      harness.handle.dispose();
+    });
+
+    it("restates the intent as a viewer frame without closing or reopening the stream", () => {
+      const harness = createViewerHarness("presentation");
+      harness.opened().onConnectionStatus("open", null, null, null);
+      emitSnapshot(harness.opened(), snapshot(""));
+      expect(harness.handle.store.getState()).toMatchObject({
+        status: "running",
+        connectionStatus: "open",
+        viewer: "presentation",
+      });
+
+      harness.handle.store.getState().restateViewer("cache");
+
+      expect(harness.frames).toEqual([viewerFrame("cache")]);
+      expect(harness.handle.store.getState()).toMatchObject({
+        status: "running",
+        connectionStatus: "open",
+        viewer: "cache",
+      });
+      expect(harness.factory).toHaveBeenCalledTimes(1);
+      expect(harness.close).not.toHaveBeenCalled();
+      expect(harness.viewers).toEqual(["presentation"]);
+
+      harness.handle.store.getState().restateViewer("presentation");
+
+      expect(harness.frames).toEqual([
+        viewerFrame("cache"),
+        viewerFrame("presentation"),
+      ]);
+      expect(harness.handle.store.getState().viewer).toBe("presentation");
+      expect(harness.factory).toHaveBeenCalledTimes(1);
+      expect(harness.close).not.toHaveBeenCalled();
+      harness.handle.dispose();
+    });
+
+    it("hands the client the intent while the stream is not open yet", () => {
+      const harness = createViewerHarness("presentation");
+      expect(harness.handle.store.getState().connectionStatus).toBe(
+        "connecting",
+      );
+
+      harness.handle.store.getState().restateViewer("cache");
+
+      // The store does not gate on the connection: the client holds the frame
+      // and its next subscribe declares the intent.
+      expect(harness.frames).toEqual([viewerFrame("cache")]);
+      expect(harness.factory).toHaveBeenCalledTimes(1);
+      harness.handle.dispose();
+    });
+
+    it("is a no-op when restating the current intent", () => {
+      const harness = createViewerHarness("presentation");
+      harness.opened().onConnectionStatus("open", null, null, null);
+      emitSnapshot(harness.opened(), snapshot(""));
+
+      harness.handle.store.getState().restateViewer("presentation");
+
+      expect(harness.frames).toEqual([]);
+      expect(harness.factory).toHaveBeenCalledTimes(1);
+      expect(harness.close).not.toHaveBeenCalled();
+      expect(harness.handle.store.getState().viewer).toBe("presentation");
+
+      harness.handle.store.getState().restateViewer("cache");
+      harness.handle.store.getState().restateViewer("cache");
+      expect(harness.frames).toEqual([viewerFrame("cache")]);
+      harness.handle.dispose();
+    });
+
+    it("records the intent but sends nothing once the session is already dead", () => {
+      const harness = createViewerHarness("presentation");
+      harness
+        .opened()
+        .onConnectionStatus("closed", { kind: "caller" }, null, null);
+      expect(harness.handle.store.getState().status).toBe("lost");
+
+      harness.handle.store.getState().restateViewer("cache");
+
+      expect(harness.handle.store.getState().viewer).toBe("cache");
+      expect(harness.frames).toEqual([]);
+      expect(harness.factory).toHaveBeenCalledTimes(1);
+      harness.handle.dispose();
+    });
+
+    it("still reopens on setViewer, and a reopen opens with the intent last stated", () => {
+      const harness = createViewerHarness("presentation");
+      harness.opened().onConnectionStatus("open", null, null, null);
+      emitSnapshot(harness.opened(), snapshot(""));
+
+      // Stated on the live stream: no reopen.
+      harness.handle.store.getState().restateViewer("cache");
+      expect(harness.viewers).toEqual(["presentation"]);
+
+      // A lease change goes through setViewer, which reopens with its value.
+      harness.handle.store.getState().setViewer("presentation");
+
+      expect(harness.factory).toHaveBeenCalledTimes(2);
+      expect(harness.close).toHaveBeenCalledTimes(1);
+      expect(harness.viewers).toEqual(["presentation", "presentation"]);
+      expect(harness.handle.store.getState().viewer).toBe("presentation");
+      // The reopened stream's open request carries the intent; no frame is
+      // sent for it.
+      expect(harness.frames).toEqual([viewerFrame("cache")]);
+
+      // setViewer to the intent already stated is the no-op it always was.
+      harness.handle.store.getState().restateViewer("cache");
+      harness.handle.store.getState().setViewer("cache");
+      expect(harness.factory).toHaveBeenCalledTimes(2);
+      harness.handle.dispose();
+    });
+  });
+});
+
+describe("viewer intent while the stream is held", () => {
+  interface HeldSubscriber {
+    readonly viewer: TerminalSubscribeViewer;
+    readonly callbacks: TerminalStreamCallbacks;
+    readonly frames: TerminalSubscribeClientFrameV17[];
+  }
+
+  function createHeldHarness() {
+    const subscribers: HeldSubscriber[] = [];
+    const close = vi.fn();
+    const writes: TerminalWrite[] = [];
+    const handle = createTerminalSessionStore({
+      scope: { kind: "epic", epicId: "epic-1" },
+      sessionId: "terminal-1",
+      cols: 80,
+      rows: 24,
+      reattachMode: "fresh",
+      kind: "terminal-agent",
+      viewer: "presentation",
+      streamClientFactory: (streamArgs) => {
+        const frames: TerminalSubscribeClientFrameV17[] = [];
+        subscribers.push({
+          viewer: streamArgs.viewer,
+          callbacks: streamArgs.callbacks,
+          frames,
+        });
+        return {
+          supportsViewerFrames: () => false,
+          sendAction: (frame) => {
+            frames.push(frame);
+          },
+          close: () => {
+            close();
+            streamArgs.callbacks.onConnectionStatus(
+              "closed",
+              { kind: "caller" },
+              null,
+              null,
+            );
+          },
+        };
+      },
+    });
+    const current = (): HeldSubscriber => {
+      const subscriber = subscribers.at(-1);
+      if (subscriber === undefined) throw new Error("Expected a subscriber");
+      return subscriber;
+    };
+    handle.store.getState().setWriter((write) => {
+      writes.push(write);
+    });
+    current().callbacks.onConnectionStatus("open", null, null, null);
+    emitSnapshot(current().callbacks, snapshotWithAckCredit(""));
+    // What the newest subscriber will declare to the host: its open-frame
+    // intent, overridden by any later viewer frame.
+    const declaredViewer = (): TerminalSubscribeViewer => {
+      const subscriber = current();
+      const restated = subscriber.frames.findLast(
+        (frame) => frame.kind === "viewer",
+      );
+      return restated?.kind === "viewer" ? restated.viewer : subscriber.viewer;
+    };
+    const ackBytes = (subscriber: HeldSubscriber): number[] =>
+      subscriber.frames.flatMap((frame) =>
+        frame.kind === "ack" ? [frame.bytes] : [],
+      );
+    return {
+      handle,
+      subscribers,
+      close,
+      writes,
+      current,
+      declaredViewer,
+      ackBytes,
+    };
+  }
+
+  it("records a viewer change made while held without touching the subscriber, then replaces it once after the continued open and drops the old ack debt", () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHeldHarness();
+      const held = h.current();
+      emitData(held.callbacks, data("parsed during hold"));
+      h.current().callbacks.onConnectionStatus(
+        "reconnecting",
+        null,
+        null,
+        "held",
+      );
+      h.writes.filter((write) => write.kind === "live")[0].onAckable();
+
+      h.handle.store.getState().setViewer("cache");
+      expect(h.handle.store.getState()).toMatchObject({
+        viewer: "cache",
+        connectionStatus: "reconnecting",
+      });
+      expect(h.subscribers).toHaveLength(1);
+      expect(h.close).not.toHaveBeenCalled();
+
+      held.callbacks.onConnectionStatus("open", null, null, "continued");
+      expect(h.subscribers.map((subscriber) => subscriber.viewer)).toEqual([
+        "presentation",
+        "cache",
+      ]);
+      expect(h.close).toHaveBeenCalledTimes(1);
+
+      // Nothing the retired subscriber owed reaches the new one, and its
+      // late callbacks are fenced out.
+      const writesBefore = h.writes.length;
+      held.callbacks.onData(data("late"), "late");
+      vi.advanceTimersByTime(1000);
+      expect(h.writes).toHaveLength(writesBefore);
+      expect(h.ackBytes(h.current())).toEqual([]);
+      expect(h.handle.store.getState().status).toBe("running");
+      h.handle.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("coalesces presentation -> cache -> presentation made while held into no replacement and keeps the ack debt on the same subscriber", () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHeldHarness();
+      const held = h.current();
+      emitData(held.callbacks, data("parsed during hold"));
+      held.callbacks.onConnectionStatus("reconnecting", null, null, "held");
+      h.writes.filter((write) => write.kind === "live")[0].onAckable();
+
+      h.handle.store.getState().setViewer("cache");
+      h.handle.store.getState().setViewer("presentation");
+      held.callbacks.onConnectionStatus("open", null, null, "continued");
+      vi.advanceTimersByTime(1000);
+
+      expect(h.subscribers).toHaveLength(1);
+      expect(h.close).not.toHaveBeenCalled();
+      expect(h.ackBytes(held)).toEqual(["parsed during hold".length]);
+      h.handle.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("carries the latest intent into the rebuild when the hold ends in a null reconnect", () => {
+    const h = createHeldHarness();
+    const held = h.current();
+    held.callbacks.onConnectionStatus("reconnecting", null, null, "held");
+    h.handle.store.getState().setViewer("cache");
+    expect(h.subscribers).toHaveLength(1);
+
+    held.callbacks.onConnectionStatus("reconnecting", null, null, null);
+    h.current().callbacks.onConnectionStatus("open", null, null, null);
+
+    expect(h.handle.store.getState().viewer).toBe("cache");
+    expect(h.declaredViewer()).toBe("cache");
+    h.handle.dispose();
+  });
+
+  it("latches the hold before publishing it, so a status observer's setViewer does not reopen the held stream", () => {
+    const h = createHeldHarness();
+    const held = h.current();
+    h.handle.store.subscribe((state, previous) => {
+      if (
+        state.connectionStatus === "reconnecting" &&
+        previous.connectionStatus !== "reconnecting"
+      ) {
+        state.setViewer("cache");
+      }
+    });
+
+    held.callbacks.onConnectionStatus("reconnecting", null, null, "held");
+    expect(h.subscribers).toHaveLength(1);
+    expect(h.close).not.toHaveBeenCalled();
+
+    held.callbacks.onConnectionStatus("open", null, null, "continued");
+    expect(h.subscribers.map((subscriber) => subscriber.viewer)).toEqual([
+      "presentation",
+      "cache",
+    ]);
+    h.handle.dispose();
+  });
+
+  it("stays coherent when a status observer restates the viewer while the continued open publishes", () => {
+    const h = createHeldHarness();
+    const held = h.current();
+    held.callbacks.onConnectionStatus("reconnecting", null, null, "held");
+    h.handle.store.getState().setViewer("cache");
+    h.handle.store.subscribe((state, previous) => {
+      if (
+        state.connectionStatus === "open" &&
+        previous.connectionStatus !== "open"
+      ) {
+        state.restateViewer("presentation");
+      }
+    });
+
+    held.callbacks.onConnectionStatus("open", null, null, "continued");
+
+    expect(h.handle.store.getState().viewer).toBe("presentation");
+    expect(h.declaredViewer()).toBe("presentation");
+    expect(h.handle.store.getState().status).toBe("running");
+    h.handle.dispose();
+  });
+
+  it("publishes a replacement stream's first held status instead of swallowing it as keep-warm noise", () => {
+    const h = createHeldHarness();
+    h.handle.store.getState().setViewer("cache");
+    expect(h.subscribers).toHaveLength(2);
+
+    h.current().callbacks.onConnectionStatus(
+      "reconnecting",
+      null,
+      null,
+      "held",
+    );
+
+    expect(h.handle.store.getState().connectionStatus).toBe("reconnecting");
+    h.handle.dispose();
+  });
+
+  it("keeps the newest subscriber when a replacement's factory opens synchronously and an observer changes the intent again", () => {
+    interface RacingClient {
+      readonly viewer: TerminalSubscribeViewer;
+      readonly callbacks: TerminalStreamCallbacks;
+      readonly frames: TerminalSubscribeClientFrameV17[];
+      closeCount: number;
+    }
+    const clients: RacingClient[] = [];
+    let observerArmed = false;
+    const handle = createTerminalSessionStore({
+      scope: { kind: "epic", epicId: "epic-1" },
+      sessionId: "terminal-1",
+      cols: 80,
+      rows: 24,
+      reattachMode: "fresh",
+      kind: "terminal-agent",
+      viewer: "presentation",
+      streamClientFactory: (streamArgs) => {
+        const client: RacingClient = {
+          viewer: streamArgs.viewer,
+          callbacks: streamArgs.callbacks,
+          frames: [],
+          closeCount: 0,
+        };
+        clients.push(client);
+        // A replacement stream that is already open when the factory
+        // returns: its status publishes before the store holds the client.
+        if (clients.length > 1) {
+          streamArgs.callbacks.onConnectionStatus("open", null, null, null);
+        }
+        return {
+          supportsViewerFrames: () => false,
+          sendAction: (frame) => {
+            client.frames.push(frame);
+          },
+          close: () => {
+            client.closeCount += 1;
+          },
+        };
+      },
+    });
+    handle.store.subscribe((state) => {
+      if (observerArmed && clients.length === 2) {
+        observerArmed = false;
+        // Re-enters the store from inside the first replacement's factory.
+        state.setViewer("presentation");
+      }
+    });
+    clients[0].callbacks.onConnectionStatus("open", null, null, null);
+    emitSnapshot(clients[0].callbacks, snapshot(""));
+    clients[0].callbacks.onConnectionStatus("reconnecting", null, null, "held");
+    handle.store.getState().setViewer("cache");
+    expect(clients).toHaveLength(1);
+
+    observerArmed = true;
+    clients[0].callbacks.onConnectionStatus("open", null, null, "continued");
+
+    // The nested replacement is the newest; the outer one it overtook is
+    // closed rather than leaked, and the first was closed exactly once.
+    expect(clients.map((client) => client.viewer)).toEqual([
+      "presentation",
+      "cache",
+      "presentation",
+    ]);
+    expect(clients.map((client) => client.closeCount)).toEqual([1, 1, 0]);
+
+    // Work after the race reaches the newest subscriber only.
+    handle.store.getState().requestResize(100, 30);
+    const resizes = (client: RacingClient): number =>
+      client.frames.filter((frame) => frame.kind === "resize").length;
+    expect(resizes(clients[1])).toBe(0);
+    expect(resizes(clients[2])).toBe(1);
+
+    handle.dispose();
+    expect(clients.map((client) => client.closeCount)).toEqual([1, 1, 1]);
+  });
+});

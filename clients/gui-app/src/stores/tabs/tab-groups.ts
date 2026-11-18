@@ -1,0 +1,239 @@
+import { z } from "zod";
+import {
+  findStripItemForRef,
+  flattenStripItemRefs,
+  tabRefKey,
+  type PersistedTabStripLayout,
+  type StripItem,
+} from "./layout";
+import type { TabRef } from "./types";
+
+export const TAB_COLORS = [
+  { name: "Gray", value: "#c4c7c5" },
+  { name: "Blue", value: "#8ab4f8" },
+  { name: "Red", value: "#f28b82" },
+  { name: "Yellow", value: "#fdd663" },
+  { name: "Green", value: "#81c995" },
+  { name: "Pink", value: "#ff8bcb" },
+  { name: "Purple", value: "#c58af9" },
+  { name: "Cyan", value: "#78d9ec" },
+  { name: "Orange", value: "#fcad70" },
+] as const;
+
+const colorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+export const tabCustomizationSchema = z.object({
+  color: colorSchema.nullable(),
+  icon: z.string().max(32).nullable(),
+  groupId: z.string().max(128).nullable(),
+  pendingGroupId: z.string().max(128).nullable().optional(),
+  organizationOwnerId: z.string().nullable().optional(),
+});
+export const tabGroupSchema = z.object({
+  name: z.string().max(80),
+  color: colorSchema,
+  collapsed: z.boolean(),
+  organizationOwnerId: z.string().nullable().optional(),
+});
+export type TabCustomization = z.infer<typeof tabCustomizationSchema>;
+export type TabGroup = z.infer<typeof tabGroupSchema>;
+export type TabCustomizations = Readonly<Record<string, TabCustomization>>;
+export type TabGroups = Readonly<Record<string, TabGroup>>;
+export const DEFAULT_TAB_CUSTOMIZATION: TabCustomization = {
+  color: null,
+  icon: null,
+  groupId: null,
+};
+
+/**
+ * The group a tab is DRAWN in, which is only ever one of the account's.
+ *
+ * A group with no `organizationOwnerId` was made by the machine-local
+ * grouping this build retired: it exists on this computer, in this window,
+ * and nowhere else. Those entries are still in persisted layouts and are
+ * left exactly as they are, but nothing resolves one any more, so the strip
+ * draws one set of groups and it is the account's. Membership keeps the same
+ * rule by construction - a tab whose group does not resolve is drawn
+ * ungrouped.
+ */
+export function drawnTabGroup(
+  groups: TabGroups | undefined,
+  groupId: string | null,
+): TabGroup | undefined {
+  if (groupId === null) return undefined;
+  const group = groups?.[groupId];
+  return group?.organizationOwnerId ? group : undefined;
+}
+
+/**
+ * A tab's own colour and icon as the ACCOUNT has them, or nothing.
+ *
+ * The sibling of {@link drawnTabGroup}, and for the same reason: a
+ * customization with no `organizationOwnerId` was written by the retired
+ * machine-local appearance controls, and a colour that exists on one
+ * computer is not what a task looks like. Unstamped entries stay in
+ * persisted layouts and are not drawn, so a tab falls back to what its kind
+ * ships until the account's projection says otherwise.
+ */
+export function drawnTabCustomization(
+  customization: TabCustomization | undefined,
+): TabCustomization | undefined {
+  return customization?.organizationOwnerId ? customization : undefined;
+}
+
+/**
+ * The colour a tab draws: its group's while it is grouped, else its own. The
+ * group's colour is read, never written into the tab's customization, so the
+ * tab's own colour is what comes back when it leaves the group.
+ */
+export function effectiveTabColor(
+  group: { readonly color: string } | null | undefined,
+  ownColor: string | null,
+): string | null {
+  return group?.color ?? ownColor;
+}
+
+export function parseTabCustomizations(value: unknown): TabCustomizations {
+  const parsed = z.record(z.string(), tabCustomizationSchema).safeParse(value);
+  return parsed.success ? parsed.data : {};
+}
+
+export function parseTabGroups(value: unknown): TabGroups {
+  const parsed = z.record(z.string(), tabGroupSchema).safeParse(value);
+  return parsed.success ? parsed.data : {};
+}
+
+export function stripItemGroupId(
+  item: StripItem,
+  customizations: TabCustomizations | undefined,
+): string | null {
+  const ref = flattenStripItemRefs(item).at(0);
+  return ref === undefined
+    ? null
+    : (customizations?.[tabRefKey(ref)]?.groupId ?? null);
+}
+
+/**
+ * Puts the tab, and its split partner, in the group or out of every group. The
+ * group's fold is left as it is, so a drop on a collapsed group's header joins
+ * without expanding it.
+ */
+export function assignLayoutTabGroup(
+  layout: PersistedTabStripLayout,
+  ref: TabRef,
+  groupId: string | null,
+): PersistedTabStripLayout {
+  const group = groupId === null ? undefined : layout.groups?.[groupId];
+  if (groupId !== null && group === undefined) return layout;
+  const item = findStripItemForRef(layout, ref);
+  if (item === null) return layout;
+  const customizations = { ...layout.customizations };
+  for (const member of flattenStripItemRefs(item)) {
+    const key = tabRefKey(member);
+    const current = layout.customizations?.[key] ?? DEFAULT_TAB_CUSTOMIZATION;
+    customizations[key] = { ...current, groupId };
+    if (member.kind === "draft")
+      customizations[key] = {
+        ...current,
+        groupId,
+        pendingGroupId: groupId,
+        organizationOwnerId: group?.organizationOwnerId,
+      };
+  }
+  return { ...layout, customizations };
+}
+
+/** `assignLayoutTabGroup`, and the group opens: the tab was put there to be seen. */
+export function setLayoutTabGroup(
+  layout: PersistedTabStripLayout,
+  ref: TabRef,
+  groupId: string | null,
+): PersistedTabStripLayout {
+  const assigned = assignLayoutTabGroup(layout, ref, groupId);
+  const group = groupId === null ? undefined : assigned.groups?.[groupId];
+  if (assigned === layout || groupId === null || group === undefined) {
+    return assigned;
+  }
+  return {
+    ...assigned,
+    groups: { ...assigned.groups, [groupId]: { ...group, collapsed: false } },
+  };
+}
+
+export function inheritTabGroup(
+  layout: PersistedTabStripLayout,
+  sourceRef: TabRef,
+  targetRef: TabRef,
+): PersistedTabStripLayout {
+  const source =
+    layout.customizations?.[tabRefKey(sourceRef)] ?? DEFAULT_TAB_CUSTOMIZATION;
+  const key = tabRefKey(targetRef);
+  const target = layout.customizations?.[key] ?? DEFAULT_TAB_CUSTOMIZATION;
+  if (
+    source.groupId === target.groupId ||
+    source.organizationOwnerId ||
+    target.organizationOwnerId ||
+    source.pendingGroupId
+  )
+    return layout;
+  return {
+    ...layout,
+    customizations: {
+      ...layout.customizations,
+      [key]: { ...target, groupId: source.groupId },
+    },
+  };
+}
+
+/** Keep group membership consistent across closes, splits and restores. */
+export function repairTabGroups(
+  layout: PersistedTabStripLayout,
+): PersistedTabStripLayout {
+  if (layout.customizations === undefined && layout.groups === undefined)
+    return layout;
+  const customizations: Record<string, TabCustomization> = {};
+  const groups: Record<string, TabGroup> = {};
+  for (const item of layout.items) {
+    collectItemCustomizations(item, layout, customizations, groups);
+  }
+  const groupItems = new Map<string, StripItem[]>();
+  for (const item of layout.items) {
+    const groupId = stripItemGroupId(item, customizations);
+    if (groupId === null) continue;
+    const members = groupItems.get(groupId);
+    if (members === undefined) groupItems.set(groupId, [item]);
+    else members.push(item);
+  }
+  const items: StripItem[] = [];
+  const emittedGroups = new Set<string>();
+  for (const item of layout.items) {
+    const groupId = stripItemGroupId(item, customizations);
+    if (groupId === null) {
+      items.push(item);
+    } else if (!emittedGroups.has(groupId)) {
+      emittedGroups.add(groupId);
+      items.push(...(groupItems.get(groupId) ?? []));
+    }
+  }
+  return { ...layout, items, customizations, groups };
+}
+
+function collectItemCustomizations(
+  item: StripItem,
+  layout: PersistedTabStripLayout,
+  customizations: Record<string, TabCustomization>,
+  groups: Record<string, TabGroup>,
+): void {
+  for (const ref of flattenStripItemRefs(item)) {
+    const key = tabRefKey(ref);
+    const current = layout.customizations?.[key];
+    if (current === undefined) continue;
+    const group =
+      current.groupId === null ? undefined : layout.groups?.[current.groupId];
+    if (current.groupId !== null && group !== undefined)
+      groups[current.groupId] = group;
+    customizations[key] = {
+      ...current,
+      groupId: group === undefined ? null : current.groupId,
+    };
+  }
+}

@@ -1,0 +1,8460 @@
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { hostHomeDir } from "../../../store/paths";
+
+// HOME is redirected to a private temp dir BEFORE anything reads it:
+// `store/paths` binds `homedir()` at module load, so without this the suite
+// would resolve this machine's REAL `~/.traycer`. A partial `store/paths`
+// mock (this file's existing `cliInstallHomeDir` override, below) is NOT
+// isolation on its own - every other export of that module, `hostHomeDir`
+// among them, still resolves under the real home unless `node:os.homedir()`
+// itself is redirected first.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const { mkdtempSync: makeTempDir } = await import("node:fs");
+  const { join: joinPath } = await import("node:path");
+  if (osHome.current === "") {
+    osHome.current = makeTempDir(
+      joinPath(actual.tmpdir(), "traycer-windows-test-home-"),
+    );
+  }
+  return { ...actual, homedir: () => osHome.current };
+});
+
+beforeAll(() => {
+  expect(osHome.current).not.toBe("");
+  expect(hostHomeDir("production").startsWith(osHome.current)).toBe(true);
+});
+
+afterAll(() => {
+  rmSync(osHome.current, { recursive: true, force: true });
+});
+
+import {
+  buildScheduledTaskXml,
+  buildWindowsHandleBoundKillScript,
+  buildWindowsSlotProcessDetailScanScript,
+  buildWindowsSlotProcessTableScanScript,
+  computeWindowsHostKillSet,
+  computeWindowsTreeKillSet,
+  killSupervisedHostTree,
+  createWindowsController,
+  describeSlotLockHolders,
+  killLingeringSlotProcesses,
+  orderWindowsKillsDescendantsFirst,
+  parseSchtasksLastRunResult,
+  parseWindowsKillOutcomeJson,
+  parseWindowsProcessDetailJson,
+  parseWindowsProcessTableJson,
+  setWindowsAccountSidResolverForTests,
+  setWindowsDefinitionDepsForTests,
+  setWindowsStartEvidenceDepsForTests,
+  setWindowsTaskInstallDepsForTests,
+  setWindowsTaskUserSidReaderForTests,
+  WINDOWS_KILL_TARGETS_PER_SCRIPT,
+  type ProcessRunner,
+  type ScheduledTaskXmlQuery,
+  type WindowsControllerDeps,
+  type WindowsDefinitionDeps,
+  type WindowsKillMemory,
+  type WindowsKillTarget,
+  type WindowsKillVictim,
+  type WindowsProcessTableRow,
+  type WindowsStartEvidenceDeps,
+  type WindowsTaskInstallDeps,
+} from "../windows";
+import { serviceLabelFor } from "../../label";
+import {
+  WINDOWS_KILL_CONVERGENCE_ROUNDS,
+  WINDOWS_PROCESS_KILL_TIMEOUT_MS,
+} from "@traycer/protocol/host/lifecycle-constants";
+import { ProcessRunError, type RunResult } from "../../process-runner";
+import type { SpawnEvidenceBaseline } from "../../../host/spawn-evidence";
+import { CLI_ERROR_CODES } from "../../../runner/errors";
+import { didServiceRegistrationCommit } from "../../cli-invocation-record";
+import { windowsTaskName } from "../../label";
+import {
+  isServiceMutationAuthorityError,
+  ServiceMutationAuthorityError,
+  withServiceMutationAuthority,
+} from "../../mutation-authority";
+import { withStopTarget } from "../../stop-target";
+import { createVerifyRace } from "../../__tests__/fixtures/verify-race";
+import { ownProcessStartIdentity } from "@traycer-clients/shared/host-lock/process-identity";
+import {
+  isUnreportedSpawnEdgeRefusal,
+  runWithLeaseAtServiceSpawnEdge,
+} from "../../spawn-edge";
+import { cliInstallHomeDir } from "../../../store/paths";
+import type { ServiceLabel } from "../../label";
+import type { ServiceController } from "../../index";
+import type { ShutdownClaimIntent } from "@traycer/protocol/host/lifecycle/schemas";
+import type { CooperativeShutdownOutcome } from "../desktop-agent-shutdown";
+import type { ForegroundHostRun } from "../../../host/foreground-host-run";
+
+// Mirrors the private `hiddenHostLauncherPath` in `windows.ts` exactly - not
+// exported, so the rollback pins below reconstruct it from the same
+// (mocked) `cliInstallHomeDir` the production code calls.
+function hiddenHostLauncherPathForTest(label: ServiceLabel): string {
+  return join(cliInstallHomeDir(label.environment), "host-start-hidden.vbs");
+}
+
+/** Models `stageTaskDefinition`'s real write of the persistent launcher. */
+async function writeLeftoverLauncher(label: ServiceLabel): Promise<string> {
+  const launcherPath = hiddenHostLauncherPathForTest(label);
+  await mkdir(dirname(launcherPath), { recursive: true });
+  await writeFile(launcherPath, "leftover-launcher", "utf8");
+  return launcherPath;
+}
+
+// Per-test gates for the launcher-restore failure pins: `restorePreviousLauncher`'s
+// `writeFile`/`rm` (re-register / fresh-install restore) and `readPreviousLauncher`'s
+// `readFile` (the unreadable-existing-launcher pin) need to fail deterministically
+// while every OTHER filesystem call this suite makes - including the sandbox
+// helpers above - keeps hitting the real temp filesystem. Mirrors
+// linux-install-flow.test.ts's `RM_FAILURE` hoisted-flag shape, gated
+// additionally by path so only the launcher is ever affected. Staging writes
+// that same path, so a `writeFile` gate meant for the restore is armed at the
+// step that precedes the restore (the `/Create` call, or a staging fake after
+// its own write), never up front.
+const LAUNCHER_RESTORE_FAILURE = vi.hoisted(() => ({
+  readFile: null as { message: string; code: string } | null,
+  writeFile: null as string | null,
+  rm: null as string | null,
+}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const isLauncherPath = (path: unknown): boolean =>
+    typeof path === "string" && path.endsWith("host-start-hidden.vbs");
+  return {
+    ...actual,
+    readFile: (async (...args: Parameters<typeof actual.readFile>) => {
+      const failure = LAUNCHER_RESTORE_FAILURE.readFile;
+      if (failure !== null && isLauncherPath(args[0])) {
+        throw Object.assign(new Error(failure.message), {
+          code: failure.code,
+        });
+      }
+      return actual.readFile(...args);
+    }) as typeof actual.readFile,
+    writeFile: (async (
+      path: Parameters<typeof actual.writeFile>[0],
+      data: Parameters<typeof actual.writeFile>[1],
+    ) => {
+      if (LAUNCHER_RESTORE_FAILURE.writeFile !== null && isLauncherPath(path)) {
+        throw new Error(LAUNCHER_RESTORE_FAILURE.writeFile);
+      }
+      return actual.writeFile(path, data);
+    }) as typeof actual.writeFile,
+    rm: (async (
+      path: Parameters<typeof actual.rm>[0],
+      options: Parameters<typeof actual.rm>[1],
+    ) => {
+      if (LAUNCHER_RESTORE_FAILURE.rm !== null && isLauncherPath(path)) {
+        throw new Error(LAUNCHER_RESTORE_FAILURE.rm);
+      }
+      return actual.rm(path, options);
+    }) as typeof actual.rm,
+  };
+});
+
+const mocks = vi.hoisted(() => ({
+  readHostPidMetadata: vi.fn(),
+  removeHostPidMetadata: vi.fn(),
+  // The stop route's own liveness read behind `onHostAddressed`. Controllable
+  // (rather than a fixed inline stub) so the at-most-once report tests can
+  // stage a live record; every other fixture leaves the default in place.
+  readHostPidMetadataEvidence: vi.fn(),
+  // Read only when `readHostPidMetadataEvidence` answers `read` - the mock
+  // above defaults to `absent`, which never reaches it.
+  publishedHostProcessGone: vi.fn(),
+  // The guard's own ask, mocked whole-module: `askHostToStandDown` imports
+  // only this one export from `./desktop-agent-shutdown` (`windows.ts`
+  // imports only the reporting variant, never the plain
+  // `requestCooperativeShutdown`). Every stop fixture defaults to "no host to
+  // ask" below, which leaves it on the existing task-end and process-scan
+  // logic unless a test stages otherwise.
+  requestCooperativeShutdownReporting: vi.fn(),
+}));
+
+// The liveness probe a record naming another instance is classified by
+// (`restartTargetStillCurrent`). A test that needs a host to publish while it
+// runs answers the probe itself; every other call reaches the real one.
+const livenessProbe = vi.hoisted(() => ({
+  answer: null as
+    | ((
+        pid: number,
+      ) => "dead" | "current" | "mismatch" | "indeterminate" | null)
+    | null,
+}));
+vi.mock(
+  "@traycer-clients/shared/host-lock/process-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-lock/process-identity")
+      >();
+    return {
+      ...actual,
+      getPublishedProcessIdentityVerdict: async (
+        pid: number,
+        identity: string | null,
+      ) =>
+        livenessProbe.answer?.(pid) ??
+        actual.getPublishedProcessIdentityVerdict(pid, identity),
+    };
+  },
+);
+
+vi.mock("../../../host/pid-metadata", () => ({
+  readHostPidMetadata: mocks.readHostPidMetadata,
+  removeHostPidMetadata: mocks.removeHostPidMetadata,
+  readHostPidMetadataEvidence: mocks.readHostPidMetadataEvidence,
+  publishedHostProcessGone: mocks.publishedHostProcessGone,
+}));
+
+vi.mock("../desktop-agent-shutdown", () => ({
+  requestCooperativeShutdownReporting:
+    mocks.requestCooperativeShutdownReporting,
+}));
+
+// Module-wide defaults for the two mocks above: every fixture's stop is
+// silent (no live record, so the ask is never reported and the guard's own
+// scan is what a test controls instead) unless it stages otherwise. A single
+// top-level `beforeEach` reaches every test in the file, nested describes
+// included, so no per-describe block has to repeat it.
+beforeEach(() => {
+  mocks.readHostPidMetadataEvidence.mockReset();
+  mocks.readHostPidMetadataEvidence.mockResolvedValue({
+    kind: "absent" as const,
+  });
+  mocks.publishedHostProcessGone.mockReset();
+  mocks.publishedHostProcessGone.mockReturnValue(false);
+  mocks.requestCooperativeShutdownReporting.mockReset();
+  mocks.requestCooperativeShutdownReporting.mockResolvedValue({
+    kind: "no-metadata" as const,
+  });
+  // The ownership gate reads the registered task before every verb that
+  // changes it (`windows-task-gate.ts`), and fails closed when it cannot tell
+  // whose the task is. Every fixture here runs as the account that owns the
+  // task unless it says otherwise; `windows-task-ownership.test.ts` covers a
+  // task that is not.
+  useOwnedTaskFixture();
+});
+
+afterEach(() => {
+  setWindowsTaskUserSidReaderForTests(null);
+  setWindowsAccountSidResolverForTests(null);
+  setWindowsDefinitionDepsForTests(null);
+});
+
+// The real logger appends to the invoking user's actual ~/.traycer log file -
+// stub it so the failed-kill WARN gating pins stay hermetic and assertable,
+// the same discipline macos.test.ts and desktop-agent-shutdown.test.ts already
+// apply to this exact module. Every other site in this file logs through
+// `debug`/`info`/`error`, and no existing test reads any of them back, so
+// replacing all four with spies (three no-op, one assertable) changes nothing
+// observable elsewhere in this suite.
+const loggerMock = vi.hoisted(() => ({ warn: vi.fn() }));
+vi.mock("../../../logger", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../logger")>();
+  return {
+    ...actual,
+    createCliLogger: () => ({
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: loggerMock.warn,
+      error: vi.fn(),
+    }),
+  };
+});
+
+// Test isolation: `hiddenHostLauncherPath(label)` resolves through
+// `cliInstallHomeDir` to `join(os.homedir(), ".traycer", "cli", ...)` (via
+// `@traycer/protocol/config/installation`), and `os.homedir()` ignores
+// `$HOME` here - same fact `macos.test.ts` documents for its own
+// `serviceManifestPath`/`serviceLauncherScriptPath` redirection. The install
+// rollback tests below `rm` this path for real, so it is redirected into a
+// private temp root instead of the developer's actual `~/.traycer/cli/...`.
+const TEST_CLI_INSTALL_HOME_ROOT = mkdtempSync(
+  join(tmpdir(), "traycer-windows-cli-install-home-test-"),
+);
+vi.mock("../../../store/paths", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../store/paths")>();
+  return {
+    ...actual,
+    cliInstallHomeDir: (environment: string) =>
+      join(TEST_CLI_INSTALL_HOME_ROOT, environment),
+  };
+});
+
+afterAll(async () => {
+  await rm(TEST_CLI_INSTALL_HOME_ROOT, { recursive: true, force: true });
+});
+
+interface RecordedCall {
+  readonly command: string;
+  readonly args: readonly string[];
+}
+
+function success(stdout: string): RunResult {
+  return { stdout, stderr: "", exitCode: 0 };
+}
+
+function emptySpawnBaseline(): SpawnEvidenceBaseline {
+  return {
+    log: {
+      path: "/tmp/host.log",
+      exists: false,
+      size: 0,
+      dev: null,
+      ino: null,
+      mtimeMs: null,
+    },
+    pidMetadata: {
+      path: "/tmp/pid.json",
+      exists: false,
+      mtimeMs: null,
+      pid: null,
+    },
+  };
+}
+
+// Most call sites below never exercise `stop`/`uninstall`/`restart` at all
+// (an install/start test never touches `killHostProcessTree`), and the ones
+// that do mostly use ordinary slot rows with no victim carry-over in play, so
+// the clock value itself is immaterial to them. A `now` of 0 is unsafe for a
+// fixture with a LIVE carry-over though: it would make every remembered
+// victim's window `[created, 0]`, which no positive `created` can ever fall
+// inside - see the tests that build their own `WindowsControllerDeps` with a
+// real clock value instead.
+const noTimingDeps: WindowsControllerDeps = { now: () => 0 };
+
+function stagedTaskInstallDeps(): WindowsTaskInstallDeps {
+  return {
+    stageTaskDefinition: async () => ({
+      tmpDir: "/tmp/traycer-task-test",
+      xmlPath: "/tmp/traycer-task-test/task.xml",
+    }),
+    removeStagedTaskDefinition: async () => undefined,
+  };
+}
+
+// Most fixtures in this file only care about processId/parentProcessId/slot -
+// the victim carry-over fields (claimedParentProcessId, created) are only
+// meaningful to the tests that exercise that carry-over directly. This lets a
+// fixture specify just the three original fields and default the other two
+// (claimedParentProcessId = parentProcessId, created = 0) rather than forcing
+// every row literal in the file to spell out fields it does not test.
+// `created: 0` is what makes the default safe: `isChildOfVictim` refuses an
+// unknown age on either end, so a defaulted row can never be spuriously
+// seeded as a victim's descendant regardless of what its claimed parent is.
+type TableRowInput = Pick<
+  WindowsProcessTableRow,
+  "processId" | "parentProcessId" | "slot"
+> &
+  Partial<Pick<WindowsProcessTableRow, "claimedParentProcessId" | "created">>;
+
+function fullRow(row: TableRowInput): WindowsProcessTableRow {
+  return {
+    processId: row.processId,
+    parentProcessId: row.parentProcessId,
+    claimedParentProcessId: row.claimedParentProcessId ?? row.parentProcessId,
+    created: row.created ?? 0,
+    slot: row.slot,
+  };
+}
+
+function rowsOf(rows: readonly TableRowInput[]): WindowsProcessTableRow[] {
+  return rows.map(fullRow);
+}
+
+// An empty carry-over memory: the state of round 0, and what every pin that
+// exercises a single snapshot on its own needs.
+const nothingRemembered: WindowsKillMemory = {
+  victims: new Map(),
+  suspects: new Map(),
+  protectedAncestors: new Map(),
+};
+
+// A memory that remembers kills but nothing undecided - the shape the window
+// pins below reason about, where an earlier round killed a parent and this
+// round has to decide what may be attributed to it.
+function victimMemory(
+  victims: ReadonlyMap<number, readonly WindowsKillVictim[]>,
+): WindowsKillMemory {
+  return { victims, suspects: new Map(), protectedAncestors: new Map() };
+}
+
+// A memory that remembers something undecided but no kill - the shape the
+// suspect-inheritance pins reason about, where an earlier round could place a
+// pid neither in the slot nor out of it.
+function suspectMemory(
+  suspects: ReadonlyMap<number, readonly number[]>,
+): WindowsKillMemory {
+  return { victims: new Map(), suspects, protectedAncestors: new Map() };
+}
+
+// Rows as the table scan's JSON, in the shape `parseWindowsProcessTableJson`
+// expects. Shared by every fixture below that needs to hand a fake table back
+// through `run("powershell.exe", ...)`.
+function tableJson(rows: readonly TableRowInput[]): string {
+  return JSON.stringify(
+    rowsOf(rows).map((row) => ({
+      ProcessId: row.processId,
+      ParentProcessId: row.parentProcessId,
+      ClaimedParentProcessId: row.claimedParentProcessId,
+      Created: row.created,
+      Slot: row.slot,
+    })),
+  );
+}
+
+// The kill (or probe) script's own JSON shape (`ProcessId`/`Outcome`),
+// matching what `parseWindowsKillOutcomeJson` pins directly. Shared by every
+// fixture below that fakes a kill or probe reply as plain (pid, outcome)
+// pairs - `probeProcessesGone` parses the exact same shape a kill script's
+// report does, whichever mode produced it.
+function killOutcomeJson(
+  outcomes: readonly {
+    readonly processId: number;
+    readonly outcome: string;
+  }[],
+): string {
+  return JSON.stringify(
+    outcomes.map((outcome) => ({
+      ProcessId: outcome.processId,
+      Outcome: outcome.outcome,
+    })),
+  );
+}
+
+// Both halves of a kill round are `powershell.exe` invocations: the table scan
+// (`Get-CimInstance Win32_Process`) and the handle-bound kill
+// (`GetProcessById`). The fakes below tell them apart by the script they
+// carry, which is also the only way a fixture can know which pids a round
+// decided to kill - the kill script's target literal is the argv.
+function isScanCall(command: string, args: readonly string[]): boolean {
+  return (
+    command === "powershell.exe" &&
+    args.some((arg) => arg.includes("Get-CimInstance Win32_Process"))
+  );
+}
+
+// Both the "kill" and "probe" scripts share one scaffold (`GetProcessById`,
+// the identity check, the try/catch), so "GetProcessById" alone no longer
+// tells them apart - the catch's own `$matched` re-check
+// (`if ($matched) { try { if ($process.HasExited) ... } }`) puts the literal
+// text "HasExited" into a KILL script too, not just a probe one. What is
+// mode-exclusive is the ACTION each script's happy path takes: only "kill"
+// ever emits `$process.Kill()`, and only "probe" ever emits the literal
+// `$outcome = 'running'` (nothing else in either script produces that word).
+// `isKillCall` keys on the former and `isProbeCall` requires "HasExited" (as
+// a probe's own action body always has it) while explicitly excluding a kill
+// script's `$process.Kill()`, so the two classifiers partition every
+// handle-bound-script call with no overlap.
+function isKillCall(command: string, args: readonly string[]): boolean {
+  return (
+    command === "powershell.exe" &&
+    args.some(
+      (arg) =>
+        arg.includes("GetProcessById") && arg.includes("$process.Kill()"),
+    )
+  );
+}
+
+function isProbeCall(command: string, args: readonly string[]): boolean {
+  return (
+    command === "powershell.exe" &&
+    args.some(
+      (arg) =>
+        arg.includes("GetProcessById") &&
+        arg.includes("HasExited") &&
+        !arg.includes("$process.Kill()"),
+    )
+  );
+}
+
+// The targets one kill OR probe invocation carries, in the order the script
+// walks them - both modes share the identical target-literal shape
+// (`@{ ProcessId = <pid>; Created = <micros> }` per target), so one parser
+// reads either back out of the script text.
+function killTargetsOf(args: readonly string[]): WindowsKillTarget[] {
+  const script = args.find((arg) => arg.includes("GetProcessById")) ?? "";
+  const targets: WindowsKillTarget[] = [];
+  for (const match of script.matchAll(/ProcessId = (\d+); Created = (\d+)/g)) {
+    targets.push({
+      processId: Number(match[1]),
+      created: Number(match[2]),
+    });
+  }
+  return targets;
+}
+
+function scanCalls(calls: readonly RecordedCall[]): RecordedCall[] {
+  return calls.filter((call) => isScanCall(call.command, call.args));
+}
+
+// Every probe invocation (the round-bound `killSetStillRunning` check, or
+// `reportFailedKillsStillRunning`'s own probe of the previous round's failed
+// kills), in issue order.
+function probeCalls(calls: readonly RecordedCall[]): RecordedCall[] {
+  return calls.filter((call) => isProbeCall(call.command, call.args));
+}
+
+// One entry per kill script - one per round, unless the round carried more
+// than `WINDOWS_KILL_TARGETS_PER_SCRIPT` targets and issued several in a row -
+// holding that script's targets in issue order.
+function killRounds(calls: readonly RecordedCall[]): WindowsKillTarget[][] {
+  return calls
+    .filter((call) => isKillCall(call.command, call.args))
+    .map((call) => killTargetsOf(call.args));
+}
+
+// Every pid a stop issued a kill for, across rounds, in issue order. The
+// shape most pins in this file reason about.
+function killedPids(calls: readonly RecordedCall[]): number[] {
+  return killRounds(calls).flatMap((round) =>
+    round.map((target) => target.processId),
+  );
+}
+
+// A WARN call's second argument comes off a `vi.fn()` mock with no generic,
+// so it types as `any` at the call site; this narrows it down to the pids
+// named in its `outcomes` list with no cast. Each outcome is
+// `"<pid>=<reason>"` and only the pid before `=` is kept.
+function warnOutcomePids(details: unknown): number[] {
+  if (typeof details !== "object" || details === null) {
+    return [];
+  }
+  if (!("outcomes" in details) || !Array.isArray(details.outcomes)) {
+    return [];
+  }
+  return details.outcomes.map((entry: unknown) =>
+    Number(String(entry).split("=")[0]),
+  );
+}
+
+// A fake scan-then-kill runner that CONVERGES the way the real scan does. A
+// real scan verifies by exe path/command line, not by remembering what an
+// earlier round saw, so a process this round's kill actually reached is
+// simply ABSENT from the next snapshot - it isn't "seen and skipped", it's
+// gone. `killHostProcessTree`'s bounded convergence loop (Codex round 2 on
+// #1755: the old single-pass scan left anything spawned after the snapshot
+// untouched) rescans after every kill, so a fixture that keeps returning one
+// constant table makes every pid look like a survivor and gets re-killed
+// `WINDOWS_KILL_CONVERGENCE_ROUNDS` times instead of once. This tracks which
+// pids a kill script has been handed and drops those rows from every later
+// snapshot, so a fixture built for the old one-pass code keeps its original
+// meaning under the new loop.
+function convergingTableRunner(rows: readonly TableRowInput[]): {
+  readonly runner: ProcessRunner;
+  readonly calls: RecordedCall[];
+} {
+  const calls: RecordedCall[] = [];
+  let live = rows;
+  const runner: ProcessRunner = async (command, args) => {
+    calls.push({ command, args });
+    if (isScanCall(command, args)) return success(tableJson(live));
+    if (isKillCall(command, args)) {
+      const killed = new Set(
+        killTargetsOf(args).map((target) => target.processId),
+      );
+      live = live.filter((row) => !killed.has(row.processId));
+    }
+    return success("");
+  };
+  return { runner, calls };
+}
+
+describe("Windows service stale host cleanup", () => {
+  beforeEach(() => {
+    mocks.readHostPidMetadata.mockReset();
+    mocks.readHostPidMetadata.mockResolvedValue(null);
+    mocks.removeHostPidMetadata.mockReset();
+    mocks.removeHostPidMetadata.mockResolvedValue(undefined);
+    setWindowsStartEvidenceDepsForTests(null);
+    setWindowsTaskInstallDepsForTests(null);
+  });
+
+  afterEach(() => {
+    setWindowsStartEvidenceDepsForTests(null);
+    setWindowsTaskInstallDepsForTests(null);
+  });
+
+  it("parses PowerShell process table JSON", () => {
+    expect(
+      parseWindowsProcessTableJson(
+        '[{"ProcessId":100,"ParentProcessId":1,"ClaimedParentProcessId":1,"Created":1000,"Slot":true},' +
+          '{"ProcessId":200,"ParentProcessId":100,"ClaimedParentProcessId":100,"Created":2000,"Slot":false}]',
+      ),
+    ).toEqual([
+      {
+        processId: 100,
+        parentProcessId: 1,
+        claimedParentProcessId: 1,
+        created: 1000,
+        slot: true,
+      },
+      {
+        processId: 200,
+        parentProcessId: 100,
+        claimedParentProcessId: 100,
+        created: 2000,
+        slot: false,
+      },
+    ]);
+    // Windows PowerShell 5.1 emits a bare object for a single row.
+    expect(
+      parseWindowsProcessTableJson(
+        '{"ProcessId":100,"ParentProcessId":1,"ClaimedParentProcessId":1,"Created":1000,"Slot":true}',
+      ),
+    ).toEqual([
+      {
+        processId: 100,
+        parentProcessId: 1,
+        claimedParentProcessId: 1,
+        created: 1000,
+        slot: true,
+      },
+    ]);
+    // A row whose ProcessId equals this test process's own pid parses fine -
+    // the table scan is deliberately unfiltered.
+    expect(
+      parseWindowsProcessTableJson(
+        `{"ProcessId":${process.pid},"ParentProcessId":1,"ClaimedParentProcessId":1,"Created":1000,"Slot":false}`,
+      ),
+    ).toEqual([
+      {
+        processId: process.pid,
+        parentProcessId: 1,
+        claimedParentProcessId: 1,
+        created: 1000,
+        slot: false,
+      },
+    ]);
+    // The System Idle Process is pid 0 with parent 0, and `Get-CimInstance
+    // Win32_Process` always returns it. Rejecting it failed the WHOLE parse on
+    // every real machine, silently demoting every stop to the pid.json
+    // fallback. A parent of 0 ("no verified parent") is equally ordinary, and
+    // so is a `Created` of 0 ("no creation time Windows could report").
+    expect(
+      parseWindowsProcessTableJson(
+        '[{"ProcessId":0,"ParentProcessId":0,"ClaimedParentProcessId":0,"Created":0,"Slot":false},' +
+          '{"ProcessId":100,"ParentProcessId":0,"ClaimedParentProcessId":0,"Created":0,"Slot":true}]',
+      ),
+    ).toEqual([
+      {
+        processId: 0,
+        parentProcessId: 0,
+        claimedParentProcessId: 0,
+        created: 0,
+        slot: false,
+      },
+      {
+        processId: 100,
+        parentProcessId: 0,
+        claimedParentProcessId: 0,
+        created: 0,
+        slot: true,
+      },
+    ]);
+    // Negative ids are still malformed, `ClaimedParentProcessId` and
+    // `Created` included - they are held to the same non-negative-integer
+    // shape as every other id/timestamp field.
+    expect(
+      parseWindowsProcessTableJson(
+        '[{"ProcessId":-1,"ParentProcessId":0,"ClaimedParentProcessId":0,"Created":0,"Slot":false}]',
+      ),
+    ).toBeNull();
+    expect(
+      parseWindowsProcessTableJson(
+        '[{"ProcessId":100,"ParentProcessId":-1,"ClaimedParentProcessId":0,"Created":0,"Slot":false}]',
+      ),
+    ).toBeNull();
+    expect(
+      parseWindowsProcessTableJson(
+        '[{"ProcessId":100,"ParentProcessId":1,"ClaimedParentProcessId":-1,"Created":0,"Slot":false}]',
+      ),
+    ).toBeNull();
+    expect(
+      parseWindowsProcessTableJson(
+        '[{"ProcessId":100,"ParentProcessId":1,"ClaimedParentProcessId":1,"Created":-1,"Slot":false}]',
+      ),
+    ).toBeNull();
+    expect(parseWindowsProcessTableJson("[]")).toEqual([]);
+    // Empty output means the scan never ran - `null`, not `[]`: a real
+    // Win32_Process scan is never empty.
+    expect(parseWindowsProcessTableJson("")).toBeNull();
+    expect(parseWindowsProcessTableJson("not-json")).toBeNull();
+    // Any malformed row fails the WHOLE parse (all-or-nothing).
+    expect(
+      parseWindowsProcessTableJson(
+        '[{"ProcessId":"100","ParentProcessId":1,"ClaimedParentProcessId":1,"Created":0,"Slot":true}]',
+      ),
+    ).toBeNull();
+    expect(
+      parseWindowsProcessTableJson('[{"ProcessId":100,"Slot":true}]'),
+    ).toBeNull();
+    expect(
+      parseWindowsProcessTableJson(
+        '[{"ProcessId":100,"ParentProcessId":1,"ClaimedParentProcessId":1,"Created":0,"Slot":"true"}]',
+      ),
+    ).toBeNull();
+    // Missing the new fields entirely is also malformed - a scan script that
+    // regresses to emitting the old three-field row must not silently parse.
+    expect(
+      parseWindowsProcessTableJson(
+        '[{"ProcessId":100,"ParentProcessId":1,"Slot":true}]',
+      ),
+    ).toBeNull();
+    // Missing just ONE of the two new fields is equally malformed - the
+    // all-or-nothing parse does not partially trust a row.
+    expect(
+      parseWindowsProcessTableJson(
+        '[{"ProcessId":100,"ParentProcessId":1,"ClaimedParentProcessId":1,"Slot":true}]',
+      ),
+    ).toBeNull();
+    expect(
+      parseWindowsProcessTableJson(
+        '[{"ProcessId":100,"ParentProcessId":1,"Created":1000,"Slot":true}]',
+      ),
+    ).toBeNull();
+    expect(parseWindowsProcessTableJson('[100, "not-a-row"]')).toBeNull();
+    // Two rows sharing a pid is not a table this code can reason over: the
+    // parent map, the child map and the age lookup would each silently keep
+    // a different one of the duplicates depending on iteration order, and
+    // the kill set would depend on which. `Get-CimInstance` cannot produce
+    // this, so a response that does is malformed - refused whole, like
+    // every other shape violation above.
+    expect(
+      parseWindowsProcessTableJson(
+        '[{"ProcessId":100,"ParentProcessId":1,"ClaimedParentProcessId":1,"Created":1000,"Slot":true},' +
+          '{"ProcessId":100,"ParentProcessId":2,"ClaimedParentProcessId":2,"Created":2000,"Slot":false}]',
+      ),
+    ).toBeNull();
+
+    // Ablation: in `parseProcessTableJson`, change `return null;` on a
+    // malformed row to `continue;` (skipping just that row instead of
+    // failing the whole parse) → the malformed-row assertions above fail:
+    // a partial table would come back instead of `null`.
+    // Ablation (§ablation table): drop the duplicate-pid rejection
+    // (`if (seenProcessIds.has(processId)) return null;`) → the
+    // duplicate-pid assertion above reddens: two rows sharing pid 100 parse
+    // successfully instead of failing the whole table.
+  });
+
+  it("builds a table scan with the slot's install\\ prefix, ParentProcessId, and Slot fields, and no $excluded/$PID", () => {
+    const script = buildWindowsSlotProcessTableScanScript(
+      "C:\\Users\\Traycer Dev\\.traycer\\host\\staging",
+    );
+    expect(script).toContain("ParentProcessId = $parentId");
+    expect(script).toContain("Slot = $hostMatch");
+    expect(script).toContain(".traycer\\host\\staging\\install\\");
+    expect(script).not.toContain("$excluded");
+    expect(script).not.toContain("$PID");
+
+    // Ablation: in `buildSlotProcessTableScanScript`, reintroduce
+    // `$excluded = @(<pid>, $PID)` into the script → this test fails (the
+    // `not.toContain("$PID")` assertion flips).
+  });
+
+  const SMART_QUOTES = ["\u2018", "\u2019", "\u201A", "\u201B"];
+
+  it.each(SMART_QUOTES)(
+    "doubles PowerShell single-quote %s in the slot process-table scan $hostPaths literal",
+    (quoteChar: string) => {
+      const script = buildWindowsSlotProcessTableScanScript(
+        `C:\\Users\\O${quoteChar}Brien\\.traycer\\host\\staging`,
+      );
+      expect(script).toContain(`${quoteChar}${quoteChar}`);
+    },
+  );
+
+  it("validates each parent edge against CreationDate from the same snapshot", () => {
+    // Windows keeps the creator's id in `ParentProcessId` after the parent
+    // exits, and may hand that id to an unrelated process. An edge is only
+    // believed when the claimed parent is still in this snapshot and is not
+    // YOUNGER than its claimed child; everything else is emitted as parent 0,
+    // which the algebra reads as "no verified parent".
+    //
+    // This is a script-text pin. The PowerShell half is only really proved by
+    // the live Windows run in the plan's release checklist - what the TS side
+    // can prove is what the algebra does once a stale id has arrived as 0,
+    // which the fixtures below cover.
+    const script = buildWindowsSlotProcessTableScanScript(
+      "C:\\Users\\Traycer Dev\\.traycer\\host",
+    );
+    // One read, materialised, so the ages compared come from the same
+    // snapshot as the matches.
+    expect(script).toContain("$table = @(Get-CimInstance Win32_Process)");
+    expect(script).toContain(
+      "if ($null -eq $row.CreationDate) { $created[[int]$row.ProcessId] = $null }",
+    );
+    expect(script).toContain(
+      "else { $created[[int]$row.ProcessId] = $row.CreationDate.ToUniversalTime() }",
+    );
+    expect(script).toContain(
+      "if ($parentId -le 0 -or -not $created.ContainsKey($parentId)) {",
+    );
+    expect(script).toContain("} elseif ($parentCreated -gt $childCreated) {");
+    // A missing CreationDate on either end (pid 0 and System have none) is
+    // uncertainty, so it fails closed to 0 like any other unverifiable edge.
+    expect(script).toContain(
+      "if ($null -eq $parentCreated -or $null -eq $childCreated) {",
+    );
+    // The two fields the victim carry-over needs: the RAW claimed parent
+    // (unvalidated, unlike `ParentProcessId` above) and the row's own age.
+    expect(script).toContain(
+      "ClaimedParentProcessId = [int]$_.ParentProcessId",
+    );
+    expect(script).toContain("Created = $createdMicros");
+    // `Created`'s own guard: 0 when Windows reports no creation time at all
+    // (pid 0 and System have none), never a stale or default timestamp.
+    expect(script).toContain("$createdMicros = 0");
+    expect(script).toContain(
+      "if ($null -ne $_.CreationDate) { $childCreated = $_.CreationDate.ToUniversalTime() }",
+    );
+    // P1-c: both operands of the edge validation are normalised to UTC.
+    // `CreationDate` arrives as a local DateTime, and local time is not
+    // monotonic across a DST fall-back - dropping `ToUniversalTime()` on
+    // either side lets a process started in the second pass of the
+    // repeated hour compare as OLDER than one from the first, and the scan
+    // would VALIDATE that edge instead of refusing it. Nothing else pins
+    // this: it is only visible in the exact text used to build `$created`
+    // and `$childCreated`.
+    expect(script).toContain(
+      "$created[[int]$row.ProcessId] = $row.CreationDate.ToUniversalTime()",
+    );
+    expect(script).toContain(
+      "$childCreated = $_.CreationDate.ToUniversalTime()",
+    );
+    // P1-b: microseconds, not milliseconds - `Ticks / 10` converts the
+    // TimeSpan's 100ns units, floored to stay an integer.
+    expect(script).toContain(
+      "$createdMicros = [long][math]::Floor(($_.CreationDate.ToUniversalTime() - [datetime]'1970-01-01').Ticks / 10)",
+    );
+
+    // Ablation: in `buildSlotProcessTableScanScript`, drop
+    // `...PARENT_EDGE_VALIDATION_SCRIPT_LINES` and emit
+    // `ParentProcessId = [int]$_.ParentProcessId` again → this test fails, and
+    // a recycled creator id becomes a believed ancestry edge.
+    // Ablation (§ablation table): drop `.ToUniversalTime()` from either
+    // operand of the edge validation → the UTC-normalisation assertions
+    // above fail; a DST fall-back can then validate a stranger's edge.
+  });
+
+  it("does not use broad production roots as process-match prefixes", () => {
+    const script = buildWindowsSlotProcessTableScanScript(
+      "C:\\Users\\Traycer Dev\\.traycer\\host",
+    );
+    expect(script).toContain(
+      "c:\\users\\traycer dev\\.traycer\\host\\install\\",
+    );
+    expect(script).not.toContain("'c:\\users\\traycer dev\\.traycer\\host'");
+  });
+
+  it("builds a detail scan sharing the shared slot-match block with the table scan, projecting name and executable path", () => {
+    const detail = buildWindowsSlotProcessDetailScanScript({
+      hostHome: "C:\\Users\\Traycer Dev\\.traycer\\host",
+      currentPid: 1234,
+    });
+    expect(detail).toContain("$excluded = @(1234, $PID)");
+    expect(detail).toContain(
+      "c:\\users\\traycer dev\\.traycer\\host\\install\\",
+    );
+    expect(detail).toContain("Select-Object ProcessId, Name, ExecutablePath");
+    // The anti-drift invariant that survives the scan split: both scripts
+    // must contain the identical shared slot-match block, verbatim.
+    const tableScan = buildWindowsSlotProcessTableScanScript(
+      "C:\\Users\\Traycer Dev\\.traycer\\host",
+    );
+    const sharedBlock = [
+      "    $exe = ([string]$_.ExecutablePath).ToLowerInvariant().Replace('/', '\\')",
+      "    $cmd = ([string]$_.CommandLine).ToLowerInvariant().Replace('/', '\\')",
+      '    $text = $exe + "`n" + $cmd',
+      "    $hostMatch = $false",
+      "    foreach ($path in $hostPaths) {",
+      "      if ($text.Contains($path)) { $hostMatch = $true; break }",
+      "    }",
+    ].join("\n");
+    expect(detail).toContain(sharedBlock);
+    expect(tableScan).toContain(sharedBlock);
+  });
+
+  it("parses PowerShell process detail JSON in both array and single-object shape", () => {
+    expect(
+      parseWindowsProcessDetailJson(
+        '[{"ProcessId":401,"Name":"claude.exe","ExecutablePath":"C:\\\\clients\\\\claude.exe"},{"ProcessId":402,"Name":"","ExecutablePath":null}]',
+      ),
+    ).toEqual([
+      {
+        pid: 401,
+        name: "claude.exe",
+        executablePath: "C:\\clients\\claude.exe",
+      },
+      { pid: 402, name: null, executablePath: null },
+    ]);
+    // Windows PowerShell 5.1 emits a bare object for a single match even
+    // under `@(...)`.
+    expect(
+      parseWindowsProcessDetailJson(
+        '{"ProcessId":401,"Name":"node.exe","ExecutablePath":"C:\\\\node.exe"}',
+      ),
+    ).toEqual([{ pid: 401, name: "node.exe", executablePath: "C:\\node.exe" }]);
+    expect(parseWindowsProcessDetailJson("")).toEqual([]);
+    expect(parseWindowsProcessDetailJson("not-json")).toEqual([]);
+    expect(parseWindowsProcessDetailJson('{"Name":"no-pid.exe"}')).toEqual([]);
+  });
+
+  it("describes slot lock holders via the detail scan", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return success(
+        '[{"ProcessId":88,"Name":"orphan.exe","ExecutablePath":"C:\\\\orphan.exe"}]',
+      );
+    };
+
+    const holders = await describeSlotLockHolders(
+      serviceLabelFor("staging"),
+      runner,
+    );
+
+    expect(holders).toEqual([
+      { pid: 88, name: "orphan.exe", executablePath: "C:\\orphan.exe" },
+    ]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.command).toBe("powershell.exe");
+    expect(calls[0]?.args.at(-1)).toContain(
+      "Select-Object ProcessId, Name, ExecutablePath",
+    );
+  });
+
+  it("reports no lock holders when the detail scan cannot run", async () => {
+    const runner: ProcessRunner = async () => {
+      throw new Error("spawn failed");
+    };
+
+    await expect(
+      describeSlotLockHolders(serviceLabelFor("staging"), runner),
+    ).resolves.toEqual([]);
+  });
+
+  // The production `killHostProcessTree` always passes `process.pid` (this
+  // test process's own pid) as the CLI identity, so every fake table below
+  // treats `process.pid` as an ordinary, unrelated process with no parent in
+  // the table - it must never appear in a kill set built from these tables.
+
+  it("re-kills scan-verified processes through killLingeringSlotProcesses", async () => {
+    const { runner, calls } = convergingTableRunner([
+      { processId: 401, parentProcessId: 1, slot: true },
+    ]);
+
+    await killLingeringSlotProcesses(
+      serviceLabelFor("staging"),
+      runner,
+      noTimingDeps,
+    );
+
+    expect(killedPids(calls)).toEqual([401]);
+    // Never a pid-only kill: no `taskkill` at all, `/T` or otherwise. The
+    // handle-bound script is the only thing that terminates a process.
+    expect(calls.some((call) => call.command === "taskkill")).toBe(false);
+  });
+
+  it("kills slot-scanned processes when pid metadata is missing", async () => {
+    const { runner, calls } = convergingTableRunner([
+      { processId: 401, parentProcessId: 1, slot: true },
+      { processId: 402, parentProcessId: 1, slot: true },
+    ]);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    // The guard's own leading scan (`askHostToStandDown`) is a
+    // `powershell.exe` call before this - the first `schtasks` call is the
+    // sweep's `/End`, not `calls[0]`.
+    expect(calls.find((call) => call.command === "schtasks")).toMatchObject({
+      command: "schtasks",
+      args: ["/End", "/TN", "\\Traycer\\Host-Staging"],
+    });
+    expect(calls.some((call) => call.command === "powershell.exe")).toBe(true);
+    expect(killedPids(calls)).toEqual([401, 402]);
+  });
+
+  it("Q13/Q26: the post-swap relaunch is the CLI's own /Run - Windows never waits on the task to restart it", async () => {
+    // The Windows lane measured that a non-zero supervisor exit propagates to
+    // `LastTaskResult` and that `RestartOnFailure` NEVER fires on it (it
+    // covers the task failing to LAUNCH, not the action returning non-zero),
+    // and that `LogonTrigger` is the only trigger. So on Windows a supervisor
+    // that exits - 0 or 77 - is not coming back on its own until next logon.
+    //
+    // This pin is what makes that survivable for the normal update flow:
+    // `relaunchAfterRestart` is the CLI issuing `schtasks /Run` itself. The
+    // exit code is diagnostic on this platform, never the relaunch signal, so
+    // Q13's `RESTART_OWED_EXIT_CODE` changes what `LastTaskResult` records and
+    // changes nothing about who restarts the host.
+    //
+    // What it does NOT establish is the Q13 outage itself: if the CLI dies
+    // between the stop and this call, nothing on Windows relaunches. That gap
+    // is real, is unchanged by Q13 (whose verb change shipped for Linux
+    // only), and is tracked separately - it is not what this pin covers.
+    // The subject is WHICH COMMAND the CLI issues, not whether the host then
+    // comes up: start verification is a separate contract with its own rows.
+    // So the evidence reader is stubbed to find nothing on a short budget and
+    // the resulting verification failure is tolerated - what must hold is
+    // that a `/Run` was issued at all.
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({ collect: async () => null }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 40,
+      verifyPollMs: 10,
+    });
+    const { runner, calls } = convergingTableRunner([]);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    try {
+      await controller
+        .relaunchAfterRestart(serviceLabelFor("staging"), {
+          forcedRecycle: false,
+        })
+        .catch(() => undefined);
+
+      // The SEQUENCE, not two independent existence checks (cold review B).
+      // The `/End` half used to be `calls.some(...) === false`, which is
+      // vacuously true on an empty call set: delete the relaunch entirely and
+      // it still passed, protected only by the `/Run` assertion happening to
+      // sit beside it. As a sequence the two failure directions separate -
+      // adding an `/End` and dropping the `/Run` each redden this line on
+      // their own, and neither can be masked by the other. Both were RUN:
+      // relaunch made a no-op gives `[] !== ["/Run", "/Query"]`, and an
+      // `/End` issued before the `/Run` gives `["/End", "/Run", "/Query"]`.
+      // Distinct messages, so a failure says WHICH direction broke.
+      //
+      // `/Query` is start verification, a separate contract with its own
+      // rows. It is named here because a sequence that omitted it would be a
+      // sequence of the calls this test likes rather than of the calls made,
+      // and the first thing anyone adding an `/End` would do is discover that
+      // the "sequence" tolerated extra members.
+      expect(
+        calls
+          .filter((call) => call.command === "schtasks")
+          .map((call) => call.args[0]),
+      ).toEqual(["/Run", "/Query"]);
+      // WHOLE ARGV for the call this pin is actually about, so an extra or
+      // reordered argument cannot appear silently - the weakness of an
+      // existence check over a partial shape, and the reason Q17's pins
+      // compare whole argv. Deliberately NOT extended to the `/Query` call:
+      // that would couple this row to verification's argument list, which is
+      // owned and pinned elsewhere. The sub-command sequence above is what
+      // binds it here.
+      expect(
+        calls.find(
+          (call) => call.command === "schtasks" && call.args[0] === "/Run",
+        )?.args,
+      ).toEqual(["/Run", "/TN", "\\Traycer\\Host-Staging"]);
+    } finally {
+      setWindowsStartEvidenceDepsForTests(null);
+    }
+  });
+
+  it("kills exactly the scan-verified pids when the scan covers the recorded pid", async () => {
+    mocks.readHostPidMetadata.mockResolvedValue({
+      pid: 401,
+      hostId: "host-test",
+      version: "1.0.0",
+      websocketUrl: "ws://127.0.0.1:54321/rpc",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const { runner, calls } = convergingTableRunner([
+      { processId: 401, parentProcessId: 1, slot: true },
+      { processId: 402, parentProcessId: 1, slot: true },
+    ]);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    expect(killedPids(calls)).toEqual([401, 402]);
+  });
+
+  it("does not kill the recorded pid when the scan verifies it no longer matches the host", async () => {
+    // pid.json says 401, but the verified slot scan only shows 402 as a slot
+    // match - the OS recycled 401 for an unrelated (non-slot) process, which
+    // must survive.
+    mocks.readHostPidMetadata.mockResolvedValue({
+      pid: 401,
+      hostId: "host-test",
+      version: "1.0.0",
+      websocketUrl: "ws://127.0.0.1:54321/rpc",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const { runner, calls } = convergingTableRunner([
+      { processId: 401, parentProcessId: 1, slot: false },
+      { processId: 402, parentProcessId: 1, slot: true },
+    ]);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    expect(killedPids(calls)).toEqual([402]);
+  });
+
+  it("purges pid metadata on uninstall like it does on stop", async () => {
+    const runner: ProcessRunner = async (command) =>
+      command === "powershell.exe" ? success("[]") : success("");
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await controller.uninstall({
+      label: serviceLabelFor("staging"),
+      leaveForegroundRun: null,
+    });
+
+    expect(mocks.removeHostPidMetadata).toHaveBeenCalledWith("staging");
+  });
+
+  it("purges pid metadata on stop so a deliberate stop never reads as a crash", async () => {
+    const runner: ProcessRunner = async (command) =>
+      command === "powershell.exe" ? success("[]") : success("");
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    expect(mocks.removeHostPidMetadata).toHaveBeenCalledWith("staging");
+  });
+
+  // The other side of the same rule as the test above: a stop that could not
+  // be VERIFIED must not purge pid.json either. Codex's finding in full was
+  // "`stopService` then deletes pid.json and `host stop` says success while
+  // descendants live" - a refused stop reporting the host gone would be that
+  // exact bug wearing a different trigger.
+  //
+  // Ablation (§ablation table, row 2): the same `scannedPids === null`
+  // `throw` → `return` mutation reddens this test too - the promise
+  // resolves, so `removeHostPidMetadata` gets called after all.
+  it("does NOT purge pid metadata when the stop refuses - a refusal must not read as a clean exit", async () => {
+    const runner: ProcessRunner = async (command) => {
+      if (command === "powershell.exe") throw new Error("spawn failed");
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).rejects.toMatchObject({ code: "E_SERVICE_CONTROL_FAILED" });
+
+    expect(mocks.removeHostPidMetadata).not.toHaveBeenCalled();
+  });
+});
+
+// `killHostProcessTree` (Codex round 2 on #1755, one P2): the scan is a
+// SNAPSHOT, so a process the host or an agent under it spawns after
+// `Get-CimInstance` materializes the table is in no round's kill set - and
+// with no `/T`, nothing walks down to catch it. `killProcessIds`' argv is
+// covered above; these pin the ROUND STRUCTURE around it: a bounded
+// scan-then-kill loop that stops the moment a scan comes back empty.
+describe("killHostProcessTree convergence loop", () => {
+  beforeEach(() => {
+    mocks.readHostPidMetadata.mockReset();
+    mocks.readHostPidMetadata.mockResolvedValue(null);
+    mocks.removeHostPidMetadata.mockReset();
+    mocks.removeHostPidMetadata.mockResolvedValue(undefined);
+  });
+
+  // A per-round scripted scan, for scenarios `convergingTableRunner`'s
+  // kill-tracking can't express - a snapshot that materializes a pid no
+  // earlier round ever saw (a late spawn), or a scan that only fails on a
+  // LATER round. `responses[n]` is the table (or throw) the (n+1)th
+  // `powershell.exe` call answers with; once exhausted, further calls answer
+  // with an empty table (converged) rather than reusing the last response -
+  // a test that needs more rounds than it scripted should say so explicitly.
+  type RoundResponse =
+    | {
+        readonly kind: "table";
+        readonly rows: readonly TableRowInput[];
+      }
+    | { readonly kind: "throw" };
+
+  // Un-shifted: scan call 0 answers `responses[0]` directly. For the one
+  // caller in this describe that never reaches the guard
+  // (`killLingeringSlotProcesses`, called directly rather than through
+  // `controller.stop`/`uninstall`/`restart`).
+  function unguardedRoundedRunner(responses: readonly RoundResponse[]): {
+    readonly runner: ProcessRunner;
+    readonly calls: RecordedCall[];
+  } {
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        const response = responses[scanCount] ?? { kind: "table", rows: [] };
+        scanCount += 1;
+        if (response.kind === "throw") throw new Error("spawn failed");
+        return success(tableJson(response.rows));
+      }
+      return success("");
+    };
+    return { runner, calls };
+  }
+
+  // Every `controller.stop`/`stopForRestart`/`restart`/`uninstall`
+  // (`leaveForegroundRun` null) call now issues the guard's own leading scan
+  // (`askHostToStandDown`/`scanSlotProcessTable`) before the sweep's round 0 -
+  // the identical PowerShell script, so a fixture cannot tell the two calls
+  // apart by their argv. Scan call 0 is always answered with an empty table
+  // here, absorbing that leading scan: an empty table names no ancestor of
+  // `process.pid` (`slotProcessIsAncestorOf`), so the guard always proceeds to
+  // the ask - separately mocked - and `responses[n]` keeps meaning exactly
+  // what it said before this guard existed: the SWEEP's round n. The guard's
+  // own outcome never changes what the sweep does next, so every fixture
+  // below is unaffected by it except for the one extra scan call this adds to
+  // `calls` - `scanCalls(calls)` counts one more than it used to.
+  function roundedRunner(responses: readonly RoundResponse[]): {
+    readonly runner: ProcessRunner;
+    readonly calls: RecordedCall[];
+  } {
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        const response =
+          scanCount === 0
+            ? { kind: "table" as const, rows: [] }
+            : (responses[scanCount - 1] ?? {
+                kind: "table" as const,
+                rows: [],
+              });
+        scanCount += 1;
+        if (response.kind === "throw") throw new Error("spawn failed");
+        return success(tableJson(response.rows));
+      }
+      return success("");
+    };
+    return { runner, calls };
+  }
+
+  it("convergence catches a late spawn: a process absent from round 1's snapshot is still killed in round 2", async () => {
+    // Round 1 sees A and B; round 2's snapshot has C instead - a process that
+    // spawned only after round 1's `Get-CimInstance` ran, which a single-pass
+    // scan (the bug Codex found) would never enumerate at all; round 3 is
+    // clean. This is the exact finding: without the loop, C survives the stop.
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 401, parentProcessId: 1, slot: true },
+          { processId: 402, parentProcessId: 1, slot: true },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [{ processId: 403, parentProcessId: 1, slot: true }],
+      },
+      { kind: "table", rows: [] },
+    ]);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    // The kill set is asserted FIRST on purpose: it is the finding's own
+    // symptom, so a regression here reports "403 was never killed" rather
+    // than an arithmetic complaint about how many times we scanned.
+    expect(killedPids(calls)).toEqual([401, 402, 403]);
+    expect(scanCalls(calls)).toHaveLength(4);
+
+    // Ablation (§C): in `killHostProcessTree`, change the loop bound from
+    // `round <= WINDOWS_KILL_CONVERGENCE_ROUNDS` to `round <= 1` (a single
+    // pass) → this test fails: only 401 and 402 are ever killed, one
+    // `powershell.exe` call is made instead of three, and 403 - the late
+    // spawn - survives the stop exactly as the Codex finding describes.
+  });
+
+  it("the bound holds AND the stop fails naming the survivors: a host that never stops spawning is not killed forever", async () => {
+    // Every round's scan hands back a BRAND NEW pid, so the loop never
+    // converges on its own - the only thing that ends it is the round bound.
+    // Bounded is the right call: a host spawning faster than we can scan is
+    // not converging, and grinding on it forever is worse than refusing and
+    // naming the survivors so an operator (or the swap's own EBUSY detail
+    // scan) can act on them.
+    // Scan call 0 is the guard's own leading scan (`askHostToStandDown`,
+    // sharing the sweep's exact script): answered with an empty table so it
+    // never joins the never-converging sequence below, exactly like
+    // `roundedRunner`'s own leading response elsewhere in this describe.
+    let scanCount = 0;
+    let sawGuardScan = false;
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        if (!sawGuardScan) {
+          sawGuardScan = true;
+          return success(tableJson([]));
+        }
+        const pid = 800 + scanCount;
+        scanCount += 1;
+        return success(
+          tableJson([{ processId: pid, parentProcessId: 1, slot: true }]),
+        );
+      }
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    // One more scan than kills: the confirming scan after the last kill
+    // round is the one that catches the still-occupied slot and refuses,
+    // rather than a scan that silently reports converged.
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).rejects.toMatchObject({
+      code: "E_SERVICE_CONTROL_FAILED",
+      details: { survivingPids: [800 + WINDOWS_KILL_CONVERGENCE_ROUNDS] },
+    });
+
+    expect(scanCalls(calls)).toHaveLength(WINDOWS_KILL_CONVERGENCE_ROUNDS + 2);
+    expect(killedPids(calls)).toEqual(
+      Array.from(
+        { length: WINDOWS_KILL_CONVERGENCE_ROUNDS },
+        (_, index) => 800 + index,
+      ),
+    );
+
+    // Ablation (§ablation table, row 1): in `killHostProcessTree`, change
+    // the bound refusal's `throw cliError(...)` to `return;` (restore the
+    // silent fallthrough) → this test fails: the call resolves instead of
+    // rejecting, and the still-running pid (800 + ROUNDS) is reported as a
+    // successful stop.
+  });
+
+  it("a lingering already-killed pid exhausts the bound - the same never-dying pid every round, not a fresh spawn", async () => {
+    // The OTHER honest-failure path the function comment's caveat names:
+    // `TerminateProcess` is asynchronous, so a confirming scan can briefly
+    // still list a pid a previous round already killed. The bound absorbs
+    // ONE such round; this pushes that to its limit - the scan returns the
+    // exact SAME pid every round (as if the kill never actually reaped it),
+    // never a fresh spawn - and the loop still refuses rather than grinding
+    // forever or quietly reporting success.
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        return success(
+          tableJson([{ processId: 900, parentProcessId: 1, slot: true }]),
+        );
+      }
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).rejects.toMatchObject({
+      code: "E_SERVICE_CONTROL_FAILED",
+      details: { survivingPids: [900] },
+    });
+
+    // One more than the sweep's own ROUNDS + 1 (its round scans plus the
+    // final confirming one): the guard's leading scan
+    // (`askHostToStandDown`), which this stateless fixture answers with the
+    // same [900] table - harmless, since the guard never kills anything.
+    expect(scanCalls(calls)).toHaveLength(WINDOWS_KILL_CONVERGENCE_ROUNDS + 2);
+    // The kill fired every round, not skipped just because it is the "same"
+    // pid as last time - the loop has no way to know that without a scan
+    // proving it, and a scan proving it IS what this test denies it.
+    expect(killRounds(calls)).toHaveLength(WINDOWS_KILL_CONVERGENCE_ROUNDS);
+  });
+
+  it("refuses before killing anything when the scan is unavailable - the round-0 case of the general rule", async () => {
+    // There used to be a pid.json fallback here: kill the one recorded pid,
+    // unverified, and move on. That let a stop report success while
+    // descendants the fallback never enumerated kept running and kept the
+    // install dir open - the finding this pins the fix for. An unreadable
+    // scan now refuses the whole stop, before anything is touched, so the
+    // tree is left whole for the next attempt. The "NEVER /T" pin the old
+    // fallback test carried is still covered by "re-kills scan-verified
+    // processes" and "host-spawned" elsewhere in this file, which exercise a
+    // real kill.
+    const { runner, calls } = roundedRunner([{ kind: "throw" }]);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).rejects.toMatchObject({ code: "E_SERVICE_CONTROL_FAILED" });
+
+    expect(scanCalls(calls)).toHaveLength(2);
+    expect(killRounds(calls)).toHaveLength(0);
+    expect(mocks.readHostPidMetadata).not.toHaveBeenCalled();
+
+    // Ablation (§ablation table, row 2): in `killHostProcessTree`, change
+    // `if (scanned === null) throw cliError(...)` to `if (scanned === null)
+    // return;` → this test fails: the call resolves instead of rejecting,
+    // and a scan that never ran is reported as a clean stop.
+  });
+
+  it("a scan that fails after earlier kills still fails the stop - a stale recorded pid is not a second opinion", async () => {
+    // Round 0 kills 901 normally. Round 1's scan is unavailable - and this is
+    // NOT a moment for any fallback: round 0 may already have killed the one
+    // pid a fallback would have named, so consulting a recorded pid here
+    // would be exactly the recycled-pid kill the scan-verification exists to
+    // prevent. There is no fallback at all now, so the question this test
+    // pins is narrower than it used to be: does an EARLIER round's real kill
+    // still happen before the LATER round's refusal, and does the refusal
+    // still refuse rather than quietly accepting round 0's kill as enough.
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [{ processId: 901, parentProcessId: 1, slot: true }],
+      },
+      { kind: "throw" },
+    ]);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).rejects.toMatchObject({ code: "E_SERVICE_CONTROL_FAILED" });
+
+    expect(scanCalls(calls)).toHaveLength(3);
+    // Round 0's kill still happened - the refusal is about round 1's scan,
+    // not a reason to have skipped work already done.
+    expect(killedPids(calls)).toEqual([901]);
+    expect(mocks.readHostPidMetadata).not.toHaveBeenCalled();
+
+    // Ablation (§ablation table, row 2): the same `scanned === null` `throw`
+    // → `return` mutation reddens this test too - round 1's unreadable scan
+    // stops refusing, so the whole stop resolves even though it never
+    // confirmed the tree came down.
+  });
+
+  it("carries the victim set BETWEEN rounds: round 1's orphan is only killable because round 0's victim is remembered", async () => {
+    // Chronology (sample 5000 before every scan; every row is born before
+    // it, so each is present in every scan taken while it lives):
+    //   R0: host 100 (born 1000, slot) and its validated child 555 (born
+    //       1500, a shell or provider binary whose own path matches nothing).
+    //       Both are killed, 555 first.
+    //   R1: 100 is gone. 555 is STILL listed - `TerminateProcess` is
+    //       asynchronous, and the loop's own comment names
+    //       this case - and its edge now arrives as `parentProcessId` 0: the
+    //       parent that would have vouched for it is dead. Its own path
+    //       matches nothing. Without `priorVictims` carrying 100's window
+    //       forward, 555 is an ordinary unrelated process and the loop reports
+    //       convergence while it lives. With it, 555 (born 1500, inside
+    //       [1000, 5000]) is seeded and killed again.
+    //   R2: empty. Converged.
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+          {
+            processId: 555,
+            parentProcessId: 100,
+            claimedParentProcessId: 100,
+            created: 1500,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          {
+            processId: 555,
+            parentProcessId: 0,
+            claimedParentProcessId: 100,
+            created: 1500,
+            slot: false,
+          },
+        ],
+      },
+      { kind: "table", rows: [] },
+    ]);
+    const controller = createWindowsController(runner, { now: () => 5000 });
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    expect(scanCalls(calls)).toHaveLength(4);
+    expect(killedPids(calls)).toEqual([555, 100, 555]);
+
+    // Ablation (§ablation table): in `classifyCarryOverClaim`, replace the
+    // body with `return "none";` → this test reddens alongside the direct
+    // "the finding" algebra pin below - 555 is never seeded in round 1, that
+    // kill set comes back empty, and the stop resolves with 555 still alive.
+  });
+
+  it("the victim map ACCUMULATES across rounds rather than being replaced - round 2 still needs round 0's victim remembered", async () => {
+    // The CLI (this process, pid 9999 here) was launched from shell 700,
+    // which the host 100 spawned - the "terminal-run" topology. 700 is the
+    // CLI's ancestor and is SPARED every round, and that is what makes this
+    // history coherent: a long-lived row that keeps claiming a dead victim.
+    // Chronology (the clock is sampled before each scan: 5000, 7000, 9000,
+    // 11000):
+    //   R0 (sample 5000): 100 (born 1000, slot), 700 (born 2000, child of
+    //       100), CLI 9999 (born 2500, child of 700). Kill set: 100 only -
+    //       700 and the CLI are the spared branch.
+    //   R1 (sample 7000): 100 gone; 700 now claims a dead parent
+    //       (`parentProcessId` 0) and is a carry-over seed through remembered
+    //       100 (born 2000, inside [1000, 5000]); a NEW sibling of the CLI,
+    //       555 (born 6000, validated child of 700), is 700's descendant and
+    //       dies. 555 born after R0's sample is why it is absent from R0.
+    //   R2 (sample 9000): 700 and the CLI again, plus another new sibling
+    //       888 (born 8000). 888 dies for the same reason - and ONLY because
+    //       100 is still remembered: a per-round reset would leave just 555
+    //       in the map, 700 would no longer be a seed, and 888 would survive
+    //       into a "converged" stop.
+    //   R3 (sample 11000): 700 and the CLI. 700 is a seed with nothing
+    //       unspared beneath it. Converged.
+    const rows700 = (extra: readonly TableRowInput[]): TableRowInput[] => [
+      {
+        processId: 700,
+        parentProcessId: 0,
+        claimedParentProcessId: 100,
+        created: 2000,
+        slot: false,
+      },
+      {
+        processId: 9999,
+        parentProcessId: 700,
+        claimedParentProcessId: 700,
+        created: 2500,
+        slot: false,
+      },
+      ...extra,
+    ];
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+          {
+            processId: 700,
+            parentProcessId: 100,
+            claimedParentProcessId: 100,
+            created: 2000,
+            slot: false,
+          },
+          {
+            processId: 9999,
+            parentProcessId: 700,
+            claimedParentProcessId: 700,
+            created: 2500,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: rows700([
+          {
+            processId: 555,
+            parentProcessId: 700,
+            claimedParentProcessId: 700,
+            created: 6000,
+            slot: false,
+          },
+        ]),
+      },
+      {
+        kind: "table",
+        rows: rows700([
+          {
+            processId: 888,
+            parentProcessId: 700,
+            claimedParentProcessId: 700,
+            created: 8000,
+            slot: false,
+          },
+        ]),
+      },
+      { kind: "table", rows: rows700([]) },
+    ]);
+    const samples = [5000, 7000, 9000, 11000];
+    let sample = 0;
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 11000;
+        sample += 1;
+        return value;
+      },
+    });
+
+    const originalPid = Object.getOwnPropertyDescriptor(process, "pid");
+    Object.defineProperty(process, "pid", { value: 9999, configurable: true });
+    try {
+      await controller.stop(serviceLabelFor("staging"), { force: false });
+    } finally {
+      if (originalPid !== undefined) {
+        Object.defineProperty(process, "pid", originalPid);
+      }
+    }
+
+    expect(scanCalls(calls)).toHaveLength(5);
+    expect(killedPids(calls)).toEqual([100, 555, 888]);
+
+    // Ablation: in `killHostProcessTree`, keep only the latest round's
+    // victims - `priorVictims.clear()` just before the recording loop at the
+    // END of each round → this test reddens: round 2 remembers only 555, 700
+    // is no longer a seed, and the stop resolves without ever issuing a kill
+    // for 888. (Clearing at the TOP of every round is the cruder mutation and
+    // reddens earlier: round 1 already remembers nothing, so 555 is never
+    // issued either and the stop resolves after the single kill of 100.)
+  });
+
+  it("the victim recorder APPENDS: a lingering victim is re-killed through the OLDER window after its parent's pid was killed again as a newcomer", async () => {
+    // The loop-level twin of the "two victim windows for one pid" algebra
+    // pin: that one builds its memory by hand, so only a fixture that runs
+    // `rememberIncarnation` twice for one pid in the SAME map can tell an
+    // append from an overwrite. Chronology (samples 5000, 7000, 9000,
+    // 11000):
+    //   R0 (sample 5000): host 100 (born 1000, slot) and its validated child
+    //       555 (born 2000). Both killed; victims 100 = [1000, 5000],
+    //       555 = [2000, 5000].
+    //   R1 (sample 7000): a re-launched slot process wears pid 100 again
+    //       (born 6000, slot-matched); 555 lingers in its asynchronous
+    //       `TerminateProcess`, and the scan zeroes its edge because the
+    //       holder of 100 is now younger than it. 555 claims remembered 100
+    //       and sits inside the OLD window: seed. Both killed again; 100 gains
+    //       a second window [6000, 7000].
+    //   R2 (sample 9000): 555 still lingers, still claiming 100. Against the
+    //       newer window it is "older than the victim" - none; against the
+    //       older one it is inside - seed. The older entry is what still
+    //       issues the kill.
+    //   R3 (sample 11000): empty. Converged.
+    const samples = [5000, 7000, 9000, 11000];
+    let sample = 0;
+    const lingering555: TableRowInput = {
+      processId: 555,
+      parentProcessId: 0,
+      claimedParentProcessId: 100,
+      created: 2000,
+      slot: false,
+    };
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+          {
+            processId: 555,
+            parentProcessId: 100,
+            claimedParentProcessId: 100,
+            created: 2000,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 6000, slot: true },
+          lingering555,
+        ],
+      },
+      { kind: "table", rows: [lingering555] },
+      { kind: "table", rows: [] },
+    ]);
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 11000;
+        sample += 1;
+        return value;
+      },
+    });
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    expect(scanCalls(calls)).toHaveLength(5);
+    expect(killedPids(calls)).toEqual([555, 100, 100, 555, 555]);
+
+    // Ablation: in `rememberIncarnation`, replace the push with an overwrite
+    // (`memory.set(pid, [incarnation])` on both arms) → this test reddens:
+    // round 2 remembers only the newcomer's window for 100, 555 (born 2000)
+    // reads as older than that victim, and the stop resolves after three
+    // scans and four kills with 555 still alive. Nothing else in the loop
+    // masks it - 555 is a victim, never a suspect, so no suspect entry keeps
+    // it in play.
+  });
+
+  it("kills within a round deepest-first: a 3-node chain is issued grandchild, child, host", async () => {
+    // `orderWindowsKillsDescendantsFirst` at the LOOP level, not just as a
+    // standalone algebra pin: a round's kill set is issued in argv order
+    // grandchild -> child -> host, shrinking the window where a parent is
+    // already gone while its still-scanned child is not yet reaped.
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, slot: true },
+          { processId: 150, parentProcessId: 100, slot: false },
+          { processId: 160, parentProcessId: 150, slot: false },
+        ],
+      },
+      { kind: "table", rows: [] },
+    ]);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    expect(killedPids(calls)).toEqual([160, 150, 100]);
+
+    // Ablation (§ablation table): in `orderWindowsKillsDescendantsFirst`,
+    // change the body to `return pids;` (issue order unchanged) → run and
+    // confirmed: this test reddens (order reverts to ascending-pid), and so
+    // do the standalone algebra pin below and the "host-spawned" /
+    // "terminal-run" tests above, which also assert deepest-first order now
+    // that the loop applies it.
+  });
+
+  // P2-2 (round 5d): an older stranger claiming a killed process as its
+  // parent is DECIDED, not undecided - a process cannot predate its own
+  // parent, so the claim is simply false, and every retry finds the same
+  // stranger sitting in exactly the same place. The stop must actually
+  // SUCCEED around it rather than refusing forever over a claim that can
+  // never resolve.
+  it("an older stranger claiming a killed victim as its parent, present in every scan, does not block a successful stop", async () => {
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+          {
+            processId: 777,
+            parentProcessId: 0,
+            claimedParentProcessId: 100,
+            created: 500,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          {
+            processId: 777,
+            parentProcessId: 0,
+            claimedParentProcessId: 100,
+            created: 500,
+            slot: false,
+          },
+        ],
+      },
+    ]);
+    const controller = createWindowsController(runner, { now: () => 2000 });
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).resolves.toBeUndefined();
+
+    expect(killedPids(calls)).toEqual([100]);
+
+    // Ablation (§ablation table): change `created < victim.created` to
+    // `return "unattributed"` in `classifyAgainstVictim` → this test
+    // reddens: 777 (born 500, before 100's own birth at 1000) is reported
+    // unattributed forever, and the stop that should succeed refuses
+    // instead.
+  });
+
+  // P1-a (round 5c): `seenAliveAt` must be sampled BEFORE the scan that
+  // selects a round's victims, not before the kills that follow it. Before
+  // the scan is what lets the soundness argument hold: the scan then
+  // observes the victim alive at some instant AFTER the sample, so the pid
+  // was demonstrably still the victim's at the sampled instant. Sampled
+  // later, the clock could read a moment after the victim already exited,
+  // its pid was reused, and the replacement forked a child - all before the
+  // sample - and that child's birth would then fall inside a window it has
+  // no business being in.
+  it("the clock is sampled BEFORE the scan, not after: a row born during the scan is unattributed and the stop refuses", async () => {
+    let clock = 2000;
+    const now = (): number => clock;
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        scanCount += 1;
+        if (scanCount === 1) {
+          // The guard's own leading scan (`askHostToStandDown`, sharing the
+          // sweep's exact script): answered with an empty table, and
+          // deliberately WITHOUT touching the clock - the sample this test
+          // pins is the sweep's own `deps.now()`, taken before ITS round-0
+          // scan below, and the guard never calls `deps.now()` at all.
+          return success(tableJson([]));
+        }
+        if (scanCount === 2) {
+          const stdout = tableJson([
+            { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+          ]);
+          // Time passes WHILE this scan "runs" (the real analogue is
+          // `Get-CimInstance` taking real wall-clock time) - after the
+          // sample that fed round 0's `seenAliveAt`, before round 1's.
+          clock = 5000;
+          return success(stdout);
+        }
+        if (scanCount === 3) {
+          return success(
+            tableJson([
+              {
+                processId: 777,
+                parentProcessId: 0,
+                claimedParentProcessId: 100,
+                created: 3000,
+                slot: false,
+              },
+            ]),
+          );
+        }
+        return success(tableJson([]));
+      }
+      return success("");
+    };
+    const controller = createWindowsController(runner, { now });
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      details: { unattributedPids: [777] },
+    });
+
+    // Round 0 killed 100 using the sample taken BEFORE its scan (2000): 777
+    // was born at 3000, after that sample, so round 1 refuses it rather
+    // than silently killing or silently sparing it.
+    expect(killedPids(calls)).toEqual([100]);
+
+    // Ablation (§ablation table): in `killHostProcessTree`, move the
+    // `deps.now()` sample to AFTER `scanSlotProcessTable` returns → this
+    // test reddens: round 0's sample would then read the clock post-bump
+    // (5000), 777's birth (3000) would fall inside `[1000, 5000]`, and the
+    // stop would resolve having force-killed a row it could never actually
+    // prove belonged to the host.
+  });
+
+  // A pid killed again in a later round gets a SECOND `priorVictims` entry
+  // with THAT round's `seenAliveAt` - never frozen at the round it was first
+  // killed - so a later orphan's window is bounded by how long the victim was
+  // actually still provably alive, not by the first round that happened to
+  // notice it.
+  it("a repeated victim's seenAliveAt advances across rounds, widening what a later orphan can be attributed to", async () => {
+    // Chronology (samples 2000, 4000, 6000, 8000):
+    //   R0 (sample 2000): 100 (born 1000, slot). Killed.
+    //   R1 (sample 4000): 100 is STILL listed (`TerminateProcess` is
+    //       asynchronous - the loop's own comment names this exact case) and
+    //       has meanwhile spawned 555 (born 3000, validated child). Both are
+    //       killed, 555 first. 100's window now extends to 4000.
+    //   R2 (sample 6000): 100 is gone; 555 lingers the same way, its edge
+    //       now `parentProcessId` 0. Born 3000, it is AFTER round 0's bound
+    //       (2000) but inside round 1's (4000): only the widened window can
+    //       attribute it, and it is killed again rather than reported as
+    //       undecided.
+    //   R3 (sample 8000): empty. Converged.
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+          {
+            processId: 555,
+            parentProcessId: 100,
+            claimedParentProcessId: 100,
+            created: 3000,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          {
+            processId: 555,
+            parentProcessId: 0,
+            claimedParentProcessId: 100,
+            created: 3000,
+            slot: false,
+          },
+        ],
+      },
+      { kind: "table", rows: [] },
+    ]);
+    const samples = [2000, 4000, 6000, 8000];
+    let sample = 0;
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 8000;
+        sample += 1;
+        return value;
+      },
+    });
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    expect(killedPids(calls)).toEqual([100, 555, 100, 555]);
+
+    // Ablation: in `rememberIncarnation`, skip the push when an entry already
+    // exists (first incarnation only) → this test reddens: 100's only window
+    // ends at round 0's 2000, 555 (born 3000) falls outside it, and round 2
+    // reports it unattributed instead of killing it.
+  });
+
+  // P2 (round 5c): a kill set of `[]` used to mean convergence unconditionally.
+  // A row claiming a killed process as parent but born after it was last
+  // proven alive is undecidable (a row born BEFORE the victim existed is not:
+  // it is decided to be somebody else's, see the P2-2 pin) - and reporting the
+  // stop successful while it survives is the bug this refusal exists to
+  // close. Kills still happen first: a round with
+  // BOTH a killable seed and an undecidable row proceeds to kill the seed,
+  // and only refuses once a later round's kill set is empty with the
+  // undecidable row still unexplained.
+  it("kills happen first even when an unattributed row sits in the same round's scan; the throw only comes once nothing is left to kill", async () => {
+    // Chronology (samples 5000, 7000, 9000):
+    //   R0 (sample 5000): host 100 (born 1000, slot). Killed.
+    //   R1 (sample 7000): a NEW slot process 200 (born 6200 - a relaunch,
+    //       hence absent from R0) and 777 (born 6000, claims 100, after 100's
+    //       window closed at 5000, so undecided). kill=[200],
+    //       unattributed=[777]: 200 dies, the refusal waits.
+    //   R2 (sample 9000): only 777. Nothing to kill, 777 still undecided:
+    //       refused, naming it.
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          { processId: 200, parentProcessId: 1, created: 6200, slot: true },
+          {
+            processId: 777,
+            parentProcessId: 0,
+            claimedParentProcessId: 100,
+            created: 6000,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          {
+            processId: 777,
+            parentProcessId: 0,
+            claimedParentProcessId: 100,
+            created: 6000,
+            slot: false,
+          },
+        ],
+      },
+    ]);
+    const samples = [5000, 7000, 9000];
+    let sample = 0;
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 9000;
+        sample += 1;
+        return value;
+      },
+    });
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      details: { unattributedPids: [777] },
+    });
+
+    // 200 (an ordinary slot match) was killed even though 777 (undecided)
+    // sat alongside it in the very same round's scan.
+    expect(killedPids(calls)).toEqual([100, 200]);
+
+    // Ablation (§ablation table): in `killHostProcessTree`, return `kill`
+    // only (drop the `unattributed.length > 0` throw) → this test's
+    // rejection reddens into a resolve, reporting the host stopped with 777
+    // still alive.
+  });
+
+  it("P2-1: an undecided row that exits between rounds leaves its child undecided too - the suspect memory outlives the row that earned it", async () => {
+    // Chronology (epoch micros; the clock is sampled BEFORE each scan):
+    //   R0 sample 5000: host 100 (born 1000, slot) -> killed.
+    //   R1 sample 7000: slot 200 (born 6200, a re-launch), non-slot 777
+    //     (born 6000, claims 100, born AFTER 100's window closed at 5000)
+    //     and 777's live, validated child 888 (born 6500).
+    //     kill=[200], unattributed=[777, 888] -> 200 is killed, 777 and 888
+    //     are remembered as suspects.
+    //   R2 sample 9000: 777 has exited on its own. Only 888 remains, parent
+    //     0, claimed 777.
+    // 777 was never a victim, so without the suspect memory 888 is an
+    // ordinary orphan claiming a pid nothing remembers: empty kill, empty
+    // unattributed, and the stop reports success with a possible host
+    // grandchild alive. With it, 888 inherits 777's suspicion and the loop
+    // refuses, naming 888.
+    const samples = [5000, 7000, 9000, 11000];
+    let sample = 0;
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          { processId: 200, parentProcessId: 1, created: 6200, slot: true },
+          {
+            processId: 777,
+            parentProcessId: 0,
+            claimedParentProcessId: 100,
+            created: 6000,
+            slot: false,
+          },
+          {
+            processId: 888,
+            parentProcessId: 777,
+            claimedParentProcessId: 777,
+            created: 6500,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          {
+            processId: 888,
+            parentProcessId: 0,
+            claimedParentProcessId: 777,
+            created: 6500,
+            slot: false,
+          },
+        ],
+      },
+    ]);
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 11000;
+        sample += 1;
+        return value;
+      },
+    });
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      details: { unattributedPids: [888] },
+    });
+
+    expect(scanCalls(calls)).toHaveLength(4);
+    expect(killedPids(calls)).toEqual([100, 200]);
+
+    // Ablation (§ablation table): in `killHostProcessTree`, drop the
+    // `priorSuspects` recording loop (record victims only) → this test
+    // reddens: round 2 finds nothing to kill and nothing it remembers, and
+    // the stop RESOLVES with 888 alive. Alternatively make
+    // `classifyAgainstSuspect` return "none" → same outcome. Neither is
+    // masked by 888's own suspect entry: a row's classification consults
+    // only its CLAIMED PARENT's incarnations, never its own.
+  });
+
+  it("P2 (round 5e): a newer incarnation of a suspect's pid does not erase the suspicion about the older one's child", async () => {
+    // Chronology (samples 5000, 7000, 9000, 11000):
+    //   R0 (sample 5000): host 100 (born 1000, slot). Killed.
+    //   R1 (sample 7000): slot 200 (born 6200), 777 (born 6000, claims dead
+    //       100 - undecided) and 777's validated child 888 (born 6500).
+    //       kill=[200], unattributed=[777, 888].
+    //   R2 (sample 9000): old 777 has exited; a NEW slot-matched process
+    //       wears pid 777 (born 8000). 888 is still there; the scan zeroes
+    //       its edge because the holder of 777 is younger than it. 888 is
+    //       undecided (suspect 777 at 6000); the newcomer is killed as a slot
+    //       match and becomes victim 777 = [8000, 9000].
+    //   R3 (sample 11000): only 888. Against victim 777 (born 8000) it is
+    //       "older than the victim" - decided, and wrongly, if that were the
+    //       only memory consulted. The remembered suspect incarnation of 777
+    //       (born 6000) keeps it undecided: refused, naming 888.
+    const samples = [5000, 7000, 9000, 11000];
+    let sample = 0;
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          { processId: 200, parentProcessId: 1, created: 6200, slot: true },
+          {
+            processId: 777,
+            parentProcessId: 0,
+            claimedParentProcessId: 100,
+            created: 6000,
+            slot: false,
+          },
+          {
+            processId: 888,
+            parentProcessId: 777,
+            claimedParentProcessId: 777,
+            created: 6500,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          { processId: 777, parentProcessId: 1, created: 8000, slot: true },
+          {
+            processId: 888,
+            parentProcessId: 0,
+            claimedParentProcessId: 777,
+            created: 6500,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          {
+            processId: 888,
+            parentProcessId: 0,
+            claimedParentProcessId: 777,
+            created: 6500,
+            slot: false,
+          },
+        ],
+      },
+    ]);
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 11000;
+        sample += 1;
+        return value;
+      },
+    });
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      details: { unattributedPids: [888] },
+    });
+
+    expect(killedPids(calls)).toEqual([100, 200, 777]);
+
+    // Ablation: in `classifyCarryOverClaim`, return the FIRST verdict instead
+    // of the strongest (`return classifyAgainstVictim(...)` inside the
+    // victims loop) → this test reddens: round 3 consults victim 777 (born
+    // 8000) first, decides 888 is older than it, never reaches the remembered
+    // suspect, and the stop RESOLVES with 888 alive. The recorder's
+    // append-vs-overwrite is NOT what this fixture exercises - 777's suspect
+    // and victim incarnations live in different maps, and 888's two suspect
+    // entries are identical - so overwriting `rememberIncarnation` leaves it
+    // green; the lingering-victim loop test above is the one that reddens.
+  });
+
+  it("a suspicion earned while a live parent's age was unreadable is cleared once the age reads and the edge validates", async () => {
+    // Chronology (samples 5000, 7000, 9000):
+    //   R0 (sample 5000): host 100 (born 1000, slot). Killed.
+    //   R1 (sample 7000): slot 200 (born 6200); an unrelated replacement
+    //       wearing pid 100, whose creation time Windows would not report
+    //       this time (`created` 0); its child 888 (born 6500), whose edge
+    //       the scan therefore zeroes. 888 claims remembered 100 and is
+    //       born after the window: undecided. kill=[200],
+    //       unattributed=[888]; 888 is remembered as a suspect.
+    //   R2 (sample 9000): the replacement's age reads (6000, older than
+    //       888) and the scan validates 888's edge to it. That is lineage
+    //       the scan has proven; the earlier suspicion must not refuse the
+    //       stop over a stranger's child. Converged.
+    const samples = [5000, 7000, 9000];
+    let sample = 0;
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          { processId: 200, parentProcessId: 1, created: 6200, slot: true },
+          {
+            processId: 100,
+            parentProcessId: 0,
+            claimedParentProcessId: 1,
+            created: 0,
+            slot: false,
+          },
+          {
+            processId: 888,
+            parentProcessId: 0,
+            claimedParentProcessId: 100,
+            created: 6500,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          {
+            processId: 100,
+            parentProcessId: 0,
+            claimedParentProcessId: 1,
+            created: 6000,
+            slot: false,
+          },
+          {
+            processId: 888,
+            parentProcessId: 100,
+            claimedParentProcessId: 100,
+            created: 6500,
+            slot: false,
+          },
+        ],
+      },
+    ]);
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 9000;
+        sample += 1;
+        return value;
+      },
+    });
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    expect(scanCalls(calls)).toHaveLength(4);
+    expect(killedPids(calls)).toEqual([100, 200]);
+  });
+
+  it("round-6 P2: a spared shell's uncertainty outlives the shell - its children still refuse the stop after it exits", async () => {
+    // The CLI (this process, pid 9999 here) runs in a terminal shell 700 the
+    // host spawned - the "terminal-run" topology - and the host's own age is
+    // unreadable, so 700 can be placed neither way for the whole loop.
+    // Chronology (samples 5000, 7000, 9000):
+    //   R0 (sample 5000): host 100 (slot, `created` 0 - unreadable), shell
+    //       700 (born 2000) claiming it with a zeroed edge, the CLI (born
+    //       2500) as 700's validated child. kill=[100]; victim 100 =
+    //       [0, 5000]. 700 is spared by ancestry; nothing is undecided yet
+    //       because nothing was remembered yet.
+    //   R1 (sample 7000): 700 and the CLI again, a side worker 888 (born
+    //       6000, 700's validated child) and a re-launched slot 200 (born
+    //       6200). Against the unreadable victim 700 is undecided; the
+    //       closure is {700, CLI, 888}; 700 and the CLI are spared from the
+    //       REPORT, so unattributed=[888]. kill=[200]. The memory must take
+    //       the whole closure: 700 and 888 become suspects.
+    //   R2 (sample 9000): 700 has exited. The CLI and 888 now claim absent
+    //       700, and a NEW child 889 (born 8000) does too. Nothing was
+    //       killed, so the verdict rests on memory: suspect 700 (born 2000)
+    //       makes every claim born after it undecided. The CLI is spared;
+    //       888 and 889 are named, and the stop refuses. Before this fix
+    //       only 888 was remembered - by its own pid, not its parent's - and
+    //       the loop reported a converged stop with both alive.
+    const samples = [5000, 7000, 9000];
+    let sample = 0;
+    const shell700 = (parent: number): TableRowInput => ({
+      processId: 700,
+      parentProcessId: parent,
+      claimedParentProcessId: 100,
+      created: 2000,
+      slot: false,
+    });
+    const cli9999 = (parent: number): TableRowInput => ({
+      processId: 9999,
+      parentProcessId: parent,
+      claimedParentProcessId: 700,
+      created: 2500,
+      slot: false,
+    });
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 0, slot: true },
+          shell700(0),
+          cli9999(700),
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          shell700(0),
+          cli9999(700),
+          {
+            processId: 888,
+            parentProcessId: 700,
+            claimedParentProcessId: 700,
+            created: 6000,
+            slot: false,
+          },
+          { processId: 200, parentProcessId: 1, created: 6200, slot: true },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          cli9999(0),
+          {
+            processId: 888,
+            parentProcessId: 0,
+            claimedParentProcessId: 700,
+            created: 6000,
+            slot: false,
+          },
+          {
+            processId: 889,
+            parentProcessId: 0,
+            claimedParentProcessId: 700,
+            created: 8000,
+            slot: false,
+          },
+        ],
+      },
+    ]);
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 9000;
+        sample += 1;
+        return value;
+      },
+    });
+
+    const originalPid = Object.getOwnPropertyDescriptor(process, "pid");
+    Object.defineProperty(process, "pid", { value: 9999, configurable: true });
+    try {
+      await expect(
+        controller.stop(serviceLabelFor("staging"), { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        details: { unattributedPids: [888, 889] },
+      });
+    } finally {
+      if (originalPid !== undefined) {
+        Object.defineProperty(process, "pid", originalPid);
+      }
+    }
+
+    expect(scanCalls(calls)).toHaveLength(4);
+    expect(killedPids(calls)).toEqual([100, 200]);
+
+    // Ablation: in `killHostProcessTree`, record suspects from `unattributed`
+    // instead of `undecided` → this test reddens: round 2 remembers 888 but
+    // not 700, no row's claim on 700 matches anything, and the stop RESOLVES
+    // with 888 and 889 alive (same kills, same three scans). 889 is why a
+    // self-identity rule would not have been enough: it was never seen
+    // before, so nothing about its own pid could be remembered - only its
+    // parent's.
+  });
+
+  it("round-6 P2, overlap: a spared shell that is BOTH a victim's validated child and an undecided root is still remembered", async () => {
+    // A spared shell can sit in both closures at once - the killed host's
+    // validated child AND a descendant of an undecided root - and it is
+    // never killed, so the kill bookkeeping alone would remember nothing
+    // about it. It is a PLACED ancestor of the CLI: reported as lineage,
+    // remembered with a window like a kill, and its later child is placed
+    // through that window. Chronology (samples 5000, 7000, 9000; CLI is
+    // pid 9999):
+    //   R0 (sample 5000): slot 200 (age unreadable) and slot 100 (born
+    //       1000) claiming 200 with a zeroed edge; shell 700 (born 2000) is
+    //       100's validated child, the CLI (born 2500) is 700's. Kill 200
+    //       and 100; 700 and the CLI are spared. Victims 200 = [0, 5000],
+    //       100 = [1000, 5000].
+    //   R1 (sample 7000): 200 is gone; 100 lingers in its TerminateProcess,
+    //       700 and the CLI remain, and a side worker 888 (born 6000) sits
+    //       under 700. 100 is a slot seed AND, against the unreadable victim
+    //       200, undecided - so both closures are {100, 700, CLI, 888}. The
+    //       actual kill is [888, 100]; 700 is a placed ancestor, remembered
+    //       as 700 = [2000, 7000] (and by identity); the CLI is its own
+    //       branch. Nothing is left undecided.
+    //   R2 (sample 9000): 100 and 888 are gone, 700 spawned 889 (born 8000)
+    //       and exited. The CLI and 889 claim absent 700: the CLI (born 2500)
+    //       falls inside 700's window and is spared as itself; 889 falls
+    //       after it and is undecided. The stop refuses naming 889.
+    const samples = [5000, 7000, 9000];
+    let sample = 0;
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          // An unreadable age zeroes the row's own edge too - the scan
+          // cannot validate a parent for a row whose birth it cannot read -
+          // so 200 carries its claim on pid 1 with `parentProcessId` 0.
+          {
+            processId: 200,
+            parentProcessId: 0,
+            claimedParentProcessId: 1,
+            created: 0,
+            slot: true,
+          },
+          {
+            processId: 100,
+            parentProcessId: 0,
+            claimedParentProcessId: 200,
+            created: 1000,
+            slot: true,
+          },
+          {
+            processId: 700,
+            parentProcessId: 100,
+            claimedParentProcessId: 100,
+            created: 2000,
+            slot: false,
+          },
+          {
+            processId: 9999,
+            parentProcessId: 700,
+            claimedParentProcessId: 700,
+            created: 2500,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          {
+            processId: 100,
+            parentProcessId: 0,
+            claimedParentProcessId: 200,
+            created: 1000,
+            slot: true,
+          },
+          {
+            processId: 700,
+            parentProcessId: 100,
+            claimedParentProcessId: 100,
+            created: 2000,
+            slot: false,
+          },
+          {
+            processId: 9999,
+            parentProcessId: 700,
+            claimedParentProcessId: 700,
+            created: 2500,
+            slot: false,
+          },
+          {
+            processId: 888,
+            parentProcessId: 700,
+            claimedParentProcessId: 700,
+            created: 6000,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          {
+            processId: 9999,
+            parentProcessId: 0,
+            claimedParentProcessId: 700,
+            created: 2500,
+            slot: false,
+          },
+          {
+            processId: 889,
+            parentProcessId: 0,
+            claimedParentProcessId: 700,
+            created: 8000,
+            slot: false,
+          },
+        ],
+      },
+    ]);
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 9000;
+        sample += 1;
+        return value;
+      },
+    });
+
+    const originalPid = Object.getOwnPropertyDescriptor(process, "pid");
+    Object.defineProperty(process, "pid", { value: 9999, configurable: true });
+    try {
+      await expect(
+        controller.stop(serviceLabelFor("staging"), { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        details: { unattributedPids: [889] },
+      });
+    } finally {
+      if (originalPid !== undefined) {
+        Object.defineProperty(process, "pid", originalPid);
+      }
+    }
+
+    expect(scanCalls(calls)).toHaveLength(4);
+    expect(killedPids(calls)).toEqual([
+      // R0: both slot rows have zeroed edges (depth 0), so pid order.
+      100, 200,
+      // R1: 888 (depth 2) before the lingering 100.
+      888, 100,
+    ]);
+
+    // Ablation: in `killHostProcessTree`, drop the `protectedAncestors`
+    // recording loop → this test reddens: 700 is neither killed nor - being
+    // subtracted from `undecided` as something the loop was about to
+    // remember - a suspect, round 2 finds nothing that remembers it, and the
+    // stop RESOLVES with 889 alive.
+  });
+
+  it("a placed CLI ancestor is remembered with a window though it is never killed: its later children are placed after it exits", async () => {
+    // The all-known-age form of the same invariant - no unreadable age, no
+    // pid reuse. The host spawned shell 700 to run this CLI (pid 9999);
+    // ages are all readable, so 700 is PLACED every round (a validated
+    // child of the host, then a carry-over seed through the host's window),
+    // spared as the CLI's ancestor, and - before this fix - never recorded,
+    // because only kills were. Chronology (samples 5000, 7000, 9000,
+    // 11000):
+    //   R0 (sample 5000): host 100 (born 1000, slot) -> shell 700 (born
+    //       2000) -> CLI (born 2500). kill=[100]; 700 is a placed ancestor,
+    //       remembered as 700 = [2000, 5000].
+    //   R1 (sample 7000): 700 orphaned (claims dead 100, inside its window:
+    //       seed), the CLI, and a side worker 888 (born 6000) under 700.
+    //       kill=[888]; 700 placed again, second window [2000, 7000].
+    //   R2 (sample 9000): 700 spawned 889 (born 8000) and exited; 888
+    //       lingers. All three claim absent 700. The CLI (born 2500) and 888
+    //       (born 6000) fall inside 700's windows: seeds - the CLI is spared,
+    //       888 is killed. 889 falls after the last window: undecided.
+    //       kill=[888], unattributed=[889] - kills first.
+    //   R3 (sample 11000): the CLI and 889. Nothing to kill; 889 is still
+    //       undecided, and the stop refuses naming it. Before this fix round
+    //       2 already resolved: nothing remembered 700, so the CLI, 888 and
+    //       889 were three orphans claiming a pid nobody knew.
+    const samples = [5000, 7000, 9000, 11000];
+    let sample = 0;
+    const cliUnder = (parent: number): TableRowInput => ({
+      processId: 9999,
+      parentProcessId: parent,
+      claimedParentProcessId: 700,
+      created: 2500,
+      slot: false,
+    });
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+          {
+            processId: 700,
+            parentProcessId: 100,
+            claimedParentProcessId: 100,
+            created: 2000,
+            slot: false,
+          },
+          cliUnder(700),
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          {
+            processId: 700,
+            parentProcessId: 0,
+            claimedParentProcessId: 100,
+            created: 2000,
+            slot: false,
+          },
+          cliUnder(700),
+          {
+            processId: 888,
+            parentProcessId: 700,
+            claimedParentProcessId: 700,
+            created: 6000,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          cliUnder(0),
+          {
+            processId: 888,
+            parentProcessId: 0,
+            claimedParentProcessId: 700,
+            created: 6000,
+            slot: false,
+          },
+          {
+            processId: 889,
+            parentProcessId: 0,
+            claimedParentProcessId: 700,
+            created: 8000,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          cliUnder(0),
+          {
+            processId: 889,
+            parentProcessId: 0,
+            claimedParentProcessId: 700,
+            created: 8000,
+            slot: false,
+          },
+        ],
+      },
+    ]);
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 11000;
+        sample += 1;
+        return value;
+      },
+    });
+
+    const originalPid = Object.getOwnPropertyDescriptor(process, "pid");
+    Object.defineProperty(process, "pid", { value: 9999, configurable: true });
+    try {
+      await expect(
+        controller.stop(serviceLabelFor("staging"), { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        details: { unattributedPids: [889] },
+      });
+    } finally {
+      if (originalPid !== undefined) {
+        Object.defineProperty(process, "pid", originalPid);
+      }
+    }
+
+    expect(scanCalls(calls)).toHaveLength(5);
+    expect(killedPids(calls)).toEqual([100, 888, 888]);
+
+    // Ablation: in `killHostProcessTree`, drop the `protectedAncestors`
+    // recording loop → this test reddens: round 2 finds three orphans
+    // claiming a pid nothing remembers, kills nothing, reports nothing, and
+    // the stop RESOLVES after three scans with 888 and 889 alive.
+  });
+
+  it("round-7 P2: the CLI's own scan is never remembered as a host suspect - a stranger reusing its pid does not refuse a later stop", async () => {
+    // The CLI (pid 9999) claims a host whose age is unreadable, so it is
+    // undecided for as long as that host is remembered - and every scan it
+    // runs is its validated child AND slot-matched (the scan's command line
+    // names the slot paths). Chronology (samples 5000, 7000, 9000):
+    //   R0 (sample 5000): host 100 (slot, `created` 0), the CLI (born 2500)
+    //       claiming it, and this round's own scan 555 (born 5500, under the
+    //       CLI, slot-matched). Memory is empty, so nothing is undecided yet.
+    //       kill=[100]; the CLI's branch is spared.
+    //   R1 (sample 7000): 100 lingers (seed), the CLI is now undecided
+    //       against victim 100 of unreadable age, and this round's scan 777
+    //       (born 7500) sits under it - in the suspect closure, spared from
+    //       the kill. kill=[100]. NOTHING is remembered as a suspect: the
+    //       CLI's branch is its own, not the host's.
+    //   R2 (sample 9000): scan 777 has long exited; an unrelated process
+    //       took pid 777 (born 8000), forked 888 (born 8500) and exited. 888
+    //       claims 777 as an orphan. Nothing remembers 777: converged. Had
+    //       777 been recorded as a host suspect, 888 would have refused the
+    //       stop over a stranger.
+    const samples = [5000, 7000, 9000];
+    let sample = 0;
+    // An unreadable age zeroes the row's own edge (the scan cannot validate
+    // a parent for a birth it cannot read), so the host carries its claim on
+    // pid 1 with `parentProcessId` 0.
+    const host100: TableRowInput = {
+      processId: 100,
+      parentProcessId: 0,
+      claimedParentProcessId: 1,
+      created: 0,
+      slot: true,
+    };
+    const cli = {
+      processId: 9999,
+      parentProcessId: 0,
+      claimedParentProcessId: 100,
+      created: 2500,
+      slot: false,
+    };
+    const ownScan = (pid: number, created: number): TableRowInput => ({
+      processId: pid,
+      parentProcessId: 9999,
+      claimedParentProcessId: 9999,
+      created,
+      slot: true,
+    });
+    const { runner, calls } = roundedRunner([
+      { kind: "table", rows: [host100, cli, ownScan(555, 5500)] },
+      { kind: "table", rows: [host100, cli, ownScan(777, 7500)] },
+      {
+        kind: "table",
+        rows: [
+          cli,
+          {
+            processId: 888,
+            parentProcessId: 0,
+            claimedParentProcessId: 777,
+            created: 8500,
+            slot: false,
+          },
+        ],
+      },
+    ]);
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 9000;
+        sample += 1;
+        return value;
+      },
+    });
+
+    const originalPid = Object.getOwnPropertyDescriptor(process, "pid");
+    Object.defineProperty(process, "pid", { value: 9999, configurable: true });
+    try {
+      await controller.stop(serviceLabelFor("staging"), { force: false });
+    } finally {
+      if (originalPid !== undefined) {
+        Object.defineProperty(process, "pid", originalPid);
+      }
+    }
+
+    expect(scanCalls(calls)).toHaveLength(4);
+    expect(killedPids(calls)).toEqual([100, 100]);
+
+    // Ablation: in `computeWindowsHostKillSet`, drop `!cliBranch.has(pid)`
+    // from the `undecided` filter → this test reddens: round 1 remembers
+    // scan 777 (born 7500) as a suspect, round 2 finds 888 (born 8500)
+    // claiming it, and the stop REFUSES naming 888 - a stranger's child.
+  });
+
+  it("two missing wrappers: the shell above the CLI stays protected by identity after the edges that proved its ancestry are gone", async () => {
+    // Remembering a placed ancestor's WINDOW is what places its children;
+    // remembering its IDENTITY is what keeps the ancestor itself protected.
+    // Chronology (samples 5000, 7000, 9000; CLI is pid 9999):
+    //   R0 (sample 5000): slot 100 (born 1000) -> wrapper 600 (born 1500)
+    //       -> shell 700 (born 2000) -> wrapper 800 (born 2250) -> CLI (born
+    //       2500), every age readable. kill=[100]; 600, 700 and 800 are the
+    //       CLI's placed ancestors, remembered by window and by identity.
+    //   R1 (sample 7000): both wrappers have exited on their own. 700
+    //       claims absent 600 (inside 600's window: a seed) and the CLI
+    //       claims absent 800; a side worker 888 (born 6000) sits under 700.
+    //       The live walk from the CLI ends at its zeroed edge, so on the
+    //       window alone 700 is an ordinary host descendant to kill. Its
+    //       identity (700, born 2000) says it is the shell this CLI runs in:
+    //       spared, placed again, and only 888 is killed.
+    //   R2 (sample 9000): 700 and the CLI. Nothing to kill, nothing
+    //       undecided. Converged - with the shell alive.
+    const samples = [5000, 7000, 9000];
+    let sample = 0;
+    const { runner, calls } = roundedRunner([
+      {
+        kind: "table",
+        rows: [
+          { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+          {
+            processId: 600,
+            parentProcessId: 100,
+            claimedParentProcessId: 100,
+            created: 1500,
+            slot: false,
+          },
+          {
+            processId: 700,
+            parentProcessId: 600,
+            claimedParentProcessId: 600,
+            created: 2000,
+            slot: false,
+          },
+          {
+            processId: 800,
+            parentProcessId: 700,
+            claimedParentProcessId: 700,
+            created: 2250,
+            slot: false,
+          },
+          {
+            processId: 9999,
+            parentProcessId: 800,
+            claimedParentProcessId: 800,
+            created: 2500,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          {
+            processId: 700,
+            parentProcessId: 0,
+            claimedParentProcessId: 600,
+            created: 2000,
+            slot: false,
+          },
+          {
+            processId: 9999,
+            parentProcessId: 0,
+            claimedParentProcessId: 800,
+            created: 2500,
+            slot: false,
+          },
+          {
+            processId: 888,
+            parentProcessId: 700,
+            claimedParentProcessId: 700,
+            created: 6000,
+            slot: false,
+          },
+        ],
+      },
+      {
+        kind: "table",
+        rows: [
+          {
+            processId: 700,
+            parentProcessId: 0,
+            claimedParentProcessId: 600,
+            created: 2000,
+            slot: false,
+          },
+          {
+            processId: 9999,
+            parentProcessId: 0,
+            claimedParentProcessId: 800,
+            created: 2500,
+            slot: false,
+          },
+        ],
+      },
+    ]);
+    const controller = createWindowsController(runner, {
+      now: () => {
+        const value = samples[sample] ?? 9000;
+        sample += 1;
+        return value;
+      },
+    });
+
+    const originalPid = Object.getOwnPropertyDescriptor(process, "pid");
+    Object.defineProperty(process, "pid", { value: 9999, configurable: true });
+    try {
+      await controller.stop(serviceLabelFor("staging"), { force: false });
+    } finally {
+      if (originalPid !== undefined) {
+        Object.defineProperty(process, "pid", originalPid);
+      }
+    }
+
+    expect(scanCalls(calls)).toHaveLength(4);
+    expect(killedPids(calls)).toEqual([100, 888]);
+
+    // Ablation: in `killHostProcessTree`, drop the `priorProtected`
+    // recording (or in `computeWindowsHostKillSet` the identity lookup) →
+    // this test reddens: round 1 kills 700 as well -
+    // the shell this CLI is running in - after 888 (descendants first).
+  });
+
+  // The unattributed refusal exercised through all four callers that run
+  // `killHostProcessTree`: none of them may treat it as anything softer than
+  // the scan-unavailable refusal already covered above. The fourth is the
+  // install swap's between-retry escalation, `killLingeringSlotProcesses`,
+  // which throws like the others; that `swapLockRetryHook` then logs the
+  // refusal and lets the rename retry anyway is existing, documented
+  // behaviour of the hook (see `killLingeringSlotProcesses`'s own comment),
+  // not of the function under test here.
+  describe("all four killHostProcessTree callers refuse the same way on an unattributed row", () => {
+    function unattributedRefusalRounds(): readonly RoundResponse[] {
+      return [
+        {
+          kind: "table",
+          rows: [
+            { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+          ],
+        },
+        {
+          kind: "table",
+          rows: [
+            {
+              processId: 777,
+              parentProcessId: 0,
+              claimedParentProcessId: 100,
+              created: 999_999,
+              slot: false,
+            },
+          ],
+        },
+      ];
+    }
+    const unattributedDeps: WindowsControllerDeps = { now: () => 5000 };
+
+    it("stop does NOT purge pid metadata when the refusal is an unattributed row, not just when the scan itself fails", async () => {
+      const { runner } = roundedRunner(unattributedRefusalRounds());
+      const controller = createWindowsController(runner, unattributedDeps);
+
+      await expect(
+        controller.stop(serviceLabelFor("staging"), { force: false }),
+      ).rejects.toMatchObject({ code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED });
+
+      expect(mocks.removeHostPidMetadata).not.toHaveBeenCalled();
+    });
+
+    it("uninstall never reaches schtasks /Delete when the tree kill refuses on an unattributed row", async () => {
+      const { runner, calls } = roundedRunner(unattributedRefusalRounds());
+      const controller = createWindowsController(runner, unattributedDeps);
+
+      await expect(
+        controller.uninstall({
+          label: serviceLabelFor("staging"),
+          leaveForegroundRun: null,
+        }),
+      ).rejects.toMatchObject({ code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED });
+
+      expect(
+        calls.some(
+          (call) => call.command === "schtasks" && call.args[0] === "/Delete",
+        ),
+      ).toBe(false);
+    });
+
+    it("restart never reaches schtasks /Run when the tree kill refuses on an unattributed row", async () => {
+      const { runner, calls } = roundedRunner(unattributedRefusalRounds());
+      const controller = createWindowsController(runner, unattributedDeps);
+
+      await expect(
+        controller.restart(serviceLabelFor("staging")),
+      ).rejects.toMatchObject({ code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED });
+
+      expect(
+        calls.some(
+          (call) => call.command === "schtasks" && call.args[0] === "/Run",
+        ),
+      ).toBe(false);
+    });
+
+    it("killLingeringSlotProcesses (the install swap's between-retry kill) throws the same refusal, naming the row", async () => {
+      // The swap path has no pid metadata to purge and no task to touch;
+      // what it must not do is resolve, because `swapLockRetryHook` reads a
+      // resolved kill as "the slot was cleared, retry the rename". The hook's
+      // own decision to log and retry anyway is its business; this function
+      // has to hand it the truth.
+      //
+      // Unlike the three callers above, this one never reaches the guard -
+      // `killLingeringSlotProcesses` is called directly here, not through
+      // `controller.stop`/`uninstall`/`restart` - so its scans are exactly
+      // `unattributedRefusalRounds()`, unshifted.
+      const { runner } = unguardedRoundedRunner(unattributedRefusalRounds());
+
+      await expect(
+        killLingeringSlotProcesses(
+          serviceLabelFor("staging"),
+          runner,
+          unattributedDeps,
+        ),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        details: { unattributedPids: [777] },
+      });
+    });
+  });
+
+  // At the round bound a
+  // LISTING is about to fail the stop, and the whole point of this fix is
+  // that a listing is no proof - an exited process can stay in the table while
+  // another process still holds a handle to it. So at the bound, and only
+  // there, `killVerifiedProcessTree`
+  // asks each listed pid through its own handle first (`killSetStillRunning`)
+  // before deciding whether to refuse. These pins drive that branch directly
+  // through `controller.stop`, with a bespoke runner that routes scan, kill
+  // and probe calls independently by script text (`isScanCall`/`isKillCall`/
+  // `isProbeCall`) - `roundedRunner`'s table-only scripting can't express a
+  // scan that keeps re-listing a pid the kill script itself reports success
+  // for, which is exactly the artifact this fix exists to see through.
+  describe("the round-bound probe on a listing the table cannot disprove", () => {
+    const ROUNDS = WINDOWS_KILL_CONVERGENCE_ROUNDS;
+
+    it("a slot process the scan keeps listing every round, but the round-bound probe reports it gone, converges instead of refusing", async () => {
+      // The scenario measured on Windows Server 2022: X's kill script never
+      // throws (it reports `killed` every round - the OS accepted the
+      // terminate call), yet the NEXT scan keeps listing X under the same
+      // identity anyway - another process still holds a handle to it, keeping
+      // its row in the process table. Nothing in the round loop's own
+      // kill-set computation consults a kill script's outcome (only the
+      // NEXT SCAN's rows decide what is still "kill"able), so X is
+      // re-selected every round regardless - this table alone would never
+      // converge on its own; only the round-bound probe's own, independent
+      // answer can.
+      const X = 950_001;
+      const calls: RecordedCall[] = [];
+      let scanCount = 0;
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (isScanCall(command, args)) {
+          scanCount += 1;
+          if (scanCount === 1) return success(tableJson([])); // guard scan
+          return success(
+            tableJson([
+              { processId: X, parentProcessId: 1, created: 1000, slot: true },
+            ]),
+          );
+        }
+        if (isProbeCall(command, args)) {
+          return success(killOutcomeJson([{ processId: X, outcome: "gone" }]));
+        }
+        if (isKillCall(command, args)) {
+          return success(
+            killOutcomeJson([{ processId: X, outcome: "killed" }]),
+          );
+        }
+        return success("");
+      };
+      const controller = createWindowsController(runner, noTimingDeps);
+
+      await expect(
+        controller.stop(serviceLabelFor("staging"), { force: false }),
+      ).resolves.toBeUndefined();
+
+      // The guard's leading scan, plus one scan per round 0..ROUNDS.
+      expect(scanCalls(calls)).toHaveLength(ROUNDS + 2);
+      // A real kill call in every round EXCEPT the bound: the bound round
+      // never reaches `killProcessIdentities` because the round-bound probe
+      // clears the listing before the `pids.length === 0` convergence check.
+      expect(killedPids(calls)).toEqual(
+        Array.from({ length: ROUNDS }, () => X),
+      );
+      expect(probeCalls(calls)).toHaveLength(1);
+      expect(killTargetsOf(probeCalls(calls)[0]?.args ?? [])).toEqual([
+        { processId: X, created: 1000 },
+      ]);
+
+      // Without the round-bound probe, `pids` at the bound is unconditionally
+      // `listed` - nothing clears it - so the loop throws "still running
+      // after N kill rounds" instead of resolving as above.
+    });
+
+    it("the round-bound probe reports it still running: the refusal names it exactly as an un-addended survivor would", async () => {
+      const X = 950_002;
+      const calls: RecordedCall[] = [];
+      let scanCount = 0;
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (isScanCall(command, args)) {
+          scanCount += 1;
+          if (scanCount === 1) return success(tableJson([]));
+          return success(
+            tableJson([
+              { processId: X, parentProcessId: 1, created: 1000, slot: true },
+            ]),
+          );
+        }
+        if (isProbeCall(command, args)) {
+          return success(
+            killOutcomeJson([{ processId: X, outcome: "running" }]),
+          );
+        }
+        if (isKillCall(command, args)) {
+          return success(
+            killOutcomeJson([{ processId: X, outcome: "killed" }]),
+          );
+        }
+        return success("");
+      };
+      const controller = createWindowsController(runner, noTimingDeps);
+
+      await expect(
+        controller.stop(serviceLabelFor("staging"), { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        details: { survivingPids: [X] },
+      });
+
+      expect(probeCalls(calls)).toHaveLength(1);
+    });
+
+    it("two listed pids at the bound, the probe clears one and keeps the other: the refusal names only the one still running", async () => {
+      const X = 950_003;
+      const Y = 950_004;
+      const calls: RecordedCall[] = [];
+      let scanCount = 0;
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (isScanCall(command, args)) {
+          scanCount += 1;
+          if (scanCount === 1) return success(tableJson([]));
+          return success(
+            tableJson([
+              { processId: X, parentProcessId: 1, created: 1000, slot: true },
+              { processId: Y, parentProcessId: 1, created: 2000, slot: true },
+            ]),
+          );
+        }
+        if (isProbeCall(command, args)) {
+          return success(
+            killOutcomeJson([
+              { processId: X, outcome: "gone" },
+              { processId: Y, outcome: "running" },
+            ]),
+          );
+        }
+        if (isKillCall(command, args)) {
+          const targets = killTargetsOf(args).map((target) => target.processId);
+          return success(
+            killOutcomeJson(
+              targets.map((pid) => ({ processId: pid, outcome: "killed" })),
+            ),
+          );
+        }
+        return success("");
+      };
+      const controller = createWindowsController(runner, noTimingDeps);
+
+      await expect(
+        controller.stop(serviceLabelFor("staging"), { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        details: { survivingPids: [Y] },
+      });
+
+      expect(probeCalls(calls)).toHaveLength(1);
+      expect(
+        killTargetsOf(probeCalls(calls)[0]?.args ?? [])
+          .map((t) => t.processId)
+          .sort((a, b) => a - b),
+      ).toEqual([X, Y].sort((a, b) => a - b));
+    });
+
+    it("the round-bound probe does not report (unparseable output): the refusal names every listed pid, exactly as before this addendum", async () => {
+      const X = 950_005;
+      const Y = 950_006;
+      const calls: RecordedCall[] = [];
+      let scanCount = 0;
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (isScanCall(command, args)) {
+          scanCount += 1;
+          if (scanCount === 1) return success(tableJson([]));
+          return success(
+            tableJson([
+              { processId: X, parentProcessId: 1, created: 1000, slot: true },
+              { processId: Y, parentProcessId: 1, created: 2000, slot: true },
+            ]),
+          );
+        }
+        if (isProbeCall(command, args)) {
+          return success("not json");
+        }
+        if (isKillCall(command, args)) {
+          const targets = killTargetsOf(args).map((target) => target.processId);
+          return success(
+            killOutcomeJson(
+              targets.map((pid) => ({ processId: pid, outcome: "killed" })),
+            ),
+          );
+        }
+        return success("");
+      };
+      const controller = createWindowsController(runner, noTimingDeps);
+
+      await expect(
+        controller.stop(serviceLabelFor("staging"), { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        details: { survivingPids: [X, Y] },
+      });
+
+      expect(probeCalls(calls)).toHaveLength(1);
+    });
+
+    it("the round-bound probe clears every listed pid, but an unattributed row is ALSO present that round: refuses on the unattributed row, not a resolved stop", async () => {
+      // P is killed cleanly in round 0 and never listed again (really
+      // reaped). X is the lingering/handle-held process, listed every
+      // round and always reporting `killed`. Y claims P - a remembered
+      // victim - but was born far outside P's proven lifetime window, so it
+      // is `unattributed` every round from round 1 onward, never resolving
+      // either way. At the bound, X is the only LISTED (killable) pid, and
+      // the round-bound probe clears it - but that must not paper over Y:
+      // the stop still has to refuse, on the unattributed row, not resolve.
+      const P = 950_101;
+      const X = 950_102;
+      const Y = 950_103;
+      const calls: RecordedCall[] = [];
+      let scanCount = 0;
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (isScanCall(command, args)) {
+          scanCount += 1;
+          if (scanCount === 1) return success(tableJson([])); // guard
+          if (scanCount === 2) {
+            return success(
+              tableJson([
+                { processId: P, parentProcessId: 1, created: 100, slot: true },
+                { processId: X, parentProcessId: 1, created: 200, slot: true },
+              ]),
+            );
+          }
+          // Round 1 onward: P is gone for good; X keeps showing up (the
+          // handle-held artifact); Y claims P at a birth far outside P's
+          // proven lifetime window.
+          return success(
+            tableJson([
+              { processId: X, parentProcessId: 1, created: 200, slot: true },
+              {
+                processId: Y,
+                parentProcessId: 0,
+                claimedParentProcessId: P,
+                created: 500_000,
+                slot: false,
+              },
+            ]),
+          );
+        }
+        if (isProbeCall(command, args)) {
+          return success(killOutcomeJson([{ processId: X, outcome: "gone" }]));
+        }
+        if (isKillCall(command, args)) {
+          const targets = killTargetsOf(args).map((target) => target.processId);
+          return success(
+            killOutcomeJson(
+              targets.map((pid) => ({ processId: pid, outcome: "killed" })),
+            ),
+          );
+        }
+        return success("");
+      };
+      const controller = createWindowsController(runner, noTimingDeps);
+
+      const rejection: unknown = await controller
+        .stop(serviceLabelFor("staging"), { force: false })
+        .catch((cause: unknown) => cause);
+
+      // The UNATTRIBUTED refusal specifically, not the "still running after
+      // N kill rounds" one - the two carry different shapes, and both would
+      // satisfy a bare `unattributedPids: [Y]` match (the round-bound
+      // refusal ALSO reports `unattributedPids` alongside its own
+      // `survivingPids`), so this checks the discriminating fields: the
+      // unattributed refusal's `details` has no `survivingPids` at all, and
+      // its message names what could not be tied to the slot rather than
+      // "still running after N kill rounds".
+      expect(rejection).toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        details: { unattributedPids: [Y] },
+      });
+      const details =
+        rejection !== null &&
+        typeof rejection === "object" &&
+        "details" in rejection
+          ? rejection.details
+          : null;
+      expect(
+        details !== null &&
+          typeof details === "object" &&
+          "survivingPids" in details,
+      ).toBe(false);
+      const message =
+        rejection instanceof Error ? rejection.message : String(rejection);
+      expect(message).toContain(
+        "could be neither tied to this slot nor ruled out of it",
+      );
+      expect(message).not.toContain("still running after");
+
+      // The round-bound probe genuinely ran and genuinely cleared X - this
+      // is the UNATTRIBUTED refusal, not the "still running" one, proving
+      // the two checks are independent: a fully-probe-cleared kill listing
+      // does not paper over a leftover unattributed row.
+      expect(probeCalls(calls)).toHaveLength(1);
+    });
+
+    it("no probe runs before the bound: a stop that converges well within the round bound issues no round-bound-probe-shaped call", async () => {
+      const { runner, calls } = convergingTableRunner([
+        { processId: 950_201, parentProcessId: 1, slot: true },
+      ]);
+      const controller = createWindowsController(runner, noTimingDeps);
+
+      await expect(
+        controller.stop(serviceLabelFor("staging"), { force: false }),
+      ).resolves.toBeUndefined();
+
+      expect(probeCalls(calls)).toHaveLength(0);
+    });
+  });
+});
+
+// The fix for a field-proven defect: the old code WARNed "left targets
+// unreached" for EVERY kill outcome other than `killed`/`gone`, including
+// `failed: Win32Exception` - which is exactly what `Kill()` throws on a
+// process that is already terminating, and killing a console client's last
+// process hands its console host precisely that state. The WARN then named a
+// pid no later round selected again. The fix defers judgment on a
+// `failed...` outcome to the scan that follows: `runHandleBoundKillScript` no
+// longer warns immediately for it (only `reused`/`unverifiable` still do),
+// `killProcessIdentities` returns it as a `WindowsFailedKill`, and the loop
+// hands the accumulated set to `reportFailedKillsStillRunning` right after the
+// NEXT scan - which warns only for a target that scan still lists under the
+// SAME (processId, created) identity, or for all of them when the scan
+// itself could not be read.
+describe("failed-kill WARN gating: a `failed: <type>` outcome waits for the next scan", () => {
+  beforeEach(() => {
+    mocks.readHostPidMetadata.mockReset();
+    mocks.readHostPidMetadata.mockResolvedValue(null);
+    mocks.removeHostPidMetadata.mockReset();
+    mocks.removeHostPidMetadata.mockResolvedValue(undefined);
+    loggerMock.warn.mockReset();
+  });
+
+  it("a failed-kill target absent from the next scan gets neither WARN, and the stop resolves", async () => {
+    // Round 0 kills 501 and the kill script reports `failed: Win32Exception`.
+    // Round 1's scan does not list 501 at all - it really is gone, exactly
+    // the field case (a console host that finished exiting on its own once
+    // its last client's Kill() raced it). `reportFailedKillsStillRunning`
+    // runs its OWN probe beside that scan (never from the scan's own table),
+    // and here it confirms 501 gone. Converges with nothing left.
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        scanCount += 1;
+        if (scanCount === 1) {
+          // The guard's own leading scan (`askHostToStandDown`, sharing the
+          // sweep's exact script): answered with an empty table.
+          return success(tableJson([]));
+        }
+        if (scanCount === 2) {
+          return success(
+            tableJson([
+              { processId: 501, parentProcessId: 1, created: 1000, slot: true },
+            ]),
+          );
+        }
+        return success(tableJson([]));
+      }
+      if (isProbeCall(command, args)) {
+        // `reportFailedKillsStillRunning`'s own probe of round 0's failed
+        // kill: 501 genuinely exited, so the probe reports it gone.
+        return success(killOutcomeJson([{ processId: 501, outcome: "gone" }]));
+      }
+      if (isKillCall(command, args)) {
+        return success(
+          killOutcomeJson([
+            { processId: 501, outcome: "failed: Win32Exception" },
+          ]),
+        );
+      }
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).resolves.toBeUndefined();
+
+    expect(killedPids(calls)).toEqual([501]);
+    expect(scanCalls(calls)).toHaveLength(3);
+    // Exactly one probe call, asked about the failed kill's own identity.
+    const probed = probeCalls(calls);
+    expect(probed).toHaveLength(1);
+    expect(killTargetsOf(probed[0]?.args ?? [])).toEqual([
+      { processId: 501, created: 1000 },
+    ]);
+    // Neither WARN fired for 501: not the immediate "unreached" one (the
+    // `failed...` outcome is excluded from that filter now), and not the
+    // probe-confirmed one (the probe reports it gone).
+    expect(loggerMock.warn).not.toHaveBeenCalled();
+
+    // Ablation abl-cli-gate: drop `!outcome.outcome.startsWith("failed"),`
+    // (and its preceding `&&`) from the `unreached` filter in
+    // `runHandleBoundKillScript` -> this test reddens: round 0's own
+    // "failed: Win32Exception" outcome falls back into `unreached` and WARNs
+    // immediately, naming 501, before the next round's probe ever runs.
+  });
+
+  it("a failed-kill target the next scan STILL LISTS under the same identity, but the probe reports it gone, gets NO WARN - the table row is the artifact, the handle is the truth", async () => {
+    // The exact mechanism this fix exists for: 501 has genuinely exited (the
+    // probe's own handle-bound read proves it), but another process still
+    // holds a handle to it, so round 1's scan keeps
+    // listing 501 under its own (pid, Created) as if it were still running.
+    // A bare table-match would read this as "still running" and WARN;
+    // the probe, asked through 501's own handle, reports `gone` instead. No
+    // WARN. Round 1's kill set still lists 501 too (same stale row), so it
+    // is re-targeted - this time the kill script itself reports `killed` -
+    // and round 2's scan is finally empty, converging the stop.
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    let killCount = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        scanCount += 1;
+        if (scanCount === 1) {
+          // The guard's own leading scan (`askHostToStandDown`, sharing the
+          // sweep's exact script): answered with an empty table.
+          return success(tableJson([]));
+        }
+        if (scanCount <= 3) {
+          // Round 0's AND round 1's scan: the held-open-handle table
+          // artifact keeps listing 501 under the identical identity.
+          return success(
+            tableJson([
+              { processId: 501, parentProcessId: 1, created: 1000, slot: true },
+            ]),
+          );
+        }
+        return success(tableJson([]));
+      }
+      if (isProbeCall(command, args)) {
+        // The handle-bound truth: 501 really has exited, despite the table
+        // still listing it.
+        return success(killOutcomeJson([{ processId: 501, outcome: "gone" }]));
+      }
+      if (isKillCall(command, args)) {
+        killCount += 1;
+        return success(
+          killOutcomeJson([
+            {
+              processId: 501,
+              outcome: killCount === 1 ? "failed: Win32Exception" : "killed",
+            },
+          ]),
+        );
+      }
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).resolves.toBeUndefined();
+
+    expect(loggerMock.warn).not.toHaveBeenCalled();
+    // Exactly one probe call: round 1's `reportFailedKillsStillRunning` of
+    // round 0's failed kill. Round 1's own re-kill succeeds, so no further
+    // failed kill is ever recorded and round 2 never has anything to probe.
+    expect(probeCalls(calls)).toHaveLength(1);
+    expect(killedPids(calls)).toEqual([501, 501]);
+
+    // Without the probe, `reportFailedKillsStillRunning` matched the failed
+    // kill's identity directly against the round's own SCAN table - 501 is
+    // still listed under the same (pid, created) - and WARNed "left targets
+    // running after a failed kill", misled by the very table artifact the
+    // probe sees through. With it there is no WARN, as asserted above.
+  });
+
+  it("(control) a failed-kill target the next scan still lists under the SAME identity gets exactly one probe-confirmed WARN, and a re-targeted kill still converges", async () => {
+    // Round 0 kills 501, reported `failed: Win32Exception`. Round 1's scan
+    // still lists 501 under the SAME `created` (1000), and the probe
+    // confirms it is genuinely still running - that is the one case the
+    // probe-confirmed WARN exists for. Round 1 re-targets 501 and this time
+    // the kill lands cleanly; round 2's scan is empty and the stop still
+    // resolves.
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    let killCount = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        scanCount += 1;
+        if (scanCount === 1) {
+          // The guard's own leading scan (`askHostToStandDown`, sharing the
+          // sweep's exact script): answered with an empty table.
+          return success(tableJson([]));
+        }
+        if (scanCount === 2) {
+          return success(
+            tableJson([
+              { processId: 501, parentProcessId: 1, created: 1000, slot: true },
+            ]),
+          );
+        }
+        if (scanCount === 3) {
+          return success(
+            tableJson([
+              { processId: 501, parentProcessId: 1, created: 1000, slot: true },
+            ]),
+          );
+        }
+        return success(tableJson([]));
+      }
+      if (isProbeCall(command, args)) {
+        // The probe's own answer for THIS identity: it really is still
+        // running under the handle the probe just pinned.
+        return success(
+          killOutcomeJson([{ processId: 501, outcome: "running" }]),
+        );
+      }
+      if (isKillCall(command, args)) {
+        killCount += 1;
+        return success(
+          killOutcomeJson([
+            {
+              processId: 501,
+              outcome: killCount === 1 ? "failed: Win32Exception" : "killed",
+            },
+          ]),
+        );
+      }
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).resolves.toBeUndefined();
+
+    expect(killedPids(calls)).toEqual([501, 501]);
+    expect(scanCalls(calls)).toHaveLength(4);
+    expect(probeCalls(calls)).toHaveLength(1);
+    expect(loggerMock.warn).toHaveBeenCalledTimes(1);
+    expect(loggerMock.warn.mock.calls[0]?.[0]).toBe(
+      "Windows host kill round left targets running after a failed kill",
+    );
+    expect(loggerMock.warn.mock.calls[0]?.[1]).toEqual({
+      targets: 1,
+      outcomes: ["501=failed: Win32Exception"],
+    });
+
+    // Ablation abl-cli-confirm: replace `if (running.length === 0) return;`
+    // with `return;` in `reportFailedKillsStillRunning` -> this test reddens:
+    // the probe-confirmed WARN never fires even though the probe reported
+    // the same identity still running, so `loggerMock.warn` is never called.
+  });
+
+  it("(control) a failed-kill target the probe reports `reused` for gets no failed-kill WARN - a stranger now wears the recycled pid", async () => {
+    // Round 0 kills 501 (born 1000), reported `failed: Win32Exception`.
+    // Round 1's scan lists 501 again, but born at 2000 - a fresh, unrelated
+    // process that landed on the recycled pid - and the probe, asked about
+    // the ORIGINAL identity (501, created 1000), reports `reused`: the
+    // current occupant of that pid does not match the age it was asked
+    // about. `reportFailedKillsStillRunning` matches on (processId, created)
+    // together, so this is not "the same target still running" and must not
+    // WARN. The new occupant is an ordinary slot-matched process and is
+    // killed like any other; round 2's scan is empty and the stop resolves.
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    let killCount = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        scanCount += 1;
+        if (scanCount === 1) {
+          // The guard's own leading scan (`askHostToStandDown`, sharing the
+          // sweep's exact script): answered with an empty table.
+          return success(tableJson([]));
+        }
+        if (scanCount === 2) {
+          return success(
+            tableJson([
+              { processId: 501, parentProcessId: 1, created: 1000, slot: true },
+            ]),
+          );
+        }
+        if (scanCount === 3) {
+          return success(
+            tableJson([
+              { processId: 501, parentProcessId: 1, created: 2000, slot: true },
+            ]),
+          );
+        }
+        return success(tableJson([]));
+      }
+      if (isProbeCall(command, args)) {
+        // Asked about (501, created 1000) - the FAILED kill's own identity -
+        // and the pid is now a stranger born at 2000, so the probe reports
+        // `reused`, the same verdict a "kill" script gives a mismatched
+        // identity.
+        return success(
+          killOutcomeJson([{ processId: 501, outcome: "reused" }]),
+        );
+      }
+      if (isKillCall(command, args)) {
+        killCount += 1;
+        return success(
+          killOutcomeJson([
+            {
+              processId: 501,
+              outcome: killCount === 1 ? "failed: Win32Exception" : "killed",
+            },
+          ]),
+        );
+      }
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).resolves.toBeUndefined();
+
+    expect(killedPids(calls)).toEqual([501, 501]);
+    expect(scanCalls(calls)).toHaveLength(4);
+    expect(probeCalls(calls)).toHaveLength(1);
+    expect(loggerMock.warn).not.toHaveBeenCalled();
+
+    // NOTE (adaptation): the code THIS test's runner shipped with, before
+    // this pass, reported "killed" for every kill call - never
+    // "failed: Win32Exception" - so no failed kill was ever recorded and the
+    // probe/WARN mechanism this test's own name and comment describe was
+    // never actually exercised; it passed vacuously regardless of the
+    // "reused pid" story. Fixed here via `killCount` so round 0's kill
+    // genuinely fails, which is what makes the probe's `reused` verdict (and
+    // the resulting "no WARN") a real assertion rather than an accident of
+    // nothing ever reaching the WARN gate.
+  });
+
+  it("an unreadable scan after a failed kill WARNs naming the target (the probe cannot report either, so nothing is proven gone), and the stop still refuses to enumerate", async () => {
+    // Round 0 kills 501, reported `failed: Win32Exception`. Round 1's scan
+    // itself fails (a non-authority throw, same as `scanSlotProcessTable`'s
+    // other unreadable-scan pins), so it resolves `null` rather than a table.
+    //
+    // Traced against the real `killVerifiedProcessTree` order: each round
+    // calls `scanSlotProcessTable` FIRST (which swallows this throw and
+    // returns `null`), then unconditionally calls
+    // `reportFailedKillsStillRunning` - which no longer reads the scan's
+    // table at all in this ship, so it runs its OWN probe regardless of
+    // whether the round's own scan just failed. Only AFTER that does the
+    // loop check `if (table === null) throw ...`. So the probe DOES run here,
+    // before the "could not enumerate" refusal ever fires - and this fixture
+    // makes it fail too (unparseable output), modelling "the whole
+    // PowerShell surface is down this round": neither the scan nor the probe
+    // can prove 501 gone, so it WARNs as still running, and the round's own
+    // scan failure still ends the stop in the existing "could not enumerate"
+    // refusal.
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        scanCount += 1;
+        if (scanCount === 1) {
+          // The guard's own leading scan (`askHostToStandDown`, sharing the
+          // sweep's exact script): answered with an empty table.
+          return success(tableJson([]));
+        }
+        if (scanCount === 2) {
+          return success(
+            tableJson([
+              { processId: 501, parentProcessId: 1, created: 1000, slot: true },
+            ]),
+          );
+        }
+        throw new Error("powershell scan timed out");
+      }
+      if (isProbeCall(command, args)) {
+        // No usable report - same underlying unavailability as the scan.
+        return success("not json");
+      }
+      if (isKillCall(command, args)) {
+        return success(
+          killOutcomeJson([
+            { processId: 501, outcome: "failed: Win32Exception" },
+          ]),
+        );
+      }
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      message: expect.stringContaining("could not enumerate"),
+    });
+
+    expect(scanCalls(calls)).toHaveLength(3);
+    expect(killedPids(calls)).toEqual([501]);
+    // The probe DID run in round 1, despite that round's own scan failing -
+    // proof it is that the two are independent, not that one gates the
+    // other.
+    expect(probeCalls(calls)).toHaveLength(1);
+    expect(loggerMock.warn).toHaveBeenCalledTimes(1);
+    expect(loggerMock.warn.mock.calls[0]?.[0]).toBe(
+      "Windows host kill round left targets running after a failed kill",
+    );
+    expect(loggerMock.warn.mock.calls[0]?.[1]).toEqual({
+      targets: 1,
+      outcomes: ["501=failed: Win32Exception"],
+    });
+  });
+
+  it("a probe that cannot report keeps every failed target running even though the very next scan is healthy and empty - the probe is the sole gate, not scan absence", async () => {
+    // Round 0 kills 501 AND 502, both reported `failed: Win32Exception`.
+    // Round 1's scan succeeds and lists neither - under the OLD (pre-probe)
+    // table-matching mechanism this alone would have cleared both silently.
+    // The probe is what actually decides now, and here it cannot report
+    // (garbage stdout), so both stay presumed running and WARN, even though
+    // nothing about the round's OWN scan is unhealthy.
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        scanCount += 1;
+        if (scanCount === 1) return success(tableJson([]));
+        if (scanCount === 2) {
+          return success(
+            tableJson([
+              { processId: 501, parentProcessId: 1, created: 1000, slot: true },
+              { processId: 502, parentProcessId: 1, created: 2000, slot: true },
+            ]),
+          );
+        }
+        return success(tableJson([]));
+      }
+      if (isProbeCall(command, args)) {
+        return success("not json");
+      }
+      if (isKillCall(command, args)) {
+        return success(
+          killOutcomeJson([
+            { processId: 501, outcome: "failed: Win32Exception" },
+            { processId: 502, outcome: "failed: Win32Exception" },
+          ]),
+        );
+      }
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).resolves.toBeUndefined();
+
+    expect(scanCalls(calls)).toHaveLength(3);
+    expect(probeCalls(calls)).toHaveLength(1);
+    expect(loggerMock.warn).toHaveBeenCalledTimes(1);
+    expect(loggerMock.warn.mock.calls[0]?.[0]).toBe(
+      "Windows host kill round left targets running after a failed kill",
+    );
+    expect(loggerMock.warn.mock.calls[0]?.[1]).toEqual({
+      targets: 2,
+      outcomes: ["501=failed: Win32Exception", "502=failed: Win32Exception"],
+    });
+  });
+
+  it("the probe never runs when no kill failed - an ordinary clean converge issues no probe-shaped call", async () => {
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        scanCount += 1;
+        if (scanCount <= 2) {
+          return success(
+            tableJson([{ processId: 701, parentProcessId: 1, slot: true }]),
+          );
+        }
+        return success(tableJson([]));
+      }
+      if (isKillCall(command, args)) {
+        return success(
+          killOutcomeJson([{ processId: 701, outcome: "killed" }]),
+        );
+      }
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).resolves.toBeUndefined();
+
+    expect(killedPids(calls)).toEqual([701]);
+    expect(probeCalls(calls)).toHaveLength(0);
+    expect(loggerMock.warn).not.toHaveBeenCalled();
+  });
+
+  it("(kept behaviour) a `reused` outcome still WARNs immediately in its own round, before any next scan", async () => {
+    // 601's kill script reports `reused` - a different process now wears the
+    // pid - which is not a `failed...` outcome and must keep the immediate
+    // "unreached" WARN this mechanism has always given it; only `failed...`
+    // moved to the probe-confirmed path. Round 1's scan is empty so the stop
+    // still resolves, and no probe call is ever issued - `reused` never
+    // populates `failedKills`.
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        scanCount += 1;
+        if (scanCount === 1) {
+          // The guard's own leading scan (`askHostToStandDown`, sharing the
+          // sweep's exact script): answered with an empty table.
+          return success(tableJson([]));
+        }
+        if (scanCount === 2) {
+          return success(
+            tableJson([{ processId: 601, parentProcessId: 1, slot: true }]),
+          );
+        }
+        return success(tableJson([]));
+      }
+      if (isKillCall(command, args)) {
+        return success(
+          killOutcomeJson([{ processId: 601, outcome: "reused" }]),
+        );
+      }
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).resolves.toBeUndefined();
+
+    expect(killedPids(calls)).toEqual([601]);
+    expect(probeCalls(calls)).toHaveLength(0);
+    expect(loggerMock.warn).toHaveBeenCalledTimes(1);
+    expect(loggerMock.warn.mock.calls[0]?.[0]).toBe(
+      "Windows host kill round left targets unreached",
+    );
+    expect(loggerMock.warn.mock.calls[0]?.[1]).toEqual({
+      targets: 1,
+      outcomes: ["601=reused"],
+    });
+  });
+});
+
+// `probeProcessesGone` chunks its targets the same way the kill script does
+// (`WINDOWS_KILL_TARGETS_PER_SCRIPT` per script, under the same command-line
+// cap), but runs its chunks side by side (`Promise.all`), each through
+// `probeChunkGone`. These pins drive it through the CHEAPER of the two public
+// callers to reach 600 targets: `reportFailedKillsStillRunning` needs only one
+// kill round (600 failed kills) before its very next scan; the round-bound
+// `killSetStillRunning` would need the same 600 pids relisted for
+// `WINDOWS_KILL_CONVERGENCE_ROUNDS` rounds running up to the bound, which is
+// more fixture weight for the same chunking behaviour. `probeProcessesGone`
+// itself is private, so there is no more direct path.
+describe("the probe chunks like the kill (WINDOWS_KILL_TARGETS_PER_SCRIPT per script)", () => {
+  beforeEach(() => {
+    mocks.readHostPidMetadata.mockReset();
+    mocks.readHostPidMetadata.mockResolvedValue(null);
+    mocks.removeHostPidMetadata.mockReset();
+    mocks.removeHostPidMetadata.mockResolvedValue(undefined);
+    loggerMock.warn.mockReset();
+  });
+
+  const FIRST_PID = 970_001;
+
+  function slotRows(count: number): TableRowInput[] {
+    return Array.from({ length: count }, (_, index) => ({
+      processId: FIRST_PID + index,
+      parentProcessId: 1,
+      slot: true,
+    }));
+  }
+
+  it("600 failed kills split the probe into 3 calls of 250/250/100 targets, all cleared - the stop resolves with no WARN", async () => {
+    const TOTAL = 600;
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        scanCount += 1;
+        if (scanCount === 1) return success(tableJson([]));
+        if (scanCount === 2) return success(tableJson(slotRows(TOTAL)));
+        return success(tableJson([]));
+      }
+      if (isProbeCall(command, args)) {
+        const targets = killTargetsOf(args);
+        return success(
+          killOutcomeJson(
+            targets.map((target) => ({
+              processId: target.processId,
+              outcome: "gone",
+            })),
+          ),
+        );
+      }
+      if (isKillCall(command, args)) {
+        const targets = killTargetsOf(args);
+        return success(
+          killOutcomeJson(
+            targets.map((target) => ({
+              processId: target.processId,
+              outcome: "failed: Win32Exception",
+            })),
+          ),
+        );
+      }
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).resolves.toBeUndefined();
+
+    // Guard scan, round 0's scan (600 slot rows), round 1's scan (empty,
+    // converged) - round 0's kill is what fails all 600, chunked the same
+    // way `killProcessIdentities` already chunks a kill.
+    expect(scanCalls(calls)).toHaveLength(3);
+    expect(killedPids(calls)).toHaveLength(TOTAL);
+
+    const probed = probeCalls(calls);
+    expect(probed).toHaveLength(3);
+    expect(killTargetsOf(probed[0]?.args ?? []).length).toBe(250);
+    expect(killTargetsOf(probed[1]?.args ?? []).length).toBe(250);
+    expect(killTargetsOf(probed[2]?.args ?? []).length).toBe(100);
+
+    // Every one of the 600 targets was asked exactly once, across the three
+    // calls combined - a count/membership check, never a printed pid list.
+    const allProbedPids = probed.flatMap((call) =>
+      killTargetsOf(call.args).map((target) => target.processId),
+    );
+    expect(allProbedPids.length).toBe(TOTAL);
+    expect(new Set(allProbedPids).size).toBe(TOTAL);
+
+    expect(loggerMock.warn).not.toHaveBeenCalled();
+
+    // Unchunked, `probeProcessesGone` sent every target in ONE script, so
+    // `probed` had length 1, not 3.
+  });
+
+  it("one throwing chunk (non-authority) keeps exactly its own targets; the other two chunks' targets clear normally", async () => {
+    const TOTAL = 600;
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    let probeCallCount = 0;
+    let throwingChunkPids: ReadonlySet<number> = new Set();
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        scanCount += 1;
+        if (scanCount === 1) return success(tableJson([]));
+        if (scanCount === 2) return success(tableJson(slotRows(TOTAL)));
+        return success(tableJson([]));
+      }
+      if (isProbeCall(command, args)) {
+        probeCallCount += 1;
+        const targets = killTargetsOf(args);
+        // The 2nd of the 3 chunks (250 targets) fails to read at all - a
+        // broker-level throw, not an authority error - so `probeChunkGone`
+        // contributes nothing for exactly this chunk; the other two chunks'
+        // targets are unaffected and clear normally.
+        if (probeCallCount === 2) {
+          throwingChunkPids = new Set(
+            targets.map((target) => target.processId),
+          );
+          throw new Error("powershell probe chunk unavailable");
+        }
+        return success(
+          killOutcomeJson(
+            targets.map((target) => ({
+              processId: target.processId,
+              outcome: "gone",
+            })),
+          ),
+        );
+      }
+      if (isKillCall(command, args)) {
+        const targets = killTargetsOf(args);
+        return success(
+          killOutcomeJson(
+            targets.map((target) => ({
+              processId: target.processId,
+              outcome: "failed: Win32Exception",
+            })),
+          ),
+        );
+      }
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).resolves.toBeUndefined();
+
+    expect(probeCallCount).toBe(3);
+    expect(throwingChunkPids.size).toBe(250);
+
+    // Exactly the throwing chunk's 250 pids stay "running" - the other 350
+    // (2 chunks' worth) cleared and dropped out. Asserted by count and set
+    // membership, never by printing the rows.
+    expect(loggerMock.warn).toHaveBeenCalledTimes(1);
+    expect(loggerMock.warn.mock.calls[0]?.[0]).toBe(
+      "Windows host kill round left targets running after a failed kill",
+    );
+    const details = loggerMock.warn.mock.calls[0]?.[1];
+    expect(details?.targets).toBe(250);
+    const namedPids = new Set<number>(warnOutcomePids(details));
+    expect(namedPids.size).toBe(250);
+    expect([...namedPids].every((pid) => throwingChunkPids.has(pid))).toBe(
+      true,
+    );
+
+    // Unchunked, the whole 600-target set is one probe script; that single
+    // call throws, so `cleared` stays empty and ALL 600 targets are named
+    // running, not exactly the 250 of one chunk.
+  });
+
+  it("control: 250 targets - exactly at the chunk boundary - issue exactly 1 probe call, not 2", async () => {
+    const TOTAL = 250;
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        scanCount += 1;
+        if (scanCount === 1) return success(tableJson([]));
+        if (scanCount === 2) return success(tableJson(slotRows(TOTAL)));
+        return success(tableJson([]));
+      }
+      if (isProbeCall(command, args)) {
+        const targets = killTargetsOf(args);
+        return success(
+          killOutcomeJson(
+            targets.map((target) => ({
+              processId: target.processId,
+              outcome: "gone",
+            })),
+          ),
+        );
+      }
+      if (isKillCall(command, args)) {
+        const targets = killTargetsOf(args);
+        return success(
+          killOutcomeJson(
+            targets.map((target) => ({
+              processId: target.processId,
+              outcome: "failed: Win32Exception",
+            })),
+          ),
+        );
+      }
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).resolves.toBeUndefined();
+
+    expect(scanCalls(calls)).toHaveLength(3);
+    expect(killedPids(calls)).toHaveLength(TOTAL);
+    const probed = probeCalls(calls);
+    expect(probed).toHaveLength(1);
+    expect(killTargetsOf(probed[0]?.args ?? []).length).toBe(TOTAL);
+    expect(loggerMock.warn).not.toHaveBeenCalled();
+  });
+});
+
+// `computeWindowsHostKillSet` is the algebra a host stop's kill set is built
+// from (victims = slot ∪ descendants(slot); spared = cli ∪ descendants(cli) ∪
+// (ancestors(cli) − slot); kill = victims − spared). These pins exercise it
+// both directly and through `controller.stop`, because the direct unit tests
+// alone would not catch a wiring bug that hands the wrong pid in as `cliPid`
+// (`process.pid`, not PowerShell's own `$PID` inside the scan script).
+// The kill is a PowerShell script over (pid, creation time) pairs, not a
+// `taskkill` per pid (#1755): the scan proves a row is the
+// host's by pid AND creation time, but a pid-only kill re-resolves the integer
+// at kill time, so a victim that exits between the snapshot and the kill and
+// has its pid reused hands the kill to a stranger the carry-over never saw.
+// The script opens a handle (which pins the pid), reads the creation time
+// through it, and terminates through it only on a match. PowerShell itself
+// cannot run here, so these pin the script's TEXT and the loop's use of it;
+// the live Windows run is what proves the two creation-time sources agree.
+describe("handle-bound kill script", () => {
+  beforeEach(() => {
+    mocks.readHostPidMetadata.mockReset();
+    mocks.readHostPidMetadata.mockResolvedValue(null);
+    mocks.removeHostPidMetadata.mockReset();
+    mocks.removeHostPidMetadata.mockResolvedValue(undefined);
+  });
+
+  it("carries every target as (pid, creation micros) in issue order, opens the handle before reading StartTime, and kills through it only within 1 µs of the scan's creation time", () => {
+    const script = buildWindowsHandleBoundKillScript(
+      [
+        { processId: 400, created: 1_700_000_000_000_400 },
+        { processId: 100, created: 1_700_000_000_000_100 },
+      ],
+      "kill",
+    );
+    expect(script).toContain("$ErrorActionPreference = 'Stop'");
+    // Integers only, no exponent, no quoting - and in the caller's order.
+    const first = script.indexOf("ProcessId = 400; Created = 1700000000000400");
+    const second = script.indexOf(
+      "ProcessId = 100; Created = 1700000000000100",
+    );
+    expect(first).toBeGreaterThan(-1);
+    expect(second).toBeGreaterThan(first);
+    // The handle is opened BEFORE the identity is read, and the kill goes
+    // through the same object afterwards - that ordering is the mechanism.
+    const handleAt = script.indexOf("$null = $process.Handle");
+    const startAt = script.indexOf("$process.StartTime");
+    const killAt = script.indexOf("$process.Kill()");
+    expect(handleAt).toBeGreaterThan(-1);
+    expect(startAt).toBeGreaterThan(handleAt);
+    expect(killAt).toBeGreaterThan(startAt);
+    expect(script).toContain(
+      "if ([math]::Abs($started - [long]$target.Created) -le 1) {",
+    );
+    // Nothing in the script re-resolves a pid at kill time.
+    expect(script).not.toMatch(/taskkill|Stop-Process/i);
+    // The handle is released whatever happened.
+    expect(script).toContain("if ($null -ne $process) { $process.Dispose() }");
+  });
+
+  it('a "probe" script never kills - it only reads HasExited through the pinned handle - while a "kill" script still terminates', () => {
+    const probe = buildWindowsHandleBoundKillScript(
+      [{ processId: 400, created: 1_700_000_000_000_400 }],
+      "probe",
+    );
+    const kill = buildWindowsHandleBoundKillScript(
+      [{ processId: 400, created: 1_700_000_000_000_400 }],
+      "kill",
+    );
+    // The probe's own happy-path action: read HasExited through the handle
+    // this script just pinned, never terminate through it.
+    expect(probe).toContain("if ($process.HasExited) { $outcome = 'gone' }");
+    expect(probe).toContain("else { $outcome = 'running' }");
+    expect(probe).not.toContain("$process.Kill()");
+    // The kill script is the mirror: it still terminates, and never reports
+    // the probe's own "running" outcome (its catch-rule re-check below
+    // reports only "gone", never "running" - a kill script has no code path
+    // that could report a matched process is still alive and unkilled).
+    expect(kill).toContain("$process.Kill()");
+    expect(kill).not.toContain("$outcome = 'running'");
+    // Everything OUTSIDE the action - the identity check, the pin, the
+    // dispose - is shared verbatim between the two modes.
+    const sharedUpTo = (script: string): string =>
+      script.slice(0, script.indexOf("if ([math]::Abs"));
+    expect(probe.slice(0, probe.indexOf("if ([math]::Abs"))).toBe(
+      sharedUpTo(kill),
+    );
+  });
+
+  it('a kill that throws re-checks HasExited through the SAME pinned handle before reporting "failed" - an exiting process reports "gone", not "failed"', () => {
+    const kill = buildWindowsHandleBoundKillScript(
+      [{ processId: 400, created: 1_700_000_000_000_400 }],
+      "kill",
+    );
+    // The exact catch-rule fix: `Kill()` on a process already exiting throws
+    // a Win32Exception, and this re-check is what turns that into "gone"
+    // instead of a permanent-looking "failed: Win32Exception" - through the
+    // SAME `$process` the try block already pinned, guarded by `$matched` so
+    // it only ever fires for a process this script actually identified (never
+    // for `reused`/`unverifiable`, which never set `$matched`).
+    expect(kill).toContain("if ($matched) {");
+    expect(kill).toContain(
+      "try { if ($process.HasExited) { $outcome = 'gone' } } catch { }",
+    );
+    // The re-check sits in the catch's non-ArgumentException branch, after
+    // the outcome is first set to `failed: <type>` - it OVERWRITES that
+    // provisional verdict rather than replacing the branch outright.
+    const failedAt = kill.indexOf(
+      "$outcome = 'failed: ' + $reason.GetType().Name",
+    );
+    const matchedAt = kill.indexOf("if ($matched) {");
+    expect(failedAt).toBeGreaterThan(-1);
+    expect(matchedAt).toBeGreaterThan(failedAt);
+  });
+
+  it("normalises StartTime like the scan normalises CreationDate (UTC, Unix epoch, microseconds) but floors with integer arithmetic, and tolerates 1 µs", () => {
+    const epoch = ".ToUniversalTime() - [datetime]'1970-01-01').Ticks";
+    const scan = buildWindowsSlotProcessTableScanScript(
+      "C:\\Users\\me\\.traycer\\host",
+    );
+    const kill = buildWindowsHandleBoundKillScript(
+      [{ processId: 1, created: 1 }],
+      "kill",
+    );
+    // Same epoch, same UTC normalisation on both sides.
+    expect(scan).toContain(`($_.CreationDate${epoch} / 10)`);
+    expect(kill).toContain(`($process.StartTime${epoch}`);
+    // But NOT the scan's `/ 10` (an earlier draft's oversight): the
+    // scan's ticks are multiples of 10 (CIM carries microseconds) so its
+    // division is exact, while StartTime keeps the FILETIME's 100 ns digit
+    // and PowerShell's non-exact `[long]` division goes through `[double]`,
+    // which past 2^53 rounds `...9` up to `...10` and lands the floor one
+    // microsecond high. Falsification on Windows PowerShell 5.1:
+    // `[long][math]::Floor([long]17870000000000019 / 10)` prints
+    // `1787000000000002`. Integer arithmetic throughout instead:
+    expect(kill).toContain("$started = [long](($ticks - ($ticks % 10)) / 10)");
+    expect(kill).not.toContain("Ticks / 10");
+    // And a 1 µs tolerance for WMI rounding rather than truncating its last
+    // digit; no stranger is born within a microsecond of the victim's birth.
+    expect(kill).toContain(
+      "if ([math]::Abs($started - [long]$target.Created) -le 1) {",
+    );
+  });
+
+  it("a target whose age is 0 - or anything that is not a safe non-negative integer - is emitted as Created = 0, which the script never kills", () => {
+    const script = buildWindowsHandleBoundKillScript(
+      [
+        { processId: 7, created: 0 },
+        { processId: 8, created: -5 },
+        { processId: 9, created: Number.MAX_SAFE_INTEGER + 2 },
+        { processId: 10, created: 1.5 },
+      ],
+      "kill",
+    );
+    for (const pid of [7, 8, 9, 10]) {
+      expect(script).toContain(`ProcessId = ${pid}; Created = 0`);
+    }
+    // The guard that makes 0 mean "no identity, no kill".
+    expect(script).toContain("if ([long]$target.Created -gt 0) {");
+  });
+
+  it("one kill invocation per round, carrying that round's whole kill set with the ages from that round's scan, descendants first", async () => {
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        scanCount += 1;
+        if (scanCount === 1) {
+          // The guard's own leading scan (`askHostToStandDown`, sharing the
+          // sweep's exact script): answered with an empty table.
+          return success(tableJson([]));
+        }
+        if (scanCount === 2) {
+          return success(
+            tableJson([
+              { processId: 100, parentProcessId: 1, created: 1000, slot: true },
+              {
+                processId: 555,
+                parentProcessId: 100,
+                created: 3000,
+                slot: false,
+              },
+            ]),
+          );
+        }
+        if (scanCount === 3) {
+          return success(
+            tableJson([
+              { processId: 777, parentProcessId: 1, created: 5000, slot: true },
+            ]),
+          );
+        }
+        return success(tableJson([]));
+      }
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    expect(killRounds(calls)).toEqual([
+      // 555 (child) before 100 (host), each with the age its row had.
+      [
+        { processId: 555, created: 3000 },
+        { processId: 100, created: 1000 },
+      ],
+      // The late spawn, in its own invocation.
+      [{ processId: 777, created: 5000 }],
+    ]);
+    expect(scanCalls(calls)).toHaveLength(4);
+    expect(calls.some((call) => call.command === "taskkill")).toBe(false);
+
+    // Ablation: in `killHostProcessTree`, hand `killProcessIdentities` a
+    // `created` of 0 for every target (drop the `created.get(pid)` lookup) →
+    // this test reddens: both rounds carry `Created = 0`, which the script
+    // would never kill.
+  });
+
+  it("a kill invocation that fails does not end the round: the confirming scan still runs and is what decides", async () => {
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        scanCount += 1;
+        // Scan 1 is the guard's own leading scan (`askHostToStandDown`,
+        // sharing the sweep's exact script), always answered with an empty
+        // table; scan 2 is the sweep's round 0.
+        return success(
+          scanCount === 2
+            ? tableJson([{ processId: 100, parentProcessId: 1, slot: true }])
+            : tableJson([]),
+        );
+      }
+      if (isKillCall(command, args)) throw new Error("powershell timed out");
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).resolves.toBeUndefined();
+
+    expect(killRounds(calls)).toHaveLength(1);
+    expect(scanCalls(calls)).toHaveLength(3);
+    expect(mocks.removeHostPidMetadata).toHaveBeenCalledWith("staging");
+  });
+
+  it("an authority loss during the kill is the one failure that propagates, before any further scan", async () => {
+    const authorityError = new ServiceMutationAuthorityError(
+      new Error("maintenance lease revoked"),
+    );
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        return success(
+          tableJson([{ processId: 100, parentProcessId: 1, slot: true }]),
+        );
+      }
+      if (isKillCall(command, args)) throw authorityError;
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    let caught: unknown = null;
+    try {
+      await controller.stop(serviceLabelFor("staging"), { force: false });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(authorityError);
+    // One more than before: the guard's own leading scan
+    // (`askHostToStandDown`), which this stateless fixture answers with the
+    // same [100] table - harmless, since the guard never kills anything.
+    expect(scanCalls(calls)).toHaveLength(2);
+    expect(mocks.removeHostPidMetadata).not.toHaveBeenCalled();
+  });
+
+  it("a round with more targets than one script carries issues several scripts, in order, and still converges", async () => {
+    // #1762: the script rides `powershell.exe`'s command line,
+    // which `CreateProcessW` caps at 32,767 characters; a single script over
+    // 500-600 targets could not start at all, and every kill pass would
+    // silently become a no-op. 600 slot processes here: three scripts of
+    // 250, 250 and 100, in the round's order (all depth 0, so by pid).
+    const rows: TableRowInput[] = Array.from({ length: 600 }, (_, index) => ({
+      processId: 1000 + index,
+      parentProcessId: 1,
+      slot: true,
+    }));
+    const { runner, calls } = convergingTableRunner(rows);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    const scripts = killRounds(calls);
+    expect(scripts.map((script) => script.length)).toEqual([
+      WINDOWS_KILL_TARGETS_PER_SCRIPT,
+      WINDOWS_KILL_TARGETS_PER_SCRIPT,
+      600 - 2 * WINDOWS_KILL_TARGETS_PER_SCRIPT,
+    ]);
+    expect(killedPids(calls)).toEqual(rows.map((row) => row.processId));
+    // The guard's own leading scan (`askHostToStandDown`), a scan, the three
+    // scripts, the confirming scan.
+    expect(scanCalls(calls)).toHaveLength(3);
+  });
+
+  it("a round that runs out of time issues no further script: the unsent targets are next round's, and the confirming scan still decides", async () => {
+    // The chunks share ONE deadline, so the restart budget's one-kill-bound
+    // per round holds however many scripts a slot needs. Every script here
+    // "takes" the whole budget, so each round sends exactly one script and
+    // the 600 targets drain across the three kill passes - convergence, not
+    // a widened round.
+    let clock = 0;
+    const monotonic = vi
+      .spyOn(performance, "now")
+      .mockImplementation(() => clock);
+    try {
+      const rows: TableRowInput[] = Array.from({ length: 600 }, (_, index) => ({
+        processId: 1000 + index,
+        parentProcessId: 1,
+        slot: true,
+      }));
+      const calls: RecordedCall[] = [];
+      let live = rows;
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (isScanCall(command, args)) return success(tableJson(live));
+        if (isKillCall(command, args)) {
+          const killed = new Set(
+            killTargetsOf(args).map((target) => target.processId),
+          );
+          live = live.filter((row) => !killed.has(row.processId));
+          clock += WINDOWS_PROCESS_KILL_TIMEOUT_MS + 1;
+        }
+        return success("");
+      };
+      const controller = createWindowsController(runner, noTimingDeps);
+
+      await controller.stop(serviceLabelFor("staging"), { force: false });
+
+      expect(killRounds(calls).map((script) => script.length)).toEqual([
+        WINDOWS_KILL_TARGETS_PER_SCRIPT,
+        WINDOWS_KILL_TARGETS_PER_SCRIPT,
+        600 - 2 * WINDOWS_KILL_TARGETS_PER_SCRIPT,
+      ]);
+      // The guard's own leading scan (`askHostToStandDown`), three rounds
+      // each one script, plus the confirming scan.
+      expect(scanCalls(calls)).toHaveLength(5);
+      expect(live).toEqual([]);
+    } finally {
+      monotonic.mockRestore();
+    }
+  });
+
+  it("a script over the maximum number of worst-case targets stays under half the command-line cap", () => {
+    const script = buildWindowsHandleBoundKillScript(
+      Array.from({ length: WINDOWS_KILL_TARGETS_PER_SCRIPT }, () => ({
+        processId: 4_294_967_295,
+        created: Number.MAX_SAFE_INTEGER,
+      })),
+      "kill",
+    );
+    expect(script.length).toBeLessThan(32_767 / 2);
+  });
+
+  it("parses the kill script's outcome report, bare single object included, and rejects any other shape", () => {
+    expect(
+      parseWindowsKillOutcomeJson(
+        '[{"ProcessId":100,"Outcome":"killed"},{"ProcessId":555,"Outcome":"reused"}]',
+      ),
+    ).toEqual([
+      { processId: 100, outcome: "killed" },
+      { processId: 555, outcome: "reused" },
+    ]);
+    expect(
+      parseWindowsKillOutcomeJson('{"ProcessId":100,"Outcome":"gone"}'),
+    ).toEqual([{ processId: 100, outcome: "gone" }]);
+    expect(parseWindowsKillOutcomeJson("")).toBeNull();
+    expect(parseWindowsKillOutcomeJson("not json")).toBeNull();
+    expect(
+      parseWindowsKillOutcomeJson('[{"ProcessId":"100","Outcome":"killed"}]'),
+    ).toBeNull();
+    expect(parseWindowsKillOutcomeJson('[{"ProcessId":100}]')).toBeNull();
+  });
+});
+
+describe("computeWindowsHostKillSet and the kill self-protection it drives", () => {
+  beforeEach(() => {
+    mocks.readHostPidMetadata.mockReset();
+    mocks.readHostPidMetadata.mockResolvedValue(null);
+    mocks.removeHostPidMetadata.mockReset();
+    mocks.removeHostPidMetadata.mockResolvedValue(undefined);
+  });
+
+  it("host-spawned: kills the host and its non-CLI-ancestor descendants, sparing the CLI's own subtree", async () => {
+    // idle 0 (the row every real scan returns)
+    // host 100 (Slot) -> cli 200 -> powershell 250
+    // cli 200 -> helper 300
+    // host 100 -> agent 400
+    // self = 200 (the CLI's own pid)
+    const rows: TableRowInput[] = [
+      { processId: 0, parentProcessId: 0, slot: false },
+      { processId: 100, parentProcessId: 1, slot: true },
+      { processId: 200, parentProcessId: 100, slot: false },
+      { processId: 250, parentProcessId: 200, slot: false },
+      { processId: 300, parentProcessId: 200, slot: false },
+      { processId: 400, parentProcessId: 100, slot: false },
+    ];
+
+    const { runner, calls } = convergingTableRunner(rows);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    const originalPid = Object.getOwnPropertyDescriptor(process, "pid");
+    Object.defineProperty(process, "pid", { value: 200, configurable: true });
+    try {
+      await controller.stop(serviceLabelFor("staging"), { force: false });
+    } finally {
+      if (originalPid !== undefined) {
+        Object.defineProperty(process, "pid", originalPid);
+      }
+    }
+
+    const killed = killedPids(calls);
+    // Deepest-first (`orderWindowsKillsDescendantsFirst`): 400 hangs off 100,
+    // so it is issued first. The KILL SET is unchanged from before that
+    // ordering existed - both pids, nothing more, nothing less - only the
+    // issue order changed.
+    expect(killed).toEqual([400, 100]);
+    // And never through a pid-only `taskkill`, tree or otherwise.
+    expect(calls.some((call) => call.command === "taskkill")).toBe(false);
+    // The scan ANSWERED, so pid metadata is never read as a kill source.
+    // Before pid 0 was accepted, the idle row failed the whole parse and
+    // every stop silently degraded to the pid.json fallback that existed
+    // then; the fallback is gone, and this pins that nothing reads it back.
+    expect(mocks.readHostPidMetadata).not.toHaveBeenCalled();
+
+    // Ablation: in `isProcessTableId`, require `value > 0` again → this test
+    // fails: the idle row rejects the table, the scan parses to null, and
+    // the stop refuses before killing anything.
+  });
+
+  it("terminal-run: a non-slot shell ancestor between the host and the CLI is spared", async () => {
+    // idle 0
+    // host 100 (Slot) -> shell 50 -> cli 200 -> powershell 250
+    // host 100 -> agent 400
+    // self = 200
+    const rows: TableRowInput[] = [
+      { processId: 0, parentProcessId: 0, slot: false },
+      { processId: 100, parentProcessId: 1, slot: true },
+      { processId: 50, parentProcessId: 100, slot: false },
+      { processId: 200, parentProcessId: 50, slot: false },
+      { processId: 250, parentProcessId: 200, slot: false },
+      { processId: 400, parentProcessId: 100, slot: false },
+    ];
+
+    const { runner, calls } = convergingTableRunner(rows);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    const originalPid = Object.getOwnPropertyDescriptor(process, "pid");
+    Object.defineProperty(process, "pid", { value: 200, configurable: true });
+    try {
+      await controller.stop(serviceLabelFor("staging"), { force: false });
+    } finally {
+      if (originalPid !== undefined) {
+        Object.defineProperty(process, "pid", originalPid);
+      }
+    }
+
+    const killed = killedPids(calls);
+    // Deepest-first, same reasoning as the host-spawned test above: 400 hangs
+    // off 100, so it is issued first. The kill SET is unchanged.
+    expect(killed).toEqual([400, 100]);
+    // 50 (a non-slot ancestor of the CLI) is spared, and never appears.
+    expect(killed.includes(50)).toBe(false);
+    // Nor does pid 0, which is in the table and in nobody's kill set.
+    expect(killed.includes(0)).toBe(false);
+    expect(mocks.readHostPidMetadata).not.toHaveBeenCalled();
+  });
+
+  it("wrong-self regression: self must be the CLI's pid, not PowerShell's own - putting self at the powershell node kills the CLI's own child", () => {
+    // Same host-spawned shape as above, but self is (wrongly) placed at the
+    // POWERSHELL node (250) instead of the CLI (200). Helper 300 is the CLI's
+    // child and PowerShell's SIBLING, so seeding the spared set from 250 no
+    // longer covers it: it lands in the kill set and would be force-killed,
+    // which is exactly the damage `cliPid = process.pid` (not the scan
+    // script's `$PID`) prevents.
+    const rows: TableRowInput[] = [
+      { processId: 0, parentProcessId: 0, slot: false },
+      { processId: 100, parentProcessId: 1, slot: true },
+      { processId: 200, parentProcessId: 100, slot: false },
+      { processId: 250, parentProcessId: 200, slot: false },
+      { processId: 300, parentProcessId: 200, slot: false },
+      { processId: 400, parentProcessId: 100, slot: false },
+    ];
+
+    const killSet = computeWindowsHostKillSet(
+      rowsOf(rows),
+      250,
+      nothingRemembered,
+    );
+
+    expect(killSet.kill).toEqual([100, 300, 400]);
+    expect(killSet.unattributed).toEqual([]);
+    // Ablation for the CALL SITE (`findSlotProcessIds(label, run, process.pid)`
+    // in `killHostProcessTree`): this test calls the algebra directly and
+    // would not see it. The host-spawned integration test above is the one
+    // that catches a wrong pid being threaded in, because it drives
+    // `controller.stop` and asserts the kill script's targets.
+  });
+
+  it("a stale parent id the scan could not verify (arriving as 0) does not make a stranger a victim", () => {
+    // The reuse the script's CreationDate check exists for: process 400
+    // outlived its creator, Windows later gave that id to the Traycer host,
+    // and 400's `ParentProcessId` still names it. The scan cannot vouch for
+    // that edge - the claimed parent is younger than its claimed child - so it
+    // emits 0, and 400 stays out of the host's subtree instead of being
+    // force-killed as a descendant.
+    const rows: TableRowInput[] = [
+      { processId: 0, parentProcessId: 0, slot: false },
+      { processId: 100, parentProcessId: 1, slot: true },
+      { processId: 400, parentProcessId: 0, slot: false },
+      { processId: 200, parentProcessId: 100, slot: false },
+    ];
+
+    expect(
+      computeWindowsHostKillSet(rowsOf(rows), 200, nothingRemembered).kill,
+    ).toEqual([100]);
+  });
+
+  it("a recycled id on the CLI's own ancestry (arriving as 0) spares nothing extra", () => {
+    // The other direction of the same reuse: the CLI's claimed parent cannot
+    // be verified, so the ancestry walk ends immediately. The CLI and its
+    // subtree are still spared - that comes from the descendant closure, not
+    // from ancestry - and the host is still killed rather than being spared as
+    // a wrongly-believed ancestor.
+    const rows: TableRowInput[] = [
+      { processId: 0, parentProcessId: 0, slot: false },
+      { processId: 100, parentProcessId: 1, slot: true },
+      { processId: 200, parentProcessId: 0, slot: false },
+      { processId: 300, parentProcessId: 200, slot: false },
+      { processId: 400, parentProcessId: 100, slot: false },
+    ];
+
+    expect(
+      computeWindowsHostKillSet(rowsOf(rows), 200, nothingRemembered).kill,
+    ).toEqual([100, 400]);
+  });
+
+  describe("seedSlotMatches gates whether slot-matched rows outside the placed root are seeded", () => {
+    it("seedSlotMatches:false seeds only the placed root's subtree, sparing an unrelated slot-matched row (pure - red on head, which seeds every slot-matched row unconditionally)", () => {
+      const rows: TableRowInput[] = [
+        // The excluded supervisor.
+        { processId: 100, parentProcessId: 1, slot: false },
+        // The placed root - a host child spawned by the supervisor - and its child.
+        { processId: 200, parentProcessId: 100, slot: false },
+        { processId: 201, parentProcessId: 200, slot: false },
+        // An unrelated slot-matched row: some other process (e.g. a text
+        // editor with the host's log open) whose command line happens to
+        // match the slot's paths, hanging off an unrelated explorer pid.
+        { processId: 900, parentProcessId: 300, slot: true },
+      ];
+      const killSet = computeWindowsTreeKillSet(
+        rowsOf(rows),
+        {
+          placedRoot: 200,
+          excludedPids: new Set([100]),
+          seedSlotMatches: false,
+        },
+        nothingRemembered,
+      );
+      expect(killSet.kill).toContain(200);
+      expect(killSet.kill).toContain(201);
+      expect(killSet.kill).not.toContain(900);
+    });
+
+    it("seedSlotMatches:true (callerOnlyKillScope/computeWindowsHostKillSet's shape) still seeds every slot-matched row (control)", () => {
+      const rows: TableRowInput[] = [
+        { processId: 100, parentProcessId: 1, slot: false },
+        { processId: 200, parentProcessId: 100, slot: false },
+        { processId: 201, parentProcessId: 200, slot: false },
+        { processId: 900, parentProcessId: 300, slot: true },
+      ];
+      const killSet = computeWindowsTreeKillSet(
+        rowsOf(rows),
+        {
+          placedRoot: 200,
+          excludedPids: new Set([100]),
+          seedSlotMatches: true,
+        },
+        nothingRemembered,
+      );
+      expect(killSet.kill).toContain(900);
+    });
+  });
+
+  // Direct algebra pins for the three subtraction terms, each isolating one
+  // ablation.
+  describe("computeWindowsHostKillSet - algebra pins", () => {
+    const rows: TableRowInput[] = [
+      { processId: 100, parentProcessId: 1, slot: true },
+      { processId: 50, parentProcessId: 100, slot: false },
+      { processId: 200, parentProcessId: 50, slot: false },
+      { processId: 300, parentProcessId: 200, slot: false },
+      { processId: 400, parentProcessId: 100, slot: false },
+    ];
+
+    it("kills the slot and its descendants, sparing the CLI's ancestry and subtree", () => {
+      expect(
+        computeWindowsHostKillSet(rowsOf(rows), 200, nothingRemembered).kill,
+      ).toEqual([100, 400]);
+
+      // Ablation: in `computeWindowsHostKillSet`, drop the
+      // `if (!slot.has(ancestor))` condition so every ancestor of the CLI is
+      // spared unconditionally → this test fails: 100 would be spared even
+      // though it is the slot-matched host, changing the expected kill set
+      // from [100, 400] to [400].
+    });
+
+    it("spares the CLI's own descendants (not just the CLI itself)", () => {
+      // 300 is the CLI's own child - PowerShell, or the detached upgrade
+      // finalizer - and it is a descendant of the slot-matched host too, so
+      // only the descendant closure around the CLI keeps it out of the kill
+      // set.
+      const withChild: TableRowInput[] = [
+        { processId: 100, parentProcessId: 1, slot: true },
+        { processId: 200, parentProcessId: 100, slot: false },
+        { processId: 300, parentProcessId: 200, slot: false },
+      ];
+      expect(
+        computeWindowsHostKillSet(rowsOf(withChild), 200, nothingRemembered)
+          .kill,
+      ).toEqual([100]);
+
+      // Ablation: in `computeWindowsHostKillSet`, change
+      // `withDescendants(new Set([cliPid]), children)` to `new Set([cliPid])`
+      // (seeding `spared` with the CLI's own pid but not its subtree) → this
+      // test fails: the kill set becomes [100, 300], because 300 is a victim
+      // through the host and nothing spares it any more.
+    });
+  });
+
+  // `priorVictims` (Codex round 4): a process spawned by the host AFTER an
+  // earlier round killed it arrives with `parentProcessId` 0 - the table
+  // cannot vouch for a parent that is already dead - so a row is only linked
+  // back to the slot through the UNVALIDATED `claimedParentProcessId`, made
+  // safe against pid reuse by comparing creation times.
+  //
+  // Codex round 5b: an earlier version of this carry-over answered lineage -
+  // "which incarnation of this pid created this row" - by inspecting the
+  // pid's CURRENT holder. That cannot work: a pid reused and then vacated
+  // between two scans leaves no trace in the table at all, so a stranger
+  // forked by that intermediate holder arrives looking exactly like the
+  // victim's own child, and the occupant check passed it through. The
+  // replacement was a lifetime window, `pid -> { created, killedAt }`.
+  //
+  // A later, independent review found four issues
+  // against that 5b window:
+  //   - the soundness argument assumed its own conclusion. Sampling the
+  //     clock before the KILL does not prove the victim was still alive at
+  //     that instant: it can exit on its own, its pid be reused, and the
+  //     replacement fork a child, all before the sample is taken. The bound
+  //     is now sampled BEFORE THE SCAN and renamed `seenAliveAt` - the scan
+  //     that follows observes the victim alive at some instant after the
+  //     sample, which is what makes the sample honest.
+  //   - millisecond rounding let a previous holder's fork-and-exit and
+  //     the victim's own birth project to the same millisecond, wrongly
+  //     admitting a stranger. `Created` is now epoch MICROSECONDS.
+  //   - the scan's edge validation compared LOCAL DateTimes; across a
+  //     DST fall-back a newer holder can look older and the scan would
+  //     VALIDATE a stranger's edge instead of refusing it. Both operands are
+  //     now `.ToUniversalTime()` (see the script-pin test above).
+  //   - a row born after the bound but genuinely the host's own child was
+  //     refused forever and silently spared, and the loop reported the stop
+  //     successful with it alive. `computeWindowsHostKillSet` now returns
+  //     `unattributed` alongside `kill`, and the loop (below) throws rather
+  //     than reading an empty `kill` as convergence while `unattributed` is
+  //     non-empty.
+  describe("computeWindowsHostKillSet - victim carry-over (lifetime window: created..seenAliveAt)", () => {
+    // (processId, parentProcessId, claimedParentProcessId, created, slot).
+    function victimRow(
+      processId: number,
+      parentProcessId: number,
+      claimedParentProcessId: number,
+      created: number,
+      slot: boolean,
+    ): TableRowInput {
+      return {
+        processId,
+        parentProcessId,
+        claimedParentProcessId,
+        created,
+        slot,
+      };
+    }
+
+    const remembered = victimMemory(
+      new Map<number, readonly WindowsKillVictim[]>([
+        [100, [{ created: 1000, seenAliveAt: 5000 }]],
+      ]),
+    );
+    const cliPid = 9999;
+    const cliRow = victimRow(cliPid, 0, 0, 500, false);
+
+    it("born inside the lifetime window is killed", () => {
+      const table = rowsOf([victimRow(777, 0, 100, 3000, false), cliRow]);
+      expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
+        kill: [777],
+        protectedAncestors: [],
+        undecided: [],
+        unattributed: [],
+      });
+    });
+
+    it("born after seenAliveAt is unattributed, neither killed nor silently spared", () => {
+      // The cold review's finding: an earlier version sampled the clock
+      // before the KILL rather than before the SCAN, so a row born after the
+      // victim genuinely exited - but before that stale sample was taken -
+      // could pass as "still inside the window". Refusing to kill it is not
+      // enough on its own either: an even earlier version silently spared
+      // rows like this, which is the gap the loop-level tests below cover.
+      const table = rowsOf([victimRow(777, 0, 100, 6000, false), cliRow]);
+      expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
+        kill: [],
+        protectedAncestors: [],
+        undecided: [777],
+        unattributed: [777],
+      });
+    });
+
+    it("a row older than the victim is DECIDED, not undecided - it cannot be the victim's child at all", () => {
+      // A process cannot predate its own parent, so 777 (born 900, before
+      // 100's own birth at 1000) never was 100's child - the claimed id is
+      // one 777 has worn since before 100 existed, which this scan simply
+      // cannot verify (no live parent survives to validate the edge). That
+      // is a decided "no", not an open question: reporting it as
+      // unattributed would fail the stop over a long-lived stranger that
+      // every retry finds sitting in exactly the same place - a refusal
+      // nothing can clear. The caller-level test below drives this through
+      // `controller.stop` and confirms the stop actually succeeds.
+      const table = rowsOf([victimRow(777, 0, 100, 900, false), cliRow]);
+      expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
+        kill: [],
+        protectedAncestors: [],
+        undecided: [],
+        unattributed: [],
+      });
+    });
+
+    it("both window bounds are inclusive: the same microsecond as the parent's birth, and the same microsecond as seenAliveAt, are both killed", () => {
+      const sameAsBirth = rowsOf([victimRow(777, 0, 100, 1000, false), cliRow]);
+      expect(
+        computeWindowsHostKillSet(sameAsBirth, cliPid, remembered),
+      ).toEqual({
+        kill: [777],
+        protectedAncestors: [],
+        undecided: [],
+        unattributed: [],
+      });
+
+      const sameAsSeenAliveAt = rowsOf([
+        victimRow(777, 0, 100, 5000, false),
+        cliRow,
+      ]);
+      expect(
+        computeWindowsHostKillSet(sameAsSeenAliveAt, cliPid, remembered),
+      ).toEqual({
+        kill: [777],
+        protectedAncestors: [],
+        undecided: [],
+        unattributed: [],
+      });
+
+      // Ablation (§ablation table): change `created < victim.created` to
+      // `return "unattributed"` → the DECIDED-not-undecided test above reddens, becoming
+      // `{ kill: [], protectedAncestors: [], undecided: [777], unattributed: [777] }` instead of deciding the row is
+      // simply not the victim's child.
+      // Ablation (§ablation table): drop `row.created <= victim.seenAliveAt`
+      // → the born-after-seenAliveAt test above reddens the same way - exactly the bug this
+      // fix exists to close.
+    });
+
+    it("created 0 on the row, and separately on the victim, both refuse the link as unattributed", () => {
+      const unknownRowAge = rowsOf([victimRow(777, 0, 100, 0, false), cliRow]);
+      expect(
+        computeWindowsHostKillSet(unknownRowAge, cliPid, remembered),
+      ).toEqual({
+        kill: [],
+        protectedAncestors: [],
+        undecided: [777],
+        unattributed: [777],
+      });
+
+      const unknownVictimAge = victimMemory(
+        new Map<number, readonly WindowsKillVictim[]>([
+          [100, [{ created: 0, seenAliveAt: 5000 }]],
+        ]),
+      );
+      const ordinaryRow = rowsOf([victimRow(777, 0, 100, 3000, false), cliRow]);
+      expect(
+        computeWindowsHostKillSet(ordinaryRow, cliPid, unknownVictimAge),
+      ).toEqual({
+        kill: [],
+        protectedAncestors: [],
+        undecided: [777],
+        unattributed: [777],
+      });
+
+      // Ablation (§ablation table): drop the zero-age branch entirely
+      // (`victim.created === 0 || row.created === 0`) → BOTH assertions
+      // above redden, in opposite directions. The row of age 0 falls into
+      // the lower bound (`0 < 1000`) and is DECIDED as older than the victim
+      // (`{ kill: [], protectedAncestors: [], undecided: [], unattributed: [] }`), which is "we could not read an
+      // age" masquerading as proof. The victim of age 0 admits everything
+      // (`3000 < 0` is false, `3000 <= 5000` is true) and 777 is killed
+      // (`{ kill: [777], protectedAncestors: [], undecided: [], unattributed: [] }`). Neither reading of an
+      // unreadable age is acceptable, which is why the guard runs first.
+    });
+
+    it("a validated live edge is neither killed nor unattributed - the carry-over is not even consulted", () => {
+      // 777 has a validated `parentProcessId` of its own (100, nonzero) - the
+      // scan found a live parent for it in this very table, so the
+      // carry-over question never arises for it at all.
+      const table = rowsOf([
+        victimRow(100, 0, 0, 3000, false),
+        victimRow(777, 100, 100, 4000, false),
+        cliRow,
+      ]);
+      expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
+        kill: [],
+        protectedAncestors: [],
+        undecided: [],
+        unattributed: [],
+      });
+    });
+
+    it("a claimed parent that is not a remembered victim is neither killed nor unattributed", () => {
+      const table = rowsOf([victimRow(777, 0, 424242, 3000, false), cliRow]);
+      expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
+        kill: [],
+        protectedAncestors: [],
+        undecided: [],
+        unattributed: [],
+      });
+    });
+
+    it("a spared row claiming a victim pid is excluded from unattributed too - a process already decided never to kill is not an open question", () => {
+      // 700 claims the dead host (100) as its parent, born after
+      // `seenAliveAt` - ordinarily unattributed on its own. But the CLI
+      // (9999) claims 700 as its own validated parent here, so 700 is spared
+      // by the ancestry exclusion regardless of its carry-over
+      // classification - reporting it would fail every stop issued from a
+      // Traycer-hosted terminal whose shell happens to sit on a pid the host
+      // once held.
+      //
+      // Excluded from the REPORT, not from the memory feed: 700 is still the
+      // round's undecided closure, and the loop remembers it as a suspect so
+      // that a child of 700 that shows up after 700 has exited still finds
+      // its parent's pid remembered. The CLI itself, though under 700, is
+      // not: the CLI's own branch is never a host suspect.
+      const table = rowsOf([
+        victimRow(700, 0, 100, 6000, false),
+        victimRow(cliPid, 700, 700, 6500, false),
+      ]);
+      expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
+        kill: [],
+        protectedAncestors: [],
+        undecided: [700],
+        unattributed: [],
+      });
+    });
+
+    it("a spared undecided shell's unspared child is reported, and the shell itself is kept in the memory feed", () => {
+      // One round of the analogous loop-level test: the host was killed with
+      // an UNREADABLE age, so shell 700 (claiming it, born 2000) can be
+      // placed neither way; the CLI (9999) is 700's validated child, and so
+      // is a side worker 888 (born 6000). 700 is spared by ancestry and 888
+      // is reported. Without 700 in `undecided` the loop would remember only
+      // 888, and once 700 exits nothing would remember the pid its children
+      // claim.
+      const unreadableHost = victimMemory(
+        new Map<number, readonly WindowsKillVictim[]>([
+          [100, [{ created: 0, seenAliveAt: 5000 }]],
+        ]),
+      );
+      const table = rowsOf([
+        victimRow(700, 0, 100, 2000, false),
+        victimRow(cliPid, 700, 700, 2500, false),
+        victimRow(888, 700, 700, 6000, false),
+        victimRow(200, 0, 0, 6200, true),
+      ]);
+      expect(computeWindowsHostKillSet(table, cliPid, unreadableHost)).toEqual({
+        kill: [200],
+        protectedAncestors: [],
+        undecided: [700, 888],
+        unattributed: [888],
+      });
+
+      // Ablation: in `computeWindowsHostKillSet`, build `undecided` with the
+      // `!spared.has(pid)` filter too (make it equal to `unattributed`) →
+      // this assertion and the one above redden on `undecided`, and the
+      // spared-shell-uncertainty loop-level test reddens into a resolved stop.
+    });
+
+    it("overlap: a spared shell in BOTH closures - the killed host's validated child and an undecided root's descendant - stays in the memory feed", () => {
+      // Round 1 of the loop-level overlap test: lingering host 100 is a slot
+      // seed and, against the unreadable victim 200 it claims, undecided at
+      // once. Shell 700 (the CLI's parent) and side worker 888 are its
+      // validated descendants. The kill is the victim closure minus the
+      // spared branch; 700 is a placed ancestor and is remembered with a
+      // window instead of being killed; `undecided` is the suspect closure
+      // minus everything that will be remembered that way and minus the
+      // CLI's own branch - here, nothing.
+      const unreadableSlot = victimMemory(
+        new Map<number, readonly WindowsKillVictim[]>([
+          [200, [{ created: 0, seenAliveAt: 5000 }]],
+          [100, [{ created: 1000, seenAliveAt: 5000 }]],
+        ]),
+      );
+      const table = rowsOf([
+        victimRow(100, 0, 200, 1000, true),
+        victimRow(700, 100, 100, 2000, false),
+        victimRow(cliPid, 700, 700, 2500, false),
+        victimRow(888, 700, 700, 6000, false),
+      ]);
+      expect(computeWindowsHostKillSet(table, cliPid, unreadableSlot)).toEqual({
+        kill: [100, 888],
+        // 700 is a PLACED ancestor of the CLI (a validated child of the
+        // lingering host, which is a seed): reported as lineage to remember
+        // with a window, and therefore out of `undecided`. The CLI is out of
+        // it as its own branch.
+        protectedAncestors: [700],
+        undecided: [],
+        unattributed: [],
+      });
+
+      // Ablation: drop `protectedAncestors` from `remembered` → 700 is
+      // listed in BOTH `protectedAncestors` and `undecided`.
+    });
+
+    it("the CLI's own branch is never a host suspect: its slot-matched scan under an undecided CLI is neither reported nor remembered", () => {
+      // One round of the analogous loop-level test. The host (100) was
+      // killed with an UNREADABLE age, so the CLI (9999, claiming it) is
+      // undecided this round, and its own PowerShell scan 777 - a validated
+      // child, slot-MATCHED because its command line names the slot paths -
+      // lands in the suspect closure. Spared from the kill and not an
+      // ancestor, it would otherwise stay in `undecided` and be remembered
+      // as a HOST suspect; a stranger that later reuses pid 777 would then
+      // have its child refuse a stop.
+      const unreadableHost = victimMemory(
+        new Map<number, readonly WindowsKillVictim[]>([
+          [100, [{ created: 0, seenAliveAt: 5000 }]],
+        ]),
+      );
+      const table = rowsOf([
+        // Unreadable age, so the host's own edge is zeroed too.
+        victimRow(100, 0, 1, 0, true),
+        victimRow(cliPid, 0, 100, 2500, false),
+        victimRow(777, cliPid, cliPid, 7500, true),
+      ]);
+      expect(computeWindowsHostKillSet(table, cliPid, unreadableHost)).toEqual({
+        kill: [100],
+        protectedAncestors: [],
+        undecided: [],
+        unattributed: [],
+      });
+
+      // Ablation: in `computeWindowsHostKillSet`, drop `!cliBranch.has(pid)`
+      // from the `undecided` filter → `undecided: [777, 9999]`, and the
+      // loop-level CLI-branch test refuses a stop over a stranger's child.
+    });
+
+    it("a remembered ancestor is spared by IDENTITY once the wrappers between it and the CLI have exited; a reused pid with a different birth is not", () => {
+      // Round 1 of the loop-level "two missing wrappers" test. Round 0 saw
+      // slot 100 -> wrapper 600 -> shell 700 -> wrapper 800 -> CLI, killed
+      // 100 and remembered 600, 700 and 800 as placed ancestors, by window
+      // and by identity. Both wrappers have since exited: 700 (born 2000)
+      // claims absent 600 inside 600's window - a seed, an ordinary host
+      // descendant on the window alone - and the CLI claims absent 800. The
+      // live walk from the CLI stops at its zeroed edge, so nothing but the
+      // remembered identity says 700 is the shell this CLI runs in. Its
+      // other child 888 is still the host's and is killed.
+      const chainRemembered: WindowsKillMemory = {
+        victims: new Map<number, readonly WindowsKillVictim[]>([
+          [100, [{ created: 1000, seenAliveAt: 5000 }]],
+          [600, [{ created: 1500, seenAliveAt: 5000 }]],
+          [700, [{ created: 2000, seenAliveAt: 5000 }]],
+          [800, [{ created: 2250, seenAliveAt: 5000 }]],
+        ]),
+        suspects: new Map(),
+        protectedAncestors: new Map<number, readonly number[]>([
+          [600, [1500]],
+          [700, [2000]],
+          [800, [2250]],
+        ]),
+      };
+      const sameShell = rowsOf([
+        victimRow(700, 0, 600, 2000, false),
+        victimRow(cliPid, 0, 800, 2500, false),
+        victimRow(888, 700, 700, 6000, false),
+      ]);
+      expect(
+        computeWindowsHostKillSet(sameShell, cliPid, chainRemembered),
+      ).toEqual({
+        kill: [888],
+        protectedAncestors: [700],
+        undecided: [],
+        unattributed: [],
+      });
+
+      // A stranger wearing pid 700, born 9000: no identity match, and its
+      // claim on 600 falls after 600's window - undecided, reported, and
+      // certainly not spared as anybody's ancestor.
+      const reusedPid = rowsOf([
+        victimRow(700, 0, 600, 9000, false),
+        victimRow(cliPid, 0, 800, 2500, false),
+        victimRow(888, 700, 700, 9500, false),
+      ]);
+      expect(
+        computeWindowsHostKillSet(reusedPid, cliPid, chainRemembered),
+      ).toEqual({
+        kill: [],
+        protectedAncestors: [],
+        undecided: [700, 888],
+        unattributed: [700, 888],
+      });
+
+      // Ablation: in `computeWindowsHostKillSet`, drop the identity lookup
+      // (build `ancestors` from the live walk only) → the first assertion
+      // reddens with `kill: [700, 888]` and `protectedAncestors: []`: the
+      // shell this CLI runs in is killed as an ordinary host descendant.
+    });
+
+    it("both non-empty: a killable seed and an unattributed row coexist in the same verdict", () => {
+      const table = rowsOf([
+        victimRow(777, 0, 100, 3000, false),
+        victimRow(888, 0, 100, 6000, false),
+        cliRow,
+      ]);
+      expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
+        kill: [777],
+        protectedAncestors: [],
+        undecided: [888],
+        unattributed: [888],
+      });
+    });
+
+    it("an ordinary slot row is killed through the ordinary walk, independent of any carry-over", () => {
+      const table = rowsOf([victimRow(200, 0, 0, 2000, true), cliRow]);
+      expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
+        kill: [200],
+        protectedAncestors: [],
+        undecided: [],
+        unattributed: [],
+      });
+    });
+
+    it("the CLI exclusion holds against victim ancestry: a shell claiming the dead host as parent spares the CLI and the shell, but not the CLI's sibling", () => {
+      // Shell 700 claims the dead host (100) as its parent - inside the
+      // window, so a carry-over seed - and the CLI is the shell's own,
+      // ordinary (validated) child. Sibling 800 is killed as 700's
+      // descendant, but the CLI and the shell above it are BOTH spared: the
+      // shell's status as a carry-over victim does not override the
+      // ancestry exclusion any more than it would for an ordinary non-slot
+      // shell. A row that ends up spared can never be the reason a round's
+      // kill set comes back non-empty - only an UNSPARED survivor can stall
+      // convergence.
+      //
+      // The shell is spared from the kill and reported as a placed ancestor:
+      // the loop remembers it with the window it would have given a kill, so
+      // that a child it spawns after this scan is still placed once the shell
+      // has exited.
+      const table = rowsOf([
+        victimRow(700, 0, 100, 2000, false),
+        victimRow(cliPid, 700, 700, 2500, false),
+        victimRow(800, 700, 700, 2500, false),
+      ]);
+      expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
+        kill: [800],
+        protectedAncestors: [700],
+        undecided: [],
+        unattributed: [],
+      });
+    });
+
+    // These three shapes are decided by the ORDINARY descendant walk, not by
+    // `classifyCarryOverClaim` - EXCEPT the seed row in the third case, which
+    // the carry-over does seed; its descendants are what the ordinary walk
+    // then reaches. They stay alongside the window tests because they were
+    // the ones the old occupant check risked getting wrong (a live parent
+    // that happens to be a former victim's pid, recycled).
+    describe("shapes the ordinary walk decides, not the carry-over", () => {
+      it("a lingering victim (still occupying its own pid) is killed through the ordinary walk", () => {
+        // `TerminateProcess` is asynchronous: the confirming scan can briefly
+        // still list the exact pid a previous round already killed. 100 IS
+        // the victim, still there, and it is ALSO a genuine slot match
+        // (`slot: true`) - so it is killed as an ordinary slot-descendant
+        // walk. 777 comes along as its ordinary, validated child.
+        const table = rowsOf([
+          victimRow(100, 0, 0, 1000, true),
+          victimRow(777, 100, 100, 4000, false),
+          cliRow,
+        ]);
+        expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
+          kill: [100, 777],
+          protectedAncestors: [],
+          undecided: [],
+          unattributed: [],
+        });
+      });
+
+      it("the pid was recycled by a process that is now ITSELF a slot match - killed regardless of the carry-over", () => {
+        // 100 is a stranger (not the victim) that happens to match the slot
+        // on its own path/command line. It is killed because it is a slot
+        // process, full stop - 777 already has a validated live parent (100)
+        // that is itself a victim through the ordinary walk.
+        const table = rowsOf([
+          victimRow(100, 0, 0, 3000, true),
+          victimRow(777, 100, 100, 4000, false),
+          cliRow,
+        ]);
+        expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
+          kill: [100, 777],
+          protectedAncestors: [],
+          undecided: [],
+          unattributed: [],
+        });
+      });
+
+      it("a grandchild and great-grandchild of a carry-over seed are killed through the ordinary descendant walk", () => {
+        // 200 IS seeded through the carry-over (born inside the dead
+        // victim's window, claimed parent 100). 300 and 400 are NOT
+        // themselves carry-over candidates - they have validated live
+        // parents (200 and 300) - so they are killed as ordinary descendants
+        // of the seed.
+        const table = rowsOf([
+          victimRow(200, 0, 100, 2000, false),
+          victimRow(300, 200, 200, 2100, false),
+          victimRow(400, 300, 300, 2200, false),
+          cliRow,
+        ]);
+        expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
+          kill: [200, 300, 400],
+          protectedAncestors: [],
+          undecided: [],
+          unattributed: [],
+        });
+      });
+    });
+
+    it("the gate is not redundant: a validated live edge to a process wearing a victim's pid is decided by the edge, not by the window", () => {
+      // LEGITIMATE scan output: after victim 100 died, an unrelated process
+      // took pid 100 (born 6000, after the window closed at 5000) and forked
+      // 777 (born 7000). The scan validates 777's edge - its parent is live
+      // and older - so `parentProcessId` is 100. On the window alone 777 is
+      // born after `seenAliveAt` and would be reported as undecided, failing
+      // the stop over a stranger's child; the edge is the better fact, and
+      // the gate is what applies it.
+      const table = rowsOf([
+        victimRow(100, 0, 0, 6000, false),
+        victimRow(777, 100, 100, 7000, false),
+        cliRow,
+      ]);
+      expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
+        kill: [],
+        protectedAncestors: [],
+        undecided: [],
+        unattributed: [],
+      });
+
+      // Ablation (§ablation table): drop `row.parentProcessId !== 0` → this
+      // test reddens, becoming `{ kill: [], protectedAncestors: [], undecided: [777], unattributed: [777] }` - the
+      // window alone cannot place a row born after 5000, and a stop would be
+      // refused over a process the scan had already tied to a living,
+      // unrelated parent.
+    });
+
+    it("the gate is checked before the window: defensive, synthetic input pins the order of the checks", () => {
+      // Deliberately SYNTHETIC: a victim window wide enough (to 6000) to
+      // contain a row whose validated live parent (born 3000) is itself
+      // inside that window cannot be produced by the pre-scan loop. It pins
+      // the ORDER only - the gate is evaluated before the window is ever
+      // consulted - so a future change cannot quietly reorder them.
+      const widerWindow = victimMemory(
+        new Map<number, readonly WindowsKillVictim[]>([
+          [100, [{ created: 1000, seenAliveAt: 6000 }]],
+        ]),
+      );
+      const table = rowsOf([
+        victimRow(100, 0, 0, 3000, false),
+        victimRow(777, 100, 100, 4000, false),
+        cliRow,
+      ]);
+      expect(computeWindowsHostKillSet(table, cliPid, widerWindow)).toEqual({
+        kill: [],
+        protectedAncestors: [],
+        undecided: [],
+        unattributed: [],
+      });
+    });
+
+    // Round 5e: memory is per INCARNATION. A pid can be killed twice as two
+    // processes, or be a suspect in one round and a victim in the next, and
+    // each incarnation is evidence about the rows born during it. The
+    // strongest verdict across incarnations wins; a newer holder of a pid
+    // never erases what the loop learned about the older holder's children.
+    describe("incarnations - a later holder of a pid does not erase the earlier one", () => {
+      it("two victim windows for one pid: a row inside the OLDER window is still seeded", () => {
+        // 100 was killed at [1000, 2000], reused, and the newcomer (born
+        // 6000, slot-matched) killed at [6000, 9000]. 555 (born 1500) claims
+        // 100: against the newer incarnation it is "older than the victim",
+        // against the older one it is inside the window. Seed.
+        const twoWindows = victimMemory(
+          new Map<number, readonly WindowsKillVictim[]>([
+            [
+              100,
+              [
+                { created: 1000, seenAliveAt: 2000 },
+                { created: 6000, seenAliveAt: 9000 },
+              ],
+            ],
+          ]),
+        );
+        const table = rowsOf([victimRow(555, 0, 100, 1500, false), cliRow]);
+        expect(computeWindowsHostKillSet(table, cliPid, twoWindows)).toEqual({
+          kill: [555],
+          protectedAncestors: [],
+          undecided: [],
+          unattributed: [],
+        });
+
+        // Ablation: in `classifyCarryOverClaim`, consult only the LAST
+        // incarnation of the claimed pid → this test reddens
+        // (`{ kill: [], protectedAncestors: [], undecided: [], unattributed: [] }`): 555 is decided as somebody
+        // else's child and silently spared.
+      });
+
+      it("a suspect incarnation and a later victim incarnation of one pid: a row between them stays undecided", () => {
+        // 777 was undecided (born 6000), exited, and its pid was taken by a
+        // slot-matched process (born 8000) that was then killed. 888 (born
+        // 6500) claims 777: "older than the victim" against the newer
+        // incarnation, but born after the suspect's birth against the older
+        // one. The open question outranks the decided one.
+        const mixed: WindowsKillMemory = {
+          victims: new Map<number, readonly WindowsKillVictim[]>([
+            [777, [{ created: 8000, seenAliveAt: 9000 }]],
+          ]),
+          suspects: new Map<number, readonly number[]>([[777, [6000]]]),
+          protectedAncestors: new Map(),
+        };
+        const table = rowsOf([victimRow(888, 0, 777, 6500, false), cliRow]);
+        expect(computeWindowsHostKillSet(table, cliPid, mixed)).toEqual({
+          kill: [],
+          protectedAncestors: [],
+          undecided: [888],
+          unattributed: [888],
+        });
+      });
+
+      it("two suspect incarnations of one pid: the older one still covers a row born before the newer", () => {
+        const twoSuspects = suspectMemory(
+          new Map<number, readonly number[]>([[777, [6000, 8000]]]),
+        );
+        const table = rowsOf([victimRow(888, 0, 777, 6500, false), cliRow]);
+        expect(computeWindowsHostKillSet(table, cliPid, twoSuspects)).toEqual({
+          kill: [],
+          protectedAncestors: [],
+          undecided: [888],
+          unattributed: [888],
+        });
+      });
+
+      it("a later validated edge outranks an earlier suspicion about the same process: an unreadable parent age that becomes readable clears the row", () => {
+        // 888 (born 6500) was reported undecided in an earlier round because
+        // its live parent - an unrelated process wearing dead victim 100's
+        // pid, born 6000 - had an unreadable creation time then, so the scan
+        // zeroed the edge and 888's claim on remembered 100 fell after the
+        // window. This round the age is readable (6000, older than 888), the
+        // scan validates the edge, and that is real lineage: a reused pid
+        // always goes to a process younger than the old holder's children,
+        // so a validated edge can never be a coincidence of reuse. The
+        // remembered suspicion about 888 must not override it, or the stop
+        // would be refused over a stranger's child the scan has already
+        // placed.
+        const suspected: WindowsKillMemory = {
+          victims: new Map<number, readonly WindowsKillVictim[]>([
+            [100, [{ created: 1000, seenAliveAt: 5000 }]],
+          ]),
+          suspects: new Map<number, readonly number[]>([[888, [6500]]]),
+          protectedAncestors: new Map(),
+        };
+        const table = rowsOf([
+          victimRow(100, 0, 0, 6000, false),
+          victimRow(888, 100, 100, 6500, false),
+          cliRow,
+        ]);
+        expect(computeWindowsHostKillSet(table, cliPid, suspected)).toEqual({
+          kill: [],
+          protectedAncestors: [],
+          undecided: [],
+          unattributed: [],
+        });
+
+        // The descendant closure, not a self-identity rule, is what keeps a
+        // child undecided when its LIVE parent is itself undecided: the same
+        // 888 under a parent 777 that claims dead 100 and was born after the
+        // window is reported with it.
+        const underSuspectParent = rowsOf([
+          victimRow(777, 0, 100, 6000, false),
+          victimRow(888, 777, 777, 6500, false),
+          cliRow,
+        ]);
+        expect(
+          computeWindowsHostKillSet(underSuspectParent, cliPid, suspected),
+        ).toEqual({
+          kill: [],
+          protectedAncestors: [],
+          undecided: [777, 888],
+          unattributed: [777, 888],
+        });
+
+        // Ablation: in `classifyCarryOverClaim`, before the gate, return
+        // "unattributed" when `memory.suspects.get(row.processId)` contains
+        // `row.created` (the self-identity rule an earlier draft had) → the
+        // first assertion reddens (`unattributed: [888]`).
+      });
+    });
+
+    // Round 5d: a pid an earlier round could place neither in the slot nor
+    // out of it is remembered as a SUSPECT (by the age of the incarnation
+    // that round saw), and suspicion is inherited - a child of a process we
+    // cannot tie to the slot cannot be tied to it either. A suspect has no
+    // upper bound: inside it the row is provably the suspect's child, outside
+    // it the row may be the suspect's or a stranger's, and both are
+    // undecided (see `classifyAgainstSuspect`).
+    describe("suspect inheritance - claims on a pid an earlier round could not place", () => {
+      const suspected = suspectMemory(
+        new Map<number, readonly number[]>([[777, [6000]]]),
+      );
+
+      it("a row claiming a suspect and born after it is unattributed, with no upper bound to clear it", () => {
+        const table = rowsOf([
+          victimRow(888, 0, 777, 6500, false),
+          victimRow(889, 0, 777, 900_000, false),
+          cliRow,
+        ]);
+        expect(computeWindowsHostKillSet(table, cliPid, suspected)).toEqual({
+          kill: [],
+          protectedAncestors: [],
+          undecided: [888, 889],
+          unattributed: [888, 889],
+        });
+
+        // Ablation (§ablation table): make `classifyAgainstSuspect` return
+        // "none" for a row born at or after the suspect → this test reddens
+        // (`unattributed: []`), and so does the loop-level undecided-row pin above.
+      });
+
+      it("a row provably older than the suspect's incarnation is decided, not undecided", () => {
+        // Same lower bound, same reason as the victim rule: a process cannot
+        // predate its parent, so the claimed id is an earlier holder's.
+        const table = rowsOf([victimRow(888, 0, 777, 5000, false), cliRow]);
+        expect(computeWindowsHostKillSet(table, cliPid, suspected)).toEqual({
+          kill: [],
+          protectedAncestors: [],
+          undecided: [],
+          unattributed: [],
+        });
+      });
+
+      it("an unreadable age on either side is undecided", () => {
+        const zeroRow = rowsOf([victimRow(888, 0, 777, 0, false), cliRow]);
+        expect(computeWindowsHostKillSet(zeroRow, cliPid, suspected)).toEqual({
+          kill: [],
+          protectedAncestors: [],
+          undecided: [888],
+          unattributed: [888],
+        });
+        const zeroSuspect = suspectMemory(
+          new Map<number, readonly number[]>([[777, [0]]]),
+        );
+        const table = rowsOf([victimRow(888, 0, 777, 5000, false), cliRow]);
+        expect(computeWindowsHostKillSet(table, cliPid, zeroSuspect)).toEqual({
+          kill: [],
+          protectedAncestors: [],
+          undecided: [888],
+          unattributed: [888],
+        });
+      });
+
+      it("a validated live child of an undecided row is named with it - the closure is over the same children map the kill set walks", () => {
+        // 777 itself is undecided against the remembered victim (born after
+        // 100's window). 888 is 777's ordinary validated child and has no
+        // claim of its own; it is reported because uncertainty about its
+        // parent is uncertainty about it.
+        const table = rowsOf([
+          victimRow(777, 0, 100, 6000, false),
+          victimRow(888, 777, 777, 6500, false),
+          cliRow,
+        ]);
+        expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
+          kill: [],
+          protectedAncestors: [],
+          undecided: [777, 888],
+          unattributed: [777, 888],
+        });
+      });
+
+      it("a pid this scan decides to kill is never also reported as undecided", () => {
+        // 777 is undecided; its child 888 is slot-matched in its own right
+        // and so is killed. Reporting 888 in both lists would put one pid in
+        // front of the user in two contradictory roles.
+        const table = rowsOf([
+          victimRow(777, 0, 100, 6000, false),
+          victimRow(888, 777, 777, 6500, true),
+          cliRow,
+        ]);
+        expect(computeWindowsHostKillSet(table, cliPid, remembered)).toEqual({
+          kill: [888],
+          protectedAncestors: [],
+          undecided: [777],
+          unattributed: [777],
+        });
+      });
+    });
+  });
+
+  it("orderWindowsKillsDescendantsFirst: deepest first, ties broken by pid", () => {
+    // root(10) -> {15, 20} -> 30 (child of 20). 15 and 20 are both depth 1 and
+    // must sort by pid (15 before 20) rather than by Map iteration order.
+    const table = rowsOf([
+      { processId: 10, parentProcessId: 0, slot: false },
+      { processId: 20, parentProcessId: 10, slot: false },
+      { processId: 15, parentProcessId: 10, slot: false },
+      { processId: 30, parentProcessId: 20, slot: false },
+    ]);
+
+    expect(orderWindowsKillsDescendantsFirst([10, 20, 15, 30], table)).toEqual([
+      30, 15, 20, 10,
+    ]);
+
+    // Ablation (§ablation table): in `orderWindowsKillsDescendantsFirst`,
+    // change the body to `return pids;` → this test reddens: the input order
+    // ([10, 20, 15, 30]) comes back unchanged instead of deepest-first.
+  });
+
+  it("orderWindowsKillsDescendantsFirst terminates and orders sanely on a cycle - a torn table must not hang the kill", () => {
+    // 10's parent claims 20 and 20's parent claims 10: a cycle a real scan
+    // should never produce, but `depthOf`'s own `seen` set is what stands
+    // between a torn snapshot and an infinite loop, not an assumption that
+    // the table is well-formed.
+    const table = rowsOf([
+      { processId: 10, parentProcessId: 20, slot: false },
+      { processId: 20, parentProcessId: 10, slot: false },
+    ]);
+
+    expect(orderWindowsKillsDescendantsFirst([10, 20], table)).toEqual([
+      10, 20,
+    ]);
+
+    // The test terminating at all - within the suite's own timeout - is the
+    // pin. Both walks stop at depth 1 (the cycle guard turns back the moment
+    // it revisits a pid already on the chain), so the tie is broken by pid
+    // ascending like any other.
+  });
+});
+
+// The task's `<UserId>` is its caller's to resolve: `installService` reads it
+// (`resolveTaskUserId`, covered by `windows-task-user-id.test.ts`) in front of
+// its install edge and hands it to the builder, so an install needs one even
+// where staging is stubbed. A fixed SID keeps these blocks off the machine's
+// own identity.
+const TEST_TASK_USER_SID = "S-1-5-21-1000-2000-3000-1001";
+
+/** A registered task whose principal is `TEST_TASK_USER_SID`, Settings Enabled. */
+const OWNED_TASK_XML = `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Principals>
+    <Principal id="Author"><UserId>${TEST_TASK_USER_SID}</UserId></Principal>
+  </Principals>
+  <Settings><Enabled>true</Enabled></Settings>
+  <Actions Context="Author"><Exec><Command>x</Command></Exec></Actions>
+</Task>`;
+
+/** The definition seams with the task registered and owned by this account. */
+function ownedDefinitionDeps(): WindowsDefinitionDeps {
+  return {
+    queryTaskXml: async () => ({ kind: "xml", xml: OWNED_TASK_XML }),
+    predictCli: async () => {
+      throw new Error("predictCli must not be called from these fixtures");
+    },
+    resolveCli: async () => {
+      throw new Error("resolveCli must not be called from these fixtures");
+    },
+  };
+}
+
+function useOwnedTaskFixture(): void {
+  setWindowsTaskUserSidReaderForTests(() => TEST_TASK_USER_SID);
+  setWindowsAccountSidResolverForTests(async () => null);
+  setWindowsDefinitionDepsForTests(ownedDefinitionDeps());
+}
+
+describe("Scheduled Task XML identity", () => {
+  it("names Traycer as the task Author", () => {
+    // Probed live on Windows 11: a task registered from this XML without an
+    // <Author> shows `Author: N/A` in `schtasks /Query /V` and in the Task
+    // Scheduler UI - anonymous provenance for the one entry that starts a
+    // background process at every login. Same defect class as the macOS
+    // "sh from Unknown Developer" login item, one field cheaper to fix.
+    const xml = buildScheduledTaskXml(
+      {
+        label: serviceLabelFor("staging"),
+        cli: {
+          command: "C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe",
+          args: [],
+        },
+      },
+      TEST_TASK_USER_SID,
+      true,
+    );
+    expect(xml).toContain("<Author>Traycer</Author>");
+  });
+
+  it("suppresses a second instance, which is what lets the post-swap relaunch converge with a waiting supervisor", () => {
+    // The Windows half of the convergence conjunct (Q13).
+    //
+    // Once the update's stop stops disarming the service manager, the manager
+    // relaunches a supervisor while the update is still running. That
+    // supervisor contends for the attempt lock and WAITS on it, so it is
+    // occupying the task's instance slot at the moment the executor finishes
+    // its swap and calls `relaunchAfterRestart` - which on Windows is
+    // `startService`, i.e. `schtasks /Run`.
+    //
+    // `IgnoreNew` is what makes that a no-op instead of a second host: Task
+    // Scheduler drops the new run request while an instance is already
+    // running. Under `Parallel` the same sequence would start a SECOND
+    // supervisor beside the waiter, and both would go on to launch a host
+    // from the same data dir - the exact duplication the incumbent check
+    // cannot serialise, since it runs once as a gate before the wait and is
+    // never re-asked after admission.
+    //
+    // SCOPE, and this pin does NOT establish convergence on Windows (cold
+    // review B). `IgnoreNew` is defined as what happens when a new instance
+    // is requested *while one is running*, which is exactly the narrow
+    // property. The window Q13 actually creates is the one where NONE is
+    // running: an admission refusal exits `SERVICE_RELAUNCH_BUSY_EXIT_CODE`,
+    // which EMPTIES the task's instance slot, so the design's own back-off
+    // produces "two start requests, nothing running" - a pending manager
+    // restart plus the executor's own `/Run`. `IgnoreNew` is silent about it.
+    //
+    // systemd and launchd survive that window on a property Task Scheduler
+    // has no equivalent for: their singleton is the UNIT and the LABEL, not
+    // the verb, so an explicit start and a pending auto-restart converge on
+    // one process in every state. Windows therefore stays in the same
+    // UNVERIFIED tier as its verb change until a lane measures it. What this
+    // pin buys is that the narrow property is not silently lost - which
+    // matters because `runTaskAndVerifyStart` already depends on it from the
+    // other direction ("mistake IgnoreNew's suppressed second run for a
+    // failed repair").
+    //
+    // This file already depends on the suppression from the other direction:
+    // `runTaskAndVerifyStart` is documented as verifying its own `/Run` so
+    // callers "never baseline after it and mistake IgnoreNew's suppressed
+    // second run for a failed repair".
+    const xml = buildScheduledTaskXml(
+      {
+        label: serviceLabelFor("staging"),
+        cli: {
+          command: "C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe",
+          args: [],
+        },
+      },
+      TEST_TASK_USER_SID,
+      true,
+    );
+    expect(xml).toContain(
+      "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>",
+    );
+  });
+
+  it("declares NO execution time limit, which is what lets a supervisor wait out an update segment", async () => {
+    // CodeRabbit #1773 round 2 (r3951899616). `SUPERVISOR_ADMISSION_WAIT_MS`
+    // is safe to sit through only while no service manager imposes a start
+    // deadline it could cross, and `host/update-budget.ts` argues that
+    // platform by platform and says the three legs are "pinned rather than
+    // asserted - see the unit-text pins".
+    //
+    // That was true for systemd (`Type=simple`, no `TimeoutStartSec`, both
+    // pinned in `linux.test.ts`) and vacuous for Windows: `ExecutionTimeLimit`
+    // had one production occurrence and zero test occurrences. The docblock
+    // was citing a pin that did not exist.
+    //
+    // PT0S is the value that matters and it is a trap to read: in Task
+    // Scheduler it means NO limit - the task may run indefinitely - not a
+    // zero-length one. Task Scheduler's default for a task that HAS a limit is
+    // P3D, which is where the docblock's old "measured in days" came from; a
+    // change to any explicit duration would bound a healthy wait, and this row
+    // is what makes that arrive as a red test rather than as a support ticket.
+    const xml = buildScheduledTaskXml(
+      {
+        label: serviceLabelFor("staging"),
+        cli: {
+          command: "C:\\Users\\test\\.traycer\\cli\\bin\\traycer.exe",
+          args: [],
+        },
+      },
+      TEST_TASK_USER_SID,
+      true,
+    );
+    expect(xml).toContain("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>");
+  });
+});
+
+describe("parseSchtasksLastRunResult", () => {
+  it("extracts Last Run Result from /Query /V LIST output", () => {
+    const stdout = [
+      "Folder: \\Traycer",
+      "HostName: DESKTOP",
+      "TaskName: \\Traycer\\Host-Staging",
+      "Next Run Time: N/A",
+      "Status: Ready",
+      "Logon Mode: Interactive only",
+      "Last Run Time: 1/1/2026 12:00:00 AM",
+      "Last Run Result: 0x41301",
+      "Author: DESKTOP\\user",
+      "Task To Run: wscript.exe //B host-start-hidden.vbs",
+      "",
+    ].join("\r\n");
+    expect(parseSchtasksLastRunResult(stdout)).toBe("0x41301");
+  });
+
+  it("is case-insensitive and trims the value", () => {
+    expect(parseSchtasksLastRunResult("last run result:  267011  \n")).toBe(
+      "267011",
+    );
+  });
+
+  it("reads the positional result from localized headerless CSV", () => {
+    const localizedCsv =
+      '"ORDINATEUR","\\\\Traycer\\\\Host","N/A","Ready","Interactive only","01/01/2026 00:00:00","0x41301","user","wscript.exe //B host-start-hidden.vbs"';
+    expect(parseSchtasksLastRunResult(localizedCsv)).toBe("0x41301");
+  });
+
+  it("returns null when the field is missing or empty", () => {
+    expect(parseSchtasksLastRunResult("Status: Ready\n")).toBeNull();
+    expect(parseSchtasksLastRunResult("Last Run Result:\n")).toBeNull();
+    expect(parseSchtasksLastRunResult("")).toBeNull();
+  });
+});
+
+// A task's XML with the given task-level `<Settings><Enabled>` text, for the
+// post-/Run pins below: windows-task-enabled-state.test.ts's `taskXml`
+// reduced to the one axis these pins vary. The trigger's own Enabled is not
+// what `readWindowsTaskEnabledState` reads, so it stays "true" throughout.
+function definitionTaskXml(settingsEnabled: string | null): string {
+  const settingsEnabledLine =
+    settingsEnabled === null
+      ? ""
+      : `<Enabled>${settingsEnabled}</Enabled>\n    `;
+  return `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>${TEST_TASK_USER_SID}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    ${settingsEnabledLine}<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>C:\\traycer\\cli.exe</Command>
+      <Arguments>host start</Arguments>
+    </Exec>
+  </Actions>
+</Task>`;
+}
+
+// A queryTaskXml stub that records every task name it was asked about, so a
+// pin can assert the read happened - the MECHANISM, not just the resulting
+// `registrationCommitted` value.
+function recordingQueryTaskXml(query: ScheduledTaskXmlQuery): {
+  readonly queryTaskXml: (taskName: string) => Promise<ScheduledTaskXmlQuery>;
+  readonly calls: string[];
+} {
+  const calls: string[] = [];
+  return {
+    queryTaskXml: async (taskName: string) => {
+      calls.push(taskName);
+      return query;
+    },
+    calls,
+  };
+}
+
+describe("Windows startService post-/Run spawn verification", () => {
+  beforeEach(() => {
+    mocks.readHostPidMetadata.mockReset();
+    mocks.readHostPidMetadata.mockResolvedValue(null);
+    mocks.removeHostPidMetadata.mockReset();
+    mocks.removeHostPidMetadata.mockResolvedValue(undefined);
+    setWindowsStartEvidenceDepsForTests(null);
+    setWindowsTaskInstallDepsForTests(null);
+    useOwnedTaskFixture();
+  });
+
+  afterEach(() => {
+    setWindowsStartEvidenceDepsForTests(null);
+    setWindowsTaskInstallDepsForTests(null);
+    setWindowsTaskUserSidReaderForTests(null);
+    setWindowsDefinitionDepsForTests(null);
+  });
+
+  it("surfaces Last Run Result when /Run is accepted but nothing spawns", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (
+        command === "schtasks" &&
+        args[0] === "/Query" &&
+        args.includes("/V")
+      ) {
+        return success(
+          [
+            "TaskName: \\Traycer\\Host-Staging",
+            "Last Run Result: 0x1",
+            "Status: Ready",
+            "",
+          ].join("\r\n"),
+        );
+      }
+      return success("");
+    };
+
+    const deps: WindowsStartEvidenceDeps = {
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({ collect: async () => null }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 40,
+      verifyPollMs: 10,
+    };
+    setWindowsStartEvidenceDepsForTests(deps);
+
+    const controller = createWindowsController(runner, noTimingDeps);
+    await expect(
+      controller.start(serviceLabelFor("staging")),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      message: expect.stringContaining("Last Run Result: 0x1"),
+      details: expect.objectContaining({ lastRunResult: "0x1" }),
+    });
+
+    expect(
+      calls.some(
+        (call) =>
+          call.command === "schtasks" &&
+          call.args[0] === "/Run" &&
+          call.args.includes("\\Traycer\\Host-Staging"),
+      ),
+    ).toBe(true);
+    expect(
+      calls.some(
+        (call) =>
+          call.command === "schtasks" &&
+          call.args[0] === "/Query" &&
+          call.args.includes("/V"),
+      ),
+    ).toBe(true);
+  });
+
+  it("returns successfully when post-baseline spawn evidence appears", async () => {
+    let polls = 0;
+    const deps: WindowsStartEvidenceDeps = {
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({
+        collect: async () => {
+          polls += 1;
+          if (polls < 2) return null;
+          return {
+            kind: "starting-marker",
+            reason: "post-baseline starting marker",
+            marker: null,
+            pid: null,
+          };
+        },
+      }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 5_000,
+      verifyPollMs: 1,
+    };
+    setWindowsStartEvidenceDepsForTests(deps);
+
+    const runner: ProcessRunner = async () => success("");
+    const controller = createWindowsController(runner, noTimingDeps);
+    await expect(
+      controller.start(serviceLabelFor("staging")),
+    ).resolves.toBeUndefined();
+    expect(polls).toBeGreaterThanOrEqual(2);
+  });
+
+  // A task its owner disabled in Task Scheduler refuses `/Run` outright and
+  // no child can ever come, so the failure is NOT marked committed: a caller
+  // holding a host-start lease would otherwise wait out its whole spawn-ack
+  // window, and retry into the same refusal, for a task that cannot run. The
+  // catch reads the task's Enabled state to know - exactly once.
+  it("a /Run failure on a task disabled in Task Scheduler is not a committed registration", async () => {
+    const { queryTaskXml, calls } = recordingQueryTaskXml({
+      kind: "xml",
+      xml: definitionTaskXml("false"),
+    });
+    setWindowsDefinitionDepsForTests({
+      queryTaskXml,
+      predictCli: async () => {
+        throw new Error("predictCli must not be called from /Run verification");
+      },
+      resolveCli: async () => {
+        throw new Error("resolveCli must not be called from /Run verification");
+      },
+    });
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "schtasks" && args[0] === "/Run") {
+        throw new ProcessRunError(
+          "schtasks /Run exited with code 1: The attempted operation is not supported for the specified type of task.",
+          command,
+          args,
+          1,
+          "",
+          "ERROR: The attempted operation is not supported for the specified type of task.",
+        );
+      }
+      return success("");
+    };
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({ collect: async () => null }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 40,
+      verifyPollMs: 10,
+    });
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner, noTimingDeps).start(
+        serviceLabelFor("staging"),
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      message: expect.stringContaining("schtasks /Run failed for"),
+      details: expect.objectContaining({ registrationCommitted: false }),
+    });
+    expect(didServiceRegistrationCommit(caught)).toBe(false);
+    // R3: one read only - the ownership gate's, in front of `/Run`. The
+    // failure path's enabled-state check now reads the gate's own XML
+    // instead of querying the task again.
+    expect(calls).toEqual(["\\Traycer\\Host-Staging"]);
+  });
+
+  // Control for the pin above: no task-level `<Enabled>` leaf at all - the
+  // schema default is enabled, so this /Run failure IS still
+  // post-registration and must stay committed exactly as today.
+  it("control: a /Run failure on a task with no Settings Enabled leaf (enabled by schema default) stays a committed registration", async () => {
+    const { queryTaskXml } = recordingQueryTaskXml({
+      kind: "xml",
+      xml: definitionTaskXml(null),
+    });
+    setWindowsDefinitionDepsForTests({
+      queryTaskXml,
+      predictCli: async () => {
+        throw new Error("predictCli must not be called from /Run verification");
+      },
+      resolveCli: async () => {
+        throw new Error("resolveCli must not be called from /Run verification");
+      },
+    });
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "schtasks" && args[0] === "/Run") {
+        throw new ProcessRunError(
+          "schtasks /Run exited with code 1: Access is denied.",
+          command,
+          args,
+          1,
+          "",
+          "ERROR: Access is denied.",
+        );
+      }
+      return success("");
+    };
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({ collect: async () => null }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 40,
+      verifyPollMs: 10,
+    });
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner, noTimingDeps).start(
+        serviceLabelFor("staging"),
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      details: { registrationCommitted: true },
+    });
+    expect(didServiceRegistrationCommit(caught)).toBe(true);
+  });
+
+  // Control: the query itself fails (access denied, Task Scheduler
+  // unreachable, ...) - `readWindowsTaskEnabledState` reads that as
+  // "unknown", which the catch treats the same as enabled: a read that
+  // cannot confirm the task is disabled never suppresses the wait.
+  it("control: a /Run failure when the task-enabled query itself fails stays a committed registration", async () => {
+    // The ownership gate's read in front of `/Run` sees the account's own
+    // task; the enabled-state read on the failure path is the one that fails.
+    const reads: ScheduledTaskXmlQuery[] = [
+      { kind: "xml", xml: OWNED_TASK_XML },
+      {
+        kind: "failed",
+        reason: "schtasks /Query failed (exit 1: ERROR: Access is denied.)",
+      },
+    ];
+    let readIndex = 0;
+    setWindowsDefinitionDepsForTests({
+      queryTaskXml: async () => {
+        const read = reads[Math.min(readIndex, reads.length - 1)];
+        readIndex += 1;
+        if (read === undefined) throw new Error("unreachable");
+        return read;
+      },
+      predictCli: async () => {
+        throw new Error("predictCli must not be called from /Run verification");
+      },
+      resolveCli: async () => {
+        throw new Error("resolveCli must not be called from /Run verification");
+      },
+    });
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "schtasks" && args[0] === "/Run") {
+        throw new ProcessRunError(
+          "schtasks /Run exited with code 1: Access is denied.",
+          command,
+          args,
+          1,
+          "",
+          "ERROR: Access is denied.",
+        );
+      }
+      return success("");
+    };
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({ collect: async () => null }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 40,
+      verifyPollMs: 10,
+    });
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner, noTimingDeps).start(
+        serviceLabelFor("staging"),
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      details: { registrationCommitted: true },
+    });
+    expect(didServiceRegistrationCommit(caught)).toBe(true);
+  });
+
+  it("controller.install performs one task rewrite followed by one verified /Run", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({
+        collect: async () => ({
+          kind: "starting-marker",
+          reason: "post-baseline starting marker",
+          marker: null,
+          pid: null,
+        }),
+      }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 5_000,
+      verifyPollMs: 1,
+    });
+
+    await createWindowsController(runner, noTimingDeps).install({
+      label: serviceLabelFor("staging"),
+      cli: { command: "C:\\traycer.exe", args: [] },
+      enableLinger: false,
+    });
+
+    expect(
+      calls.filter(
+        (call) => call.command === "schtasks" && call.args[0] === "/Create",
+      ),
+    ).toHaveLength(1);
+    expect(
+      calls.filter(
+        (call) => call.command === "schtasks" && call.args[0] === "/Run",
+      ),
+    ).toHaveLength(1);
+  });
+
+  // `registrationCommitted: true` is the signal `didServiceRegistrationCommit`
+  // reads: `/Create` already succeeded here (the task exists with its logon
+  // trigger), so a caller holding a host-start adoption lease must honour it
+  // rather than treat this as a clean pre-registration failure.
+  it("marks a /Run failure after a successful /Create as a committed registration", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "schtasks" && args[0] === "/Run") {
+        throw new ProcessRunError(
+          "schtasks /Run exited with code 1: Access is denied.",
+          command,
+          args,
+          1,
+          "",
+          "ERROR: Access is denied.",
+        );
+      }
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+    // The /Run catch reads the task's Enabled state; stubbed so it never
+    // reaches a live `schtasks /Query /XML`. Enabled, so this stays the
+    // committed post-registration case.
+    setWindowsDefinitionDepsForTests({
+      queryTaskXml: async () => ({
+        kind: "xml",
+        xml: definitionTaskXml(null),
+      }),
+      predictCli: async () => {
+        throw new Error("predictCli must not be called from /Run verification");
+      },
+      resolveCli: async () => {
+        throw new Error("resolveCli must not be called from /Run verification");
+      },
+    });
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({ collect: async () => null }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 40,
+      verifyPollMs: 10,
+    });
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner, noTimingDeps).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      details: { registrationCommitted: true },
+    });
+    expect(didServiceRegistrationCommit(caught)).toBe(true);
+    expect(
+      calls.filter(
+        (call) => call.command === "schtasks" && call.args[0] === "/Create",
+      ),
+    ).toHaveLength(1);
+  });
+
+  // Same committed classification as the /Run failure above, for the other
+  // post-registration failure mode: /Run was ACCEPTED (the scheduler took
+  // the request) but no post-baseline spawn evidence ever showed up.
+  it("marks a spawn-evidence timeout after an accepted /Run as a committed registration", async () => {
+    const runner: ProcessRunner = async () => success("");
+    const deps: WindowsStartEvidenceDeps = {
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({ collect: async () => null }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 40,
+      verifyPollMs: 10,
+    };
+    setWindowsStartEvidenceDepsForTests(deps);
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner, noTimingDeps).start(
+        serviceLabelFor("staging"),
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      details: { registrationCommitted: true },
+    });
+    expect(didServiceRegistrationCommit(caught)).toBe(true);
+  });
+
+  // The negative twin: a `/Create` failure happens BEFORE the task exists at
+  // all, so it must never carry the committed flag.
+  it("does not mark a /Create failure as a committed registration", async () => {
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "schtasks" && args[0] === "/Create") {
+        throw new ProcessRunError(
+          "schtasks /Create exited with code 1: Access is denied.",
+          command,
+          args,
+          1,
+          "",
+          "ERROR: Access is denied.",
+        );
+      }
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner, noTimingDeps).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    });
+    expect(didServiceRegistrationCommit(caught)).toBe(false);
+  });
+
+  // A mutation-authority loss is not a `CliError`: it must keep its own
+  // identity (`isServiceMutationAuthorityError`) rather than being wrapped,
+  // and `markRegistrationCommitted` marks it by reference instead of via
+  // `details.registrationCommitted`.
+  it("marks a mutation-authority loss from /Run after a successful /Create as a committed registration", async () => {
+    const authorityError = new ServiceMutationAuthorityError(
+      new Error("maintenance lease revoked"),
+    );
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "schtasks" && args[0] === "/Run") {
+        throw authorityError;
+      }
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({ collect: async () => null }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 40,
+      verifyPollMs: 10,
+    });
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner, noTimingDeps).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(authorityError);
+    expect(isServiceMutationAuthorityError(caught)).toBe(true);
+    expect(didServiceRegistrationCommit(caught)).toBe(true);
+  });
+
+  // The negative twin: a mutation-authority loss from `/Create` happens
+  // BEFORE the task exists at all, so it must stay an authority error
+  // without ever being read as committed.
+  it("does not mark a mutation-authority loss from /Create (pre-registration) as a committed registration", async () => {
+    const authorityError = new ServiceMutationAuthorityError(
+      new Error("maintenance lease revoked"),
+    );
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "schtasks" && args[0] === "/Create") {
+        throw authorityError;
+      }
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner, noTimingDeps).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(authorityError);
+    expect(isServiceMutationAuthorityError(caught)).toBe(true);
+    expect(didServiceRegistrationCommit(caught)).toBe(false);
+  });
+
+  // The staging cleanup runs in `installService`'s `finally`, AFTER `/Create`
+  // has already registered the task. An authority loss there is therefore
+  // just as post-registration as one from `/Run` itself - and since the
+  // `finally` throw pre-empts the try block's own control flow, `/Run` is
+  // never reached at all.
+  it("marks a mutation-authority loss from the staging cleanup after a successful /Create as a committed registration, without attempting /Run", async () => {
+    const authorityError = new ServiceMutationAuthorityError(
+      new Error("maintenance lease revoked"),
+    );
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests({
+      stageTaskDefinition: async () => ({
+        tmpDir: "/tmp/traycer-task-test",
+        xmlPath: "/tmp/traycer-task-test/task.xml",
+      }),
+      removeStagedTaskDefinition: async () => {
+        throw authorityError;
+      },
+    });
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner, noTimingDeps).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(authorityError);
+    expect(isServiceMutationAuthorityError(caught)).toBe(true);
+    expect(didServiceRegistrationCommit(caught)).toBe(true);
+    expect(
+      calls.filter(
+        (call) => call.command === "schtasks" && call.args[0] === "/Run",
+      ),
+    ).toHaveLength(0);
+  });
+
+  // The negative twin: `/Create` itself fails, so the task was never
+  // registered - the staging cleanup's authority loss must not be read as
+  // committed. This is deliberate, not an oversight: the authority loss is
+  // still what propagates, REPLACING the `SERVICE_INSTALL_FAILED` cliError
+  // the `/Create` catch block built (a `finally` throw pre-empts the try
+  // block's own control flow), because "may not mutate at all" is the more
+  // fundamental fact of the two. It just must not be misread as committed,
+  // since the task itself was never registered.
+  it("does not mark a mutation-authority loss from the staging cleanup when /Create failed as a committed registration", async () => {
+    const authorityError = new ServiceMutationAuthorityError(
+      new Error("maintenance lease revoked"),
+    );
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "schtasks" && args[0] === "/Create") {
+        throw new ProcessRunError(
+          "schtasks /Create exited with code 1: Access is denied.",
+          command,
+          args,
+          1,
+          "",
+          "ERROR: Access is denied.",
+        );
+      }
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests({
+      stageTaskDefinition: async () => ({
+        tmpDir: "/tmp/traycer-task-test",
+        xmlPath: "/tmp/traycer-task-test/task.xml",
+      }),
+      removeStagedTaskDefinition: async () => {
+        throw authorityError;
+      },
+    });
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner, noTimingDeps).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(authorityError);
+    expect(isServiceMutationAuthorityError(caught)).toBe(true);
+    expect(didServiceRegistrationCommit(caught)).toBe(false);
+  });
+
+  // A NON-authority staging cleanup failure is the ordinary case (a leftover
+  // temp dir, a locked file) - it is logged at debug and swallowed, so when
+  // `/Create` failed the propagating error stays the `SERVICE_INSTALL_FAILED`
+  // cliError the catch block built, not the cleanup's own error.
+  it("does not let a non-authority staging cleanup failure override a /Create failure", async () => {
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "schtasks" && args[0] === "/Create") {
+        throw new ProcessRunError(
+          "schtasks /Create exited with code 1: Access is denied.",
+          command,
+          args,
+          1,
+          "",
+          "ERROR: Access is denied.",
+        );
+      }
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests({
+      stageTaskDefinition: async () => ({
+        tmpDir: "/tmp/traycer-task-test",
+        xmlPath: "/tmp/traycer-task-test/task.xml",
+      }),
+      removeStagedTaskDefinition: async () => {
+        throw new Error("EBUSY");
+      },
+    });
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner, noTimingDeps).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    });
+    expect(didServiceRegistrationCommit(caught)).toBe(false);
+  });
+
+  // The other side of the same swallow: a non-authority cleanup failure must
+  // not stop install from proceeding to the verified `/Run` once `/Create`
+  // already succeeded.
+  it("still runs /Run after a non-authority staging cleanup failure when /Create succeeded", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests({
+      stageTaskDefinition: async () => ({
+        tmpDir: "/tmp/traycer-task-test",
+        xmlPath: "/tmp/traycer-task-test/task.xml",
+      }),
+      removeStagedTaskDefinition: async () => {
+        throw new Error("EBUSY");
+      },
+    });
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({
+        collect: async () => ({
+          kind: "starting-marker",
+          reason: "post-baseline starting marker",
+          marker: null,
+          pid: null,
+        }),
+      }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 5_000,
+      verifyPollMs: 1,
+    });
+
+    await expect(
+      createWindowsController(runner, noTimingDeps).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(
+      calls.filter(
+        (call) => call.command === "schtasks" && call.args[0] === "/Run",
+      ),
+    ).toHaveLength(1);
+  });
+
+  // The post-`/Run` evidence poll is wrapped in try/catch so a NON-authority
+  // rejection from `evidenceReader.collect()` is also rethrown marked
+  // committed: the task exists and `/Run` was accepted, so everything from
+  // here on is post-registration whatever the cause of the failure.
+  it("marks a non-authority evidence-poll failure after an accepted /Run as a committed registration", async () => {
+    const evidenceError = new Error("EIO");
+    const runner: ProcessRunner = async () => success("");
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({
+        collect: async () => {
+          throw evidenceError;
+        },
+      }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 40,
+      verifyPollMs: 10,
+    });
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner, noTimingDeps).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(evidenceError);
+    expect(didServiceRegistrationCommit(caught)).toBe(true);
+  });
+
+  // `readTaskLastRunResult` is only ever reached after `/Run` was accepted
+  // and the post-baseline spawn-evidence poll timed out, so an authority
+  // loss from that diagnostic query is just as post-registration as the
+  // `/Run` failure it exists to explain.
+  it("marks a mutation-authority loss from the Last Run Result query after an accepted /Run as a committed registration", async () => {
+    const authorityError = new ServiceMutationAuthorityError(
+      new Error("maintenance lease revoked"),
+    );
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "schtasks" && args[0] === "/Query") {
+        throw authorityError;
+      }
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({ collect: async () => null }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 40,
+      verifyPollMs: 10,
+    });
+
+    let caught: unknown = null;
+    try {
+      await createWindowsController(runner, noTimingDeps).install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(authorityError);
+    expect(isServiceMutationAuthorityError(caught)).toBe(true);
+    expect(didServiceRegistrationCommit(caught)).toBe(true);
+  });
+});
+
+describe("Windows controller — installService launcher-restore behavior", () => {
+  // Real default staging deps in this block, except where one case injects a
+  // mid-staging throw: `stageTaskDefinition` genuinely writes the launcher
+  // through `writeHiddenHostLauncher`, so the bytes these tests check are the
+  // production write, not a stub's. The task XML it builds needs a logon
+  // identity, which only a Windows session sets, so one is stubbed.
+  beforeEach(() => {
+    vi.stubEnv("USERDOMAIN", "TESTBOX");
+    vi.stubEnv("USERNAME", "testuser");
+    // Hermeticity: this block runs the REAL
+    // `stageTaskDefinition` (see the block comment above), which reaches
+    // `resolveTaskUserId`. Stub COMPUTERNAME/USERDNSDOMAIN empty and force
+    // the SID reader to `null` so a Windows dev machine's real values can't
+    // change what these launcher-restore tests exercise.
+    vi.stubEnv("COMPUTERNAME", "");
+    vi.stubEnv("USERDNSDOMAIN", "");
+    useOwnedTaskFixture();
+    setWindowsTaskInstallDepsForTests(null);
+    setWindowsStartEvidenceDepsForTests(null);
+    LAUNCHER_RESTORE_FAILURE.readFile = null;
+    LAUNCHER_RESTORE_FAILURE.writeFile = null;
+    LAUNCHER_RESTORE_FAILURE.rm = null;
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    setWindowsTaskUserSidReaderForTests(null);
+    setWindowsTaskInstallDepsForTests(null);
+    setWindowsStartEvidenceDepsForTests(null);
+    LAUNCHER_RESTORE_FAILURE.readFile = null;
+    LAUNCHER_RESTORE_FAILURE.writeFile = null;
+    LAUNCHER_RESTORE_FAILURE.rm = null;
+  });
+
+  // `onCreate` runs as `/Create` is issued - after staging has written the
+  // launcher - so a gate it arms fails only the restore that follows.
+  function createFailingRunner(onCreate: () => void): {
+    readonly runner: ProcessRunner;
+    readonly calls: RecordedCall[];
+  } {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "schtasks" && args[0] === "/Create") {
+        onCreate();
+        throw new ProcessRunError(
+          "schtasks /Create exited with code 1: Access is denied.",
+          command,
+          args,
+          1,
+          "",
+          "ERROR: Access is denied.",
+        );
+      }
+      return success("");
+    };
+    return { runner, calls };
+  }
+
+  // Re-register, /Create fails. An existing launcher's OLD bytes must
+  // come back, not be removed - removing them (the old unconditional
+  // rollback) breaks the EXISTING task's next logon start, /Run and
+  // restart-on-failure alike, since that task is still registered and still
+  // points at this exact path.
+  it("re-register: /Create fails, restores the launcher to its OLD bytes, and leaves details.launcherRestoreFailure null", async () => {
+    const label = serviceLabelFor("win-restore-reregister-create-fail");
+    const taskName = windowsTaskName(label);
+    const launcherPath = await writeLeftoverLauncher(label);
+    const oldBytes = await readFile(launcherPath);
+    const seen = { bytesAtCreate: Buffer.alloc(0) };
+    const { runner } = createFailingRunner(() => {
+      seen.bytesAtCreate = readFileSync(launcherPath);
+    });
+
+    await expect(
+      createWindowsController(runner, noTimingDeps).install({
+        label,
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: `schtasks /Create failed for ${taskName}: schtasks /Create exited with code 1: Access is denied. (exit=1)`,
+      details: { launcherRestoreFailure: null },
+    });
+
+    // Staging really overwrote the launcher before `/Create` ran, so the old
+    // bytes below are the restore's doing, not a write that never happened.
+    expect(seen.bytesAtCreate.length).toBeGreaterThan(0);
+    expect(seen.bytesAtCreate.equals(oldBytes)).toBe(false);
+    const restoredBytes = await readFile(launcherPath);
+    expect(restoredBytes.equals(oldBytes)).toBe(true);
+    await rm(launcherPath, { force: true });
+  });
+
+  // Fresh install, /Create fails. No launcher existed before, so the
+  // one staging just wrote is an orphan with no task pointing at it -
+  // removed, not left behind as a stray file. This is the narrowed survivor
+  // of the old "/Create failure removes the launcher" test: it is EXPLICITLY
+  // the fresh-install case now, never the re-register one, which restores
+  // instead of removing.
+  it("fresh install: /Create fails, and the launcher it wrote is removed (not left as a stray file)", async () => {
+    const label = serviceLabelFor("win-restore-fresh-create-fail");
+    const taskName = windowsTaskName(label);
+    const launcherPath = hiddenHostLauncherPathForTest(label);
+    expect(existsSync(launcherPath)).toBe(false);
+    const seen = { launcherAtCreate: false };
+    const { runner } = createFailingRunner(() => {
+      seen.launcherAtCreate = existsSync(launcherPath);
+    });
+
+    await expect(
+      createWindowsController(runner, noTimingDeps).install({
+        label,
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: `schtasks /Create failed for ${taskName}: schtasks /Create exited with code 1: Access is denied. (exit=1)`,
+      details: { launcherRestoreFailure: null },
+    });
+
+    // Staging wrote a launcher before `/Create` ran; the failure removed it.
+    expect(seen.launcherAtCreate).toBe(true);
+    expect(existsSync(launcherPath)).toBe(false);
+  });
+
+  // The restore itself fails too, re-register variant. `writeFile` on the
+  // launcher path is gated from `/Create` on, after staging's own write, so the
+  // real `restorePreviousLauncher` genuinely throws, and the message names the exact `launcherRestoreFailed` sentence
+  // for a present `previousLauncher`.
+  it("re-register: /Create fails AND restoring the OLD bytes also fails - the 'still registered' wording, with launcherRestoreFailure populated", async () => {
+    const label = serviceLabelFor("win-restore-reregister-restore-fail");
+    const taskName = windowsTaskName(label);
+    const launcherPath = await writeLeftoverLauncher(label);
+    const oldBytes = await readFile(launcherPath);
+    const { runner } = createFailingRunner(() => {
+      LAUNCHER_RESTORE_FAILURE.writeFile = "EACCES: permission denied";
+    });
+
+    const rejection: unknown = await createWindowsController(
+      runner,
+      noTimingDeps,
+    )
+      .install({
+        label,
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      })
+      .catch((cause: unknown) => cause);
+
+    expect(rejection).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: { launcherRestoreFailure: "EACCES: permission denied" },
+    });
+    const message = rejection instanceof Error ? rejection.message : "";
+    expect(message).toBe(
+      `schtasks /Create failed for ${taskName}: schtasks /Create exited with code 1: Access is denied. (exit=1). Restoring the launcher it overwrote failed too (EACCES: permission denied), so the task still registered as ${taskName} now points at a launcher it may not be able to use. Run 'traycer host service install' again.`,
+    );
+    // The failed restore leaves whatever staging wrote in place - NOT the
+    // old bytes, since the write-back never landed.
+    const bytesNow = await readFile(launcherPath);
+    expect(bytesNow.equals(oldBytes)).toBe(false);
+    LAUNCHER_RESTORE_FAILURE.writeFile = null;
+    await rm(launcherPath, { force: true });
+  });
+
+  // The restore itself fails too, fresh-install variant - `rm` on the
+  // launcher path is gated instead, and the message names the exact
+  // `launcherRestoreFailed` sentence for a `null` `previousLauncher`.
+  it("fresh install: /Create fails AND removing the orphaned launcher also fails - the 'no task runs it' wording, with launcherRestoreFailure populated", async () => {
+    const label = serviceLabelFor("win-restore-fresh-restore-fail");
+    const taskName = windowsTaskName(label);
+    const launcherPath = hiddenHostLauncherPathForTest(label);
+    const { runner } = createFailingRunner(() => {
+      LAUNCHER_RESTORE_FAILURE.rm = "EBUSY: resource busy or locked";
+    });
+
+    const rejection: unknown = await createWindowsController(
+      runner,
+      noTimingDeps,
+    )
+      .install({
+        label,
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      })
+      .catch((cause: unknown) => cause);
+
+    expect(rejection).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: { launcherRestoreFailure: "EBUSY: resource busy or locked" },
+    });
+    const message = rejection instanceof Error ? rejection.message : "";
+    expect(message).toBe(
+      `schtasks /Create failed for ${taskName}: schtasks /Create exited with code 1: Access is denied. (exit=1). Removing the launcher it wrote failed too (EBUSY: resource busy or locked); no task runs it.`,
+    );
+    LAUNCHER_RESTORE_FAILURE.rm = null;
+    await rm(launcherPath, { force: true });
+  });
+
+  // Staging throws AFTER it already wrote the (new) launcher bytes - a
+  // fake `stageTaskDefinition` (this ONE case overrides the real deps,
+  // deliberately, since a mid-staging throw needs to be injected) models
+  // exactly that: it writes new bytes to the real launcher path and then
+  // throws. The original staging error must be rethrown BY IDENTITY, and the
+  // launcher restored to its OLD bytes.
+  it("staging throws after writing the launcher: the staging error is rethrown BY IDENTITY, and the launcher is restored to its OLD bytes", async () => {
+    const label = serviceLabelFor("win-restore-staging-throws");
+    const launcherPath = await writeLeftoverLauncher(label);
+    const oldBytes = await readFile(launcherPath);
+    const stagingError = new Error("stageTaskDefinition: disk full");
+    setWindowsTaskInstallDepsForTests({
+      stageTaskDefinition: async () => {
+        await writeFile(launcherPath, "mid-staging-new-bytes", "utf8");
+        throw stagingError;
+      },
+      removeStagedTaskDefinition: async () => undefined,
+    });
+    const runner: ProcessRunner = async () => success("");
+
+    await expect(
+      createWindowsController(runner, noTimingDeps).install({
+        label,
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      }),
+    ).rejects.toBe(stagingError);
+
+    const bytesNow = await readFile(launcherPath);
+    expect(bytesNow.equals(oldBytes)).toBe(true);
+    await rm(launcherPath, { force: true });
+  });
+
+  // Staging throws AND the restore it triggers also fails: the wrapped
+  // `SERVICE_INSTALL_FAILED` staging-failed message, with the restore-failed
+  // sentence appended and `details.launcherRestoreFailure` populated. The gate
+  // is armed inside the staging fake, after its own write, so only the restore
+  // trips it.
+  it("staging throws after writing the launcher, and the restore also fails: SERVICE_INSTALL_FAILED naming both failures", async () => {
+    const label = serviceLabelFor("win-restore-staging-throws-restore-fail");
+    const taskName = windowsTaskName(label);
+    const launcherPath = await writeLeftoverLauncher(label);
+    const stagingError = new Error("stageTaskDefinition: disk full");
+    setWindowsTaskInstallDepsForTests({
+      stageTaskDefinition: async () => {
+        await writeFile(launcherPath, "mid-staging-new-bytes", "utf8");
+        LAUNCHER_RESTORE_FAILURE.writeFile = "EACCES: permission denied";
+        throw stagingError;
+      },
+      removeStagedTaskDefinition: async () => undefined,
+    });
+    const runner: ProcessRunner = async () => success("");
+
+    const rejection: unknown = await createWindowsController(
+      runner,
+      noTimingDeps,
+    )
+      .install({
+        label,
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      })
+      .catch((cause: unknown) => cause);
+
+    expect(rejection).not.toBe(stagingError);
+    expect(rejection).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      details: { launcherRestoreFailure: "EACCES: permission denied" },
+    });
+    const message = rejection instanceof Error ? rejection.message : "";
+    expect(message).toBe(
+      `staging the task definition for ${taskName} failed: stageTaskDefinition: disk full. Restoring the launcher it overwrote failed too (EACCES: permission denied), so the task still registered as ${taskName} now points at a launcher it may not be able to use. Run 'traycer host service install' again.`,
+    );
+    LAUNCHER_RESTORE_FAILURE.writeFile = null;
+    await rm(launcherPath, { force: true });
+  });
+
+  // An existing launcher that cannot be read at all. The install edge has
+  // ALREADY published by the time this check runs (`readPreviousLauncher`
+  // sits after it), so the publish call log proves that ordering; no
+  // `/Create` is ever issued, and the launcher itself is left exactly as it
+  // was - unreadable, but untouched.
+  it("an existing launcher that cannot be read: SERVICE_INSTALL_FAILED, no /Create, the launcher untouched, and the publish already happened", async () => {
+    const label = serviceLabelFor("win-restore-unreadable-launcher");
+    const taskName = windowsTaskName(label);
+    const launcherPath = await writeLeftoverLauncher(label);
+    LAUNCHER_RESTORE_FAILURE.readFile = {
+      message: "EACCES: permission denied, open",
+      code: "EACCES",
+    };
+    const calls: RecordedCall[] = [];
+    const log: string[] = [];
+    const publish = vi.fn(async (): Promise<null> => {
+      log.push("publish");
+      return null;
+    });
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      log.push(args[0] ?? command);
+      return success("");
+    };
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () =>
+        createWindowsController(runner, noTimingDeps).install({
+          label,
+          cli: { command: "C:\\traycer.exe", args: [] },
+          enableLinger: false,
+        }),
+    ).catch((cause: unknown) => cause);
+
+    expect(rejection).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: expect.stringContaining("could not be read"),
+    });
+    const message = rejection instanceof Error ? rejection.message : "";
+    expect(message).toBe(
+      `service install for ${taskName}: the existing host launcher could not be read (EACCES: permission denied, open), so it was left untouched and nothing was installed.`,
+    );
+    expect(
+      calls.some((c) => c.command === "schtasks" && c.args[0] === "/Create"),
+    ).toBe(false);
+    // The publish already happened by the time the read failure is
+    // classified - it is the very first thing installService does.
+    expect(log[0]).toBe("publish");
+    LAUNCHER_RESTORE_FAILURE.readFile = null;
+    const stillThere = await readFile(launcherPath);
+    expect(stillThere.toString("utf8")).toBe("leftover-launcher");
+    await rm(launcherPath, { force: true });
+  });
+});
+
+// `installService` never reads the CURRENTLY-registered task's
+// XML before it rewrites it. It builds the `/Create /F` document fresh from
+// `buildTaskXmlForUser` every time, so a task the user disabled in Task
+// Scheduler (`<Enabled>false</Enabled>` in the LIVE definition
+// `schtasks /Query /XML` would show) is silently re-enabled by any
+// re-register - `installService` has no code path that ever looks at that
+// live XML at all. This is GREEN on head: it records the current fact that
+// policy must change, not a bug in this codepath itself.
+describe("Windows controller — installService fact: /Create's XML is built fresh, never from the queried task", () => {
+  beforeEach(() => {
+    vi.stubEnv("USERDOMAIN", "TESTBOX");
+    vi.stubEnv("USERNAME", "testuser");
+    vi.stubEnv("COMPUTERNAME", "");
+    vi.stubEnv("USERDNSDOMAIN", "");
+    useOwnedTaskFixture();
+    setWindowsTaskInstallDepsForTests(null);
+    setWindowsStartEvidenceDepsForTests(null);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    setWindowsTaskUserSidReaderForTests(null);
+    setWindowsTaskInstallDepsForTests(null);
+    setWindowsStartEvidenceDepsForTests(null);
+  });
+
+  it("the queried task being disabled changes nothing about the fresh /Create XML", async () => {
+    const label = serviceLabelFor("win-fact-fresh-xml-ignores-queried-state");
+    const seen = { createXml: null as string | null };
+    const runner: ProcessRunner = async (command, args) => {
+      if (command === "schtasks" && args[0] === "/Create") {
+        const xmlPath = args[args.indexOf("/XML") + 1];
+        // `stageTaskDefinition` writes UTF-16LE (what `schtasks /Create /XML`
+        // itself requires), so decode the same way to compare text, not bytes.
+        seen.createXml = readFileSync(xmlPath as string).toString("utf16le");
+        // Fail /Run deliberately so the test never needs spawn-evidence
+        // polling - the XML this row asserts on is already captured by the
+        // time /Create returns.
+        return success("");
+      }
+      if (command === "schtasks" && args[0] === "/Run") {
+        throw new ProcessRunError(
+          "schtasks /Run exited with code 1: ERROR: The attempted operation is not supported for a task that is disabled.",
+          command,
+          args,
+          1,
+          "",
+          "ERROR: The attempted operation is not supported for a task that is disabled.",
+        );
+      }
+      return success("");
+    };
+
+    // `installService` never queries the live task at all - there is no
+    // fixture to "make the queried task disabled" with, because nothing in
+    // this codepath ever reads `schtasks /Query /XML` for the task it is
+    // about to overwrite. That absence IS the fact this row records.
+    await createWindowsController(runner, noTimingDeps)
+      .install({
+        label,
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      })
+      .catch(() => undefined);
+
+    expect(seen.createXml).not.toBeNull();
+    expect(seen.createXml as string).not.toContain("<Enabled>false</Enabled>");
+    expect(seen.createXml as string).toContain("<Enabled>true</Enabled>");
+    await rm(hiddenHostLauncherPathForTest(label), { force: true });
+  });
+});
+
+// Adapted from main (#2169): the guard in front of this ask
+// (`askHostToStandDown`'s own slot scan, the cooperative-shutdown guard tests below) now runs
+// BEFORE `requestCooperativeShutdownReporting` on every non-forced site, so a
+// fixture answers the guard's scan (`convergingTableRunner` always does, even
+// with an empty table) or the ask is skipped as unreadable. Every "no OS
+// mutation yet" assertion below therefore reads "no `schtasks` call", not "no
+// calls at all" - the guard's own read is expected and is not a mutation.
+describe("Windows cooperative stop", () => {
+  const label = serviceLabelFor("staging");
+
+  beforeEach(() => {
+    mocks.readHostPidMetadata.mockReset();
+    mocks.readHostPidMetadata.mockResolvedValue(null);
+    mocks.removeHostPidMetadata.mockReset();
+    mocks.removeHostPidMetadata.mockResolvedValue(undefined);
+    mocks.requestCooperativeShutdownReporting.mockReset();
+    mocks.requestCooperativeShutdownReporting.mockResolvedValue({
+      kind: "no-host",
+    });
+    setWindowsStartEvidenceDepsForTests(null);
+    setWindowsTaskInstallDepsForTests(null);
+  });
+
+  afterEach(() => {
+    setWindowsStartEvidenceDepsForTests(null);
+    setWindowsTaskInstallDepsForTests(null);
+  });
+
+  function idleController() {
+    const { runner, calls } = convergingTableRunner([]);
+    return {
+      calls,
+      controller: createWindowsController(runner, noTimingDeps),
+    };
+  }
+
+  // A stopped host is not there to ask; the ordinary path only sweeps the
+  // task and any survivors, and a stop with no metadata must stay idempotent.
+  // `busy` is deliberately absent from this list: it now refuses stop/restart
+  // before any OS mutation instead of falling back here (see BUSY_SITES,
+  // below), and uninstall - the one operation `busy` does not refuse - never
+  // reaches this table at all.
+  const OUTCOMES_THAT_FALL_BACK_TO_THE_EXISTING_STOP = [
+    { kind: "stopped" },
+    { kind: "no-host" },
+    { kind: "no-metadata" },
+    { kind: "unreachable", cause: "dial failed" },
+    { kind: "hung", pid: 4242 },
+  ] as const;
+
+  it("asks the host to shut down before the first OS mutation, and mutates only once that settles", async () => {
+    const outcome = (() => {
+      let resolve: (value: { kind: string }) => void = () => undefined;
+      const promise = new Promise<{ kind: string }>((done) => {
+        resolve = done;
+      });
+      return { promise, resolve };
+    })();
+    mocks.requestCooperativeShutdownReporting.mockReturnValueOnce(
+      outcome.promise,
+    );
+    const { controller, calls } = idleController();
+
+    const stopping = controller.stop(label, { force: false });
+    // The ask follows the guard's scan, which is a service call behind its
+    // own authority and stop-target checks: wait for it rather than count the
+    // turns those checks take.
+    await vi.waitFor(() => {
+      expect(mocks.requestCooperativeShutdownReporting).toHaveBeenCalledTimes(
+        1,
+      );
+    });
+    // Only the guard's read-only scan ran so far: no /End, no kill - `some
+    // call is schtasks` would miss a kill script, which is a `powershell.exe`
+    // call too, so every recorded call must still be that same read.
+    expect(calls.some((call) => call.command === "schtasks")).toBe(false);
+    expect(calls.every((call) => isScanCall(call.command, call.args))).toBe(
+      true,
+    );
+
+    outcome.resolve({ kind: "stopped" });
+    await stopping;
+
+    expect(calls.find((call) => call.command === "schtasks")).toMatchObject({
+      command: "schtasks",
+      args: ["/End", "/TN", "\\Traycer\\Host-Staging"],
+    });
+    expect(calls.some((call) => isScanCall(call.command, call.args))).toBe(
+      true,
+    );
+  });
+
+  it("tells the host whether this is a plain stop or the stop half of a restart", async () => {
+    const { controller } = idleController();
+
+    await controller.stop(label, { force: false });
+    await controller.stopForRestart(label, { force: false });
+
+    expect(
+      mocks.requestCooperativeShutdownReporting.mock.calls.map(
+        (call: unknown[]) => [call[1], call[2]],
+      ),
+    ).toEqual([
+      ["stop", "shutdown"],
+      ["restart", "restart"],
+    ]);
+  });
+
+  it("forwards the helper's host-addressed report to the caller exactly once", async () => {
+    mocks.requestCooperativeShutdownReporting.mockImplementationOnce(
+      async (
+        _environment: string,
+        _operation: string,
+        _intent: string,
+        onHostAddressed: (() => void) | null,
+      ) => {
+        onHostAddressed?.();
+        return { kind: "stopped" as const };
+      },
+    );
+    const onHostAddressed = vi.fn();
+    const { controller } = idleController();
+
+    await controller.stop(label, { force: false, onHostAddressed });
+
+    expect(onHostAddressed).toHaveBeenCalledTimes(1);
+  });
+
+  // A stop confirmed for one host process (`withStopTarget`) reads `pid.json`
+  // as the last thing before each service call. The authority check in front
+  // of the call awaits lock verification, and a host published during that
+  // await has to be read.
+  describe("a restart's stop confirmed for one host process", () => {
+    const CONFIRMED_HOST = { pid: 4242, startIdentity: "windows:boot-a 4242" };
+
+    // A record naming an instance that is neither the confirmed host nor
+    // running. Classifying it takes a liveness probe, and a replacement can
+    // publish while that probe runs.
+    const STALE_INSTANCE = {
+      pid: 31337,
+      startIdentity: "windows:boot-z 31337",
+    };
+
+    // What the last authority check finds: the replacement itself, a stale
+    // record whose probe is when the replacement publishes, or a stale record
+    // that stays what it is.
+    type LastCheck = "replacement" | "stale-then-replacement" | "stale-only";
+
+    async function stopAndObserve(
+      publishAt: number | null,
+      lastCheck: LastCheck,
+    ): Promise<{
+      readonly calls: RecordedCall[];
+      readonly verifiesAtCall: number[];
+      readonly error: unknown;
+    }> {
+      let published: {
+        readonly kind: "read";
+        readonly metadata: {
+          readonly pid: number;
+          readonly processStartIdentity: string;
+        };
+      } = {
+        kind: "read",
+        metadata: {
+          pid: CONFIRMED_HOST.pid,
+          processStartIdentity: CONFIRMED_HOST.startIdentity,
+        },
+      };
+      mocks.readHostPidMetadataEvidence.mockImplementation(
+        async () => published,
+      );
+      const publishReplacement = (): void => {
+        published = {
+          kind: "read",
+          metadata: {
+            pid: process.pid,
+            processStartIdentity: ownProcessStartIdentity() ?? "",
+          },
+        };
+      };
+      const publishStale = (): void => {
+        published = {
+          kind: "read",
+          metadata: {
+            pid: STALE_INSTANCE.pid,
+            processStartIdentity: STALE_INSTANCE.startIdentity,
+          },
+        };
+      };
+      livenessProbe.answer =
+        lastCheck === "replacement"
+          ? null
+          : (pid) => {
+              if (pid !== STALE_INSTANCE.pid) return null;
+              if (lastCheck === "stale-then-replacement") publishReplacement();
+              return "dead";
+            };
+      const race = createVerifyRace(
+        publishAt,
+        lastCheck === "replacement" ? publishReplacement : publishStale,
+      );
+      const { runner, calls } = convergingTableRunner([]);
+      const verifiesAtCall: number[] = [];
+      const controller = createWindowsController(async (...callArgs) => {
+        verifiesAtCall.push(race.verifyCount());
+        return runner(...callArgs);
+      }, noTimingDeps);
+      const error = await withServiceMutationAuthority(race.verify, () =>
+        withStopTarget("host restart", label.environment, CONFIRMED_HOST, () =>
+          controller.stopForRestart(label, { force: false }),
+        ),
+      ).then(
+        () => null,
+        (cause: unknown) => cause,
+      );
+      return { calls, verifiesAtCall, error };
+    }
+
+    afterEach(() => {
+      livenessProbe.answer = null;
+    });
+
+    it("never ends the task when a live host is published while the last authority check is awaited, and refuses as a mutation-authority failure", async () => {
+      // The dry run finds which authority check is the last one before the
+      // task is ended.
+      const dry = await stopAndObserve(null, "replacement");
+      const endAt = dry.calls.findIndex(
+        (call) => call.command === "schtasks" && call.args[0] === "/End",
+      );
+      expect(endAt).toBeGreaterThanOrEqual(0);
+      expect(dry.error).toBeNull();
+
+      const raced = await stopAndObserve(
+        dry.verifiesAtCall[endAt] ?? null,
+        "replacement",
+      );
+
+      expect(raced.error).toMatchObject({
+        code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+      });
+      expect(isServiceMutationAuthorityError(raced.error)).toBe(true);
+      expect(raced.calls.some((call) => call.command === "schtasks")).toBe(
+        false,
+      );
+    });
+
+    it("never ends the task when a host is published while a stale record's liveness probe runs", async () => {
+      const dry = await stopAndObserve(null, "stale-then-replacement");
+      const endAt = dry.calls.findIndex(
+        (call) => call.command === "schtasks" && call.args[0] === "/End",
+      );
+      expect(dry.error).toBeNull();
+
+      const raced = await stopAndObserve(
+        dry.verifiesAtCall[endAt] ?? null,
+        "stale-then-replacement",
+      );
+
+      expect(raced.error).toMatchObject({
+        code: CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+      });
+      expect(raced.calls.some((call) => call.command === "schtasks")).toBe(
+        false,
+      );
+    });
+
+    it("still ends the task when the stale record stays the stale record across its probe", async () => {
+      const dry = await stopAndObserve(null, "stale-only");
+      const endAt = dry.calls.findIndex(
+        (call) => call.command === "schtasks" && call.args[0] === "/End",
+      );
+
+      const raced = await stopAndObserve(
+        dry.verifiesAtCall[endAt] ?? null,
+        "stale-only",
+      );
+
+      expect(raced.error).toBeNull();
+      expect(raced.calls.some((call) => call.command === "schtasks")).toBe(
+        true,
+      );
+    });
+  });
+
+  interface BusySite {
+    readonly name: string;
+    readonly invoke: (controller: ServiceController) => Promise<unknown>;
+  }
+
+  // The three routes that ask before an OS mutation: a plain stop, a
+  // restart's own top-level ask (`controller.restart`, which always asks - it
+  // takes no `force`), and the stop half of a restart
+  // (`controller.stopForRestart`). `uninstall` is deliberately not here: it
+  // does not refuse on `busy` (see the dedicated test below).
+  const BUSY_SITES: readonly BusySite[] = [
+    {
+      name: "stop",
+      invoke: (controller) => controller.stop(label, { force: false }),
+    },
+    {
+      name: "restart",
+      invoke: (controller) => controller.restart(label),
+    },
+    {
+      name: "stopForRestart",
+      invoke: (controller) =>
+        controller.stopForRestart(label, { force: false }),
+    },
+  ];
+
+  it.each(BUSY_SITES)(
+    "$name: a busy host refuses with E_HOST_BUSY before any OS mutation",
+    async ({ invoke }) => {
+      mocks.requestCooperativeShutdownReporting.mockResolvedValue({
+        kind: "busy",
+      });
+      const { controller, calls } = idleController();
+
+      await expect(invoke(controller)).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_BUSY,
+      });
+      // Only the guard's read-only scan ran: no /End, no kill - `some call is
+      // schtasks` would miss a kill script, which is a `powershell.exe` call
+      // too, so every recorded call must still be that same read.
+      expect(calls.some((call) => call.command === "schtasks")).toBe(false);
+      expect(calls.every((call) => isScanCall(call.command, call.args))).toBe(
+        true,
+      );
+      expect(mocks.removeHostPidMetadata).not.toHaveBeenCalled();
+    },
+  );
+
+  it("uninstall: a busy host does not refuse, and still issues /End and sweeps", async () => {
+    mocks.requestCooperativeShutdownReporting.mockResolvedValue({
+      kind: "busy",
+    });
+    const { runner, calls } = convergingTableRunner([
+      { processId: 401, parentProcessId: 1, slot: true },
+    ]);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.uninstall({ label, leaveForegroundRun: null }),
+    ).resolves.toBeUndefined();
+
+    expect(
+      calls.some(
+        (call) => call.command === "schtasks" && call.args[0] === "/End",
+      ),
+    ).toBe(true);
+    expect(killedPids(calls)).toEqual([401]);
+  });
+
+  it.each(["stop", "restart"] as const)(
+    "%s: losing service mutation authority during the cooperative request aborts with no OS command and no forced cleanup",
+    async (operation) => {
+      const lost = new ServiceMutationAuthorityError(new Error("revoked"));
+      mocks.requestCooperativeShutdownReporting.mockRejectedValue(lost);
+      const { controller, calls } = idleController();
+
+      const attempt =
+        operation === "stop"
+          ? controller.stop(label, { force: false })
+          : controller.stopForRestart(label, { force: false });
+
+      await expect(attempt).rejects.toBe(lost);
+      // Same reading as the busy refusal above: only the guard's read-only
+      // scan ran - no /End, no kill.
+      expect(calls.some((call) => call.command === "schtasks")).toBe(false);
+      expect(calls.every((call) => isScanCall(call.command, call.args))).toBe(
+        true,
+      );
+      expect(mocks.removeHostPidMetadata).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(OUTCOMES_THAT_FALL_BACK_TO_THE_EXISTING_STOP)(
+    "stop and restart both continue into the existing verified stop when the cooperative outcome is $kind",
+    async (outcome) => {
+      for (const operation of ["stop", "restart"] as const) {
+        mocks.requestCooperativeShutdownReporting.mockResolvedValue(outcome);
+        const { runner, calls } = convergingTableRunner([
+          { processId: 401, parentProcessId: 1, slot: true },
+        ]);
+        const controller = createWindowsController(runner, noTimingDeps);
+
+        if (operation === "stop") {
+          await controller.stop(label, { force: false });
+        } else {
+          await expect(
+            controller.stopForRestart(label, { force: false }),
+          ).resolves.toEqual({ forcedRecycle: false });
+        }
+
+        expect(calls.find((call) => call.command === "schtasks")).toMatchObject(
+          {
+            command: "schtasks",
+            args: ["/End", "/TN", "\\Traycer\\Host-Staging"],
+          },
+        );
+        expect(killedPids(calls)).toEqual([401]);
+      }
+    },
+  );
+
+  it.each(["stop", "restart"] as const)(
+    "%s with force never asks the host and goes straight to the task end and kill",
+    async (operation) => {
+      const { runner, calls } = convergingTableRunner([
+        { processId: 401, parentProcessId: 1, slot: true },
+      ]);
+      const controller = createWindowsController(runner, noTimingDeps);
+
+      if (operation === "stop") {
+        await controller.stop(label, { force: true });
+      } else {
+        await controller.stopForRestart(label, { force: true });
+      }
+
+      expect(mocks.requestCooperativeShutdownReporting).not.toHaveBeenCalled();
+      expect(calls[0]).toMatchObject({
+        command: "schtasks",
+        args: ["/End", "/TN", "\\Traycer\\Host-Staging"],
+      });
+      expect(killedPids(calls)).toEqual([401]);
+    },
+  );
+});
+
+describe("Windows controller — spawn-edge placement", () => {
+  function stageEvidenceForImmediateStart(): void {
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({
+        collect: async () => ({
+          kind: "starting-marker",
+          reason: "post-baseline starting marker",
+          marker: null,
+          pid: null,
+        }),
+      }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 5_000,
+      verifyPollMs: 1,
+    });
+  }
+
+  beforeEach(() => {
+    setWindowsTaskUserSidReaderForTests(() => TEST_TASK_USER_SID);
+  });
+
+  afterEach(() => {
+    setWindowsStartEvidenceDepsForTests(null);
+    setWindowsTaskInstallDepsForTests(null);
+    setWindowsTaskUserSidReaderForTests(null);
+  });
+
+  // The publish spy and the runner push into ONE shared log, in the order
+  // they actually happen.
+  function makeSharedLog(): {
+    readonly log: string[];
+    readonly publish: () => Promise<null>;
+  } {
+    const log: string[] = [];
+    const publish = vi.fn(async (): Promise<null> => {
+      log.push("publish");
+      return null;
+    });
+    return { log, publish };
+  }
+
+  function expectPublishImmediatelyPrecedes(
+    log: readonly string[],
+    verb: string,
+  ): void {
+    expect(log.filter((entry) => entry === "publish")).toHaveLength(1);
+    const publishIndex = log.indexOf("publish");
+    expect(publishIndex).toBeGreaterThanOrEqual(0);
+    expect(log.slice(0, publishIndex)).not.toContain(verb);
+    expect(log[publishIndex + 1]).toBe(verb);
+  }
+
+  it("install: publish precedes /Create - the install edge sits in front of every write - and /Run follows /Create", async () => {
+    const { log, publish } = makeSharedLog();
+    const runner: ProcessRunner = async (command, args) => {
+      log.push(args[0] ?? command);
+      return success("");
+    };
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+    stageEvidenceForImmediateStart();
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.install({
+        label: serviceLabelFor("staging"),
+        cli: { command: "C:\\traycer.exe", args: [] },
+        enableLinger: false,
+      }),
+    );
+
+    expect(log.filter((entry) => entry === "publish")).toHaveLength(1);
+    const publishIndex = log.indexOf("publish");
+    // Nothing the runner can observe happens before publish: the install
+    // edge is the very first thing `installService` does, ahead of the
+    // (unobservable) launcher read and the staging write alike.
+    expect(publishIndex).toBe(0);
+    const createIndex = log.indexOf("/Create");
+    const runIndex = log.indexOf("/Run");
+    expect(createIndex).toBeGreaterThan(publishIndex);
+    expect(runIndex).toBeGreaterThan(createIndex);
+  });
+
+  it("start: publish is immediately before /Run", async () => {
+    stageEvidenceForImmediateStart();
+    const { log, publish } = makeSharedLog();
+    const runner: ProcessRunner = async (command, args) => {
+      log.push(args[0] ?? command);
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.start(serviceLabelFor("staging")),
+    );
+
+    expectPublishImmediatelyPrecedes(log, "/Run");
+  });
+
+  it("restart: /End and every kill-loop call precede publish, and /Run is the entry right after it", async () => {
+    stageEvidenceForImmediateStart();
+    const { runner } = convergingTableRunner([
+      { processId: 401, parentProcessId: 1, slot: true },
+    ]);
+    const { log, publish } = makeSharedLog();
+    const wrappedRunner: ProcessRunner = async (command, args, options) => {
+      log.push(args[0] ?? command);
+      return runner(command, args, options);
+    };
+    const controller = createWindowsController(wrappedRunner, noTimingDeps);
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () =>
+      controller.restart(serviceLabelFor("staging")),
+    );
+
+    expectPublishImmediatelyPrecedes(log, "/Run");
+    const publishIndex = log.indexOf("publish");
+    const preEdge = log.slice(0, publishIndex);
+    // The guard's own leading scan (`askHostToStandDown`) is a
+    // `powershell.exe` call before this - its first logged entry is
+    // `-NoProfile`, not `/End` - so the first SCHTASKS sub-command is what
+    // pins the sweep's own `/End`.
+    const schtasksPreEdge = preEdge.filter((entry) => entry.startsWith("/"));
+    expect(schtasksPreEdge[0]).toBe("/End");
+    // Every schtasks/powershell call the kill loop issues ran before publish
+    // - none of it is on the grant's clock any more.
+    expect(preEdge.every((entry) => entry !== "/Run")).toBe(true);
+    expect(preEdge.length).toBeGreaterThan(1);
+  });
+
+  it("install: a refused publication propagates raw, by identity - it is the install's first edge, in front of every write, so there is nothing to roll back", async () => {
+    setWindowsTaskInstallDepsForTests(stagedTaskInstallDeps());
+    stageEvidenceForImmediateStart();
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+    const label = serviceLabelFor("staging");
+    const launcherPath = await writeLeftoverLauncher(label);
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () =>
+        controller.install({
+          label,
+          cli: { command: "C:\\traycer.exe", args: [] },
+          enableLinger: false,
+        }),
+    ).catch((cause: unknown) => cause);
+
+    expect(rejection).toBe(publishError);
+    expect(isUnreportedSpawnEdgeRefusal(rejection)).toBe(true);
+    // Not one process call: no /Create, /Delete, /End, /Query or /Run - the
+    // task a previous install registered is never addressed.
+    expect(calls).toEqual([]);
+    expect(didServiceRegistrationCommit(rejection)).toBe(false);
+    // The install edge sits in front of the launcher READ, let alone any
+    // write, so a leftover launcher from a previous install is left exactly
+    // as it was.
+    expect(existsSync(launcherPath)).toBe(true);
+    const bytes = await readFile(launcherPath);
+    expect(bytes.toString("utf8")).toBe("leftover-launcher");
+    await rm(launcherPath, { force: true });
+  });
+
+  it("restart: a refused publication issues /End (no /Run), and rejects with the exact SERVICE_CONTROL_FAILED stopped-host wording", async () => {
+    stageEvidenceForImmediateStart();
+    const { runner } = convergingTableRunner([
+      { processId: 401, parentProcessId: 1, slot: true },
+    ]);
+    const calls: RecordedCall[] = [];
+    const wrappedRunner: ProcessRunner = async (command, args, options) => {
+      calls.push({ command, args });
+      return runner(command, args, options);
+    };
+    const controller = createWindowsController(wrappedRunner, noTimingDeps);
+    const label = serviceLabelFor("staging");
+    const taskName = windowsTaskName(label);
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () => controller.restart(label),
+    ).catch((cause: unknown) => cause);
+
+    expect(
+      calls.some((c) => c.command === "schtasks" && c.args[0] === "/End"),
+    ).toBe(true);
+    expect(
+      calls.some((c) => c.command === "schtasks" && c.args[0] === "/Run"),
+    ).toBe(false);
+    expect(rejection).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+    });
+    const message = rejection instanceof Error ? rejection.message : "";
+    expect(message).toBe(
+      `start of ${taskName} after its stop: the host-start grant could not be published (proof write failed), so no start was requested. The host was stopped before this start, and this command did not start it again. Run 'traycer host service start' to start it.`,
+    );
+  });
+
+  it("relaunchAfterRestart: a refused publication issues no /Run, and rejects with the SAME exact stopped-host wording restart uses", async () => {
+    stageEvidenceForImmediateStart();
+    const runner: ProcessRunner = async () => success("");
+    const controller = createWindowsController(runner, noTimingDeps);
+    const label = serviceLabelFor("staging");
+    const taskName = windowsTaskName(label);
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () => controller.relaunchAfterRestart(label, { forcedRecycle: true }),
+    ).catch((cause: unknown) => cause);
+
+    expect(rejection).toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+    });
+    const message = rejection instanceof Error ? rejection.message : "";
+    expect(message).toBe(
+      `start of ${taskName} after its stop: the host-start grant could not be published (proof write failed), so no start was requested. The host was stopped before this start, and this command did not start it again. Run 'traycer host service start' to start it.`,
+    );
+  });
+
+  it("start: a refused publication propagates raw, by identity - it wrote nothing before this edge, so there is nothing to roll back", async () => {
+    stageEvidenceForImmediateStart();
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () => controller.start(serviceLabelFor("staging")),
+    ).catch((cause: unknown) => cause);
+
+    expect(rejection).toBe(publishError);
+    expect(isUnreportedSpawnEdgeRefusal(rejection)).toBe(true);
+    expect(
+      calls.some((c) => c.command === "schtasks" && c.args[0] === "/Run"),
+    ).toBe(false);
+  });
+});
+
+describe("computeWindowsTreeKillSet: a supervisor killing its own host child", () => {
+  // idle 0; supervisor 200 -> host 300 (root) -> 310 -> 320;
+  // supervisor 200 -> PowerShell scan 250 (slot-matched, its own branch).
+  const table = rowsOf([
+    { processId: 0, parentProcessId: 0, slot: false },
+    { processId: 200, parentProcessId: 1, slot: false, created: 10 },
+    { processId: 300, parentProcessId: 200, slot: false, created: 20 },
+    { processId: 310, parentProcessId: 300, slot: false, created: 30 },
+    { processId: 320, parentProcessId: 310, slot: false, created: 40 },
+    { processId: 250, parentProcessId: 200, slot: true, created: 50 },
+  ]);
+
+  it("kills the placed root and every descendant, never the supervisor or its other children", () => {
+    const killSet = computeWindowsTreeKillSet(
+      table,
+      { placedRoot: 300, excludedPids: new Set([200]), seedSlotMatches: false },
+      nothingRemembered,
+    );
+    expect(killSet.kill).toEqual([300, 310, 320]);
+    expect(killSet.kill).not.toContain(200);
+    expect(killSet.kill).not.toContain(250);
+  });
+
+  it("without a placed root the whole supervisor branch is spared", () => {
+    const killSet = computeWindowsTreeKillSet(
+      table,
+      {
+        placedRoot: null,
+        excludedPids: new Set([200]),
+        seedSlotMatches: false,
+      },
+      nothingRemembered,
+    );
+    expect(killSet.kill).toEqual([]);
+  });
+
+  it("never lets the excluded process into the kill set, even when it is the root's descendant", () => {
+    const cyclic = rowsOf([
+      { processId: 300, parentProcessId: 1, slot: false, created: 20 },
+      { processId: 200, parentProcessId: 300, slot: false, created: 30 },
+    ]);
+    const killSet = computeWindowsTreeKillSet(
+      cyclic,
+      { placedRoot: 300, excludedPids: new Set([200]), seedSlotMatches: false },
+      nothingRemembered,
+    );
+    expect(killSet.kill).not.toContain(200);
+  });
+
+  it("computeWindowsHostKillSet is the rootless form of the same algebra", () => {
+    const tables: WindowsProcessTableRow[][] = [
+      table,
+      rowsOf([
+        { processId: 0, parentProcessId: 0, slot: false },
+        { processId: 100, parentProcessId: 1, slot: true },
+        { processId: 200, parentProcessId: 100, slot: false },
+        { processId: 250, parentProcessId: 200, slot: false },
+        { processId: 400, parentProcessId: 100, slot: false },
+      ]),
+      rowsOf([
+        { processId: 100, parentProcessId: 1, slot: true },
+        { processId: 50, parentProcessId: 100, slot: false },
+        { processId: 200, parentProcessId: 50, slot: false },
+        { processId: 400, parentProcessId: 100, slot: false },
+      ]),
+    ];
+    for (const rows of tables) {
+      expect(computeWindowsHostKillSet(rows, 200, nothingRemembered)).toEqual(
+        computeWindowsTreeKillSet(
+          rows,
+          {
+            placedRoot: null,
+            excludedPids: new Set([200]),
+            seedSlotMatches: true,
+          },
+          nothingRemembered,
+        ),
+      );
+    }
+  });
+});
+
+describe("killSupervisedHostTree", () => {
+  const supervisor = process.pid;
+  const ROOT = 900_001;
+  const CHILD = 900_002;
+
+  function scriptedRunner(tables: readonly (readonly TableRowInput[])[]): {
+    readonly runner: ProcessRunner;
+    readonly calls: RecordedCall[];
+    readonly seq: string[];
+  } {
+    const calls: RecordedCall[] = [];
+    const seq: string[] = [];
+    let scans = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      seq.push("run");
+      if (isScanCall(command, args)) {
+        const rows = tables[Math.min(scans, tables.length - 1)];
+        scans += 1;
+        return success(tableJson(rows));
+      }
+      return success("");
+    };
+    return { runner, calls, seq };
+  }
+
+  const firstScan: TableRowInput[] = [
+    { processId: 0, parentProcessId: 0, slot: false },
+    { processId: supervisor, parentProcessId: 1, slot: false, created: 10 },
+    {
+      processId: ROOT,
+      parentProcessId: supervisor,
+      slot: false,
+      created: 5_000,
+    },
+    { processId: CHILD, parentProcessId: ROOT, slot: false, created: 6_000 },
+  ];
+  const drained: TableRowInput[] = [
+    { processId: 0, parentProcessId: 0, slot: false },
+    { processId: supervisor, parentProcessId: 1, slot: false, created: 10 },
+  ];
+
+  it("seeds the root as a validated child of the supervisor and kills its whole tree", async () => {
+    const { runner, calls } = scriptedRunner([firstScan, drained]);
+    await killSupervisedHostTree(
+      "staging",
+      ROOT,
+      async () => undefined,
+      runner,
+      noTimingDeps,
+    );
+    const killed = killedPids(calls);
+    expect(killed.sort((a, b) => a - b)).toEqual([ROOT, CHILD]);
+    expect(killed).not.toContain(supervisor);
+  });
+
+  it("integration: kills only the root's subtree, sparing an unrelated slot-matched process (red on head, which kills it too)", async () => {
+    const scanWithBystander: TableRowInput[] = [
+      { processId: 0, parentProcessId: 0, slot: false },
+      { processId: supervisor, parentProcessId: 1, slot: false, created: 10 },
+      {
+        processId: ROOT,
+        parentProcessId: supervisor,
+        slot: false,
+        created: 5_000,
+      },
+      { processId: CHILD, parentProcessId: ROOT, slot: false, created: 6_000 },
+      // A bystander process that happens to match the slot's paths (e.g. a
+      // text editor with host.log open), hanging off an unrelated pid -
+      // never a descendant of the supervisor or the root.
+      { processId: 700_001, parentProcessId: 1, slot: true, created: 4_000 },
+    ];
+    // The confirming scan: the bystander is gone too (its "kill" - which
+    // never should have been attempted - is modeled as having landed), so
+    // the loop converges after one round and the test can assert on WHICH
+    // pids were targeted rather than on a thrown "still running" refusal.
+    const drainedWithBystander: TableRowInput[] = [
+      { processId: 0, parentProcessId: 0, slot: false },
+      { processId: supervisor, parentProcessId: 1, slot: false, created: 10 },
+    ];
+    const { runner, calls } = scriptedRunner([
+      scanWithBystander,
+      drainedWithBystander,
+    ]);
+    await killSupervisedHostTree(
+      "staging",
+      ROOT,
+      async () => undefined,
+      runner,
+      noTimingDeps,
+    );
+    const killed = killedPids(calls);
+    expect(killed).not.toContain(700_001);
+  });
+
+  it("does not seed a root that is not the supervisor's child at first sight", async () => {
+    const stranger: TableRowInput[] = [
+      { processId: 0, parentProcessId: 0, slot: false },
+      { processId: supervisor, parentProcessId: 1, slot: false, created: 10 },
+      { processId: ROOT, parentProcessId: 1, slot: false, created: 5_000 },
+    ];
+    const { runner, calls } = scriptedRunner([stranger]);
+    await killSupervisedHostTree(
+      "staging",
+      ROOT,
+      async () => undefined,
+      runner,
+      noTimingDeps,
+    );
+    expect(killedPids(calls)).toEqual([]);
+  });
+
+  it("does not seed a later row wearing the root pid with a different birth", async () => {
+    const recycled: TableRowInput[] = [
+      { processId: 0, parentProcessId: 0, slot: false },
+      { processId: supervisor, parentProcessId: 1, slot: false, created: 10 },
+      {
+        processId: ROOT,
+        parentProcessId: supervisor,
+        slot: false,
+        created: 9_999,
+      },
+    ];
+    const { runner, calls } = scriptedRunner([firstScan, recycled, drained]);
+    await killSupervisedHostTree(
+      "staging",
+      ROOT,
+      async () => undefined,
+      runner,
+      noTimingDeps,
+    );
+    const rounds = killRounds(calls);
+    expect(rounds).toHaveLength(1);
+    expect(rounds[0].map((t) => t.processId).sort((a, b) => a - b)).toEqual([
+      ROOT,
+      CHILD,
+    ]);
+  });
+
+  it("awaits verifyAuthority before every subprocess", async () => {
+    const { runner, seq } = scriptedRunner([firstScan, drained]);
+    await killSupervisedHostTree(
+      "staging",
+      ROOT,
+      async () => {
+        seq.push("verify");
+      },
+      runner,
+      noTimingDeps,
+    );
+    const runs = seq.filter((entry) => entry === "run").length;
+    expect(runs).toBeGreaterThanOrEqual(3);
+    seq.forEach((entry, index) => {
+      if (entry === "run") expect(seq[index - 1]).toBe("verify");
+    });
+  });
+
+  it("propagates a lost authority instead of reporting a scan failure", async () => {
+    let verifications = 0;
+    const { runner } = scriptedRunner([firstScan, drained]);
+    const rejection: unknown = await killSupervisedHostTree(
+      "staging",
+      ROOT,
+      async () => {
+        verifications += 1;
+        if (verifications >= 2) throw new Error("lock lost");
+      },
+      runner,
+      noTimingDeps,
+    ).catch((cause: unknown) => cause);
+    expect(isServiceMutationAuthorityError(rejection)).toBe(true);
+    expect(
+      String(rejection instanceof Error ? rejection.message : ""),
+    ).not.toContain("could not enumerate");
+  });
+});
+
+// Every Windows stop that is not forced now asks the
+// running host to stand down (`askHostToStandDown`) before the sweep that
+// used to be the whole stop, so its graceful close - the terminal teardown
+// and the durable store close - runs before anything is killed. The guard in
+// front of that ask exists because the ask is NEVER safe from inside the
+// host's own process tree: a live managed shell does not make the host busy,
+// so a `host restart`/`host service uninstall` typed into an idle agent's
+// shell would be granted the claim, and the host's graceful close - which
+// kills every managed command's process group - would kill the CLI issuing
+// the ask before its `/Run`/`/Delete` ever ran. The guard reads the same slot
+// scan the sweep uses and skips the ask whenever a slot process sits above
+// `process.pid`, or whenever the scan that would prove it cannot run at all.
+describe("the cooperative-shutdown guard", () => {
+  beforeEach(() => {
+    mocks.readHostPidMetadata.mockReset();
+    mocks.readHostPidMetadata.mockResolvedValue(null);
+    mocks.removeHostPidMetadata.mockReset();
+    mocks.removeHostPidMetadata.mockResolvedValue(undefined);
+    setWindowsStartEvidenceDepsForTests({
+      captureBaseline: async () => emptySpawnBaseline(),
+      createEvidenceReader: () => ({ collect: async () => null }),
+      sleep: async () => undefined,
+      verifyTimeoutMs: 10,
+      verifyPollMs: 5,
+    });
+  });
+
+  afterEach(() => {
+    setWindowsStartEvidenceDepsForTests(null);
+  });
+
+  interface StandDownSite {
+    readonly name: string;
+    readonly operation: string;
+    readonly intent: ShutdownClaimIntent;
+    readonly invoke: (
+      controller: ServiceController,
+      label: ServiceLabel,
+    ) => Promise<void>;
+  }
+
+  // The four call sites `askHostToStandDown` sits in front of, and the
+  // (operation, intent) each one asks with.
+  const STAND_DOWN_SITES: readonly StandDownSite[] = [
+    {
+      name: "stop",
+      operation: "stop",
+      intent: "shutdown",
+      invoke: async (controller, label) => {
+        await controller.stop(label, { force: false });
+      },
+    },
+    {
+      name: "stopForRestart",
+      operation: "restart",
+      intent: "restart",
+      invoke: async (controller, label) => {
+        await controller.stopForRestart(label, { force: false });
+      },
+    },
+    {
+      name: "restart",
+      operation: "restart",
+      intent: "restart",
+      invoke: async (controller, label) => {
+        await controller.restart(label);
+      },
+    },
+    {
+      name: "uninstall",
+      operation: "uninstall",
+      intent: "shutdown",
+      invoke: async (controller, label) => {
+        await controller.uninstall({ label, leaveForegroundRun: null });
+      },
+    },
+  ];
+
+  // Both the fake runner and the ask mock push into ONE shared log, in the
+  // order they actually happen - the only way to prove the ask runs before
+  // the sweep's own `/End`, since both are otherwise invisible to each other.
+  function loggedRunner(rows: readonly TableRowInput[]): {
+    readonly runner: ProcessRunner;
+    readonly log: string[];
+  } {
+    const { runner } = convergingTableRunner(rows);
+    const log: string[] = [];
+    const wrapped: ProcessRunner = async (command, args, options) => {
+      if (command === "schtasks") log.push(args[0] ?? command);
+      return runner(command, args, options);
+    };
+    return { runner: wrapped, log };
+  }
+
+  it.each(STAND_DOWN_SITES)(
+    "$name asks the host to stand down exactly once, before /End, with (environment, operation, intent) and a null 4th arg",
+    async ({ operation, intent, invoke }) => {
+      const { runner, log } = loggedRunner([
+        { processId: 100, parentProcessId: 1, slot: true },
+      ]);
+      mocks.requestCooperativeShutdownReporting.mockImplementation(async () => {
+        log.push("ask");
+        return { kind: "no-metadata" as const };
+      });
+      const controller = createWindowsController(runner, noTimingDeps);
+
+      await invoke(controller, serviceLabelFor("staging")).catch(
+        () => undefined,
+      );
+
+      expect(mocks.requestCooperativeShutdownReporting).toHaveBeenCalledTimes(
+        1,
+      );
+      expect(mocks.requestCooperativeShutdownReporting).toHaveBeenCalledWith(
+        "staging",
+        operation,
+        intent,
+        null,
+      );
+      const askIndex = log.indexOf("ask");
+      const endIndex = log.indexOf("/End");
+      expect(askIndex).toBeGreaterThanOrEqual(0);
+      expect(endIndex).toBeGreaterThan(askIndex);
+    },
+  );
+
+  it("stop's onHostAddressed reaches the ask as its 4th arg", async () => {
+    const { runner } = convergingTableRunner([
+      { processId: 100, parentProcessId: 1, slot: true },
+    ]);
+    mocks.requestCooperativeShutdownReporting.mockResolvedValue({
+      kind: "no-metadata" as const,
+    });
+    const controller = createWindowsController(runner, noTimingDeps);
+    const onHostAddressed = vi.fn();
+
+    await controller.stop(serviceLabelFor("staging"), {
+      force: false,
+      onHostAddressed,
+    });
+
+    expect(mocks.requestCooperativeShutdownReporting).toHaveBeenCalledTimes(1);
+    const fourthArg =
+      mocks.requestCooperativeShutdownReporting.mock.calls[0]?.[3];
+    expect(typeof fourthArg).toBe("function");
+  });
+
+  interface ForcedSite {
+    readonly name: string;
+    readonly invoke: (
+      controller: ServiceController,
+      label: ServiceLabel,
+    ) => Promise<void>;
+  }
+
+  const FORCED_SITES: readonly ForcedSite[] = [
+    {
+      name: "stop",
+      invoke: async (controller, label) => {
+        await controller.stop(label, { force: true });
+      },
+    },
+    {
+      name: "stopForRestart",
+      invoke: async (controller, label) => {
+        await controller.stopForRestart(label, { force: true });
+      },
+    },
+  ];
+
+  it.each(FORCED_SITES)(
+    "$name with force never asks and never scans for the guard - the first call of all is /End",
+    async ({ invoke }) => {
+      const { runner, calls } = convergingTableRunner([
+        { processId: 100, parentProcessId: 1, slot: true },
+      ]);
+      const controller = createWindowsController(runner, noTimingDeps);
+
+      await invoke(controller, serviceLabelFor("staging"));
+
+      expect(mocks.requestCooperativeShutdownReporting).not.toHaveBeenCalled();
+      expect(calls[0]).toMatchObject({
+        command: "schtasks",
+        args: ["/End", "/TN", "\\Traycer\\Host-Staging"],
+      });
+    },
+  );
+
+  it("uninstall beside a foreground run never asks the host to stand down", async () => {
+    const { runner } = convergingTableRunner([]);
+    const controller = createWindowsController(runner, noTimingDeps);
+    const leaveForegroundRun: ForegroundHostRun = {
+      supervisorPid: 4242,
+      hostPid: 4243,
+    };
+
+    await controller.uninstall({
+      label: serviceLabelFor("staging"),
+      leaveForegroundRun,
+    });
+
+    expect(mocks.requestCooperativeShutdownReporting).not.toHaveBeenCalled();
+  });
+
+  // A table whose ancestry trips the guard for every site: `process.pid`
+  // (this test process's own pid) claims non-slot shell S (700) as its
+  // parent, and S claims slot-matched host H (100) as ITS parent - so H is a
+  // slot process sitting above `process.pid` over validated parent edges,
+  // exactly `slotProcessIsAncestorOf`'s guard condition. After H is killed,
+  // S's own edge to the now-dead H zeroes (a real scan can no longer vouch
+  // for it), but the CLI's edge to S stays live, so S is still found as the
+  // CLI's ancestor and stays spared.
+  function guardTrippedRunner(): {
+    readonly runner: ProcessRunner;
+    readonly calls: RecordedCall[];
+  } {
+    const calls: RecordedCall[] = [];
+    let scanCount = 0;
+    const before: TableRowInput[] = [
+      {
+        processId: 100,
+        parentProcessId: 1,
+        claimedParentProcessId: 1,
+        created: 1000,
+        slot: true,
+      },
+      {
+        processId: 700,
+        parentProcessId: 100,
+        claimedParentProcessId: 100,
+        created: 2000,
+        slot: false,
+      },
+      {
+        processId: process.pid,
+        parentProcessId: 700,
+        claimedParentProcessId: 700,
+        created: 2500,
+        slot: false,
+      },
+    ];
+    const after: TableRowInput[] = [
+      {
+        processId: 700,
+        parentProcessId: 0,
+        claimedParentProcessId: 100,
+        created: 2000,
+        slot: false,
+      },
+      {
+        processId: process.pid,
+        parentProcessId: 700,
+        claimedParentProcessId: 700,
+        created: 2500,
+        slot: false,
+      },
+    ];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (isScanCall(command, args)) {
+        scanCount += 1;
+        // Scan 1 is the guard's own read; scan 2 is the sweep's round 0 -
+        // both see the same, unkilled tree. Scan 3 is round 1's confirming
+        // scan, after H is dead.
+        return success(tableJson(scanCount <= 2 ? before : after));
+      }
+      return success("");
+    };
+    return { runner, calls };
+  }
+
+  it.each(STAND_DOWN_SITES)(
+    "$name: the guard is not asked when a slot process sits above process.pid, but the sweep still runs and kills only the slot host",
+    async ({ invoke }) => {
+      const { runner, calls } = guardTrippedRunner();
+      const controller = createWindowsController(runner, { now: () => 5000 });
+
+      await invoke(controller, serviceLabelFor("staging")).catch(
+        () => undefined,
+      );
+
+      expect(mocks.requestCooperativeShutdownReporting).not.toHaveBeenCalled();
+      expect(
+        calls.some(
+          (call) => call.command === "schtasks" && call.args[0] === "/End",
+        ),
+      ).toBe(true);
+      // H (100) killed; neither S (700) nor process.pid touched.
+      expect(killedPids(calls)).toEqual([100]);
+    },
+  );
+
+  it("stop refuses to ask when the guard's own scan cannot run, and still rejects the way an unreadable scan always has", async () => {
+    const runner: ProcessRunner = async (command) => {
+      if (command === "powershell.exe") throw new Error("spawn failed");
+      return success("");
+    };
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).rejects.toMatchObject({ code: "E_SERVICE_CONTROL_FAILED" });
+
+    expect(mocks.requestCooperativeShutdownReporting).not.toHaveBeenCalled();
+    expect(mocks.removeHostPidMetadata).not.toHaveBeenCalled();
+  });
+
+  // The five `CooperativeShutdownOutcome` kinds a plain stop treats
+  // identically (`desktop-agent-shutdown.ts`) - the sweep is what actually
+  // confirms the slot is empty. `busy` is deliberately NOT here: it now
+  // refuses `stop`/`restart` with `E_HOST_BUSY` before any of this runs (see
+  // BUSY_REFUSAL_SITES, right below), rather than falling through to the
+  // sweep like the other five.
+  const OUTCOMES: readonly CooperativeShutdownOutcome[] = [
+    { kind: "stopped" },
+    { kind: "no-host" },
+    { kind: "no-metadata" },
+    { kind: "hung", pid: 4242 },
+    { kind: "unreachable", cause: "dial failed" },
+  ];
+
+  it.each(OUTCOMES)(
+    "outcome $kind: the stop still issues /End, sweeps, resolves, and purges pid metadata",
+    async (outcome) => {
+      mocks.requestCooperativeShutdownReporting.mockResolvedValue(outcome);
+      const { runner, calls } = convergingTableRunner([
+        { processId: 100, parentProcessId: 1, slot: true },
+      ]);
+      const controller = createWindowsController(runner, noTimingDeps);
+
+      await expect(
+        controller.stop(serviceLabelFor("staging"), { force: false }),
+      ).resolves.toBeUndefined();
+
+      // The ask genuinely ran and returned this outcome - not merely staged
+      // and never read.
+      expect(mocks.requestCooperativeShutdownReporting).toHaveBeenCalledTimes(
+        1,
+      );
+      expect(
+        calls.some(
+          (call) => call.command === "schtasks" && call.args[0] === "/End",
+        ),
+      ).toBe(true);
+      expect(killedPids(calls)).toEqual([100]);
+      expect(mocks.removeHostPidMetadata).toHaveBeenCalledWith("staging");
+    },
+  );
+
+  // Re-pinned from the OUTCOMES table above: `busy` used to fall through to
+  // the sweep like every other outcome; it now throws before the sweep ever
+  // starts, for every site that actually asks. `uninstall` is excluded here
+  // on purpose - it is the one stand-down site that does NOT refuse on busy
+  // (its own test follows).
+  const BUSY_REFUSAL_SITES = STAND_DOWN_SITES.filter(
+    (site) => site.name !== "uninstall",
+  );
+
+  it.each(BUSY_REFUSAL_SITES)(
+    "$name: a busy host refuses with E_HOST_BUSY before any OS mutation, with no /End, no kill, and no pid-metadata purge",
+    async ({ invoke }) => {
+      mocks.requestCooperativeShutdownReporting.mockResolvedValue({
+        kind: "busy",
+      });
+      const { runner, calls } = convergingTableRunner([
+        { processId: 100, parentProcessId: 1, slot: true },
+      ]);
+      const controller = createWindowsController(runner, noTimingDeps);
+
+      await expect(
+        invoke(controller, serviceLabelFor("staging")),
+      ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_BUSY });
+
+      // Only the guard's read-only scan ran: no /End, no kill - `some call is
+      // schtasks` would miss a kill script, which is a `powershell.exe` call
+      // too, so every recorded call must still be that same read, and the
+      // slot-matched host (pid 100) must never have been killed. The busy
+      // refusal never reaches the pid-metadata purge either.
+      expect(calls.some((call) => call.command === "schtasks")).toBe(false);
+      expect(calls.every((call) => isScanCall(call.command, call.args))).toBe(
+        true,
+      );
+      expect(killedPids(calls)).toEqual([]);
+      expect(mocks.removeHostPidMetadata).not.toHaveBeenCalled();
+    },
+  );
+
+  it("uninstall: a busy host does not refuse for busy, and still issues /End and sweeps", async () => {
+    mocks.requestCooperativeShutdownReporting.mockResolvedValue({
+      kind: "busy",
+    });
+    const { runner, calls } = convergingTableRunner([
+      { processId: 100, parentProcessId: 1, slot: true },
+    ]);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.uninstall({
+        label: serviceLabelFor("staging"),
+        leaveForegroundRun: null,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(
+      calls.some(
+        (call) => call.command === "schtasks" && call.args[0] === "/End",
+      ),
+    ).toBe(true);
+    expect(killedPids(calls)).toEqual([100]);
+  });
+
+  // A mutation-authority loss during the ask must abort the stop itself,
+  // never fall back to the sweep the way an ordinary "unreachable" does -
+  // `isServiceMutationAuthorityError` is what `askHostToStandDown` never
+  // catches (it lets the throw propagate straight out of `stopService`).
+  it("stop: a lost service-mutation authority during the ask aborts with no /End and no kill", async () => {
+    const lost = new ServiceMutationAuthorityError(new Error("revoked"));
+    mocks.requestCooperativeShutdownReporting.mockRejectedValue(lost);
+    const { runner, calls } = convergingTableRunner([
+      { processId: 100, parentProcessId: 1, slot: true },
+    ]);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await expect(
+      controller.stop(serviceLabelFor("staging"), { force: false }),
+    ).rejects.toBe(lost);
+
+    // Only the guard's read-only scan ran: no /End, no kill, and the
+    // slot-matched host (pid 100) must never have been killed.
+    expect(calls.some((call) => call.command === "schtasks")).toBe(false);
+    expect(calls.every((call) => isScanCall(call.command, call.args))).toBe(
+      true,
+    );
+    expect(killedPids(calls)).toEqual([]);
+    expect(mocks.removeHostPidMetadata).not.toHaveBeenCalled();
+  });
+
+  // Abbreviated the same way the rest of this file already does (see e.g.
+  // "kills exactly the scan-verified pids..." above) - the mock is untyped,
+  // so only the fields these tests read need to be present.
+  const LIVE_HOST_PID_METADATA = {
+    pid: 100,
+    hostId: "host-test",
+    version: "1.0.0",
+    websocketUrl: "ws://127.0.0.1:54321/rpc",
+    startedAt: "2026-01-01T00:00:00.000Z",
+  };
+
+  it("stop reports onHostAddressed exactly once when both the ask and the pre-sweep read find a live host", async () => {
+    const onHostAddressed = vi.fn();
+    mocks.requestCooperativeShutdownReporting.mockImplementation(
+      async (
+        _environment: string,
+        _operation: string,
+        _intent: string,
+        reported: (() => void) | null,
+      ) => {
+        reported?.();
+        return { kind: "stopped" as const };
+      },
+    );
+    mocks.readHostPidMetadataEvidence.mockResolvedValue({
+      kind: "read",
+      metadata: LIVE_HOST_PID_METADATA,
+    });
+    mocks.publishedHostProcessGone.mockReturnValue(false);
+    const { runner } = convergingTableRunner([
+      { processId: 100, parentProcessId: 1, slot: true },
+    ]);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await controller.stop(serviceLabelFor("staging"), {
+      force: false,
+      onHostAddressed,
+    });
+
+    // The ask genuinely ran (its own read is the one that finds the live
+    // host here), and the callback fired exactly once despite two readers
+    // that could each have called it.
+    expect(mocks.requestCooperativeShutdownReporting).toHaveBeenCalledTimes(1);
+    expect(onHostAddressed).toHaveBeenCalledTimes(1);
+  });
+
+  it("(control) stop reports onHostAddressed exactly once from the pre-sweep read alone, when the ask itself never invokes it", async () => {
+    const onHostAddressed = vi.fn();
+    mocks.requestCooperativeShutdownReporting.mockResolvedValue({
+      kind: "no-metadata" as const,
+    });
+    mocks.readHostPidMetadataEvidence.mockResolvedValue({
+      kind: "read",
+      metadata: LIVE_HOST_PID_METADATA,
+    });
+    mocks.publishedHostProcessGone.mockReturnValue(false);
+    const { runner } = convergingTableRunner([
+      { processId: 100, parentProcessId: 1, slot: true },
+    ]);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await controller.stop(serviceLabelFor("staging"), {
+      force: false,
+      onHostAddressed,
+    });
+
+    // The ask genuinely ran and did NOT invoke the callback itself - the
+    // pre-sweep read is the only one that did.
+    expect(mocks.requestCooperativeShutdownReporting).toHaveBeenCalledTimes(1);
+    expect(onHostAddressed).toHaveBeenCalledTimes(1);
+  });
+
+  it("the default stays absent: a plain stop with no staged evidence never reports onHostAddressed", async () => {
+    const onHostAddressed = vi.fn();
+    const { runner } = convergingTableRunner([
+      { processId: 100, parentProcessId: 1, slot: true },
+    ]);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await controller.stop(serviceLabelFor("staging"), {
+      force: false,
+      onHostAddressed,
+    });
+
+    expect(onHostAddressed).not.toHaveBeenCalled();
+  });
+
+  it("the guard's scan and the sweep's round-0 scan carry the identical -Command script text, both before the first kill in the same stop", async () => {
+    const { runner, calls } = convergingTableRunner([
+      { processId: 100, parentProcessId: 1, slot: true },
+    ]);
+    const controller = createWindowsController(runner, noTimingDeps);
+
+    await controller.stop(serviceLabelFor("staging"), { force: false });
+
+    const firstKillIndex = calls.findIndex((call) =>
+      isKillCall(call.command, call.args),
+    );
+    expect(firstKillIndex).toBeGreaterThan(-1);
+    // TWO scans precede the first kill: the guard's own read
+    // (`askHostToStandDown`) and the sweep's round-0 read - both of the
+    // still-unkilled tree, over the identical shared script. A stop with no
+    // guard has only ONE scan before its first kill (the sweep's round 0),
+    // so this count is what actually distinguishes the two calls from an
+    // ordinary pair of same-script rounds.
+    const scanScriptsBeforeFirstKill = calls
+      .slice(0, firstKillIndex)
+      .filter((call) => isScanCall(call.command, call.args))
+      .map((call) => call.args[3]);
+    expect(scanScriptsBeforeFirstKill).toHaveLength(2);
+    expect(scanScriptsBeforeFirstKill[0]).toBe(scanScriptsBeforeFirstKill[1]);
+  });
+});

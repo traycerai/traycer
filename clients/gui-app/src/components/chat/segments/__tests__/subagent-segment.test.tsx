@@ -1,0 +1,1580 @@
+import {
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+} from "@testing-library/react";
+import { useState, type ReactNode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
+import { deriveSubagentCollapsibleKey } from "@/components/chat/chat-collapsible-key";
+import { chatFindSubagentHeaderUnitId } from "@/components/chat/chat-find";
+import { SubagentSegment } from "@/components/chat/segments/subagent-segment";
+import { OpenSubagentAsChatContext } from "@/components/chat/segments/subagent-open-as-chat";
+import {
+  useChatFindForcedOpen,
+  useSetChatFindForcedOpen,
+  useChatCollapsibleTileInstanceId,
+} from "@/stores/chats/chat-find-force-store-context";
+import type {
+  SubagentChildSegment,
+  SubagentSegment as SubagentSegmentModel,
+} from "@/stores/composer/chat-store";
+
+function clickTriggerFor(text: string): void {
+  const button = screen.getByText(text).closest("button");
+  if (button === null) {
+    throw new Error(`expected a button trigger ancestor for "${text}"`);
+  }
+  fireEvent.click(button);
+}
+
+function nestedAgentFixture(
+  overrides: Partial<SubagentSegmentModel>,
+): SubagentSegmentModel {
+  return {
+    id: "nested-agent",
+    kind: "subagent",
+    name: "nested-agent",
+    agentType: null,
+    task: "Investigate nested work.",
+    progressUpdates: [],
+    result: null,
+    isStreaming: true,
+    endState: null,
+    stopped: false,
+    startedAt: null,
+    durationMs: null,
+    spawnToolCallId: null,
+    parentId: null,
+    workflowMeta: null,
+    toolImageResults: [],
+    children: [],
+    ...overrides,
+  };
+}
+
+function render(ui: ReactNode) {
+  return rtlRender(
+    <ChatExpansionTestProviders tileInstanceId="subagent-test-tile">
+      {ui}
+    </ChatExpansionTestProviders>,
+  );
+}
+
+interface SubagentPersistenceHarnessProps {
+  readonly segmentId: string;
+  readonly visible: boolean;
+}
+
+function SubagentPersistenceHarness(props: SubagentPersistenceHarnessProps) {
+  if (!props.visible) return null;
+  return (
+    <SubagentSegment
+      id={props.segmentId}
+      cardId={props.segmentId}
+      name="reviewer"
+      task="Review the implementation"
+      progressUpdates={["Step one"]}
+      result="Done."
+      isStreaming={false}
+      endState={null}
+      stopped={false}
+      startedAt={null}
+      durationMs={null}
+      agentType={null}
+      toolImageResults={[]}
+      workflowMeta={null}
+      nested={[]}
+      variant="promoted"
+    />
+  );
+}
+
+interface ForceSubagentOpenButtonProps {
+  readonly label: string;
+  readonly renderId: string;
+}
+
+function ForceSubagentOpenButton(props: ForceSubagentOpenButtonProps) {
+  const tileInstanceId = useChatCollapsibleTileInstanceId();
+  const setFindForcedOpen = useSetChatFindForcedOpen();
+  const key = deriveSubagentCollapsibleKey(tileInstanceId, props.renderId);
+  return (
+    <button type="button" onClick={() => setFindForcedOpen(key, true)}>
+      {props.label}
+    </button>
+  );
+}
+
+interface FindForceStatusProps {
+  readonly renderId: string;
+}
+
+function FindForceStatus(props: FindForceStatusProps) {
+  const tileInstanceId = useChatCollapsibleTileInstanceId();
+  const key = deriveSubagentCollapsibleKey(tileInstanceId, props.renderId);
+  const forced = useChatFindForcedOpen(key);
+  return <span>{forced ? "forced" : "released"}</span>;
+}
+
+describe("<SubagentSegment /> promoted feed", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("shows only the latest progress line collapsed, full history expanded", () => {
+    render(
+      <SubagentSegment
+        id="test-segment-1"
+        cardId="test-segment-1"
+        name="reviewer"
+        task="Review the implementation"
+        progressUpdates={["one", "two", "three", "four", "five", "six"]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        agentType={null}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    // Collapsed: only the most recent line, nothing else.
+    expect(screen.getByText("six")).toBeTruthy();
+    expect(screen.queryByText("one")).toBeNull();
+    expect(screen.queryByText("five")).toBeNull();
+    // Task is never shown collapsed.
+    expect(screen.queryByText("Review the implementation")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
+
+    for (const line of ["one", "two", "three", "four", "five"]) {
+      expect(screen.getByText(line)).toBeTruthy();
+    }
+    // The latest line shows in both the header summary and the history list.
+    expect(screen.getAllByText("six").length).toBe(2);
+  });
+
+  it("shows a starting state before progress arrives", () => {
+    render(
+      <SubagentSegment
+        id="test-segment-2"
+        cardId="test-segment-2"
+        name="reviewer"
+        task="Review the implementation"
+        progressUpdates={[]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        agentType={null}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    expect(screen.getByText("Starting…")).toBeTruthy();
+  });
+
+  it("skips ephemeral header chrome from find highlighting but keeps name and type findable", () => {
+    render(
+      <SubagentSegment
+        id="subagent-header-skip"
+        cardId="subagent-header-skip"
+        name="Scanner"
+        task="Scan the repo"
+        progressUpdates={["Scanning"]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        agentType="analysis"
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    // Name + agent type are projected/indexed, so they must stay highlightable
+    // (no data-find-skip ancestor).
+    expect(screen.getByText("Scanner").closest("[data-find-skip]")).toBeNull();
+    expect(screen.getByText("analysis").closest("[data-find-skip]")).toBeNull();
+
+    // The latest-progress header mirror duplicates the body's last progress line
+    // (see "shows ... in both the header summary and the history list" above).
+    // The projection does not index it, so it must be skipped by the highlighter
+    // to keep count == highlightable.
+    expect(
+      screen.getByText("Scanning").closest("[data-find-skip]"),
+    ).not.toBeNull();
+  });
+
+  it("skips the promoted live elapsed timer and Starting placeholder from highlighting", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(10_000);
+      render(
+        <SubagentSegment
+          id="subagent-header-skip-elapsed"
+          cardId="subagent-header-skip-elapsed"
+          name="Probe"
+          task="Scan the repo"
+          progressUpdates={[]}
+          result={null}
+          isStreaming
+          endState={null}
+          stopped={false}
+          startedAt={5_000}
+          durationMs={null}
+          agentType={null}
+          toolImageResults={[]}
+          workflowMeta={null}
+          nested={[]}
+          variant="promoted"
+        />,
+      );
+
+      // Name stays findable; the elapsed timer and the "Starting…" mirror are
+      // ephemeral chrome the projection never indexes, so both are skipped.
+      const name = screen.getByText("Probe");
+      expect(name.closest("[data-find-skip]")).toBeNull();
+      expect(name.closest("button")).not.toBeNull();
+      expect(screen.getByText("5s").closest("[data-find-skip]")).not.toBeNull();
+      expect(
+        screen.getByText("Starting…").closest("[data-find-skip]"),
+      ).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips the promoted end-state badge from highlighting", () => {
+    render(
+      <SubagentSegment
+        id="subagent-header-skip-badge"
+        cardId="subagent-header-skip-badge"
+        name="Probe"
+        task="Scan the repo"
+        progressUpdates={["Scanning"]}
+        result={null}
+        isStreaming={false}
+        endState="interrupted"
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        agentType={null}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    const name = screen.getByText("Probe");
+    expect(name.closest("[data-find-skip]")).toBeNull();
+    expect(name.closest("button")).not.toBeNull();
+    expect(
+      screen.getByText("stopped").closest("[data-find-skip]"),
+    ).not.toBeNull();
+  });
+
+  it("skips the compact card header mirror and elapsed timer, keeping the name findable", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(10_000);
+      render(
+        <SubagentSegment
+          id="subagent-card-header-skip"
+          cardId="subagent-card-header-skip"
+          name="Probe"
+          task="Scan the repo"
+          progressUpdates={["Scanning"]}
+          result={null}
+          isStreaming
+          endState={null}
+          stopped={false}
+          startedAt={5_000}
+          durationMs={null}
+          agentType="analysis"
+          toolImageResults={[]}
+          workflowMeta={null}
+          nested={[]}
+          variant="card"
+        />,
+      );
+
+      // Name + type stay highlightable; the collapsed summary mirror and elapsed
+      // timer in the compact header are skipped, matching the promoted variant.
+      const name = screen.getByText("Probe");
+      expect(name.closest("[data-find-skip]")).toBeNull();
+      expect(name.closest("button")).not.toBeNull();
+      expect(
+        screen.getByText("analysis").closest("[data-find-skip]"),
+      ).toBeNull();
+      expect(
+        screen.getByText("Scanning").closest("[data-find-skip]"),
+      ).not.toBeNull();
+      expect(screen.getByText("5s").closest("[data-find-skip]")).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips the compact card end-state badge from highlighting", () => {
+    render(
+      <SubagentSegment
+        id="subagent-card-header-skip-badge"
+        cardId="subagent-card-header-skip-badge"
+        name="Probe"
+        task="Scan the repo"
+        progressUpdates={[]}
+        result={null}
+        isStreaming={false}
+        endState="superseded"
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        agentType={null}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[]}
+        variant="card"
+      />,
+    );
+
+    const name = screen.getByText("Probe");
+    expect(name.closest("[data-find-skip]")).toBeNull();
+    expect(name.closest("button")).not.toBeNull();
+    expect(
+      screen.getByText("superseded").closest("[data-find-skip]"),
+    ).not.toBeNull();
+  });
+
+  it("toggles open and closed when the promoted card trigger is clicked", () => {
+    render(
+      <SubagentSegment
+        id="test-segment-measured-change"
+        cardId="test-segment-measured-change"
+        name="reviewer"
+        task="Review the implementation"
+        progressUpdates={["one", "two"]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        agentType={null}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: /Subagent/ });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("toggles open and closed through the shared card shell", () => {
+    render(
+      <SubagentSegment
+        id="test-segment-card-measured-change"
+        cardId="test-segment-card-measured-change"
+        name="reviewer"
+        task="Review the implementation"
+        progressUpdates={["one", "two"]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        agentType={null}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[]}
+        variant="card"
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: /reviewer/ });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(trigger);
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("shows the cleaned task only when expanded, never as the collapsed line", () => {
+    render(
+      <SubagentSegment
+        id="test-segment-task-notification"
+        cardId="test-segment-task-notification"
+        name="codex-cli"
+        task={[
+          "<task-notification>",
+          "<task-id>bd0xoyyo6</task-id>",
+          "<summary>Monitor event: What's this project about?</summary>",
+          "</task-notification>",
+        ].join("\n")}
+        progressUpdates={[]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        agentType={null}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    // Collapsed line is the live status, not the task.
+    expect(screen.queryByText("What's this project about?")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
+
+    expect(screen.getByText("What's this project about?")).toBeTruthy();
+    expect(screen.queryByText(/task-id/)).toBeNull();
+    expect(screen.queryByText(/Monitor event/)).toBeNull();
+  });
+
+  it("does not expose raw task-notification markup when the wrapper has attributes", () => {
+    render(
+      <SubagentSegment
+        id="test-segment-task-notification-attrs"
+        cardId="test-segment-task-notification-attrs"
+        name="codex-cli"
+        task={[
+          '<task-notification kind="monitor">',
+          "<task-id>bd0xoyyo6</task-id>",
+          "<message>Monitor event: Inspect the failing suite</message>",
+          "</task-notification>",
+        ].join("\n")}
+        progressUpdates={[]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        agentType={null}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
+
+    expect(screen.getByText("Inspect the failing suite")).toBeTruthy();
+    expect(screen.queryByText(/task-notification/)).toBeNull();
+    expect(screen.queryByText(/Monitor event/)).toBeNull();
+  });
+
+  it("collapses adjacent duplicate progress lines in the expanded history", () => {
+    render(
+      <SubagentSegment
+        id="test-segment-3"
+        cardId="test-segment-3"
+        name="reviewer"
+        task="Review the implementation"
+        progressUpdates={["Scanning", "Scanning", "Reading", "Scanning"]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        agentType={null}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
+
+    // History keeps the two non-adjacent "Scanning" blocks (adjacent pair
+    // collapsed); the header summary mirrors the latest line, so three total.
+    expect(screen.getAllByText("Scanning")).toHaveLength(3);
+    expect(screen.getByText("Reading")).toBeTruthy();
+  });
+
+  it("shows the result collapsed and full progress history when expanded", () => {
+    render(
+      <SubagentSegment
+        id="test-segment-4"
+        cardId="test-segment-4"
+        name="reviewer"
+        task="Review the implementation"
+        progressUpdates={["Step one", "Step two"]}
+        result="Completed the review."
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        agentType={null}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    expect(screen.queryByText("Completed the review.")).toBeNull();
+    expect(screen.queryByText("Step one")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
+
+    expect(screen.getByText("Progress")).toBeTruthy();
+    expect(screen.getByText("Step one")).toBeTruthy();
+    expect(screen.getByText("Step two")).toBeTruthy();
+    expect(screen.getByText("Completed the review.")).toBeTruthy();
+  });
+
+  it("preserves open state across unmount and remount with same segment id", () => {
+    const segmentId = "test-segment-persistent";
+
+    const { rerender } = rtlRender(
+      <ChatExpansionTestProviders tileInstanceId="subagent-test-tile">
+        <SubagentPersistenceHarness segmentId={segmentId} visible />
+      </ChatExpansionTestProviders>,
+    );
+
+    expect(screen.queryByText("Progress")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
+
+    expect(screen.getByText("Progress")).toBeTruthy();
+
+    rerender(
+      <ChatExpansionTestProviders tileInstanceId="subagent-test-tile">
+        <SubagentPersistenceHarness segmentId={segmentId} visible={false} />
+      </ChatExpansionTestProviders>,
+    );
+    rerender(
+      <ChatExpansionTestProviders tileInstanceId="subagent-test-tile">
+        <SubagentPersistenceHarness segmentId={segmentId} visible />
+      </ChatExpansionTestProviders>,
+    );
+
+    expect(screen.getByText("Progress")).toBeTruthy();
+  });
+
+  it("opens from find-force and releases force on manual collapse", () => {
+    const segmentId = "test-segment-find-forced";
+    render(
+      <>
+        <ForceSubagentOpenButton label="Force subagent" renderId={segmentId} />
+        <FindForceStatus renderId={segmentId} />
+        <SubagentSegment
+          id={segmentId}
+          cardId={segmentId}
+          name="reviewer"
+          task="Find-forced task"
+          progressUpdates={["Step one"]}
+          result="Done."
+          isStreaming={false}
+          endState={null}
+          stopped={false}
+          startedAt={null}
+          durationMs={null}
+          agentType={null}
+          toolImageResults={[]}
+          workflowMeta={null}
+          nested={[]}
+          variant="promoted"
+        />
+      </>,
+    );
+
+    expect(screen.queryByText("Find-forced task")).toBeNull();
+    expect(screen.getByText("released")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Force subagent" }));
+
+    expect(screen.getByText("Find-forced task")).toBeTruthy();
+    expect(screen.getByText("forced")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
+
+    expect(screen.queryByText("Find-forced task")).toBeNull();
+    expect(screen.getByText("released")).toBeTruthy();
+  });
+
+  it("keeps find-force scoped to the tile provider", () => {
+    const segmentId = "shared-subagent-id";
+    rtlRender(
+      <div>
+        <ChatExpansionTestProviders tileInstanceId="tile-a">
+          <ForceSubagentOpenButton
+            label="Force tile A subagent"
+            renderId={segmentId}
+          />
+          <SubagentSegment
+            id={segmentId}
+            cardId={segmentId}
+            name="reviewer"
+            task="Tile A task"
+            progressUpdates={[]}
+            result="Tile A result"
+            isStreaming={false}
+            endState={null}
+            stopped={false}
+            startedAt={null}
+            durationMs={null}
+            agentType={null}
+            toolImageResults={[]}
+            workflowMeta={null}
+            nested={[]}
+            variant="promoted"
+          />
+        </ChatExpansionTestProviders>
+        <ChatExpansionTestProviders tileInstanceId="tile-b">
+          <SubagentSegment
+            id={segmentId}
+            cardId={segmentId}
+            name="reviewer"
+            task="Tile B task"
+            progressUpdates={[]}
+            result="Tile B result"
+            isStreaming={false}
+            endState={null}
+            stopped={false}
+            startedAt={null}
+            durationMs={null}
+            agentType={null}
+            toolImageResults={[]}
+            workflowMeta={null}
+            nested={[]}
+            variant="promoted"
+          />
+        </ChatExpansionTestProviders>
+      </div>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Force tile A subagent" }),
+    );
+
+    expect(screen.getByText("Tile A task")).toBeTruthy();
+    expect(screen.queryByText("Tile B task")).toBeNull();
+  });
+
+  it("renders the agent type as a distinct title segment alongside the name", () => {
+    render(
+      <SubagentSegment
+        id="test-agent-type"
+        cardId="test-agent-type"
+        name="Godel"
+        agentType="explorer"
+        task="Investigate the auth flow"
+        progressUpdates={[]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    // Title reads "Subagent · explorer · Godel · ..." (role CSS-capitalized).
+    expect(screen.getByText("explorer")).toBeTruthy();
+    expect(screen.getByText("Godel")).toBeTruthy();
+  });
+
+  it("anchors the always-visible header (name + type) to the header find unit", () => {
+    render(
+      <SubagentSegment
+        id="test-header-anchor"
+        cardId="test-header-anchor"
+        name="Godel"
+        agentType="explorer"
+        task="Investigate the auth flow"
+        progressUpdates={[]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: /Subagent/ });
+    // The name + agent type render inside the always-visible header trigger, and
+    // that trigger carries the header find-unit anchor so the painter can target
+    // it without expanding the body.
+    expect(trigger.getAttribute("data-chat-find-unit")).toBe(
+      chatFindSubagentHeaderUnitId("test-header-anchor"),
+    );
+    expect(trigger.textContent).toContain("Godel");
+    expect(trigger.textContent).toContain("explorer");
+  });
+
+  it("shows a live elapsed timer while streaming", () => {
+    // Fake the clock so the floored delta is exact (10s now - 5s start = 5s).
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(10_000);
+      render(
+        <SubagentSegment
+          id="test-elapsed-live"
+          cardId="test-elapsed-live"
+          name="reviewer"
+          agentType={null}
+          task="Review the implementation"
+          progressUpdates={["Scanning"]}
+          result={null}
+          isStreaming
+          endState={null}
+          stopped={false}
+          startedAt={5_000}
+          durationMs={null}
+          toolImageResults={[]}
+          workflowMeta={null}
+          nested={[]}
+          variant="promoted"
+        />,
+      );
+
+      expect(screen.getByText("5s")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows the total run duration once finished", () => {
+    render(
+      <SubagentSegment
+        id="test-elapsed-total"
+        cardId="test-elapsed-total"
+        name="reviewer"
+        agentType={null}
+        task="Review the implementation"
+        progressUpdates={["Scanning"]}
+        result="Done."
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        startedAt={1_000}
+        durationMs={7_000}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    expect(screen.getByText("7s")).toBeTruthy();
+  });
+
+  it("floors the finished total to match the live tick (no +1 jump)", () => {
+    render(
+      <SubagentSegment
+        id="test-elapsed-floor"
+        cardId="test-elapsed-floor"
+        name="reviewer"
+        agentType={null}
+        task="Review the implementation"
+        progressUpdates={["Scanning"]}
+        result="Done."
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        startedAt={0}
+        durationMs={7_600}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    // 7.6s floors to "7s" (the last live value), not round-up "8s".
+    expect(screen.getByText("7s")).toBeTruthy();
+    expect(screen.queryByText("8s")).toBeNull();
+  });
+
+  it("clamps a sub-second finished run to 1s instead of showing 0s", () => {
+    render(
+      <SubagentSegment
+        id="test-elapsed-subsecond"
+        cardId="test-elapsed-subsecond"
+        name="reviewer"
+        agentType={null}
+        task="Review the implementation"
+        progressUpdates={["Scanning"]}
+        result="Done."
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        startedAt={0}
+        durationMs={300}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    expect(screen.getByText("1s")).toBeTruthy();
+    expect(screen.queryByText("0s")).toBeNull();
+  });
+
+  it("shows no duration for an interrupted run, only the end-state badge", () => {
+    render(
+      <SubagentSegment
+        id="test-elapsed-interrupted"
+        cardId="test-elapsed-interrupted"
+        name="reviewer"
+        agentType={null}
+        task="Review the implementation"
+        progressUpdates={["Scanning"]}
+        result={null}
+        isStreaming={false}
+        endState="interrupted"
+        stopped={false}
+        startedAt={1_000}
+        durationMs={null}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    // A force-finalized card carries no (turn-end-inflated) duration; the
+    // builder passes durationMs=null for non-completed blocks.
+    expect(screen.queryByText(/^\d+s$/)).toBeNull();
+  });
+
+  it("shows a neutral stopped badge for a subagent whose terminal status is errored but stopped is true", () => {
+    // `status: "errored"` with `stopped: true` is how the host reports a
+    // subagent that was explicitly stopped (e.g. a deadline-killed run) rather
+    // than one that genuinely failed - distinct from `endState`, which only
+    // covers `interrupted`/`superseded` statuses.
+    render(
+      <SubagentSegment
+        id="test-subagent-stopped"
+        cardId="test-subagent-stopped"
+        name="reviewer"
+        agentType={null}
+        task="Review the implementation"
+        progressUpdates={["Scanning"]}
+        result={null}
+        isStreaming={false}
+        endState={null}
+        stopped
+        startedAt={1_000}
+        durationMs={4_000}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    expect(screen.getByText("stopped")).toBeTruthy();
+  });
+
+  it("renders a nested agent as a row entry once expanded", () => {
+    render(
+      <SubagentSegment
+        id="test-parent"
+        cardId="test-parent"
+        name="planner"
+        agentType={null}
+        task="Plan the refactor."
+        progressUpdates={[]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[
+          nestedAgentFixture({ id: "nested-1", name: "callsite-sweeper" }),
+        ]}
+        variant="promoted"
+      />,
+    );
+
+    expect(screen.queryByText("callsite-sweeper")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
+
+    expect(screen.getByText("callsite-sweeper")).toBeTruthy();
+  });
+
+  it("draws no conversation when there are no children", () => {
+    const { container } = render(
+      <SubagentSegment
+        id="test-no-children"
+        cardId="test-no-children"
+        name="planner"
+        agentType={null}
+        task="Plan the refactor."
+        progressUpdates={[]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
+
+    expect(container.querySelector("[data-subagent-conversation]")).toBeNull();
+  });
+
+  it("renders a nested provider notice as a compact row once the card is expanded", () => {
+    render(
+      <SubagentSegment
+        id="test-parent-notice"
+        cardId="test-parent-notice"
+        name="planner"
+        agentType={null}
+        task="Plan the refactor."
+        progressUpdates={[]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[
+          {
+            id: "notice-1",
+            kind: "provider_notice",
+            receipt: null,
+            status: "completed",
+            noticeKind: "model_rerouted",
+            tone: "warning",
+            title: "Model changed",
+            message: "Codex switched from gpt-5 to gpt-5-safe.",
+            details: [],
+            parentId: "test-parent-notice",
+          },
+        ]}
+        variant="promoted"
+      />,
+    );
+
+    expect(screen.queryByText("Model changed")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
+
+    expect(screen.getByText("Model changed")).toBeTruthy();
+  });
+
+  it("renders a second nesting level once the first-level row is itself expanded", () => {
+    render(
+      <SubagentSegment
+        id="test-root"
+        cardId="test-root"
+        name="root-agent"
+        agentType={null}
+        task="Root task."
+        progressUpdates={[]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        toolImageResults={[]}
+        workflowMeta={null}
+        nested={[
+          nestedAgentFixture({
+            id: "mid-agent",
+            name: "mid-agent",
+            children: [
+              nestedAgentFixture({ id: "leaf-agent", name: "leaf-agent" }),
+            ],
+          }),
+        ]}
+        variant="promoted"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Subagent/ }));
+
+    // The nested row's own header is visible immediately - one indent level -
+    // but its grandchild only appears once THAT row is itself expanded.
+    expect(screen.getByText("mid-agent")).toBeTruthy();
+    expect(screen.queryByText("leaf-agent")).toBeNull();
+
+    clickTriggerFor("mid-agent");
+
+    expect(screen.getByText("leaf-agent")).toBeTruthy();
+  });
+
+  it("renders the dedicated workflow card for a subagent segment with workflowMeta", () => {
+    render(
+      <SubagentSegment
+        id="test-workflow"
+        cardId="test-workflow"
+        name="max-effort-review"
+        agentType={null}
+        task={null}
+        progressUpdates={[]}
+        result={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        toolImageResults={[]}
+        workflowMeta={{
+          name: "max-effort-review",
+          intent: "Max-effort review of the refusal-handling changeset",
+          activity: [
+            { kind: "phase", text: "Phase — Find (16 agents)" },
+            { kind: "label", text: "find:host-core" },
+          ],
+          agentsStarted: 16,
+          agentsFinished: 3,
+          totalTokens: 412_000,
+        }}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    expect(screen.getByText("max-effort-review")).toBeTruthy();
+    expect(screen.getByText("Workflow")).toBeTruthy();
+    // The collapsed live line composes phase + active label + fleet counts.
+    expect(screen.getByText(/Phase — Find \(16 agents\)/)).toBeTruthy();
+    expect(screen.getByText(/working on find:host-core/)).toBeTruthy();
+    expect(screen.getByText(/3 \/ 16 agents done/)).toBeTruthy();
+
+    clickTriggerFor("max-effort-review");
+
+    expect(
+      screen.getByText("Max-effort review of the refusal-handling changeset"),
+    ).toBeTruthy();
+    expect(screen.getByText("Activity")).toBeTruthy();
+    expect(screen.getByText("find:host-core")).toBeTruthy();
+  });
+
+  it("omits the Intent section for a workflow card whose intent extraction failed", () => {
+    render(
+      <SubagentSegment
+        id="test-workflow-no-intent"
+        cardId="test-workflow-no-intent"
+        name="mystery-workflow"
+        agentType={null}
+        task={null}
+        progressUpdates={[]}
+        result={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        startedAt={1_000}
+        durationMs={5_000}
+        toolImageResults={[]}
+        workflowMeta={{
+          name: "mystery-workflow",
+          intent: null,
+          activity: [],
+          agentsStarted: null,
+          agentsFinished: null,
+          totalTokens: null,
+        }}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    clickTriggerFor("mystery-workflow");
+
+    expect(screen.queryByText("Intent")).toBeNull();
+  });
+
+  it("shows Result totals only once a workflow run has settled", () => {
+    render(
+      <SubagentSegment
+        id="test-workflow-totals"
+        cardId="test-workflow-totals"
+        name="settled-workflow"
+        agentType={null}
+        task={null}
+        progressUpdates={[]}
+        result="All checks passed."
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        startedAt={1_000}
+        durationMs={65_000}
+        toolImageResults={[]}
+        workflowMeta={{
+          name: "settled-workflow",
+          intent: null,
+          activity: [],
+          agentsStarted: 5,
+          agentsFinished: 5,
+          totalTokens: 10_000,
+        }}
+        nested={[]}
+        variant="promoted"
+      />,
+    );
+
+    clickTriggerFor("settled-workflow");
+
+    // The result renders both as the (always-on, card-style) header summary
+    // and inside the expanded Result panel.
+    expect(screen.getAllByText("All checks passed.").length).toBeGreaterThan(0);
+    expect(
+      screen.getByText("5 agents run · 10,000 tokens · 1m 5s"),
+    ).toBeTruthy();
+  });
+});
+
+function textChild(id: string, markdown: string): SubagentChildSegment {
+  return { id, kind: "text", markdown, isStreaming: false, parentId: "conv" };
+}
+
+function noticeChild(id: string): SubagentChildSegment {
+  return {
+    id,
+    kind: "provider_notice",
+    status: "completed",
+    noticeKind: "model_rerouted",
+    tone: "info",
+    title: "Model changed",
+    message: null,
+    details: [],
+    receipt: null,
+    parentId: "conv",
+  };
+}
+
+interface ConversationCardProps {
+  readonly nested: ReadonlyArray<SubagentChildSegment>;
+  readonly result: string | null;
+  readonly progressUpdates: ReadonlyArray<string>;
+  readonly variant: "card" | "promoted";
+}
+
+// The open store outlives a test, so every render takes a fresh card id.
+let conversationCardCounter = 0;
+
+function ConversationCard(props: ConversationCardProps) {
+  const [id] = useState(() => {
+    conversationCardCounter += 1;
+    return `conv-${conversationCardCounter}`;
+  });
+  return (
+    <SubagentSegment
+      id={id}
+      cardId={id}
+      name="reviewer"
+      agentType={null}
+      task="Review it"
+      progressUpdates={props.progressUpdates}
+      result={props.result}
+      isStreaming={false}
+      endState={null}
+      stopped={false}
+      startedAt={null}
+      durationMs={null}
+      toolImageResults={[]}
+      workflowMeta={null}
+      nested={props.nested}
+      variant={props.variant}
+    />
+  );
+}
+
+function openCard(variant: "card" | "promoted"): void {
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: variant === "promoted" ? /Subagent/ : /reviewer/,
+    }),
+  );
+}
+
+describe("<SubagentSegment /> conversation", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("mounts no children while the card is closed", () => {
+    render(
+      <ConversationCard
+        nested={[textChild("t1", "child words")]}
+        result={null}
+        progressUpdates={[]}
+        variant="card"
+      />,
+    );
+    expect(screen.queryByText("child words")).toBeNull();
+    openCard("card");
+    expect(screen.getByText("child words")).toBeTruthy();
+  });
+
+  it("renders a prose child inside the card", () => {
+    const { container } = render(
+      <ConversationCard
+        nested={[textChild("t1", "child words")]}
+        result={null}
+        progressUpdates={[]}
+        variant="promoted"
+      />,
+    );
+    openCard("promoted");
+    const conversation = container.querySelector(
+      "[data-subagent-conversation]",
+    );
+    expect(conversation).not.toBeNull();
+    expect(conversation?.textContent ?? "").toContain("child words");
+  });
+
+  it("hides the Result panel when a child text exists", () => {
+    render(
+      <ConversationCard
+        nested={[textChild("t1", "child words")]}
+        result="a different result"
+        progressUpdates={[]}
+        variant="promoted"
+      />,
+    );
+    openCard("promoted");
+    expect(screen.getByText("child words")).toBeTruthy();
+    expect(screen.queryByText("Result")).toBeNull();
+    expect(screen.queryByText("a different result")).toBeNull();
+  });
+
+  it("shows the Result panel when the children are not text", () => {
+    render(
+      <ConversationCard
+        nested={[noticeChild("n1")]}
+        result="a different result"
+        progressUpdates={[]}
+        variant="promoted"
+      />,
+    );
+    openCard("promoted");
+    expect(screen.getByText("Result")).toBeTruthy();
+    expect(screen.getByText("a different result")).toBeTruthy();
+  });
+
+  it("renders a parented reasoning child as a collapsed Thinking row", () => {
+    render(
+      <ConversationCard
+        nested={[
+          {
+            id: "r1",
+            kind: "reasoning",
+            markdown: "private chain of thought",
+            isStreaming: false,
+            durationMs: 3_000,
+            parentId: "conv",
+          },
+        ]}
+        result={null}
+        progressUpdates={[]}
+        variant="promoted"
+      />,
+    );
+    openCard("promoted");
+    expect(screen.queryByText("private chain of thought")).toBeNull();
+    clickTriggerFor("Thought for 3s");
+    expect(screen.getByText("private chain of thought")).toBeTruthy();
+  });
+
+  it("shows a hand-back result verbatim when there is no child text", () => {
+    const handBack = "[Subagent hand-back] the final answer";
+    render(
+      <ConversationCard
+        nested={[noticeChild("n1")]}
+        result={handBack}
+        progressUpdates={[]}
+        variant="promoted"
+      />,
+    );
+    openCard("promoted");
+    expect(screen.getByText(handBack)).toBeTruthy();
+  });
+
+  it("shows the hand-back header text nowhere once a child text exists", () => {
+    render(
+      <ConversationCard
+        nested={[textChild("t1", "the final answer")]}
+        result="[Subagent hand-back] the final answer"
+        progressUpdates={[]}
+        variant="card"
+      />,
+    );
+    // The compact header mirrors the result, so it must be absent even closed.
+    expect(screen.queryByText(/Subagent hand-back/)).toBeNull();
+    openCard("card");
+    expect(screen.queryByText(/Subagent hand-back/)).toBeNull();
+    expect(screen.getByText("the final answer")).toBeTruthy();
+  });
+
+  it("keeps the workflow card's collapsed header off the result once a child text exists", () => {
+    render(
+      <SubagentSegment
+        id="conv-workflow"
+        cardId="conv-workflow"
+        name="review-workflow"
+        agentType={null}
+        task={null}
+        progressUpdates={[]}
+        result="[Subagent hand-back] the final answer"
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        startedAt={null}
+        durationMs={null}
+        toolImageResults={[]}
+        workflowMeta={{
+          name: "review-workflow",
+          intent: null,
+          activity: [],
+          agentsStarted: 0,
+          agentsFinished: 0,
+          totalTokens: null,
+        }}
+        nested={[textChild("t1", "the final answer")]}
+        variant="promoted"
+      />,
+    );
+    // Collapsed: the header is the only thing on screen, and it must not
+    // carry the result the body will not draw.
+    expect(screen.queryByText(/Subagent hand-back/)).toBeNull();
+  });
+
+  it("lists a progress line equal to a child text once, and keeps a summary line matching none", () => {
+    render(
+      <ConversationCard
+        nested={[textChild("t1", "Found the bug.")]}
+        result={null}
+        progressUpdates={["Found the bug.", "Summary: one bug"]}
+        variant="card"
+      />,
+    );
+    openCard("card");
+    expect(screen.getAllByText("Found the bug.")).toHaveLength(1);
+    expect(screen.getByText("Progress")).toBeTruthy();
+    // Header mirror + the Progress list entry.
+    expect(screen.getAllByText("Summary: one bug")).toHaveLength(2);
+  });
+
+  it("offers Open as chat only with the context, and calls the opener with the card id", () => {
+    const open = vi.fn();
+    const { unmount } = render(
+      <ConversationCard
+        nested={[textChild("t1", "child words")]}
+        result={null}
+        progressUpdates={[]}
+        variant="promoted"
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Open as chat" })).toBeNull();
+    unmount();
+
+    render(
+      <OpenSubagentAsChatContext value={open}>
+        <ConversationCard
+          nested={[textChild("t1", "child words")]}
+          result={null}
+          progressUpdates={[]}
+          variant="promoted"
+        />
+      </OpenSubagentAsChatContext>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open as chat" }));
+    expect(open).toHaveBeenCalledWith(expect.stringMatching(/^conv-\d+$/));
+  });
+
+  it("marks the Open as chat button with the card id for focus return", () => {
+    render(
+      <OpenSubagentAsChatContext value={vi.fn()}>
+        <ConversationCard
+          nested={[textChild("t1", "child words")]}
+          result={null}
+          progressUpdates={[]}
+          variant="promoted"
+        />
+      </OpenSubagentAsChatContext>,
+    );
+    const button = screen.getByRole("button", { name: "Open as chat" });
+    const cardId = button.getAttribute("data-subagent-open-as-chat");
+    expect(cardId).toMatch(/^conv-\d+$/);
+    expect(button.getAttribute("data-testid")).toBe(
+      `subagent-open-as-chat-${cardId}`,
+    );
+  });
+});
+
+const WORKFLOW_META: NonNullable<SubagentSegmentModel["workflowMeta"]> = {
+  name: "review-workflow",
+  intent: null,
+  activity: [],
+  agentsStarted: 0,
+  agentsFinished: 0,
+  totalTokens: null,
+};
+
+type OpenAsChatVariant = "card" | "row" | "promoted";
+
+function OpenAsChatCard(props: {
+  readonly id: string;
+  readonly variant: OpenAsChatVariant;
+  readonly workflow: boolean;
+  readonly nested: ReadonlyArray<SubagentChildSegment>;
+}) {
+  return (
+    <SubagentSegment
+      id={props.id}
+      cardId={props.id}
+      name="reviewer"
+      agentType={null}
+      task="Review it"
+      progressUpdates={[]}
+      result="Looks fine."
+      isStreaming={false}
+      endState={null}
+      stopped={false}
+      startedAt={null}
+      durationMs={null}
+      toolImageResults={[]}
+      workflowMeta={props.workflow ? WORKFLOW_META : null}
+      nested={props.nested}
+      variant={props.variant}
+    />
+  );
+}
+
+describe("<SubagentSegment /> open as chat on a card with no nested activity", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  const variants: ReadonlyArray<OpenAsChatVariant> = [
+    "promoted",
+    "card",
+    "row",
+  ];
+
+  it.each(variants)(
+    "draws the control on a finished %s subagent card and opens it by the card id",
+    (variant) => {
+      const open = vi.fn();
+      const id = `reply-only-${variant}`;
+      render(
+        <OpenSubagentAsChatContext value={open}>
+          <OpenAsChatCard
+            id={id}
+            variant={variant}
+            workflow={false}
+            nested={[]}
+          />
+        </OpenSubagentAsChatContext>,
+      );
+      fireEvent.click(screen.getByTestId(`subagent-open-as-chat-${id}`));
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(open).toHaveBeenCalledWith(id);
+    },
+  );
+
+  it.each(variants)(
+    "draws nothing on a %s subagent card without the context",
+    (variant) => {
+      const id = `no-context-${variant}`;
+      render(
+        <OpenAsChatCard
+          id={id}
+          variant={variant}
+          workflow={false}
+          nested={[]}
+        />,
+      );
+      expect(screen.queryByTestId(`subagent-open-as-chat-${id}`)).toBeNull();
+    },
+  );
+
+  it.each(["card", "row"] as const)(
+    "draws no control on a %s workflow card with no nested activity, and one with nested activity",
+    (variant) => {
+      const open = vi.fn();
+      const { unmount } = render(
+        <OpenSubagentAsChatContext value={open}>
+          <OpenAsChatCard
+            id={`wf-empty-${variant}`}
+            variant={variant}
+            workflow
+            nested={[]}
+          />
+        </OpenSubagentAsChatContext>,
+      );
+      expect(
+        screen.queryByTestId(`subagent-open-as-chat-wf-empty-${variant}`),
+      ).toBeNull();
+      unmount();
+
+      render(
+        <OpenSubagentAsChatContext value={open}>
+          <OpenAsChatCard
+            id={`wf-busy-${variant}`}
+            variant={variant}
+            workflow
+            nested={[textChild("t1", "child words")]}
+          />
+        </OpenSubagentAsChatContext>,
+      );
+      fireEvent.click(
+        screen.getByTestId(`subagent-open-as-chat-wf-busy-${variant}`),
+      );
+      expect(open).toHaveBeenCalledWith(`wf-busy-${variant}`);
+    },
+  );
+});

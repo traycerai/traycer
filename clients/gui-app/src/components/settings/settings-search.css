@@ -1,0 +1,61 @@
+/*
+ * The mark a search result leaves on the row it landed on.
+ *
+ * Driven by an attribute rather than a class because the element is found and
+ * marked from outside React (`use-settings-anchor-reveal.ts`) — a class list
+ * is React's to own on these nodes, and a stray class would survive the next
+ * render that rewrites `className`.
+ *
+ * Deliberately NOT `var(--muted)`: every preset theme's dark variant defines
+ * `--muted` identical to `--card`, so a muted wash on a settings card is
+ * invisible on most themes and correct only on the default pair. An alpha of
+ * the foreground is surface-independent by construction. The animation carries
+ * no `both`, and its last frame is transparent, so the row is left exactly as
+ * the class-driven styles painted it once the flash ends.
+ */
+
+[data-settings-anchor-flash] {
+  border-radius: 0.5rem;
+  animation: settings-anchor-flash 1.8s ease-out;
+}
+
+/*
+ * Both the ring and the wash are INSET box-shadows, and the wash is a huge
+ * spread rather than a `background-color`.
+ *
+ * Animating the background would mean owning it for the whole 1.8s — and the
+ * element underneath already has one (`bg-card/40` on a group's card), so the
+ * frames would have to end on `transparent` and the card would quietly lose
+ * its own fill while lit. An inset shadow paints ABOVE the background and
+ * BELOW the content, so the surface keeps whatever it normally has and the
+ * wash simply sits on top of it.
+ */
+@keyframes settings-anchor-flash {
+  0%,
+  55% {
+    box-shadow:
+      inset 0 0 0 2px var(--ring),
+      inset 0 0 0 9999px color-mix(in oklab, var(--foreground) 8%, transparent);
+  }
+
+  100% {
+    box-shadow:
+      inset 0 0 0 2px transparent,
+      inset 0 0 0 9999px transparent;
+  }
+}
+
+/*
+ * Reduced motion keeps the mark and drops the fade. The point of the flash is
+ * "this is the row you asked for", which is information, not decoration — so
+ * it is held steady rather than removed, and the attribute's own timeout is
+ * what ends it.
+ */
+@media (prefers-reduced-motion: reduce) {
+  [data-settings-anchor-flash] {
+    animation: none;
+    box-shadow:
+      inset 0 0 0 2px var(--ring),
+      inset 0 0 0 9999px color-mix(in oklab, var(--foreground) 8%, transparent);
+  }
+}

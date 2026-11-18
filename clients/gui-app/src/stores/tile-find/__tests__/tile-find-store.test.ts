@@ -1,0 +1,983 @@
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import {
+  createUnavailableTileFindAdapter,
+  evictTileFindUi,
+  useTileFindStore,
+  type TileFindAdapter,
+  type TileFindCapability,
+  type TileFindInput,
+  type TileFindStateSnapshot,
+  type TileFindStatus,
+  type TileReplaceInput,
+} from "@/stores/tile-find";
+import { promoteTileFindUiToDurable } from "@/stores/tile-find/tile-find-store";
+import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
+
+// scheduleUiReclaim also checks canvas liveness. Default false
+// preserves existing "permanently torn down" reclaim coverage (empty canvas).
+const tileLiveness = vi.hoisted(() => ({ live: false }));
+
+vi.mock("@/stores/epics/canvas/tile-instance-liveness", () => ({
+  isEpicCanvasTileInstanceLive: () => tileLiveness.live,
+}));
+
+const FIND_CAPABILITY = new Set<TileFindCapability>(["find"]);
+const REPLACE_CAPABILITY = new Set<TileFindCapability>([
+  "find",
+  "replace",
+  "replaceAll",
+]);
+
+interface TestTileFindAdapter extends TileFindAdapter {
+  readonly searchInputs: TileFindInput[];
+  readonly replaceInputs: TileReplaceInput[];
+  readonly nextMock: Mock<() => void>;
+  readonly previousMock: Mock<() => void>;
+  publish(snapshot: TileFindStateSnapshot): void;
+}
+
+function makeSnapshot(args: {
+  readonly requestId: number;
+  readonly status: TileFindStatus;
+  readonly capabilities: ReadonlySet<TileFindCapability>;
+  readonly query: string;
+  readonly matchCase: boolean;
+  readonly replaceText: string;
+  readonly current: number;
+  readonly total: number;
+  readonly coverageMessage: string | null;
+  readonly errorMessage: string | null;
+}): TileFindStateSnapshot {
+  return {
+    requestId: args.requestId,
+    status: args.status,
+    capabilities: args.capabilities,
+    query: args.query,
+    matchCase: args.matchCase,
+    replaceText: args.replaceText,
+    current: args.current,
+    total: args.total,
+    coverageMessage: args.coverageMessage,
+    errorMessage: args.errorMessage,
+    activeUnitId: null,
+    exactHighlight: "none",
+  };
+}
+
+function createTestAdapter(args: {
+  readonly tileInstanceId: string;
+  readonly tileKind: TileKindId;
+  readonly capabilities: ReadonlySet<TileFindCapability>;
+}): TestTileFindAdapter {
+  let snapshot = makeSnapshot({
+    requestId: 0,
+    status: "idle",
+    capabilities: args.capabilities,
+    query: "",
+    matchCase: false,
+    replaceText: "",
+    current: 0,
+    total: 0,
+    coverageMessage: null,
+    errorMessage: null,
+  });
+  const listeners = new Set<() => void>();
+  const searchInputs: TileFindInput[] = [];
+  const replaceInputs: TileReplaceInput[] = [];
+  const nextMock = vi.fn();
+  const previousMock = vi.fn();
+  const publish = (next: TileFindStateSnapshot): void => {
+    snapshot = next;
+    listeners.forEach((listener) => listener());
+  };
+  return {
+    tileInstanceId: args.tileInstanceId,
+    tileKind: args.tileKind,
+    searchInputs,
+    replaceInputs,
+    getSnapshot: () => snapshot,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    search: (input) => {
+      searchInputs.push(input);
+      publish(
+        makeSnapshot({
+          requestId: input.requestId,
+          status: "searching",
+          capabilities: args.capabilities,
+          query: input.query,
+          matchCase: input.matchCase,
+          replaceText: snapshot.replaceText,
+          current: 0,
+          total: 0,
+          coverageMessage: null,
+          errorMessage: null,
+        }),
+      );
+    },
+    next: nextMock,
+    previous: previousMock,
+    clear: vi.fn(),
+    replace: args.capabilities.has("replace")
+      ? {
+          replaceCurrent: (input) => {
+            replaceInputs.push(input);
+          },
+          replaceAll: (input) => {
+            replaceInputs.push(input);
+          },
+        }
+      : null,
+    nextMock,
+    previousMock,
+    publish,
+  };
+}
+
+function register(adapter: TileFindAdapter, isEligible: boolean): () => void {
+  return useTileFindStore.getState().registerTarget({
+    tileInstanceId: adapter.tileInstanceId,
+    contentId: `${adapter.tileInstanceId}-content`,
+    viewTabId: "view-1",
+    tileId: `${adapter.tileInstanceId}-pane`,
+    epicId: "epic-1",
+    tileKind: adapter.tileKind,
+    isEligible,
+    adapter,
+  });
+}
+
+describe("useTileFindStore", () => {
+  beforeEach(() => {
+    tileLiveness.live = false;
+  });
+
+  afterEach(() => {
+    tileLiveness.live = false;
+    useTileFindStore.getState().resetForTests();
+  });
+
+  it("advances request ids and rejects stale adapter snapshots", () => {
+    const adapter = createTestAdapter({
+      tileInstanceId: "tile-a",
+      tileKind: "spec",
+      capabilities: FIND_CAPABILITY,
+    });
+    register(adapter, true);
+
+    useTileFindStore.getState().setQuery("tile-a", "needle");
+    useTileFindStore.getState().search("tile-a");
+
+    expect(adapter.searchInputs).toEqual([
+      { requestId: 1, query: "needle", matchCase: false },
+    ]);
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-a"]?.lastSnapshot
+        .status,
+    ).toBe("searching");
+
+    adapter.publish(
+      makeSnapshot({
+        requestId: 0,
+        status: "ready",
+        capabilities: FIND_CAPABILITY,
+        query: "needle",
+        matchCase: false,
+        replaceText: "",
+        current: 1,
+        total: 1,
+        coverageMessage: null,
+        errorMessage: null,
+      }),
+    );
+
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-a"]?.lastSnapshot
+        .status,
+    ).toBe("searching");
+
+    adapter.publish(
+      makeSnapshot({
+        requestId: 1,
+        status: "ready",
+        capabilities: FIND_CAPABILITY,
+        query: "needle",
+        matchCase: false,
+        replaceText: "",
+        current: 1,
+        total: 2,
+        coverageMessage: null,
+        errorMessage: null,
+      }),
+    );
+
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-a"]?.lastSnapshot
+        .total,
+    ).toBe(2);
+
+    useTileFindStore.getState().setQuery("tile-a", "next");
+    useTileFindStore.getState().search("tile-a");
+
+    expect(adapter.searchInputs.at(-1)).toEqual({
+      requestId: 2,
+      query: "next",
+      matchCase: false,
+    });
+  });
+
+  it("keeps the current adapter subscription when an old unregister cleanup runs", () => {
+    const firstAdapter = createTestAdapter({
+      tileInstanceId: "tile-a",
+      tileKind: "spec",
+      capabilities: FIND_CAPABILITY,
+    });
+    const secondAdapter = createTestAdapter({
+      tileInstanceId: "tile-a",
+      tileKind: "spec",
+      capabilities: FIND_CAPABILITY,
+    });
+    const unregisterFirst = register(firstAdapter, true);
+    register(secondAdapter, true);
+
+    unregisterFirst();
+
+    expect(
+      useTileFindStore.getState().targetsByTileInstanceId["tile-a"]?.adapter,
+    ).toBe(secondAdapter);
+
+    secondAdapter.publish(
+      makeSnapshot({
+        requestId: 0,
+        status: "ready",
+        capabilities: FIND_CAPABILITY,
+        query: "",
+        matchCase: false,
+        replaceText: "",
+        current: 1,
+        total: 4,
+        coverageMessage: null,
+        errorMessage: null,
+      }),
+    );
+
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-a"]?.lastSnapshot
+        .total,
+    ).toBe(4);
+  });
+
+  it("replays the current search request when a tile adapter is replaced", () => {
+    const loadingAdapter = createTestAdapter({
+      tileInstanceId: "tile-a",
+      tileKind: "spec",
+      capabilities: FIND_CAPABILITY,
+    });
+    const loadedAdapter = createTestAdapter({
+      tileInstanceId: "tile-a",
+      tileKind: "spec",
+      capabilities: FIND_CAPABILITY,
+    });
+    register(loadingAdapter, true);
+
+    // The bar is open while the adapter swaps (the real loading -> loaded case).
+    useTileFindStore.getState().openForTile("tile-a");
+    useTileFindStore.getState().setMatchCase("tile-a", true);
+    useTileFindStore.getState().setQuery("tile-a", "Needle");
+    useTileFindStore.getState().search("tile-a");
+    register(loadedAdapter, true);
+
+    expect(loadingAdapter.searchInputs).toEqual([
+      { requestId: 1, query: "Needle", matchCase: true },
+    ]);
+    expect(loadedAdapter.searchInputs).toEqual([
+      { requestId: 1, query: "Needle", matchCase: true },
+    ]);
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-a"]
+        ?.currentRequestId,
+    ).toBe(1);
+  });
+
+  it("does not replay the search onto a fresh adapter after the bar is closed", () => {
+    const firstAdapter = createTestAdapter({
+      tileInstanceId: "tile-a",
+      tileKind: "spec",
+      capabilities: FIND_CAPABILITY,
+    });
+    const unregisterFirst = register(firstAdapter, true);
+
+    // User opens find, searches (and cycles - all immediate).
+    useTileFindStore.getState().openForTile("tile-a");
+    useTileFindStore.getState().setQuery("tile-a", "needle");
+    useTileFindStore.getState().search("tile-a");
+    expect(firstAdapter.searchInputs).toEqual([
+      { requestId: 1, query: "needle", matchCase: false },
+    ]);
+
+    // User closes the search bar.
+    useTileFindStore.getState().close("tile-a");
+    const uiAfterClose =
+      useTileFindStore.getState().uiByTileInstanceId["tile-a"];
+    // close() keeps query + currentRequestId (so reopening remembers the query)
+    // but flips isOpen false - the only thing that must stop the replay below.
+    expect(uiAfterClose?.isOpen).toBe(false);
+    expect(uiAfterClose?.query).toBe("needle");
+    expect(uiAfterClose?.currentRequestId).toBe(1);
+
+    // The tile's adapter is re-created while the bar is closed (real trigger: an
+    // isActive flip changes tileFindContext identity -> chat re-runs its adapter
+    // effect). A fresh adapter starts at requestId 0.
+    unregisterFirst();
+    const freshAdapter = createTestAdapter({
+      tileInstanceId: "tile-a",
+      tileKind: "spec",
+      capabilities: FIND_CAPABILITY,
+    });
+    register(freshAdapter, true);
+
+    // No replay onto the closed-bar adapter: the search is NOT re-run, so the
+    // real chat adapter never re-paints highlights with the bar shut.
+    expect(freshAdapter.searchInputs).toEqual([]);
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-a"]?.isOpen,
+    ).toBe(false);
+  });
+
+  it("ignores stale async command failures from earlier requests", async () => {
+    let snapshot = makeSnapshot({
+      requestId: 0,
+      status: "idle",
+      capabilities: FIND_CAPABILITY,
+      query: "",
+      matchCase: false,
+      replaceText: "",
+      current: 0,
+      total: 0,
+      coverageMessage: null,
+      errorMessage: null,
+    });
+    const listeners = new Set<() => void>();
+    const searchInputs: TileFindInput[] = [];
+    const rejectSearches: Array<(reason: unknown) => void> = [];
+    const nextMock = vi.fn();
+    const previousMock = vi.fn();
+    const adapter: TestTileFindAdapter = {
+      tileInstanceId: "tile-a",
+      tileKind: "spec",
+      searchInputs,
+      replaceInputs: [],
+      nextMock,
+      previousMock,
+      getSnapshot: () => snapshot,
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      search: (input) => {
+        searchInputs.push(input);
+        return new Promise<void>((_resolve, reject) => {
+          rejectSearches.push(reject);
+        });
+      },
+      next: nextMock,
+      previous: previousMock,
+      clear: vi.fn(),
+      replace: null,
+      publish: (next) => {
+        snapshot = next;
+        listeners.forEach((listener) => listener());
+      },
+    };
+    register(adapter, true);
+
+    useTileFindStore.getState().setQuery("tile-a", "first");
+    useTileFindStore.getState().search("tile-a");
+    useTileFindStore.getState().setQuery("tile-a", "second");
+    useTileFindStore.getState().search("tile-a");
+
+    expect(searchInputs).toEqual([
+      { requestId: 1, query: "first", matchCase: false },
+      { requestId: 2, query: "second", matchCase: false },
+    ]);
+
+    rejectSearches[0]?.(new Error("first failed"));
+    await Promise.resolve();
+
+    const afterStaleFailure =
+      useTileFindStore.getState().uiByTileInstanceId["tile-a"];
+    expect(afterStaleFailure?.currentRequestId).toBe(2);
+    expect(afterStaleFailure?.lastSnapshot.status).toBe("searching");
+    expect(afterStaleFailure?.lastSnapshot.errorMessage).toBeNull();
+
+    rejectSearches[1]?.(new Error("second failed"));
+    await Promise.resolve();
+
+    const afterCurrentFailure =
+      useTileFindStore.getState().uiByTileInstanceId["tile-a"];
+    expect(afterCurrentFailure?.currentRequestId).toBe(2);
+    expect(afterCurrentFailure?.lastSnapshot.status).toBe("error");
+    expect(afterCurrentFailure?.lastSnapshot.errorMessage).toBe(
+      "second failed",
+    );
+  });
+
+  it("keeps query and open state isolated per tile instance", () => {
+    register(
+      createTestAdapter({
+        tileInstanceId: "tile-a",
+        tileKind: "spec",
+        capabilities: FIND_CAPABILITY,
+      }),
+      true,
+    );
+    register(
+      createTestAdapter({
+        tileInstanceId: "tile-b",
+        tileKind: "spec",
+        capabilities: REPLACE_CAPABILITY,
+      }),
+      false,
+    );
+
+    useTileFindStore.getState().setQuery("tile-a", "alpha");
+    useTileFindStore.getState().setQuery("tile-b", "beta");
+    useTileFindStore.getState().setReplaceText("tile-b", "gamma");
+    useTileFindStore.getState().setReplaceExpanded("tile-b", true);
+    useTileFindStore.getState().openForTile("tile-a");
+
+    const state = useTileFindStore.getState();
+    expect(state.uiByTileInstanceId["tile-a"]?.query).toBe("alpha");
+    expect(state.uiByTileInstanceId["tile-a"]?.isOpen).toBe(true);
+    expect(state.uiByTileInstanceId["tile-a"]?.replaceExpanded).toBe(false);
+    expect(state.uiByTileInstanceId["tile-b"]?.query).toBe("beta");
+    expect(state.uiByTileInstanceId["tile-b"]?.replaceText).toBe("gamma");
+    expect(state.uiByTileInstanceId["tile-b"]?.replaceExpanded).toBe(true);
+    expect(state.uiByTileInstanceId["tile-b"]?.isOpen).toBe(false);
+  });
+
+  it("routes replace commands through a replace-capable adapter boundary", () => {
+    const adapter = createTestAdapter({
+      tileInstanceId: "tile-a",
+      tileKind: "spec",
+      capabilities: REPLACE_CAPABILITY,
+    });
+    register(adapter, true);
+
+    useTileFindStore.getState().setQuery("tile-a", "needle");
+    useTileFindStore.getState().setReplaceText("tile-a", "haystack");
+    useTileFindStore.getState().replaceCurrent("tile-a");
+    useTileFindStore.getState().replaceAll("tile-a");
+
+    expect(adapter.replaceInputs).toEqual([
+      {
+        requestId: 1,
+        query: "needle",
+        matchCase: false,
+        replaceText: "haystack",
+      },
+      {
+        requestId: 2,
+        query: "needle",
+        matchCase: false,
+        replaceText: "haystack",
+      },
+    ]);
+  });
+
+  it("refuses replace commands when the adapter has no replace boundary, without mutating request state", () => {
+    const adapter = createTestAdapter({
+      tileInstanceId: "tile-a",
+      tileKind: "terminal",
+      capabilities: FIND_CAPABILITY,
+    });
+    register(adapter, true);
+
+    expect(adapter.replace).toBeNull();
+
+    useTileFindStore.getState().setQuery("tile-a", "needle");
+    const beforeRequestId =
+      useTileFindStore.getState().uiByTileInstanceId["tile-a"]
+        ?.currentRequestId;
+
+    useTileFindStore.getState().replaceCurrent("tile-a");
+    useTileFindStore.getState().replaceAll("tile-a");
+
+    expect(adapter.replaceInputs).toEqual([]);
+    const ui = useTileFindStore.getState().uiByTileInstanceId["tile-a"];
+    // The request id is not bumped and the snapshot is not flipped to searching:
+    // an unsupported replace is a no-op, not a swallowed request.
+    expect(ui?.currentRequestId).toBe(beforeRequestId);
+    expect(ui?.lastSnapshot.status).not.toBe("searching");
+  });
+
+  it("registers blank or unsupported tiles with the default unavailable state", () => {
+    const adapter = createUnavailableTileFindAdapter({
+      tileInstanceId: "blank-tile",
+      tileKind: "blank",
+      message: null,
+    });
+    register(adapter, true);
+
+    useTileFindStore.getState().openForTile("blank-tile");
+    useTileFindStore.getState().setQuery("blank-tile", "needle");
+    useTileFindStore.getState().search("blank-tile");
+
+    const snapshot =
+      useTileFindStore.getState().uiByTileInstanceId["blank-tile"]
+        ?.lastSnapshot;
+    expect(snapshot?.status).toBe("unavailable");
+    expect(snapshot?.capabilities.size).toBe(0);
+    expect(snapshot?.coverageMessage).toBe("Open a tile before using find.");
+    expect(snapshot?.requestId).toBe(1);
+  });
+
+  it("resolves active owner only for eligible tiles and owner-free canvas state", () => {
+    register(
+      createTestAdapter({
+        tileInstanceId: "hidden",
+        tileKind: "chat",
+        capabilities: FIND_CAPABILITY,
+      }),
+      false,
+    );
+    register(
+      createTestAdapter({
+        tileInstanceId: "active",
+        tileKind: "ticket",
+        capabilities: FIND_CAPABILITY,
+      }),
+      true,
+    );
+
+    expect(useTileFindStore.getState().activeOwner).toMatchObject({
+      tileInstanceId: "active",
+      tileKind: "ticket",
+    });
+
+    useTileFindStore.getState().setOwnerBlocker({
+      reason: "command-palette",
+      ownerId: "command-palette",
+    });
+
+    expect(useTileFindStore.getState().activeOwner).toBeNull();
+
+    useTileFindStore.getState().setOwnerBlocker(null);
+
+    expect(useTileFindStore.getState().activeOwner?.tileInstanceId).toBe(
+      "active",
+    );
+  });
+
+  it("advances the resolved active owner without duplicating owner resolution", () => {
+    const activeAdapter = createTestAdapter({
+      tileInstanceId: "active",
+      tileKind: "ticket",
+      capabilities: FIND_CAPABILITY,
+    });
+    const hiddenAdapter = createTestAdapter({
+      tileInstanceId: "hidden",
+      tileKind: "chat",
+      capabilities: FIND_CAPABILITY,
+    });
+    register(activeAdapter, true);
+    register(hiddenAdapter, false);
+
+    expect(useTileFindStore.getState().advanceActiveOwner(1)).toBe(true);
+    expect(useTileFindStore.getState().advanceActiveOwner(-1)).toBe(true);
+
+    expect(activeAdapter.nextMock.mock.calls).toHaveLength(1);
+    expect(activeAdapter.previousMock.mock.calls).toHaveLength(1);
+    expect(hiddenAdapter.nextMock.mock.calls).toHaveLength(0);
+    expect(hiddenAdapter.previousMock.mock.calls).toHaveLength(0);
+
+    useTileFindStore.getState().setOwnerBlocker({
+      reason: "app-dialog",
+      ownerId: "app-dialog",
+    });
+
+    expect(useTileFindStore.getState().advanceActiveOwner(1)).toBe(false);
+    expect(activeAdapter.nextMock.mock.calls).toHaveLength(1);
+  });
+
+  it("reclaims per-tile ui state when a tile is permanently torn down", async () => {
+    const adapter = createTestAdapter({
+      tileInstanceId: "tile-a",
+      tileKind: "chat",
+      capabilities: FIND_CAPABILITY,
+    });
+    const unregister = register(adapter, true);
+    useTileFindStore.getState().setQuery("tile-a", "needle");
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-a"]?.query,
+    ).toBe("needle");
+
+    unregister();
+
+    // Reclaim is deferred so an immediate re-registration (swap) can keep it.
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-a"],
+    ).toBeDefined();
+
+    await Promise.resolve();
+
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-a"],
+    ).toBeUndefined();
+    expect(
+      useTileFindStore.getState().targetsByTileInstanceId["tile-a"],
+    ).toBeUndefined();
+  });
+
+  it("keeps per-tile ui state when a live tile unregisters (tab switch remount)", async () => {
+    const adapter = createTestAdapter({
+      tileInstanceId: "tile-live",
+      tileKind: "chat",
+      capabilities: FIND_CAPABILITY,
+    });
+    const unregister = register(adapter, true);
+    useTileFindStore.getState().openForTile("tile-live");
+    useTileFindStore.getState().setQuery("tile-live", "needle");
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-live"]?.query,
+    ).toBe("needle");
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-live"]?.isOpen,
+    ).toBe(true);
+
+    // Live in the canvas (switched-away chat tile will remount with the same
+    // instanceId) - must NOT reclaim ui after the deferred microtask.
+    tileLiveness.live = true;
+    unregister();
+    await Promise.resolve();
+
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-live"]?.query,
+    ).toBe("needle");
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-live"]?.isOpen,
+    ).toBe(true);
+  });
+
+  it(
+    "F4: evicts ui for a tile that unregistered while live once the canvas " +
+      "sweep later evicts it (real close sequence, not a re-register trick)",
+    async () => {
+      const adapter = createTestAdapter({
+        tileInstanceId: "tile-live-then-closed",
+        tileKind: "chat",
+        capabilities: FIND_CAPABILITY,
+      });
+      const unregister = register(adapter, true);
+      useTileFindStore.getState().openForTile("tile-live-then-closed");
+      useTileFindStore.getState().setQuery("tile-live-then-closed", "needle");
+
+      // Switch-away: unregisters while still live in the canvas -
+      // scheduleUiReclaim skips reclaiming (see the test above).
+      tileLiveness.live = true;
+      unregister();
+      await Promise.resolve();
+      expect(
+        useTileFindStore.getState().uiByTileInstanceId["tile-live-then-closed"],
+      ).toBeDefined();
+
+      // The tab is later closed directly (never switched back to, so the
+      // adapter never re-registers) - the canvas store's tile-removal
+      // subscriber calls evictTileFindUi with the closed instanceId. This is
+      // the ONLY path that can ever reclaim this tile's ui now: nothing else
+      // re-fires scheduleUiReclaim for an instanceId that never unregisters
+      // again.
+      evictTileFindUi(["tile-live-then-closed"]);
+
+      expect(
+        useTileFindStore.getState().uiByTileInstanceId["tile-live-then-closed"],
+      ).toBeUndefined();
+    },
+  );
+
+  it("keeps per-tile session state across an unregister/re-register swap - query/bar restore, active match is the adapter's own default (round 5 item 1, decision #19 re-amended)", async () => {
+    const firstAdapter = createTestAdapter({
+      tileInstanceId: "tile-a",
+      tileKind: "chat",
+      capabilities: FIND_CAPABILITY,
+    });
+    const unregisterFirst = register(firstAdapter, true);
+    // Find is open during the keep-alive remount, so the session search replays.
+    useTileFindStore.getState().openForTile("tile-a");
+    useTileFindStore.getState().setMatchCase("tile-a", true);
+    useTileFindStore.getState().setQuery("tile-a", "needle");
+    useTileFindStore.getState().search("tile-a");
+    // The reader had navigated to the 3rd match before the tab switch - this
+    // is the tab-switch analogue of the now-deleted durable
+    // occurrence-restore: no mechanism ever consumed this position for
+    // restoration (only for live rendering of the CURRENT adapter's own
+    // snapshot), so it must NOT influence where the swapped-in adapter lands.
+    firstAdapter.publish(
+      makeSnapshot({
+        requestId: 1,
+        status: "ready",
+        capabilities: FIND_CAPABILITY,
+        query: "needle",
+        matchCase: true,
+        replaceText: "",
+        current: 3,
+        total: 5,
+        coverageMessage: null,
+        errorMessage: null,
+      }),
+    );
+
+    // Forward-ordered swap: the live target unregisters, then a fresh adapter
+    // re-registers for the same tile in the same tick (keep-alive remount).
+    unregisterFirst();
+    const secondAdapter = createTestAdapter({
+      tileInstanceId: "tile-a",
+      tileKind: "chat",
+      capabilities: FIND_CAPABILITY,
+    });
+    register(secondAdapter, true);
+
+    // The deferred reclaim must observe the re-created target and leave ui alone.
+    await Promise.resolve();
+
+    const ui = useTileFindStore.getState().uiByTileInstanceId["tile-a"];
+    expect(ui?.query).toBe("needle");
+    expect(ui?.matchCase).toBe(true);
+    expect(ui?.isOpen).toBe(true);
+    // The session search replays onto the replacement adapter...
+    expect(secondAdapter.searchInputs).toEqual([
+      { requestId: 1, query: "needle", matchCase: true },
+    ]);
+    expect(secondAdapter.nextMock.mock.calls).toHaveLength(0);
+
+    // ...and lands wherever the fresh adapter's own search naturally
+    // resolves - NOT chased back to the 3rd-match position the reader had
+    // reached on the old adapter.
+    secondAdapter.publish(
+      makeSnapshot({
+        requestId: 1,
+        status: "ready",
+        capabilities: FIND_CAPABILITY,
+        query: "needle",
+        matchCase: true,
+        replaceText: "",
+        current: 1,
+        total: 5,
+        coverageMessage: null,
+        errorMessage: null,
+      }),
+    );
+    expect(
+      useTileFindStore.getState().uiByTileInstanceId["tile-a"]?.lastSnapshot
+        .current,
+    ).toBe(1);
+    expect(secondAdapter.nextMock.mock.calls).toHaveLength(0);
+  });
+
+  it("flushes a registered pending search before advancing and skips the advance when it flushes", () => {
+    const adapter = createTestAdapter({
+      tileInstanceId: "tile-a",
+      tileKind: "chat",
+      capabilities: FIND_CAPABILITY,
+    });
+    register(adapter, true);
+
+    const flush = vi.fn(() => true);
+    useTileFindStore.getState().registerPendingSearchFlush("tile-a", flush);
+
+    useTileFindStore.getState().next("tile-a");
+
+    // A pending debounced search was flushed (revealing the first match), so the
+    // advance is skipped - adapter.next must not run.
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(adapter.nextMock.mock.calls).toHaveLength(0);
+
+    // With nothing pending (flush returns false), next advances normally.
+    flush.mockReturnValue(false);
+    useTileFindStore.getState().next("tile-a");
+    expect(flush).toHaveBeenCalledTimes(2);
+    expect(adapter.nextMock.mock.calls).toHaveLength(1);
+
+    // Unregistering removes the flush hook entirely.
+    useTileFindStore.getState().registerPendingSearchFlush("tile-a", null);
+    useTileFindStore.getState().next("tile-a");
+    expect(flush).toHaveBeenCalledTimes(2);
+    expect(adapter.nextMock.mock.calls).toHaveLength(2);
+  });
+
+  it("flushes a registered pending search on the desktop-menu advanceActiveOwner path", () => {
+    const adapter = createTestAdapter({
+      tileInstanceId: "active",
+      tileKind: "chat",
+      capabilities: FIND_CAPABILITY,
+    });
+    register(adapter, true);
+    const flush = vi.fn(() => true);
+    useTileFindStore.getState().registerPendingSearchFlush("active", flush);
+
+    // The desktop menu drives navigation through advanceActiveOwner -> next /
+    // previous, which must flush the pending (new-query) search instead of
+    // advancing the prior query's stale matches.
+    expect(useTileFindStore.getState().advanceActiveOwner(1)).toBe(true);
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(adapter.nextMock.mock.calls).toHaveLength(0);
+
+    expect(useTileFindStore.getState().advanceActiveOwner(-1)).toBe(true);
+    expect(flush).toHaveBeenCalledTimes(2);
+    expect(adapter.previousMock.mock.calls).toHaveLength(0);
+  });
+});
+
+describe("ticket 15 review round 4 (F5 deletion): reopen-after-close restores query/bar state only", () => {
+  const EPIC_ID = "epic-f5";
+  const CONTENT_ID = "content-f5";
+
+  beforeEach(() => {
+    tileLiveness.live = false;
+  });
+
+  afterEach(() => {
+    tileLiveness.live = false;
+    useTileFindStore.getState().resetForTests();
+  });
+
+  it("restores query, match-case, and bar-open state, and never auto-advances to a specific occurrence", () => {
+    const closedAdapter = createTestAdapter({
+      tileInstanceId: "f5-closed",
+      tileKind: "chat",
+      capabilities: FIND_CAPABILITY,
+    });
+    useTileFindStore.getState().registerTarget({
+      tileInstanceId: "f5-closed",
+      contentId: CONTENT_ID,
+      viewTabId: "view-1",
+      tileId: "pane-1",
+      epicId: EPIC_ID,
+      tileKind: "chat",
+      isEligible: true,
+      adapter: closedAdapter,
+    });
+    useTileFindStore.getState().setQuery("f5-closed", "needle");
+    useTileFindStore.getState().setMatchCase("f5-closed", true);
+    useTileFindStore.getState().search("f5-closed");
+    // The reader had navigated to the 3rd of 5 matches before closing - round
+    // 4 deleted the machinery that used to chase this specific occurrence
+    // back on reopen (it restored the wrong OCCURRENCE within a unit that had
+    // more than one match, since the snapshot only ever exposes `unitId`,
+    // never `occurrenceInUnit` - see chat-find-adapter.test.ts:43-66).
+    closedAdapter.publish(
+      makeSnapshot({
+        requestId: 1,
+        status: "ready",
+        capabilities: FIND_CAPABILITY,
+        query: "needle",
+        matchCase: true,
+        replaceText: "",
+        current: 3,
+        total: 5,
+        coverageMessage: null,
+        errorMessage: null,
+      }),
+    );
+    useTileFindStore.getState().openForTile("f5-closed");
+
+    // Real close: the canvas sweep promotes BEFORE evicting (mandate A).
+    promoteTileFindUiToDurable({
+      tileInstanceId: "f5-closed",
+      epicId: EPIC_ID,
+      chatId: CONTENT_ID,
+    });
+    evictTileFindUi(["f5-closed"]);
+
+    // Reopen: a brand-new tileInstanceId, same (epicId, contentId).
+    const reopenedAdapter = createTestAdapter({
+      tileInstanceId: "f5-reopened",
+      tileKind: "chat",
+      capabilities: FIND_CAPABILITY,
+    });
+    useTileFindStore.getState().registerTarget({
+      tileInstanceId: "f5-reopened",
+      contentId: CONTENT_ID,
+      viewTabId: "view-1",
+      tileId: "pane-2",
+      epicId: EPIC_ID,
+      tileKind: "chat",
+      isEligible: true,
+      adapter: reopenedAdapter,
+    });
+
+    // Query/match-case/bar-open state comes back (the replay re-runs the
+    // query, existing mechanism, unchanged)...
+    expect(reopenedAdapter.searchInputs.at(-1)).toMatchObject({
+      query: "needle",
+      matchCase: true,
+    });
+    const restoredUi =
+      useTileFindStore.getState().uiByTileInstanceId["f5-reopened"];
+    expect(restoredUi?.isOpen).toBe(true);
+    expect(restoredUi?.query).toBe("needle");
+    expect(restoredUi?.matchCase).toBe(true);
+    // ...but the auto-advance was deleted entirely: the replayed
+    // search's own default landing (whatever the adapter itself returns
+    // first) is final, never nudged toward the closed session's occurrence.
+    expect(reopenedAdapter.nextMock.mock.calls).toHaveLength(0);
+  });
+
+  it("does not auto-advance even when the durable session never opened past its own default first match", () => {
+    const closedAdapter = createTestAdapter({
+      tileInstanceId: "f5-closed-first",
+      tileKind: "chat",
+      capabilities: FIND_CAPABILITY,
+    });
+    useTileFindStore.getState().registerTarget({
+      tileInstanceId: "f5-closed-first",
+      contentId: CONTENT_ID,
+      viewTabId: "view-1",
+      tileId: "pane-1",
+      epicId: EPIC_ID,
+      tileKind: "chat",
+      isEligible: true,
+      adapter: closedAdapter,
+    });
+    useTileFindStore.getState().setQuery("f5-closed-first", "needle");
+    useTileFindStore.getState().search("f5-closed-first");
+    useTileFindStore.getState().openForTile("f5-closed-first");
+    promoteTileFindUiToDurable({
+      tileInstanceId: "f5-closed-first",
+      epicId: EPIC_ID,
+      chatId: CONTENT_ID,
+    });
+    evictTileFindUi(["f5-closed-first"]);
+
+    const reopenedAdapter = createTestAdapter({
+      tileInstanceId: "f5-reopened-first",
+      tileKind: "chat",
+      capabilities: FIND_CAPABILITY,
+    });
+    useTileFindStore.getState().registerTarget({
+      tileInstanceId: "f5-reopened-first",
+      contentId: CONTENT_ID,
+      viewTabId: "view-1",
+      tileId: "pane-2",
+      epicId: EPIC_ID,
+      tileKind: "chat",
+      isEligible: true,
+      adapter: reopenedAdapter,
+    });
+    expect(reopenedAdapter.nextMock.mock.calls).toHaveLength(0);
+  });
+});

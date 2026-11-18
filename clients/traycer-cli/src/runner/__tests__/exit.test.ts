@@ -1,0 +1,412 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// int#4840. `finishAndExit` replaced the `process.exit(...)` call sites: the
+// win32 SEA aborted inside libuv teardown (`uv_async_send` on an already
+// closing handle, src\win\async.c:76) AFTER the command had succeeded, so a
+// finished `host available` reported failure to Desktop.
+//
+// Four properties carry that fix and none is observable from a command test:
+//   1. the code lands on `process.exitCode` and the loop is left to drain
+//   2. the code and the watchdog are in place BEFORE the first blocking await.
+//      The first version of this module armed the watchdog last, so the two
+//      steps most likely to hang were the two the backstop did not cover.
+//   3. every teardown step is bounded and escalates to a forced release, so a
+//      stalled socket cannot turn "let the loop drain" into "never exit"
+//   4. the watchdog is UNREF'd, so it cannot itself keep the process alive -
+//      if it could, every CLI run would sit there for the full timeout and the
+//      fix would read as a hang.
+
+const sentryClose = vi.fn<(timeout: number) => Promise<boolean>>();
+const destroySentryTransportRequests = vi.fn<() => number>();
+const dispatcherClose = vi.fn<() => Promise<void>>();
+const dispatcherDestroy = vi.fn<() => Promise<void>>();
+
+vi.mock("@sentry/node", () => ({
+  close: (timeout: number) => sentryClose(timeout),
+}));
+
+vi.mock("undici", () => ({
+  getGlobalDispatcher: () => ({
+    close: () => dispatcherClose(),
+    destroy: () => dispatcherDestroy(),
+  }),
+}));
+
+vi.mock("../../sentry-transport", () => ({
+  destroySentryTransportRequests: () => destroySentryTransportRequests(),
+}));
+
+function never(): Promise<never> {
+  return new Promise<never>(() => {});
+}
+
+describe("finishAndExit", () => {
+  let priorExitCode: number | string | null | undefined;
+
+  beforeEach(() => {
+    priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    vi.useFakeTimers();
+    // Module-level arbitration state (recorded code, watchdog, teardown latch)
+    // must not leak between cases.
+    vi.resetModules();
+    sentryClose.mockReset().mockResolvedValue(true);
+    destroySentryTransportRequests.mockReset().mockReturnValue(0);
+    dispatcherClose.mockReset().mockResolvedValue(undefined);
+    dispatcherDestroy.mockReset().mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    process.exitCode = priorExitCode;
+  });
+
+  it("records the exit code and does NOT tear the process down itself", async () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((): never => {
+      throw new Error("process.exit must not be called on the normal path");
+    }) as never);
+    const { finishAndExit } = await import("../exit");
+
+    await finishAndExit(3);
+
+    expect(process.exitCode).toBe(3);
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("records the code and arms the watchdog BEFORE the teardown awaits", async () => {
+    // Both teardown clients hang forever. Under the original ordering nothing
+    // was recorded or armed until they resolved, so this is the regression
+    // test for the cold-review P1: the guard has to exist before the steps it
+    // is supposed to guard.
+    sentryClose.mockReturnValue(never());
+    dispatcherClose.mockReturnValue(never());
+    const exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as never);
+    const { finishAndExit } = await import("../exit");
+
+    const pending = finishAndExit(9);
+    // Let the synchronous prologue and the stdio flush settle, but advance no
+    // timers - nothing the teardown waits on has had a chance to finish.
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(process.exitCode).toBe(9);
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    // The watchdog is real and armed: it fires even though teardown is still
+    // stuck, and carries the code the command earned.
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(exitSpy).toHaveBeenCalledWith(9);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await pending;
+  });
+
+  it("arms an unref'd watchdog so the timer cannot hold the loop open", async () => {
+    const unref = vi.fn();
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation(((): { unref: () => void } => ({ unref })) as never);
+    const { finishAndExit } = await import("../exit");
+
+    await finishAndExit(0);
+
+    // `flushStdio` and the teardown bounds arm their own timers, so the
+    // watchdog is not the only `setTimeout` here - it is the only one that
+    // gets unref'd, which is exactly the property under test. The others are
+    // CLEARED on the normal path rather than unref'd.
+    expect(unref).toHaveBeenCalledTimes(1);
+    const delays = setTimeoutSpy.mock.calls.map((call) => call[1]);
+    expect(delays).toContain(15_000);
+  });
+
+  it("arms the watchdog once no matter how many paths finish the process", async () => {
+    const unref = vi.fn();
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((): {
+      unref: () => void;
+    } => ({ unref })) as never);
+    const { finishAndExit } = await import("../exit");
+
+    await finishAndExit(1);
+    await finishAndExit(0);
+
+    // Two watchdogs would mean two racing `process.exit` calls, and the second
+    // could report a code the first had already superseded.
+    expect(unref).toHaveBeenCalledTimes(1);
+  });
+
+  it("forces the exit, with the same code, once the watchdog fires", async () => {
+    const exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as never);
+    const { finishAndExit } = await import("../exit");
+
+    await finishAndExit(7);
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    // Stand in for a handle that never let go.
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(exitSpy).toHaveBeenCalledWith(7);
+  });
+
+  describe("exit-code arbitration", () => {
+    it("does not let a later success downgrade a fatal code", async () => {
+      const { finishAndExit } = await import("../exit");
+
+      // The process-fatal handler records a 1 the moment it fires, and
+      // draining lets the interrupted command keep running. Without
+      // arbitration a later finish with 0 would report success for a failed
+      // process.
+      await finishAndExit(1);
+      await finishAndExit(0);
+
+      expect(process.exitCode).toBe(1);
+    });
+
+    it("upgrades a success to a later failure", async () => {
+      const { finishAndExit } = await import("../exit");
+
+      await finishAndExit(0);
+      await finishAndExit(2);
+
+      expect(process.exitCode).toBe(2);
+    });
+
+    it("keeps the FIRST failure when two failures race", async () => {
+      const { finishAndExit } = await import("../exit");
+
+      await finishAndExit(4);
+      await finishAndExit(5);
+
+      expect(process.exitCode).toBe(4);
+    });
+
+    it("reports the arbitrated code when the watchdog fires later", async () => {
+      const exitSpy = vi
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const { finishAndExit } = await import("../exit");
+
+      await finishAndExit(0);
+      await finishAndExit(6);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      // Read at FIRE time, not at arm time: the watchdog was armed by the
+      // first call, which had earned a 0.
+      expect(exitSpy).toHaveBeenCalledWith(6);
+    });
+  });
+
+  describe("bounded teardown", () => {
+    it("gives up on a stalled Sentry flush and destroys its sockets anyway", async () => {
+      // `Sentry.close()` is `flush()` plus `enabled = false`; it does NOT
+      // retire in-flight requests. A DSN endpoint that accepts TCP and never
+      // answers leaves sockets holding the loop open, which is what turned the
+      // first version of this fix into a 5s stall plus a forced exit.
+      sentryClose.mockReturnValue(never());
+      const { finishAndExit } = await import("../exit");
+
+      const pending = finishAndExit(0);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await pending;
+
+      expect(destroySentryTransportRequests).toHaveBeenCalledTimes(1);
+      expect(dispatcherClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("destroys the dispatcher when a graceful close outlives its bound", async () => {
+      // undici's `Agent.close()` waits for RUNNING requests with no timeout of
+      // its own, so an un-cancelled stalled response body parks teardown
+      // forever unless something escalates.
+      dispatcherClose.mockReturnValue(never());
+      const { finishAndExit } = await import("../exit");
+
+      const pending = finishAndExit(0);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await pending;
+
+      expect(dispatcherDestroy).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not destroy the dispatcher when the graceful close succeeds", async () => {
+      const { finishAndExit } = await import("../exit");
+
+      await finishAndExit(0);
+
+      expect(dispatcherClose).toHaveBeenCalledTimes(1);
+      expect(dispatcherDestroy).not.toHaveBeenCalled();
+    });
+
+    it("shuts the network clients down once across repeated calls", async () => {
+      const { finishAndExit } = await import("../exit");
+
+      await finishAndExit(1);
+      await finishAndExit(1);
+
+      expect(sentryClose).toHaveBeenCalledTimes(1);
+      expect(dispatcherClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not close the global dispatcher when the exit is process-fatal", async () => {
+      // A fatal lets the interrupted work KEEP RUNNING (a non-runner path
+      // takes this exit at once; a runner command reaches it after settling,
+      // and the skip is memoized). It shares this one dispatcher, and
+      // undici answers every dispatch after a close with `ClientClosedError`,
+      // so closing here does not clean up after the failure - it invents a
+      // second one, and the invented one (a registry download that never
+      // reached the network reporting `E_REGISTRY_UNAVAILABLE`) is the line
+      // the user reads.
+      const { finishAndExit, markProcessFatal } = await import("../exit");
+
+      markProcessFatal();
+      await finishAndExit(1);
+
+      expect(dispatcherClose).not.toHaveBeenCalled();
+      expect(dispatcherDestroy).not.toHaveBeenCalled();
+      // Only the dispatcher is skipped. Stdio, Sentry and the recorded code
+      // are unaffected - a fatal exit still has to flush and report.
+      expect(sentryClose).toHaveBeenCalledTimes(1);
+      expect(destroySentryTransportRequests).toHaveBeenCalledTimes(1);
+      expect(process.exitCode).toBe(1);
+    });
+
+    it("a fatal while a command is in flight records the 1 but arms nothing; the command's own finish arms the watchdog", async () => {
+      // The real-host matrix watched `host update` take an undici assertion
+      // mid-download, carry on, and complete the install-directory swap and
+      // service restart 14 s later - one second inside a watchdog the fatal
+      // handler had armed. Ablation: make `finishAfterProcessFatal` call
+      // `finishAndExit(1)` unconditionally and the no-exit / no-teardown
+      // assertions redden; drop its `recordExitCode(1)` and the first one does.
+      const exitSpy = vi
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const {
+        finishAfterProcessFatal,
+        finishAndExit,
+        markCommandSettled,
+        markCommandStarted,
+        markProcessFatal,
+      } = await import("../exit");
+
+      markCommandStarted();
+      markProcessFatal();
+      await finishAfterProcessFatal();
+
+      // The code is recorded at once - a command whose resolver died with the
+      // throw never settles, and the drained loop would otherwise exit 0 - but
+      // nothing is armed: a full watchdog period passes and the process is
+      // still the command's to finish.
+      expect(process.exitCode).toBe(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(sentryClose).not.toHaveBeenCalled();
+
+      // The runner's own finish, after the command's work: watchdog armed
+      // from HERE.
+      markCommandSettled();
+      await finishAndExit(1);
+      expect(process.exitCode).toBe(1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it("a command that never settles after a fatal is ended at the in-flight ceiling, not left forever", async () => {
+      const exitSpy = vi
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const { finishAfterProcessFatal, markCommandStarted, markProcessFatal } =
+        await import("../exit");
+
+      markCommandStarted();
+      markProcessFatal();
+      await finishAfterProcessFatal();
+      // A second fatal inside the same command arms no second ceiling.
+      await finishAfterProcessFatal();
+
+      // Well past any swap-plus-restart and still the command's process.
+      await vi.advanceTimersByTimeAsync(10 * 60_000 - 1);
+      expect(exitSpy).not.toHaveBeenCalled();
+      // The ceiling finishes the process the way the runner would have: the
+      // watchdog is armed from there and fires 15 s later with the fatal 1.
+      await vi.advanceTimersByTimeAsync(1);
+      expect(exitSpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(exitSpy).toHaveBeenCalledTimes(1);
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it("the runner brackets the command body: a fatal inside it is deferred to the runner's own finish", async () => {
+      // The two rows above call `markCommandStarted` by hand; this one pins
+      // that `runCommand` is what calls it. Ablation: delete the
+      // `markCommandStarted()` in runner.ts and the in-body assertion reddens.
+      const exitSpy = vi
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      vi.spyOn(process.stdout, "write").mockImplementation(((
+        _chunk: string | Uint8Array,
+        callback: (() => void) | undefined,
+      ) => {
+        if (callback !== undefined) callback();
+        return true;
+      }) as never);
+      const { finishAfterProcessFatal, markProcessFatal } =
+        await import("../exit");
+      const { runCommand } = await import("../runner");
+
+      let exitsInsideBody = -1;
+      await runCommand(
+        async () => {
+          markProcessFatal();
+          await finishAfterProcessFatal();
+          await vi.advanceTimersByTimeAsync(60_000);
+          exitsInsideBody = exitSpy.mock.calls.length;
+          return { data: { ok: true }, human: "ok", exitCode: 0 };
+        },
+        { json: true, quiet: null, noProgress: null, noBootstrap: null },
+      );
+
+      expect(exitsInsideBody).toBe(0);
+      // The runner's process-fatal envelope path armed the watchdog.
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it("a fatal with no command in flight finishes the process itself, as the handler always did", async () => {
+      const exitSpy = vi
+        .spyOn(process, "exit")
+        .mockImplementation((() => undefined) as never);
+      const { finishAfterProcessFatal, markProcessFatal } =
+        await import("../exit");
+
+      markProcessFatal();
+      await finishAfterProcessFatal();
+
+      expect(process.exitCode).toBe(1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it("closes the global dispatcher on a failing exit that is NOT process-fatal", async () => {
+      // The control for the case above, and it deliberately uses the SAME exit
+      // code: the skip has to key on the fatal FLAG, not on "the code is
+      // non-zero". A command that failed normally has finished with its
+      // dispatcher and still wants its keep-alive sockets retired.
+      const { finishAndExit } = await import("../exit");
+
+      await finishAndExit(1);
+
+      expect(dispatcherClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("survives a teardown step that rejects", async () => {
+      sentryClose.mockRejectedValue(new Error("transport exploded"));
+      dispatcherClose.mockRejectedValue(new Error("dispatcher exploded"));
+      const { finishAndExit } = await import("../exit");
+
+      await expect(finishAndExit(3)).resolves.toBeUndefined();
+      expect(process.exitCode).toBe(3);
+    });
+  });
+});

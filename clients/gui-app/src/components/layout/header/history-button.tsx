@@ -1,0 +1,55 @@
+import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
+import { History } from "lucide-react";
+import { useRouterState } from "@tanstack/react-router";
+import { Button } from "@/components/ui/button";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { isHistoryPath } from "@/stores/tabs/kinds/history";
+import {
+  useSystemOverlayActive,
+  useSystemTabModalActions,
+} from "@/stores/tabs/use-system-tab-modal";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { useBindingForAction } from "@/stores/settings/keybinding-store";
+
+/**
+ * Header trigger that opens (or focuses) the History tab. Click =
+ * `ensureHistoryTab` (singleton in the tabs store) + `navigate` to the
+ * remembered or default path. Active styling matches the History tab
+ * descriptor's `matchesPath`.
+ */
+export function HistoryButton() {
+  const placement = useColumnOverlayPlacement("foot");
+  const { openHistory } = useSystemTabModalActions();
+  const historyOverlayActive = useSystemOverlayActive("history");
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const isActive = isHistoryPath(pathname) || historyOverlayActive;
+  const chord = useBindingForAction("app.history.open");
+  const tooltip =
+    chord === null ? "History" : `History (${formatChordForDisplay(chord)})`;
+  const onClick = () => {
+    openHistory();
+  };
+  return (
+    <TooltipWrapper
+      label={tooltip}
+      side={placement?.side ?? "top"}
+      sideOffset={6}
+      align={placement?.align}
+    >
+      <Button
+        type="button"
+        variant="muted"
+        size="icon-sm"
+        // Non-editable chrome, dimmed while a layout session is live (4.2).
+        data-layout-passive
+        aria-label="History"
+        aria-haspopup="dialog"
+        aria-expanded={isActive}
+        data-testid="history-button"
+        onClick={onClick}
+      >
+        <History className="size-4" />
+      </Button>
+    </TooltipWrapper>
+  );
+}

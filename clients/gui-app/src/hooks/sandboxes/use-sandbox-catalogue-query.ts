@@ -1,0 +1,70 @@
+import {
+  queryOptions,
+  useQuery,
+  type UseQueryResult,
+} from "@tanstack/react-query";
+import type {
+  SandboxCatalogue,
+  SandboxCatalogueReadinessRequest,
+} from "@traycer/protocol/host/sandbox-control";
+import type { AuthService } from "@/lib/auth/auth-service";
+import { useHostBinding } from "@/lib/host";
+import { sandboxQueryKeys } from "@/lib/query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { sandboxFailureMessage } from "@/hooks/sandboxes/sandbox-failure-copy";
+import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
+
+/** The catalogue moves on a provider contract, not on a user's action. */
+const SANDBOX_CATALOGUE_STALE_MS = 10 * 60_000;
+
+export function sandboxCatalogueQueryOptions(
+  auth: AuthService | null,
+  userId: string | null,
+  enabled: boolean,
+  context: SandboxCatalogueReadinessRequest | null,
+) {
+  if (auth === null) {
+    return queryOptions<SandboxCatalogue>({
+      queryKey: sandboxQueryKeys.catalogueMissing(),
+      queryFn: () => Promise.reject(new Error("Sign in to create a sandbox.")),
+      enabled: false,
+    });
+  }
+  return queryOptions<SandboxCatalogue>({
+    queryKey: sandboxQueryKeys.catalogue(auth, userId, context),
+    queryFn: async () => {
+      const result = await auth.getSandboxCatalogue(context);
+      if (result.kind === "ok") {
+        return result.catalogue;
+      }
+      throw new Error(sandboxFailureMessage(result));
+    },
+    enabled,
+    staleTime: context === null ? SANDBOX_CATALOGUE_STALE_MS : 0,
+    refetchOnMount: context === null ? true : "always",
+  });
+}
+
+/**
+ * `GET /api/sandboxes/catalogue`: shapes, regions, prices and the nearest
+ * region for the create form, each provider's suspend fidelity for the card,
+ * and offered agents for staged Send checks. A staged target starts this read
+ * before Send so its offer is normally cached by the first action.
+ */
+export function useSandboxCatalogue(
+  enabled: boolean,
+): UseQueryResult<SandboxCatalogue> {
+  const binding = useHostBinding();
+  const auth = binding === null ? null : binding.auth;
+  const signedIn = useAuthStore((s) => s.status === "signed-in");
+  const userId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
+  const unavailable = useSandboxControlUnavailableReason() !== null;
+  return useQuery(
+    sandboxCatalogueQueryOptions(
+      auth,
+      userId,
+      signedIn && enabled && !unavailable,
+      null,
+    ),
+  );
+}

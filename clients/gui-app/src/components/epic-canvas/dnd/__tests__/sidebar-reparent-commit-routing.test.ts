@@ -1,0 +1,925 @@
+/**
+ * WHICH PLANE a sidebar reparent drop is committed to.
+ *
+ * The agent family's parent pointer moved to the host's record plane, so an
+ * agent drop became an `epic.reparentChat` call instead of a Y write - and that
+ * is right for every row the host actually has a record for. It is NOT right
+ * for a terminal agent that is still only a `tuiAgents` doc entry: its binding
+ * host predates the record channel, `epic.reparentChat@1.0` has no
+ * terminal-agent arm there, and the call would fail where the doc write used to
+ * work. So the commit routes on whether the row is registry-backed, and these
+ * tests pin the answers - registry-backed agent, doc-only terminal agent
+ * (Y-only; never `epic.reparentArtifact`), artifact (doc write +
+ * `epic.reparentArtifact`; no client keeps the doc write).
+ *
+ * The registry module is the seam: the commit reads the live epic session
+ * imperatively through it, so stubbing it is what lets a drop be committed
+ * without an app shell.
+ */
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
+import { hostQueryKeys } from "@/lib/query-keys";
+import type { TreeNode, TreeSlice } from "@/stores/epics/open-epic/types";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { appLogger } from "@/lib/logger";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  MockHostMessenger,
+  type MockHandlerMap,
+  type MockMethodHandler,
+} from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+
+const seam = vi.hoisted(() => {
+  // Typed through a helper rather than an `as TreeSlice` on the literal: the
+  // literal alone infers `rootIds: never[]`, and the typed lint's `--fix`
+  // strips the assertion it would otherwise need. Defined in here because the
+  // hoisted factory runs before any module-level binding exists.
+  const emptyTree = (): TreeSlice => ({
+    rootIds: [],
+    childrenByParent: {},
+    nodeById: {},
+  });
+  // A real annotated local, not an `as Record` on the literal below: the
+  // typed lint's `--fix` strips that assertion (the same reason `emptyTree`
+  // above is a helper rather than an inline cast), which silently widened
+  // this back to an empty-object literal with no string index.
+  const hostIdByNodeId: Record<string, string | undefined> = {};
+  return {
+    emptyTree,
+    reparentArtifact: vi.fn<(id: string, parentId: string | null) => boolean>(
+      () => true,
+    ),
+    request: vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
+    /** Ids the host serves as terminal-agent RECORDS (`epic.listTuiAgents`). */
+    recordIds: [] as string[],
+    /**
+     * Ids present in the terminal-agent UNION (`state.tuiAgents`) with
+     * `docResident: true` - the `@1.1` doc-resident remainder.
+     * `isDocOnlyTerminalAgent` reads the UNION, never `tuiAgentRecords`, so a
+     * routing test seeds this (not `recordIds`) to model that row.
+     */
+    docResidentIds: [] as string[],
+    tree: emptyTree(),
+    /** null models a session with no serving client. */
+    hasClient: true,
+    /**
+     * The optimistic overlay's begin/retire pair (Phase 1.1). Only the
+     * registry-backed agent branch calls these - the doc-write branch
+     * (artifacts, doc-only terminal agents) is untouched by the overlay.
+     */
+    beginReparentMutation: vi.fn<
+      (nodeId: string, parentId: string | null) => string | null
+    >(() => "req-1"),
+    retirePendingMutation: vi.fn<
+      (requestId: string, outcome: "landed" | "failed") => boolean
+    >(() => true),
+    /**
+     * Chats the record plane STATED are doc-homed. Everything in
+     * `recordIds` that is dropped as a chat projects `docResident: false`; an
+     * id listed here projects `true`, which is what makes the chat arm of the
+     * addressability gate reachable.
+     */
+    docHomedChatIds: [] as readonly string[],
+    /**
+     * The write-command queue, absent from this fake since it landed. Three
+     * ARTIFACT tests in this file were failing on `enqueueWriteCommand is not a
+     * function` before the chat gate existed - a stale fake, not a defect in
+     * the code under test.
+     *
+     * Resolves rather than returning bare `null`: the artifact branch in
+     * `root-dnd-commits.ts` now chains `.catch(...)` directly off this call's
+     * return value (the unhandled-rejection fix), and a synchronous `null`
+     * has no `.catch` to call - another stale-fake gap, not a defect in the
+     * code under test.
+     */
+    enqueueWriteCommand: vi.fn<(intent: unknown) => unknown>(() =>
+      Promise.resolve(null),
+    ),
+    /**
+     * Per-node owner host override, read into the `tuiAgents`/`chats` union
+     * rows below. Empty by default, so every EXISTING test in this file (none
+     * of which sets it) keeps projecting `hostId: undefined` and falls back to
+     * the session host - unchanged behavior for the same-host case.
+     */
+    hostIdByNodeId,
+    /**
+     * The binding the commit is handed - `null` unless a test needs a
+     * cross-host resolve. Typed as `resolveNamedHostClient`'s own parameter
+     * (a `Pick` of `HostRuntimeBinding`, not the full interface): that pure
+     * resolver reads only `.hostClient`, so this is the honest declaration of
+     * what it depends on, not a narrowed stand-in for a type it does not use.
+     */
+    hostBinding: null as Pick<
+      HostRuntimeBinding<HostRpcRegistry>,
+      "hostClient"
+    > | null,
+  };
+});
+
+/**
+ * A real `HostClient` backed by an in-memory `MockHostMessenger`, wrapped as
+ * the `Pick<HostRuntimeBinding, "hostClient">` `resolveNamedHostClient` (the
+ * REAL production function, not a mock) actually takes - so a cross-host
+ * reparent lands on a real transport endpoint, not a spied helper call.
+ * Mirrors `use-switcher-rename.test.tsx`'s `buildCommandRequester`.
+ */
+function buildNamedHostRuntimeBinding(
+  hostId: string,
+  handlers: MockHandlerMap<HostRpcRegistry>,
+): Pick<HostRuntimeBinding<HostRpcRegistry>, "hostClient"> {
+  const entry: HostDirectoryEntry = {
+    hostId,
+    label: hostId,
+    kind: "local",
+    websocketUrl: "ws://127.0.0.1:0",
+    version: "1.5.0",
+    transportDialability: "dialable",
+  };
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (candidateHostId) =>
+      candidateHostId === entry.hostId ? entry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `req-${hostId}`,
+      handlers,
+    }),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  return { hostClient: spine };
+}
+
+const handle = vi.hoisted(() => ({ marker: "handle" }));
+
+vi.mock("@/lib/registries/epic-session-registry", () => ({
+  getOpenEpicRegistry: () => ({
+    subscribe: (_listener: () => void) => () => undefined,
+    nextByteEvictionGraceDeadlineMs: () => null,
+    peek: () => ({
+      store: {
+        getState: () => ({
+          tree: seam.tree,
+          tuiAgentRecords: {
+            byId: Object.fromEntries(
+              seam.recordIds.map((id) => [id, { id }] as const),
+            ),
+            allIds: seam.recordIds,
+          },
+          // The UNION `isDocOnlyTerminalAgent` actually reads. A registry id
+          // projects `docResident: false`; a `docResidentIds` entry projects
+          // `true` - the two lists are mutually exclusive in practice, same as
+          // the real resolver (`epic-list-tui-agents-resolver.ts` excludes a
+          // doc entry whose id is already a registry id).
+          tuiAgents: {
+            // The element type is stated because the two spreads below have
+            // DIFFERENT tuple types (`docResident: false` vs `true`), and
+            // `Object.fromEntries` infers `any` off that union rather than
+            // widening it - which `no-unsafe-assignment` then rejects. The
+            // homogeneous `tuiAgentRecords` map above needs no annotation.
+            byId: Object.fromEntries<{
+              id: string;
+              docResident: boolean;
+              hostId: string | undefined;
+            }>([
+              ...seam.recordIds.map(
+                (id) =>
+                  [
+                    id,
+                    { id, docResident: false, hostId: seam.hostIdByNodeId[id] },
+                  ] as const,
+              ),
+              ...seam.docResidentIds.map(
+                (id) =>
+                  [
+                    id,
+                    { id, docResident: true, hostId: seam.hostIdByNodeId[id] },
+                  ] as const,
+              ),
+            ]),
+            allIds: [...seam.recordIds, ...seam.docResidentIds],
+          },
+          // The chat half of the union the gate reads. `docResident` is the
+          // fact `routeChatWrite` consults on a host that HAS a record plane;
+          // on a host without one the gate never reaches it.
+          chats: {
+            byId: Object.fromEntries<{
+              id: string;
+              docResident: boolean | null;
+              hostId: string | undefined;
+            }>([
+              ...seam.recordIds.map(
+                (id) =>
+                  [
+                    id,
+                    { id, docResident: false, hostId: seam.hostIdByNodeId[id] },
+                  ] as const,
+              ),
+              ...seam.docHomedChatIds.map(
+                (id) =>
+                  [
+                    id,
+                    { id, docResident: true, hostId: seam.hostIdByNodeId[id] },
+                  ] as const,
+              ),
+            ]),
+            allIds: [...seam.recordIds, ...seam.docHomedChatIds],
+          },
+          reparentArtifact: seam.reparentArtifact,
+          beginReparentMutation: seam.beginReparentMutation,
+          retirePendingMutation: seam.retirePendingMutation,
+          enqueueWriteCommand: seam.enqueueWriteCommand,
+        }),
+      },
+      ...handle,
+    }),
+  }),
+  getEpicSessionHandleHostClient: () =>
+    seam.hasClient ? { request: seam.request } : null,
+  // The host the session is stamped with - what the post-RPC invalidation
+  // scopes the record query to.
+  getEpicSessionHandleHostId: () => "host-1",
+}));
+
+const { commitSidebarReparentDrop } =
+  await import("@/components/epic-canvas/dnd/root-dnd-commits");
+
+function node(
+  id: string,
+  type: TreeNode["type"],
+  parentId: string | null,
+): TreeNode {
+  return {
+    id,
+    parentId,
+    title: id,
+    type,
+    status: null,
+    createdAt: 0,
+    updatedAt: 0,
+  };
+}
+
+/** A two-row tree: `child` at root, `parent` at root, same family. */
+function treeOf(nodes: readonly TreeNode[]): TreeSlice {
+  return {
+    rootIds: nodes.map((n) => n.id),
+    childrenByParent: {},
+    nodeById: Object.fromEntries(nodes.map((n) => [n.id, n] as const)),
+  };
+}
+
+const queryClient = new QueryClient();
+
+async function drop(
+  sourceNodeId: string,
+  newParentId: string | null,
+): Promise<void> {
+  await commitSidebarReparentDrop({
+    epicId: "epic-1",
+    sourceNodeId,
+    newParentId,
+    panelId: "chats",
+    viewTabId: "tab-1",
+    queryClient,
+    hostBinding: seam.hostBinding,
+  });
+}
+
+beforeEach(() => {
+  seam.reparentArtifact.mockClear();
+  seam.reparentArtifact.mockReturnValue(true);
+  seam.request.mockClear();
+  seam.request.mockResolvedValue({ updated: true });
+  seam.recordIds = [];
+  seam.docResidentIds = [];
+  seam.docHomedChatIds = [];
+  seam.enqueueWriteCommand.mockClear();
+  // The chat arm of the gate reads THIS host's negotiated record-plane
+  // coverage, which is process-wide module state. Cleared per test so one
+  // test's host cannot decide another's: with nothing recorded the host reads
+  // as floor-era, which is the permissive arm.
+  resetNegotiatedManifests();
+  seam.hasClient = true;
+  seam.tree = seam.emptyTree();
+  seam.beginReparentMutation.mockClear();
+  seam.beginReparentMutation.mockReturnValue("req-1");
+  seam.retirePendingMutation.mockClear();
+  seam.retirePendingMutation.mockReturnValue(true);
+  seam.hostIdByNodeId = {};
+  seam.hostBinding = null;
+});
+
+describe("commitSidebarReparentDrop routes by which plane owns the pointer", () => {
+  it("sends a registry-backed terminal agent through epic.reparentChat", async () => {
+    seam.tree = treeOf([
+      node("tui-1", "terminal-agent", null),
+      node("tui-parent", "terminal-agent", null),
+    ]);
+    seam.recordIds = ["tui-1", "tui-parent"];
+    seam.request.mockResolvedValueOnce({ updated: true });
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+
+    await drop("tui-1", "tui-parent");
+
+    // The optimistic overlay stamps BEFORE the RPC fires, so the row moves at
+    // drop time rather than waiting on the round trip.
+    expect(seam.beginReparentMutation).toHaveBeenCalledWith(
+      "tui-1",
+      "tui-parent",
+    );
+    expect(seam.beginReparentMutation.mock.invocationCallOrder[0]).toBeLessThan(
+      seam.request.mock.invocationCallOrder[0],
+    );
+
+    expect(seam.request).toHaveBeenCalledWith("epic.reparentChat", {
+      epicId: "epic-1",
+      chatId: "tui-1",
+      newParentId: "tui-parent",
+    });
+    expect(seam.reparentArtifact).not.toHaveBeenCalled();
+    // On success the moved node's record query is re-asked on the session's
+    // host, so a drop does not sit under its old parent until the 20s poll
+    // when the push stream is down or negotiated below @1.1.
+    await vi.waitFor(() => {
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: hostQueryKeys.methodScope("host-1", "epic.listTuiAgents"),
+      });
+    });
+    // The RPC's ack retires the stamp as LANDED, not deleted - the overlay
+    // stays applied until the invalidated record refetch actually lands the
+    // moved pointer.
+    expect(seam.retirePendingMutation).toHaveBeenCalledWith("req-1", "landed");
+    invalidate.mockRestore();
+  });
+
+  it("retires the overlay stamp as FAILED when epic.reparentChat rejects", async () => {
+    seam.tree = treeOf([
+      node("tui-1", "terminal-agent", null),
+      node("tui-parent", "terminal-agent", null),
+    ]);
+    seam.recordIds = ["tui-1", "tui-parent"];
+    seam.request.mockRejectedValueOnce(new Error("host refused the move"));
+
+    await drop("tui-1", "tui-parent");
+
+    expect(seam.beginReparentMutation).toHaveBeenCalledWith(
+      "tui-1",
+      "tui-parent",
+    );
+    await vi.waitFor(() => {
+      expect(seam.retirePendingMutation).toHaveBeenCalledWith(
+        "req-1",
+        "failed",
+      );
+    });
+  });
+
+  it("writes the doc for a terminal agent the host serves no record for", async () => {
+    // The legacy-host case. `epic.listTuiAgents` is unsupported there, so the
+    // record slice is empty and the agent renders from the doc's `tuiAgents`
+    // map - which is also where its parent pointer still lives. Absent from
+    // the union entirely, exactly like an `@1.0` host that sends no marker at
+    // all - the `agent === undefined` arm of `isDocOnlyTerminalAgent`.
+    //
+    // Ablation: route every agent-family drop to the RPC and this drag calls a
+    // released `@1.0` with a `chatId` naming no chat - a host error, where the
+    // doc write it replaced worked.
+    seam.tree = treeOf([
+      node("tui-legacy", "terminal-agent", null),
+      node("tui-parent", "terminal-agent", null),
+    ]);
+    seam.recordIds = [];
+
+    await drop("tui-legacy", "tui-parent");
+
+    expect(seam.reparentArtifact).toHaveBeenCalledWith(
+      "tui-legacy",
+      "tui-parent",
+    );
+    // Q1: doc-only TUI stays Y-only. This RPC names an artifact id, not a
+    // tuiAgents map entry — must not start sending `epic.reparentArtifact`.
+    expect(seam.request).not.toHaveBeenCalled();
+  });
+
+  it("routes a docResident: true agent to the Y.Doc branch even though it is not absent from the union", async () => {
+    // `epic.listTuiAgents@1.1` unions the doc-resident remainder INTO the
+    // same table `epic.listTuiAgents` records fill, so "absent from the
+    // union" stopped being a reliable doc-only tell - this id is very much
+    // present. `docResident` is the marker that survives the union, and this
+    // pins the routing decision to IT rather than to presence.
+    //
+    // Ablation: revert to the pre-`@1.1` presence check
+    // (`!Object.hasOwn(state.tuiAgentRecords.byId, id)`) and this agent reads
+    // as registry-backed - the drop would call `epic.reparentChat` with a
+    // `chatId` naming no registry chat, the exact host error `docResident`
+    // exists to prevent.
+    seam.tree = treeOf([
+      node("tui-frozen", "terminal-agent", null),
+      node("tui-parent", "terminal-agent", null),
+    ]);
+    seam.docResidentIds = ["tui-frozen"];
+
+    await drop("tui-frozen", "tui-parent");
+
+    expect(seam.reparentArtifact).toHaveBeenCalledWith(
+      "tui-frozen",
+      "tui-parent",
+    );
+    expect(seam.request).not.toHaveBeenCalled();
+  });
+
+  it("sends a doc-homed chat through epic.reparentChat on a FLOOR-ERA host", async () => {
+    // No handshake recorded, so this host has no chat record plane at all -
+    // and `epic.reparentChat` is on `RELEASED_FLOOR_METHOD_NAMES`, so it exists
+    // there and resolves a doc chat through the host's own storage seam.
+    //
+    // Ablation: gate the chat arm on `docResident` ALONE and this drop stops
+    // being sent - every chat reparent on every floor-era host silently
+    // disabled, which is why the predicate reads the host's coverage first.
+    seam.tree = treeOf([
+      node("chat-doc", "chat", null),
+      node("chat-parent", "chat", null),
+    ]);
+    seam.docHomedChatIds = ["chat-doc"];
+
+    await drop("chat-doc", "chat-parent");
+
+    expect(seam.request).toHaveBeenCalledWith("epic.reparentChat", {
+      epicId: "epic-1",
+      chatId: "chat-doc",
+      newParentId: "chat-parent",
+    });
+  });
+
+  it("REFUSES a doc-homed chat on a host that serves the chat record plane", async () => {
+    // The plane exists and states this row lives in the doc, so the writer
+    // cannot address it: `epic.reparentChat` would name no registry row and
+    // fail HOST-SIDE, after the row rendered fine. Nothing is sent, and
+    // nothing is written to the doc either - on a host with a record plane the
+    // doc is not the authority, so a local write would lose to record-wins on
+    // the next answer and read as an affordance that works while changing
+    // nothing.
+    recordNegotiatedHostMethods("host-1", [
+      "epic.listChatRecords",
+      "epic.reparentChat",
+    ]);
+    seam.tree = treeOf([
+      node("chat-doc", "chat", null),
+      node("chat-parent", "chat", null),
+    ]);
+    seam.docHomedChatIds = ["chat-doc"];
+
+    await drop("chat-doc", "chat-parent");
+
+    expect(seam.request).not.toHaveBeenCalled();
+    expect(seam.reparentArtifact).not.toHaveBeenCalled();
+    // No optimistic stamp either: an overlay patch for a mutation that is never
+    // sent is a row that moves and then snaps back on the next answer.
+    expect(seam.beginReparentMutation).not.toHaveBeenCalled();
+  });
+
+  it("still sends a STORE-homed chat on a host that serves the record plane", async () => {
+    // The other half of the same host: the plane stated this row is in the
+    // store, so it is addressable. Without this, the test above would pass just
+    // as well against a gate that refused every chat on a record-plane host.
+    recordNegotiatedHostMethods("host-1", [
+      "epic.listChatRecords",
+      "epic.reparentChat",
+    ]);
+    seam.tree = treeOf([
+      node("chat-store", "chat", null),
+      node("chat-parent", "chat", null),
+    ]);
+    seam.recordIds = ["chat-store"];
+
+    await drop("chat-store", "chat-parent");
+
+    expect(seam.request).toHaveBeenCalledWith("epic.reparentChat", {
+      epicId: "epic-1",
+      chatId: "chat-store",
+      newParentId: "chat-parent",
+    });
+  });
+
+  it("sends a chat through epic.reparentChat even with no terminal records", async () => {
+    // Chats are NOT gated on the terminal-agent record slice: `epic.reparentChat`
+    // has routed chats since chats-off-YJS, and a doc-only chat resolves through
+    // the same storage seam on the host. Gating them too would restore the
+    // silent no-op this branch exists to fix.
+    seam.tree = treeOf([
+      node("chat-1", "chat", null),
+      node("chat-parent", "chat", null),
+    ]);
+    seam.recordIds = [];
+
+    await drop("chat-1", "chat-parent");
+
+    expect(seam.request).toHaveBeenCalledWith("epic.reparentChat", {
+      epicId: "epic-1",
+      chatId: "chat-1",
+      newParentId: "chat-parent",
+    });
+    expect(seam.reparentArtifact).not.toHaveBeenCalled();
+  });
+
+  it("enqueues an artifact drop as a write command, with no direct doc write", async () => {
+    // RETARGETED, not patched. The artifact reparent moved off the
+    // dual-write (a local `reparentArtifact` Y write PLUS an
+    // `epic.reparentArtifact` RPC) onto the write-command queue, which owns
+    // ordering, idempotency and the rejected/superseded lifecycle. The
+    // assertion follows the seam: the command must carry the same intent the
+    // direct pair used to express, and the direct Y write must NOT still
+    // happen beside it - a doc write racing a queued command is exactly the
+    // double-apply the queue exists to prevent.
+    seam.tree = treeOf([
+      node("spec-1", "spec", null),
+      node("spec-parent", "spec", null),
+    ]);
+
+    await commitSidebarReparentDrop({
+      epicId: "epic-1",
+      sourceNodeId: "spec-1",
+      newParentId: "spec-parent",
+      panelId: "artifacts",
+      viewTabId: "tab-1",
+      queryClient,
+      hostBinding: seam.hostBinding,
+    });
+
+    expect(seam.enqueueWriteCommand).toHaveBeenCalledTimes(1);
+    expect(seam.enqueueWriteCommand).toHaveBeenCalledWith({
+      kind: "reparent-artifact",
+      artifactId: "spec-1",
+      parentId: "spec-parent",
+    });
+    // The queue is the only writer now. A surviving direct write would apply
+    // the move twice - once locally, once when the command commits.
+    expect(seam.reparentArtifact).not.toHaveBeenCalled();
+    // And the RPC is the queue's to send, not this file's.
+    expect(seam.request).not.toHaveBeenCalled();
+  });
+
+  it("still enqueues an artifact drop when the session has no client", async () => {
+    // Unlike a record-backed agent (silent cancel), an artifact drop is always
+    // accepted locally: the queue holds it and sends it when a transport comes
+    // back, which is the whole point of an offline-tolerant write path. Before
+    // this branch asserted the doc write survived a missing client; the
+    // command queue is now what survives it.
+    seam.tree = treeOf([
+      node("spec-1", "spec", null),
+      node("spec-parent", "spec", null),
+    ]);
+    seam.hasClient = false;
+
+    await commitSidebarReparentDrop({
+      epicId: "epic-1",
+      sourceNodeId: "spec-1",
+      newParentId: "spec-parent",
+      panelId: "artifacts",
+      viewTabId: "tab-1",
+      queryClient,
+      hostBinding: seam.hostBinding,
+    });
+
+    expect(seam.enqueueWriteCommand).toHaveBeenCalledWith({
+      kind: "reparent-artifact",
+      artifactId: "spec-1",
+      parentId: "spec-parent",
+    });
+    expect(seam.reparentArtifact).not.toHaveBeenCalled();
+    expect(seam.request).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to a doc write when a record-backed agent has no client", async () => {
+    // A session with no serving client is a silent cancel, not a licence to
+    // write the doc: the pointer for this row lives on the host, so a Y write
+    // would be a no-op the user reads as a move.
+    seam.tree = treeOf([
+      node("tui-1", "terminal-agent", null),
+      node("tui-parent", "terminal-agent", null),
+    ]);
+    seam.recordIds = ["tui-1", "tui-parent"];
+    seam.hasClient = false;
+
+    await drop("tui-1", "tui-parent");
+
+    expect(seam.request).not.toHaveBeenCalled();
+    expect(seam.reparentArtifact).not.toHaveBeenCalled();
+    // The no-client check runs before the overlay is even stamped - a silent
+    // cancel must not leave a phantom pending mutation behind.
+    expect(seam.beginReparentMutation).not.toHaveBeenCalled();
+    expect(seam.retirePendingMutation).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A registry-backed agent's parent pointer lives on its OWNER host's record
+ * plane, which is not necessarily the SESSION host the sidebar is projected
+ * from - a cross-host clone can be dragged from a session viewing it as a
+ * foreign row. The commit must resolve a client NAMED for the owner host
+ * (`resolveNamedHostClient(hostBinding, ownerHostId)`) rather than blindly
+ * reusing the session's own client, which would send `epic.reparentChat` to
+ * the wrong machine.
+ */
+describe("commitSidebarReparentDrop resolves the OWNER host's client for a cross-host row", () => {
+  it("sends epic.reparentChat on the NAMED owner-host's real transport, never the session client, when the row's own host differs from the session", async () => {
+    seam.tree = treeOf([
+      node("tui-1", "terminal-agent", null),
+      node("tui-parent", "terminal-agent", null),
+    ]);
+    seam.recordIds = ["tui-1", "tui-parent"];
+    // The session (`getEpicSessionHandleHostId`) is stubbed to "host-1"; this
+    // row's own owner is a DIFFERENT host.
+    seam.hostIdByNodeId = { "tui-1": "host-2" };
+    const reparentChat = vi.fn<
+      MockMethodHandler<HostRpcRegistry, "epic.reparentChat">
+    >(() => Promise.resolve({ updated: true }));
+    seam.hostBinding = buildNamedHostRuntimeBinding("host-2", {
+      "epic.reparentChat": reparentChat,
+    });
+
+    await drop("tui-1", "tui-parent");
+
+    expect(reparentChat).toHaveBeenCalledWith({
+      epicId: "epic-1",
+      chatId: "tui-1",
+      newParentId: "tui-parent",
+    });
+    // The session's OWN client must never see this request - it does not own
+    // the dragged row.
+    expect(seam.request).not.toHaveBeenCalled();
+  });
+
+  it("invalidates records for BOTH the owner host and the session host on success", async () => {
+    seam.tree = treeOf([
+      node("tui-1", "terminal-agent", null),
+      node("tui-parent", "terminal-agent", null),
+    ]);
+    seam.recordIds = ["tui-1", "tui-parent"];
+    seam.hostIdByNodeId = { "tui-1": "host-2" };
+    seam.hostBinding = buildNamedHostRuntimeBinding("host-2", {
+      "epic.reparentChat": () => Promise.resolve({ updated: true }),
+    });
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+
+    await drop("tui-1", "tui-parent");
+    await vi.waitFor(() => {
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: hostQueryKeys.methodScope("host-2", "epic.listTuiAgents"),
+      });
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: hostQueryKeys.methodScope("host-1", "epic.listTuiAgents"),
+    });
+    invalidate.mockRestore();
+  });
+
+  it("is a silent cancel when there is no host runtime binding to resolve the owner host through", async () => {
+    seam.tree = treeOf([
+      node("tui-1", "terminal-agent", null),
+      node("tui-parent", "terminal-agent", null),
+    ]);
+    seam.recordIds = ["tui-1", "tui-parent"];
+    seam.hostIdByNodeId = { "tui-1": "host-2" };
+    // `resolveNamedHostClient` answers null for exactly one reason: no
+    // `HostRuntimeBinding` at all (the app shell has not mounted one yet).
+    // `beforeEach` already defaults `hostBinding` to `null`; restated here for
+    // this test's own clarity.
+    seam.hostBinding = null;
+
+    await drop("tui-1", "tui-parent");
+
+    expect(seam.request).not.toHaveBeenCalled();
+    expect(seam.reparentArtifact).not.toHaveBeenCalled();
+    expect(seam.beginReparentMutation).not.toHaveBeenCalled();
+  });
+
+  it("still uses the SESSION client when the row's own host matches the session host (no named binding touched)", async () => {
+    seam.tree = treeOf([
+      node("tui-1", "terminal-agent", null),
+      node("tui-parent", "terminal-agent", null),
+    ]);
+    seam.recordIds = ["tui-1", "tui-parent"];
+    // Same host as `getEpicSessionHandleHostId`'s stub ("host-1") - an
+    // explicit same-host row, not just the "hostId absent" default the rest
+    // of this file's tests rely on. `hostBinding` is left `null` (the
+    // `beforeEach` default) and must never be touched for this row.
+    seam.hostIdByNodeId = { "tui-1": "host-1" };
+    seam.request.mockResolvedValueOnce({ updated: true });
+
+    await drop("tui-1", "tui-parent");
+
+    expect(seam.request).toHaveBeenCalledWith("epic.reparentChat", {
+      epicId: "epic-1",
+      chatId: "tui-1",
+      newParentId: "tui-parent",
+    });
+  });
+});
+
+/**
+ * A doc-homed chat's addressability must be judged against the RPC's actual
+ * OWNER host, not the viewer/session host the sidebar is projected from.
+ */
+describe("commitSidebarReparentDrop judges a doc-homed chat's addressability against the OWNER host, not the viewer", () => {
+  it("owner floor-era ALLOWS the send even though the viewer/session host serves a modern record plane", async () => {
+    seam.tree = treeOf([
+      node("chat-doc", "chat", null),
+      node("chat-parent", "chat", null),
+    ]);
+    seam.docHomedChatIds = ["chat-doc"];
+    // Owner is host-2; session ("getEpicSessionHandleHostId"'s stub) is
+    // host-1.
+    seam.hostIdByNodeId = { "chat-doc": "host-2" };
+    recordNegotiatedHostMethods("host-1", [
+      "epic.listChatRecords",
+      "epic.reparentChat",
+    ]);
+    const reparentChat = vi.fn<
+      MockMethodHandler<HostRpcRegistry, "epic.reparentChat">
+    >(() => Promise.resolve({ updated: true }));
+    seam.hostBinding = buildNamedHostRuntimeBinding("host-2", {
+      "epic.reparentChat": reparentChat,
+    });
+
+    await drop("chat-doc", "chat-parent");
+
+    expect(reparentChat).toHaveBeenCalledWith({
+      epicId: "epic-1",
+      chatId: "chat-doc",
+      newParentId: "chat-parent",
+    });
+    expect(seam.request).not.toHaveBeenCalled();
+  });
+
+  it("owner registry-serving REFUSES the send even though the viewer/session host is floor-era", async () => {
+    seam.tree = treeOf([
+      node("chat-doc", "chat", null),
+      node("chat-parent", "chat", null),
+    ]);
+    seam.docHomedChatIds = ["chat-doc"];
+    seam.hostIdByNodeId = { "chat-doc": "host-2" };
+    recordNegotiatedHostMethods("host-2", [
+      "epic.listChatRecords",
+      "epic.reparentChat",
+    ]);
+    const reparentChat = vi.fn<
+      MockMethodHandler<HostRpcRegistry, "epic.reparentChat">
+    >(() => Promise.resolve({ updated: true }));
+    seam.hostBinding = buildNamedHostRuntimeBinding("host-2", {
+      "epic.reparentChat": reparentChat,
+    });
+
+    await drop("chat-doc", "chat-parent");
+
+    expect(reparentChat).not.toHaveBeenCalled();
+    expect(seam.request).not.toHaveBeenCalled();
+    expect(seam.beginReparentMutation).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Rejections are asserted through Node's own `process` event rather than a
+ * DOM `unhandledrejection` listener: `vitest.config.ts` sets
+ * `dangerouslyIgnoreUnhandledErrors` and the setup file registers a
+ * process-level swallow, so an empty-array assertion taken off the DOM event
+ * reads the same whether nothing rejected or nothing fired at all. Mirrors
+ * `epic-title-write-settlement.test.ts`'s helpers of the same names.
+ */
+function captureUnhandledRejections(): {
+  readonly seen: unknown[];
+  readonly stop: () => void;
+} {
+  const seen: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => {
+    seen.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandled);
+  return {
+    seen,
+    stop: () => {
+      process.off("unhandledRejection", onUnhandled);
+    },
+  };
+}
+
+/** Two macrotasks: one for the `.catch` to run, one for Node to judge it. */
+async function drainRejections(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+describe("commitSidebarReparentDrop never lets a queue failure escape as an unhandled rejection", () => {
+  it("an artifact enqueue rejection is logged, a teardown answer is not, and neither is ever unhandled", async () => {
+    // The artifact-family branch: `enqueueWriteCommand(...)` is fire-and-
+    // forget from this file's own return value, so its `.catch` is the only
+    // thing standing between a rejection and an unhandled one.
+    seam.tree = treeOf([
+      node("spec-1", "spec", null),
+      node("spec-parent", "spec", null),
+    ]);
+    const capture = captureUnhandledRejections();
+    const errorSpy = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+
+    try {
+      // A generic worker/bridge fault: logged.
+      seam.enqueueWriteCommand.mockRejectedValueOnce(
+        new Error("worker bridge fault"),
+      );
+      await commitSidebarReparentDrop({
+        epicId: "epic-1",
+        sourceNodeId: "spec-1",
+        newParentId: "spec-parent",
+        panelId: "artifacts",
+        viewTabId: "tab-1",
+        queryClient,
+        hostBinding: seam.hostBinding,
+      });
+      await drainRejections();
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+
+      errorSpy.mockClear();
+
+      // TEARDOWN, which is deliberately NOT a rejection on this path and so
+      // deliberately not a log. `callOrNullOnTeardown` in the store maps
+      // `BridgeDisposedError` to a `null` answer before it ever reaches here
+      // - a torn-down session refused the command, it did not fault - so the
+      // shape to pin is a resolved `null`, not a thrown cancellation. (A
+      // `EpicSessionEndedError` arm would be unreachable: only
+      // `waitForWriteCommand` raises that.)
+      seam.enqueueWriteCommand.mockResolvedValueOnce(null);
+      await commitSidebarReparentDrop({
+        epicId: "epic-1",
+        sourceNodeId: "spec-1",
+        newParentId: "spec-parent",
+        panelId: "artifacts",
+        viewTabId: "tab-1",
+        queryClient,
+        hostBinding: seam.hostBinding,
+      });
+      await drainRejections();
+      expect(errorSpy).not.toHaveBeenCalled();
+
+      // Neither rejection ever escaped as an unhandled rejection - the
+      // defect this fix closes. Before it, the artifact branch's
+      // `enqueueWriteCommand(...)` call had no `.catch` at all.
+      expect(capture.seen).toEqual([]);
+    } finally {
+      capture.stop();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("a reparent-mutation retirement rejection is logged, an inert teardown answer is not, and neither is ever unhandled", async () => {
+    // The registry-rpc branch's `retire` closure: only reached for a
+    // registry-backed row (a terminal agent the host serves a record for),
+    // after `epic.reparentChat` answers.
+    seam.tree = treeOf([
+      node("tui-1", "terminal-agent", null),
+      node("tui-parent", "terminal-agent", null),
+    ]);
+    seam.recordIds = ["tui-1", "tui-parent"];
+    const capture = captureUnhandledRejections();
+    const errorSpy = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+
+    try {
+      seam.request.mockResolvedValueOnce({ updated: true });
+      seam.retirePendingMutation.mockRejectedValueOnce(
+        new Error("retirement bridge fault"),
+      );
+      await drop("tui-1", "tui-parent");
+      await drainRejections();
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+
+      errorSpy.mockClear();
+
+      // The teardown shape again, and again not a rejection: `applyMutation`
+      // answers a disposed session with the shared INERT result, which this
+      // member reads back as `false`. Nothing to log.
+      seam.request.mockResolvedValueOnce({ updated: true });
+      seam.retirePendingMutation.mockResolvedValueOnce(false);
+      await drop("tui-1", "tui-parent");
+      await drainRejections();
+      expect(errorSpy).not.toHaveBeenCalled();
+
+      // Before the fix, `retire` awaited `retirePendingMutation` with no
+      // try/catch at all, so BOTH rejections above would have escaped as
+      // unhandled - one of them from inside a `.then` whose own `.catch`
+      // this closure sits behind.
+      expect(capture.seen).toEqual([]);
+    } finally {
+      capture.stop();
+      errorSpy.mockRestore();
+    }
+  });
+});

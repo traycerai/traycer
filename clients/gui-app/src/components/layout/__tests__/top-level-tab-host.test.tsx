@@ -1,0 +1,1860 @@
+import { use, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import type { UseNavigateResult } from "@tanstack/react-router";
+import type { InterviewQuestion } from "@traycer/protocol/persistence/epic/schemas";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { DndContext, useDraggable } from "@dnd-kit/core";
+import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
+import {
+  HEADER_TAB_DND_TYPE,
+  type HeaderTabDragData,
+} from "@/components/layout/tabs/header-tab-dnd";
+import {
+  registerTabStructuralLockPredicate,
+  resetTabStructuralLockForTesting,
+} from "@/stores/tabs/tab-structural-lock";
+import {
+  LandingTerminalHost,
+  LandingTerminalPaneAnchor,
+} from "@/components/home/terminal-panel/landing-terminal-host";
+import {
+  MAX_RETAINED_TOP_LEVEL_SURFACES,
+  TopLevelTabHost,
+} from "@/components/layout/top-level-tab-host";
+import { ROUTE_PENDING_MS } from "@/components/loading/route-pending-screen";
+import {
+  HostReadinessControllerContext,
+  type HostReadinessController,
+} from "@/components/layout/host-readiness-controller-context";
+import {
+  TopLevelSurfaceActivationContext,
+  type TopLevelSurfaceActivator,
+} from "@/components/layout/top-level-surface-activation-context";
+import { activateHostedTopLevelSurface } from "@/components/epic-canvas/surface-host/hosted-top-level-activation";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useLayoutStore } from "@/stores/layout/layout-store";
+import { useTabsStore } from "@/stores/tabs/store";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import type { HeaderTab, TabRef } from "@/stores/tabs/types";
+
+type EpicHeaderTab = Extract<HeaderTab, { readonly kind: "epic" }>;
+import { tabRefKey, type StripItem } from "@/stores/tabs/layout";
+import {
+  HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
+  HOSTED_TILE_PANE_ID_ATTRIBUTE,
+  HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE,
+} from "@/components/epic-canvas/surface-host/hosted-tile-dom";
+import {
+  pane,
+  TEST_HOST_ID,
+} from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
+import {
+  publishTileSurfaceEnvironment,
+  resetTileSurfaceEnvironmentRegistryForTesting,
+  type ReadyTileSurfaceEnvironment,
+} from "@/components/epic-canvas/surface-host/tile-surface-environment-registry";
+import { PendingInterviewCard } from "@/components/chat/segments/pending-interview/pending-interview-card";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  PaneFocusProbeContext,
+  PaneSurfaceActivityContext,
+  PaneVisibilityContext,
+  usePaneFocusProbe,
+  usePanePortalContainer,
+  usePaneVisible,
+} from "@/components/epic-tabs/pane-visibility-context";
+import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
+import {
+  PaneActivationFocusIntentContext,
+  usePaneActivationFocusIntent,
+} from "@/components/epic-canvas/pane-activation";
+import {
+  __resetTabNavigationControllerForTesting,
+  activateTabIntent,
+  navigateToTabIntent,
+} from "@/lib/tab-navigation";
+import {
+  draftTabIntent,
+  existingEpicTabIntent,
+  newDraftTabIntent,
+} from "@/lib/tab-navigation/intents";
+import { tabResolveIntent } from "@/stores/tabs/registry";
+import { resetTileSurfaceMembershipForTesting } from "@/components/epic-canvas/surface-host/tile-surface-membership";
+import { buildSyntheticTileSurfaceEnvironment } from "@/components/epic-canvas/surface-host/__tests__/synthetic-tile-surface-fixture";
+import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
+import { registerComposerFocus } from "@/lib/composer/composer-focus-registry";
+import {
+  registerTerminalFocus,
+  resetTerminalFocusRegistryForTests,
+} from "@/lib/terminals/terminal-focus-registry";
+import { resetPrimaryFocusCoordinatorForTests } from "@/lib/focus/primary-focus-coordinator";
+import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
+
+const stableTileSurfaceHostTestState = vi.hoisted(() => ({ enabled: false }));
+
+// Two seams the hosted suites steer per test: the body a hosted record
+// renders, and an extra child the mocked Epic surface renders beside its own
+// content (the focus-snapback suite below publishes a real tile environment
+// from there, so the publish lands in the SAME commit as a tab switch).
+const hostedSurfaceBodyTestState = vi.hoisted(() => ({
+  render: null as
+    | ((environment: ReadyTileSurfaceEnvironment) => ReactNode)
+    | null,
+}));
+const epicSurfaceExtraTestState = vi.hoisted(() => ({
+  render: null as ((tabId: string) => ReactNode) | null,
+}));
+const deferredTabBodyImports = vi.hoisted(() => ({
+  history: {
+    hold: false,
+    started: false,
+    onStarted: null as (() => void) | null,
+    release: null as (() => void) | null,
+  },
+  settings: {
+    hold: false,
+    started: false,
+    onStarted: null as (() => void) | null,
+    release: null as (() => void) | null,
+  },
+}));
+
+/** Read through a call so the test's own reset does not narrow it to null. */
+function releaseHeldTabBodyImport(load: {
+  readonly release: (() => void) | null;
+}): void {
+  load.release?.();
+}
+
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@tanstack/react-router")>();
+  return {
+    ...actual,
+    useRouterState: (options: {
+      readonly select?: (state: {
+        readonly location: {
+          readonly pathname: string;
+          readonly search: Record<string, unknown>;
+        };
+      }) => unknown;
+    }) => options.select?.({ location: { pathname: "/", search: {} } }) ?? "/",
+  };
+});
+
+vi.mock(
+  "@/components/epic-canvas/surface-host/stable-tile-surface-host-switch",
+  () => ({
+    get STABLE_TILE_SURFACE_HOST_ENABLED() {
+      return stableTileSurfaceHostTestState.enabled;
+    },
+  }),
+);
+
+// The wiring test below only cares whether a real pointerdown/focus event on
+// a hosted record's DOM reaches `activateHostedTopLevelSurface` - not that
+// the real ChatTile/ChatMessages chain renders (that needs a real Epic
+// session handle the synthetic environment fixture cannot supply). Stub the
+// body the same way `stable-tile-surface-host.test.tsx` uses a synthetic
+// body renderer.
+vi.mock(
+  "@/components/epic-canvas/surface-host/hosted-chat-surface-body",
+  () => ({
+    renderHostedChatSurfaceBody: (environment: ReadyTileSurfaceEnvironment) =>
+      hostedSurfaceBodyTestState.render === null ? (
+        <div data-testid="hosted-wiring-body-stub" />
+      ) : (
+        hostedSurfaceBodyTestState.render(environment)
+      ),
+  }),
+);
+
+vi.mock("@/components/epic-tabs/epic-surface", async () => {
+  const React = await import("react");
+  const { usePaneActivationFocusIntent } =
+    await import("@/components/epic-canvas/pane-activation");
+  const { usePaneFocused } =
+    await import("@/components/epic-tabs/pane-visibility-context");
+
+  function MockEpicSurface(props: {
+    readonly epicId: string;
+    readonly tabId: string;
+  }) {
+    const focused = usePaneFocused();
+    const focusIntent = usePaneActivationFocusIntent();
+    const primaryRef = React.useRef<HTMLInputElement | null>(null);
+    const previouslyFocusedRef = React.useRef(false);
+    React.useEffect(() => {
+      const newlyFocused = focused && !previouslyFocusedRef.current;
+      previouslyFocusedRef.current = focused;
+      if (!newlyFocused) return;
+      if (focusIntent.shouldYieldAutoFocus()) return;
+      primaryRef.current?.focus();
+    }, [focusIntent, focused]);
+
+    return (
+      <div data-testid={`epic-surface-content-${props.tabId}`}>
+        <input
+          aria-label={`Action ${props.tabId}`}
+          data-epic-id={props.epicId}
+          data-testid={`epic-surface-body-${props.tabId}`}
+          defaultValue={props.tabId}
+        />
+        <input aria-label={`Primary ${props.tabId}`} ref={primaryRef} />
+        <div data-testid={`blank-surface-${props.tabId}`} />
+        {epicSurfaceExtraTestState.render?.(props.tabId)}
+      </div>
+    );
+  }
+
+  return { EpicSurface: MockEpicSurface };
+});
+
+vi.mock("@/components/home/home-hero", () => ({
+  HomeHero: () => <div />,
+}));
+vi.mock("@/components/home/host-update-banner", () => ({
+  HostUpdateBanner: () => null,
+}));
+// The landing guide's Start toast reads this computer's environment through
+// the host runtime and a QueryClient, neither of which this suite mounts.
+vi.mock("@/components/onboarding/first-task-guide", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/components/onboarding/first-task-guide")
+    >();
+  return { ...actual, FirstTaskLandingGuide: () => null };
+});
+// Reads the landing draft's repository identity through the host runtime,
+// which this suite mounts no provider for.
+vi.mock("@/components/home/landing-appearance-wallpaper", () => ({
+  LandingAppearanceWallpaper: () => null,
+}));
+vi.mock("@/components/epics/epics-list-panel", () => ({
+  EpicsListPanel: () => null,
+}));
+vi.mock("@/components/home/current-tasks-section", () => ({
+  CurrentTasksSection: () => null,
+}));
+vi.mock(
+  "@/components/home/host-workspace-selector/host-workspace-selector",
+  () => ({ HostWorkspaceSelector: () => null }),
+);
+vi.mock("@/components/home/composer/landing-composer", () => ({
+  LandingComposer: (props: { readonly draftId: string | null }) => {
+    const active = useSurfaceActivity();
+    const isPaneFocusedNow = usePaneFocusProbe();
+    const ref = useRef<HTMLButtonElement | null>(null);
+    useLayoutEffect(() => {
+      const element = ref.current;
+      if (element === null) return;
+      return registerComposerFocus(
+        `integrated-${props.draftId ?? "unbound"}`,
+        {
+          focus: () => element.focus(),
+          containsActiveElement: (activeElement) => activeElement === element,
+          isEligible: () => element.isConnected,
+        },
+        active,
+        isPaneFocusedNow,
+      );
+    }, [active, isPaneFocusedNow, props.draftId]);
+    return (
+      <button
+        ref={ref}
+        type="button"
+        aria-label={`Composer ${props.draftId}`}
+      />
+    );
+  },
+}));
+
+vi.mock("@/components/epics/history-surface", async () => {
+  const React = await import("react");
+  const load = deferredTabBodyImports.history;
+  if (load.hold) {
+    load.started = true;
+    load.onStarted?.();
+    await new Promise<void>((resolve) => {
+      load.release = resolve;
+    });
+    load.release = null;
+  }
+  return {
+    HistorySurface: () =>
+      React.createElement("div", { "data-testid": "history-surface-body" }),
+  };
+});
+
+vi.mock("@/components/settings/settings-surface", async () => {
+  const React = await import("react");
+  const load = deferredTabBodyImports.settings;
+  if (load.hold) {
+    load.started = true;
+    load.onStarted?.();
+    await new Promise<void>((resolve) => {
+      load.release = resolve;
+    });
+    load.release = null;
+  }
+  return {
+    SettingsSurface: () =>
+      React.createElement("div", { "data-testid": "settings-surface-body" }),
+  };
+});
+
+// The host wraps the panel in the gesture provider (the single live-value
+// reader); project the draft the host resolved onto the provider so this test
+// verifies the single-mount projection without the provider's live wiring.
+vi.mock(
+  "@/components/home/terminal-panel/landing-terminal-gesture-provider",
+  () => ({
+    LandingTerminalGestureProvider: (props: {
+      readonly draftId: string | null;
+      readonly children: ReactNode;
+    }) => (
+      <div data-draft-id={props.draftId ?? ""} data-testid="landing-terminal">
+        {props.children}
+      </div>
+    ),
+  }),
+);
+vi.mock("@/components/home/terminal-panel/landing-terminal-panel", () => ({
+  LandingTerminalPanel: () => {
+    const ref = useRef<HTMLButtonElement | null>(null);
+    useLayoutEffect(() => {
+      const element = ref.current;
+      if (element === null) return;
+      return registerTerminalFocus(
+        "integrated-terminal",
+        () => element.focus(),
+        (activeElement) => activeElement === element,
+        () => element.isConnected,
+      );
+    }, []);
+    return (
+      <button
+        ref={ref}
+        type="button"
+        data-testid="landing-terminal-panel-body"
+      />
+    );
+  },
+}));
+
+const EPIC_A: TabRef = { kind: "epic", id: "epic-a" };
+const EPIC_B: TabRef = { kind: "epic", id: "epic-b" };
+const DRAFT_A: TabRef = { kind: "draft", id: "draft-a" };
+const DRAFT_B: TabRef = { kind: "draft", id: "draft-b" };
+const HISTORY: TabRef = { kind: "history", id: "history" };
+const SETTINGS: TabRef = { kind: "settings", id: "settings" };
+
+const UNAVAILABLE_DEFAULT_HOST_CONTROLLER: HostReadinessController = {
+  readinessFor: () => ({ kind: "restoring-request-context" }),
+  hasBeenDefaultHostReady: false,
+  defaultHostPresentation: {
+    targetKind: "local",
+    localBootIntent: true,
+    localHostState: "unknown",
+    stage: "loading",
+    progress: null,
+    lastProgress: null,
+    provisioningError: null,
+    ensureFailure: null,
+    provisioning: false,
+    removed: false,
+    hostBusy: false,
+    canManageHost: false,
+    retryProvisioning: () => undefined,
+    forceProvisioning: () => undefined,
+    reinstall: () => undefined,
+    configureShell: () => undefined,
+    refreshDirectory: () => undefined,
+    openSettings: () => undefined,
+    compatibility: {
+      status: "compatible",
+      degraded: false,
+      unreachable: false,
+      hostStatus: null,
+    },
+  },
+};
+
+function rect(left: number, top: number, right: number, bottom: number) {
+  return {
+    x: left,
+    y: top,
+    left,
+    top,
+    right,
+    bottom,
+    width: right - left,
+    height: bottom - top,
+    toJSON: () => ({}),
+  };
+}
+
+/**
+ * Stands in for `RootDndProvider` (whose drag overlay needs a host runtime):
+ * a real dnd-kit context that records the dragged header tab the way the
+ * provider's drag start does.
+ */
+function HeaderTabDragHarness(props: {
+  readonly data: HeaderTabDragData;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <DndContext
+      onDragStart={() => {
+        useEpicDndStore
+          .getState()
+          .headerTabDragStarted(props.data, null, null, null);
+      }}
+    >
+      <HeaderTabDragSource data={props.data} />
+      {props.children}
+    </DndContext>
+  );
+}
+
+function HeaderTabDragSource(props: {
+  readonly data: HeaderTabDragData;
+}): ReactNode {
+  const { listeners, setNodeRef } = useDraggable({
+    id: `header-tab:${props.data.tabId}`,
+    data: props.data,
+  });
+  return (
+    <button
+      type="button"
+      ref={setNodeRef}
+      data-testid="header-tab-drag-source"
+      {...listeners}
+    >
+      drag source
+    </button>
+  );
+}
+
+function surfaceRef(key: TabRef): HTMLElement {
+  return screen.getByTestId(`top-level-surface-${key.kind}-${key.id}`);
+}
+
+function activatingHost(left: TabRef, right: TabRef): ReactNode {
+  return (
+    <TopLevelSurfaceActivationContext.Provider
+      value={(tab) => {
+        setSplit(left, right, tab.id === right.id ? "right" : "left");
+      }}
+    >
+      <TopLevelTabHost />
+    </TopLevelSurfaceActivationContext.Provider>
+  );
+}
+
+function seedSources(refs: ReadonlyArray<TabRef>): void {
+  for (const ref of refs) {
+    if (ref.kind === "epic") {
+      useEpicCanvasStore
+        .getState()
+        .openEpicTabWithId(ref.id, ref.id, `Epic ${ref.id}`);
+      continue;
+    }
+    if (ref.kind === "draft") {
+      useLandingDraftStore.getState().createDraftWithId(ref.id, null);
+    }
+  }
+
+  useTabsStore.setState((state) => ({
+    ...state,
+    systemTabs: {
+      history: refs.some((ref) => ref.kind === "history")
+        ? { id: "history", kind: "history", name: "History", lastPath: null }
+        : null,
+      settings: refs.some((ref) => ref.kind === "settings")
+        ? {
+            id: "settings",
+            kind: "settings",
+            name: "Settings",
+            lastPath: null,
+          }
+        : null,
+    },
+  }));
+}
+
+function setSplit(left: TabRef, right: TabRef, focusedSide: "left" | "right") {
+  useTabsStore.setState((state) => ({
+    ...state,
+    items: [
+      {
+        kind: "split",
+        id: "pair",
+        left: { kind: "tab", ref: left },
+        right: { kind: "tab", ref: right },
+        focusedSide,
+        routeBackingSide: focusedSide,
+        leftRatio: 0.5,
+      },
+    ],
+    activeItemId: "pair",
+    stripOrder: [left, right],
+  }));
+}
+
+function setSplitAlongside(
+  left: TabRef,
+  right: TabRef,
+  focusedSide: "left" | "right",
+  refs: ReadonlyArray<TabRef>,
+) {
+  const paired = new Set([left.id, right.id]);
+  useTabsStore.setState((state) => ({
+    ...state,
+    items: [
+      {
+        kind: "split",
+        id: "pair",
+        left: { kind: "tab", ref: left },
+        right: { kind: "tab", ref: right },
+        focusedSide,
+        routeBackingSide: focusedSide,
+        leftRatio: 0.5,
+      },
+      ...refs
+        .filter((ref) => !paired.has(ref.id))
+        .map((ref) => ({
+          kind: "tab" as const,
+          id: `tab:${ref.kind}:${ref.id}`,
+          ref,
+        })),
+    ],
+    activeItemId: "pair",
+    stripOrder: refs,
+  }));
+}
+
+function setSingle(ref: TabRef, refs: ReadonlyArray<TabRef>) {
+  useTabsStore.setState((state) => ({
+    ...state,
+    items: refs.map((candidate) => ({
+      kind: "tab" as const,
+      id: `tab:${candidate.kind}:${candidate.id}`,
+      ref: candidate,
+    })),
+    activeItemId: `tab:${ref.kind}:${ref.id}`,
+    stripOrder: refs,
+  }));
+}
+
+describe("<TopLevelTabHost />", () => {
+  // The draft tab kind renders through TWO chained `React.lazy()` boundaries
+  // (`draft-surface-provider` wrapping `landing-draft-surface`), each a real
+  // dynamic `import()` that must transform and evaluate before its Suspense
+  // fallback (`null`) is replaced by content - so a test that queries a draft
+  // pane's content is racing that resolution. Awaiting the SAME module
+  // specifiers here, once, up front, is the deterministic fact this suite
+  // needs: ESM caches by specifier, so by the time `render()` runs inside any
+  // `it`, `lazy()`'s own `import()` call resolves against an already-loaded
+  // module instead of paying transform+eval under whatever load the runner is
+  // under. This is not a longer wait - it moves the real async work earlier,
+  // to a point this file can already `await`.
+  beforeAll(async () => {
+    await Promise.all([
+      import("@/components/home/landing-draft-surface"),
+      import("@/providers/draft-surface-provider"),
+    ]);
+  });
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    useAuthStore.setState(useAuthStore.getInitialState(), true);
+    useLandingPanelStore.getState().resetForTests();
+  });
+
+  afterEach(() => {
+    cleanup();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    useAuthStore.setState(useAuthStore.getInitialState(), true);
+    useLandingPanelStore.getState().resetForTests();
+    useEpicDndStore.setState(useEpicDndStore.getInitialState(), true);
+    resetTabStructuralLockForTesting();
+    resetTerminalFocusRegistryForTests();
+    resetPrimaryFocusCoordinatorForTests();
+  });
+
+  it.each([
+    {
+      label: "History",
+      kind: "history",
+      ref: HISTORY,
+      bodyTestId: "history-surface-body",
+    },
+    {
+      label: "Settings",
+      kind: "settings",
+      ref: SETTINGS,
+      bodyTestId: "settings-surface-body",
+    },
+  ] as const)(
+    "shows delayed loading feedback while the visible $label body import is pending",
+    async ({ label, kind, ref, bodyTestId }) => {
+      const load = deferredTabBodyImports[kind];
+      load.hold = true;
+      load.started = false;
+      load.release = null;
+      let signalStarted: (() => void) | null = null;
+      const importStarted = new Promise<void>((resolve) => {
+        signalStarted = resolve;
+      });
+      load.onStarted = () => signalStarted?.();
+      vi.useFakeTimers();
+
+      try {
+        seedSources([ref]);
+        setSingle(ref, [ref]);
+        render(<TopLevelTabHost />);
+
+        expect(surfaceRef(ref).dataset.visible).toBe("true");
+        await importStarted;
+        expect(load.started).toBe(true);
+        expect(screen.queryByTestId("route-pending-screen")).toBeNull();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(ROUTE_PENDING_MS - 1);
+        });
+        expect(screen.queryByTestId("route-pending-screen")).toBeNull();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1);
+        });
+        expect(screen.getByTestId("route-pending-screen")).toBeTruthy();
+
+        await act(async () => {
+          const release = load.release;
+          if (release === null) {
+            throw new Error(`expected the ${label} body import to be held`);
+          }
+          load.hold = false;
+          release();
+          await Promise.resolve();
+        });
+        expect(screen.getByTestId(bodyTestId)).toBeTruthy();
+        expect(screen.queryByTestId("route-pending-screen")).toBeNull();
+      } finally {
+        load.hold = false;
+        releaseHeldTabBodyImport(load);
+        load.onStarted = null;
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
+    ["Epic/Epic", EPIC_A, EPIC_B],
+    ["Epic/draft", EPIC_A, DRAFT_A],
+    ["Epic/History", EPIC_A, HISTORY],
+    ["Epic/Settings", EPIC_A, SETTINGS],
+    ["draft/draft", DRAFT_A, DRAFT_B],
+    ["draft/History", DRAFT_A, HISTORY],
+    ["draft/Settings", DRAFT_A, SETTINGS],
+    ["History/Settings", HISTORY, SETTINGS],
+  ])("renders %s as two visible slots", (_name, left, right) => {
+    seedSources([left, right]);
+    setSplit(left, right, "left");
+
+    render(<TopLevelTabHost />);
+
+    expect(surfaceRef(left).dataset.visible).toBe("true");
+    expect(surfaceRef(left).dataset.focused).toBe("true");
+    expect(surfaceRef(left).className).toContain("flex");
+    expect(surfaceRef(left).className).toContain("h-full");
+    expect(surfaceRef(left).className).toContain("flex-col");
+    expect(surfaceRef(right).dataset.visible).toBe("true");
+    expect(surfaceRef(right).dataset.focused).toBe("false");
+  });
+
+  it("keeps tab content mounted while window default-host readiness is unavailable", () => {
+    seedSources([EPIC_A]);
+    setSingle(EPIC_A, [EPIC_A]);
+    useAuthStore.setState({ status: "signed-in" });
+
+    render(
+      <HostReadinessControllerContext.Provider
+        value={UNAVAILABLE_DEFAULT_HOST_CONTROLLER}
+      >
+        <TopLevelTabHost />
+      </HostReadinessControllerContext.Provider>,
+    );
+
+    expect(screen.getByTestId("epic-surface-content-epic-a")).toBeTruthy();
+  });
+
+  it("keeps split partner keys mounted while swapping their slots", () => {
+    seedSources([EPIC_A, DRAFT_A]);
+    setSplit(EPIC_A, DRAFT_A, "left");
+    render(<TopLevelTabHost />);
+
+    const epicBefore = surfaceRef(EPIC_A);
+    const draftBefore = surfaceRef(DRAFT_A);
+
+    act(() => setSplit(DRAFT_A, EPIC_A, "right"));
+
+    expect(surfaceRef(EPIC_A)).toBe(epicBefore);
+    expect(surfaceRef(DRAFT_A)).toBe(draftBefore);
+    expect(surfaceRef(EPIC_A).dataset.focused).toBe("true");
+  });
+
+  it("keeps pointer and keyboard focus on the control that activates a split partner", () => {
+    seedSources([EPIC_A, EPIC_B]);
+    setSplit(EPIC_A, EPIC_B, "left");
+    render(activatingHost(EPIC_A, EPIC_B));
+
+    const action = screen.getByRole("textbox", { name: "Action epic-b" });
+    act(() => {
+      action.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, composed: true }),
+      );
+      action.focus();
+    });
+
+    expect(surfaceRef(EPIC_B).dataset.focused).toBe("true");
+    expect(document.activeElement).toBe(action);
+
+    act(() => setSplit(EPIC_A, EPIC_B, "left"));
+    act(() => action.focus());
+
+    expect(surfaceRef(EPIC_B).dataset.focused).toBe("true");
+    expect(document.activeElement).toBe(action);
+  });
+
+  it("keeps the activating composer focused in a real draft/draft split", async () => {
+    seedSources([DRAFT_A, DRAFT_B]);
+    setSplit(DRAFT_A, DRAFT_B, "left");
+    render(
+      <PrimaryFocusCoordinatorProvider>
+        {activatingHost(DRAFT_A, DRAFT_B)}
+      </PrimaryFocusCoordinatorProvider>,
+    );
+
+    const rightComposer = await screen.findByRole("button", {
+      name: `Composer ${DRAFT_B.id}`,
+    });
+    act(() => {
+      rightComposer.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, composed: true }),
+      );
+      rightComposer.focus();
+    });
+
+    expect(surfaceRef(DRAFT_B).dataset.focused).toBe("true");
+    expect(document.activeElement).toBe(rightComposer);
+  });
+
+  it("retains primary autofocus for blank top-level surface activation", () => {
+    seedSources([EPIC_A, EPIC_B]);
+    setSplit(EPIC_A, EPIC_B, "left");
+    render(activatingHost(EPIC_A, EPIC_B));
+
+    act(() => {
+      screen
+        .getByTestId("blank-surface-epic-b")
+        .dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, composed: true }),
+        );
+    });
+
+    expect(surfaceRef(EPIC_B).dataset.focused).toBe("true");
+    expect(document.activeElement).toBe(
+      screen.getByRole("textbox", { name: "Primary epic-b" }),
+    );
+  });
+
+  it("keeps a body instance and its local value across single-to-split-to-swap", async () => {
+    seedSources([EPIC_A, DRAFT_A]);
+    setSingle(EPIC_A, [EPIC_A, DRAFT_A]);
+    render(<TopLevelTabHost />);
+
+    const bodyBefore = await screen.findByTestId("epic-surface-body-epic-a");
+    bodyBefore.setAttribute("data-local-value", "retained");
+
+    act(() => setSplit(EPIC_A, DRAFT_A, "left"));
+    act(() => setSplit(DRAFT_A, EPIC_A, "right"));
+
+    const bodyAfter = screen.getByTestId("epic-surface-body-epic-a");
+    expect(bodyAfter).toBe(bodyBefore);
+    expect(bodyAfter.dataset.localValue).toBe("retained");
+  });
+
+  it("pins both active split members and evicts hidden surfaces by global MRU", async () => {
+    const refs = Array.from({ length: 6 }, (_value, index) => ({
+      kind: "epic" as const,
+      id: `epic-${index}`,
+    }));
+    seedSources(refs);
+    setSingle(refs[0], refs);
+    render(<TopLevelTabHost />);
+
+    for (const ref of refs.slice(1)) {
+      act(() => setSingle(ref, refs));
+    }
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/^top-level-surface-epic-/)).toHaveLength(
+        MAX_RETAINED_TOP_LEVEL_SURFACES,
+      );
+    });
+    expect(screen.queryByTestId("top-level-surface-epic-0")).toBeNull();
+
+    act(() => setSplitAlongside(refs[4], refs[5], "right", refs));
+
+    await waitFor(() => {
+      expect(surfaceRef(refs[4]).dataset.visible).toBe("true");
+      expect(surfaceRef(refs[5]).dataset.visible).toBe("true");
+      expect(screen.getAllByTestId(/^top-level-surface-epic-/)).toHaveLength(
+        MAX_RETAINED_TOP_LEVEL_SURFACES,
+      );
+    });
+  });
+
+  it("evicts and reconstructs mixed-kind bodies while keeping an empty chooser side free", async () => {
+    const refs = [EPIC_A, DRAFT_A, HISTORY, SETTINGS, EPIC_B, DRAFT_B];
+    seedSources(refs);
+    setSingle(EPIC_A, refs);
+    render(<TopLevelTabHost />);
+
+    const evictedBody = await screen.findByTestId("epic-surface-body-epic-a");
+    refs.slice(1).forEach((ref) => {
+      act(() => setSingle(ref, refs));
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("epic-surface-body-epic-a")).toBeNull();
+    });
+
+    act(() => setSingle(EPIC_A, refs));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("epic-surface-body-epic-a")).not.toBe(
+        evictedBody,
+      );
+    });
+
+    act(() => {
+      useTabsStore.setState((state) => ({
+        ...state,
+        items: [
+          {
+            kind: "split",
+            id: "chooser",
+            left: { kind: "tab", ref: EPIC_A },
+            right: { kind: "empty" },
+            focusedSide: "right",
+            routeBackingSide: "left",
+            leftRatio: 0.5,
+          },
+          ...refs
+            .filter((ref) => ref !== EPIC_A)
+            .map((ref) => ({
+              kind: "tab" as const,
+              id: `tab:${ref.kind}:${ref.id}`,
+              ref,
+            })),
+        ],
+        activeItemId: "chooser",
+        stripOrder: refs,
+      }));
+    });
+
+    expect(screen.getByTestId("top-level-fillable-slot-right")).not.toBeNull();
+    expect(screen.getAllByTestId(/^top-level-surface-/)).toHaveLength(5);
+  });
+
+  // A tab locked while it is dragged over an empty split slot must stop the
+  // slot's drop ring: the ring stayed lit for a release that the live guard
+  // then refused, so the drop silently did nothing.
+  it("drops the fillable slot's drop ring when the dragged tab becomes structurally locked", () => {
+    seedSources([EPIC_A, EPIC_B]);
+    useTabsStore.setState((state) => ({
+      ...state,
+      items: [
+        {
+          kind: "split",
+          id: "chooser",
+          left: { kind: "tab", ref: EPIC_A },
+          right: { kind: "empty" },
+          focusedSide: "right",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+        { kind: "tab", id: "tab:epic:epic-b", ref: EPIC_B },
+      ],
+      activeItemId: "chooser",
+      stripOrder: [EPIC_A, EPIC_B],
+    }));
+    render(
+      <HeaderTabDragHarness
+        data={{
+          kind: HEADER_TAB_DND_TYPE,
+          stripItemId: "tab:epic:epic-b",
+          tabKind: "epic",
+          tabId: EPIC_B.id,
+          index: 1,
+        }}
+      >
+        <TopLevelTabHost />
+      </HeaderTabDragHarness>,
+    );
+    const slot = screen.getByTestId("top-level-fillable-slot-right");
+    vi.spyOn(slot, "getBoundingClientRect").mockReturnValue(
+      rect(200, 0, 400, 50),
+    );
+    const source = screen.getByTestId("header-tab-drag-source");
+    vi.spyOn(source, "getBoundingClientRect").mockReturnValue(
+      rect(0, 0, 50, 50),
+    );
+
+    act(() => {
+      fireEvent.pointerDown(source, {
+        pointerId: 2,
+        isPrimary: true,
+        button: 0,
+        clientX: 10,
+        clientY: 10,
+      });
+      fireEvent.pointerMove(source, { pointerId: 2, clientX: 30, clientY: 10 });
+      fireEvent.pointerMove(source, {
+        pointerId: 2,
+        clientX: 350,
+        clientY: 10,
+      });
+    });
+    expect(slot.dataset.dropActive).toBe("true");
+
+    act(() => {
+      registerTabStructuralLockPredicate((ref) => ref.id === EPIC_B.id);
+    });
+    expect(slot.dataset.dropActive).toBe("false");
+  });
+
+  it("focuses a maximized terminal when its draft is reconstructed after MRU eviction", async () => {
+    const refs = Array.from({ length: 6 }, (_value, index) => ({
+      kind: "draft" as const,
+      id: `draft-${index}`,
+    }));
+    seedSources(refs);
+    setSingle(refs[0], refs);
+    const terminalStore = useLandingPanelStore.getState();
+    terminalStore.addTab({
+      kind: "terminal",
+      instanceId: "integrated-terminal",
+      sessionId: "integrated-terminal-session",
+      hostId: TEST_HOST_ID,
+      cwd: "/tmp",
+      name: "Terminal",
+      titleSource: "default",
+    });
+    terminalStore.setPanelOpen(refs[0].id, true);
+    terminalStore.setPanelMaximized(refs[0].id, true);
+
+    render(
+      <PrimaryFocusCoordinatorProvider>
+        <TopLevelTabHost />
+        <LandingTerminalHost />
+      </PrimaryFocusCoordinatorProvider>,
+    );
+    const firstSurface = surfaceRef(refs[0]);
+    const terminal = await screen.findByTestId("landing-terminal-panel-body");
+    expect(document.activeElement).toBe(terminal);
+
+    for (const ref of refs.slice(1)) {
+      act(() => setSingle(ref, refs));
+    }
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId(`top-level-surface-draft-${refs[0].id}`),
+      ).toBeNull();
+    });
+
+    act(() => setSingle(refs[0], refs));
+
+    await waitFor(() => {
+      expect(surfaceRef(refs[0])).not.toBe(firstSurface);
+      expect(document.activeElement).toBe(
+        screen.getByTestId("landing-terminal-panel-body"),
+      );
+    });
+  });
+
+  it("mounts exactly one landing terminal panel for a draft/draft split", () => {
+    seedSources([DRAFT_A, DRAFT_B]);
+    setSplit(DRAFT_A, DRAFT_B, "right");
+
+    render(<LandingTerminalHost />);
+
+    expect(screen.getAllByTestId("landing-terminal")).toHaveLength(1);
+    expect(screen.getByTestId("landing-terminal").dataset.draftId).toBe(
+      DRAFT_B.id,
+    );
+  });
+
+  it("mounts landing terminal chrome for a standalone New Task tab", () => {
+    seedSources([DRAFT_A]);
+    setSingle(DRAFT_A, [DRAFT_A]);
+
+    render(<LandingTerminalHost />);
+
+    expect(screen.getByTestId("landing-terminal").dataset.draftId).toBe(
+      DRAFT_A.id,
+    );
+  });
+
+  it("keeps the landing terminal bound to the visible draft beside a focused chooser", () => {
+    seedSources([DRAFT_A]);
+    useTabsStore.setState((state) => ({
+      ...state,
+      items: [
+        {
+          kind: "split",
+          id: "chooser",
+          left: { kind: "tab", ref: DRAFT_A },
+          right: { kind: "empty" },
+          focusedSide: "right",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+      ],
+      activeItemId: "chooser",
+      stripOrder: [DRAFT_A],
+    }));
+
+    render(<LandingTerminalHost />);
+
+    expect(screen.getByTestId("landing-terminal").dataset.draftId).toBe(
+      DRAFT_A.id,
+    );
+  });
+
+  it("keeps one gesture provider mounted while the panel portals between panes", () => {
+    seedSources([DRAFT_A, DRAFT_B]);
+    setSplit(DRAFT_A, DRAFT_B, "left");
+
+    render(
+      <>
+        <LandingTerminalHost />
+        <LandingTerminalPaneAnchor draftId={DRAFT_A.id} />
+        <LandingTerminalPaneAnchor draftId={DRAFT_B.id} />
+      </>,
+    );
+
+    const provider = screen.getByTestId("landing-terminal");
+    expect(provider.dataset.draftId).toBe(DRAFT_A.id);
+    expect(
+      screen
+        .getByTestId(`landing-terminal-anchor-${DRAFT_A.id}`)
+        .contains(screen.getByTestId("landing-terminal-panel-body")),
+    ).toBe(true);
+
+    act(() => setSplit(DRAFT_A, DRAFT_B, "right"));
+
+    // The provider node survives the focus change: only the panel's DOM moves
+    // between panes, so the captured-gesture state the provider owns (pending
+    // gesture, generation, open-episode draft) is never destroyed mid-flight.
+    expect(screen.getByTestId("landing-terminal")).toBe(provider);
+    expect(provider.dataset.draftId).toBe(DRAFT_B.id);
+    expect(
+      screen
+        .getByTestId(`landing-terminal-anchor-${DRAFT_B.id}`)
+        .contains(screen.getByTestId("landing-terminal-panel-body")),
+    ).toBe(true);
+  });
+});
+
+/**
+ * Sheet shell: `TopLevelSurfaceMount` is the single sheet
+ * for every non-epic surface (Home/History/Settings/draft) and carries no
+ * sheet marker of its own for an epic tab - the epic surface paints its own
+ * two sheets (panel/content) internally, proven separately in
+ * `epic-sidebar-side.test.tsx` against the REAL (unmocked) `EpicSurface`.
+ * `EpicSurface` is mocked here, so this suite can only speak to the mount
+ * wrapper's own marker, not the epic surface's internal structure. The
+ * surface frame around the mount is `app-column-frame.test.tsx`'s, and Home's
+ * retained marker is `home-surface-mount-latch.test.tsx`'s.
+ */
+describe("TopLevelSurfaceMount: single-sheet route marker (D1/D2)", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    useLayoutStore.setState(useLayoutStore.getInitialState(), true);
+  });
+
+  afterEach(() => {
+    cleanup();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    useLayoutStore.setState(useLayoutStore.getInitialState(), true);
+  });
+
+  it.each([
+    ["draft", DRAFT_A],
+    ["history", HISTORY],
+    ["settings", SETTINGS],
+  ] as const)(
+    "stamps data-shell-sheet=route on a %s tab's mount",
+    (_kind, ref) => {
+      seedSources([EPIC_A, ref]);
+      setSplit(EPIC_A, ref, "left");
+
+      render(<TopLevelTabHost />);
+
+      expect(surfaceRef(ref).dataset.shellSheet).toBe("route");
+    },
+  );
+
+  it("leaves data-shell-sheet unset on an epic tab's own mount", () => {
+    seedSources([EPIC_A, HISTORY]);
+    setSplit(EPIC_A, HISTORY, "left");
+
+    render(<TopLevelTabHost />);
+
+    expect(surfaceRef(EPIC_A).hasAttribute("data-shell-sheet")).toBe(false);
+  });
+});
+
+describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus reaches its OWN owning top-level tab)", () => {
+  afterEach(() => cleanup());
+
+  function buildHostedRecord(
+    instanceId: string,
+    paneId: string,
+    viewTabId: string,
+  ): HTMLDivElement {
+    const record = document.createElement("div");
+    record.setAttribute(HOSTED_TILE_INSTANCE_ID_ATTRIBUTE, instanceId);
+    record.setAttribute(HOSTED_TILE_PANE_ID_ATTRIBUTE, paneId);
+    record.setAttribute(HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE, viewTabId);
+    return record;
+  }
+
+  it("activates the hosted record's OWN owning epic tab, not a fixed one", () => {
+    const tabA: EpicHeaderTab = {
+      kind: "epic",
+      id: "epic-a",
+      epicId: "epic-a",
+      hostId: null,
+      route: "/epic/epic-a",
+      name: "Epic A",
+      icon: null,
+      canClose: true,
+      canDuplicate: true,
+      canOpenInNewWindow: true,
+      appearance: null,
+    };
+    const tabB: HeaderTab = { ...tabA, id: "epic-b", epicId: "epic-b" };
+    const tabsByRefKey = new Map([
+      [tabRefKey(tabA), tabA],
+      [tabRefKey(tabB), tabB],
+    ]);
+    const activeItem: StripItem = {
+      kind: "tab",
+      id: "tab:epic:epic-a",
+      ref: { kind: "epic", id: "epic-a" },
+    };
+    const record = buildHostedRecord("inst-chat-b", "p1", "epic-b");
+    document.body.appendChild(record);
+    const activate = vi.fn();
+
+    activateHostedTopLevelSurface(record, false, {
+      tabsByRefKey,
+      activeItem,
+      activate,
+    });
+
+    expect(activate).toHaveBeenCalledTimes(1);
+    expect(activate).toHaveBeenCalledWith(tabB);
+    record.remove();
+  });
+
+  it("does not re-activate the already-focused owning tab", () => {
+    const tabA: EpicHeaderTab = {
+      kind: "epic",
+      id: "epic-a",
+      epicId: "epic-a",
+      hostId: null,
+      route: "/epic/epic-a",
+      name: "Epic A",
+      icon: null,
+      canClose: true,
+      canDuplicate: true,
+      canOpenInNewWindow: true,
+      appearance: null,
+    };
+    const tabsByRefKey = new Map([[tabRefKey(tabA), tabA]]);
+    const activeItem: StripItem = {
+      kind: "tab",
+      id: "tab:epic:epic-a",
+      ref: { kind: "epic", id: "epic-a" },
+    };
+    const record = buildHostedRecord("inst-chat-a", "p1", "epic-a");
+    document.body.appendChild(record);
+    const activate = vi.fn();
+
+    activateHostedTopLevelSurface(record, false, {
+      tabsByRefKey,
+      activeItem,
+      activate,
+    });
+
+    expect(activate).not.toHaveBeenCalled();
+    record.remove();
+  });
+
+  it("respects defaultPrevented, a null activator, and a target outside any hosted record", () => {
+    const tabA: EpicHeaderTab = {
+      kind: "epic",
+      id: "epic-a",
+      epicId: "epic-a",
+      hostId: null,
+      route: "/epic/epic-a",
+      name: "Epic A",
+      icon: null,
+      canClose: true,
+      canDuplicate: true,
+      canOpenInNewWindow: true,
+      appearance: null,
+    };
+    const tabsByRefKey = new Map([[tabRefKey(tabA), tabA]]);
+    const activeItem: StripItem | null = null;
+    const record = buildHostedRecord("inst-chat-a", "p1", "epic-a");
+    document.body.appendChild(record);
+    const activate = vi.fn();
+
+    activateHostedTopLevelSurface(record, true, {
+      tabsByRefKey,
+      activeItem,
+      activate,
+    });
+    expect(activate).not.toHaveBeenCalled();
+
+    activateHostedTopLevelSurface(record, false, {
+      tabsByRefKey,
+      activeItem,
+      activate: null,
+    });
+    expect(activate).not.toHaveBeenCalled();
+
+    const outside = document.createElement("div");
+    document.body.appendChild(outside);
+    activateHostedTopLevelSurface(outside, false, {
+      tabsByRefKey,
+      activeItem,
+      activate,
+    });
+    expect(activate).not.toHaveBeenCalled();
+
+    record.remove();
+    outside.remove();
+  });
+});
+
+/**
+ * F3: `activateHostedTopLevelSurface`'s own unit tests above
+ * prove its routing logic, but not that a real hosted pointerdown reaches it
+ * at all - that depends on the `onPointerDownCapture`/`onFocusCapture` JSX
+ * wiring on `TopLevelTabHost`'s hosted-plane wrapper (a sibling of every
+ * physical top-level surface wrapper, so it cannot inherit their own
+ * handlers). This renders the REAL `TopLevelTabHost` with the switch on and a
+ * REAL hosted record (real membership + registry, synthetic environment -
+ * the same fixture seam `stable-tile-surface-host.test.tsx` uses), then fires
+ * a genuine `pointerdown` on it to prove the wiring itself, not just the
+ * function it calls.
+ */
+describe("TopLevelTabHost hosted-plane wiring (design-review F3: real pointerdown reaches activateHostedTopLevelSurface)", () => {
+  const EPIC_A: TabRef = { kind: "epic", id: "epic-a" };
+  const EPIC_B: TabRef = { kind: "epic", id: "epic-b" };
+  const CHAT_INSTANCE_ID = "hosted-wiring-chat";
+  const PANE_ID = "p1";
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    tabCommandCoordinator.resetReconciliationForTesting();
+    resetTileSurfaceMembershipForTesting();
+    resetTileSurfaceEnvironmentRegistryForTesting();
+    stableTileSurfaceHostTestState.enabled = true;
+  });
+
+  afterEach(() => {
+    cleanup();
+    stableTileSurfaceHostTestState.enabled = false;
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    tabCommandCoordinator.resetReconciliationForTesting();
+    resetTileSurfaceMembershipForTesting();
+    resetTileSurfaceEnvironmentRegistryForTesting();
+  });
+
+  it("activates epic-b when a real pointerdown lands on its hosted record, while epic-a stays the physically focused surface", async () => {
+    useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(EPIC_A.id, EPIC_A.id, "Epic A");
+    useEpicCanvasStore
+      .getState()
+      .openEpicTabWithId(EPIC_B.id, EPIC_B.id, "Epic B");
+    const stripItems = [EPIC_A, EPIC_B].map((ref) => ({
+      kind: "tab" as const,
+      id: `tab:${ref.kind}:${ref.id}`,
+      ref,
+    }));
+    // The MRU retention policy only retains a background surface once it has
+    // been active at least once (`advanceTopLevelSurfaceRecency` only adds
+    // active keys). Visit B first so it enters recency, matching how a real
+    // "open in background then switch away" sequence would leave B eligible
+    // for the surface-host membership while A is the focused surface.
+    useTabsStore.setState((state) => ({
+      ...state,
+      items: stripItems,
+      activeItemId: `tab:${EPIC_B.kind}:${EPIC_B.id}`,
+      stripOrder: [EPIC_A, EPIC_B],
+    }));
+    useTabsStore.setState((state) => ({
+      ...state,
+      activeItemId: `tab:${EPIC_A.kind}:${EPIC_A.id}`,
+    }));
+    useEpicCanvasStore.setState((state) => ({
+      ...state,
+      canvasByTabId: {
+        ...state.canvasByTabId,
+        [EPIC_B.id]: {
+          root: pane(PANE_ID, [CHAT_INSTANCE_ID]),
+          activePaneId: PANE_ID,
+          tilesByInstanceId: {
+            [CHAT_INSTANCE_ID]: {
+              id: CHAT_INSTANCE_ID,
+              instanceId: CHAT_INSTANCE_ID,
+              type: "chat" as const,
+              name: "Hosted wiring chat",
+              hostId: TEST_HOST_ID,
+            },
+          },
+          sizesByGroupId: {},
+        },
+      },
+    }));
+
+    const activate = vi.fn<TopLevelSurfaceActivator>();
+    render(
+      <TopLevelSurfaceActivationContext.Provider value={activate}>
+        <TopLevelTabHost />
+      </TopLevelSurfaceActivationContext.Provider>,
+    );
+
+    expect(surfaceRef(EPIC_A).dataset.focused).toBe("true");
+
+    act(() => {
+      publishTileSurfaceEnvironment(
+        buildSyntheticTileSurfaceEnvironment(CHAT_INSTANCE_ID, {
+          placement: {
+            epicId: EPIC_B.id,
+            viewTabId: EPIC_B.id,
+            paneId: PANE_ID,
+            hostId: TEST_HOST_ID,
+          },
+        }),
+      );
+    });
+
+    const hostedRecord = await waitFor(() => {
+      const element = document.querySelector(
+        `[${HOSTED_TILE_INSTANCE_ID_ATTRIBUTE}="${CHAT_INSTANCE_ID}"]`,
+      );
+      if (element === null) throw new Error("hosted record not yet published");
+      return element;
+    });
+    expect(hostedRecord.getAttribute(HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE)).toBe(
+      EPIC_B.id,
+    );
+
+    // A real pointerdown on the hosted record - not a direct function call -
+    // must reach the wrapper's onPointerDownCapture and activate epic-b.
+    fireEvent.pointerDown(hostedRecord);
+
+    expect(activate).toHaveBeenCalledTimes(1);
+    const [activatedTab] = activate.mock.calls[0];
+    expect(activatedTab.id).toBe(EPIC_B.id);
+  });
+});
+
+/**
+ * "Reverse views" on a top-level split (`swapSplitSides`) exchanges the two
+ * sides' `left` offsets while each side keeps its own width - at ratio 0.5
+ * literally, and at any other ratio because `1 - leftRatio` on the other side
+ * is the width it already had. A hosted chat body is positioned by rects the
+ * geometry coordinator reads inside a ResizeObserver callback, and a
+ * ResizeObserver reports SIZE changes only, so nothing about the swap reached
+ * the coordinator: both hosted bodies stayed painted at their pre-swap rects
+ * while the tab strips and sidebars around them had already crossed over,
+ * overlapping the other side's sidebar. This pins the remeasure
+ * `TopLevelTabHost` now performs on every placement change. The
+ * `ControllableResizeObserver` installed above never fires unless triggered,
+ * and this test deliberately never triggers it - that IS the real-world
+ * condition for a position-only move.
+ */
+describe("TopLevelTabHost re-measures hosted geometry on a position-only placement change (Reverse views)", () => {
+  const CHAT_A = "reverse-views-chat-a";
+  const CHAT_B = "reverse-views-chat-b";
+  const PANE_ID = "p1";
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    tabCommandCoordinator.resetReconciliationForTesting();
+    resetTileSurfaceMembershipForTesting();
+    resetTileSurfaceEnvironmentRegistryForTesting();
+    stableTileSurfaceHostTestState.enabled = true;
+  });
+
+  afterEach(() => {
+    cleanup();
+    stableTileSurfaceHostTestState.enabled = false;
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    tabCommandCoordinator.resetReconciliationForTesting();
+    resetTileSurfaceMembershipForTesting();
+    resetTileSurfaceEnvironmentRegistryForTesting();
+  });
+
+  function stubAnchorRect(
+    anchor: HTMLDivElement,
+    rect: { readonly left: number; readonly width: number },
+  ): void {
+    anchor.getBoundingClientRect = () => ({
+      left: rect.left,
+      top: 0,
+      width: rect.width,
+      height: 600,
+      right: rect.left + rect.width,
+      bottom: 600,
+      x: rect.left,
+      y: 0,
+      toJSON: () => ({}),
+    });
+  }
+
+  function seedChatCanvas(epic: TabRef, instanceId: string): void {
+    useEpicCanvasStore.setState((state) => ({
+      ...state,
+      canvasByTabId: {
+        ...state.canvasByTabId,
+        [epic.id]: {
+          root: pane(PANE_ID, [instanceId]),
+          activePaneId: PANE_ID,
+          tilesByInstanceId: {
+            [instanceId]: {
+              id: instanceId,
+              instanceId,
+              type: "chat" as const,
+              name: `Chat ${instanceId}`,
+              hostId: TEST_HOST_ID,
+            },
+          },
+          sizesByGroupId: {},
+        },
+      },
+    }));
+  }
+
+  async function hostedRecord(instanceId: string): Promise<HTMLElement> {
+    return waitFor(() => {
+      const element = document.querySelector(
+        `[${HOSTED_TILE_INSTANCE_ID_ATTRIBUTE}="${instanceId}"]`,
+      );
+      if (!(element instanceof HTMLElement)) {
+        throw new Error(`hosted record ${instanceId} not yet published`);
+      }
+      return element;
+    });
+  }
+
+  it("moves both hosted bodies to their swapped slots when the sides exchange offsets but keep their widths, with no ResizeObserver callback", async () => {
+    seedSources([EPIC_A, EPIC_B]);
+    seedChatCanvas(EPIC_A, CHAT_A);
+    seedChatCanvas(EPIC_B, CHAT_B);
+    setSplit(EPIC_A, EPIC_B, "left");
+
+    render(<TopLevelTabHost />);
+
+    // The two slots as the DOM lays them out before the swap: A fills the
+    // left half, B the right half, equal widths.
+    const anchorA = document.createElement("div");
+    const anchorB = document.createElement("div");
+    stubAnchorRect(anchorA, { left: 0, width: 500 });
+    stubAnchorRect(anchorB, { left: 500, width: 500 });
+
+    act(() => {
+      for (const [epic, instanceId, anchor] of [
+        [EPIC_A, CHAT_A, anchorA],
+        [EPIC_B, CHAT_B, anchorB],
+      ] as const) {
+        const base = buildSyntheticTileSurfaceEnvironment(instanceId, {
+          placement: {
+            epicId: epic.id,
+            viewTabId: epic.id,
+            paneId: PANE_ID,
+            hostId: TEST_HOST_ID,
+          },
+        });
+        publishTileSurfaceEnvironment({
+          ...base,
+          identity: { ...base.identity, epicId: epic.id },
+          services: { ...base.services, geometryAnchorElement: anchor },
+        });
+      }
+    });
+
+    const recordA = await hostedRecord(CHAT_A);
+    const recordB = await hostedRecord(CHAT_B);
+    expect(recordA.style.transform).toBe("translate(0px, 0px)");
+    expect(recordB.style.transform).toBe("translate(500px, 0px)");
+    expect(recordA.style.width).toBe("500px");
+    expect(recordB.style.width).toBe("500px");
+
+    // Reverse views: the DOM slots exchange `left` and keep their widths...
+    stubAnchorRect(anchorA, { left: 500, width: 500 });
+    stubAnchorRect(anchorB, { left: 0, width: 500 });
+    // ...and the strip commits the swapped split at the same 0.5 ratio -
+    // exactly what `swapSplitSides` produces for this item.
+    act(() => setSplit(EPIC_B, EPIC_A, "right"));
+
+    // Both records are the SAME elements (no remount), now at swapped rects.
+    expect(screen.getByTestId(`stable-tile-surface-record-${CHAT_A}`)).toBe(
+      recordA,
+    );
+    expect(recordA.style.transform).toBe("translate(500px, 0px)");
+    expect(recordB.style.transform).toBe("translate(0px, 0px)");
+    expect(recordA.style.width).toBe("500px");
+    expect(recordB.style.width).toBe("500px");
+  });
+});
+
+/**
+ * Desktop 1.3.0-rc.1 "the Start Page tab does nothing": with an Epic tab
+ * active whose hosted chat shows a pending interview card, clicking the Start
+ * Page tab silently snapped straight back to the Epic.
+ *
+ * The card registers itself in the composer focus registry with the hosted
+ * body's raw `isActive` - `tabSelected && canvasPaneActive`, which
+ * deliberately excludes top-level tab focus - so a BACKGROUND Epic tab's card
+ * stays in the registry as an active, eligible composer. When the newly
+ * focused Start Page restores focus it falls through to
+ * `focusRegisteredActiveComposer()`, picks that card, and
+ * `HTMLElement.focus()` runs synchronously - before the hosted record's own
+ * `useSyncExternalStore` re-render has made it inert. The focus bubbles to the
+ * hosted plane's `onFocusCapture`, which reads it as the user working in the
+ * Epic and re-activates that tab, superseding the draft's pending push.
+ *
+ * The publish has to happen from INSIDE the Epic surface's own commit (hence
+ * the publisher below rendered through the mocked Epic surface): a manual
+ * publish in a separate `act` moves the record's re-render out of the switch
+ * commit and erases the race the defect lives in. jsdom does not enforce
+ * `inert`, which costs nothing here - the window this pins is before `inert`
+ * is applied at all.
+ */
+describe("TopLevelTabHost: a background epic's pending interview card cannot snap a Start Page activation back", () => {
+  // The Start Page that reaches the registry is one with no restorable saved
+  // focus target - the freshly created "+" page here, and equally a retained
+  // one whose remembered element is gone. A Start Page that still has one
+  // restores it and returns before the registry is ever consulted, so the
+  // first switch below is the control and the second is the defect.
+  const CHAT_INSTANCE_ID = "interview-snapback-chat";
+  const PANE_ID = "p1";
+  const FREE_TEXT_QUESTION: InterviewQuestion = {
+    questionId: "q1",
+    question: "What should I do next?",
+    header: null,
+    options: [],
+    multiSelect: false,
+    allowsCustomAnswer: null,
+  };
+
+  /**
+   * Mirrors `TileSurfaceSlot`: republishes this tile's environment from the
+   * Epic surface's own live pane contexts, so every presentation change is
+   * published in the commit that made it.
+   */
+  function EpicInterviewTilePublisher(props: {
+    readonly viewTabId: string;
+  }): ReactNode {
+    const [base] = useState(() =>
+      buildSyntheticTileSurfaceEnvironment(CHAT_INSTANCE_ID, {}),
+    );
+    const topLevelVisible = usePaneVisible();
+    const topLevelFocused = use(PaneSurfaceActivityContext).focused;
+    const isPaneFocusedNow = usePaneFocusProbe();
+    const panePortalContainer = usePanePortalContainer();
+    const focusIntent = usePaneActivationFocusIntent();
+
+    useLayoutEffect(() => {
+      publishTileSurfaceEnvironment({
+        ...base,
+        identity: { ...base.identity, epicId: props.viewTabId },
+        placement: {
+          epicId: props.viewTabId,
+          viewTabId: props.viewTabId,
+          paneId: PANE_ID,
+          hostId: TEST_HOST_ID,
+        },
+        presentation: { topLevelVisible, topLevelFocused },
+        canvasActivity: { tabSelected: true, canvasPaneActive: true },
+        paneActivation: { focusIntent },
+        services: { ...base.services, isPaneFocusedNow, panePortalContainer },
+      });
+    }, [
+      base,
+      focusIntent,
+      isPaneFocusedNow,
+      panePortalContainer,
+      props.viewTabId,
+      topLevelFocused,
+      topLevelVisible,
+    ]);
+
+    return null;
+  }
+
+  /**
+   * The contexts `HostedChatSurfaceContextBridge` re-provides around a hosted
+   * chat, plus `HostedChatSurfaceBody`'s own `isActive` rule - the raw flag
+   * `chat-tile-lower-surfaces` hands the card.
+   */
+  function HostedInterviewCardBody(props: {
+    readonly environment: ReadyTileSurfaceEnvironment;
+  }): ReactNode {
+    const { environment } = props;
+    const tileActive =
+      environment.canvasActivity.tabSelected &&
+      environment.canvasActivity.canvasPaneActive;
+    return (
+      <PaneSurfaceActivityContext.Provider
+        value={{
+          visible: environment.presentation.topLevelVisible,
+          focused: environment.presentation.topLevelFocused,
+        }}
+      >
+        <PaneVisibilityContext.Provider
+          value={environment.presentation.topLevelVisible}
+        >
+          <PaneActivationFocusIntentContext.Provider
+            value={environment.paneActivation.focusIntent}
+          >
+            <PaneFocusProbeContext.Provider
+              value={environment.services.isPaneFocusedNow}
+            >
+              <TabBodySelectedContext.Provider
+                value={environment.canvasActivity.tabSelected}
+              >
+                <TooltipProvider>
+                  <PendingInterviewCard
+                    chatId="interview-chat"
+                    blockId="interview-block"
+                    questions={[FREE_TEXT_QUESTION]}
+                    isActive={tileActive}
+                    isBusy={false}
+                    onSubmit={() => null}
+                    onSkip={null}
+                    onFork={null}
+                    navigationHighlighted={false}
+                  />
+                </TooltipProvider>
+              </TabBodySelectedContext.Provider>
+            </PaneFocusProbeContext.Provider>
+          </PaneActivationFocusIntentContext.Provider>
+        </PaneVisibilityContext.Provider>
+      </PaneSurfaceActivityContext.Provider>
+    );
+  }
+
+  /** Records what the controller asked the router for; never commits it. */
+  function deferredNavigate(): UseNavigateResult<string> {
+    return () => new Promise<void>(() => undefined);
+  }
+
+  function focusedRefKey(): string | null {
+    const state = useTabsStore.getState();
+    const active = state.items.find((item) => item.id === state.activeItemId);
+    if (active === undefined) return null;
+    if (active.kind === "tab") return tabRefKey(active.ref);
+    const side = active.focusedSide === "left" ? active.left : active.right;
+    return side.kind === "tab" ? tabRefKey(side.ref) : null;
+  }
+
+  async function settle(): Promise<void> {
+    await act(async () => {
+      await new Promise<void>((resolve) =>
+        window.requestAnimationFrame(() => resolve()),
+      );
+    });
+  }
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    useAuthStore.setState(useAuthStore.getInitialState(), true);
+    useLandingPanelStore.getState().resetForTests();
+    tabCommandCoordinator.resetReconciliationForTesting();
+    resetTileSurfaceMembershipForTesting();
+    resetTileSurfaceEnvironmentRegistryForTesting();
+    resetPrimaryFocusCoordinatorForTests();
+    __resetTabNavigationControllerForTesting();
+    stableTileSurfaceHostTestState.enabled = true;
+    epicSurfaceExtraTestState.render = (tabId) => (
+      <EpicInterviewTilePublisher viewTabId={tabId} />
+    );
+    hostedSurfaceBodyTestState.render = (environment) => (
+      <HostedInterviewCardBody environment={environment} />
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+    stableTileSurfaceHostTestState.enabled = false;
+    epicSurfaceExtraTestState.render = null;
+    hostedSurfaceBodyTestState.render = null;
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
+    useAuthStore.setState(useAuthStore.getInitialState(), true);
+    useLandingPanelStore.getState().resetForTests();
+    tabCommandCoordinator.resetReconciliationForTesting();
+    resetTileSurfaceMembershipForTesting();
+    resetTileSurfaceEnvironmentRegistryForTesting();
+    resetPrimaryFocusCoordinatorForTests();
+    __resetTabNavigationControllerForTesting();
+  });
+
+  it("keeps a newly opened Start Page activated while the epic tab's interview card is still registered active", async () => {
+    seedSources([EPIC_A, DRAFT_A]);
+    useEpicCanvasStore.setState((state) => ({
+      ...state,
+      canvasByTabId: {
+        ...state.canvasByTabId,
+        [EPIC_A.id]: {
+          root: pane(PANE_ID, [CHAT_INSTANCE_ID]),
+          activePaneId: PANE_ID,
+          tilesByInstanceId: {
+            [CHAT_INSTANCE_ID]: {
+              id: CHAT_INSTANCE_ID,
+              instanceId: CHAT_INSTANCE_ID,
+              type: "chat" as const,
+              name: "Interview chat",
+              hostId: TEST_HOST_ID,
+            },
+          },
+          sizesByGroupId: {},
+        },
+      },
+    }));
+    // Start on the Start Page so its lazily loaded surface is resolved before
+    // the switch under test - in the app it has been rendered before too, and
+    // a first-ever lazy resolution would push the mount into a LATER commit
+    // than the tab switch, which is where the defect lives.
+    setSingle(DRAFT_A, [EPIC_A, DRAFT_A]);
+    const navigate = deferredNavigate();
+
+    render(
+      <PrimaryFocusCoordinatorProvider>
+        <TopLevelSurfaceActivationContext.Provider
+          value={(tab) => {
+            navigateToTabIntent(navigate, tabResolveIntent(tab), undefined);
+          }}
+        >
+          <TopLevelTabHost />
+        </TopLevelSurfaceActivationContext.Provider>
+      </PrimaryFocusCoordinatorProvider>,
+    );
+    await screen.findByRole("button", { name: `Composer ${DRAFT_A.id}` });
+
+    act(() => {
+      activateTabIntent(
+        navigate,
+        existingEpicTabIntent({
+          epicId: EPIC_A.id,
+          tabId: EPIC_A.id,
+          focus: undefined,
+        }),
+        undefined,
+      );
+    });
+    // The card is live inside the focused epic tab's hosted record, so it is
+    // registered as the active composer.
+    const answer = await screen.findByLabelText("Interview answer");
+    await settle();
+    expect(surfaceRef(EPIC_A).dataset.focused).toBe("true");
+    expect(answer.isConnected).toBe(true);
+
+    // Clicking the Start Page tab in the strip is exactly this activation.
+    act(() => {
+      activateTabIntent(navigate, draftTabIntent(DRAFT_A.id), undefined);
+    });
+    await settle();
+
+    // This one has a saved focus target of its own, so it restores that and
+    // never consults the registry - the control for the step below.
+    expect(focusedRefKey()).toBe(tabRefKey(DRAFT_A));
+    expect(surfaceRef(DRAFT_A).dataset.focused).toBe("true");
+    expect(surfaceRef(EPIC_A).dataset.focused).toBe("false");
+
+    // "+" opens a second Start Page - a surface with no saved focus target of
+    // its own, which is the shape that reaches the composer focus registry.
+    act(() => {
+      activateTabIntent(navigate, newDraftTabIntent(null), undefined);
+    });
+    await settle();
+
+    const secondDraftId = useLandingDraftStore
+      .getState()
+      .drafts.map((draft) => draft.id)
+      .find((id) => id !== DRAFT_A.id);
+    expect(secondDraftId).toBeDefined();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: `Composer ${secondDraftId ?? ""}` }),
+    );
+    expect(focusedRefKey()).toBe(
+      tabRefKey({ kind: "draft", id: secondDraftId ?? "" }),
+    );
+  });
+});

@@ -1,0 +1,172 @@
+import * as React from "react";
+import { Drawer as DrawerPrimitive } from "vaul";
+
+import { cn } from "@/lib/utils";
+import { BackdropDimSource } from "@/components/ui/backdrop-dim-source";
+import { useOverlayDragSuppressionRef } from "@/stores/layout/title-bar-drag-store";
+
+function Drawer({
+  ...props
+}: React.ComponentProps<typeof DrawerPrimitive.Root>) {
+  return <DrawerPrimitive.Root data-slot="drawer" {...props} />;
+}
+
+function DrawerTrigger({
+  ...props
+}: React.ComponentProps<typeof DrawerPrimitive.Trigger>) {
+  return <DrawerPrimitive.Trigger data-slot="drawer-trigger" {...props} />;
+}
+
+function DrawerPortal({
+  ...props
+}: React.ComponentProps<typeof DrawerPrimitive.Portal>) {
+  return <DrawerPrimitive.Portal data-slot="drawer-portal" {...props} />;
+}
+
+function DrawerClose({
+  ...props
+}: React.ComponentProps<typeof DrawerPrimitive.Close>) {
+  return <DrawerPrimitive.Close data-slot="drawer-close" {...props} />;
+}
+
+function DrawerOverlay({
+  className,
+  ...props
+}: React.ComponentProps<typeof DrawerPrimitive.Overlay>) {
+  return (
+    <DrawerPrimitive.Overlay
+      data-slot="drawer-overlay"
+      className={cn(
+        "fixed inset-0 z-50 bg-black/10 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+        className,
+      )}
+      {...props}
+    >
+      <BackdropDimSource strength="10" />
+    </DrawerPrimitive.Overlay>
+  );
+}
+
+/**
+ * `vaul` drawer primitive (drag-dismissable). Direction is caller-set via
+ * `Drawer direction="bottom"`. The content imposes NO max-height itself so the
+ * composing surface caps it with a viewport-aware value (e.g.
+ * `max-h-[min(90dvh,…)]`) and owns its own internal scroll region. The grab
+ * handle renders only for the bottom direction.
+ */
+function DrawerContent({
+  ref,
+  className,
+  children,
+  fullWidth = false,
+  ...props
+}: React.ComponentProps<typeof DrawerPrimitive.Content> & {
+  /**
+   * A side drawer (`direction="left"` or `"right"`) spans everything the
+   * safe-area insets leave, at every width, instead of three quarters of the
+   * screen capped at `sm:max-w-sm`. Top and bottom drawers ignore it.
+   */
+  fullWidth?: boolean;
+}) {
+  const contentRef = useOverlayDragSuppressionRef(ref);
+  return (
+    <DrawerPortal data-slot="drawer-portal">
+      <DrawerOverlay />
+      <DrawerPrimitive.Content
+        ref={contentRef}
+        data-slot="drawer-content"
+        className={cn(
+          "group/drawer-content fixed z-50 flex h-auto flex-col bg-popover bg-clip-padding text-popover-foreground shadow-lg",
+          "data-[vaul-drawer-direction=top]:inset-x-0 data-[vaul-drawer-direction=top]:top-0 data-[vaul-drawer-direction=top]:mb-24 data-[vaul-drawer-direction=top]:rounded-b-lg data-[vaul-drawer-direction=top]:border-b",
+          "data-[vaul-drawer-direction=bottom]:inset-x-0 data-[vaul-drawer-direction=bottom]:bottom-0 data-[vaul-drawer-direction=bottom]:mt-24 data-[vaul-drawer-direction=bottom]:rounded-t-lg data-[vaul-drawer-direction=bottom]:border-t",
+          "data-[vaul-drawer-direction=right]:inset-y-0 data-[vaul-drawer-direction=right]:right-0 data-[vaul-drawer-direction=right]:w-3/4 data-[vaul-drawer-direction=right]:border-l data-[vaul-drawer-direction=right]:sm:max-w-sm",
+          "data-[vaul-drawer-direction=left]:inset-y-0 data-[vaul-drawer-direction=left]:left-0 data-[vaul-drawer-direction=left]:w-3/4 data-[vaul-drawer-direction=left]:border-r data-[vaul-drawer-direction=left]:sm:max-w-sm",
+          // Safe-area inset, per direction, mirroring `sheet.tsx`: a drawer is
+          // portalled and `fixed`, so `#root`'s padding never reaches it. The
+          // horizontal insets apply to every direction, since the landscape
+          // sensor housing sits on a side edge whichever way the drawer opens.
+          // The edge a drawer is anchored to is left alone - it is meant to
+          // meet the screen there, and pads its own contents instead.
+          "data-[vaul-drawer-direction=top]:mt-safe-top data-[vaul-drawer-direction=top]:ml-safe-left data-[vaul-drawer-direction=top]:mr-safe-right",
+          "data-[vaul-drawer-direction=bottom]:ml-safe-left data-[vaul-drawer-direction=bottom]:mr-safe-right",
+          // The side directions also take a width cap, for the reason spelled
+          // out in `sheet.tsx`: a caller's `w-full` is 100% of the viewport on
+          // a fixed element, so a margin alone would displace it rather than
+          // narrow it.
+          "data-[vaul-drawer-direction=left]:mt-safe-top data-[vaul-drawer-direction=left]:ml-safe-left data-[vaul-drawer-direction=left]:max-w-safe-dvw data-[vaul-drawer-direction=right]:mt-safe-top data-[vaul-drawer-direction=right]:mr-safe-right data-[vaul-drawer-direction=right]:max-w-safe-dvw",
+          // After the defaults above, so the same-modifier width rules they set
+          // are displaced rather than tied.
+          fullWidth &&
+            "data-[vaul-drawer-direction=right]:w-full data-[vaul-drawer-direction=right]:sm:max-w-safe-dvw data-[vaul-drawer-direction=left]:w-full data-[vaul-drawer-direction=left]:sm:max-w-safe-dvw",
+          className,
+        )}
+        {...props}
+      >
+        <div className="mx-auto mt-3 hidden h-1.5 w-12 shrink-0 rounded-full bg-border group-data-[vaul-drawer-direction=bottom]/drawer-content:block" />
+        {children}
+      </DrawerPrimitive.Content>
+    </DrawerPortal>
+  );
+}
+
+function DrawerHeader({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="drawer-header"
+      className={cn("flex flex-col gap-0.5 p-4", className)}
+      {...props}
+    />
+  );
+}
+
+function DrawerFooter({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="drawer-footer"
+      className={cn("mt-auto flex flex-col gap-2 p-4", className)}
+      {...props}
+    />
+  );
+}
+
+function DrawerTitle({
+  className,
+  ...props
+}: React.ComponentProps<typeof DrawerPrimitive.Title>) {
+  return (
+    <DrawerPrimitive.Title
+      data-slot="drawer-title"
+      className={cn(
+        "font-heading text-ui font-medium text-foreground",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function DrawerDescription({
+  className,
+  ...props
+}: React.ComponentProps<typeof DrawerPrimitive.Description>) {
+  return (
+    <DrawerPrimitive.Description
+      data-slot="drawer-description"
+      className={cn("text-ui-sm text-muted-foreground", className)}
+      {...props}
+    />
+  );
+}
+
+export {
+  Drawer,
+  DrawerPortal,
+  DrawerOverlay,
+  DrawerTrigger,
+  DrawerClose,
+  DrawerContent,
+  DrawerHeader,
+  DrawerFooter,
+  DrawerTitle,
+  DrawerDescription,
+};

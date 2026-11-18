@@ -1,0 +1,366 @@
+import type { ReactNode } from "react";
+import {
+  AlignJustify,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Diff,
+  ExternalLink,
+  EyeOff,
+  type LucideIcon,
+  Settings2,
+} from "lucide-react";
+import { RefreshIcon } from "@/components/refresh-icon";
+import { useIsNarrowWindow } from "@/hooks/ui/use-narrow-window";
+import { DiffSplitIcon, DiffUnifiedIcon } from "./diff-mode-icons";
+import type { GitDiffTileViewState } from "@/stores/epics/canvas/types";
+import {
+  GIT_DIFF_INDICATOR_STYLE_LABELS,
+  type DiffViewerPreferences,
+  type GitDiffIndicatorStyle,
+  type GitDiffViewMode,
+} from "@/lib/diff/diff-viewer-preferences";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { paneActivationDeferProps } from "@/components/epic-canvas/pane-activation";
+import { cn } from "@/lib/utils";
+
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+// @pierre/diffs gutter indicator styles, mapped to a representative icon.
+const INDICATOR_OPTIONS: ReadonlyArray<{
+  readonly value: GitDiffIndicatorStyle;
+  readonly label: string;
+  readonly icon: LucideIcon;
+}> = [
+  {
+    value: "bars",
+    label: GIT_DIFF_INDICATOR_STYLE_LABELS.bars,
+    icon: AlignJustify,
+  },
+  {
+    value: "classic",
+    label: GIT_DIFF_INDICATOR_STYLE_LABELS.classic,
+    icon: Diff,
+  },
+  { value: "none", label: GIT_DIFF_INDICATOR_STYLE_LABELS.none, icon: EyeOff },
+];
+
+export type DiffTabToolbarView = DiffViewerPreferences & GitDiffTileViewState;
+
+export type DiffTabToolbarViewPatch =
+  | { readonly mode: GitDiffViewMode }
+  | { readonly wordWrap: boolean }
+  | { readonly ignoreWhitespace: boolean }
+  | { readonly backgrounds: boolean }
+  | { readonly lineNumbers: boolean }
+  | { readonly indicatorStyle: GitDiffIndicatorStyle }
+  | { readonly collapsedFilePaths: ReadonlyArray<string> };
+
+/**
+ * The toolbar's open-this-file action. One object rather than four parallel
+ * props so "no action" is a single `null` - the label and pending state cannot
+ * outlive the handler, and a caller with no file to open cannot be asked for a
+ * label it would never render.
+ */
+export interface DiffTabToolbarOpenFile {
+  readonly onClick: () => void;
+  /**
+   * Names the resolved default target, because it is not always an editor - a
+   * Finder default reveals the file in Finder, and "Open in editor" would be
+   * describing something else.
+   */
+  readonly label: string;
+  readonly disabled: boolean;
+  readonly pending: boolean;
+}
+
+interface DiffTabToolbarProps {
+  readonly view: DiffTabToolbarView;
+  readonly onViewPatch: (patch: DiffTabToolbarViewPatch) => void;
+  // Collapse/expand every file in a bundle; null for single-file tiles.
+  readonly collapseAll: {
+    readonly allCollapsed: boolean;
+    readonly filePaths: ReadonlyArray<string>;
+  } | null;
+  readonly refreshing: boolean;
+  // `null` hides the refresh control entirely (snapshot diffs are immutable -
+  // there is nothing to re-fetch).
+  readonly onRefresh: (() => void) | null;
+  // `null` hides the row (e.g. bundle tiles with no single file).
+  readonly openFile: DiffTabToolbarOpenFile | null;
+}
+
+export function DiffTabToolbar(props: DiffTabToolbarProps) {
+  const openFile = props.openFile;
+  const view = props.view;
+  const isSplit = view.mode === "split";
+  // A narrow window renders one column whatever the stored mode
+  // (`useDiffViewerPreferences`), so a toggle here would flip a choice the
+  // tile cannot show. Width, not the phone-layout policy: an iPad in
+  // landscape gets the toggle back.
+  const narrowWindow = useIsNarrowWindow();
+
+  const collapseAll = props.collapseAll;
+  const settings: ReadonlyArray<{
+    readonly label: string;
+    readonly checked: boolean;
+    readonly patch: (checked: boolean) => DiffTabToolbarViewPatch;
+  }> = [
+    {
+      label: "Backgrounds",
+      checked: view.backgrounds,
+      patch: (backgrounds) => ({ backgrounds }),
+    },
+    {
+      label: "Line numbers",
+      checked: view.lineNumbers,
+      patch: (lineNumbers) => ({ lineNumbers }),
+    },
+    {
+      label: "Word wrap",
+      checked: view.wordWrap,
+      patch: (wordWrap) => ({ wordWrap }),
+    },
+    {
+      label: "Ignore whitespace",
+      checked: view.ignoreWhitespace,
+      patch: (ignoreWhitespace) => ({ ignoreWhitespace }),
+    },
+  ];
+
+  return (
+    <div className="flex items-center gap-0.5">
+      {collapseAll !== null ? (
+        <TooltipWrapper
+          label={collapseAll.allCollapsed ? "Expand all" : "Collapse all"}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <Button
+            type="button"
+            onClick={() =>
+              props.onViewPatch({
+                collapsedFilePaths: collapseAll.allCollapsed
+                  ? []
+                  : [...collapseAll.filePaths],
+              })
+            }
+            variant="muted"
+            size="icon-sm"
+            aria-label={
+              collapseAll.allCollapsed ? "Expand all" : "Collapse all"
+            }
+          >
+            {collapseAll.allCollapsed ? (
+              <ChevronsUpDown className="size-4" />
+            ) : (
+              <ChevronsDownUp className="size-4" />
+            )}
+          </Button>
+        </TooltipWrapper>
+      ) : null}
+
+      {narrowWindow ? null : (
+        <TooltipWrapper
+          label={isSplit ? "Split view" : "Unified view"}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <Button
+            type="button"
+            onClick={() =>
+              props.onViewPatch({ mode: isSplit ? "unified" : "split" })
+            }
+            variant="muted"
+            size="icon-sm"
+            aria-label={
+              isSplit ? "Switch to unified view" : "Switch to split view"
+            }
+          >
+            {isSplit ? (
+              <DiffSplitIcon className="size-4" />
+            ) : (
+              <DiffUnifiedIcon className="size-4" />
+            )}
+          </Button>
+        </TooltipWrapper>
+      )}
+
+      {props.onRefresh !== null ? (
+        <TooltipWrapper
+          label="Refresh diff"
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <span className="inline-flex">
+            <Button
+              type="button"
+              onClick={props.onRefresh}
+              disabled={props.refreshing}
+              variant="muted"
+              size="icon-sm"
+              aria-label="Refresh diff"
+            >
+              <RefreshIcon refreshing={props.refreshing} />
+            </Button>
+          </span>
+        </TooltipWrapper>
+      ) : null}
+
+      <Popover>
+        <PopoverTrigger asChild>
+          <TooltipWrapper
+            label="Diff settings"
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            <Button
+              type="button"
+              variant="muted"
+              size="icon-sm"
+              aria-label="Diff settings"
+            >
+              <Settings2 className="size-4" />
+            </Button>
+          </TooltipWrapper>
+        </PopoverTrigger>
+        <PopoverContent
+          layout="bare"
+          {...paneActivationDeferProps}
+          align="end"
+          className="w-[min(80vw,15rem)]"
+        >
+          {/* The gutter belongs to the LIST, not to the plate: these rows paint
+              their own hover and would otherwise run into the plate's corner. */}
+          <div className="p-1">
+            {settings.map((setting) => (
+              <DiffSettingRow
+                key={setting.label}
+                label={setting.label}
+                checked={setting.checked}
+                onCheckedChange={(checked) =>
+                  props.onViewPatch(setting.patch(checked))
+                }
+              />
+            ))}
+            <div className="flex items-center justify-between gap-3 px-2 py-1.5 text-ui-sm">
+              <span>Gutter marks</span>
+              <IndicatorStyleControl
+                value={view.indicatorStyle}
+                onChange={(indicatorStyle) =>
+                  props.onViewPatch({ indicatorStyle })
+                }
+              />
+            </div>
+            {openFile !== null ? (
+              <>
+                <Separator className="my-1" />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={openFile.onClick}
+                  disabled={openFile.disabled}
+                  className="h-7 w-full justify-start font-normal"
+                >
+                  {openFile.pending ? (
+                    <AgentSpinningDots
+                      className="size-4"
+                      testId="diff-tab-open-editor-spinner"
+                      variant={undefined}
+                      tone="muted"
+                    />
+                  ) : (
+                    <ExternalLink className="size-4 text-muted-foreground" />
+                  )}
+                  {openFile.label}
+                </Button>
+              </>
+            ) : null}
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
+function DiffSettingRow(props: {
+  readonly label: string;
+  readonly checked: boolean;
+  readonly onCheckedChange: (on: boolean) => void;
+}): ReactNode {
+  return (
+    <Label variant="row" className="cursor-pointer justify-between">
+      <span>{props.label}</span>
+      <Switch checked={props.checked} onCheckedChange={props.onCheckedChange} />
+    </Label>
+  );
+}
+
+// Segmented control with a sliding "magnetic" highlight (diffshub style): one
+// pill slides between equal-width segments instead of each button toggling its
+// own background. The highlight translates by whole segment widths, so its own
+// width is the segment width and translateX(index * 100%) lands it exactly.
+function IndicatorStyleControl(props: {
+  readonly value: GitDiffIndicatorStyle;
+  readonly onChange: (style: GitDiffIndicatorStyle) => void;
+}): ReactNode {
+  const activeIndex = INDICATOR_OPTIONS.findIndex(
+    (option) => option.value === props.value,
+  );
+
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Gutter marks"
+      // muted-fill-ok: segmented track on bg-canvas (tile-canvas canvas-token-scope); --canvas never equals --muted
+      className="relative flex items-center rounded-md bg-muted p-0.5"
+    >
+      <div
+        aria-hidden="true"
+        className="absolute inset-y-0.5 left-0.5 w-7 rounded-sm bg-background shadow-sm transition-transform duration-200 ease-out"
+        style={{ transform: `translateX(${Math.max(activeIndex, 0) * 100}%)` }}
+      />
+      {INDICATOR_OPTIONS.map((option) => {
+        const Icon = option.icon;
+        const active = props.value === option.value;
+        return (
+          <TooltipWrapper
+            key={option.value}
+            label={option.label}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            <button
+              type="button"
+              role="radio"
+              aria-checked={active}
+              aria-label={option.label}
+              onClick={() => props.onChange(option.value)}
+              className={cn(
+                "relative z-10 flex size-7 items-center justify-center rounded-sm transition-colors",
+                active
+                  ? "text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Icon className="size-3.5" />
+            </button>
+          </TooltipWrapper>
+        );
+      })}
+    </div>
+  );
+}

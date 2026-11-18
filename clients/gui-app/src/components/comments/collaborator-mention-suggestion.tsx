@@ -1,0 +1,245 @@
+import {
+  FrameCommentPortalContext,
+  FrameFullscreenContext,
+} from "./frame-comment-surface-context";
+import {
+  useContext,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type Ref,
+} from "react";
+import { createPortal } from "react-dom";
+import {
+  autoUpdate,
+  computePosition,
+  flip,
+  offset,
+  shift,
+} from "@floating-ui/dom";
+import type { MentionCollaborator } from "@/hooks/comments/use-mention-collaborators";
+import { PersonAvatar } from "@/components/bots/bot-avatars";
+import { usePersonIdentityResolver } from "@/hooks/identity/use-person-identity";
+import { usePanePortalContainer } from "@/components/epic-tabs/pane-visibility-context";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
+import { cn } from "@/lib/utils";
+
+/**
+ * Imperative handle the Tiptap suggestion `render()` lifecycle calls into so
+ * arrow / Enter / Escape keystrokes captured by the editor can drive the
+ * floating list without React having to own the keymap. The composer wires
+ * the ref through `useImperativeHandle` and the suggestion plugin's
+ * `onKeyDown` callback returns whatever this handle returns - `true` to
+ * swallow, `false` to fall through.
+ */
+export interface MentionSuggestionListHandle {
+  onKeyDown(event: KeyboardEvent): boolean;
+}
+
+export interface MentionSuggestionListProps {
+  readonly items: ReadonlyArray<MentionCollaborator>;
+  readonly command: (attrs: { id: string; label: string }) => void;
+  readonly getReferenceClientRect: (() => DOMRect | null) | null;
+  readonly ref?: Ref<MentionSuggestionListHandle>;
+}
+
+/**
+ * Floating list rendered into `document.body` while a `@` mention query is
+ * active inside the comment composer. The list itself is a thin presentation
+ * layer - the composer owns lifetime, the suggestion plugin owns input
+ * dispatch.
+ *
+ * Positioning uses `@floating-ui/dom` with `autoUpdate` so the popover stays
+ * pinned to the caret while the user types or scrolls. We deliberately don't
+ * use `cmdk`'s `Command` here: `cmdk` insists on owning the focused element
+ * (a hidden input), but the editor must keep DOM focus so its key handlers
+ * keep firing. A handcrafted listbox sidesteps that conflict.
+ */
+export function MentionSuggestionList({
+  items,
+  command,
+  getReferenceClientRect,
+  ref,
+}: MentionSuggestionListProps) {
+  const itemsKey = mentionSuggestionItemsKey(items);
+  return (
+    <MentionSuggestionListContent
+      key={itemsKey}
+      items={items}
+      command={command}
+      getReferenceClientRect={getReferenceClientRect}
+      ref={ref}
+    />
+  );
+}
+
+function MentionSuggestionListContent({
+  items,
+  command,
+  getReferenceClientRect,
+  ref,
+}: MentionSuggestionListProps) {
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const resolveIdentity = usePersonIdentityResolver();
+  const floatingRef = useRef<HTMLDivElement | null>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  // Render into the pane's portal host (not `document.body`), so a mention
+  // list opened inside a background split pane's comment composer is hidden +
+  // inert with that pane instead of escaping over the focused partner.
+  const paneContainer = usePanePortalContainer();
+  const commentContainer = useContext(FrameCommentPortalContext);
+  const fullscreenContainer = useContext(FrameFullscreenContext);
+  const portalContainer =
+    commentContainer ?? fullscreenContainer ?? paneContainer;
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      onKeyDown(event: KeyboardEvent) {
+        if (items.length === 0) return false;
+        const navigationKey = listNavigationKey(event);
+        if (navigationKey === "ArrowDown") {
+          setSelectedIndex((prior) => (prior + 1) % items.length);
+          return true;
+        }
+        if (navigationKey === "ArrowUp") {
+          setSelectedIndex(
+            (prior) => (prior - 1 + items.length) % items.length,
+          );
+          return true;
+        }
+        if (event.key === "Enter") {
+          const choice = items[selectedIndex] ?? items[0];
+          command({
+            id: choice.userId,
+            label:
+              resolveIdentity(choice.userId)?.displayName ?? choice.displayName,
+          });
+          return true;
+        }
+        return false;
+      },
+    }),
+    [items, selectedIndex, command, resolveIdentity],
+  );
+
+  useLayoutEffect(() => {
+    const floating = floatingRef.current;
+    if (floating === null) return;
+    if (getReferenceClientRect === null) return;
+    const virtualReference = {
+      getBoundingClientRect: () => {
+        const rect = getReferenceClientRect();
+        if (rect === null) return new DOMRect(0, 0, 0, 0);
+        return rect;
+      },
+    };
+    const reposition = () => {
+      void computePosition(virtualReference, floating, {
+        placement: "bottom-start",
+        middleware: [offset(6), flip(), shift({ padding: 8 })],
+      }).then(({ x, y }) => {
+        floating.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(
+          y,
+        )}px, 0)`;
+      });
+    };
+    reposition();
+    const cleanup = autoUpdate(virtualReference, floating, reposition);
+    return cleanup;
+    // `portalContainer` dep: the portal remounts into the live node once the host
+    // ref settles, so re-bind `autoUpdate` to it rather than the first node.
+  }, [getReferenceClientRect, items.length, portalContainer]);
+
+  useLayoutEffect(() => {
+    if (items.length === 0) return;
+    const node = itemRefs.current[selectedIndex] ?? null;
+    if (node === null) return;
+    node.scrollIntoView({ block: "nearest" });
+  }, [items.length, selectedIndex]);
+
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
+    <div
+      ref={floatingRef}
+      role="listbox"
+      aria-label="Mention collaborator"
+      data-slot="mention-suggestion"
+      className={cn(
+        "absolute top-0 left-0 z-50 w-[min(80vw,18rem)] max-h-[min(40vh,18rem)] overflow-y-auto rounded-md border border-border bg-popover p-1 text-ui-sm text-popover-foreground shadow-md outline-none",
+      )}
+    >
+      {items.length === 0 ? (
+        <div className="px-2 py-3 text-center text-ui-xs text-muted-foreground">
+          No matching collaborators
+        </div>
+      ) : (
+        items.map((item, index) => {
+          const isSelected = index === selectedIndex;
+          const identity = resolveIdentity(item.userId);
+          const name = identity?.displayName ?? item.displayName;
+          return (
+            <button
+              key={item.userId}
+              ref={(node) => {
+                itemRefs.current[index] = node;
+              }}
+              type="button"
+              role="option"
+              aria-selected={isSelected}
+              data-selected={isSelected ? "true" : undefined}
+              className={cn(
+                // `border-transparent` in the base so the selected border
+                // below does not shift the row.
+                "flex w-full items-center gap-2 rounded-sm border border-transparent px-2 py-1.5 text-left outline-none",
+                // The ACTIVE option (keyboard navigation) takes the same
+                // treatment `ui/command.tsx` gives its selected item, rather
+                // than a heavier foreground alpha: `--primary` never
+                // collapses into a surface token in any theme, and a
+                // selection this list drives with ArrowUp/Down has to be
+                // unmistakable next to the plain hover tint below - which a
+                // foreground alpha one step up from it would not be.
+                "data-[selected=true]:border-primary/35 data-[selected=true]:bg-[color-mix(in_srgb,var(--primary)_14%,var(--popover))] data-[selected=true]:text-foreground data-[selected=true]:shadow-sm",
+                "hover:bg-foreground/6",
+              )}
+              onMouseEnter={() => setSelectedIndex(index)}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                command({ id: item.userId, label: name });
+              }}
+            >
+              <PersonAvatar
+                userId={item.userId}
+                name={name}
+                avatarUrl={identity?.avatarUrl ?? null}
+                size="sm"
+              />
+              <div className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate text-ui-sm leading-tight">
+                  {name}
+                </span>
+                {item.email.length > 0 && item.email !== name ? (
+                  <span className="truncate text-ui-xs text-muted-foreground">
+                    {item.email}
+                  </span>
+                ) : null}
+              </div>
+            </button>
+          );
+        })
+      )}
+    </div>,
+    portalContainer ?? document.body,
+  );
+}
+
+function mentionSuggestionItemsKey(
+  items: ReadonlyArray<MentionCollaborator>,
+): string {
+  if (items.length === 0) return "empty";
+  return items
+    .map((item) => `${item.userId}\u0000${item.displayName}\u0000${item.email}`)
+    .join("\u0001");
+}

@@ -1,0 +1,307 @@
+{
+  "name": "@traycer-clients/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Traycer standalone desktop shell (Electron) hosting the gui-app renderer; host lifecycle is delegated to the Traycer CLI.",
+  "homepage": "https://traycer.ai",
+  "license": "MIT",
+  "author": {
+    "name": "Traycer AI",
+    "email": "support@traycer.ai"
+  },
+  "main": "dist/main/index.js",
+  "scripts": {
+    "clean": "rimraf dist",
+    "clean:main": "rimraf dist/main dist/packages dist/protocol dist/clients",
+    "compile": "node ../../scripts/tsrs.mjs --noEmit -p tsconfig.json --singleThreaded --incremental --tsBuildInfoFile node_modules/.tmp/compile.tsbuildinfo",
+    "build:main": "bun run clean:main && bun scripts/build-main-bundle.cjs && bun run build:native",
+    "build:native": "node scripts/build-native-addons.cjs",
+    "build:renderer": "vite build --config vite.renderer.config.ts && bun scripts/assert-single-instance-deps.cjs",
+    "build:app": "bun run --cwd ../../protocol validate:registries && bun run clean && bun run build:main && bun run build:renderer",
+    "prepack:check-cli": "bun scripts/prepack/check-cli-resource.cjs",
+    "prepack:check-icons": "bun scripts/prepack/check-bundle-icons.cjs",
+    "prepack:check-tray": "bun scripts/prepack/check-tray-assets.cjs",
+    "build": "bun run build:app",
+    "package": "bun run build:app && bun run prepack:check-cli && bun run prepack:check-icons && bun run prepack:check-tray && bun x electron-builder --publish never",
+    "package:dir": "bun run build:app && bun run prepack:check-cli && bun run prepack:check-icons && bun run prepack:check-tray && bun x electron-builder --dir --publish never",
+    "dev:renderer": "vite --config vite.renderer.config.ts",
+    "dev:main": "bun run build:main && bun scripts/dev/dev-main.cjs",
+    "dev": "bun scripts/dev/dev-stack.cjs",
+    "lint": "bun run lint:files .",
+    "lint:files": "oxlint -c oxlint.config.mts --fix --deny-warnings --no-error-on-unmatched-pattern",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "test": "vitest run",
+    "test:resolution": "VITE_DESKTOP_LOCAL_STORAGE_KEY=traycer-resolution-test-local-storage-key bun run build:app && bun scripts/resolution/run-resolution-matrix.cjs",
+    "test:packaging": "vitest run --config vitest.config.packaging.ts"
+  },
+  "dependencies": {
+    "@sentry/browser": "catalog:",
+    "@sentry/core": "catalog:",
+    "@sentry/electron": "catalog:",
+    "electron-log": "catalog:",
+    "electron-updater": "^6.8.9",
+    "encrypt-storage": "catalog:",
+    "font-list": "^2.1.0",
+    "perfect-freehand": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@rolldown/plugin-babel": "catalog:",
+    "@sentry/esbuild-plugin": "catalog:",
+    "@sentry/vite-plugin": "catalog:",
+    "@tailwindcss/vite": "catalog:",
+    "@tanstack/router-plugin": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@typescript-eslint/eslint-plugin": "catalog:",
+    "@typescript-eslint/parser": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "babel-plugin-react-compiler": "catalog:",
+    "electron": "catalog:",
+    "electron-builder": "catalog:",
+    "esbuild": "catalog:",
+    "eslint": "catalog:",
+    "prettier": "catalog:",
+    "rimraf": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  },
+  "build": {
+    "appId": "ai.traycer.desktop",
+    "productName": "Traycer",
+    "artifactName": "traycer-desktop-${arch}.${ext}",
+    "asar": true,
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false
+    },
+    "directories": {
+      "buildResources": "resources/bundle",
+      "output": "release"
+    },
+    "afterPack": "scripts/prepack/inject-host-launch-agent.cjs",
+    "files": [
+      "dist/**/*",
+      "package.json",
+      "!**/*.map",
+      "node_modules/font-list/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/font-list/**/*",
+      "dist/main/native/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/app",
+        "to": "app",
+        "filter": [
+          "**/*.png"
+        ]
+      },
+      {
+        "from": "dist/renderer",
+        "to": "renderer",
+        "filter": [
+          "**/*",
+          "!**/*.map"
+        ]
+      },
+      {
+        "from": "resources/host",
+        "to": "host",
+        "filter": [
+          "README.md",
+          ".gitkeep"
+        ]
+      },
+      {
+        "from": "resources/tray",
+        "to": "tray",
+        "filter": [
+          "**/*.png"
+        ]
+      }
+    ],
+    "protocols": [
+      {
+        "name": "Traycer",
+        "schemes": [
+          "traycer"
+        ]
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "traycerai",
+        "repo": "traycer"
+      }
+    ],
+    "mac": {
+      "artifactName": "traycer-desktop-macos-${arch}.${ext}",
+      "category": "public.app-category.developer-tools",
+      "minimumSystemVersion": "12.0",
+      "entitlements": "resources/bundle/entitlements.mac.plist",
+      "entitlementsInherit": "resources/bundle/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Traycer uses the microphone for voice dictation in the composer."
+      },
+      "extraResources": [
+        {
+          "from": "resources/cli/darwin-${arch}",
+          "to": "cli/darwin-${arch}",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ],
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "win": {
+      "artifactName": "traycer-desktop-windows-${arch}.${ext}",
+      "icon": "icon.ico",
+      "signtoolOptions": {
+        "signingHashAlgorithms": [
+          "sha256"
+        ]
+      },
+      "extraResources": [
+        {
+          "from": "resources/cli/win32-${arch}",
+          "to": "cli/win32-${arch}",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "msi",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "linux": {
+      "artifactName": "traycer-desktop-linux-${arch}.${ext}",
+      "executableName": "traycer-desktop",
+      "icon": "icons",
+      "syncDesktopName": true,
+      "maintainer": "Traycer AI <support@traycer.ai>",
+      "extraResources": [
+        {
+          "from": "resources/cli/linux-${arch}",
+          "to": "cli/linux-${arch}",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ],
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "rpm",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Development"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "include": "uninstall-host-autostart.nsh"
+    },
+    "dmg": {
+      "background": "resources/bundle/dmg/assets/dmg-background.png",
+      "window": {
+        "width": 642,
+        "height": 406
+      },
+      "iconSize": 128,
+      "contents": [
+        {
+          "x": 170,
+          "y": 187,
+          "type": "file"
+        },
+        {
+          "x": 470,
+          "y": 187,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
+  },
+  "desktopName": "traycer-desktop.desktop",
+  "nx": {
+    "implicitDependencies": [
+      "@traycer/protocol",
+      "@traycer-clients/shared",
+      "traycer-clients-gui-app",
+      "@traycer/html-source"
+    ],
+    "targets": {
+      "build": {
+        "dependsOn": []
+      },
+      "test": {
+        "inputs": [
+          "{workspaceRoot}/scripts/test-worker-environment.ts",
+          "default",
+          "^production",
+          "sharedGlobals",
+          "{workspaceRoot}/.github/workflows/test.yml"
+        ]
+      }
+    }
+  },
+  "productName": "Traycer"
+}

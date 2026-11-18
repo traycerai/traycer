@@ -1,0 +1,157 @@
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import type { SyntheticEvent } from "react";
+import type {
+  BrowserNavState,
+  BrowserScreencastUnsupportedFeature,
+  BrowserSessionProfileKind,
+} from "@traycer/protocol/host/browser/contracts";
+import type {
+  TileChromeCapabilities,
+  TileController,
+} from "@/components/epic-canvas/renderers/tile-controller";
+import { normalizeBrowserAddressInput } from "@/lib/browser-view/browser-tab-display";
+import { useAddressDraft } from "@/components/epic-canvas/renderers/use-address-draft";
+import { toast } from "sonner";
+
+export const EMPTY_SCREENCAST_NAV_STATE: BrowserNavState = {
+  url: "",
+  canGoBack: false,
+  canGoForward: false,
+  loading: false,
+};
+
+const SCREENCAST_TILE_CHROME_CAPABILITIES: TileChromeCapabilities = {
+  navigate: true,
+  back: true,
+  forward: true,
+  reload: true,
+  // The screencast nav wire has no stop; the spinner rides inside Reload.
+  stop: false,
+  zoom: false,
+  devtools: false,
+  find: false,
+  siteInfo: false,
+  annotate: false,
+};
+
+const SCREENCAST_UNSUPPORTED_INTERACTION_TOASTS = {
+  fileUpload: "File upload not supported",
+  download: "Download saved on the host",
+} as const;
+
+interface UseScreencastTileChromeArgs {
+  readonly profile: BrowserSessionProfileKind;
+  readonly navState: BrowserNavState;
+  readonly initialUrl: string;
+  readonly disabled: boolean;
+  readonly onNavigateUrl: (url: string) => void;
+  readonly onBack: () => void;
+  readonly onForward: () => void;
+  readonly onReload: () => void;
+}
+
+export interface ScreencastTileChrome {
+  readonly controller: TileController;
+  readonly navigateToUrl: (url: string) => void;
+  readonly onAddressFocusChange: (focused: boolean) => void;
+}
+
+export function toastScreencastUnsupportedInteraction(
+  feature: BrowserScreencastUnsupportedFeature,
+): void {
+  toast(SCREENCAST_UNSUPPORTED_INTERACTION_TOASTS[feature]);
+}
+
+/**
+ * Shared-toolbar controller for a headless screencast tile. Capabilities
+ * are nav-only; the address draft stays owned by focus, so an in-flight
+ * agent navigation cannot clobber a URL the user is still editing.
+ * A submitted draft yields to the next navState so redirects land.
+ */
+export function useScreencastTileChrome(
+  args: UseScreencastTileChromeArgs,
+): ScreencastTileChrome {
+  const {
+    navState,
+    initialUrl,
+    disabled,
+    onNavigateUrl,
+    onBack,
+    onForward,
+    onReload,
+  } = args;
+  const liveUrl = navState.url.length > 0 ? navState.url : initialUrl;
+  const draft = useAddressDraft(liveUrl);
+  const addressValue = draft.addressValue;
+  const navigateToUrl = (url: string): void => {
+    draft.onAddressSubmitted(url);
+    if (
+      url ===
+      normalizeBrowserAddressInput(
+        liveUrl,
+        useSettingsStore.getState().browserSearchEngine,
+      )
+    ) {
+      onReload();
+    } else {
+      onNavigateUrl(url);
+    }
+  };
+
+  const onAddressFocusChange = (focused: boolean): void => {
+    draft.onAddressFocusChange(focused);
+    if (focused) draft.focusAddress();
+  };
+
+  const controller: TileController = {
+    viewport: null,
+    capabilities: SCREENCAST_TILE_CHROME_CAPABILITIES,
+    profile: args.profile,
+    url: liveUrl,
+    addressValue,
+    selectAddressOnFocus: true,
+    setAddressInput: draft.setAddressInput,
+    focusAddress: draft.focusAddress,
+    canGoBack: navState.canGoBack,
+    canGoForward: navState.canGoForward,
+    zoomPercent: 100,
+    disabled,
+    zoomLocked: false,
+    annotation: null,
+    onNavigate: (event: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {
+      event.preventDefault();
+      const url = normalizeBrowserAddressInput(
+        addressValue,
+        useSettingsStore.getState().browserSearchEngine,
+      );
+      navigateToUrl(url);
+    },
+    onAddressChange: draft.onAddressChange,
+    onAddressFocusChange,
+    onBack: () => {
+      if (!navState.canGoBack) return;
+      onBack();
+    },
+    onForward: () => {
+      if (!navState.canGoForward) return;
+      onForward();
+    },
+    onReload,
+    onStop: ignoreChromeAction,
+    onZoomOut: ignoreChromeAction,
+    onZoomIn: ignoreChromeAction,
+    onResetZoom: ignoreChromeAction,
+    onOpenDevTools: ignoreChromeAction,
+    // A screencast tile watches a headless context on the host; there is no
+    // local jar here to clear, and the host's own eviction is what reaches it.
+    onClearSite: null,
+  };
+
+  return {
+    controller,
+    navigateToUrl,
+    onAddressFocusChange,
+  };
+}
+
+function ignoreChromeAction(): void {}

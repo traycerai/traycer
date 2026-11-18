@@ -1,0 +1,715 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import { WorktreeDeleteBatchStreamClient } from "../worktree-delete-batch-stream-client";
+import type { WsStreamClient } from "../ws-stream-client";
+import { FakeStreamClient } from "../__testing__/fake-stream-client";
+import {
+  completeHandshake,
+  makeStubSocketFactory,
+  makeStubSocketStreamClient,
+  subscribeFrame,
+  subscribeParams,
+  type StubStreamWebSocket,
+} from "../__testing__/stub-stream-socket";
+import type { StreamContinuity } from "../i-stream-session";
+
+const COMMAND_ID = "6f1a6a0e-1f0f-4a1e-9f0d-1b6f0c2c9f11";
+
+const NOOP_CALLBACKS = {
+  onTargetStarted: () => undefined,
+  onTargetPhase: () => undefined,
+  onTargetOutput: () => undefined,
+  onTargetComplete: () => undefined,
+  onTargetFailed: () => undefined,
+  onCommandComplete: () => undefined,
+  onCommandFailed: () => undefined,
+  onUnsupported: () => undefined,
+  onConnectionStatus: () => undefined,
+};
+
+function openBatchClient(
+  wsStreamClient: WsStreamClient<typeof hostStreamRpcRegistry>,
+): WorktreeDeleteBatchStreamClient {
+  return new WorktreeDeleteBatchStreamClient({
+    wsStreamClient,
+    commandId: COMMAND_ID,
+    source: "settings",
+    targets: [
+      { worktreePath: "/wt/a", scripts: null, stopOwners: false },
+      { worktreePath: "/wt/b", scripts: null, stopOwners: false },
+    ],
+    callbacks: NOOP_CALLBACKS,
+  });
+}
+
+describe("WorktreeDeleteBatchStreamClient replay safety", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("sends a Task sweep's destination only on the start request", () => {
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "task_sweep",
+      epicId: "epic-1",
+      targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: false }],
+      callbacks: NOOP_CALLBACKS,
+    });
+
+    completeHandshake(sockets[0]);
+    expect(subscribeParams(sockets[0])).toMatchObject({
+      mode: "start",
+      source: "task_sweep",
+      epicId: "epic-1",
+    });
+    batch.close();
+  });
+
+  it("re-subscribes as observe after a drop, so the transport can never replay the start", () => {
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
+    const batch = openBatchClient(client);
+
+    completeHandshake(sockets[0]);
+    expect(subscribeParams(sockets[0])).toMatchObject({
+      mode: "start",
+      commandId: COMMAND_ID,
+      source: "settings",
+    });
+
+    // The socket dies after the host already has the command.
+    sockets[0].fireClose(1006, "abnormal");
+    // The swap is synchronous inside the `reconnecting` transition, so the
+    // replacement session dials before any backoff timer could re-send `start`.
+    expect(sockets).toHaveLength(2);
+
+    completeHandshake(sockets[1]);
+    expect(subscribeParams(sockets[1])).toEqual({
+      mode: "observe",
+      commandId: COMMAND_ID,
+    });
+
+    // Every later reconnect stays on observe, however long the outage runs.
+    sockets[1].fireClose(1006, "abnormal");
+    vi.advanceTimersByTime(1_000);
+    expect(sockets).toHaveLength(3);
+    completeHandshake(sockets[2]);
+    expect(subscribeParams(sockets[2])).toEqual({
+      mode: "observe",
+      commandId: COMMAND_ID,
+    });
+
+    const starts = sockets
+      .map((socket) =>
+        socket.textSent.length > 1 ? subscribeParams(socket) : null,
+      )
+      .filter((params) => params?.mode === "start");
+    expect(starts).toHaveLength(1);
+    batch.close();
+  });
+
+  it("reports an incompatible close on the observe session as a connection failure, not unsupported", () => {
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
+    const onUnsupported = vi.fn();
+    const onConnectionStatus = vi.fn();
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: false }],
+      callbacks: {
+        ...NOOP_CALLBACKS,
+        onUnsupported,
+        onConnectionStatus,
+      },
+    });
+
+    // The host has the command: start was subscribed on a live socket.
+    completeHandshake(sockets[0]);
+    expect(subscribeParams(sockets[0])).toMatchObject({ mode: "start" });
+    sockets[0].fireClose(1006, "abnormal");
+    expect(sockets).toHaveLength(2);
+
+    // The replacement host lacks the method. `onUnsupported` here would
+    // licence the legacy fallback to run the deletion a second time.
+    const reason = {
+      kind: "fatalError" as const,
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "host does not offer worktree.deleteBatchByPath",
+        incompatibleMethods: [
+          {
+            method: "worktree.deleteBatchByPath",
+            clientCanonical: { major: 1, minor: 1 },
+            hostCanonical: null,
+            blocking: "host-missing-method" as const,
+          },
+        ],
+        upgradeGuidance: null,
+      },
+    };
+    sockets[1].fireText(reason);
+
+    expect(onUnsupported).not.toHaveBeenCalled();
+    expect(onConnectionStatus).toHaveBeenLastCalledWith({
+      status: "closed",
+      reason,
+      retryCause: null,
+      continuity: null,
+      startSent: true,
+    });
+    batch.close();
+  });
+
+  it("keeps retrying start while the drop happened before it was sent", () => {
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
+    const batch = openBatchClient(client);
+
+    // Dies during the dial: the subscribe frame never went out, so nothing was
+    // started and re-issuing the user's actual request is both safe and what
+    // they asked for.
+    expect(sockets[0].textSent).toHaveLength(0);
+    sockets[0].fireClose(1006, "abnormal");
+    vi.advanceTimersByTime(50);
+    expect(sockets).toHaveLength(2);
+
+    completeHandshake(sockets[1]);
+    expect(subscribeParams(sockets[1])).toMatchObject({
+      mode: "start",
+      commandId: COMMAND_ID,
+    });
+    batch.close();
+  });
+
+  it("reports an unsupported method instead of a connection failure", () => {
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
+    let unsupported = 0;
+    let statusClosed = 0;
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: false }],
+      callbacks: {
+        ...NOOP_CALLBACKS,
+        onUnsupported: () => {
+          unsupported += 1;
+        },
+        onConnectionStatus: ({ status }) => {
+          if (status === "closed") statusClosed += 1;
+        },
+      },
+    });
+
+    // An older host: its manifest simply has no entry for the method.
+    sockets[0].fireOpen();
+    const open = JSON.parse(sockets[0].textSent[0]) as {
+      readonly manifest: Record<string, { major: number; minor: number }>;
+    };
+    const olderManifest = { ...open.manifest };
+    delete olderManifest["worktree.deleteBatchByPath"];
+    sockets[0].fireText({ kind: "openAck", manifest: olderManifest });
+
+    expect(unsupported).toBe(1);
+    expect(statusClosed).toBe(0);
+    // Rejected on the openAck: no subscribe frame, so no host work started.
+    expect(sockets[0].textSent).toHaveLength(2);
+    expect(JSON.parse(sockets[0].textSent[1])).toMatchObject({
+      kind: "fatalError",
+    });
+    batch.close();
+  });
+
+  it("reports a generic incompatible close as a connection failure", () => {
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
+    const onUnsupported = vi.fn();
+    const onConnectionStatus = vi.fn();
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: false }],
+      callbacks: {
+        ...NOOP_CALLBACKS,
+        onUnsupported,
+        onConnectionStatus,
+      },
+    });
+    const reason = {
+      kind: "fatalError" as const,
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "protocol version skew",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    };
+
+    completeHandshake(sockets[0]);
+    sockets[0].fireText(reason);
+
+    expect(onUnsupported).not.toHaveBeenCalled();
+    expect(onConnectionStatus).toHaveBeenLastCalledWith({
+      status: "closed",
+      reason,
+      retryCause: null,
+      continuity: null,
+      startSent: true,
+    });
+    batch.close();
+  });
+
+  it("rejects a force-target @1.1 command against a 1.0 host before subscribe", () => {
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
+    const onUnsupported = vi.fn();
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/force", scripts: null, stopOwners: true }],
+      callbacks: { ...NOOP_CALLBACKS, onUnsupported },
+    });
+
+    sockets[0].fireOpen();
+    const open = JSON.parse(sockets[0].textSent[0]) as {
+      readonly manifest: Record<string, { major: number; minor: number }>;
+    };
+    sockets[0].fireText({
+      kind: "openAck",
+      manifest: {
+        ...open.manifest,
+        "worktree.deleteBatchByPath": { major: 1, minor: 0 },
+      },
+    });
+
+    expect(onUnsupported).toHaveBeenCalledOnce();
+    expect(sockets[0].textSent).toHaveLength(2);
+    expect(JSON.parse(sockets[0].textSent[1])).toMatchObject({
+      kind: "fatalError",
+      details: {
+        incompatibleMethods: [{ method: "worktree.deleteBatchByPath" }],
+      },
+    });
+    expect(
+      sockets[0].textSent.some((raw) => JSON.parse(raw).kind === "subscribe"),
+    ).toBe(false);
+    batch.close();
+  });
+
+  it("sends a force target on an accepted pinned @1.1 subscribe", () => {
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/force", scripts: null, stopOwners: true }],
+      callbacks: NOOP_CALLBACKS,
+    });
+
+    completeHandshake(sockets[0]);
+
+    // The @1.1 pin is a FLOOR (consent needs stopOwners on the wire), so the
+    // frame carries whatever the handshake negotiated - the registry's
+    // latest minor on a same-version host - not 1.1 itself.
+    expect(subscribeFrame(sockets[0])).toMatchObject({
+      kind: "subscribe",
+      method: "worktree.deleteBatchByPath",
+      schemaVersion: {
+        major: 1,
+        minor:
+          hostStreamRpcRegistry["worktree.deleteBatchByPath"][1].latestMinor,
+      },
+      params: {
+        mode: "start",
+        targets: [
+          {
+            worktreePath: "/wt/force",
+            scripts: null,
+            stopOwners: true,
+          },
+        ],
+      },
+    });
+    batch.close();
+  });
+
+  it("re-attaches a force command with an unpinned observe request", () => {
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/force", scripts: null, stopOwners: true }],
+      callbacks: NOOP_CALLBACKS,
+    });
+
+    completeHandshake(sockets[0]);
+    sockets[0].fireClose(1006, "abnormal");
+    expect(sockets).toHaveLength(2);
+
+    sockets[1].fireOpen();
+    const open = JSON.parse(sockets[1].textSent[0]) as {
+      readonly manifest: Record<string, { major: number; minor: number }>;
+    };
+    sockets[1].fireText({
+      kind: "openAck",
+      manifest: {
+        ...open.manifest,
+        "worktree.deleteBatchByPath": { major: 1, minor: 0 },
+      },
+    });
+
+    expect(subscribeFrame(sockets[1])).toMatchObject({
+      kind: "subscribe",
+      method: "worktree.deleteBatchByPath",
+      schemaVersion: { major: 1, minor: 0 },
+      params: { mode: "observe", commandId: COMMAND_ID },
+    });
+    batch.close();
+  });
+});
+
+describe("WorktreeDeleteBatchStreamClient target.complete decline kind", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function openWithCompleteSpy(): {
+    readonly socket: StubStreamWebSocket;
+    readonly completions: ReadonlyArray<readonly unknown[]>;
+    readonly batch: WorktreeDeleteBatchStreamClient;
+  } {
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
+    const completions: unknown[][] = [];
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: false }],
+      callbacks: {
+        ...NOOP_CALLBACKS,
+        onTargetComplete: (...args) => {
+          completions.push(args);
+        },
+      },
+    });
+    completeHandshake(sockets[0]);
+    return { socket: sockets[0], completions, batch };
+  }
+
+  it("passes the decline kind of a non-deletion through to the callback", () => {
+    const { socket, completions, batch } = openWithCompleteSpy();
+
+    socket.fireText({
+      kind: "target.complete",
+      worktreePath: "/wt/a",
+      deleted: false,
+      declined: "not_managed",
+      hasBinaryPayload: false,
+    });
+
+    expect(completions).toEqual([["/wt/a", false, "not_managed", undefined]]);
+    batch.close();
+  });
+
+  it("reports an absent decline kind as undefined (older host, or a deletion)", () => {
+    const { socket, completions, batch } = openWithCompleteSpy();
+
+    socket.fireText({
+      kind: "target.complete",
+      worktreePath: "/wt/a",
+      deleted: true,
+      hasBinaryPayload: false,
+    });
+
+    expect(completions).toEqual([["/wt/a", true, undefined, undefined]]);
+    batch.close();
+  });
+});
+
+describe("WorktreeDeleteBatchStreamClient decline kind on a force-delete retry", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function openForceBatch(): {
+    readonly socket: StubStreamWebSocket;
+    readonly completions: ReadonlyArray<readonly unknown[]>;
+    readonly batch: WorktreeDeleteBatchStreamClient;
+  } {
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
+    const completions: unknown[][] = [];
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: true }],
+      callbacks: {
+        ...NOOP_CALLBACKS,
+        onTargetComplete: (...args) => {
+          completions.push(args);
+        },
+      },
+    });
+    return { socket: sockets[0], completions, batch };
+  }
+
+  it("subscribes a stopOwners target at the host's newest minor, so a decline kind survives", () => {
+    const { socket, completions, batch } = openForceBatch();
+    completeHandshake(socket);
+
+    // `@1.1` is the floor the consent needs, not the version declared.
+    expect(subscribeFrame(socket)).toMatchObject({
+      schemaVersion: {
+        major: 1,
+        minor:
+          hostStreamRpcRegistry["worktree.deleteBatchByPath"][1].latestMinor,
+      },
+      params: { mode: "start", targets: [{ stopOwners: true }] },
+    });
+
+    socket.fireText({
+      kind: "target.complete",
+      worktreePath: "/wt/a",
+      deleted: false,
+      declined: "teardown_failed",
+      hasBinaryPayload: false,
+    });
+    expect(completions).toEqual([
+      ["/wt/a", false, "teardown_failed", undefined],
+    ]);
+    batch.close();
+  });
+
+  it("still delivers the outcome from a @1.1 host that cannot name a decline kind", () => {
+    const { socket, completions, batch } = openForceBatch();
+    socket.fireOpen();
+    const open = JSON.parse(socket.textSent[0]) as {
+      readonly manifest: Record<string, { major: number; minor: number }>;
+    };
+    socket.fireText({
+      kind: "openAck",
+      manifest: {
+        ...open.manifest,
+        "worktree.deleteBatchByPath": { major: 1, minor: 1 },
+      },
+    });
+
+    expect(subscribeFrame(socket)).toMatchObject({
+      schemaVersion: { major: 1, minor: 1 },
+      params: { mode: "start", targets: [{ stopOwners: true }] },
+    });
+
+    socket.fireText({
+      kind: "target.complete",
+      worktreePath: "/wt/a",
+      deleted: false,
+      hasBinaryPayload: false,
+    });
+    expect(completions).toEqual([["/wt/a", false, undefined, undefined]]);
+    batch.close();
+  });
+});
+
+describe("WorktreeDeleteBatchStreamClient error tail", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function openWithTerminalSpies(): {
+    readonly socket: StubStreamWebSocket;
+    readonly completions: ReadonlyArray<readonly unknown[]>;
+    readonly failures: ReadonlyArray<readonly unknown[]>;
+    readonly batch: WorktreeDeleteBatchStreamClient;
+  } {
+    const { factory, sockets } = makeStubSocketFactory();
+    const client = makeStubSocketStreamClient(factory);
+    const completions: unknown[][] = [];
+    const failures: unknown[][] = [];
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: client,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: false }],
+      callbacks: {
+        ...NOOP_CALLBACKS,
+        onTargetComplete: (...args) => {
+          completions.push(args);
+        },
+        onTargetFailed: (...args) => {
+          failures.push(args);
+        },
+      },
+    });
+    completeHandshake(sockets[0]);
+    return { socket: sockets[0], completions, failures, batch };
+  }
+
+  it("passes the error tail of a failed deletion through target.complete", () => {
+    const { socket, completions, batch } = openWithTerminalSpies();
+
+    socket.fireText({
+      kind: "target.complete",
+      worktreePath: "/wt/a",
+      deleted: false,
+      declined: "removal_failed",
+      errorTail: "fatal: cannot remove",
+      hasBinaryPayload: false,
+    });
+
+    expect(completions).toEqual([
+      ["/wt/a", false, "removal_failed", "fatal: cannot remove"],
+    ]);
+    batch.close();
+  });
+
+  it("passes the error tail of a failed target through target.failed", () => {
+    const { socket, failures, batch } = openWithTerminalSpies();
+
+    socket.fireText({
+      kind: "target.failed",
+      worktreePath: "/wt/a",
+      reason: "git worktree remove failed",
+      errorTail: "error: unable to unlink",
+      hasBinaryPayload: false,
+    });
+
+    expect(failures).toEqual([
+      [
+        "/wt/a",
+        "git worktree remove failed",
+        {
+          holders: undefined,
+          code: undefined,
+          errorTail: "error: unable to unlink",
+        },
+      ],
+    ]);
+    batch.close();
+  });
+
+  it("delivers the terminal frame with an undefined tail when the host sends a malformed one", () => {
+    const { socket, completions, failures, batch } = openWithTerminalSpies();
+
+    socket.fireText({
+      kind: "target.complete",
+      worktreePath: "/wt/a",
+      deleted: false,
+      declined: "removal_failed",
+      errorTail: { not: "a string" },
+      hasBinaryPayload: false,
+    });
+    socket.fireText({
+      kind: "target.failed",
+      worktreePath: "/wt/b",
+      reason: "boom",
+      errorTail: 7,
+      hasBinaryPayload: false,
+    });
+
+    expect(completions).toEqual([
+      ["/wt/a", false, "removal_failed", undefined],
+    ]);
+    expect(failures).toEqual([
+      [
+        "/wt/b",
+        "boom",
+        { holders: undefined, code: undefined, errorTail: undefined },
+      ],
+    ]);
+    batch.close();
+  });
+});
+
+describe("WorktreeDeleteBatchStreamClient held continuity", () => {
+  function startReached(): {
+    readonly fake: FakeStreamClient;
+    readonly batch: WorktreeDeleteBatchStreamClient;
+    readonly statuses: Array<{
+      readonly status: string;
+      readonly continuity: StreamContinuity;
+    }>;
+  } {
+    const fake = new FakeStreamClient(true);
+    const statuses: Array<{
+      readonly status: string;
+      readonly continuity: StreamContinuity;
+    }> = [];
+    const batch = new WorktreeDeleteBatchStreamClient({
+      wsStreamClient: fake,
+      commandId: COMMAND_ID,
+      source: "settings",
+      targets: [{ worktreePath: "/wt/a", scripts: null, stopOwners: false }],
+      callbacks: {
+        ...NOOP_CALLBACKS,
+        onConnectionStatus: ({ status, continuity }) => {
+          statuses.push({ status, continuity });
+        },
+      },
+    });
+    return { fake, batch, statuses };
+  }
+
+  it("keeps the start session while the host holds it, and reports the held and continued transitions", () => {
+    const { fake, batch, statuses } = startReached();
+    const session = fake.sessions[0];
+
+    session.emitContinuityStatus("reconnecting", "held");
+    session.emitContinuityStatus("open", "continued");
+
+    expect(fake.subscribes).toHaveLength(1);
+    expect(session.closed).toBe(false);
+    expect(statuses.slice(-2)).toEqual([
+      { status: "reconnecting", continuity: "held" },
+      { status: "open", continuity: "continued" },
+    ]);
+    batch.close();
+  });
+
+  it("swaps to observe on a plain reconnect after the start was sent", () => {
+    const { fake, batch, statuses } = startReached();
+    const session = fake.sessions[0];
+
+    session.emitContinuityStatus("reconnecting", null);
+
+    expect(session.closed).toBe(true);
+    expect(fake.subscribes).toHaveLength(2);
+    expect(fake.subscribes[1]?.params).toEqual({
+      mode: "observe",
+      commandId: COMMAND_ID,
+    });
+    expect(statuses.at(-1)).toEqual({
+      status: "reconnecting",
+      continuity: null,
+    });
+    batch.close();
+  });
+});

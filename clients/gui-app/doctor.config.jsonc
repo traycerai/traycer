@@ -1,0 +1,29 @@
+{
+  "$schema": "https://react.doctor/schema/config.json",
+  "blocking": "warning",
+
+  // React Doctor backlog reviewed during the misc-fixes cleanup.
+  // These rules flag existing architecture patterns that need separate,
+  // behavior-focused refactors rather than broad lint churn in this PR.
+  "rules": {
+    "react-doctor/prefer-tag-over-role": "off",
+    "react-doctor/no-aria-hidden-on-focusable": "off",
+    "react-doctor/no-giant-component": "off",
+    "react-doctor/no-event-handler": "off",
+    "react-doctor/no-multi-comp": "off",
+    "react-doctor/js-combine-iterations": "off",
+    "react-doctor/no-pass-data-to-parent": "off",
+    "react-doctor/jsx-no-jsx-as-prop": "off",
+    "react-doctor/no-derived-state": "off",
+    "react-doctor/no-pass-live-state-to-parent": "off",
+    "react-doctor/query-mutation-missing-invalidation": "off",
+    "react-doctor/prefer-dynamic-import": "off",
+    "react-doctor/async-defer-await": "off",
+    "react-doctor/js-tosorted-immutable": "off",
+    "react-doctor/no-polymorphic-children": "off",
+  },
+
+  "ignore": {
+    "files": ["doctor.config.jsonc"],
+  },
+}

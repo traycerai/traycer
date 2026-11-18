@@ -1,0 +1,57 @@
+{
+  "name": "@traycer-clients/traycer-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Traycer CLI - host supervisor, auth, and config surface",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/traycerai/traycer.git",
+    "directory": "clients/traycer-cli"
+  },
+  "bin": {
+    "traycer": "./src/index.ts"
+  },
+  "type": "module",
+  "scripts": {
+    "traycer": "bun run src/index.ts",
+    "compile": "node ../../scripts/tsrs.mjs --noEmit --singleThreaded --incremental --tsBuildInfoFile node_modules/.tmp/compile.tsbuildinfo",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "lint": "bun run lint:files .",
+    "lint:files": "oxlint -c oxlint.config.ts --fix --deny-warnings --no-error-on-unmatched-pattern",
+    "test": "vitest run --config vitest.config.ts",
+    "build": "bun run --cwd ../../protocol validate:registries && node scripts/build-cli-npm.cjs",
+    "prepack": "bun run build",
+    "build:sea": "bun run --cwd ../../protocol validate:registries && node scripts/build-cli-sea.cjs",
+    "smoke:sea": "node scripts/smoke-cli-sea.cjs",
+    "smoke:ndjson": "node scripts/smoke-cli-ndjson.cjs",
+    "smoke:exit-code": "node scripts/smoke-cli-exit-code.cjs"
+  },
+  "dependencies": {
+    "@sentry/node": "catalog:",
+    "commander": "catalog:",
+    "node-stream-zip": "catalog:",
+    "qrcode": "catalog:",
+    "tar": "^7.5.22",
+    "undici": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@sentry/esbuild-plugin": "catalog:",
+    "@traycer-clients/shared": "workspace:*",
+    "@traycer/protocol": "workspace:*",
+    "@types/node": "catalog:",
+    "@types/qrcode": "catalog:",
+    "@typescript-eslint/eslint-plugin": "catalog:",
+    "@typescript-eslint/parser": "catalog:",
+    "esbuild": "catalog:",
+    "eslint": "catalog:",
+    "prettier": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}

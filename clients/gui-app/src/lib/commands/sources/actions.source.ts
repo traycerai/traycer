@@ -1,0 +1,122 @@
+import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
+/**
+ * One flat row per `chord`-kind action in `ACTION_META`. Runs as
+ * a React source so rebinding a chord in the settings UI updates
+ * the palette's shortcut column live; the items themselves still
+ * dispatch through `dispatchAction` via `runCommandItem`, so the
+ * keybinding registry remains the single source of truth for the
+ * action's behavior.
+ *
+ * Skips:
+ *   - `digit`-kind actions (modifier-only chords resolved at
+ *     runtime; their concrete targets already live in other
+ *     surfaces);
+ *   - `app.palette.open` (the opener itself would loop);
+ *   - `composer.dictation.toggle` (no `dispatchAction` handler - it's a
+ *     press-and-hold action owned by a capture-phase hook, so a palette
+ *     entry would be inert; toggling it is the mic button's job);
+ *   - `composer.suggestion.accept` (no `dispatchAction` handler either - the
+ *     chat composer matches it in its own editor while a suggestion shows);
+ *   - actions this app cannot run (`isActionAvailable`): `desktopOnly` ones in
+ *     the installed mobile app, where the surface they act on is never drawn,
+ *     and the soundtrack's in a build with nothing to play;
+ *   - `app.home.open` while the Home tab setting is off;
+ *   - `app.tabs.vertical.collapse` while this window's tabs are at the top.
+ */
+import { useMemo } from "react";
+import {
+  ACTION_IDS,
+  ACTION_META,
+  isActionAvailable,
+  type ActionId,
+  type ActionMeta,
+} from "@/lib/keybindings/actions";
+import { useSideStripCollapseOffered } from "@/components/layout/tabs/mobile-strip-form-context";
+import { useTabStripPlacement } from "@/components/layout/tabs/use-tab-strip-placement";
+import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+import { isHomeTabEnabled } from "@/stores/layout/layout-store";
+import type { CommandItem, ReactCommandSource } from "@/lib/commands/types";
+
+export const actionsSource: ReactCommandSource = {
+  id: "actions",
+  useItems: () => {
+    const bindings = useKeybindingStore((state) => state.bindings);
+    const canRecover = useTabRecoveryHistory(
+      (state) => state.ready && state.entries.length > 0,
+    );
+    const homeTabEnabled = isHomeTabEnabled();
+    const placement = useTabStripPlacement();
+    const collapseOffered = useSideStripCollapseOffered();
+    const stripCollapsible = placement !== "top" && collapseOffered;
+    return useMemo<ReadonlyArray<CommandItem>>(() => {
+      const items: Array<CommandItem> = [];
+      for (const id of ACTION_IDS) {
+        const meta = ACTION_META[id];
+        if (
+          !isPaletteEligible(meta, homeTabEnabled, stripCollapsible) ||
+          (id === "tab.reopen" && !canRecover)
+        )
+          continue;
+        items.push(buildActionItem(meta, bindings[id] ?? null));
+      }
+      return items;
+    }, [bindings, canRecover, homeTabEnabled, stripCollapsible]);
+  },
+};
+
+function isPaletteEligible(
+  meta: ActionMeta,
+  homeTabEnabled: boolean,
+  stripCollapsible: boolean,
+): boolean {
+  if (meta.kind !== "chord") return false;
+  // Nothing registers the handler of an action this app cannot run, so the row
+  // would offer a command that does nothing. Both of its facts are fixed before
+  // the first render, so reading it inside the memo is stable for the app's
+  // lifetime.
+  if (!isActionAvailable(meta.id)) return false;
+  // Its handler no-ops while the Home tab is off, and a palette row that does
+  // nothing is worse than no row.
+  if (meta.id === "app.home.open" && !homeTabEnabled) return false;
+  // Only the vertical strip registers its handler (`side-tab-strip.tsx`).
+  if (meta.id === "app.tabs.vertical.collapse" && !stripCollapsible)
+    return false;
+  if (meta.id === "app.palette.open") return false;
+  // No dispatchAction handler; handled by the capture-phase dictation hook.
+  if (meta.id === "composer.dictation.toggle") return false;
+  // No dispatchAction handler either: the chat composer matches the chord in
+  // its own editor, and only while it shows a suggestion. A palette row would
+  // be inert.
+  if (meta.id === "composer.suggestion.accept") return false;
+  // The composer source emits a context-gated "Change model…" entry (with the
+  // active model as its subtitle); a second generic row here would duplicate it.
+  if (meta.id === "composer.model-picker.toggle") return false;
+  if (meta.id === "composer.drafts") return false;
+  return true;
+}
+
+/** Former names a person may still type: the strip's drawer was "Inbox". */
+const ACTION_SYNONYMS: Partial<Record<ActionId, ReadonlyArray<string>>> = {
+  "app.notifications.open": ["inbox"],
+};
+
+function buildActionItem(
+  meta: ActionMeta,
+  shortcut: string | null,
+): CommandItem {
+  const actionId: ActionId = meta.id;
+  return {
+    id: `action:${actionId}`,
+    label: meta.label,
+    description: meta.description,
+    keywords: [meta.category, ...(ACTION_SYNONYMS[actionId] ?? [])],
+    group: "actions",
+    scope: "actions",
+    shortcut,
+    actionId,
+    subpage: null,
+    // Never reached from the palette: `runCommandItem` short-
+    // circuits to `dispatchAction` whenever `actionId !== null`.
+    run: () => undefined,
+  };
+}

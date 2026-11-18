@@ -1,0 +1,459 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+import { getDefaultBindings } from "@/lib/keybindings/actions";
+import { findActionMatchForChord } from "@/lib/keybindings/dispatch";
+import { isMac } from "@/lib/keybindings/platform";
+
+describe("useKeybindingStore", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
+  });
+
+  afterEach(() => {
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
+  });
+
+  it("initializes with the default bindings", () => {
+    const state = useKeybindingStore.getState();
+    expect(state.bindings["epic.switch.byDigit"]).toBe("alt");
+    expect(state.bindings["tab.switch.byDigit"]).toBe("mod");
+    expect(state.bindings["epic.next"]).toBe("mod+shift+]");
+    expect(state.bindings["epic.prev"]).toBe("mod+shift+[");
+    expect(state.bindings["tab.next"]).toBe("mod+]");
+    expect(state.bindings["tab.prev"]).toBe("mod+[");
+    expect(state.bindings["app.settings.section.byDigit"]).toBe("alt");
+    expect(state.bindings["group.split.horizontal"]).toBe("mod+d");
+    expect(state.bindings["group.split.vertical"]).toBe("mod+shift+d");
+    expect(state.bindings["app.sidebar.toggle"]).toBe("mod+b");
+    expect(state.bindings["nav.back"]).toBe("mod+shift+,");
+    expect(state.bindings["nav.forward"]).toBe("mod+shift+.");
+  });
+
+  it("setBinding updates an action's chord", () => {
+    useKeybindingStore.getState().setBinding("app.settings.open", "mod+alt+s");
+    expect(useKeybindingStore.getState().bindings["app.settings.open"]).toBe(
+      "mod+alt+s",
+    );
+  });
+
+  // The dispatcher and every conflict/persistence read compare bindings as
+  // plain strings, so a non-canonical chord (a reordered modifier, or `ctrl`
+  // off mac where the encoder reads Control as `mod`) has to be normalized
+  // before it lands in the store, not just at match time.
+  it("setBinding stores the canonical form of a non-canonical chord", () => {
+    useKeybindingStore.getState().setBinding("epic.new", "ctrl+alt+t");
+    expect(useKeybindingStore.getState().bindings["epic.new"]).toBe(
+      isMac() ? "ctrl+alt+t" : "mod+alt+t",
+    );
+  });
+
+  // The suggested-reply accept key is the one binding a person records as a
+  // bare key with no modifier (Tab in place of →): it has to survive the
+  // canonical form, the persisted write and a rehydrate exactly as recorded.
+  it("keeps a bare-key rebind of the accept key through persistence", async () => {
+    useKeybindingStore
+      .getState()
+      .setBinding("composer.suggestion.accept", "tab");
+    expect(
+      useKeybindingStore.getState().bindings["composer.suggestion.accept"],
+    ).toBe("tab");
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(
+      useKeybindingStore.getState().bindings["composer.suggestion.accept"],
+    ).toBe("tab");
+    useKeybindingStore.getState().resetAll();
+    expect(
+      useKeybindingStore.getState().bindings["composer.suggestion.accept"],
+    ).toBe("arrowright");
+  });
+
+  it("clearBinding sets the action to null", () => {
+    useKeybindingStore.getState().clearBinding("epic.switch.byDigit");
+    expect(
+      useKeybindingStore.getState().bindings["epic.switch.byDigit"],
+    ).toBeNull();
+  });
+
+  it("resetAll restores every default", () => {
+    useKeybindingStore.getState().clearBinding("epic.switch.byDigit");
+    useKeybindingStore.getState().setBinding("app.settings.open", "mod+alt+s");
+    useKeybindingStore.getState().resetAll();
+    expect(useKeybindingStore.getState().bindings).toEqual(
+      getDefaultBindings(),
+    );
+  });
+
+  it("persists bindings to the versioned localStorage key", () => {
+    useKeybindingStore.getState().setBinding("epic.new", "mod+alt+t");
+    const raw = window.localStorage.getItem("traycer-gui-app:keybindings");
+    expect(raw).not.toBeNull();
+    if (raw === null) return;
+    const parsed = JSON.parse(raw) as {
+      state: { bindings: Record<string, string | null> };
+    };
+    expect(parsed.state.bindings["epic.new"]).toBe("mod+alt+t");
+  });
+
+  it("rehydrates persisted rebinds via default hydration", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({
+        state: {
+          bindings: {
+            ...getDefaultBindings(),
+            "epic.new": "mod+alt+n",
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(useKeybindingStore.getState().bindings["epic.new"]).toBe(
+      "mod+alt+n",
+    );
+  });
+
+  it.each([
+    { actionId: "app.palette.open", chord: "mod+f" },
+    { actionId: "composer.model-picker.toggle", chord: "mod+g" },
+  ])(
+    "preserves $actionId when upgrading a version 1 binding map",
+    async ({ actionId, chord }) => {
+      const saved: Record<string, string | null> = {
+        ...getDefaultBindings(),
+      };
+      delete saved["tile.find.open"];
+      delete saved["tile.find.next"];
+      saved[actionId] = chord;
+      window.localStorage.setItem(
+        "traycer-gui-app:keybindings",
+        JSON.stringify({ state: { bindings: saved }, version: 1 }),
+      );
+
+      await useKeybindingStore.persist.rehydrate();
+
+      expect(findActionMatchForChord(chord)).toEqual({
+        actionId,
+        terminalPolicy: "app",
+      });
+    },
+  );
+
+  it("adds Find defaults when upgrading a version 1 binding map", async () => {
+    const saved: Record<string, string | null> = {
+      ...getDefaultBindings(),
+    };
+    delete saved["tile.find.open"];
+    delete saved["tile.find.next"];
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({ state: { bindings: saved }, version: 1 }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(findActionMatchForChord("mod+f")).toEqual({
+      actionId: "tile.find.open",
+      terminalPolicy: "shell",
+    });
+    expect(findActionMatchForChord("mod+g")).toEqual({
+      actionId: "tile.find.next",
+      terminalPolicy: "shell",
+    });
+  });
+
+  it("keeps the first custom primary binding ahead of later custom actions", async () => {
+    const saved: Record<string, string | null> = {
+      ...getDefaultBindings(),
+    };
+    delete saved["tile.find.open"];
+    delete saved["tile.find.next"];
+    saved["app.palette.open"] = "mod+f";
+    saved["composer.model-picker.toggle"] = "mod+f";
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({ state: { bindings: saved }, version: 1 }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(findActionMatchForChord("mod+f")).toEqual({
+      actionId: "app.palette.open",
+      terminalPolicy: "app",
+    });
+  });
+
+  it("keeps primary matches ahead of secondaries and respects null bindings", async () => {
+    const saved: Record<string, string | null> = {
+      ...getDefaultBindings(),
+    };
+    delete saved["tile.find.open"];
+    delete saved["tile.find.next"];
+    const paletteSecondaryChord = isMac() ? "ctrl+shift+p" : "mod+shift+p";
+    saved["app.settings.open"] = paletteSecondaryChord;
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({ state: { bindings: saved }, version: 1 }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(findActionMatchForChord(paletteSecondaryChord)).toEqual({
+      actionId: "app.settings.open",
+      terminalPolicy: "app",
+    });
+    useKeybindingStore.getState().clearBinding("app.settings.open");
+    expect(findActionMatchForChord(paletteSecondaryChord)).toEqual({
+      actionId: "app.palette.open",
+      terminalPolicy: "app",
+    });
+    useKeybindingStore.getState().clearBinding("app.palette.open");
+    expect(findActionMatchForChord(paletteSecondaryChord)).toBeNull();
+  });
+
+  it("ignores invalid persisted binding keys and values during hydration", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({
+        state: {
+          bindings: {
+            "epic.new": 123,
+            "tab.new": ["mod+t"],
+            "group.split.horizontal": "mod+alt+h",
+            "group.split.vertical": null,
+            "unknown.action": "mod+u",
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    const bindings = useKeybindingStore.getState().bindings;
+    expect(bindings["epic.new"]).toBe(getDefaultBindings()["epic.new"]);
+    expect(bindings["tab.new"]).toBe(getDefaultBindings()["tab.new"]);
+    expect(bindings["group.split.horizontal"]).toBe("mod+alt+h");
+    expect(bindings["group.split.vertical"]).toBeNull();
+    expect(Object.hasOwn(bindings, "unknown.action")).toBe(false);
+  });
+
+  it("canonicalizes a persisted chord-kind binding on read", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({
+        state: {
+          bindings: {
+            ...getDefaultBindings(),
+            "composer.model-picker.toggle": "alt+shift+m",
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    // Reordering has no platform branch (only the ctrl-off-mac conversion
+    // does, and this chord has no ctrl token), so this holds on either
+    // platform this suite runs on.
+    expect(
+      useKeybindingStore.getState().bindings["composer.model-picker.toggle"],
+    ).toBe("shift+alt+m");
+  });
+
+  it("leaves a persisted digit-kind mask exactly as stored", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({
+        state: {
+          bindings: {
+            ...getDefaultBindings(),
+            "epic.switch.byDigit": "shift+alt",
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(useKeybindingStore.getState().bindings["epic.switch.byDigit"]).toBe(
+      "shift+alt",
+    );
+  });
+
+  it("migrates legacy nav.back/nav.forward arrow defaults to mod+shift+, and mod+shift+.", async () => {
+    const legacyBack = isMac() ? "mod+arrowleft" : "alt+arrowleft";
+    const legacyForward = isMac() ? "mod+arrowright" : "alt+arrowright";
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({
+        state: {
+          bindings: {
+            ...getDefaultBindings(),
+            "nav.back": legacyBack,
+            "nav.forward": legacyForward,
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(useKeybindingStore.getState().bindings["nav.back"]).toBe(
+      "mod+shift+,",
+    );
+    expect(useKeybindingStore.getState().bindings["nav.forward"]).toBe(
+      "mod+shift+.",
+    );
+  });
+
+  it("preserves the other platform's former defaults as custom bindings", async () => {
+    const customBack = isMac() ? "alt+arrowleft" : "mod+arrowleft";
+    const customForward = isMac() ? "alt+arrowright" : "mod+arrowright";
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({
+        state: {
+          bindings: {
+            ...getDefaultBindings(),
+            "nav.back": customBack,
+            "nav.forward": customForward,
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(useKeybindingStore.getState().bindings["nav.back"]).toBe(customBack);
+    expect(useKeybindingStore.getState().bindings["nav.forward"]).toBe(
+      customForward,
+    );
+  });
+
+  it("preserves customized nav bindings during hydration", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({
+        state: {
+          bindings: {
+            ...getDefaultBindings(),
+            "nav.back": "mod+alt+b",
+            "nav.forward": "mod+alt+f",
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(useKeybindingStore.getState().bindings["nav.back"]).toBe(
+      "mod+alt+b",
+    );
+    expect(useKeybindingStore.getState().bindings["nav.forward"]).toBe(
+      "mod+alt+f",
+    );
+  });
+
+  it("migrates the legacy split default pair to right on mod+d and down on mod+shift+d", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({
+        state: {
+          bindings: {
+            ...getDefaultBindings(),
+            "group.split.horizontal": "mod+shift+d",
+            "group.split.vertical": "mod+d",
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(
+      useKeybindingStore.getState().bindings["group.split.horizontal"],
+    ).toBe("mod+d");
+    expect(useKeybindingStore.getState().bindings["group.split.vertical"]).toBe(
+      "mod+shift+d",
+    );
+  });
+
+  it("preserves customized split bindings during hydration", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({
+        state: {
+          bindings: {
+            ...getDefaultBindings(),
+            "group.split.horizontal": "mod+alt+h",
+            "group.split.vertical": "mod+alt+v",
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(
+      useKeybindingStore.getState().bindings["group.split.horizontal"],
+    ).toBe("mod+alt+h");
+    expect(useKeybindingStore.getState().bindings["group.split.vertical"]).toBe(
+      "mod+alt+v",
+    );
+  });
+
+  it("seeds composer.drafts from a rebound legacy composer.stash", async () => {
+    const legacy: Record<string, string | null> = {
+      ...getDefaultBindings(),
+      "composer.stash": "mod+alt+s",
+    };
+    // The renamed id is not in the persisted record at all, which is exactly
+    // the shape an upgrade produces.
+    delete legacy["composer.drafts"];
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({ state: { bindings: legacy }, version: 1 }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(useKeybindingStore.getState().bindings["composer.drafts"]).toBe(
+      "mod+alt+s",
+    );
+  });
+
+  it("keeps an explicit composer.drafts rebind over the legacy value", async () => {
+    window.localStorage.setItem(
+      "traycer-gui-app:keybindings",
+      JSON.stringify({
+        state: {
+          bindings: {
+            ...getDefaultBindings(),
+            "composer.stash": "mod+alt+s",
+            "composer.drafts": "mod+alt+d",
+          },
+        },
+        version: 1,
+      }),
+    );
+
+    await useKeybindingStore.persist.rehydrate();
+
+    expect(useKeybindingStore.getState().bindings["composer.drafts"]).toBe(
+      "mod+alt+d",
+    );
+  });
+});

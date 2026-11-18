@@ -1,0 +1,30 @@
+{
+  "name": "@traycer-clients/shared",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "compile": "node ../../scripts/tsrs.mjs --noEmit --singleThreaded --incremental --tsBuildInfoFile node_modules/.tmp/compile.tsbuildinfo",
+    "lint": "bun run lint:files .",
+    "lint:files": "oxlint -c oxlint.config.ts --fix --deny-warnings --no-error-on-unmatched-pattern",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "catalog:",
+    "@typescript-eslint/parser": "catalog:",
+    "eslint": "catalog:",
+    "fflate": "catalog:",
+    "prettier": "catalog:",
+    "yaml": "catalog:"
+  },
+  "nx": {
+    "implicitDependencies": [
+      "@traycer/protocol"
+    ]
+  }
+}

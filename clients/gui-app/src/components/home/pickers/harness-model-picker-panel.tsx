@@ -1,0 +1,535 @@
+import { PopoverContent } from "@/components/ui/popover";
+import { useCoarsePointerOpenAutoFocus } from "@/hooks/ui/use-coarse-pointer-open-autofocus";
+import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
+import { LEADER_SCOPE_MODEL_PICKER } from "@/lib/keybindings/leader-scope";
+import { HarnessModelPickerSearch } from "@/components/home/pickers/harness-model-picker-search";
+import { HarnessModelPickerList } from "@/components/home/pickers/harness-model-picker-list";
+import { ProviderRail } from "@/components/home/pickers/harness-model-picker-group";
+import {
+  PickerProviderAuthLine,
+  PickerTerminalSetupGuidance,
+} from "@/components/home/pickers/harness-model-picker-auth-line";
+import { PickerSandboxCredentialLine } from "@/components/home/pickers/harness-sandbox-credential-line";
+import { useOnTeamSandbox } from "@/hooks/sandboxes/use-on-team-sandbox";
+import {
+  TEAM_SANDBOX_HARNESS_UNAVAILABLE,
+  teamSandboxHarnessBlocked,
+} from "@/lib/sandboxes/team-sandbox-harness";
+import { PickerProfileDropdown } from "@/components/home/pickers/picker-profile-dropdown";
+import { TerminalAccountFirstMention } from "@/components/home/pickers/terminal-account-first-mention";
+import { isProfileUsageSidecarTarget } from "@/components/providers/profile-usage-sidecar-target";
+import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
+import { pickerProfileShortcutHintForIndex } from "@/components/home/pickers/harness-model-picker-shortcut-hint";
+import type {
+  HarnessOption,
+  ProviderId,
+} from "@/components/home/data/landing-options";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
+import {
+  profileDropdownShown,
+  resolvedProfileRow,
+  type ProfileRowAdmission,
+  type RemovedProviderProfile,
+} from "@/components/providers/provider-profile-model";
+import { removedProfilesForHarness } from "@/components/home/pickers/harness-rail-providers";
+import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
+import type { GuiHarnessCatalogEntry } from "@/hooks/harnesses/use-gui-harness-catalog";
+import type { ProviderPackPreparing } from "@/components/providers/provider-pack-readiness";
+import type { HarnessModelRow } from "@/components/home/data/harness-model-search";
+import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
+import type { VirtuosoHandle } from "react-virtuoso";
+import {
+  useCallback,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import { cn } from "@/lib/utils";
+import {
+  HarnessModelPickerModelSettingsFooter,
+  type ReasoningFooterConfig,
+  type ServiceTierFooterConfig,
+} from "@/components/home/pickers/harness-model-picker-footers";
+import type { MaxModeContext } from "@/components/home/data/model-max-mode";
+import {
+  UltracodeFooterButton,
+  type UltracodeFooterConfig,
+} from "@/components/home/pickers/ultracode-footer-button";
+
+/**
+ * What the picker's body draws from. Props only: the live picker feeds it from
+ * the host catalog, the layout editor's sample canvas from sample data
+ * (`sample-model-picker.tsx`).
+ */
+export interface HarnessModelPickerPanelBodyProps {
+  readonly hasQuery: boolean;
+  readonly listboxId: string;
+  readonly idPrefix: string;
+  readonly inputRef: RefObject<HTMLInputElement | null>;
+  readonly query: string;
+  readonly onQueryChange: (next: string) => void;
+  readonly activeProviderLabel: string;
+  readonly activeDescendant: string | undefined;
+  readonly catalogHarnesses: ReadonlyArray<HarnessOption>;
+  readonly fallbackHarnesses: ReadonlyArray<HarnessOption>;
+  /** See `VisibleRailEntriesInput.offeredAgents`. */
+  readonly offeredAgents: ReadonlyArray<string> | null;
+  readonly profilesByHarnessId: ReadonlyMap<
+    GuiHarnessId,
+    ReadonlyArray<ProviderProfile>
+  >;
+  readonly removedProfilesByHarnessId: ReadonlyMap<
+    GuiHarnessId,
+    readonly RemovedProviderProfile[]
+  >;
+  readonly resolvedActiveProviderId: ProviderId;
+  readonly activeProfileId: string | null;
+  readonly activeProfileIdByHarnessId: ReadonlyMap<GuiHarnessId, string | null>;
+  readonly activeProviderProfiles: ReadonlyArray<ProviderProfile>;
+  readonly profileEnablementPending: (profileId: string | null) => boolean;
+  /** The browsed provider's CLI state, for the ambient-auth line shown when
+   *  the account dropdown is not (`profileDropdownShown`). `null` when
+   *  `providers.list` hasn't resolved it. */
+  readonly activeProviderState: ProviderCliState | null;
+  readonly lockedHarnessId: ProviderId | null;
+  readonly degradedHarnessIds: ReadonlySet<GuiHarnessId>;
+  readonly preparingByHarnessId: ReadonlyMap<
+    GuiHarnessId,
+    ProviderPackPreparing
+  >;
+  readonly catalogHarnessesLoading: boolean;
+  readonly onEntryChange: (providerId: ProviderId) => void;
+  readonly onRetryPack: (providerId: ProviderId) => void;
+  readonly onProfileChange: (
+    providerId: ProviderId,
+    profileId: string | null,
+  ) => void;
+  readonly onRefreshCatalog: () => Promise<void>;
+  readonly hostUnavailableLabel: string | null;
+  readonly onOpenProviderSettings: (focusTab: string) => void;
+  readonly onOpenHostUpdates: () => void;
+  /** Closes the picker popover without opening Settings - used by the profile
+   *  dropdown's "Add a profile" row, which opens the add-profile flow in
+   *  its own global host, not Settings. */
+  readonly onClosePicker: () => void;
+  readonly listRef: RefObject<VirtuosoHandle | null>;
+  readonly listKey: string;
+  readonly visibleRows: ReadonlyArray<HarnessModelRow>;
+  /** The browsed provider's model providers hidden in Settings. */
+  readonly hiddenModelProviders: ReadonlySet<string>;
+  readonly selectedRowId: string;
+  readonly effectiveActiveRowId: string;
+  readonly hoveredRowId: string;
+  readonly initialTopMostItemIndex: {
+    index: number;
+    align: "center" | "end" | "start";
+    behavior: "auto";
+  };
+  readonly catalogHarnessesError: boolean;
+  readonly activeProvider: GuiHarnessCatalogEntry | null;
+  readonly onHoverRow: (rowId: string) => void;
+  readonly onActiveRow: (rowId: string) => void;
+  readonly onSelectRow: (row: HarnessModelRow) => void;
+  readonly reasoningFooter: ReasoningFooterConfig | null;
+  readonly ultracodeFooter: UltracodeFooterConfig | null;
+  /** The picker's `visibleOpen`, for the footer's max treatment. */
+  readonly reasoningPickerOpen: boolean;
+  readonly serviceTierFooter: ServiceTierFooterConfig | null;
+  readonly maxModeContextKind?: MaxModeContext["kind"];
+  readonly maxModeRequired?: boolean;
+  /** The host "Add a profile" creates on - see `HarnessModelPicker`'s
+   *  prop of the same name. */
+  readonly createProfileHostId: string | null;
+  /** Exact host where the next run executes. Never inferred from the create
+   *  profile scope, even though current call sites intentionally pass both. */
+  readonly runTargetHostId: string | null;
+  /** Where a provider's setup terminal lands - see `HarnessModelPicker`'s
+   *  prop of the same name. */
+  readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
+  readonly createProfileDisabled: boolean;
+  readonly createProfileDisabledReason: string | undefined;
+  /** Per-row admission override for the active provider's profile strip -
+   *  see `HarnessModelPicker`'s prop of the same name. */
+  readonly profileAdmission: ReadonlyMap<
+    string | null,
+    ProfileRowAdmission
+  > | null;
+}
+
+interface HarnessModelPickerPanelProps extends HarnessModelPickerPanelBodyProps {
+  readonly trimmedQuery: string;
+  readonly onKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
+  /**
+   * Hand focus to the active composer's editor on close. `false` for an
+   * embedded picker (`HarnessModelPickerEmbedding`): Radix's own restore
+   * returns focus to the surface's face instead.
+   */
+  readonly closeFocusesComposer: boolean;
+  /** An embedding's own footer, under the effort footer; `null` for none. */
+  readonly footer: ReactNode | null;
+}
+
+/**
+ * The picker's own box: search, rail, list and effort footer. A composer's
+ * popover IS this box; an embedding's footer goes under it rather than inside
+ * it, so the popover grows by the footer and the list keeps the composer's
+ * height. Written once so the two can never disagree.
+ */
+const PICKER_BODY_HEIGHT =
+  "h-[min(var(--radix-popover-content-available-height),23rem)]";
+
+/** The picker's popover: the body in its Radix surface. */
+export function HarnessModelPickerPanel(props: HarnessModelPickerPanelProps) {
+  const { contentRef, onOpenAutoFocus: coarseOpenAutoFocus } =
+    useCoarsePointerOpenAutoFocus();
+  const {
+    trimmedQuery,
+    onQueryChange,
+    onKeyDown,
+    closeFocusesComposer,
+    footer,
+    ...body
+  } = props;
+
+  return (
+    <PopoverContent
+      side="bottom"
+      align="end"
+      sideOffset={8}
+      collisionPadding={12}
+      role="dialog"
+      aria-label="Select model"
+      // Opts this popover out of the keybinding provider's dialog block so the
+      // picker's leader-digit shortcuts fire while it's open (see
+      // `isAnyDialogOpen` in keybinding-provider.tsx).
+      data-leader-scope={LEADER_SCOPE_MODEL_PICKER}
+      layout="panel"
+      className={cn(
+        footer === null
+          ? PICKER_BODY_HEIGHT
+          : "max-h-[var(--radix-popover-content-available-height)]",
+        "w-[min(86vw,30rem)]",
+      )}
+      // Return focus to the composer editor (not the trigger pill) on close so
+      // the user can keep typing after picking a model. No-op on surfaces with
+      // no registered composer (e.g. the terminal launcher), where Radix's
+      // default focus restore stands. An embedded picker never asks: the
+      // registry falls back to ANY registered composer, which from outside
+      // one would pull an unrelated chat to the front.
+      onCloseAutoFocus={(event) => {
+        if (!closeFocusesComposer) return;
+        if (focusActiveComposer()) event.preventDefault();
+      }}
+      ref={contentRef}
+      // The search field is the first tabbable descendant, so Radix's own
+      // open-autofocus takes it whether or not the panel's search effect runs.
+      // Both halves have to move together or the gate is a no-op.
+      onOpenAutoFocus={coarseOpenAutoFocus}
+      onKeyDown={(event) => {
+        if (
+          isInsideEmbeddingFooter(event.target) ||
+          isInsideSpeedMenu(event.target)
+        ) {
+          return;
+        }
+        onKeyDown(event);
+      }}
+      onEscapeKeyDown={(event) => {
+        if (trimmedQuery.length === 0) return;
+        event.preventDefault();
+        onQueryChange("");
+      }}
+      onInteractOutside={(event) => {
+        if (isProfileUsageSidecarTarget(event.target)) event.preventDefault();
+      }}
+    >
+      {footer === null ? (
+        <HarnessModelPickerPanelBody {...body} onQueryChange={onQueryChange} />
+      ) : (
+        <>
+          <div className={cn("flex min-h-0 flex-col", PICKER_BODY_HEIGHT)}>
+            <HarnessModelPickerPanelBody
+              {...body}
+              onQueryChange={onQueryChange}
+            />
+          </div>
+          <div data-picker-embedding-footer="" className="shrink-0">
+            {footer}
+          </div>
+        </>
+      )}
+    </PopoverContent>
+  );
+}
+
+/** The search field, the provider rail, the account line, the list and the footer. */
+export function HarnessModelPickerPanelBody(
+  props: HarnessModelPickerPanelBodyProps,
+) {
+  const {
+    hasQuery,
+    listboxId,
+    idPrefix,
+    inputRef,
+    query,
+    onQueryChange,
+    activeProviderLabel,
+    activeDescendant,
+    catalogHarnesses,
+    fallbackHarnesses,
+    offeredAgents,
+    profilesByHarnessId,
+    removedProfilesByHarnessId,
+    resolvedActiveProviderId,
+    activeProfileId,
+    activeProfileIdByHarnessId,
+    activeProviderProfiles,
+    profileEnablementPending,
+    activeProviderState,
+    lockedHarnessId,
+    degradedHarnessIds,
+    preparingByHarnessId,
+    catalogHarnessesLoading,
+    onEntryChange,
+    onRetryPack,
+    onProfileChange,
+    onRefreshCatalog,
+    hostUnavailableLabel,
+    onOpenProviderSettings,
+    onOpenHostUpdates,
+    onClosePicker,
+    listRef,
+    listKey,
+    visibleRows,
+    hiddenModelProviders,
+    selectedRowId,
+    effectiveActiveRowId,
+    hoveredRowId,
+    initialTopMostItemIndex,
+    catalogHarnessesError,
+    activeProvider,
+    onHoverRow,
+    onActiveRow,
+    onSelectRow,
+    reasoningFooter,
+    ultracodeFooter,
+    reasoningPickerOpen,
+    serviceTierFooter,
+    maxModeContextKind,
+    maxModeRequired,
+    createProfileHostId,
+    runTargetHostId,
+    terminalLoginSurface,
+    createProfileDisabled,
+    createProfileDisabledReason,
+    profileAdmission,
+  } = props;
+  // On a team sandbox only a harness whose credential stays a placeholder is
+  // offered; any other is listed, not selectable.
+  const onTeamSandbox = useOnTeamSandbox(runTargetHostId);
+  const teamBlocked =
+    activeProvider !== null &&
+    teamSandboxHarnessBlocked(
+      activeProvider.sandboxCredentialMode,
+      onTeamSandbox,
+    );
+  const openAddProfile = useProviderProfileAddFlowStore(
+    (state) => state.openForHarness,
+  );
+  const [profileDropdownContainer, setProfileDropdownContainer] =
+    useState<HTMLDivElement | null>(null);
+  const bindProfileDropdownContainer = useCallback(
+    (node: HTMLDivElement | null) => {
+      setProfileDropdownContainer(node);
+    },
+    [],
+  );
+  const activeRemovedProfiles = removedProfilesForHarness(
+    removedProfilesByHarnessId,
+    resolvedActiveProviderId,
+  );
+
+  return (
+    <>
+      <HarnessModelPickerSearch
+        inputRef={inputRef}
+        value={query}
+        onChange={onQueryChange}
+        providerLabel={activeProviderLabel}
+        listboxId={listboxId}
+        activeDescendant={activeDescendant}
+      />
+      {/* The provider rail stays mounted while searching: search is local to the
+          active harness, so the rail keeps its role as the only way to switch
+          scope. The grid is always two columns - no width jump on query. */}
+      <div className="grid min-h-0 flex-1 grid-cols-[3rem_minmax(0,1fr)] overflow-hidden">
+        <ProviderRail
+          harnesses={catalogHarnesses}
+          fallbackHarnesses={fallbackHarnesses}
+          profilesByHarnessId={profilesByHarnessId}
+          removedProfilesByHarnessId={removedProfilesByHarnessId}
+          activeProviderId={resolvedActiveProviderId}
+          activeProfileIdByHarnessId={activeProfileIdByHarnessId}
+          lockedHarnessId={lockedHarnessId}
+          degradedHarnessIds={degradedHarnessIds}
+          preparingByHarnessId={preparingByHarnessId}
+          pending={catalogHarnessesLoading}
+          onEntryChange={onEntryChange}
+          onRetryPack={onRetryPack}
+          onRefresh={onRefreshCatalog}
+          refreshDisabledReason={hostUnavailableLabel ?? undefined}
+          onOpenProviderSettings={onOpenProviderSettings}
+          offeredAgents={offeredAgents}
+        />
+        <div
+          ref={bindProfileDropdownContainer}
+          className="flex min-h-0 min-w-0 flex-col overflow-hidden"
+        >
+          {/* The dropdown is the picker's second interaction level: only when
+              `profileDropdownShown` (a removed pin, one row of a provider
+              that can have profiles, two rows of any other), and
+              it persists while typing - search stays scoped to the active
+              provider+profile pair. Otherwise the same slot carries the
+              ambient-auth line instead, so account identity has one home
+              either way. */}
+          {profileDropdownShown(
+            guiHarnessIdToProviderId(resolvedActiveProviderId),
+            activeProviderProfiles,
+            activeRemovedProfiles,
+            activeProfileId,
+          ) ? (
+            <>
+              <div className="shrink-0 border-b p-2">
+                <PickerProfileDropdown
+                  providerId={resolvedActiveProviderId}
+                  providerLabel={activeProviderLabel}
+                  profiles={activeProviderProfiles}
+                  activeProfileId={activeProfileId}
+                  onSelectProfile={(profileId) =>
+                    onProfileChange(resolvedActiveProviderId, profileId)
+                  }
+                  onCreateProfile={() => {
+                    onClosePicker();
+                    openAddProfile(
+                      resolvedActiveProviderId,
+                      createProfileHostId,
+                      (profileId) =>
+                        onProfileChange(resolvedActiveProviderId, profileId),
+                    );
+                  }}
+                  createProfileDisabled={createProfileDisabled}
+                  createProfileDisabledReason={createProfileDisabledReason}
+                  shortcutHintForIndex={pickerProfileShortcutHintForIndex}
+                  profileEnablementPending={profileEnablementPending}
+                  contentContainer={profileDropdownContainer}
+                  inputRef={inputRef}
+                  runTargetHostId={runTargetHostId}
+                  admissionByProfileId={profileAdmission}
+                />
+                {/* The Personal sign-in hint. */}
+                <TerminalAccountFirstMention
+                  named={activeProviderProfiles.some(
+                    (profile) => profile.kind === "ambient",
+                  )}
+                  runTargetHostId={runTargetHostId}
+                />
+              </div>
+              <PickerTerminalSetupGuidance
+                selectedProfile={resolvedProfileRow(
+                  activeProviderProfiles,
+                  activeRemovedProfiles,
+                  activeProfileId,
+                )}
+                state={activeProviderState}
+                harness={activeProvider}
+                terminalLoginSurface={terminalLoginSurface}
+                runTargetHostId={runTargetHostId}
+                onClosePicker={onClosePicker}
+              />
+            </>
+          ) : (
+            <PickerProviderAuthLine
+              state={activeProviderState}
+              harness={activeProvider}
+              terminalLoginSurface={terminalLoginSurface}
+              runTargetHostId={runTargetHostId}
+              onClosePicker={onClosePicker}
+            />
+          )}
+          {teamBlocked ? (
+            <p
+              className="px-3 py-1 text-ui-xs text-muted-foreground"
+              data-testid="picker-team-sandbox-unavailable"
+            >
+              {TEAM_SANDBOX_HARNESS_UNAVAILABLE}
+            </p>
+          ) : (
+            <PickerSandboxCredentialLine harness={activeProvider} />
+          )}
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <HarnessModelPickerList
+              idPrefix={idPrefix}
+              listboxId={listboxId}
+              listRef={listRef}
+              listKey={listKey}
+              rows={visibleRows}
+              hiddenModelProviders={hiddenModelProviders}
+              maxModeContextKind={maxModeContextKind ?? "none"}
+              selectedRowId={selectedRowId}
+              activeRowId={effectiveActiveRowId}
+              hoveredRowId={hoveredRowId}
+              hasQuery={hasQuery}
+              initialTopMostItemIndex={initialTopMostItemIndex}
+              catalogLoading={catalogHarnessesLoading}
+              catalogError={catalogHarnessesError}
+              hostUnavailableLabel={hostUnavailableLabel}
+              activeProvider={activeProvider}
+              activeProviderState={activeProviderState}
+              onHover={onHoverRow}
+              onActive={onActiveRow}
+              onSelect={onSelectRow}
+              onOpenProviderSettings={onOpenProviderSettings}
+              onOpenHostUpdates={onOpenHostUpdates}
+              terminalLoginSurface={terminalLoginSurface}
+              runTargetHostId={runTargetHostId}
+              onClosePicker={onClosePicker}
+              rowsDisabled={teamBlocked}
+            />
+          </div>
+          {ultracodeFooter === null ? null : (
+            <UltracodeFooterButton {...ultracodeFooter} />
+          )}
+          <HarnessModelPickerModelSettingsFooter
+            reasoning={reasoningFooter}
+            pickerOpen={reasoningPickerOpen}
+            serviceTier={serviceTierFooter}
+            maxMode={maxModeRequired === true}
+          />
+        </div>
+      </div>
+    </>
+  );
+}
+
+/** The embedding footer's subtree, which the list key handling skips. */
+const EMBEDDING_FOOTER_SELECTOR = "[data-picker-embedding-footer]";
+
+function isInsideEmbeddingFooter(target: EventTarget): boolean {
+  return (
+    target instanceof Element &&
+    target.closest(EMBEDDING_FOOTER_SELECTOR) !== null
+  );
+}
+
+/** Radix owns keyboard input inside the Speed trigger and its portalled menu. */
+function isInsideSpeedMenu(target: EventTarget): boolean {
+  return (
+    target instanceof Element &&
+    target.closest("[data-picker-speed-menu], [data-picker-ultracode]") !== null
+  );
+}

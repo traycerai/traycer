@@ -1,0 +1,5 @@
+{
+  "name": "pierre-tree-zoom-electron-fixture",
+  "private": true,
+  "main": "main.cjs"
+}

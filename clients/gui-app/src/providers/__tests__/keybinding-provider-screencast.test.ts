@@ -1,0 +1,637 @@
+import { createElement } from "react";
+import { act, cleanup, render } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMemoryHistory } from "@tanstack/react-router";
+import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
+import { registerReservedBrowserChords } from "@/lib/browser-view/reserved-chords-registration";
+import type { KeybindingRouterSource } from "@/lib/keybindings/router-adapter";
+import { getDefaultBindings } from "@/lib/keybindings/actions";
+import { isMac } from "@/lib/keybindings/platform";
+import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
+import { registerLeaderScope } from "@/lib/keybindings/leader-scope";
+import { KeybindingProvider } from "@/providers/keybinding-provider";
+import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
+import type { TabStripItem } from "@/stores/tabs/layout";
+import { useTabsStore } from "@/stores/tabs/store";
+import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
+import type { OpenSettingsModalOpts } from "@/stores/tabs/system-overlay-types";
+import type { SettingsSectionId } from "@/lib/settings-sections";
+import { createFakeRunnerHost } from "../../../__tests__/create-fake-runner-host";
+
+function buildProviderRouterSource(
+  initialPathname: string,
+): KeybindingRouterSource {
+  const history = createMemoryHistory({ initialEntries: [initialPathname] });
+  const navigate: KeybindingRouterSource["navigate"] = () => Promise.resolve();
+  return {
+    get state() {
+      return { location: { pathname: history.location.pathname } };
+    },
+    history,
+    navigate,
+  };
+}
+
+function platformModKeys(): {
+  readonly metaKey: boolean;
+  readonly ctrlKey: boolean;
+} {
+  if (isMac()) return { metaKey: true, ctrlKey: false };
+  return { metaKey: false, ctrlKey: true };
+}
+
+/**
+ * The default layout is a Start Page owning the screen, which is what makes
+ * the landing rows forwarded; `EPIC_TAB` is the other side of that gate.
+ */
+const INITIAL_TABS_LAYOUT = {
+  items: useTabsStore.getState().items,
+  activeItemId: useTabsStore.getState().activeItemId,
+};
+const EPIC_TAB: TabStripItem = {
+  kind: "tab",
+  id: "item-epic-a",
+  ref: { kind: "epic", id: "epic-a" },
+};
+
+function armWithReleaseSpy() {
+  const releasePageKeys = vi.fn();
+  useScreencastArmedStore.getState().claim("peek-owner", releasePageKeys);
+  return { releasePageKeys };
+}
+
+function dispatchWindowKey(
+  type: "keydown" | "keyup",
+  init: KeyboardEventInit,
+): KeyboardEvent {
+  const event = new KeyboardEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
+  window.dispatchEvent(event);
+  return event;
+}
+
+function dispatchTargetKey(
+  target: HTMLElement,
+  type: "keydown" | "keyup",
+  init: KeyboardEventInit,
+): KeyboardEvent {
+  const event = new KeyboardEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    ...init,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
+function seedHistoryModal(openHistory: () => void): void {
+  setSystemTabModalApi({
+    active: null,
+    openSettings: (_opts: OpenSettingsModalOpts) => undefined,
+    openHistory,
+    close: () => undefined,
+    setSection: (_section: SettingsSectionId) => undefined,
+    replaceOwnedSettingsRoute: (_section: SettingsSectionId) => undefined,
+    promoteToTab: () => undefined,
+    isOverlayActive: () => false,
+  });
+}
+
+describe("KeybindingProvider screencast armed flag", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    useKeybindingStore.setState({ bindings: getDefaultBindings() });
+    useTabsStore.setState(INITIAL_TABS_LAYOUT);
+    const store = useScreencastArmedStore.getState();
+    if (store.ownerId !== null) store.release(store.ownerId);
+  });
+
+  afterEach(() => {
+    cleanup();
+    document.body.innerHTML = "";
+    const store = useScreencastArmedStore.getState();
+    if (store.ownerId !== null) store.release(store.ownerId);
+    useTabsStore.setState(INITIAL_TABS_LAYOUT);
+    setSystemTabModalApi(null);
+    vi.restoreAllMocks();
+  });
+
+  it("skips a bound app chord while armed and fires it after disarm", () => {
+    const router = buildProviderRouterSource("/");
+    const openHistory = vi.fn();
+    seedHistoryModal(openHistory);
+    render(createElement(KeybindingProvider, { router, children: null }));
+
+    expect(getDefaultBindings()["app.history.open"]).toBe("mod+y");
+
+    const chordInit: KeyboardEventInit = {
+      code: "KeyY",
+      key: "y",
+      ...platformModKeys(),
+    };
+
+    const { releasePageKeys } = armWithReleaseSpy();
+    act(() => {
+      dispatchWindowKey("keydown", chordInit);
+    });
+
+    expect(openHistory).not.toHaveBeenCalled();
+    expect(router.state.location.pathname).toBe("/");
+    // An UNRESERVED app chord is still the page's while armed, so the tile is
+    // never told to release the keys it has forwarded either.
+    expect(releasePageKeys).not.toHaveBeenCalled();
+
+    useScreencastArmedStore.getState().release("peek-owner");
+    act(() => {
+      dispatchWindowKey("keydown", chordInit);
+    });
+
+    expect(openHistory).toHaveBeenCalledTimes(1);
+  });
+
+  // The streamed half of the reserved-chord table. A native tile gets these
+  // because main replays them into this renderer; a streamed tile has no main
+  // process in its input path, so the app registry skipping every action while
+  // armed was the whole of what stopped them.
+  it("fires an app-forwarded chord while armed, after releasing the page's keys", () => {
+    const router = buildProviderRouterSource("/");
+    const openPalette = vi.fn();
+    const unregister = registerDynamicActionHandler(
+      "app.palette.open",
+      openPalette,
+    );
+    render(createElement(KeybindingProvider, { router, children: null }));
+
+    expect(getDefaultBindings()["app.palette.open"]).toBe("mod+k");
+    const { releasePageKeys } = armWithReleaseSpy();
+
+    // Stands in for the armed tile's own listener, at the same phase and below
+    // the window the provider listens on.
+    const tile = document.createElement("div");
+    document.body.append(tile);
+    const tileCaptureHits: string[] = [];
+    tile.addEventListener(
+      "keydown",
+      (event) => {
+        tileCaptureHits.push(event.code);
+      },
+      true,
+    );
+
+    let consumed = false;
+    act(() => {
+      const event = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        code: "KeyK",
+        key: "k",
+        ...platformModKeys(),
+      });
+      tile.dispatchEvent(event);
+      consumed = event.defaultPrevented;
+    });
+
+    expect(openPalette).toHaveBeenCalledTimes(1);
+    // Reserved, so the tile's own capture-phase listener never runs and the
+    // page is never sent the keystroke. Asserted directly rather than inferred
+    // from `defaultPrevented`, because "the app acted" and "the page did not
+    // also get it" are two different guarantees and only the second is what
+    // stops a chord being handled twice. The tile listens in the CAPTURE
+    // phase on its own element (`use-screencast-session`), which the
+    // provider's window-capture `stopPropagation` is above.
+    expect(consumed).toBe(true);
+    expect(tileCaptureHits).toEqual([]);
+    // Before the action, not after: the palette takes focus out of the tile's
+    // IME input, so the keyup that would have ended this modifier never
+    // reaches the page.
+    expect(releasePageKeys).toHaveBeenCalledTimes(1);
+    expect(releasePageKeys.mock.invocationCallOrder[0]).toBeLessThan(
+      openPalette.mock.invocationCallOrder[0],
+    );
+    unregister();
+  });
+
+  // The landing rows keep the surface gate they already have on the native
+  // side, and it lives in `reservedBrowserChordsFor` - so a canvas-armed tile
+  // is never offered them and its own Cmd+J stays the page's.
+  it("fires a landing-forwarded chord while armed only while the Start Page owns the screen", () => {
+    const router = buildProviderRouterSource("/");
+    const toggleTerminal = vi.fn();
+    const unregister = registerDynamicActionHandler(
+      "app.terminal.toggle",
+      toggleTerminal,
+    );
+    render(createElement(KeybindingProvider, { router, children: null }));
+
+    expect(getDefaultBindings()["app.terminal.toggle"]).toBe("mod+j");
+    const chordInit: KeyboardEventInit = {
+      code: "KeyJ",
+      key: "j",
+      ...platformModKeys(),
+    };
+    armWithReleaseSpy();
+
+    act(() => {
+      dispatchWindowKey("keydown", chordInit);
+    });
+    expect(toggleTerminal).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      useTabsStore.setState({ items: [EPIC_TAB], activeItemId: EPIC_TAB.id });
+    });
+    let consumed = true;
+    act(() => {
+      consumed = dispatchWindowKey("keydown", chordInit).defaultPrevented;
+    });
+
+    expect(toggleTerminal).toHaveBeenCalledTimes(1);
+    expect(consumed).toBe(false);
+    unregister();
+  });
+
+  /**
+   * The DIGIT half of the same exemption, which the chord case above cannot
+   * stand in for.
+   *
+   * A leader binds a modifier MASK (`"mod"`), and the set this exemption is
+   * compared against holds full chords resolved from the event - so a leader
+   * reserved verbatim would put `"mod"` in that set, `resolveMatchingChord`
+   * would answer `mod+1`, and ⌘1 would stay the page's while the panel held a
+   * scope for it. `reservedBrowserChordsFor` expanding the leader to its nine
+   * digits is what makes this pass, and it is the SAME expansion main replays
+   * from on the native side.
+   */
+  it("fires the panel's tab-number leader while armed, on a digit", () => {
+    const router = buildProviderRouterSource("/");
+    const switchByDigit = vi.fn();
+    const unregister = registerLeaderScope({
+      id: "test-landing-digits",
+      actions: [
+        {
+          actionId: "tab.switch.byDigit",
+          isActive: () => true,
+          dispatch: (digit) => {
+            switchByDigit(digit);
+            return true;
+          },
+          dispatchSequence: null,
+          sequenceState: null,
+        },
+      ],
+    });
+    render(createElement(KeybindingProvider, { router, children: null }));
+
+    expect(getDefaultBindings()["tab.switch.byDigit"]).toBe("mod");
+    const { releasePageKeys } = armWithReleaseSpy();
+    act(() => {
+      dispatchWindowKey("keydown", {
+        code: "Digit2",
+        key: "2",
+        ...platformModKeys(),
+      });
+    });
+
+    expect(switchByDigit).toHaveBeenCalledWith(2);
+    expect(releasePageKeys).toHaveBeenCalledTimes(1);
+
+    // And it keeps the surface gate the chord rows have: on an epic canvas the
+    // digit is the page's again.
+    act(() => {
+      useTabsStore.setState({ items: [EPIC_TAB], activeItemId: EPIC_TAB.id });
+    });
+    act(() => {
+      dispatchWindowKey("keydown", {
+        code: "Digit2",
+        key: "2",
+        ...platformModKeys(),
+      });
+    });
+    expect(switchByDigit).toHaveBeenCalledTimes(1);
+    unregister();
+  });
+
+  // The browser-scoped rows are the other half of the same table and must NOT
+  // be exempted: the screencast controller claims them for the tile, and an
+  // app registry that fired first would take the tab chords off it.
+  it("leaves the browser's own reserved chords to the armed tile", () => {
+    const router = buildProviderRouterSource("/");
+    const newTab = vi.fn();
+    const unregister = registerDynamicActionHandler("tab.new", newTab);
+    render(createElement(KeybindingProvider, { router, children: null }));
+
+    const { releasePageKeys } = armWithReleaseSpy();
+    let consumed = true;
+    act(() => {
+      consumed = dispatchWindowKey("keydown", {
+        code: "KeyT",
+        key: "t",
+        ...platformModKeys(),
+      }).defaultPrevented;
+    });
+
+    expect(newTab).not.toHaveBeenCalled();
+    expect(consumed).toBe(false);
+    expect(releasePageKeys).not.toHaveBeenCalled();
+    unregister();
+  });
+
+  // Editing conventions win over the app-forwarded exemption too, not only
+  // over the browser-scoped rows above: a reader can REBIND an app-forwarded
+  // action (defaults never land on Z/Y today) onto the same token undo/redo
+  // uses, and without the `isTextHistoryShortcut` guard that rebind would
+  // route the keystroke to the app dispatcher while armed - the streamed
+  // mirror of the native `BrowserViewChords.match` guard.
+  it("does not forward a rebound app-forwarded chord that collides with the history shortcut", () => {
+    const router = buildProviderRouterSource("/");
+    const openPalette = vi.fn();
+    const unregister = registerDynamicActionHandler(
+      "app.palette.open",
+      openPalette,
+    );
+    useKeybindingStore.setState({
+      bindings: { ...getDefaultBindings(), "app.palette.open": "mod+z" },
+    });
+    render(createElement(KeybindingProvider, { router, children: null }));
+
+    const { releasePageKeys } = armWithReleaseSpy();
+    let consumed = true;
+    act(() => {
+      consumed = dispatchWindowKey("keydown", {
+        code: "KeyZ",
+        key: "z",
+        ...platformModKeys(),
+      }).defaultPrevented;
+    });
+
+    expect(openPalette).not.toHaveBeenCalled();
+    expect(consumed).toBe(false);
+    expect(releasePageKeys).not.toHaveBeenCalled();
+    unregister();
+  });
+
+  it("ignores a stale release from a superseded owner", () => {
+    const store = useScreencastArmedStore.getState();
+    store.claim("owner-a", () => undefined);
+    store.claim("owner-b", () => undefined);
+
+    store.release("owner-a");
+
+    expect(useScreencastArmedStore.getState().ownerId).toBe("owner-b");
+  });
+
+  it("lets a consumed app chord keyup reach its focused target", () => {
+    const router = buildProviderRouterSource("/");
+    seedHistoryModal(() => undefined);
+    render(createElement(KeybindingProvider, { router, children: null }));
+
+    const target = document.createElement("button");
+    target.type = "button";
+    document.body.append(target);
+    const bubble = vi.fn();
+    target.addEventListener("keyup", bubble);
+
+    const chordInit: KeyboardEventInit = {
+      code: "KeyY",
+      key: "y",
+      ...platformModKeys(),
+    };
+
+    act(() => {
+      dispatchTargetKey(target, "keydown", chordInit);
+    });
+
+    let keyup: KeyboardEvent | undefined;
+    act(() => {
+      keyup = dispatchTargetKey(target, "keyup", chordInit);
+    });
+
+    expect(keyup?.defaultPrevented).toBe(false);
+    expect(bubble).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers default Find chords through the native bridge on both surfaces", () => {
+    const landingBridge = new FakeBrowserViewBridge({});
+    const epicBridge = new FakeBrowserViewBridge({});
+    registerReservedBrowserChords(
+      createFakeRunnerHost({ browserView: landingBridge }),
+      getDefaultBindings(),
+      { landingSurfaceActive: true },
+    );
+    registerReservedBrowserChords(
+      createFakeRunnerHost({ browserView: epicBridge }),
+      getDefaultBindings(),
+      { landingSurfaceActive: false },
+    );
+
+    expect([
+      landingBridge.reservedChordsCalls[0]?.filter(
+        (row) => row.token === "mod+f" || row.token === "mod+g",
+      ),
+      epicBridge.reservedChordsCalls[0]?.filter(
+        (row) => row.token === "mod+f" || row.token === "mod+g",
+      ),
+    ]).toEqual([
+      [
+        { token: "mod+f", command: null },
+        { token: "mod+g", command: null },
+      ],
+      [
+        { token: "mod+f", command: null },
+        { token: "mod+g", command: null },
+      ],
+    ]);
+  });
+
+  it("registers live Find rebinds and preserves browser-scoped collision winners", () => {
+    const browserView = new FakeBrowserViewBridge({});
+    const runnerHost = createFakeRunnerHost({ browserView });
+    const findTokens = ["mod+f", "mod+g", "mod+alt+f", "mod+alt+g"];
+
+    useKeybindingStore.getState().setBinding("tile.find.open", "mod+alt+f");
+    useKeybindingStore.getState().setBinding("tile.find.next", "mod+alt+g");
+    registerReservedBrowserChords(
+      runnerHost,
+      useKeybindingStore.getState().bindings,
+      { landingSurfaceActive: true },
+    );
+    expect(
+      browserView.reservedChordsCalls[0]?.filter((row) =>
+        findTokens.includes(row.token),
+      ),
+    ).toEqual([
+      { token: "mod+alt+f", command: null },
+      { token: "mod+alt+g", command: null },
+    ]);
+
+    useKeybindingStore.getState().clearBinding("tile.find.open");
+    useKeybindingStore.getState().clearBinding("tile.find.next");
+    registerReservedBrowserChords(
+      runnerHost,
+      useKeybindingStore.getState().bindings,
+      { landingSurfaceActive: true },
+    );
+    expect(
+      browserView.reservedChordsCalls[1]?.filter((row) =>
+        findTokens.includes(row.token),
+      ),
+    ).toEqual([]);
+
+    useKeybindingStore.getState().setBinding("tile.find.open", "mod+w");
+    useKeybindingStore.getState().setBinding("tile.find.next", "mod+t");
+    registerReservedBrowserChords(
+      runnerHost,
+      useKeybindingStore.getState().bindings,
+      { landingSurfaceActive: true },
+    );
+    expect(
+      browserView.reservedChordsCalls[2]?.filter(
+        (row) => row.token === "mod+w" || row.token === "mod+t",
+      ),
+    ).toEqual([
+      { token: "mod+w", command: "closeTab" },
+      { token: "mod+t", command: "newTab" },
+    ]);
+  });
+
+  it("leaves streamed default Find F/G page-owned while armed", () => {
+    const router = buildProviderRouterSource("/");
+    const findOpen = vi.fn();
+    const findNext = vi.fn();
+    const unregisterFindOpen = registerDynamicActionHandler(
+      "tile.find.open",
+      findOpen,
+    );
+    const unregisterFindNext = registerDynamicActionHandler(
+      "tile.find.next",
+      findNext,
+    );
+
+    try {
+      render(createElement(KeybindingProvider, { router, children: null }));
+      expect(getDefaultBindings()["tile.find.open"]).toBe("mod+f");
+      expect(getDefaultBindings()["tile.find.next"]).toBe("mod+g");
+
+      const { releasePageKeys } = armWithReleaseSpy();
+      const tile = document.createElement("div");
+      document.body.append(tile);
+      const pageKeyCodes: string[] = [];
+      tile.addEventListener(
+        "keydown",
+        (event) => {
+          pageKeyCodes.push(event.code);
+        },
+        true,
+      );
+      let findPrevented = true;
+      let nextPrevented = true;
+      act(() => {
+        findPrevented = dispatchTargetKey(tile, "keydown", {
+          code: "KeyF",
+          key: "f",
+          ...platformModKeys(),
+        }).defaultPrevented;
+        nextPrevented = dispatchTargetKey(tile, "keydown", {
+          code: "KeyG",
+          key: "g",
+          ...platformModKeys(),
+        }).defaultPrevented;
+      });
+
+      expect(findPrevented).toBe(false);
+      expect(nextPrevented).toBe(false);
+      expect(pageKeyCodes).toEqual(["KeyF", "KeyG"]);
+      expect(releasePageKeys).not.toHaveBeenCalled();
+      expect(findOpen).not.toHaveBeenCalled();
+      expect(findNext).not.toHaveBeenCalled();
+    } finally {
+      unregisterFindOpen();
+      unregisterFindNext();
+    }
+  });
+
+  it.each(["tile.find.open", "tile.find.next"] as const)(
+    "keeps rebound %s page-owned while armed, then dispatches it after disarm",
+    (findActionId) => {
+      const router = buildProviderRouterSource("/");
+      const findOpen = vi.fn();
+      const findNext = vi.fn();
+      const openPalette = vi.fn();
+      const unregisterFindOpen = registerDynamicActionHandler(
+        "tile.find.open",
+        findOpen,
+      );
+      const unregisterFindNext = registerDynamicActionHandler(
+        "tile.find.next",
+        findNext,
+      );
+      const unregisterPalette = registerDynamicActionHandler(
+        "app.palette.open",
+        openPalette,
+      );
+
+      try {
+        useKeybindingStore.getState().setBinding(findActionId, "mod+k");
+        expect(getDefaultBindings()["app.palette.open"]).toBe("mod+k");
+        render(createElement(KeybindingProvider, { router, children: null }));
+        const { releasePageKeys } = armWithReleaseSpy();
+        const tile = document.createElement("div");
+        document.body.append(tile);
+        const pageKeyCodes: string[] = [];
+        tile.addEventListener(
+          "keydown",
+          (event) => {
+            pageKeyCodes.push(event.code);
+          },
+          true,
+        );
+
+        let armedPrevented = false;
+        act(() => {
+          armedPrevented = dispatchTargetKey(tile, "keydown", {
+            code: "KeyK",
+            key: "k",
+            ...platformModKeys(),
+          }).defaultPrevented;
+        });
+
+        expect(armedPrevented).toBe(false);
+        expect(pageKeyCodes).toEqual(["KeyK"]);
+        expect(releasePageKeys).not.toHaveBeenCalled();
+        expect(findOpen).not.toHaveBeenCalled();
+        expect(findNext).not.toHaveBeenCalled();
+        expect(openPalette).not.toHaveBeenCalled();
+
+        act(() => {
+          useScreencastArmedStore.getState().release("peek-owner");
+        });
+        let disarmedPrevented = false;
+        act(() => {
+          disarmedPrevented = dispatchTargetKey(tile, "keydown", {
+            code: "KeyK",
+            key: "k",
+            ...platformModKeys(),
+          }).defaultPrevented;
+        });
+
+        expect(disarmedPrevented).toBe(true);
+        expect(pageKeyCodes).toEqual(["KeyK"]);
+        expect(releasePageKeys).not.toHaveBeenCalled();
+        expect(findOpen).toHaveBeenCalledTimes(
+          findActionId === "tile.find.open" ? 1 : 0,
+        );
+        expect(findNext).toHaveBeenCalledTimes(
+          findActionId === "tile.find.next" ? 1 : 0,
+        );
+        expect(openPalette).not.toHaveBeenCalled();
+      } finally {
+        unregisterFindOpen();
+        unregisterFindNext();
+        unregisterPalette();
+      }
+    },
+  );
+});

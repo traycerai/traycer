@@ -1,0 +1,1501 @@
+import { EventEmitter } from "node:events";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
+import type { DesktopPublishedHostSnapshot } from "../../../ipc-contracts/host-types";
+import type {
+  DesktopAuthSessionSnapshot,
+  MenuCommandId,
+  WindowSummary,
+} from "../../../ipc-contracts/window-types";
+import type {
+  IpcHostLifecycle,
+  IpcPerWindowState,
+} from "../../ipc/runner-ipc-bridge";
+import { DesktopAuthSession } from "../../auth/desktop-auth-session";
+import { PerWindowState } from "../../windows/per-window-state";
+import type {
+  MenuLocalHostLanes,
+  MenuManagedWindow,
+  MenuWindowRecord,
+  MenuWindowRegistry,
+  MenuZoomController,
+} from "../menu-controller";
+
+interface CapturedMenuItem {
+  readonly label?: string;
+  readonly enabled?: boolean;
+  readonly submenu?: readonly CapturedMenuItem[];
+  readonly click?: (menuItem: unknown, browserWindow: unknown) => void;
+}
+
+const electronState = vi.hoisted(() => {
+  const getAllWindows = vi.fn();
+  const getFocusedWindow = vi.fn();
+  // A real class so `instanceof BrowserWindow` narrowing in the controller
+  // works against the fake app windows below.
+  class MockBrowserWindow {
+    static getAllWindows(): unknown {
+      return getAllWindows();
+    }
+    static getFocusedWindow(): unknown {
+      return getFocusedWindow();
+    }
+  }
+  return {
+    setApplicationMenu: vi.fn(),
+    getAllWindows,
+    getFocusedWindow,
+    MockBrowserWindow,
+    lastTemplate: null as readonly CapturedMenuItem[] | null,
+  };
+});
+
+const configState = vi.hoisted(() => ({ canOpenDevTools: true }));
+
+vi.mock("../../../config", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../config")>();
+  return {
+    ...actual,
+    get canOpenDevTools(): boolean {
+      return configState.canOpenDevTools;
+    },
+  };
+});
+
+vi.mock("electron", () => ({
+  Menu: {
+    buildFromTemplate: (template: readonly CapturedMenuItem[]) => {
+      electronState.lastTemplate = template;
+      return { template };
+    },
+    setApplicationMenu: electronState.setApplicationMenu,
+  },
+  BrowserWindow: electronState.MockBrowserWindow,
+  app: {
+    isPackaged: false,
+    quit: vi.fn(),
+    showAboutPanel: vi.fn(),
+  },
+  shell: {
+    openExternal: vi.fn(() => Promise.resolve()),
+  },
+}));
+
+vi.mock("electron-log", () => ({
+  default: {
+    transports: {
+      file: { level: "info" },
+      console: { level: "info" },
+    },
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
+import { app } from "electron";
+import log from "electron-log";
+import { MenuController } from "../menu-controller";
+
+class FakeHost extends EventEmitter implements IpcHostLifecycle {
+  private snapshot: DesktopPublishedHostSnapshot | null = null;
+  respawnCalls = 0;
+  notifyRespawningCalls = 0;
+  reloadSnapshotCalls = 0;
+  ensureWatcherCalls = 0;
+  noteEndpointAnsweredCalls = 0;
+  readonly pidMetadataFile = "/tmp/fake-traycer-host/pid.json";
+  readonly identityEnrollmentFile =
+    "/tmp/fake-traycer-host/identity/enrollment.json";
+  isDisposed = false;
+
+  getSnapshot(): DesktopPublishedHostSnapshot | null {
+    return this.snapshot;
+  }
+
+  setSnapshot(snapshot: DesktopPublishedHostSnapshot | null): void {
+    this.snapshot = snapshot;
+    this.emit("change", snapshot);
+  }
+
+  async respawn(): Promise<void> {
+    this.respawnCalls += 1;
+  }
+  notifyRespawning(): void {
+    this.notifyRespawningCalls += 1;
+    this.snapshot = null;
+    this.emit("change", null);
+  }
+  async reloadSnapshotFromDisk(): Promise<DesktopPublishedHostSnapshot | null> {
+    this.reloadSnapshotCalls += 1;
+    return this.getSnapshot();
+  }
+  ensureWatcherInstalled(): void {
+    this.ensureWatcherCalls += 1;
+  }
+  noteEndpointAnswered(): void {
+    this.noteEndpointAnsweredCalls += 1;
+  }
+  async installService(): Promise<void> {}
+  async uninstallService(_purge: boolean): Promise<void> {}
+  async startService(): Promise<void> {}
+  async stopService(): Promise<void> {}
+  async restartService(): Promise<void> {}
+  async upgradeService(): Promise<void> {}
+  async enableLinger(): Promise<void> {}
+  async getRecentLogTail(_maxLines: number): Promise<string | null> {
+    return null;
+  }
+}
+
+class FakeWindow implements MenuManagedWindow {
+  menus: Electron.Menu[] = [];
+  readonly menuBarVisibilityCalls: boolean[] = [];
+  focused = true;
+  destroyed = false;
+
+  isDestroyed(): boolean {
+    return this.destroyed;
+  }
+
+  isFocused(): boolean {
+    return this.focused;
+  }
+
+  setMenu(menu: Electron.Menu): void {
+    this.menus.push(menu);
+  }
+
+  setMenuBarVisibility(visible: boolean): void {
+    this.menuBarVisibilityCalls.push(visible);
+  }
+}
+
+class FakeWindowRegistry extends EventEmitter implements MenuWindowRegistry {
+  readonly window = new FakeWindow();
+  readonly closeRequests: string[] = [];
+  readonly minimizeRequests: string[] = [];
+  readonly zoomRequests: string[] = [];
+  readonly createRequests: Array<{
+    readonly initialRoute: string | null;
+    readonly beforeLoad: ((windowId: string) => void) | null;
+  }> = [];
+
+  async create(options: {
+    readonly initialRoute: string | null;
+    readonly beforeLoad: ((windowId: string) => void) | null;
+  }): Promise<string> {
+    this.createRequests.push(options);
+    return "window-created";
+  }
+
+  closeById(windowId: string): Promise<void> {
+    this.closeRequests.push(windowId);
+    return Promise.resolve();
+  }
+
+  minimizeById(windowId: string): Promise<void> {
+    this.minimizeRequests.push(windowId);
+    return Promise.resolve();
+  }
+
+  zoomById(windowId: string): Promise<void> {
+    this.zoomRequests.push(windowId);
+    return Promise.resolve();
+  }
+
+  focusById(_windowId: string): boolean {
+    this.window.focused = true;
+    return true;
+  }
+
+  list(): readonly WindowSummary[] {
+    return [
+      {
+        windowId: "window-a",
+        title: "Window A",
+        isFocused: this.window.focused,
+        isVisible: true,
+      },
+    ];
+  }
+
+  records(): readonly MenuWindowRecord[] {
+    return [
+      {
+        windowId: "window-a",
+        window: this.window,
+      },
+    ];
+  }
+
+  mostRecentlyFocusedId(): string | null {
+    return "window-a";
+  }
+
+  emitChange(): void {
+    this.emit("change");
+  }
+}
+
+class FakeZoomController implements MenuZoomController {
+  readonly requests: string[] = [];
+
+  zoomIn(): Promise<number> {
+    this.requests.push("in");
+    return Promise.resolve(110);
+  }
+
+  zoomOut(): Promise<number> {
+    this.requests.push("out");
+    return Promise.resolve(90);
+  }
+
+  reset(): Promise<number> {
+    this.requests.push("reset");
+    return Promise.resolve(100);
+  }
+}
+
+/**
+ * Fake `MenuLocalHostLanes`. `active` starts the object's
+ * `localHostLanesActive()` answer and can be flipped directly between
+ * assertions; `foreground` starts `localHostRunIsForeground()`'s answer
+ * (a person started the running host in a terminal) and is likewise
+ * mutable; `fireChange()` replays what `HostLifecycleService` does on a
+ * real lane transition, and `listenerCount` lets a test prove `dispose()`
+ * actually unsubscribed rather than merely not crashing.
+ */
+class FakeLocalHostLanes implements MenuLocalHostLanes {
+  active: boolean;
+  foreground: boolean;
+  private readonly listeners = new Set<() => void>();
+
+  constructor(active: boolean, foreground: boolean) {
+    this.active = active;
+    this.foreground = foreground;
+  }
+
+  localHostLanesActive(): boolean {
+    return this.active;
+  }
+
+  localHostRunIsForeground(): boolean {
+    return this.foreground;
+  }
+
+  onChange(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  fireChange(): void {
+    for (const listener of Array.from(this.listeners)) {
+      listener();
+    }
+  }
+
+  get listenerCount(): number {
+    return this.listeners.size;
+  }
+}
+
+class EmptyWindowRegistry extends EventEmitter implements MenuWindowRegistry {
+  readonly createRequests: Array<{
+    readonly initialRoute: string | null;
+    readonly beforeLoad: ((windowId: string) => void) | null;
+  }> = [];
+  private readonly createError: Error | null;
+
+  constructor(createError: Error | null) {
+    super();
+    this.createError = createError;
+  }
+
+  async create(options: {
+    readonly initialRoute: string | null;
+    readonly beforeLoad: ((windowId: string) => void) | null;
+  }): Promise<string> {
+    this.createRequests.push(options);
+    if (this.createError !== null) {
+      throw this.createError;
+    }
+    return "window-created";
+  }
+
+  closeById(_windowId: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  minimizeById(_windowId: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  zoomById(_windowId: string): Promise<void> {
+    return Promise.resolve();
+  }
+
+  focusById(_windowId: string): boolean {
+    return false;
+  }
+
+  list(): readonly WindowSummary[] {
+    return [];
+  }
+
+  records(): readonly MenuWindowRecord[] {
+    return [];
+  }
+
+  mostRecentlyFocusedId(): string | null {
+    return null;
+  }
+}
+
+class MultiWindowRegistry extends EventEmitter implements MenuWindowRegistry {
+  readonly windowA = new FakeWindow();
+  readonly windowB = new FakeWindow();
+  readonly closeRequests: string[] = [];
+  readonly minimizeRequests: string[] = [];
+  readonly zoomRequests: string[] = [];
+
+  constructor() {
+    super();
+    this.windowA.focused = true;
+    this.windowB.focused = false;
+  }
+
+  async create(_options: {
+    readonly initialRoute: string | null;
+    readonly beforeLoad: ((windowId: string) => void) | null;
+  }): Promise<string> {
+    return "window-created";
+  }
+
+  closeById(windowId: string): Promise<void> {
+    this.closeRequests.push(windowId);
+    return Promise.resolve();
+  }
+
+  minimizeById(windowId: string): Promise<void> {
+    this.minimizeRequests.push(windowId);
+    return Promise.resolve();
+  }
+
+  zoomById(windowId: string): Promise<void> {
+    this.zoomRequests.push(windowId);
+    return Promise.resolve();
+  }
+
+  focusById(windowId: string): boolean {
+    if (windowId === "window-a") {
+      this.windowA.focused = true;
+      this.windowB.focused = false;
+      return true;
+    }
+    if (windowId === "window-b") {
+      this.windowA.focused = false;
+      this.windowB.focused = true;
+      return true;
+    }
+    return false;
+  }
+
+  list(): readonly WindowSummary[] {
+    return this.records().map((record) => ({
+      windowId: record.windowId,
+      title: record.windowId,
+      isFocused: record.window.isFocused(),
+      isVisible: true,
+    }));
+  }
+
+  records(): readonly MenuWindowRecord[] {
+    return [
+      {
+        windowId: "window-a",
+        window: this.windowA,
+      },
+      {
+        windowId: "window-b",
+        window: this.windowB,
+      },
+    ];
+  }
+
+  mostRecentlyFocusedId(): string | null {
+    return "window-b";
+  }
+}
+
+class FakeAppContents {
+  destroyed = false;
+  devToolsFocused = false;
+  readonly toggleDevTools = vi.fn<() => void>();
+
+  isDestroyed(): boolean {
+    return this.destroyed;
+  }
+  isDevToolsFocused(): boolean {
+    return this.devToolsFocused;
+  }
+}
+
+/** A registered (or inspector) `BrowserWindow` with an observable app webContents. */
+class FakeAppWindow
+  extends electronState.MockBrowserWindow
+  implements MenuManagedWindow
+{
+  focused = false;
+  destroyed = false;
+  parent: FakeAppWindow | null = null;
+  readonly webContents = new FakeAppContents();
+
+  isDestroyed(): boolean {
+    return this.destroyed;
+  }
+  isFocused(): boolean {
+    return this.focused;
+  }
+  getParentWindow(): FakeAppWindow | null {
+    return this.parent;
+  }
+  setMenu(_menu: Electron.Menu): void {}
+  setMenuBarVisibility(_visible: boolean): void {}
+}
+
+class AppWindowRegistry extends EventEmitter implements MenuWindowRegistry {
+  private readonly entries: ReadonlyArray<{
+    readonly windowId: string;
+    readonly window: FakeAppWindow;
+  }>;
+  private readonly mruId: string | null;
+
+  constructor(
+    entries: ReadonlyArray<{
+      readonly windowId: string;
+      readonly window: FakeAppWindow;
+    }>,
+    mruId: string | null,
+  ) {
+    super();
+    this.entries = entries;
+    this.mruId = mruId;
+  }
+
+  async create(_options: {
+    readonly initialRoute: string | null;
+    readonly beforeLoad: ((windowId: string) => void) | null;
+  }): Promise<string> {
+    return "window-created";
+  }
+  closeById(_windowId: string): Promise<void> {
+    return Promise.resolve();
+  }
+  minimizeById(_windowId: string): Promise<void> {
+    return Promise.resolve();
+  }
+  zoomById(_windowId: string): Promise<void> {
+    return Promise.resolve();
+  }
+  focusById(_windowId: string): boolean {
+    return false;
+  }
+  list(): readonly WindowSummary[] {
+    return this.entries.map((entry) => ({
+      windowId: entry.windowId,
+      title: entry.windowId,
+      isFocused: entry.window.isFocused(),
+      isVisible: true,
+    }));
+  }
+  records(): readonly MenuWindowRecord[] {
+    return this.entries;
+  }
+  mostRecentlyFocusedId(): string | null {
+    return this.mruId;
+  }
+}
+
+function createController(options: {
+  readonly registry: MenuWindowRegistry;
+  readonly host: FakeHost;
+  readonly authSession: DesktopAuthSession;
+  readonly perWindowState: IpcPerWindowState;
+  readonly dispatchRendererCommand: (
+    command: MenuCommandId,
+    hostUpdateVersion: string | null,
+  ) => boolean;
+}): MenuController {
+  return new MenuController({
+    appName: "Traycer",
+    platform: "darwin",
+    windowRegistry: options.registry,
+    host: options.host,
+    authSession: options.authSession,
+    perWindowState: options.perWindowState,
+    tray: null,
+    zoomController: new FakeZoomController(),
+    dispatchRendererCommand: options.dispatchRendererCommand,
+    checkForUpdates: () => Promise.resolve(),
+    // The managed default: existing fixtures using this helper are not
+    // about the `offerRestartHost` mechanism, so lanes are active.
+    localHostLanes: new FakeLocalHostLanes(true, false),
+  });
+}
+
+function menuItem(label: string): CapturedMenuItem {
+  return menuItemInTopLevel("File", label);
+}
+
+function windowMenuItem(label: string): CapturedMenuItem {
+  return menuItemInTopLevel("Window", label);
+}
+
+function menuItemInTopLevel(
+  topLevelLabel: string,
+  label: string,
+): CapturedMenuItem {
+  const template = electronState.lastTemplate;
+  if (template === null) {
+    throw new Error("menu template missing");
+  }
+  const topLevel = template.find((item) => item.label === topLevelLabel);
+  const item = topLevel?.submenu?.find((entry) => entry.label === label);
+  if (item === undefined) {
+    throw new Error(`menu item ${topLevelLabel}/${label} missing`);
+  }
+  return item;
+}
+
+function runControllerCommand(
+  controller: MenuController,
+  command: MenuCommandId,
+  senderWindow: MenuManagedWindow | null,
+  hostUpdateVersion: string | null,
+): void {
+  const handleCommand = Reflect.get(controller, "handleCommand");
+  if (typeof handleCommand !== "function") {
+    throw new Error("handleCommand missing");
+  }
+  handleCommand.call(controller, command, senderWindow, hostUpdateVersion);
+}
+
+describe("MenuController", () => {
+  beforeEach(() => {
+    electronState.setApplicationMenu.mockClear();
+    electronState.getAllWindows.mockClear();
+    electronState.getAllWindows.mockReturnValue([]);
+    electronState.getFocusedWindow.mockReset();
+    electronState.getFocusedWindow.mockReturnValue(null);
+    configState.canOpenDevTools = true;
+    electronState.lastTemplate = null;
+  });
+
+  it("rebuilds when window, auth, host, or per-window state changes", () => {
+    const registry = new FakeWindowRegistry();
+    const host = new FakeHost();
+    const authSession = new DesktopAuthSession();
+    const perWindowState = new PerWindowState(null);
+    const controller = createController({
+      registry,
+      host,
+      authSession,
+      perWindowState,
+      dispatchRendererCommand: () => true,
+    });
+
+    controller.install();
+    expect(electronState.setApplicationMenu).toHaveBeenCalledTimes(1);
+
+    registry.emitChange();
+    host.setSnapshot({
+      hostId: "host-a",
+      websocketUrl: "ws://127.0.0.1:9000/rpc",
+      version: "0.1.0",
+      pid: 123,
+      systemHostName: "host-a",
+      displayName: "host-a",
+      availability: "available",
+    });
+    authSession.set({
+      status: "signed-in",
+      token: "token",
+      profile: {
+        userId: "test-user",
+        userName: "Test User",
+        email: "test@example.com",
+      },
+    } satisfies DesktopAuthSessionSnapshot);
+    perWindowState.update("window-a", {
+      landingDrafts: [
+        {
+          id: "draft-a",
+          content: { type: "doc" },
+          selection: null,
+          lastTouchedAt: 0,
+          settings: null,
+          composerMode: null,
+          workspace: null,
+          closed: null,
+        },
+      ],
+      activeLandingDraftId: "draft-a",
+    });
+
+    expect(electronState.setApplicationMenu).toHaveBeenCalledTimes(5);
+    controller.dispose();
+  });
+
+  it("keeps Linux native menu bars hidden across menu rebuilds", () => {
+    const registry = new FakeWindowRegistry();
+    const controller = new MenuController({
+      appName: "Traycer",
+      platform: "linux",
+      windowRegistry: registry,
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      tray: null,
+      zoomController: new FakeZoomController(),
+      dispatchRendererCommand: () => true,
+      checkForUpdates: () => Promise.resolve(),
+      localHostLanes: new FakeLocalHostLanes(true, false),
+    });
+
+    controller.install();
+    registry.emitChange();
+
+    expect(registry.window.menuBarVisibilityCalls).toEqual([false, false]);
+    expect(registry.window.menus).toHaveLength(2);
+    controller.dispose();
+  });
+
+  it("broadcasts menu changes to live renderer windows after a rebuild", () => {
+    const liveSend = vi.fn();
+    const destroyedSend = vi.fn();
+    electronState.getAllWindows.mockReturnValue([
+      {
+        isDestroyed: () => false,
+        webContents: { isDestroyed: () => false, send: liveSend },
+      },
+      {
+        isDestroyed: () => true,
+        webContents: { isDestroyed: () => false, send: destroyedSend },
+      },
+    ]);
+    const controller = new MenuController({
+      appName: "Traycer",
+      platform: "linux",
+      windowRegistry: new FakeWindowRegistry(),
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      tray: null,
+      zoomController: new FakeZoomController(),
+      dispatchRendererCommand: () => true,
+      checkForUpdates: () => Promise.resolve(),
+      localHostLanes: new FakeLocalHostLanes(true, false),
+    });
+
+    controller.install();
+
+    expect(liveSend).toHaveBeenCalledWith(RunnerHostEvent.menuChanged);
+    expect(destroyedSend).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it("dispatches Close Tab through the renderer command path", () => {
+    const perWindowState = new PerWindowState(null);
+    perWindowState.update("window-a", {
+      epicTabs: [{ id: "tab-a", epicId: "epic-a", name: "Alpha" }],
+      activeTabId: "tab-a",
+    });
+    const dispatchRendererCommand = vi.fn(() => true);
+    const controller = createController({
+      registry: new FakeWindowRegistry(),
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState,
+      dispatchRendererCommand,
+    });
+
+    controller.install();
+    const closeTab = menuItem("Close Tab");
+    expect(closeTab.enabled).toBe(true);
+    closeTab.click?.(null, null);
+
+    expect(dispatchRendererCommand).toHaveBeenCalledWith("epic.closeTab", null);
+    controller.dispose();
+  });
+
+  // Cold-review #3 / review finding 5: the version dispatched with
+  // `host.installUpdate` is the value captured into the tray item callback
+  // when the row was labelled - not live MenuController state - so a stale
+  // open-menu click after presentation moves on still pins the version the
+  // user saw.
+  it("dispatches host.installUpdate with the version captured by the tray item callback", () => {
+    const dispatchRendererCommand = vi.fn(() => true);
+    const controller = createController({
+      registry: new FakeWindowRegistry(),
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+    controller.install();
+    // Live controller state may already disagree with the captured click.
+    controller.setHostUpdateAvailableVersion("1.7.0-rc.9");
+
+    runControllerCommand(controller, "host.installUpdate", null, "1.6.0-rc.1");
+
+    expect(dispatchRendererCommand).toHaveBeenCalledWith(
+      "host.installUpdate",
+      "1.6.0-rc.1",
+    );
+    controller.dispose();
+  });
+
+  it("dispatches host.installUpdate with null when the item callback captured no version", () => {
+    const dispatchRendererCommand = vi.fn(() => true);
+    const controller = createController({
+      registry: new FakeWindowRegistry(),
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+    controller.install();
+    controller.setHostUpdateAvailableVersion("1.6.0-rc.1");
+
+    runControllerCommand(controller, "host.installUpdate", null, null);
+
+    expect(dispatchRendererCommand).toHaveBeenCalledWith(
+      "host.installUpdate",
+      null,
+    );
+    controller.dispose();
+  });
+
+  // Stale open-menu capture of version A after presentation moves to B is
+  // covered end-to-end at the tray boundary in tray.test.ts (DesktopTrayController
+  // private fields make a real tray fixture impractical here). The cases above
+  // prove MenuController dispatches the callback-captured version rather than
+  // live hostUpdateAvailableVersion.
+
+  it("dispatches Restart Host through the renderer confirmation path", () => {
+    const host = new FakeHost();
+    const registry = new FakeWindowRegistry();
+    const dispatchRendererCommand = vi.fn(() => true);
+    const controller = createController({
+      registry,
+      host,
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+
+    controller.install();
+    runControllerCommand(controller, "host.restart", null, null);
+
+    expect(dispatchRendererCommand).toHaveBeenCalledWith("host.restart", null);
+    expect(host.respawnCalls).toBe(0);
+    expect(registry.createRequests).toEqual([]);
+    controller.dispose();
+  });
+
+  it("opens a window and retries Restart Host when no renderer is available", async () => {
+    const host = new FakeHost();
+    const registry = new EmptyWindowRegistry(null);
+    const dispatchRendererCommand = vi
+      .fn<(_command: MenuCommandId) => boolean>()
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    const controller = createController({
+      registry,
+      host,
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+
+    controller.install();
+    runControllerCommand(controller, "host.restart", null, null);
+    await Promise.resolve();
+
+    expect(registry.createRequests).toEqual([
+      { initialRoute: null, beforeLoad: null },
+    ]);
+    expect(dispatchRendererCommand).toHaveBeenCalledTimes(2);
+    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(
+      1,
+      "host.restart",
+      null,
+    );
+    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(
+      2,
+      "host.restart",
+      null,
+    );
+    expect(host.respawnCalls).toBe(0);
+    controller.dispose();
+  });
+
+  it("logs when Restart Host opens a window but still has no renderer target", async () => {
+    const host = new FakeHost();
+    const registry = new EmptyWindowRegistry(null);
+    const dispatchRendererCommand = vi.fn(() => false);
+    const controller = createController({
+      registry,
+      host,
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+
+    controller.install();
+    vi.mocked(log.warn).mockClear();
+    runControllerCommand(controller, "host.restart", null, null);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(registry.createRequests).toEqual([
+      { initialRoute: null, beforeLoad: null },
+    ]);
+    expect(dispatchRendererCommand).toHaveBeenCalledTimes(2);
+    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(
+      1,
+      "host.restart",
+      null,
+    );
+    expect(dispatchRendererCommand).toHaveBeenNthCalledWith(
+      2,
+      "host.restart",
+      null,
+    );
+    expect(host.respawnCalls).toBe(0);
+    expect(log.warn).toHaveBeenCalledWith(
+      "[menu] host.restart had no renderer after opening window",
+      { command: "host.restart" },
+    );
+    controller.dispose();
+  });
+
+  it("logs when Restart Host cannot open a renderer window", async () => {
+    const createError = new Error("create failed");
+    const host = new FakeHost();
+    const registry = new EmptyWindowRegistry(createError);
+    const dispatchRendererCommand = vi.fn(() => false);
+    const controller = createController({
+      registry,
+      host,
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+
+    controller.install();
+    vi.mocked(log.warn).mockClear();
+    runControllerCommand(controller, "host.restart", null, null);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(registry.createRequests).toEqual([
+      { initialRoute: null, beforeLoad: null },
+    ]);
+    expect(dispatchRendererCommand).toHaveBeenCalledTimes(1);
+    expect(dispatchRendererCommand).toHaveBeenCalledWith("host.restart", null);
+    expect(host.respawnCalls).toBe(0);
+    expect(log.warn).toHaveBeenCalledWith(
+      "[menu] host.restart window creation failed",
+      createError,
+    );
+    controller.dispose();
+  });
+
+  it("uses the main-process close path for Close Window", () => {
+    const registry = new FakeWindowRegistry();
+    const dispatchRendererCommand = vi.fn(() => true);
+    const controller = createController({
+      registry,
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+
+    controller.install();
+    runControllerCommand(
+      controller,
+      "window.closeWindow",
+      registry.window,
+      null,
+    );
+
+    expect(registry.closeRequests).toEqual(["window-a"]);
+    expect(dispatchRendererCommand).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it("uses main-process paths for Minimize and Zoom", () => {
+    const registry = new FakeWindowRegistry();
+    const dispatchRendererCommand = vi.fn(() => true);
+    const controller = createController({
+      registry,
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+
+    controller.install();
+    runControllerCommand(
+      controller,
+      "window.minimizeWindow",
+      registry.window,
+      null,
+    );
+    runControllerCommand(
+      controller,
+      "window.zoomWindow",
+      registry.window,
+      null,
+    );
+
+    expect(registry.minimizeRequests).toEqual(["window-a"]);
+    expect(registry.zoomRequests).toEqual(["window-a"]);
+    expect(dispatchRendererCommand).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it("routes View zoom commands through the zoom controller", async () => {
+    const zoomController = new FakeZoomController();
+    const dispatchRendererCommand = vi.fn(() => true);
+    const controller = new MenuController({
+      appName: "Traycer",
+      platform: "darwin",
+      windowRegistry: new FakeWindowRegistry(),
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      tray: null,
+      zoomController,
+      dispatchRendererCommand,
+      checkForUpdates: () => Promise.resolve(),
+      localHostLanes: new FakeLocalHostLanes(true, false),
+    });
+
+    controller.install();
+    runControllerCommand(controller, "view.zoomIn", null, null);
+    runControllerCommand(controller, "view.zoomOut", null, null);
+    runControllerCommand(controller, "view.resetZoom", null, null);
+    await Promise.resolve();
+
+    expect(zoomController.requests).toEqual(["in", "out", "reset"]);
+    expect(dispatchRendererCommand).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it("opens fresh windows without an explicit route override", () => {
+    const registry = new FakeWindowRegistry();
+    const controller = createController({
+      registry,
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand: () => true,
+    });
+
+    controller.install();
+    runControllerCommand(controller, "epic.newWindow", null, null);
+
+    expect(
+      registry.createRequests.map((request) => request.initialRoute),
+    ).toEqual([null]);
+    controller.dispose();
+  });
+
+  it("disables renderer focused-window commands when no window is focused", () => {
+    const registry = new FakeWindowRegistry();
+    registry.window.focused = false;
+    const perWindowState = new PerWindowState(null);
+    perWindowState.update("window-a", {
+      epicTabs: [{ id: "tab-a", epicId: "epic-a", name: "Alpha" }],
+      activeTabId: "tab-a",
+    });
+    const dispatchRendererCommand = vi.fn(() => true);
+    const controller = createController({
+      registry,
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState,
+      dispatchRendererCommand,
+    });
+
+    controller.install();
+
+    expect(menuItem("Close Tab").enabled).toBe(false);
+    expect(windowMenuItem("Close Window").enabled).toBe(true);
+
+    expect(registry.closeRequests).toEqual([]);
+    expect(dispatchRendererCommand).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it("falls back to the MRU window for Window menu actions without a focused sender", () => {
+    const registry = new FakeWindowRegistry();
+    registry.window.focused = false;
+    const dispatchRendererCommand = vi.fn(() => true);
+    const controller = createController({
+      registry,
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+
+    controller.install();
+    runControllerCommand(controller, "window.minimizeWindow", null, null);
+    runControllerCommand(controller, "window.zoomWindow", null, null);
+    runControllerCommand(controller, "window.closeWindow", null, null);
+
+    expect(registry.minimizeRequests).toEqual(["window-a"]);
+    expect(registry.zoomRequests).toEqual(["window-a"]);
+    expect(registry.closeRequests).toEqual(["window-a"]);
+    expect(dispatchRendererCommand).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it("swallows a synchronous command failure instead of aborting the process", () => {
+    const controller = createController({
+      registry: new FakeWindowRegistry(),
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand: () => true,
+    });
+
+    controller.install();
+    vi.mocked(log.warn).mockClear();
+    vi.mocked(app.showAboutPanel).mockImplementationOnce(() => {
+      throw new Error("about panel boom");
+    });
+
+    expect(() =>
+      runControllerCommand(controller, "app.about", null, null),
+    ).not.toThrow();
+    expect(log.warn).toHaveBeenCalledWith(
+      "[menu] command threw",
+      expect.objectContaining({ command: "app.about" }),
+    );
+    controller.dispose();
+  });
+
+  it("absorbs a rejected dispatch promise without an unhandled rejection", async () => {
+    const registry = new FakeWindowRegistry();
+    registry.create = () => Promise.reject(new Error("create boom"));
+    const controller = createController({
+      registry,
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand: () => true,
+    });
+
+    controller.install();
+    vi.mocked(log.warn).mockClear();
+    runControllerCommand(controller, "epic.newWindow", null, null);
+    // Flush the microtask that runs the attached `.catch`.
+    await Promise.resolve();
+
+    expect(log.warn).toHaveBeenCalledWith(
+      "[menu] epic.newWindow failed",
+      expect.any(Error),
+    );
+    controller.dispose();
+  });
+
+  it("preserves Electron sender-window targeting for Window menu actions", () => {
+    const registry = new MultiWindowRegistry();
+    const dispatchRendererCommand = vi.fn(() => true);
+    const controller = createController({
+      registry,
+      host: new FakeHost(),
+      authSession: new DesktopAuthSession(),
+      perWindowState: new PerWindowState(null),
+      dispatchRendererCommand,
+    });
+
+    controller.install();
+    expect(windowMenuItem("Close Window").enabled).toBe(true);
+    runControllerCommand(
+      controller,
+      "window.minimizeWindow",
+      registry.windowB,
+      null,
+    );
+    runControllerCommand(
+      controller,
+      "window.zoomWindow",
+      registry.windowB,
+      null,
+    );
+    runControllerCommand(
+      controller,
+      "window.closeWindow",
+      registry.windowB,
+      null,
+    );
+
+    expect(registry.minimizeRequests).toEqual(["window-b"]);
+    expect(registry.zoomRequests).toEqual(["window-b"]);
+    expect(registry.closeRequests).toEqual(["window-b"]);
+    expect(dispatchRendererCommand).not.toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  describe("Toggle Developer Tools", () => {
+    function installWithWindows(
+      windows: ReadonlyArray<{
+        readonly windowId: string;
+        readonly window: FakeAppWindow;
+      }>,
+      mruId: string | null,
+    ): MenuController {
+      const controller = createController({
+        registry: new AppWindowRegistry(windows, mruId),
+        host: new FakeHost(),
+        authSession: new DesktopAuthSession(),
+        perWindowState: new PerWindowState(null),
+        dispatchRendererCommand: vi.fn(() => true),
+      });
+      controller.install();
+      return controller;
+    }
+
+    function toggleDevTools(window: unknown): void {
+      menuItemInTopLevel("Help", "Toggle Developer Tools").click?.(
+        null,
+        window,
+      );
+    }
+
+    it("toggles only the sender window's app webContents, whichever window is focused", () => {
+      const a = new FakeAppWindow();
+      const b = new FakeAppWindow();
+      a.focused = true;
+      const controller = installWithWindows(
+        [
+          { windowId: "window-a", window: a },
+          { windowId: "window-b", window: b },
+        ],
+        "window-a",
+      );
+
+      toggleDevTools(b);
+      expect(b.webContents.toggleDevTools).toHaveBeenCalledTimes(1);
+      expect(a.webContents.toggleDevTools).not.toHaveBeenCalled();
+
+      toggleDevTools(a);
+      expect(a.webContents.toggleDevTools).toHaveBeenCalledTimes(1);
+      expect(b.webContents.toggleDevTools).toHaveBeenCalledTimes(1);
+      controller.dispose();
+    });
+
+    it("targets the parent app window when a custom inspector window sends the command", () => {
+      const a = new FakeAppWindow();
+      const b = new FakeAppWindow();
+      a.focused = true;
+      const inspector = new FakeAppWindow();
+      inspector.parent = b;
+      const controller = installWithWindows(
+        [
+          { windowId: "window-a", window: a },
+          { windowId: "window-b", window: b },
+        ],
+        "window-a",
+      );
+
+      toggleDevTools(inspector);
+
+      expect(b.webContents.toggleDevTools).toHaveBeenCalledTimes(1);
+      expect(a.webContents.toggleDevTools).not.toHaveBeenCalled();
+      expect(inspector.webContents.toggleDevTools).not.toHaveBeenCalled();
+      controller.dispose();
+    });
+
+    it("falls back to the focused registered window for a parentless, unregistered inspector sender", () => {
+      const a = new FakeAppWindow();
+      const b = new FakeAppWindow();
+      b.focused = true;
+      const inspector = new FakeAppWindow();
+      const controller = installWithWindows(
+        [
+          { windowId: "window-a", window: a },
+          { windowId: "window-b", window: b },
+        ],
+        "window-a",
+      );
+
+      toggleDevTools(inspector);
+
+      expect(b.webContents.toggleDevTools).toHaveBeenCalledTimes(1);
+      expect(a.webContents.toggleDevTools).not.toHaveBeenCalled();
+      expect(inspector.webContents.toggleDevTools).not.toHaveBeenCalled();
+      controller.dispose();
+    });
+
+    it("uses the focused BrowserWindow when the callback window is missing", () => {
+      const a = new FakeAppWindow();
+      const b = new FakeAppWindow();
+      const inspector = new FakeAppWindow();
+      inspector.parent = a;
+      electronState.getFocusedWindow.mockReturnValue(inspector);
+      const controller = installWithWindows(
+        [
+          { windowId: "window-a", window: a },
+          { windowId: "window-b", window: b },
+        ],
+        "window-b",
+      );
+
+      toggleDevTools(undefined);
+
+      expect(a.webContents.toggleDevTools).toHaveBeenCalledTimes(1);
+      expect(b.webContents.toggleDevTools).not.toHaveBeenCalled();
+      controller.dispose();
+    });
+
+    it("built-in detached app DevTools (null callback window, no focused BrowserWindow) targets the MRU app window", () => {
+      const a = new FakeAppWindow();
+      const b = new FakeAppWindow();
+      const controller = installWithWindows(
+        [
+          { windowId: "window-a", window: a },
+          { windowId: "window-b", window: b },
+        ],
+        "window-b",
+      );
+
+      toggleDevTools(undefined);
+
+      expect(b.webContents.toggleDevTools).toHaveBeenCalledTimes(1);
+      expect(a.webContents.toggleDevTools).not.toHaveBeenCalled();
+      controller.dispose();
+    });
+
+    it("built-in detached app DevTools picks the app whose DevTools is focused, even when another app is MRU", () => {
+      const a = new FakeAppWindow();
+      const b = new FakeAppWindow();
+      a.webContents.devToolsFocused = true;
+      const controller = installWithWindows(
+        [
+          { windowId: "window-a", window: a },
+          { windowId: "window-b", window: b },
+        ],
+        "window-b",
+      );
+
+      toggleDevTools(undefined);
+
+      expect(a.webContents.toggleDevTools).toHaveBeenCalledTimes(1);
+      expect(b.webContents.toggleDevTools).not.toHaveBeenCalled();
+      controller.dispose();
+    });
+
+    it("swallows and logs a synchronous toggleDevTools exception", () => {
+      const a = new FakeAppWindow();
+      const failure = new Error("toggleDevTools boom");
+      a.webContents.toggleDevTools.mockImplementation(() => {
+        throw failure;
+      });
+      const controller = installWithWindows(
+        [{ windowId: "window-a", window: a }],
+        "window-a",
+      );
+      vi.mocked(log.warn).mockClear();
+
+      expect(() => toggleDevTools(a)).not.toThrow();
+
+      expect(a.webContents.toggleDevTools).toHaveBeenCalledTimes(1);
+      expect(
+        vi.mocked(log.warn).mock.calls.some((call) => call.includes(failure)),
+      ).toBe(true);
+      controller.dispose();
+    });
+
+    it("does nothing when no app window can be resolved", () => {
+      const controller = installWithWindows([], null);
+
+      expect(() => toggleDevTools(undefined)).not.toThrow();
+      controller.dispose();
+    });
+
+    it("does nothing when the resolved app window or its webContents is destroyed", () => {
+      const destroyedWindow = new FakeAppWindow();
+      destroyedWindow.destroyed = true;
+      const destroyedContents = new FakeAppWindow();
+      destroyedContents.webContents.destroyed = true;
+      const controller = installWithWindows(
+        [
+          { windowId: "window-a", window: destroyedWindow },
+          { windowId: "window-b", window: destroyedContents },
+        ],
+        "window-a",
+      );
+
+      expect(() => toggleDevTools(destroyedWindow)).not.toThrow();
+      expect(() => toggleDevTools(destroyedContents)).not.toThrow();
+      expect(() => toggleDevTools(undefined)).not.toThrow();
+
+      expect(destroyedWindow.webContents.toggleDevTools).not.toHaveBeenCalled();
+      expect(
+        destroyedContents.webContents.toggleDevTools,
+      ).not.toHaveBeenCalled();
+      controller.dispose();
+    });
+
+    it("ignores a stale captured callback once the policy disables DevTools", () => {
+      const a = new FakeAppWindow();
+      const controller = installWithWindows(
+        [{ windowId: "window-a", window: a }],
+        "window-a",
+      );
+      const item = menuItemInTopLevel("Help", "Toggle Developer Tools");
+
+      configState.canOpenDevTools = false;
+      item.click?.(null, a);
+
+      expect(a.webContents.toggleDevTools).not.toHaveBeenCalled();
+      controller.dispose();
+    });
+
+    it("does not install the command when the production policy disables DevTools", () => {
+      configState.canOpenDevTools = false;
+      const controller = installWithWindows(
+        [{ windowId: "window-a", window: new FakeAppWindow() }],
+        "window-a",
+      );
+
+      expect(() =>
+        menuItemInTopLevel("Help", "Toggle Developer Tools"),
+      ).toThrow("missing");
+      controller.dispose();
+    });
+  });
+
+  describe("offerRestartHost (localHostLanes)", () => {
+    it("omits Restart Host while lanes are inactive, shows it once onChange fires them active, and dispose() unsubscribes", () => {
+      const localHostLanes = new FakeLocalHostLanes(false, false);
+      const controller = new MenuController({
+        appName: "Traycer",
+        platform: "darwin",
+        windowRegistry: new FakeWindowRegistry(),
+        host: new FakeHost(),
+        authSession: new DesktopAuthSession(),
+        perWindowState: new PerWindowState(null),
+        tray: null,
+        zoomController: new FakeZoomController(),
+        dispatchRendererCommand: () => true,
+        checkForUpdates: () => Promise.resolve(),
+        localHostLanes,
+      });
+
+      controller.install();
+      expect(() => menuItemInTopLevel("Traycer", "Restart Host")).toThrow(
+        "missing",
+      );
+      expect(() => menuItemInTopLevel("Help", "Restart Host")).toThrow(
+        "missing",
+      );
+      expect(localHostLanes.listenerCount).toBe(1);
+
+      localHostLanes.active = true;
+      localHostLanes.fireChange();
+
+      expect(menuItemInTopLevel("Traycer", "Restart Host")).toBeDefined();
+      expect(menuItemInTopLevel("Help", "Restart Host")).toBeDefined();
+
+      controller.dispose();
+      expect(localHostLanes.listenerCount).toBe(0);
+    });
+
+    function newController(localHostLanes: FakeLocalHostLanes): MenuController {
+      return new MenuController({
+        appName: "Traycer",
+        platform: "darwin",
+        windowRegistry: new FakeWindowRegistry(),
+        host: new FakeHost(),
+        authSession: new DesktopAuthSession(),
+        perWindowState: new PerWindowState(null),
+        tray: null,
+        zoomController: new FakeZoomController(),
+        dispatchRendererCommand: () => true,
+        checkForUpdates: () => Promise.resolve(),
+        localHostLanes,
+      });
+    }
+
+    // "The desktop leaves a host that a person started in a terminal
+    // untouched; the mode governs the service run only." Restart Host
+    // targets the SERVICE run, so it must never be offered for a run the
+    // service does not own either - the review ruling extends the same hiding
+    // Quit-and-Stop-Host already gets.
+    it("(i) lanes active + foreground: NO Restart Host row", () => {
+      const localHostLanes = new FakeLocalHostLanes(true, true);
+      const controller = newController(localHostLanes);
+      controller.install();
+      expect(() => menuItemInTopLevel("Traycer", "Restart Host")).toThrow(
+        "missing",
+      );
+      expect(() => menuItemInTopLevel("Help", "Restart Host")).toThrow(
+        "missing",
+      );
+      controller.dispose();
+    });
+
+    it("(ii) lanes active + not foreground: the row is present (guard)", () => {
+      const localHostLanes = new FakeLocalHostLanes(true, false);
+      const controller = newController(localHostLanes);
+      controller.install();
+      expect(menuItemInTopLevel("Traycer", "Restart Host")).toBeDefined();
+      expect(menuItemInTopLevel("Help", "Restart Host")).toBeDefined();
+      controller.dispose();
+    });
+
+    it("(iii) foreground flips true then false, each with fireChange(): the row hides, then comes back", () => {
+      const localHostLanes = new FakeLocalHostLanes(true, false);
+      const controller = newController(localHostLanes);
+      controller.install();
+      expect(menuItemInTopLevel("Traycer", "Restart Host")).toBeDefined();
+
+      localHostLanes.foreground = true;
+      localHostLanes.fireChange();
+      expect(() => menuItemInTopLevel("Traycer", "Restart Host")).toThrow(
+        "missing",
+      );
+
+      localHostLanes.foreground = false;
+      localHostLanes.fireChange();
+      expect(menuItemInTopLevel("Traycer", "Restart Host")).toBeDefined();
+
+      controller.dispose();
+    });
+
+    it("(iv) lanes inactive + foreground: no row (guard)", () => {
+      const localHostLanes = new FakeLocalHostLanes(false, true);
+      const controller = newController(localHostLanes);
+      controller.install();
+      expect(() => menuItemInTopLevel("Traycer", "Restart Host")).toThrow(
+        "missing",
+      );
+      expect(() => menuItemInTopLevel("Help", "Restart Host")).toThrow(
+        "missing",
+      );
+      controller.dispose();
+    });
+  });
+});

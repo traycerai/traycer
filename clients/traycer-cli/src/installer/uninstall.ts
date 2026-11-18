@@ -1,0 +1,254 @@
+import { rm } from "node:fs/promises";
+import {
+  deleteHostInstallRecord,
+  readHostInstallRecord,
+  type HostInstallRecord,
+} from "../manifest/host-install";
+import type { Environment } from "../runner/environment";
+import { createCliLogger, errorFromUnknown, type ILogger } from "../logger";
+import { rotateHostLogForPurgeWithVerifier } from "../host/host-log-rotation";
+import {
+  hostHomeDir,
+  hostInstallDir,
+  hostPidMetadataPath,
+  hostStagedDir,
+} from "../store/paths";
+import { legacyMutationVerifier } from "./aside-dirs";
+import { sweepOldTrash } from "./install";
+import { resetHeldHostVersion } from "../host/held-host-version";
+import { removeHostUpdateLastAttempt } from "@traycer-clients/shared/host-update";
+
+// Uninstall the installed host directory for a single environment. Always
+// removes the install dir + record, AND the staged dir alongside it (Tech
+// Plan, "host uninstall ... removes staged/ alongside install/") - a
+// staged-but-not-yet-applied update has nothing left to apply to once the
+// host it was staged against is gone. Both `host uninstall` and
+// `host uninstall --all` route through this function, so both modes get
+// the removal. Runtime state (pid metadata, log) is preserved unless
+// `purgeChannelRuntime` is set. User data under ~/.traycer/ (chats,
+// sqlite, snapshots, credentials, downloaded models + provider binaries)
+// is NEVER removed - there is intentionally no "purge user data" path.
+// The OS service registration is NOT touched here - the caller decides
+// whether to follow up with a service-uninstall (the `--all` flag flow).
+export interface UninstallHostOptions {
+  readonly environment: Environment;
+  readonly purgeChannelRuntime: boolean;
+  /**
+   * Every destructive edge receives an explicit verifier. Legacy callers
+   * use the named `legacyMutationVerifier`, never a nullable omission.
+   */
+  readonly verifyMutationCapability: () => Promise<void>;
+  /**
+   * Drops `update-attempt.json` through the caller's live lock handle.
+   *
+   * Required and nullable rather than optional, like every other authority
+   * seam here: the record is canonical state, so the ONLY callers that may
+   * clear it are the ones holding a `host-uninstall-maintenance` capability
+   * to hand one in. `null` is the legacy/no-contender path, which leaves the
+   * record exactly as it found it rather than unlinking it without authority.
+   */
+  readonly discardAttemptRecord: (() => Promise<void>) | null;
+}
+
+export interface UninstallHostResult {
+  readonly removedRecord: HostInstallRecord | null;
+  readonly removedInstallDir: boolean;
+  readonly removedStagedDir: boolean;
+  readonly purgedRuntime: boolean;
+}
+
+export async function removeHostPidMetadataForPurge(
+  environment: Environment,
+  logger: ILogger,
+  remove: (path: string, options: { readonly force: true }) => Promise<void>,
+): Promise<void> {
+  return await removeHostPidMetadataForPurgeWithVerifier(
+    environment,
+    logger,
+    remove,
+    legacyMutationVerifier,
+  );
+}
+
+export async function removeHostPidMetadataForPurgeWithVerifier(
+  environment: Environment,
+  logger: ILogger,
+  remove: (path: string, options: { readonly force: true }) => Promise<void>,
+  verifyMutationCapability: () => Promise<void>,
+): Promise<void> {
+  // A lock/capability failure is an authority failure, not a best-effort
+  // metadata cleanup error. Leave it visible to stop the remaining purge.
+  await verifyMutationCapability();
+  try {
+    await remove(hostPidMetadataPath(environment), { force: true });
+  } catch (err) {
+    logger.warn("Host uninstall failed to remove pid metadata", {
+      environment,
+      errorName: errorFromUnknown(err).name,
+      errorMessage: errorFromUnknown(err).message,
+    });
+  }
+}
+
+export async function uninstallHost(
+  opts: UninstallHostOptions,
+): Promise<UninstallHostResult> {
+  const verify = opts.verifyMutationCapability;
+  const logger = createCliLogger(opts.environment);
+  logger.info("Host uninstall started", {
+    environment: opts.environment,
+    purgeChannelRuntime: opts.purgeChannelRuntime,
+  });
+  const previous = await readHostInstallRecord(opts.environment);
+  logger.debug("Host uninstall read install record", {
+    environment: opts.environment,
+    hadInstallRecord: previous !== null,
+  });
+  let removedInstallDir = false;
+  await verify();
+  try {
+    await rm(hostInstallDir(opts.environment), {
+      recursive: true,
+      force: true,
+    });
+    removedInstallDir = true;
+  } catch (err) {
+    logger.warn("Host uninstall failed to remove install directory", {
+      environment: opts.environment,
+      errorName: errorFromUnknown(err).name,
+      errorMessage: errorFromUnknown(err).message,
+    });
+    removedInstallDir = false;
+  }
+  await verify();
+  await deleteHostInstallRecord(opts.environment);
+  logger.info("Host uninstall deleted install record", {
+    environment: opts.environment,
+    removedInstallDir,
+  });
+  // Sweep any stale `<installDir>.old-*` siblings the atomic swap left
+  // behind after a crash. Best-effort; never blocks the uninstall.
+  await sweepOldTrash(
+    hostInstallDir(opts.environment),
+    "install.json",
+    logger,
+    verify,
+  );
+
+  // A staged update has nothing left to apply to once the host it was
+  // staged against is gone - remove `staged/` (and its own `.old-*`
+  // litter, the identical trash convention `install/` uses, keyed by its
+  // own `staged.json` sidecar) alongside `install/` rather than leaving
+  // it to be silently swept by the next install/apply's reconcile pass.
+  let removedStagedDir = false;
+  await verify();
+  try {
+    await rm(hostStagedDir(opts.environment), {
+      recursive: true,
+      force: true,
+    });
+    removedStagedDir = true;
+  } catch (err) {
+    logger.warn("Host uninstall failed to remove staged directory", {
+      environment: opts.environment,
+      errorName: errorFromUnknown(err).name,
+      errorMessage: errorFromUnknown(err).message,
+    });
+    removedStagedDir = false;
+  }
+  await sweepOldTrash(
+    hostStagedDir(opts.environment),
+    "staged.json",
+    logger,
+    verify,
+  );
+
+  // The schema-v2 attempt record (`update-attempt.json`) describes an update
+  // OF the install just removed, and it is the one piece of install-scoped
+  // state that lives beside `install/` rather than inside it. Left behind,
+  // a parked or interrupted attempt outlives everything it could resume
+  // against and keeps refusing the maintenance admissions that follow: the
+  // next `host install` / desktop activation met a park for a host that no
+  // longer existed and failed closed on it.
+  //
+  // Dropped through the caller's handle-bound discard, NOT an `rm` here.
+  // `store.ts` forbids a raw delete on purpose: an unlink checks nothing at
+  // the point of the write, and a handle can outlive its lock without anyone
+  // releasing it (a contender that proved the PUBLISHED holder dead breaks the
+  // lock and takes it, notifying nobody), so an uninstall that lost its lock
+  // would unlink the NEW owner's live attempt. Under the root maintenance
+  // lease the published holder is the supervisor child, not this process, so
+  // that was reachable while this uninstall ran perfectly healthy; the lease
+  // now publishes the executing process across an in-process action. The
+  // discard additionally takes the mutation lease and checks ownership
+  // immediately before the unlink. The lock FILE stays: it is the caller's
+  // live handle, not evidence.
+  // A failure here PROPAGATES, unlike the best-effort removals above. Those
+  // leave litter; this one leaves the exact defect this seam exists to
+  // prevent - a valid nonterminal record standing in a host home whose
+  // install is gone, refusing the next install's admission. Reporting a
+  // successful uninstall while that record survives is the silent version of
+  // the original bug, so the uninstall fails loudly instead.
+  //
+  // Safe to propagate for the ordinary case: `removeRecordFile` unlinks with
+  // `force`, so an absent record is a successful discard, not an error.
+  if (opts.discardAttemptRecord !== null) {
+    await verify();
+    await opts.discardAttemptRecord();
+  }
+  await verify();
+  await removeHostUpdateLastAttempt(hostHomeDir(opts.environment));
+
+  // The version hold names a deliberate downgrade of the install we just
+  // removed; drop it so a later fresh install of that same version does not
+  // inherit a stale hold and silently park its updates (first install has no
+  // previous version, so it writes no hold of its own to overwrite it).
+  // Best-effort - a surviving marker is only inert until then, and never
+  // blocks the uninstall.
+  await verify();
+  await resetHeldHostVersion(opts.environment);
+
+  let purgedRuntime = false;
+  if (opts.purgeChannelRuntime) {
+    // Clear pid metadata + log + any other environment-scoped runtime
+    // state. We don't blow away ~/.traycer/host/ wholesale because
+    // the dev environment's install lives under it.
+    //
+    // The log is ROTATED, not deleted. `make dev-desktop` runs
+    // `host uninstall --all` on every Ctrl-C teardown, so deleting here meant
+    // the session you most wanted to investigate was routinely gone before you
+    // could read it. Rotating still clears the live log (a purge that leaves an
+    // orphan behind is its own surprise) while shifting the host's own two
+    // generations (`host.log.1`, `host.log.2`) the way its logger does, so
+    // they cannot accumulate.
+    await removeHostPidMetadataForPurgeWithVerifier(
+      opts.environment,
+      logger,
+      rm,
+      verify,
+    );
+    const rotated = await rotateHostLogForPurgeWithVerifier(
+      opts.environment,
+      verify,
+    );
+    purgedRuntime = true;
+    logger.warn("Host uninstall purged runtime files", {
+      environment: opts.environment,
+      rotatedLog: rotated === "rotated",
+    });
+  }
+
+  logger.info("Host uninstall completed", {
+    environment: opts.environment,
+    removedInstallDir,
+    removedStagedDir,
+    purgedRuntime,
+    hadInstallRecord: previous !== null,
+  });
+  return {
+    removedRecord: previous,
+    removedInstallDir,
+    removedStagedDir,
+    purgedRuntime,
+  };
+}

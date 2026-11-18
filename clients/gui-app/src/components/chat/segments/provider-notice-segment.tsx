@@ -1,0 +1,223 @@
+import {
+  ChevronDown,
+  ChevronRight,
+  Info,
+  TriangleAlert,
+  Wifi,
+} from "lucide-react";
+import { useState } from "react";
+import type {
+  ProviderNoticeDetail,
+  ProviderNoticeKind,
+  ProviderNoticeTone,
+} from "@traycer/protocol/persistence/epic/content-blocks";
+import { Button } from "@/components/ui/button";
+import { LivePulse } from "@/components/ui/live-pulse";
+import { cn } from "@/lib/utils";
+import { useReadingWidthStyle } from "@/lib/layout-overrides";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+
+interface ProviderNoticeSegmentProps {
+  status: "streaming" | "completed" | "errored";
+  /**
+   * Which notice this is. Only `fallback_applied` reads it, and only to leave
+   * its message off the rule (see `inlineMessageFor`) - the rest of this
+   * component is kind-blind on purpose, because a harness notice and a
+   * fallback notice are the same shape of row.
+   */
+  noticeKind: ProviderNoticeKind;
+  /** Compact Codex status, matching the native app's transient retry row. */
+  presentation?: "retry";
+  tone: ProviderNoticeTone;
+  title: string;
+  message: string | null;
+  details: ReadonlyArray<ProviderNoticeDetail>;
+  findUnitId: string | null;
+}
+
+const TONE_ICON: Record<ProviderNoticeTone, typeof Info> = {
+  info: Info,
+  warning: TriangleAlert,
+};
+
+// The status token, never a palette hue: `text-warning-foreground` is verified
+// against every preset's background, where a fixed amber pair was tuned for
+// the default light/dark themes only.
+const TONE_TEXT_CLASS: Record<ProviderNoticeTone, string> = {
+  info: "text-muted-foreground",
+  warning: "text-warning-foreground",
+};
+
+/**
+ * The message the collapsed rule prints after the title, or `null`.
+ *
+ * `fallback_applied` prints its title alone (clutter cuts, 2026-09-27): the
+ * title already says what happened ("Switched to Sonnet 5 · Low on Surya
+ * after a rate limit"), and the message beside it was the raw route that
+ * belongs among the details under the chevron. Every other kind keeps its
+ * message inline, as harness notices always have.
+ */
+function inlineMessageFor(
+  noticeKind: ProviderNoticeKind,
+  message: string | null,
+): string | null {
+  if (noticeKind === "fallback_applied") return null;
+  return message === null || message.length === 0 ? null : message;
+}
+
+export function ProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
+  return props.presentation === "retry" ? (
+    <CodexRetryNotice
+      title={props.title}
+      details={props.details}
+      findUnitId={props.findUnitId}
+    />
+  ) : (
+    <StandardProviderNoticeSegment {...props} />
+  );
+}
+
+function CodexRetryNotice(
+  props: Pick<ProviderNoticeSegmentProps, "title" | "details" | "findUnitId">,
+) {
+  const { title, details, findUnitId } = props;
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div
+      role="status"
+      data-chat-find-unit={findUnitId ?? undefined}
+      className="flex w-full min-w-0 flex-col items-start gap-1 text-ui-xs text-muted-foreground"
+    >
+      <TooltipWrapper
+        label="Reported by Codex"
+        side="top"
+        sideOffset={undefined}
+        align="start"
+      >
+        <Button
+          size="inline-xs"
+          variant="muted"
+          data-find-include="true"
+          aria-expanded={expanded}
+          aria-label={`${title}. Reported by Codex. ${expanded ? "Hide" : "Show"} details.`}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          <Wifi className="size-3.5 shrink-0" aria-hidden />
+          <span>{title}</span>
+        </Button>
+      </TooltipWrapper>
+      {expanded ? (
+        <dl
+          data-find-skip="true"
+          className="m-0 flex w-full min-w-0 flex-col gap-1 pl-5"
+        >
+          {details.map((detail) => (
+            <div
+              key={`${detail.label}:${detail.value}`}
+              className="flex flex-wrap gap-x-2"
+            >
+              <dt className="font-medium">{detail.label}</dt>
+              <dd className="m-0 min-w-0 wrap-anywhere">{detail.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+    </div>
+  );
+}
+
+function StandardProviderNoticeSegment(props: ProviderNoticeSegmentProps) {
+  const { status, noticeKind, tone, title, message, details, findUnitId } =
+    props;
+  const isStreaming = status === "streaming";
+  const [expanded, setExpanded] = useState(false);
+  const toggleExpanded = (): void => setExpanded((current) => !current);
+  const readingWidth = useReadingWidthStyle();
+
+  const hasDetails = details.length > 0;
+  const Icon = TONE_ICON[tone];
+  const toneClass = TONE_TEXT_CLASS[tone];
+  const ExpandIcon = expanded ? ChevronDown : ChevronRight;
+  const inlineMessage = inlineMessageFor(noticeKind, message);
+
+  const labelInner = (
+    <div className={cn("flex items-center gap-2 text-ui-xs", toneClass)}>
+      <Icon className="size-3.5 shrink-0" aria-hidden />
+      <span>
+        {title}
+        {inlineMessage === null ? null : (
+          <span className="text-muted-foreground/80"> · {inlineMessage}</span>
+        )}
+      </span>
+      {isStreaming ? (
+        <LivePulse
+          size="xs"
+          tone="active"
+          ariaLabel="Provider notice active"
+          className={undefined}
+        />
+      ) : null}
+      {hasDetails ? (
+        <ExpandIcon className="size-3 shrink-0" aria-hidden />
+      ) : null}
+    </div>
+  );
+
+  return (
+    <div
+      data-chat-find-unit={findUnitId ?? undefined}
+      role={isStreaming ? "status" : undefined}
+      className="flex w-full flex-col gap-1"
+    >
+      <div className="flex items-center gap-3">
+        <span aria-hidden className="h-px flex-1 bg-border/60" />
+        {hasDetails ? (
+          <Button
+            size="inline-xs-wrap"
+            variant="muted"
+            onClick={toggleExpanded}
+            aria-expanded={expanded}
+          >
+            {labelInner}
+          </Button>
+        ) : (
+          labelInner
+        )}
+        <span aria-hidden className="h-px flex-1 bg-border/60" />
+      </div>
+      {hasDetails && expanded ? (
+        <div
+          className={cn(
+            "mx-auto w-full",
+            "rounded-md border border-border/60 bg-muted/30 p-3",
+            readingWidth.className,
+          )}
+          style={{ maxWidth: readingWidth.maxWidth }}
+        >
+          <dl className="m-0 flex flex-col gap-1 text-ui-xs">
+            {details.map((detail) => (
+              <div
+                key={`${detail.label}:${detail.value}`}
+                className="flex gap-2"
+              >
+                <dt className="shrink-0 font-medium text-muted-foreground">
+                  {detail.label}
+                </dt>
+                <dd className="m-0 min-w-0 flex-1 text-foreground/85">
+                  {detail.value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          {/*
+           * No action in here, for a fallback notice either (clutter cuts,
+           * 2026-09-27): the "Model routing" settings button that sat below
+           * the details was a text-styled action on a historical row. The
+           * row describes something that already happened; the gear on the
+           * live routing cards is the way to settings.
+           */}
+        </div>
+      ) : null}
+    </div>
+  );
+}

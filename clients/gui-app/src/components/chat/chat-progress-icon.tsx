@@ -1,0 +1,237 @@
+import { type ReactNode } from "react";
+import { useStore } from "zustand";
+import { MessageSquareLock } from "lucide-react";
+import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
+import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
+import { useRegisteredEpicAgentActivityTiers } from "@/lib/epic-selectors";
+import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
+import { chatActivityIndicator } from "@/components/epic-canvas/renderers/chat-tile-session-state";
+import type { IndicatorRunningKind } from "@/components/notifications/notification-indicator-icon";
+import type { AgentActivityCoverage } from "@/lib/agent-activity";
+import { useAgentActivityCoverage } from "@/stores/agent-activity-store";
+import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
+import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
+import { cn } from "@/lib/utils";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+interface ChatProgressIconProps {
+  readonly epicId: string;
+  readonly chatId: string;
+  /**
+   * The host that owns this chat, named by the surface rendering the icon: a
+   * canvas tab passes its ref's bound host, a sidebar row passes the host off
+   * its own projection row. A chat id alone does not identify a session (it is
+   * host-minted), so without this the icon could read a same-id chat on
+   * another machine. `null` (a row whose projection carries no host) simply
+   * means no session to read - the icon falls back to epic awareness. The same
+   * host also scopes the notification indicator to this chat's origin.
+   */
+  readonly hostId: string | null;
+  readonly className: string | undefined;
+  readonly mutedClassName: string;
+  readonly testId: string;
+  /**
+   * Optional idle-slot content (e.g. title-generation spinner). Shown only
+   * when no notification status, running state, or read-only lock replaces it.
+   */
+  readonly defaultIcon: ReactNode | undefined;
+}
+
+export function ChatProgressIcon(props: ChatProgressIconProps) {
+  // Sidebar-level awareness covers chats running host-side without a renderer
+  // session handle. An opened session adds run-status race smoothing and
+  // authoritative chat access; notification rows own prompt and outcome
+  // presentation.
+  //
+  // Read as a TIER, not as membership of the active-id set. The two have
+  // identical membership, but the set alone cannot say whether an unopened
+  // chat is mid-turn or merely kept alive by background work, so it forced the
+  // turn spinner on both. The tier is the same awareness data the descendant
+  // rollup already reads, so a background-only chat now presents the same way
+  // whether you look at its own row or at the collapsed parent standing in
+  // for it. A host that has not classified its agents still reports `"turn"`.
+  //
+  // Both reads go through the REGISTERED (keyed, non-throwing) selectors, not
+  // the ambient `useEpicAgentActivityTiers()` / `useEpicPermissionRole()`: this
+  // icon already carries its `epicId`, and it is a presentational leaf that
+  // must stay renderable wherever a chat node is drawn - the same rule the
+  // sibling `TuiAgentLiveTabIcon` follows. With the ambient hooks it was the
+  // least-defended node icon: any render outside an `<EpicSessionProvider>`
+  // (or under one whose handle is momentarily `null`) threw from here and
+  // blanked the window via the root boundary. Outside a session both degrade
+  // - no activity, `null` role - which is the same neutral idle the icon
+  // already shows for an unknown permission.
+  const awarenessRunning: IndicatorRunningKind =
+    useRegisteredEpicAgentActivityTiers(props.epicId).get(props.chatId) ??
+    false;
+  // Read for the HANDLE-LESS arm below, but hooks cannot be called
+  // conditionally so it is resolved here for both. `null` answers
+  // `indeterminate` by construction, which is the right reading for a row
+  // whose projection carries no host: unable to name the machine, unable to
+  // detect exclusion.
+  const awarenessCoverage = useAgentActivityCoverage(props.hostId);
+  const handle = useExistingChatSessionHandle(
+    props.epicId,
+    props.chatId,
+    props.hostId,
+  );
+  const indicatorState = useSurfaceNotificationIndicatorState(
+    {
+      epicId: props.epicId,
+      chatId: props.chatId,
+    },
+    props.hostId,
+  );
+  if (handle === null) {
+    return (
+      <ChatProgressPresentation
+        indicatorState={indicatorState}
+        running={awarenessRunning}
+        activityCoverage={awarenessCoverage}
+        // An unopened row claims nothing: every task role may write, and
+        // whether this particular chat is somebody else's is the session's own
+        // access snapshot to say, which this arm does not have.
+        isReadOnly={false}
+        subjectId={props.chatId}
+        className={props.className}
+        mutedClassName={props.mutedClassName}
+        testId={props.testId}
+        defaultIcon={props.defaultIcon}
+      />
+    );
+  }
+  return (
+    <ChatProgressIconWithHandle
+      handle={handle}
+      awarenessRunning={awarenessRunning}
+      indicatorState={indicatorState}
+      className={props.className}
+      mutedClassName={props.mutedClassName}
+      testId={props.testId}
+      subjectId={props.chatId}
+      defaultIcon={props.defaultIcon}
+    />
+  );
+}
+
+function ChatProgressIconWithHandle(props: {
+  readonly handle: ChatSessionStoreHandle;
+  readonly awarenessRunning: IndicatorRunningKind;
+  readonly indicatorState: NotificationIndicatorState;
+  readonly className: string | undefined;
+  readonly mutedClassName: string;
+  readonly testId: string;
+  readonly subjectId: string;
+  readonly defaultIcon: ReactNode | undefined;
+}) {
+  // `useStore(api, selector)` instead of `props.handle.store(...)`: the
+  // bound-store call form isn't recognizable as a hook to the React Compiler,
+  // which memoizes it away and corrupts the hook order.
+  //
+  // The selector collapses the session state to the tri-state activity kind
+  // (a primitive), so array-identity churn on queue/backgroundItems can't
+  // re-render this icon.
+  const activity = useStore(props.handle.store, (state) =>
+    chatActivityIndicator(state),
+  );
+  const access = useStore(props.handle.store, (state) => state.access);
+  return (
+    <ChatProgressPresentation
+      indicatorState={props.indicatorState}
+      // The session's own tri-state is authoritative when it reads any
+      // activity: it sees the queue and background items directly, while
+      // awareness reports what the HOST classified. Awareness only backfills
+      // the brief subscription-gap window where the store still reads idle.
+      running={activity ?? props.awarenessRunning}
+      // An OPEN session is a direct subscription to this chat on its own host,
+      // so the activity plane's reach is not what this icon depends on -
+      // whatever that plane can or cannot see, this row has its own source.
+      // `indeterminate` says exactly that: no exclusion to report.
+      activityCoverage="indeterminate"
+      // A session's access snapshot is authoritative. Keep the icon neutral
+      // while it is unknown so an owner never sees the unopened-chat fallback
+      // lock flash before the snapshot arrives.
+      isReadOnly={access !== null && access.role !== "owner"}
+      subjectId={props.subjectId}
+      className={props.className}
+      mutedClassName={props.mutedClassName}
+      testId={props.testId}
+      defaultIcon={props.defaultIcon}
+    />
+  );
+}
+
+function ChatProgressPresentation(props: {
+  readonly indicatorState: NotificationIndicatorState;
+  readonly running: IndicatorRunningKind;
+  readonly activityCoverage: AgentActivityCoverage;
+  readonly isReadOnly: boolean;
+  readonly subjectId: string;
+  readonly className: string | undefined;
+  readonly mutedClassName: string;
+  readonly testId: string;
+  readonly defaultIcon: ReactNode | undefined;
+}) {
+  const icon = useChatIconDisplay(props.className, props.mutedClassName);
+  let idleIcon: ReactNode;
+  if (props.isReadOnly) {
+    idleIcon = (
+      <TooltipWrapper
+        label="Read-only agent"
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <span
+          role="status"
+          aria-label="Read-only agent"
+          className={icon.className}
+          style={icon.style}
+        >
+          <MessageSquareLock aria-hidden className="size-3.5" />
+        </span>
+      </TooltipWrapper>
+    );
+  } else if (props.defaultIcon !== undefined) {
+    idleIcon = props.defaultIcon;
+  } else {
+    idleIcon = (
+      <EPIC_NODE_ICONS.chat className={icon.className} style={icon.style} />
+    );
+  }
+  return (
+    <NotificationIndicatorIcon
+      state={props.indicatorState}
+      running={props.running}
+      activityCoverage={props.activityCoverage}
+      subjectId={props.subjectId}
+      testIdPrefix={props.testId}
+      className={icon.className}
+      style={icon.style}
+      runningTitle="Agent in progress"
+      defaultIcon={idleIcon}
+      agentSurface="gui"
+    />
+  );
+}
+
+function useChatIconDisplay(
+  className: string | undefined,
+  mutedClassName: string,
+): {
+  readonly className: string;
+  readonly style: { color: string | undefined } | undefined;
+} {
+  const colorMode = useSettingsStore((s) => s.artifactIconColorMode);
+  const color = useSettingsStore((s) => s.artifactIconColors.chat);
+  return {
+    className: cn(
+      "size-3.5 shrink-0",
+      colorMode === "none" && mutedClassName,
+      className,
+    ),
+    style: colorMode === "byType" ? { color } : undefined,
+  };
+}

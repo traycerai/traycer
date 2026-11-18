@@ -1,0 +1,483 @@
+import {
+  useCallback,
+  useEffect,
+  type ReactElement,
+  type ReactNode,
+} from "react";
+import { createRoot } from "react-dom/client";
+import type { JsonContent } from "@traycer/protocol/common/registry";
+import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
+import { FixtureOrganizationContext } from "./organization-fixture-context";
+import { FIXTURE_ORGANIZATION_OWNER_ID } from "./organization-seed";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  RouterProvider,
+} from "@tanstack/react-router";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  MockRunnerHost,
+  MockTraycerCli,
+} from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { LazyMotion, domAnimation } from "motion/react";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { TabStrip } from "@/components/layout/tabs/tab-strip";
+import {
+  HostRuntimeProvider,
+  hostRpcRegistry,
+  type HostRpcRegistry,
+  type MessengerFactory,
+} from "@/lib/host";
+import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
+import {
+  batchHeaderTabRecovery,
+  configureTabRecoveryHistory,
+  flushTabRecoveryHistory,
+  resetTabRecoveryHistory,
+  useTabRecoveryHistory,
+} from "@/lib/tab-recovery/history";
+import { persistKey } from "@/lib/persist/keys";
+import { useTabRecovery } from "@/lib/tab-recovery/use-tab-recovery";
+import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import { tabItemId, type PersistedTabStripLayout } from "@/stores/tabs/layout";
+import { readTabStripLayout, useTabsStore } from "@/stores/tabs/store";
+import type { TabRef } from "@/stores/tabs/types";
+import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import "@/index.css";
+
+const ACCOUNT_ID = "browser-tab-recovery-account";
+const windowsBridgeValue = { bridge: null, hasHydrated: true } as const;
+const browserWindowId =
+  new URLSearchParams(window.location.search).get("windowId") ??
+  "browser-recovery-window";
+Reflect.set(globalThis, "runnerHost", {
+  windows: { windowId: browserWindowId },
+});
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+});
+
+let taskCounter = 0;
+let requestCounter = 0;
+const fixtureErrors: string[] = [];
+
+window.addEventListener("error", (event) => {
+  fixtureErrors.push(
+    event.error instanceof Error
+      ? (event.error.stack ?? event.message)
+      : event.message,
+  );
+});
+window.addEventListener("unhandledrejection", (event) => {
+  fixtureErrors.push(
+    event.reason instanceof Error
+      ? (event.reason.stack ?? event.reason.message)
+      : String(event.reason),
+  );
+});
+Reflect.set(window, "__traycerTabRecoveryErrors", fixtureErrors);
+
+const localHost = {
+  hostId: "browser-recovery-host",
+  websocketUrl: "ws://127.0.0.1:9/rpc",
+  version: "1.2.3",
+  pid: 4343,
+  systemHostName: "tab-recovery-fixture",
+  displayName: "tab-recovery-fixture",
+  availability: "available",
+} as const;
+
+function buildMessengerFactory(): MessengerFactory<HostRpcRegistry> {
+  return ({ registry }) =>
+    new MockHostMessenger<HostRpcRegistry>({
+      registry,
+      requestId: () => `browser-recovery-${String(++requestCounter)}`,
+      handlers: {
+        "host.status": () => ({
+          ready: true,
+          hostVersion: "1.2.3",
+          protocolVersion: { major: 1, minor: 2 },
+          busy: false,
+          busySessionCount: 0,
+          updateProgress: null,
+          busyBreakdown: null,
+          updateOperation: null,
+          updateTransaction: null,
+          storeFormats: null,
+          install: null,
+          processMemory: null,
+          crossHostMessaging: null,
+          sessions: null,
+          updatesExternallyManaged: null,
+          previousExit: null,
+        }),
+        "host.notifications.indicatorState": () => ({
+          epics: {},
+          chats: {},
+          complete: true,
+        }),
+        "epic.getTaskContexts": () => ({ tasks: {} }),
+      },
+    });
+}
+
+const fixtureMessengerFactory = buildMessengerFactory();
+
+export function SignedInFixture(props: {
+  readonly children: ReactNode;
+}): ReactElement {
+  const authStatus = useAuthStore((state) => state.status);
+  useEffect(() => {
+    if (authStatus === "signed-in") return;
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: FIXTURE_ORGANIZATION_OWNER_ID,
+        userName: "Tab Recovery User",
+        email: "tab-recovery@example.invalid",
+      },
+      {
+        userId: FIXTURE_ORGANIZATION_OWNER_ID,
+        username: "Tab Recovery User",
+      },
+      [],
+    );
+  }, [authStatus]);
+  return <>{props.children}</>;
+}
+
+function currentRefs(): ReadonlyArray<TabRef> {
+  const canvas = useEpicCanvasStore.getState();
+  const drafts = useLandingDraftStore.getState();
+  return [
+    ...canvas.openTabOrder.map((id): TabRef => ({ kind: "epic", id })),
+    ...drafts.drafts
+      .filter((draft) => !draft.closed)
+      .map((draft): TabRef => ({ kind: "draft", id: draft.id })),
+  ];
+}
+
+function syncStrip(active: TabRef): void {
+  const refs = currentRefs();
+  const layout: PersistedTabStripLayout = {
+    version: 2,
+    items: refs.map((ref) => ({
+      kind: "tab",
+      id: tabItemId(ref),
+      ref,
+    })),
+    activeItemId: tabItemId(active),
+    activationHistory: [],
+    systemTabs: { history: null, settings: null },
+  };
+  useTabsStore.setState((state) => ({ ...state, ...layout, stripOrder: refs }));
+}
+
+function createDraft(): string {
+  const id = useLandingDraftStore.getState().createDraft(null);
+  const content: JsonContent = {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: "browser recovery draft" }],
+      },
+    ],
+  };
+  useLandingDraftStore.getState().setDraftContent(id, content, null);
+  syncStrip({ kind: "draft", id });
+  return id;
+}
+
+function closeActiveTab(): boolean {
+  const activeItemId = useTabsStore.getState().activeItemId;
+  const active = currentRefs().find((ref) => tabItemId(ref) === activeItemId);
+  return active === undefined
+    ? false
+    : tabCommandCoordinator.closeRefAfterConfirmed(active);
+}
+
+function resetRendererStores(): void {
+  useTabsStore.setState(useTabsStore.getInitialState(), true);
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+}
+
+function entrySummary() {
+  return useTabRecoveryHistory.getState().entries.map((entry) => ({
+    id: entry.id,
+    kind: entry.kind,
+    bulk: entry.bulk,
+    items: entry.items.map((item) => ({
+      kind: item.kind,
+      id: item.kind === "epic" ? item.tab.tabId : item.draftId,
+      index: item.index,
+      ...(item.placement === undefined ? {} : { placement: item.placement }),
+      ...(item.kind === "draft"
+        ? { hasSnapshot: "content" in item || "draft" in item }
+        : {}),
+    })),
+  }));
+}
+
+let completedReopens = 0;
+
+function snapshot() {
+  const canvas = useEpicCanvasStore.getState();
+  const drafts = useLandingDraftStore.getState();
+  return {
+    completedReopens,
+    ready: useTabRecoveryHistory.getState().ready,
+    entries: entrySummary(),
+    headerTabs: getHeaderTabs().map((tab) => ({
+      kind: tab.kind,
+      id: tab.id,
+      name: tab.name,
+    })),
+    openTaskIds: canvas.openTabOrder,
+    draftIds: drafts.drafts
+      .filter((draft) => !draft.closed)
+      .map((draft) => draft.id),
+    draftRecords: drafts.drafts.map((draft) => ({
+      id: draft.id,
+      closed: draft.closed,
+    })),
+    activeHeaderItemId: useTabsStore.getState().activeItemId,
+    tabLayout: readTabStripLayout(),
+    errors: [...fixtureErrors],
+    toasts: Array.from(
+      document.querySelectorAll("[data-sonner-toast]"),
+      (toast) => String(toast.textContent),
+    ),
+  };
+}
+
+function installBridge(reopen: () => Promise<void>): void {
+  const bridge = {
+    reset: async () => {
+      await configureTabRecoveryHistory(null);
+      resetRendererStores();
+      await configureTabRecoveryHistory(ACCOUNT_ID);
+    },
+    createTask: (name: string) => {
+      const epicId = `browser-recovery-epic-${++taskCounter}`;
+      const tabId = useEpicCanvasStore.getState().openEpicTab(epicId, name);
+      syncStrip({ kind: "epic", id: tabId });
+      return tabId;
+    },
+    createDraft,
+    closeActiveTab,
+    closeTask: (tabId: string) =>
+      tabCommandCoordinator.closeRefAfterConfirmed({ kind: "epic", id: tabId }),
+    closeDraft: (id: string) =>
+      tabCommandCoordinator.closeRefAfterConfirmed({ kind: "draft", id }),
+    closeBulk: (refs: ReadonlyArray<TabRef>) => {
+      batchHeaderTabRecovery(() => {
+        for (const ref of refs)
+          tabCommandCoordinator.closeRefAfterConfirmed(ref);
+      }, readTabStripLayout());
+    },
+    seedTopLevelSplit: (
+      leftTaskId: string,
+      rightTaskId: string,
+      splitId: string,
+      leftRatio: number,
+    ) => {
+      const store = useTabsStore.getState();
+      store.pair({
+        left: { kind: "epic", id: leftTaskId },
+        right: { kind: "epic", id: rightTaskId },
+        splitId,
+        leftRatio,
+      });
+      store.focusSplitSide({ splitId, side: "right" });
+      return splitId;
+    },
+    seedNamedGroup: (firstTaskId: string, secondTaskId: string) => {
+      const first: TabRef = { kind: "epic", id: firstTaskId };
+      const second: TabRef = { kind: "epic", id: secondTaskId };
+      const groupId = "recovery-group";
+      // A group is the account's now, and the organization projection writes
+      // it straight onto the layout; this fixture stands in for one frame of
+      // that projection.
+      useTabsStore.setState({
+        groups: {
+          ...useTabsStore.getState().groups,
+          [groupId]: {
+            name: "Recovery group",
+            color: "#8ab4f8",
+            collapsed: false,
+            // The stamp is what makes a group the account's, and only a
+            // stamped group is drawn - so a fixture without it seeds a group
+            // the strip never shows.
+            organizationOwnerId: FIXTURE_ORGANIZATION_OWNER_ID,
+          },
+        },
+      });
+      const store = useTabsStore.getState();
+      store.setTabGroup(first, groupId);
+      store.setTabGroup(second, groupId);
+      return groupId;
+    },
+    reopen: async () => {
+      await reopen();
+      await flushTabRecoveryHistory();
+    },
+    flush: () => flushTabRecoveryHistory(),
+    wipeRecovery: async () => {
+      await resetTabRecoveryHistory();
+      await new Promise<void>((resolve, reject) => {
+        const request = indexedDB.deleteDatabase(persistKey("tab-recovery"));
+        request.onsuccess = () => resolve();
+        request.onerror = () =>
+          reject(
+            request.error ?? new Error("recovery database deletion failed"),
+          );
+        request.onblocked = () =>
+          reject(new Error("recovery database deletion was blocked"));
+      });
+      return true;
+    },
+    snapshot,
+  };
+  Reflect.set(window, "__traycerTabRecovery", bridge);
+}
+
+export function RecoverySurface(): ReactElement {
+  const { reopen: performReopen } = useTabRecovery();
+  const reopen = useCallback(async () => {
+    await performReopen();
+    completedReopens += 1;
+  }, [performReopen]);
+  const recoveryReady = useTabRecoveryHistory((state) => state.ready);
+  const recoveryCount = useTabRecoveryHistory((state) => state.entries.length);
+
+  useEffect(() => {
+    void configureTabRecoveryHistory(ACCOUNT_ID);
+  }, []);
+  useEffect(() => {
+    installBridge(reopen);
+    return () => {
+      Reflect.deleteProperty(window, "__traycerTabRecovery");
+    };
+  }, [reopen]);
+
+  return (
+    <SignedInFixture>
+      <TabNavigationRouteBridge />
+      <div data-testid="tab-recovery-browser-fixture">
+        <div data-testid="recovery-status">
+          {recoveryReady ? `ready:${recoveryCount}` : "loading"}
+        </div>
+        <div>
+          <button
+            data-testid="recovery-create-draft"
+            type="button"
+            onClick={createDraft}
+          >
+            Create draft
+          </button>
+          <button
+            data-testid="recovery-close-active"
+            type="button"
+            onClick={closeActiveTab}
+          >
+            Close active tab
+          </button>
+          <button
+            data-testid="recovery-reopen"
+            type="button"
+            onClick={() => {
+              void reopen();
+            }}
+          >
+            Reopen closed tab
+          </button>
+        </div>
+        {/* The top bar's drivers drop tabs into the seeded group, which the
+            drop refuses to write unless the account can be told. */}
+        <FixtureOrganizationContext>
+          <RootDndProvider>
+            <TabStrip />
+          </RootDndProvider>
+        </FixtureOrganizationContext>
+      </div>
+    </SignedInFixture>
+  );
+}
+
+function buildRunnerHost(): MockRunnerHost {
+  return new MockRunnerHost({
+    signInUrl: "http://127.0.0.1:9/sign-in",
+    authnBaseUrl: "http://127.0.0.1:9",
+    localHost,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: new MockTraycerCli(),
+  });
+}
+
+const fixtureRunnerHost = buildRunnerHost();
+
+function buildRouter() {
+  const rootRoute = createRootRoute({
+    component: () => (
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider runnerHost={fixtureRunnerHost}>
+          <HostRuntimeProvider
+            registry={hostRpcRegistry}
+            messengerFactory={fixtureMessengerFactory}
+            invalidator={null}
+            requestId={null}
+            remoteFetcher={() =>
+              Promise.resolve({ kind: "hosts", entries: [] })
+            }
+            fallback={<div data-testid="tab-recovery-runtime-fallback" />}
+          >
+            <WindowsBridgeContext.Provider value={windowsBridgeValue}>
+              <LazyMotion features={domAnimation}>
+                <TooltipProvider>
+                  <RecoverySurface />
+                </TooltipProvider>
+              </LazyMotion>
+            </WindowsBridgeContext.Provider>
+          </HostRuntimeProvider>
+        </RunnerHostProvider>
+      </QueryClientProvider>
+    ),
+  });
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    component: () => null,
+  });
+  const epicRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/epics/$epicId/$tabId",
+    component: () => null,
+  });
+  const draftRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/draft/$draftId",
+    component: () => null,
+  });
+  return createRouter({
+    routeTree: rootRoute.addChildren([indexRoute, epicRoute, draftRoute]),
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+  });
+}
+
+installTabSyncCoordinator({ readyPromise: Promise.resolve() });
+
+const root = document.querySelector("#root");
+if (root === null) throw new Error("tab recovery fixture root missing");
+createRoot(root).render(<RouterProvider router={buildRouter()} />);

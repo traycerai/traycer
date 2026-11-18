@@ -1,0 +1,57 @@
+/*
+ * The INSTALLED APP's stylesheet: the shared entry, plus the CSS half of the
+ * one decision that is true only of a native install - the app is a
+ * phone-layout product on every device it ships to, tablets included.
+ *
+ * `main.tsx` loads this when `Capacitor.isNativePlatform()` is true, the same
+ * check that sets `setPhoneLayoutOnly(true)` so `useIsMobileViewport()` says
+ * phone at every width; a browser tab loads `index.css` alone and keeps the
+ * real breakpoints. The two have to move together: JS mounting the phone
+ * shell at every width while `md:` and `lg:` utilities still turn on would
+ * paint desktop controls over it on an iPad.
+ */
+@import "./index.css";
+
+/*
+ * NO RESPONSIVE BREAKPOINTS IN THE INSTALLED APP.
+ *
+ * A sentinel width rather than `--breakpoint-*: initial`, deliberately.
+ * Removing the tokens would drop the `max-*` variants too - and those are
+ * phone styling across the shared GUI that must keep applying. Pushing the
+ * bound out of reach instead keeps both halves right by construction: `md:`
+ * compiles to a minimum-width query that never matches, `max-md:` to its
+ * negation, which always does. Grep the built CSS for the number rather than
+ * for a particular spelling - Tailwind writes range syntax and the minifier
+ * downlevels it.
+ *
+ * `@theme` (not `inline`) after the import, so these win over the shared
+ * stylesheet's own breakpoints.
+ */
+@theme {
+  --breakpoint-sm: 999999px;
+  --breakpoint-md: 999999px;
+  --breakpoint-lg: 999999px;
+  --breakpoint-xl: 999999px;
+  --breakpoint-2xl: 999999px;
+}
+
+/* The breakpoint sentinel above switches off every dialog's `sm:max-w-*`, which
+ * would let one span a phone on its side or a tablet. A dialog keeps about the
+ * size it has on a phone. Unlayered, so it wins over a caller's utility. */
+[data-slot="dialog-content"] {
+  max-width: min(calc(100% - 2rem), var(--safe-area-width), 32rem);
+}
+
+/* TOUCH FIRST. Android ranks a stylus as a fine pointer, so a phone with a pen
+ * would otherwise lose every touch floor. `useCoarsePointer` says the same. */
+@custom-variant pointer-coarse (&);
+@custom-variant pointer-fine (&:not(*));
+
+/* The app's reading and page columns fill the width the phone shell gives them,
+ * in landscape and on a tablet as much as on a phone held upright. `#root`
+ * keeps this to the page: dialogs and popovers portal to `body` and keep their
+ * own caps. */
+#root .max-w-3xl,
+#root .max-w-\[72ch\] {
+  max-width: none;
+}

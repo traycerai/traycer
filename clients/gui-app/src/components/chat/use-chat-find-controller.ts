@@ -1,0 +1,795 @@
+import {
+  buildChatFindRows,
+  buildSubagentChatFindRows,
+  createChatFindAdapter,
+  queryMountedChatFindUnit,
+  queryMountedChatMessageRoot,
+  queryMountedChatMessageRoots,
+  subagentChatFindRowId,
+  type ChatFindAdapter,
+  type ChatFindLandingOutcome,
+  type ChatFindReconcileTarget,
+  type ChatFindRevealTarget,
+} from "@/components/chat/chat-find";
+import { subagentCardPath } from "@/components/chat/segments/subagent-display";
+import { BotSessionContext } from "@/components/bots/bot-session-context";
+import { askedConversationIds } from "@/lib/bots/bot-send-tool";
+import {
+  CHAT_FIND_INDEX_ABSENT,
+  ChatFindIndexDemandSource,
+  FULLY_LOADED_TRANSCRIPT,
+  type ChatFindIndexAnswer,
+  type ChatFindIndexRead,
+  type ChatFindTranscriptPlacement,
+} from "@/components/chat/chat-find-index";
+import {
+  serializeChatCollapsibleKey,
+  type ChatCollapsibleKey,
+} from "@/components/chat/chat-collapsible-key";
+import {
+  chatTimelineLocationForMessage,
+  selectActiveUserMessageId,
+  type ChatTimelineNavigationLocation,
+} from "@/components/chat/chat-messages-scroll-helpers";
+import { useTranscriptQueuePauseReasonSupport } from "@/components/chat/use-transcript-queue-pause-reason-support";
+import { TileFindContext } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
+import { useRegionShown } from "@/lib/layout-overrides";
+import { isThinkingShown } from "@/stores/layout/layout-store";
+import {
+  useChatFindActiveTargetClearEpoch,
+  useReconcileChatFindActiveTarget,
+  useSetChatFindActiveTarget,
+  useSetChatFindForcedOpen,
+} from "@/stores/chats/chat-find-force-store-context";
+import { arrayShallowEq } from "@/stores/epics/open-epic/projection-helpers";
+import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import {
+  use,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
+
+const FIND_REVEAL_ANCHOR_RETRY_LIMIT = 3;
+
+interface FindOpenedTargetState {
+  readonly messageId: string;
+  readonly unitId: string;
+  readonly chainKeyIds: ReadonlyArray<string>;
+}
+
+interface ChatFindControllerArgs {
+  readonly instanceId: string;
+  /** Live transcript; drives the notify-rows-changed lifecycle. */
+  readonly messages: ReadonlyArray<ChatMessageModel>;
+  /** Latest transcript, read lazily by the adapter's getRows supplier. */
+  readonly messagesRef: RefObject<ReadonlyArray<ChatMessageModel>>;
+  /**
+   * Live background-tool promotion set. Drives the notify-rows-changed
+   * lifecycle alongside `messages`: promotion changes which runs group
+   * together, so it changes unit ids and owning chains even when no message
+   * did, and a projection that missed it would be stale in exactly the way
+   * that produces unpaintable matches.
+   */
+  readonly backgroundToolBlockIds: ReadonlySet<string>;
+  /** Latest promotion set, read lazily by the adapter's getRows supplier. */
+  readonly backgroundToolBlockIdsRef: RefObject<ReadonlySet<string>>;
+  /**
+   * Whether the transcript draws a long turn as several list rows - the SAME
+   * decision `transcriptListRows` was given. Find's units carry the row key
+   * they must scroll to, so a projection that split differently from the list
+   * would name rows the list never built.
+   */
+  readonly splitLongTurns: boolean;
+  /**
+   * Caveat describing the rows `messagesRef` does NOT contain, read lazily
+   * beside it.
+   *
+   * A ref-free supplier rather than a value, for the same reason the rows are:
+   * a closed find bar must not re-register its adapter every time the window
+   * hydrates.
+   */
+  readonly getFindCoverageMessage: () => string | null;
+  /**
+   * Where records and rows sit in the transcript (`ChatFindTranscriptPlacement`),
+   * read with the rows.
+   */
+  readonly getFindPlacement: () => ChatFindTranscriptPlacement;
+  /** Hydrate and land an older message by a row or message id (the tile's jump). */
+  readonly requestIndexJump: (target: string) => void;
+  /**
+   * Hydrate a candidate older message's row without moving the viewport, so
+   * the client scan can confirm it before it is counted; `null` ends the read.
+   */
+  readonly requestIndexRead: (read: ChatFindIndexRead | null) => void;
+  readonly rowIndexByKeyRef: RefObject<ReadonlyMap<string, number>>;
+  readonly getScroller: () => HTMLElement | null;
+  /** Calls afterSettle only once row navigation can no longer correct the scroll. */
+  readonly scrollToLocation: (
+    location: ChatTimelineNavigationLocation,
+    afterSettle: () => void,
+    onCancelled: () => void,
+  ) => void;
+  /** Manual-navigation cancel (find performs it first). */
+  readonly cancelManualNavigation: () => void;
+  /**
+   * `ChatMessages`' reader-navigation generation: a reader gesture or a
+   * navigation bumps it - find's own scroll too, through
+   * `cancelManualNavigation`.
+   */
+  readonly getNavigationGeneration: () => number;
+  readonly setScrolledActiveUserMessageIdIfChanged: (
+    next: string | null,
+  ) => void;
+  /**
+   * The card an open-as-chat view shows, or `null` while the transcript does.
+   * While a card is open find searches ONLY its conversation, resolves anchors
+   * under `getSubagentViewRoot()`, and never scrolls the covered timeline; a
+   * change re-runs the open query over the new scope.
+   */
+  readonly openSubagentId: string | null;
+  readonly getSubagentViewRoot: () => HTMLElement | null;
+}
+
+interface ChatFindController {
+  /** Repaint the mounted highlight after a measured-item layout change. */
+  readonly scheduleMountedHighlightSync: () => void;
+  /** Find-side follow-up to the timeline's rendered-data change. */
+  readonly onRenderedDataChange: () => void;
+  /** What the index should be asked; feeds `ChatFindIndexSource`. */
+  readonly indexDemand: ChatFindIndexDemandSource;
+  /** The index's answer about older rows, for the adapter. */
+  readonly setIndexAnswer: (answer: ChatFindIndexAnswer) => void;
+  /** A transcript scroll request settled on `rowMessageId`. */
+  readonly onTranscriptLandingSettled: (
+    rowMessageId: string,
+    outcome: ChatFindLandingOutcome,
+  ) => void;
+  /** A candidate's read could not be placed; see `notifyIndexReadFailed`. */
+  readonly onIndexReadFailed: (messageId: string) => void;
+}
+
+/**
+ * Owns chat find registration, active-match reveal/reconcile orchestration, and
+ * the mounted-highlight resync loop. Lifted out of `chat-messages.tsx` so the
+ * renderer returns to message-list orchestration and the find machinery has a
+ * single home. The adapter pulls rows lazily via a `getRows()` supplier, so a
+ * closed find bar pays no transcript-projection cost on streaming updates.
+ */
+export function useChatFindController(
+  args: ChatFindControllerArgs,
+): ChatFindController {
+  const {
+    instanceId,
+    messages,
+    messagesRef,
+    backgroundToolBlockIds,
+    backgroundToolBlockIdsRef,
+    splitLongTurns,
+    getFindCoverageMessage,
+    getFindPlacement,
+    requestIndexJump,
+    requestIndexRead,
+    rowIndexByKeyRef,
+    getScroller,
+    scrollToLocation,
+    cancelManualNavigation,
+    getNavigationGeneration,
+    setScrolledActiveUserMessageIdIfChanged,
+    openSubagentId,
+    getSubagentViewRoot,
+  } = args;
+
+  // Read lazily by the adapter's suppliers, like `messagesRef`, so opening a
+  // card does not re-register the adapter; the scope effect below keeps it.
+  const openSubagentIdRef = useRef(openSubagentId);
+
+  // One per transcript, outliving every adapter registration: the index query
+  // subscribes to it before any adapter exists.
+  const [indexDemand] = useState(() => new ChatFindIndexDemandSource());
+  // Read through refs, so a caller's new callback identity never re-registers
+  // the adapter - which would drop the search it is holding.
+  const getFindPlacementRef = useRef(getFindPlacement);
+  const requestIndexJumpRef = useRef(requestIndexJump);
+  const requestIndexReadRef = useRef(requestIndexRead);
+  const getNavigationGenerationRef = useRef(getNavigationGeneration);
+  const getSubagentViewRootRef = useRef(getSubagentViewRoot);
+  // How much of that generation find's own scrolls account for: the rest is
+  // the reader moving, which a read in flight has to yield to.
+  const findNavigationBumpsRef = useRef(0);
+  // The last answer, so an adapter created later (a re-registration) starts
+  // from it rather than waiting for the index to answer again.
+  const indexAnswerRef = useRef<ChatFindIndexAnswer>(CHAT_FIND_INDEX_ABSENT);
+  useLayoutEffect(() => {
+    getFindPlacementRef.current = getFindPlacement;
+    requestIndexJumpRef.current = requestIndexJump;
+    requestIndexReadRef.current = requestIndexRead;
+    getNavigationGenerationRef.current = getNavigationGeneration;
+    getSubagentViewRootRef.current = getSubagentViewRoot;
+  }, [
+    getFindPlacement,
+    getNavigationGeneration,
+    getSubagentViewRoot,
+    requestIndexJump,
+    requestIndexRead,
+  ]);
+
+  const setFindForcedOpen = useSetChatFindForcedOpen();
+  const setFindActiveTarget = useSetChatFindActiveTarget();
+  const reconcileFindActiveTarget = useReconcileChatFindActiveTarget();
+  const activeTargetClearEpoch = useChatFindActiveTargetClearEpoch();
+  const tileFindContext = use(TileFindContext);
+  // The renderer's answer for which notices it hides, read through a ref like
+  // the messages: the adapter reads rows lazily, and re-registering it on a
+  // change would drop the search it holds.
+  const queuePauseReasonSupport = useTranscriptQueuePauseReasonSupport();
+  const queuePauseReasonSupportRef = useRef(queuePauseReasonSupport);
+  useLayoutEffect(() => {
+    queuePauseReasonSupportRef.current = queuePauseReasonSupport;
+  }, [queuePauseReasonSupport]);
+  // A bot's session's send cards read their posts' state (Tracy Bots T94);
+  // read through a ref for the same reason.
+  const botSession = use(BotSessionContext);
+  const botSessionRef = useRef(botSession);
+  useLayoutEffect(() => {
+    botSessionRef.current = botSession;
+  }, [botSession]);
+
+  const chatFindAdapterRef = useRef<ChatFindAdapter | null>(null);
+  const activeFindRevealRef = useRef<ChatFindRevealTarget | null>(null);
+  const findRevealGenerationRef = useRef(0);
+  const findRevealFrameRef = useRef<number | null>(null);
+  const findRevealAnchorMissCountRef = useRef(0);
+  const findRevealSkipUnitScrollRef = useRef(false);
+  const findRowNavigationPendingRef = useRef(false);
+  const findOpenedChainRef = useRef<ReadonlyArray<ChatCollapsibleKey>>([]);
+  const findOpenedTargetRef = useRef<FindOpenedTargetState | null>(null);
+  // Opening/reconciling a unit does not prove navigation ever reached it.
+  const findRevealedUnitRef = useRef<{
+    readonly messageId: string;
+    readonly unitId: string;
+  } | null>(null);
+  const mountedHighlightSyncFrameRef = useRef<number | null>(null);
+
+  const scrollToMessageForFindRef = useRef<
+    (messageId: string, rowKey: string, afterSettle: () => void) => void
+  >(() => undefined);
+  const getMountedFindUnitRootRef = useRef<
+    (messageId: string, unitId: string) => HTMLElement | null
+  >(() => null);
+  const getMountedMessageRootRef = useRef<
+    (messageId: string) => HTMLElement | null
+  >(() => null);
+  const scheduleFindRevealStepRef = useRef<
+    (generation: number, skipUnitScroll: boolean) => void
+  >(() => undefined);
+
+  const cancelFindRevealFrame = useCallback((): void => {
+    if (findRevealFrameRef.current !== null) {
+      window.cancelAnimationFrame(findRevealFrameRef.current);
+      findRevealFrameRef.current = null;
+    }
+  }, []);
+
+  const cancelMountedHighlightSyncFrame = useCallback((): void => {
+    if (mountedHighlightSyncFrameRef.current !== null) {
+      window.cancelAnimationFrame(mountedHighlightSyncFrameRef.current);
+      mountedHighlightSyncFrameRef.current = null;
+    }
+  }, []);
+
+  const scheduleMountedHighlightSync = useCallback((): void => {
+    cancelMountedHighlightSyncFrame();
+    mountedHighlightSyncFrameRef.current = window.requestAnimationFrame(() => {
+      mountedHighlightSyncFrameRef.current = null;
+      if (activeFindRevealRef.current !== null) {
+        scheduleFindRevealStepRef.current(
+          findRevealGenerationRef.current,
+          findRevealSkipUnitScrollRef.current,
+        );
+        return;
+      }
+      chatFindAdapterRef.current?.syncMountedHighlight();
+    });
+  }, [cancelMountedHighlightSyncFrame]);
+
+  useLayoutEffect(
+    () => () => {
+      cancelFindRevealFrame();
+      cancelMountedHighlightSyncFrame();
+    },
+    [cancelFindRevealFrame, cancelMountedHighlightSyncFrame],
+  );
+
+  const scrollToMessageForFind = useCallback(
+    (messageId: string, rowKey: string, afterSettle: () => void): void => {
+      // The open conversation's one row is always mounted, and the timeline
+      // under it is not what the reader is looking at: leave it where it is.
+      if (openSubagentIdRef.current !== null) {
+        afterSettle();
+        return;
+      }
+      const generationBefore = getNavigationGenerationRef.current();
+      cancelManualNavigation();
+      // Find's own scroll is not the reader moving.
+      findNavigationBumpsRef.current +=
+        getNavigationGenerationRef.current() - generationBefore;
+      setScrolledActiveUserMessageIdIfChanged(
+        selectActiveUserMessageId(messagesRef.current, messageId, false),
+      );
+      // By ROW KEY, not by message id: a long turn is drawn as several list
+      // items and the match's unit lives in exactly one of them. For every
+      // other row - and for part 0 - the two are the same string.
+      const location = chatTimelineLocationForMessage(
+        rowKey,
+        rowIndexByKeyRef.current,
+        false,
+      );
+      if (location === null) {
+        afterSettle();
+        return;
+      }
+      const generation = findRevealGenerationRef.current;
+      scrollToLocation(location, afterSettle, () => {
+        if (findRevealGenerationRef.current !== generation) return;
+        // The reader owns the viewport now. Retire the scrolling reveal, but
+        // retain the active match so future mounts can paint it passively.
+        findRevealGenerationRef.current += 1;
+        findRowNavigationPendingRef.current = false;
+        activeFindRevealRef.current = null;
+        // A cancelled landing is not an already-revealed unit. The next Find
+        // hop must supersede any navigation that took the viewport from it.
+        findRevealedUnitRef.current = null;
+        cancelFindRevealFrame();
+        chatFindAdapterRef.current?.syncMountedHighlight();
+      });
+    },
+    [
+      cancelFindRevealFrame,
+      cancelManualNavigation,
+      rowIndexByKeyRef,
+      messagesRef,
+      scrollToLocation,
+      setScrolledActiveUserMessageIdIfChanged,
+    ],
+  );
+
+  const getMountedMessageRoot = useCallback(
+    (messageId: string): HTMLElement | null => {
+      const openId = openSubagentIdRef.current;
+      if (openId !== null) {
+        return messageId === subagentChatFindRowId(openId)
+          ? getSubagentViewRootRef.current()
+          : null;
+      }
+      const scroller = getScroller();
+      if (scroller === null) return null;
+      return queryMountedChatMessageRoot(scroller, messageId);
+    },
+    [getScroller],
+  );
+
+  const getMountedFindUnitRoot = useCallback(
+    (messageId: string, unitId: string): HTMLElement | null => {
+      // An open subagent conversation is one root by construction, and it is
+      // not in the transcript scroller at all.
+      const scroller =
+        openSubagentIdRef.current === null ? getScroller() : null;
+      if (scroller === null) {
+        const messageRoot = getMountedMessageRoot(messageId);
+        return messageRoot === null
+          ? null
+          : queryMountedChatFindUnit(messageRoot, unitId);
+      }
+      // Across every mounted part of the turn: a long turn is drawn as several
+      // list items and the unit may be in a later one than the first mounted.
+      return queryMountedChatMessageRoots(
+        scroller,
+        messageId,
+      ).reduce<HTMLElement | null>(
+        (found, root) => found ?? queryMountedChatFindUnit(root, unitId),
+        null,
+      );
+    },
+    [getMountedMessageRoot, getScroller],
+  );
+
+  useLayoutEffect(() => {
+    scrollToMessageForFindRef.current = scrollToMessageForFind;
+  }, [scrollToMessageForFind]);
+
+  useLayoutEffect(() => {
+    getMountedMessageRootRef.current = getMountedMessageRoot;
+  }, [getMountedMessageRoot]);
+
+  useLayoutEffect(() => {
+    getMountedFindUnitRootRef.current = getMountedFindUnitRoot;
+  }, [getMountedFindUnitRoot]);
+
+  const applyFindOpenedChain = useCallback(
+    (nextChain: ReadonlyArray<ChatCollapsibleKey>): void => {
+      const nextKeyIds = new Set(nextChain.map(serializeChatCollapsibleKey));
+      findOpenedChainRef.current.forEach((key) => {
+        if (!nextKeyIds.has(serializeChatCollapsibleKey(key))) {
+          setFindForcedOpen(key, false);
+        }
+      });
+      nextChain.forEach((key) => {
+        setFindForcedOpen(key, true);
+      });
+      findOpenedChainRef.current = nextChain.slice();
+    },
+    [setFindForcedOpen],
+  );
+
+  const applyFindOpenedTarget = useCallback(
+    (target: ChatFindReconcileTarget, forceApply: boolean): boolean => {
+      const chainKeyIds = target.owningChain.map(serializeChatCollapsibleKey);
+      const previousTarget = findOpenedTargetRef.current;
+      const targetChanged =
+        previousTarget === null ||
+        previousTarget.messageId !== target.messageId ||
+        previousTarget.unitId !== target.unitId ||
+        !arrayShallowEq(previousTarget.chainKeyIds, chainKeyIds);
+      if (!forceApply && !targetChanged) return false;
+      // LegendList's own `maintainVisibleContentPosition` is the sole passive
+      // stability mechanism (behavior contract) - the chain-open flows
+      // directly into it, with no bespoke scroll-preservation wrapper.
+      applyFindOpenedChain(target.owningChain);
+      const interviewKey = target.owningChain.find(
+        (key) => key.kind === "interview",
+      );
+      const findTarget =
+        interviewKey === undefined
+          ? null
+          : { key: interviewKey, unitId: target.unitId };
+      if (forceApply) {
+        setFindActiveTarget(findTarget);
+      } else {
+        reconcileFindActiveTarget(findTarget);
+      }
+      findOpenedTargetRef.current = {
+        messageId: target.messageId,
+        unitId: target.unitId,
+        chainKeyIds,
+      };
+      return true;
+    },
+    [applyFindOpenedChain, reconcileFindActiveTarget, setFindActiveTarget],
+  );
+
+  const releaseFindOpenedChain = useCallback(
+    (clearActiveTarget: boolean): void => {
+      findOpenedChainRef.current.forEach((key) => {
+        setFindForcedOpen(key, false);
+      });
+      findOpenedChainRef.current = [];
+      findOpenedTargetRef.current = null;
+      if (clearActiveTarget) setFindActiveTarget(null);
+    },
+    [setFindActiveTarget, setFindForcedOpen],
+  );
+
+  const clearFindReveal = useCallback((): void => {
+    findRevealGenerationRef.current += 1;
+    activeFindRevealRef.current = null;
+    findRevealedUnitRef.current = null;
+    findRowNavigationPendingRef.current = false;
+    findRevealAnchorMissCountRef.current = 0;
+    cancelFindRevealFrame();
+    releaseFindOpenedChain(true);
+  }, [cancelFindRevealFrame, releaseFindOpenedChain]);
+
+  useLayoutEffect(() => {
+    if (activeTargetClearEpoch === 0) return;
+    findRevealGenerationRef.current += 1;
+    activeFindRevealRef.current = null;
+    findRevealedUnitRef.current = null;
+    findRowNavigationPendingRef.current = false;
+    findRevealAnchorMissCountRef.current = 0;
+    cancelFindRevealFrame();
+    releaseFindOpenedChain(false);
+    chatFindAdapterRef.current?.dismissActiveMatch();
+  }, [activeTargetClearEpoch, cancelFindRevealFrame, releaseFindOpenedChain]);
+
+  const scheduleFindRevealStep = useCallback(
+    (generation: number, skipUnitScroll: boolean): void => {
+      // Row mounts and measurements also request reveal steps. They must not
+      // bypass the row landing or cancel the frame that starts it.
+      if (findRowNavigationPendingRef.current) return;
+      cancelFindRevealFrame();
+      findRevealFrameRef.current = window.requestAnimationFrame(() => {
+        findRevealFrameRef.current = null;
+        if (findRevealGenerationRef.current !== generation) return;
+        const target = activeFindRevealRef.current;
+        if (target === null) return;
+        const unitRoot = getMountedFindUnitRootRef.current(
+          target.messageId,
+          target.unitId,
+        );
+        if (unitRoot === null) {
+          findRowNavigationPendingRef.current = true;
+          scrollToMessageForFindRef.current(
+            target.messageId,
+            target.rowKey,
+            () => {
+              if (findRevealGenerationRef.current !== generation) return;
+              findRowNavigationPendingRef.current = false;
+              const messageRoot = getMountedMessageRootRef.current(
+                target.messageId,
+              );
+              if (messageRoot === null) return;
+              if (
+                findRevealAnchorMissCountRef.current <
+                FIND_REVEAL_ANCHOR_RETRY_LIMIT
+              ) {
+                findRevealAnchorMissCountRef.current += 1;
+                scheduleFindRevealStepRef.current(generation, skipUnitScroll);
+                return;
+              }
+              target.paintFallback();
+              if (activeFindRevealRef.current?.matchKey === target.matchKey) {
+                activeFindRevealRef.current = null;
+                findRevealedUnitRef.current = {
+                  messageId: target.messageId,
+                  unitId: target.unitId,
+                };
+              }
+            },
+          );
+          return;
+        }
+        findRevealAnchorMissCountRef.current = 0;
+        // An in-place hop stays in the same already-open unit, so re-centering
+        // the row would churn the layout (flicker) for no reason. Skip the
+        // unit re-center and let the active-match paint scroll only the inner
+        // scroll container to the next occurrence.
+        if (!skipUnitScroll) {
+          unitRoot.scrollIntoView({
+            block: "center",
+            inline: "nearest",
+            behavior: "auto",
+          });
+        }
+        findRevealFrameRef.current = window.requestAnimationFrame(() => {
+          findRevealFrameRef.current = null;
+          if (findRevealGenerationRef.current !== generation) return;
+          if (activeFindRevealRef.current?.matchKey !== target.matchKey) return;
+          target.paint();
+          if (activeFindRevealRef.current.matchKey === target.matchKey) {
+            activeFindRevealRef.current = null;
+            findRevealedUnitRef.current = {
+              messageId: target.messageId,
+              unitId: target.unitId,
+            };
+          }
+        });
+      });
+    },
+    [cancelFindRevealFrame],
+  );
+
+  useLayoutEffect(() => {
+    scheduleFindRevealStepRef.current = scheduleFindRevealStep;
+  }, [scheduleFindRevealStep]);
+
+  const requestFindReveal = useCallback(
+    (target: ChatFindRevealTarget): void => {
+      // Consecutive matches inside the same already-revealed unit are an
+      // in-place hop: the row is mounted and positioned, so scrolling the row
+      // and re-centering the unit would visibly flicker. Detect it against the
+      // last completed reveal, never the passively reconciled open chain.
+      const previousTarget = findRevealedUnitRef.current;
+      const sameUnit =
+        previousTarget !== null &&
+        previousTarget.messageId === target.messageId &&
+        previousTarget.unitId === target.unitId;
+      const generation = findRevealGenerationRef.current + 1;
+      findRevealGenerationRef.current = generation;
+      activeFindRevealRef.current = target;
+      findRevealedUnitRef.current = null;
+      findRevealAnchorMissCountRef.current = 0;
+      findRevealSkipUnitScrollRef.current = sameUnit;
+      findRowNavigationPendingRef.current = !sameUnit;
+      // LegendList remeasures a row's height via its own per-row
+      // ResizeObserver, so the chain-open below picks up the target row's OWN
+      // layout change without an explicit nudge. Content ABOVE the viewport
+      // changing size (a deeply nested chain-open) is corrected by LegendList's
+      // own `maintainVisibleContentPosition`, unconditionally enabled - no
+      // bespoke scroll-preservation wrapper needed here.
+      applyFindOpenedTarget(target, true);
+      cancelFindRevealFrame();
+      findRevealFrameRef.current = window.requestAnimationFrame(() => {
+        findRevealFrameRef.current = null;
+        if (findRevealGenerationRef.current !== generation) return;
+        if (!sameUnit) {
+          scrollToMessageForFind(target.messageId, target.rowKey, () => {
+            if (findRevealGenerationRef.current !== generation) return;
+            findRowNavigationPendingRef.current = false;
+            scheduleFindRevealStep(generation, false);
+          });
+          return;
+        }
+        scheduleFindRevealStep(generation, true);
+      });
+    },
+    [
+      applyFindOpenedTarget,
+      cancelFindRevealFrame,
+      scheduleFindRevealStep,
+      scrollToMessageForFind,
+    ],
+  );
+
+  const requestFindReconcile = useCallback(
+    (target: ChatFindReconcileTarget): void => {
+      // Passive streaming resync of an already-active target.
+      applyFindOpenedTarget(target, false);
+    },
+    [applyFindOpenedTarget],
+  );
+
+  // A question settled, or its post read, while Find is open changes what
+  // the card says: the rows are read again once the card has drawn it. Only
+  // a bot's session has questions to watch, so no other chat scans for them.
+  const askedInKey = useMemo(
+    () =>
+      botSession === null ? "" : askedConversationIds(messages).join("\n"),
+    [botSession, messages],
+  );
+  const [questionStatesRevision, noteQuestionStates] = useReducer(
+    (revision: number) => revision + 1,
+    0,
+  );
+  useLayoutEffect(() => {
+    if (botSession === null || askedInKey.length === 0) return undefined;
+    return botSession.watchQuestionStates(
+      askedInKey.split("\n"),
+      noteQuestionStates,
+    );
+  }, [askedInKey, botSession]);
+  // Thinking's Shown regroups runs as surely as promotion does.
+  const thinkingShown = useRegionShown("thinking");
+  useLayoutEffect(() => {
+    chatFindAdapterRef.current?.notifyRowsChanged();
+  }, [
+    backgroundToolBlockIds,
+    botSession,
+    messages,
+    queuePauseReasonSupport,
+    questionStatesRevision,
+    thinkingShown,
+  ]);
+
+  useLayoutEffect(() => {
+    if (openSubagentIdRef.current === openSubagentId) return;
+    openSubagentIdRef.current = openSubagentId;
+    // A new scope is a new search space: an open query re-runs over it from
+    // its first match, exactly as typing it afresh would - a passive rescan
+    // would try to keep a match that no longer exists in this scope.
+    const adapter = chatFindAdapterRef.current;
+    if (adapter === null) return;
+    const { requestId, query, matchCase } = adapter.getSnapshot();
+    if (query.length === 0) return;
+    void adapter.search({ requestId, query, matchCase });
+  }, [openSubagentId]);
+
+  useLayoutEffect(() => {
+    if (tileFindContext === null) return undefined;
+
+    const adapter = createChatFindAdapter({
+      tileInstanceId: instanceId,
+      getRows: () => {
+        const openId = openSubagentIdRef.current;
+        if (openId !== null) {
+          return buildSubagentChatFindRows(
+            subagentCardPath(messagesRef.current, openId)?.at(-1) ?? null,
+            instanceId,
+          );
+        }
+        return buildChatFindRows(
+          messagesRef.current,
+          instanceId,
+          backgroundToolBlockIdsRef.current,
+          {
+            hideReasoning: !isThinkingShown(),
+            queuePauseReasonProtocolSupported:
+              queuePauseReasonSupportRef.current,
+            splitLongTurns,
+            botSendQuestionStates:
+              botSessionRef.current?.questionStatesOf ?? null,
+          },
+        );
+      },
+      // A card's conversation lives inside one loaded turn: the windowed
+      // line's caveat and the transcript placement describe transcript rows,
+      // which an open card never searches. A `null` caveat is also what keeps
+      // the index's older hits out of the card's stops.
+      getCoverageMessage: () =>
+        openSubagentIdRef.current === null ? getFindCoverageMessage() : null,
+      getPlacement: () =>
+        openSubagentIdRef.current === null
+          ? getFindPlacementRef.current()
+          : FULLY_LOADED_TRANSCRIPT,
+      getQueuePauseReasonSupport: () => queuePauseReasonSupportRef.current,
+      getReaderNavigationGeneration: () =>
+        getNavigationGenerationRef.current() - findNavigationBumpsRef.current,
+      indexDemand,
+      jumpToIndexHit: (target) => requestIndexJumpRef.current(target),
+      readIndexHit: (read) => requestIndexReadRef.current(read),
+      revealMatch: requestFindReveal,
+      reconcileMatch: requestFindReconcile,
+      clearReveal: clearFindReveal,
+      getMountedMessageRoot: (messageId) => getMountedMessageRoot(messageId),
+      getMountedUnitRoot: (messageId, unitId) =>
+        getMountedFindUnitRootRef.current(messageId, unitId),
+    });
+    adapter.setIndexAnswer(indexAnswerRef.current);
+    chatFindAdapterRef.current = adapter;
+    const unregisterAdapter = tileFindContext.registerAdapter(adapter);
+
+    return () => {
+      unregisterAdapter();
+      if (chatFindAdapterRef.current === adapter) {
+        chatFindAdapterRef.current = null;
+      }
+      adapter.dispose();
+    };
+  }, [
+    backgroundToolBlockIdsRef,
+    clearFindReveal,
+    getFindCoverageMessage,
+    getMountedMessageRoot,
+    indexDemand,
+    instanceId,
+    messagesRef,
+    requestFindReconcile,
+    requestFindReveal,
+    splitLongTurns,
+    tileFindContext,
+  ]);
+
+  const setIndexAnswer = useCallback((answer: ChatFindIndexAnswer): void => {
+    indexAnswerRef.current = answer;
+    chatFindAdapterRef.current?.setIndexAnswer(answer);
+  }, []);
+
+  const onTranscriptLandingSettled = useCallback(
+    (rowMessageId: string, outcome: ChatFindLandingOutcome): void => {
+      chatFindAdapterRef.current?.notifyTranscriptLanding(
+        rowMessageId,
+        outcome,
+      );
+    },
+    [],
+  );
+
+  const onIndexReadFailed = useCallback((messageId: string): void => {
+    chatFindAdapterRef.current?.notifyIndexReadFailed(messageId);
+  }, []);
+
+  const onRenderedDataChange = useCallback((): void => {
+    const activeReveal = activeFindRevealRef.current;
+    if (activeReveal !== null) {
+      scheduleFindRevealStep(
+        findRevealGenerationRef.current,
+        findRevealSkipUnitScrollRef.current,
+      );
+      return;
+    }
+    chatFindAdapterRef.current?.syncMountedHighlight();
+  }, [scheduleFindRevealStep]);
+
+  return {
+    scheduleMountedHighlightSync,
+    onRenderedDataChange,
+    indexDemand,
+    setIndexAnswer,
+    onTranscriptLandingSettled,
+    onIndexReadFailed,
+  };
+}

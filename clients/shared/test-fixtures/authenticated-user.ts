@@ -1,0 +1,83 @@
+/**
+ * Canonical AuthenticatedUser test fixture for traycer-agents tests.
+ *
+ * Every field required by the real authn service contract is present so that
+ * future model changes cause compile-time failures rather than silent
+ * runtime mismatches.
+ */
+import type { AuthenticatedUser } from "@traycer/protocol/auth";
+
+/** The id of the user every default fixture, and every context built from it, belongs to. */
+export const AUTHENTICATED_USER_FIXTURE_ID = "user-fixture-1";
+
+/**
+ * Returns a deeply-populated AuthenticatedUser fixture.
+ * Pass overrides to customise individual fields per test.
+ */
+export function createAuthenticatedUserFixture(
+  overrides: Partial<AuthenticatedUser> | undefined,
+): AuthenticatedUser {
+  const effectiveOverrides = overrides ?? {};
+  const base: AuthenticatedUser = {
+    user: {
+      id: AUTHENTICATED_USER_FIXTURE_ID,
+      name: "Test User",
+      providerId: "github|12345",
+      providerHandle: "testuser",
+      providerType: "GITHUB",
+      email: "test@example.com",
+      avatarUrl: "https://example.com/avatar.png",
+      activatedAt: new Date("2024-01-01T00:00:00Z"),
+      createdAt: new Date("2024-01-01T00:00:00Z"),
+      updatedAt: new Date("2024-01-01T00:00:00Z"),
+      lastSeenAt: new Date("2024-01-01T00:00:00Z"),
+      privacyMode: false,
+      isLearningEnabled: true,
+    } as AuthenticatedUser["user"],
+    userSubscription: {
+      id: "sub-fixture-1",
+      userID: AUTHENTICATED_USER_FIXTURE_ID,
+      orgID: null,
+      teamID: null,
+      customerId: "cus_fixture1",
+      createdAt: new Date("2024-01-01T00:00:00Z"),
+      updatedAt: new Date("2024-01-01T00:00:00Z"),
+      subscriptionExpiry: null,
+      trialEndsAt: null,
+      subscriptionStatus: "PRO",
+      hasPaymentMethod: true,
+      isInTrial: false,
+      rechargeRateSeconds: 3600,
+    } as AuthenticatedUser["userSubscription"],
+    teamSubscriptions: [],
+    payAsYouGoUsage: {
+      allowPayAsYouGo: false,
+    },
+    environments: { personal: null, teams: [] },
+    actingAs: null,
+  };
+
+  return { ...base, ...effectiveOverrides };
+}
+
+/**
+ * Same fixture, with `user.providerType` forced to `APPLE` - the major-2 value
+ * a frozen (major-1) reader must refuse. `overrides.user`, if supplied, is
+ * merged UNDER the forced `providerType` so a caller cannot accidentally
+ * un-Apple the fixture by passing an unrelated `user` override.
+ */
+export function createAppleAuthenticatedUserFixture(
+  overrides: Partial<AuthenticatedUser> | undefined,
+): AuthenticatedUser {
+  const effectiveOverrides = overrides ?? {};
+  const base = createAuthenticatedUserFixture(undefined);
+  return {
+    ...base,
+    ...effectiveOverrides,
+    user: {
+      ...base.user,
+      ...effectiveOverrides.user,
+      providerType: "APPLE",
+    },
+  };
+}

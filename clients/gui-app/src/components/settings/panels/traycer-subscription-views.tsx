@@ -1,0 +1,359 @@
+/**
+ * Presentational, query-free views for the Traycer subscription surface, shared
+ * by the Settings › Providers › Traycer card (`traycer-subscription-section.tsx`)
+ * and the header rate-limit popover's "Traycer" tab (`rate-limit-popover.tsx`) -
+ * the same "one renderer, two surfaces" split `provider-rate-limit-views.tsx`
+ * uses for the host-RPC providers, so the card and the popover can never
+ * disagree.
+ *
+ * `TraycerSubscriptionView` is the shared body (credit/rate-limit breakdown -
+ * no tier/trial badge; feedback: "badge is not needed, just show plan, bonus
+ * and credits"). Unlike `ProviderRateLimitDetail`, it is NOT
+ * variant-parameterized: the Traycer body has no per-model / extra-window rows
+ * to drop, so the Overview-vs-detail difference is purely the surrounding
+ * chrome (account cards or picker, the "Manage subscription" link), which each
+ * caller composes around this body. Each bucket (Plan/Bonus/Bundle/Artifacts)
+ * renders through `CreditMeterRow`, the same shared `MeterRow` shell the
+ * Codex/Claude windows use, so Traycer's own bars read identically
+ * (feedback: "bar similar to claude/codex").
+ *
+ * One thing this body reads from outside its props: `isMobileApp()`, which
+ * decides whether credit amounts are denominated in `$` (desktop, browser) or
+ * stated as plain consumption (the installed mobile app - see
+ * `creditMeterDetail`). Both callers inherit it, which is the point: the phone
+ * must not show a price for a subscription it cannot sell, on either surface.
+ *
+ * The lone exception to "query-free" is `RateLimitView`, which keeps its own
+ * `useHostRateLimitUsageQuery` + turn-refresh exactly as before: rendering it
+ * only for rate-limit-based plans IS the tier-gate that stops the aperture pull
+ * from firing on credit-based plans, so lifting the query to the callers would
+ * either break that gate or mount it for every plan.
+ */
+import type { ReactNode } from "react";
+import type { TraycerTeamSubscription } from "@traycer/protocol/auth";
+import type { AccountContext } from "@traycer/protocol/common/schemas";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useHostRateLimitUsageQuery } from "@/hooks/host/use-host-rate-limit-usage-query";
+import { useRefreshRateLimitUsageOnTraycerTurn } from "@/hooks/host/use-refresh-rate-limit-usage-on-traycer-turn";
+import {
+  PERSONAL_VALUE,
+  TEAM_VALUE_PREFIX,
+  creditBreakdown,
+  formatArtifactTokens,
+  formatCredits,
+  formatCreditsPlain,
+  formatRechargeRate,
+  usesCreditView,
+  type CreditBreakdown,
+  type TraycerSubscription,
+} from "@/lib/auth/traycer-subscription-content";
+import { isMobileApp } from "@/lib/mobile-app";
+import {
+  creditUsageSeverity,
+  rateLimitWindowFillPercent,
+  rateLimitWindowSeverityBarClassName,
+  type RateLimitWindowSeverity,
+} from "@/lib/rate-limits/window-severity";
+import { cn } from "@/lib/utils";
+
+/**
+ * The Personal / Team account picker, shared by the Settings card header and the
+ * popover's Traycer detail tab. Renders nothing when the user has no teams (the
+ * only choice is Personal, so a one-option select is noise) - the caller can
+ * always render it unconditionally.
+ */
+export function TraycerAccountSelect({
+  teams,
+  value,
+  onValueChange,
+}: {
+  readonly teams: readonly TraycerTeamSubscription[];
+  readonly value: string;
+  readonly onValueChange: (value: string) => void;
+}): ReactNode {
+  if (teams.length === 0) return null;
+  return (
+    <Select value={value} onValueChange={onValueChange}>
+      <SelectTrigger size="sm" aria-label="Account" className="w-full">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={PERSONAL_VALUE}>Personal</SelectItem>
+        {teams.map((team) => (
+          <SelectItem
+            key={team.team.id}
+            value={`${TEAM_VALUE_PREFIX}${team.team.id}`}
+          >
+            {team.team.slug}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+/**
+ * The shared subscription body: either the credit breakdown (credit-based
+ * statuses - FREE and the V3 plans - and any plan the server reports plan
+ * credits for) or the rate-limit view
+ * (legacy / v2 plans without plan credits) - see `usesCreditView`. The single
+ * source both surfaces render through.
+ */
+export function TraycerSubscriptionView({
+  subscription,
+  accountContext,
+}: {
+  readonly subscription: TraycerSubscription;
+  readonly accountContext: AccountContext;
+}): ReactNode {
+  return usesCreditView(subscription) ? (
+    <CreditBreakdownView breakdown={creditBreakdown(subscription)} />
+  ) : (
+    <RateLimitView
+      subscription={subscription}
+      accountContext={accountContext}
+    />
+  );
+}
+
+// Rate-limit (legacy / v2) plans don't bill credits - they throttle artifact
+// generation and refill at a recharge rate. Mirrors the extension's
+// `RateLimitBasedPlanUsageDisplay` (recharge rate + artifact bar + bundle bar).
+// Live artifact usage comes from aperture via `host.getRateLimitUsage`; when
+// aperture is off or has no data (totalTokens === 0) we show "unavailable"
+// rather than a 0-left bar (decision 2). Only rendered for rate-limit plans, so
+// its `useHostRateLimitUsageQuery` mount is the implicit tier-gate.
+function RateLimitView({
+  subscription,
+  accountContext,
+}: {
+  readonly subscription: TraycerSubscription;
+  readonly accountContext: AccountContext;
+}) {
+  const usageQuery = useHostRateLimitUsageQuery(accountContext, null);
+  // Keep the bar live: a Traycer turn finishing while this is on screen
+  // re-fetches usage. Only mounted here, so it costs nothing elsewhere.
+  useRefreshRateLimitUsageOnTraycerTurn(accountContext);
+
+  const recharge = formatRechargeRate(subscription.rechargeRateSeconds);
+  const usage = usageQuery.data ?? null;
+  const artifactTotal = usage?.totalTokens ?? 0;
+  const artifactConsumed = Math.max(
+    0,
+    artifactTotal - (usage?.remainingTokens ?? 0),
+  );
+  const bundle = subscription.bundleSummary;
+  const bundleTotal = bundle?.bundleTotal ?? 0;
+  const bundleConsumed = Math.max(
+    0,
+    bundleTotal - (bundle?.bundleRemaining ?? 0),
+  );
+  return (
+    <div className="flex flex-col gap-3">
+      <span className="text-ui-sm font-medium text-foreground">Rate limit</span>
+      {recharge !== null ? (
+        <div className="flex items-center justify-between text-ui-sm">
+          <span className="text-muted-foreground">New artifact every</span>
+          <span className="font-medium text-foreground">{recharge}</span>
+        </div>
+      ) : null}
+      {artifactTotal > 0 ? (
+        <CreditMeterRow
+          label="Artifacts"
+          consumed={artifactConsumed}
+          total={artifactTotal}
+          unit="artifacts"
+        />
+      ) : (
+        <p className="text-ui-xs text-muted-foreground">
+          Live artifact usage is unavailable.
+        </p>
+      )}
+      {bundleTotal > 0 ? (
+        <CreditMeterRow
+          label="Bundle"
+          consumed={bundleConsumed}
+          total={bundleTotal}
+          unit="credits"
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function CreditBreakdownView({
+  breakdown,
+}: {
+  readonly breakdown: CreditBreakdown;
+}): ReactNode {
+  if (breakdown.totalAvailable <= 0) {
+    return (
+      <div className="text-ui-sm text-muted-foreground">
+        No credit usage to display for this plan.
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      {breakdown.planTotal > 0 ? (
+        <CreditMeterRow
+          label="Plan"
+          consumed={breakdown.planConsumed}
+          total={breakdown.planTotal}
+          unit="credits"
+        />
+      ) : null}
+      {breakdown.bonusTotal > 0 ? (
+        <CreditMeterRow
+          label="Bonus"
+          consumed={breakdown.bonusConsumed}
+          total={breakdown.bonusTotal}
+          unit="credits"
+        />
+      ) : null}
+      {breakdown.bundleTotal > 0 ? (
+        <CreditMeterRow
+          label="Bundle"
+          consumed={breakdown.bundleConsumed}
+          total={breakdown.bundleTotal}
+          unit="credits"
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The shared meter-row shell every rate-limit/credit row in the app renders
+ * through: a header line (`label` left, a `detail` slot right - a reset line
+ * plus percent for windows, a plain amount line for credit/uncapped-usage
+ * buckets), then a bar spanning the row's *full* width on its own line below,
+ * colored by the caller-provided semantic tone (`window-severity.ts`). Provider
+ * windows use the canonical duration-aware classifier; credit/balance meters
+ * keep their separate, non-provider semantics.
+ *
+ * The bar is deliberately on its own line rather than beside the text (as it
+ * used to be): sitting the label and bar on the same line made the bar's
+ * start position and width drift with label length - a short "5h" row and a
+ * long per-model label ended up with visibly different bar widths on the same
+ * screen (feedback: "different width bars ... looking weird"). Putting the
+ * bar on a `w-full` line of its own means every row's bar is the same width
+ * regardless of what the label or detail text says, for every provider.
+ *
+ * Centralizing this is what keeps the Codex/Claude windows (`RateLimitWindowRow`
+ * in `provider-rate-limit-views.tsx`), Traycer's own bars (`CreditMeterRow`
+ * below), and the uncapped OpenRouter/Claude-extra-usage bars from drifting
+ * apart visually - each computes its own `usedPercent` and composes its own
+ * `detail` and semantic tone, but all of them render through this one layout.
+ *
+ * The track fills with `bg-foreground/15` rather than `bg-muted`, and carries
+ * no border: several dark theme presets set `--muted` equal to `--popover`,
+ * so a plain `bg-muted` track (with or without a border ring) can end up the
+ * same color as the popover background and read as "nothing there" (or as an
+ * unwanted outline where none was wanted - feedback: "keep the bar design
+ * like this [flat, no outline]"). An opacity overlay on `--foreground` is
+ * guaranteed to contrast against any background, in every theme, without
+ * needing a border to stay visible at 0% fill.
+ */
+export function MeterRow({
+  label,
+  usedPercent,
+  detail,
+  severity,
+}: {
+  readonly label: string;
+  readonly usedPercent: number;
+  readonly detail: ReactNode;
+  readonly severity: RateLimitWindowSeverity;
+}): ReactNode {
+  const fillPercent = rateLimitWindowFillPercent(usedPercent);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between gap-3 text-ui-sm">
+        <span className="text-foreground">{label}</span>
+        <span className="text-ui-xs text-muted-foreground/70">{detail}</span>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-foreground/15">
+        <div
+          className={cn(
+            "h-full rounded-full transition-all",
+            rateLimitWindowSeverityBarClassName(severity),
+          )}
+          style={{ width: `${fillPercent}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What a meter row is counting. Artifact allowances are not money and read the
+ * same on every shell; credits are the ones the currency rule below applies to.
+ */
+type CreditMeterUnit = "artifacts" | "credits";
+
+/**
+ * The amount line beside a bucket's label.
+ *
+ * Desktop and the browser keep the `$`-denominated consumed/total the
+ * extension shows. The INSTALLED mobile app must not present the subscription
+ * it cannot sell through Apple (App Store review guideline 3.1.1), and a
+ * dollar figure is exactly the part a reviewer reads as a price - so there the
+ * same reading is stated as consumption: bare credit counts with the unit
+ * named in words. The bar, the buckets and the numbers are unchanged; only the
+ * denomination is. No percent is spelled out beside them, because the bar
+ * directly below already IS the ratio.
+ *
+ * Branched on the PRODUCT flag rather than the viewport: this is installed-app
+ * policy, and a narrow desktop window is still a desktop that may be shown its
+ * own billing.
+ */
+function creditMeterDetail(args: {
+  readonly consumed: number;
+  readonly total: number;
+  readonly unit: CreditMeterUnit;
+}): string {
+  if (args.unit === "artifacts") {
+    return `${formatArtifactTokens(args.consumed)} / ${formatArtifactTokens(args.total)}`;
+  }
+  return isMobileApp()
+    ? `${formatCreditsPlain(args.consumed)} / ${formatCreditsPlain(args.total)} credits`
+    : `${formatCredits(args.consumed)} / ${formatCredits(args.total)}`;
+}
+
+/**
+ * A credit/balance meter row - matching the Codex/Claude window rows exactly
+ * via the shared `MeterRow` shell, so Traycer's own bars read identically to
+ * the other providers' (feedback: "bar similar to claude/codex").
+ *
+ * The row takes a `unit` rather than a formatter so the currency decision
+ * lives in one place (`creditMeterDetail`) instead of at every call site,
+ * where a new bucket could quietly reintroduce a `$` on the phone.
+ */
+function CreditMeterRow({
+  label,
+  consumed,
+  total,
+  unit,
+}: {
+  readonly label: string;
+  readonly consumed: number;
+  readonly total: number;
+  readonly unit: CreditMeterUnit;
+}): ReactNode {
+  const usedPercent = total > 0 ? (consumed / total) * 100 : 0;
+  return (
+    <MeterRow
+      label={label}
+      usedPercent={usedPercent}
+      detail={creditMeterDetail({ consumed, total, unit })}
+      severity={creditUsageSeverity(usedPercent)}
+    />
+  );
+}

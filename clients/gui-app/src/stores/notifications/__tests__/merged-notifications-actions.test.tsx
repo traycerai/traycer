@@ -1,0 +1,2165 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import type {
+  HostNotificationEntry,
+  HostNotificationsCloudFeedRow,
+} from "@traycer/protocol/host/notifications/contracts";
+import {
+  createNotificationRoomEntryMap,
+  NOTIFICATIONS_ARRAY_KEY,
+  type NotificationRoomEntryMap,
+} from "@traycer/protocol/notifications/notification-room";
+import {
+  type NotificationEntry,
+  NOTIFICATION_EVENT_TYPES,
+} from "@traycer/protocol/notifications/notification-entry";
+import {
+  __resetAppLocalNotificationsStoreForTests,
+  useAppLocalNotificationsStore,
+} from "@/stores/notifications/app-local-notifications-store";
+import {
+  __resetHostNotificationsStoreForTests,
+  useHostNotificationsStore,
+} from "@/stores/notifications/host-notifications-store";
+import {
+  cloudNotificationFeedId,
+  useCloudNotificationsStore,
+} from "@/stores/notifications/cloud-notifications-store";
+import {
+  globalFeedId,
+  useAttentionNotificationIds,
+  useMergedNotificationRow,
+  useMergedNotificationsActions,
+  type MergedNotificationRow,
+  type MergedNotificationsActions,
+} from "@/stores/notifications/merged-notifications";
+import {
+  __resetNotificationsStoreForTests,
+  useNotificationsStore,
+} from "@/stores/notifications/notifications-store";
+
+const hostRequestMock = vi.hoisted(() =>
+  vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
+);
+const notificationFeedMode = vi.hoisted<{ value: "local" | "cloud" }>(() => ({
+  value: "local",
+}));
+/** The provider's settling hold: a held `cloud` whose host is re-negotiating. */
+const notificationFeedModeSettling = vi.hoisted<{ value: boolean }>(() => ({
+  value: false,
+}));
+
+/**
+ * The minor the CONNECTION carrying the next frame reports, per method.
+ *
+ * Separate from `notificationFeedMode` on purpose, because the whole point of
+ * a dispatch-bound floor is that these two can disagree: the render already
+ * settled on `cloud` off one process's handshake, and the frame is written to
+ * whatever process is there a moment later. Lowering an entry between the
+ * render and the gesture is how a test stands in for the process-replacement
+ * gap.
+ *
+ * Keyed by METHOD rather than a single number because the floors are a class,
+ * not one case: a fixture that could only refuse `clearAll` would have let
+ * `markAllRead`'s floor land completely unpinned while every suite stayed
+ * green.
+ */
+const negotiatedMinors = vi.hoisted<{ readonly byMethod: Map<string, number> }>(
+  () => ({ byMethod: new Map<string, number>() }),
+);
+
+/** Every dispatch-bound floor the subject claimed, in order. */
+const floorsRequested = vi.hoisted<{ readonly calls: unknown[] }>(() => ({
+  calls: [],
+}));
+
+interface StubHostClient {
+  readonly request: typeof hostRequestMock;
+  readonly getActiveHostId: () => string | null;
+  /**
+   * The spine resolves a host id into a client (redesign P4.2); production
+   * calls this instead of reading a bound host off the client itself. This
+   * fixture has exactly one host, so the requester IS the client - what
+   * matters is that the method EXISTS, since a stub missing it takes the
+   * subject down at first render rather than failing an assertion.
+   */
+  readonly createRequesterForHostId: (hostId: string | null) => StubHostClient;
+  /**
+   * The dispatch a `requiredHostMethodVersion` takes (`use-host-query.ts`).
+   *
+   * It has to exist here for the same reason the note above gives, and the
+   * reason is not hypothetical: this stub HAD no such method, so the moment
+   * `clearHostAll` began claiming a floor every cloud-mode clear died on
+   * "not a function" and read exactly like a request that was never sent -
+   * an under-provisioned mock wearing the shape of a missing feature.
+   */
+  readonly requestWithSignalRequiringHostMethodVersion: (
+    method: string,
+    params: unknown,
+    signal: AbortSignal | undefined,
+    requirement: { readonly method: string; readonly version: SchemaVersion },
+  ) => Promise<unknown>;
+}
+
+const hostBindingState = vi.hoisted(() => ({
+  current: null as { readonly hostClient: StubHostClient } | null,
+}));
+
+vi.mock("@/lib/host", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostBinding: () => hostBindingState.current,
+  };
+});
+
+vi.mock("@/lib/host-error-toast", async (importActual) => {
+  const actual = await importActual<typeof import("@/lib/host-error-toast")>();
+  return {
+    ...actual,
+    toastFromHostError: vi.fn(actual.toastFromHostError),
+  };
+});
+
+// A whole-module factory, so anything the subject imports from here has to be
+// re-exported explicitly: the floor CONSTANT would otherwise arrive as
+// `undefined` and the dispatch floor would silently claim `@1.undefined`.
+// Spread the real module rather than listing values by hand, so the next
+// export added there does not have to be discovered by a failing test.
+vi.mock("@/lib/notifications/notification-feed-mode", async (importActual) => {
+  const actual =
+    await importActual<
+      typeof import("@/lib/notifications/notification-feed-mode")
+    >();
+  return {
+    ...actual,
+    useNotificationFeedMode: () => notificationFeedMode.value,
+    useNotificationFeedModeSettling: () => notificationFeedModeSettling.value,
+  };
+});
+
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () =>
+    hostBindingState.current?.hostClient.getActiveHostId() ?? null,
+}));
+
+// The notification centre reads its host from `useNotificationResolveHost` (the local
+// host that owns the streams), not from the app-wide active host. Projected
+// from this suite's existing host ref so the scenario it was already
+// describing is unchanged.
+vi.mock("@/hooks/notifications/use-notification-host", () => ({
+  useNotificationResolveHostId: () =>
+    hostBindingState.current?.hostClient.getActiveHostId() ?? null,
+  useNotificationResolveHost: () => ({
+    hostId: hostBindingState.current?.hostClient.getActiveHostId() ?? null,
+    client: hostBindingState.current?.hostClient ?? null,
+  }),
+}));
+
+const confirmedWriteSpy = vi.hoisted(() =>
+  vi.fn<(accountId: string, writeVersion: number | null) => void>(),
+);
+
+// The real module with its one recording edge spied, so the floor a cloud
+// write leaves is read off the call the subject actually makes.
+vi.mock(
+  "@/lib/view-replica/notification-feed-replica",
+  async (importActual) => {
+    const actual =
+      await importActual<
+        typeof import("@/lib/view-replica/notification-feed-replica")
+      >();
+    return {
+      ...actual,
+      noteNotificationFeedConfirmedWrite: (
+        accountId: string,
+        writeVersion: number | null,
+      ): void => {
+        confirmedWriteSpy(accountId, writeVersion);
+        actual.noteNotificationFeedConfirmedWrite(accountId, writeVersion);
+      },
+    };
+  },
+);
+
+vi.mock("sonner", () => ({
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+  },
+}));
+
+import { toast } from "sonner";
+import { toastFromHostError } from "@/lib/host-error-toast";
+
+function createTestQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+}
+
+function createWrapper(): (props: {
+  readonly children: ReactNode;
+}) => ReactNode {
+  const queryClient = createTestQueryClient();
+  return function Wrapper(props: { readonly children: ReactNode }): ReactNode {
+    return (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+  };
+}
+
+function createRetryingMutationWrapper(): (props: {
+  readonly children: ReactNode;
+}) => ReactNode {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: 1, retryDelay: 0 },
+    },
+  });
+  return function Wrapper(props: { readonly children: ReactNode }): ReactNode {
+    return (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+  };
+}
+
+function hostPrompt(
+  id: string,
+  updatedAt: number,
+  readAt: number | null,
+): HostNotificationEntry {
+  return {
+    id,
+    updatedAt,
+    readAt,
+    kind: "approval.requested",
+    sourceRef: id,
+    severity: "needs_action",
+    outcome: null,
+    resolvedAt: null,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    payload: {
+      kind: "approval",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      chatTitle: "Deploy checkout fix",
+      taskTitle: "Checkout notifications",
+      approvalId: id,
+    },
+  };
+}
+
+function hostDone(
+  id: string,
+  updatedAt: number,
+  readAt: number | null,
+): HostNotificationEntry {
+  return {
+    id,
+    updatedAt,
+    readAt,
+    kind: "agent.stopped",
+    sourceRef: id,
+    severity: "done",
+    outcome: "completed",
+    epicId: "epic-1",
+    chatId: "chat-1",
+    payload: {
+      kind: "chat",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      agentName: "Agent",
+      taskTitle: "Checkout notifications",
+      outcome: "completed",
+    },
+  };
+}
+
+/** One occurrence of the `agent.stopped:chat-1` group. A reopen is a DIFFERENT
+ * `entryId` under the same `coalesceKey`, never an edit of this one. */
+function cloudDone(
+  entryId: string,
+  createdAt: number,
+  readAt: number | null,
+): HostNotificationsCloudFeedRow {
+  return {
+    entryId,
+    originHostId: "host-cloud",
+    coalesceKey: "agent.stopped:chat-1",
+    entry: {
+      id: entryId,
+      updatedAt: createdAt,
+      readAt,
+      kind: "agent.stopped",
+      sourceRef: entryId,
+      severity: "done",
+      outcome: "completed",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      payload: {
+        kind: "chat",
+        epicId: "epic-1",
+        chatId: "chat-1",
+        outcome: "completed",
+      },
+    },
+    presentation: { epicTitle: "Cloud epic", chatTitle: "Cloud chat" },
+  };
+}
+
+function seedGlobal(entries: ReadonlyArray<NotificationEntry>): void {
+  const document = useNotificationsStore.getState().doc;
+  const notifications = document.getArray<NotificationRoomEntryMap>(
+    NOTIFICATIONS_ARRAY_KEY,
+  );
+  document.transact(() => {
+    for (const entry of entries) {
+      notifications.push([createNotificationRoomEntryMap(entry)]);
+    }
+  });
+}
+
+function applyHostSnapshot(
+  entries: ReadonlyArray<HostNotificationEntry>,
+  summary: { readonly unreadCount: number; readonly attentionCount: number },
+): void {
+  useHostNotificationsStore.getState().applySnapshot({
+    attention: {
+      entries: entries.filter(
+        (entry) =>
+          entry.readAt === null &&
+          (entry.severity === "needs_action" || entry.severity === "failure"),
+      ),
+      nextCursor: null,
+    },
+    recent: { entries, nextCursor: null },
+    summary,
+  });
+}
+
+/** A session holding a cloud verdict - what `feedMode === "cloud"` presumes. */
+function signInForActions(): void {
+  useAuthStore
+    .getState()
+    .setSignedIn(
+      { userId: "user-actions", userName: "U", email: "u@example.com" },
+      { userId: "user-actions", username: "U" },
+      [],
+    );
+}
+
+/** The same session after authn withdrew its verdict, rows still rendered. */
+function demoteToUnverified(): void {
+  useAuthStore
+    .getState()
+    .setUnverifiedSession(
+      { userId: "user-actions", userName: "U", email: "u@example.com" },
+      { userId: "user-actions", username: "U" },
+    );
+}
+
+function bindHostClient(): void {
+  const hostClient: StubHostClient = {
+    request: hostRequestMock,
+    getActiveHostId: () => mockLocalHostEntry.hostId,
+    createRequesterForHostId: () => hostClient,
+    // Stands in for the transport's own check, which answers the floor from
+    // the handshake of the connection carrying the frame rather than from
+    // anything the render observed. `ws-rpc-client.test.ts` pins that the real
+    // transport enforces it; this pins that the subject CLAIMS it and that a
+    // peer below the floor never receives the frame.
+    requestWithSignalRequiringHostMethodVersion: (
+      method,
+      params,
+      _signal,
+      requirement,
+    ) => {
+      floorsRequested.calls.push(requirement);
+      // An unset method is AT the floor, so a case that says nothing about
+      // versions behaves like a current host; only an explicit entry can
+      // refuse.
+      const negotiated =
+        negotiatedMinors.byMethod.get(requirement.method) ??
+        requirement.version.minor;
+      if (negotiated < requirement.version.minor) {
+        return Promise.reject(
+          new Error(
+            `host does not serve ${requirement.method}@${requirement.version.major}.${requirement.version.minor}`,
+          ),
+        );
+      }
+      return hostRequestMock(method, params);
+    },
+  };
+  hostBindingState.current = { hostClient };
+}
+
+function defaultHostRequest(method: string): Promise<unknown> {
+  if (
+    method === "host.notifications.markRead" ||
+    method === "host.notifications.markAllRead"
+  ) {
+    return Promise.resolve({ ok: true });
+  }
+  return Promise.resolve({});
+}
+
+function unsupportedHostError(method: string): HostRpcError {
+  return new HostRpcError({
+    code: "E_HOST_UNSUPPORTED",
+    message: `${method} is not supported`,
+    requestId: "req-unsupported-method",
+    method,
+    fatalDetails: {
+      code: "E_HOST_UNSUPPORTED",
+      reason: "Method not advertised by this host",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function markAllReadCallParams(): { readonly beforeUpdatedAt: number } {
+  return hostBeforeUpdatedAtCallParams("host.notifications.markAllRead");
+}
+
+function clearAllCallParams(): { readonly beforeUpdatedAt: number } {
+  return hostBeforeUpdatedAtCallParams("host.notifications.clearAll");
+}
+
+function clearAllRawParams(): Record<string, unknown> {
+  const call = hostRequestMock.mock.calls.find(
+    (entry) => entry[0] === "host.notifications.clearAll",
+  );
+  const params: unknown = call === undefined ? undefined : call[1];
+  if (!isRecord(params)) {
+    throw new Error("expected host.notifications.clearAll params");
+  }
+  return params;
+}
+
+function hostBeforeUpdatedAtCallParams(
+  method: "host.notifications.markAllRead" | "host.notifications.clearAll",
+): { readonly beforeUpdatedAt: number } {
+  const call = hostRequestMock.mock.calls.find((entry) => entry[0] === method);
+  const params: unknown = call === undefined ? undefined : call[1];
+  if (!isRecord(params)) {
+    throw new Error(`expected ${method} params`);
+  }
+  const beforeUpdatedAt = params["beforeUpdatedAt"];
+  if (typeof beforeUpdatedAt !== "number") {
+    throw new Error(`expected ${method} params`);
+  }
+  return { beforeUpdatedAt };
+}
+
+/** The exact `useHostQueries` cache key shape for one `indicatorState`
+ * request pair: host scope, method, request params, identity suffix. */
+type IndicatorQueryKey = readonly [
+  "host",
+  string,
+  "host.notifications.indicatorState",
+  {
+    readonly epicIds: ReadonlyArray<string>;
+    readonly chatIds: ReadonlyArray<string>;
+  },
+  string,
+];
+
+describe("useMergedNotificationsActions markAllAsRead composition", () => {
+  beforeEach(() => {
+    hostRequestMock.mockReset();
+    hostRequestMock.mockImplementation(defaultHostRequest);
+    hostBindingState.current = null;
+    notificationFeedMode.value = "local";
+    notificationFeedModeSettling.value = false;
+    negotiatedMinors.byMethod.clear();
+    floorsRequested.calls.length = 0;
+    confirmedWriteSpy.mockClear();
+    // The cloud-feed mutations re-read the live verdict at dispatch; a
+    // `cloud` feed mode below stands for a session that holds one.
+    signInForActions();
+    vi.mocked(toastFromHostError).mockClear();
+    vi.mocked(toast.error).mockClear();
+    __resetNotificationsStoreForTests();
+    __resetHostNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
+    // An opened session for the signed-in account owns the rows seeded below.
+    useCloudNotificationsStore.setState({ accountId: "user-actions" });
+    __resetAppLocalNotificationsStoreForTests();
+    useAppLocalNotificationsStore.getState().activateIdentity("user-actions");
+    useHostNotificationsStore.getState().applySnapshot({
+      attention: { entries: [], nextCursor: null },
+      recent: { entries: [], nextCursor: null },
+      summary: { unreadCount: 0, attentionCount: 0 },
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    hostBindingState.current = null;
+    notificationFeedMode.value = "local";
+    notificationFeedModeSettling.value = false;
+    negotiatedMinors.byMethod.clear();
+    floorsRequested.calls.length = 0;
+    useAuthStore.getState().setSignedOut();
+    __resetHostNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  it("marks every unread host row read without resolving prompts", async () => {
+    bindHostClient();
+    applyHostSnapshot(
+      [
+        hostPrompt("prompt-a", 200, null),
+        hostPrompt("prompt-b", 150, 40),
+        hostDone("done-unread", 100, null),
+      ],
+      { unreadCount: 2, attentionCount: 1 },
+    );
+
+    const { result } = renderHook(
+      () => ({
+        actions: useMergedNotificationsActions(),
+        attentionIds: useAttentionNotificationIds(),
+      }),
+      { wrapper: createWrapper() },
+    );
+
+    expect(result.current.attentionIds).toEqual(["host:prompt-a"]);
+
+    act(() => {
+      result.current.actions.markAllAsRead();
+    });
+
+    await waitFor(() => {
+      expect(markAllReadCallParams().beforeUpdatedAt).toBeTypeOf("number");
+    });
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.resolve",
+      ),
+    ).toBe(false);
+
+    act(() => {
+      useHostNotificationsStore
+        .getState()
+        .applyReadStateFrame(["prompt-a", "prompt-b"], {
+          readAt: 999,
+          resolvedAt: null,
+          removedIds: [],
+          summary: { unreadCount: 0, attentionCount: 0 },
+        });
+    });
+
+    await waitFor(() => {
+      expect(result.current.attentionIds).toEqual([]);
+    });
+    for (const id of ["prompt-a", "prompt-b"]) {
+      const entry = useHostNotificationsStore.getState().byId[id];
+      expect("resolvedAt" in entry ? entry.resolvedAt : null).toBeNull();
+    }
+  });
+
+  it("withholds whole-origin host writes in local mode once the verdict is withdrawn", async () => {
+    // A host below the partition floors: its feed is whole-origin, cloud-home
+    // replicas beside the local rows, and no `home` selector reaches it. A
+    // marker set on it by an `unverified` session becomes a cloud write
+    // deferred past the withheld verdict once the origin replicates.
+    bindHostClient();
+    notificationFeedMode.value = "local";
+    applyHostSnapshot(
+      [hostPrompt("prompt-a", 200, null), hostDone("done-unread", 100, null)],
+      { unreadCount: 2, attentionCount: 1 },
+    );
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    demoteToUnverified();
+    act(() => {
+      result.current.markAsRead("host:prompt-a");
+      result.current.markAllAsRead();
+      result.current.clearAll();
+    });
+
+    // Non-vacuity: the same three gestures dispatch once the verdict returns.
+    for (const method of [
+      "host.notifications.markRead",
+      "host.notifications.markAllRead",
+      "host.notifications.clearAll",
+    ]) {
+      expect(
+        hostRequestMock.mock.calls.some((call) => call[0] === method),
+      ).toBe(false);
+    }
+    signInForActions();
+    act(() => {
+      result.current.markAsRead("host:prompt-a");
+      result.current.markAllAsRead();
+      result.current.clearAll();
+    });
+    await waitFor(() => {
+      for (const method of [
+        "host.notifications.markRead",
+        "host.notifications.markAllRead",
+        "host.notifications.clearAll",
+      ]) {
+        expect(
+          hostRequestMock.mock.calls.some((call) => call[0] === method),
+        ).toBe(true);
+      }
+    });
+  });
+
+  it("withholds the host mark-read in cloud mode too once the verdict is withdrawn: the RPC has no home selector", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    applyHostSnapshot([hostPrompt("prompt-a", 200, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    demoteToUnverified();
+    act(() => {
+      result.current.markAsRead("host:prompt-a");
+    });
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.markRead",
+      ),
+    ).toBe(false);
+
+    signInForActions();
+    act(() => {
+      result.current.markAsRead("host:prompt-a");
+    });
+    await waitFor(() => {
+      expect(
+        hostRequestMock.mock.calls.some(
+          (call) => call[0] === "host.notifications.markRead",
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("holds mark-all and pagination while a held cloud mode's host is re-negotiating, then dispatches", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    notificationFeedModeSettling.value = true;
+    applyHostSnapshot([hostPrompt("prompt-a", 200, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+
+    const { result, rerender } = renderHook(
+      () => useMergedNotificationsActions(),
+      { wrapper: createWrapper() },
+    );
+
+    // The host `markAllRead` would carry `home: "local"` to a host that may
+    // come back below the floor and strip it; the gesture waits instead.
+    act(() => {
+      result.current.markAllAsRead();
+    });
+    // Give the dispatch a real opportunity before reading the mock: the
+    // mutation reaches the transport on a later tick, so a synchronous read
+    // here passes whether or not the hold exists.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.markAllRead",
+      ),
+    ).toBe(false);
+    expect(result.current.canLoadMoreHost).toBe(false);
+    expect(result.current.canLoadMoreUnreadRecent).toBe(false);
+
+    // Non-vacuity: the handshake landed and reconfirmed `cloud`; the same
+    // gesture now dispatches with the selector.
+    notificationFeedModeSettling.value = false;
+    rerender();
+    act(() => {
+      result.current.markAllAsRead();
+    });
+    await waitFor(() => {
+      expect(
+        hostRequestMock.mock.calls.find(
+          (call) => call[0] === "host.notifications.markAllRead",
+        )?.[1],
+      ).toMatchObject({ home: "local" });
+    });
+  });
+
+  it("does not need a resolve call when no Attention rows exist", async () => {
+    bindHostClient();
+    applyHostSnapshot([hostDone("done-only", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+
+    await waitFor(() => {
+      expect(markAllReadCallParams().beforeUpdatedAt).toBeTypeOf("number");
+    });
+
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.resolve",
+      ),
+    ).toBe(false);
+  });
+
+  describe("a cloud write that resolves after the account changed", () => {
+    function signInAs(userId: string): void {
+      useAuthStore
+        .getState()
+        .setSignedIn(
+          { userId, userName: "U", email: `${userId}@example.com` },
+          { userId, username: "U" },
+          [],
+        );
+    }
+
+    /** A host answer the test releases by hand, so the account can change
+     * while the write is in flight. */
+    function holdCloudAnswer(
+      method:
+        | "host.notifications.cloudFeed.markRead"
+        | "host.notifications.cloudFeed.markAllRead",
+    ): { readonly release: (version: number) => void } {
+      let resolveAnswer: (answer: unknown) => void = () => undefined;
+      const answer = new Promise<unknown>((resolve) => {
+        resolveAnswer = resolve;
+      });
+      hostRequestMock.mockImplementation((requested: string) =>
+        requested === method ? answer : defaultHostRequest(requested),
+      );
+      return {
+        release: (version) => {
+          resolveAnswer({ status: "applied", version });
+        },
+      };
+    }
+
+    function useCloudActionsAndRow(): {
+      readonly actions: MergedNotificationsActions;
+      readonly row: MergedNotificationRow | null;
+    } {
+      return {
+        actions: useMergedNotificationsActions(),
+        row: useMergedNotificationRow(cloudNotificationFeedId("entry-a")),
+      };
+    }
+
+    function seedCloudFeed(): void {
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [cloudDone("entry-a", 1, null)],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        version: 10,
+      });
+    }
+
+    it("records the confirmed-write floor for the account that wrote it while that account is still signed in", async () => {
+      bindHostClient();
+      notificationFeedMode.value = "cloud";
+      const held = holdCloudAnswer("host.notifications.cloudFeed.markRead");
+      seedCloudFeed();
+      const { result } = renderHook(() => useCloudActionsAndRow(), {
+        wrapper: createWrapper(),
+      });
+      const row = result.current.row;
+      if (row === null) throw new Error("expected cloud row");
+
+      act(() => {
+        result.current.actions.markAsRead(row);
+      });
+      await waitFor(() => {
+        expect(hostRequestMock).toHaveBeenCalledWith(
+          "host.notifications.cloudFeed.markRead",
+          { entryId: "entry-a" },
+        );
+      });
+      act(() => {
+        held.release(41);
+      });
+
+      await waitFor(() => {
+        expect(confirmedWriteSpy).toHaveBeenCalledWith("user-actions", 41);
+      });
+    });
+
+    it.each([
+      {
+        name: "markRead",
+        method: "host.notifications.cloudFeed.markRead" as const,
+        gesture: (
+          actions: MergedNotificationsActions,
+          row: MergedNotificationRow | null,
+        ): void => {
+          if (row === null) throw new Error("expected cloud row");
+          actions.markAsRead(row);
+        },
+      },
+      {
+        name: "markAllRead",
+        method: "host.notifications.cloudFeed.markAllRead" as const,
+        gesture: (
+          actions: MergedNotificationsActions,
+          _row: MergedNotificationRow | null,
+        ): void => {
+          actions.markAllAsRead();
+        },
+      },
+    ])(
+      "does not record account A's $name version as account B's floor when the auth store switches straight to B first",
+      async ({ method, gesture }) => {
+        bindHostClient();
+        notificationFeedMode.value = "cloud";
+        const held = holdCloudAnswer(method);
+        seedCloudFeed();
+        const { result } = renderHook(() => useCloudActionsAndRow(), {
+          wrapper: createWrapper(),
+        });
+
+        act(() => {
+          gesture(result.current.actions, result.current.row);
+        });
+        await waitFor(() => {
+          expect(hostRequestMock).toHaveBeenCalledWith(
+            method,
+            expect.anything(),
+          );
+        });
+        // The cross-window projection: one `setSignedIn`, no signed-out gap,
+        // so the cloud store's `sessionEpoch` has not moved.
+        const epochBefore = useCloudNotificationsStore.getState().sessionEpoch;
+        act(() => {
+          signInAs("user-b");
+        });
+        expect(useCloudNotificationsStore.getState().sessionEpoch).toBe(
+          epochBefore,
+        );
+        act(() => {
+          held.release(41);
+        });
+        // Let the settled mutation's success handler run before reading.
+        await act(async () => {
+          await Promise.resolve();
+        });
+
+        expect(confirmedWriteSpy).not.toHaveBeenCalledWith("user-b", 41);
+      },
+    );
+  });
+});
+
+describe("useMergedNotificationsActions indicator invalidation", () => {
+  beforeEach(() => {
+    hostRequestMock.mockReset();
+    hostRequestMock.mockImplementation(defaultHostRequest);
+    hostBindingState.current = null;
+    notificationFeedMode.value = "local";
+    notificationFeedModeSettling.value = false;
+    negotiatedMinors.byMethod.clear();
+    floorsRequested.calls.length = 0;
+    confirmedWriteSpy.mockClear();
+    // The cloud-feed mutations re-read the live verdict at dispatch; a
+    // `cloud` feed mode below stands for a session that holds one.
+    signInForActions();
+    vi.mocked(toastFromHostError).mockClear();
+    vi.mocked(toast.error).mockClear();
+    __resetNotificationsStoreForTests();
+    __resetHostNotificationsStoreForTests();
+    // The feed version is monotonic within a session, so a snapshot below the
+    // one already applied is dropped as a stale frame. Leaking it across tests
+    // would silently swallow the next test's seed.
+    useCloudNotificationsStore.getState().reset();
+    // An opened session for the signed-in account owns the rows seeded below.
+    useCloudNotificationsStore.setState({ accountId: "user-actions" });
+    __resetAppLocalNotificationsStoreForTests();
+    useAppLocalNotificationsStore.getState().activateIdentity("user-actions");
+  });
+
+  afterEach(() => {
+    cleanup();
+    hostBindingState.current = null;
+    notificationFeedMode.value = "local";
+    notificationFeedModeSettling.value = false;
+    negotiatedMinors.byMethod.clear();
+    floorsRequested.calls.length = 0;
+    useAuthStore.getState().setSignedOut();
+    __resetHostNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
+    __resetAppLocalNotificationsStoreForTests();
+  });
+
+  function indicatorKey(epicId: string, chatId: string): IndicatorQueryKey {
+    return [
+      "host",
+      mockLocalHostEntry.hostId,
+      "host.notifications.indicatorState",
+      { epicIds: [epicId], chatIds: [chatId] },
+      "notifications:indicator-state:user-actions",
+    ];
+  }
+
+  function seededIndicatorHarness(): {
+    readonly queryClient: QueryClient;
+    readonly rowKey: IndicatorQueryKey;
+    readonly unrelatedKey: IndicatorQueryKey;
+    readonly wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+  } {
+    const queryClient = createTestQueryClient();
+    const rowKey = indicatorKey("epic-1", "chat-1");
+    const unrelatedKey = indicatorKey("epic-other", "chat-other");
+    queryClient.setQueryData(rowKey, { epics: {}, chats: {} });
+    queryClient.setQueryData(unrelatedKey, { epics: {}, chats: {} });
+    return {
+      queryClient,
+      rowKey,
+      unrelatedKey,
+      wrapper: function Wrapper(props: {
+        readonly children: ReactNode;
+      }): ReactNode {
+        return (
+          <QueryClientProvider client={queryClient}>
+            {props.children}
+          </QueryClientProvider>
+        );
+      },
+    };
+  }
+
+  it("invalidates the row's entity-scoped indicator queries on mark-read success", async () => {
+    // The tab/sidebar error badges refetch off `indicatorState` queries. The
+    // host's `readStateChanged` echo on the feed stream is one invalidation
+    // trigger, but a successful unary mark-read must clear them on its own -
+    // otherwise a stream outage freezes badges while the popover row greys out.
+    bindHostClient();
+    applyHostSnapshot([hostDone("done-1", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    const { queryClient, rowKey, unrelatedKey, wrapper } =
+      seededIndicatorHarness();
+
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper,
+    });
+
+    act(() => {
+      result.current.markAsRead("host:done-1");
+    });
+
+    await waitFor(() => {
+      expect(queryClient.getQueryState(rowKey)?.isInvalidated).toBe(true);
+    });
+    expect(queryClient.getQueryState(unrelatedKey)?.isInvalidated).toBe(false);
+  });
+
+  it("falls back to the full indicator scope when the marked row names no entity", async () => {
+    // A live row with no `epicId` never named an entity, so it cannot produce
+    // an entity-scoped invalidation. The fallback must refresh the whole host
+    // scope rather than silently skip - a skip would strand exactly the badges
+    // this change exists to clear. The row has to be live: a row that already
+    // left the feed is refused at dispatch.
+    bindHostClient();
+    applyHostSnapshot(
+      [{ ...hostDone("no-entity", 100, null), epicId: null, chatId: null }],
+      {
+        unreadCount: 1,
+        attentionCount: 0,
+      },
+    );
+    const { queryClient, rowKey, unrelatedKey, wrapper } =
+      seededIndicatorHarness();
+
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper,
+    });
+
+    act(() => {
+      result.current.markAsRead("host:no-entity");
+    });
+
+    await waitFor(() => {
+      expect(queryClient.getQueryState(rowKey)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(unrelatedKey)?.isInvalidated).toBe(true);
+    });
+  });
+
+  it("invalidates the full indicator scope on mark-all-read success", async () => {
+    bindHostClient();
+    applyHostSnapshot([hostDone("done-1", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    const { queryClient, rowKey, unrelatedKey, wrapper } =
+      seededIndicatorHarness();
+
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper,
+    });
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+
+    await waitFor(() => {
+      expect(queryClient.getQueryState(rowKey)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(unrelatedKey)?.isInvalidated).toBe(true);
+    });
+  });
+
+  it("refuses the entry captured by the click once it left the feed, and addresses only the reopened entry", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 1,
+    });
+
+    const { result } = renderHook(
+      () => ({
+        actions: useMergedNotificationsActions(),
+        row: useMergedNotificationRow(cloudNotificationFeedId("entry-a")),
+        reopened: useMergedNotificationRow(cloudNotificationFeedId("entry-b")),
+      }),
+      { wrapper: createWrapper() },
+    );
+    const captured = result.current.row;
+    if (captured === null) throw new Error("expected cloud row");
+
+    // The group reopens: a NEW entry supersedes the captured one, and it
+    // arrives under its own feed id rather than mutating the old row.
+    act(() => {
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [cloudDone("entry-b", 2, null)],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        version: 2,
+      });
+    });
+    act(() => {
+      result.current.actions.clear(captured);
+    });
+    const reopened = result.current.reopened;
+    if (reopened === null) throw new Error("expected reopened cloud row");
+    act(() => {
+      result.current.actions.clear(reopened);
+    });
+
+    // The superseded entry is no longer live, so its click sends nothing; the
+    // reopened one is addressed by its own id, never retargeted from entry-a.
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.clear",
+        { entryId: "entry-b" },
+      );
+    });
+    expect(hostRequestMock).not.toHaveBeenCalledWith(
+      "host.notifications.cloudFeed.clear",
+      { entryId: "entry-a" },
+    );
+  });
+
+  it("keeps a reopened entry unread after the entry it superseded was read", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+
+    const { result } = renderHook(
+      () => ({
+        actions: useMergedNotificationsActions(),
+        readRow: useMergedNotificationRow(cloudNotificationFeedId("entry-a")),
+        reopenedRow: useMergedNotificationRow(
+          cloudNotificationFeedId("entry-b"),
+        ),
+      }),
+      { wrapper: createWrapper() },
+    );
+    const captured = result.current.readRow;
+    if (captured === null) throw new Error("expected cloud row");
+    act(() => {
+      result.current.actions.markAsRead(captured);
+    });
+    const optimisticallyRead =
+      useCloudNotificationsStore.getState().rows[
+        cloudNotificationFeedId("entry-a")
+      ];
+    expect(optimisticallyRead?.entry.readAt).toBeTypeOf("number");
+    expect(useCloudNotificationsStore.getState().summary?.unreadCount).toBe(0);
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markRead",
+        { entryId: "entry-a" },
+      );
+    });
+
+    // `entry-a` is now read in the cloud, and the reopen arrives as its own
+    // immutable entry with its own null markers. Nothing can carry the read
+    // across: there is no shared row for a marker to have been written on.
+    act(() => {
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [cloudDone("entry-b", 2, null)],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        version: 11,
+      });
+    });
+
+    expect(result.current.reopenedRow?.readAt).toBeNull();
+    expect(result.current.readRow).toBeNull();
+  });
+
+  it("sends an identical body on a retried mutation - a set-once marker needs no idempotency key", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    let attempts = 0;
+    hostRequestMock.mockImplementation((method: string) => {
+      if (method === "host.notifications.cloudFeed.markRead") {
+        attempts += 1;
+        if (attempts === 1) {
+          return Promise.reject(
+            unsupportedHostError("host.notifications.cloudFeed.markRead"),
+          );
+        }
+        return Promise.resolve({ status: "applied", version: 11 });
+      }
+      return defaultHostRequest(method);
+    });
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+    const { result } = renderHook(
+      () => ({
+        actions: useMergedNotificationsActions(),
+        row: useMergedNotificationRow(cloudNotificationFeedId("entry-a")),
+      }),
+      { wrapper: createRetryingMutationWrapper() },
+    );
+    const captured = result.current.row;
+    if (captured === null) throw new Error("expected cloud row");
+
+    act(() => {
+      result.current.actions.markAsRead(captured);
+    });
+
+    await waitFor(() => {
+      const calls = hostRequestMock.mock.calls.filter(
+        (call) => call[0] === "host.notifications.cloudFeed.markRead",
+      );
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.[1]).toEqual({ entryId: "entry-a" });
+      expect(calls[1]?.[1]).toEqual(calls[0]?.[1]);
+    });
+  });
+
+  it("does not dispatch cloud-feed writes after the session is demoted to unverified", async () => {
+    // The provider closes the cloud lanes in an EFFECT, so for the
+    // commit/effect window after a demotion the popover still holds cloud
+    // rows and their callbacks - and the retained local-host connection
+    // carries no renderer verdict. Every cloud write re-reads the store at
+    // dispatch instead of trusting its rendered closure.
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null), cloudDone("entry-b", 2, null)],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      version: 10,
+    });
+    useCloudNotificationsStore.getState().setConnectionState("connected");
+    const { result } = renderHook(
+      () => ({
+        actions: useMergedNotificationsActions(),
+        row: useMergedNotificationRow(cloudNotificationFeedId("entry-a")),
+      }),
+      { wrapper: createWrapper() },
+    );
+    const captured = result.current.row;
+    if (captured === null) throw new Error("expected cloud row");
+
+    // The demotion lands between the render and the click: the closure the
+    // click reaches was built under `cloud` feed mode.
+    demoteToUnverified();
+    act(() => {
+      result.current.actions.markAsRead(captured);
+      result.current.actions.markAllAsRead();
+      result.current.actions.clear(captured);
+      result.current.actions.clearAll();
+    });
+    // Settle any mutation that WOULD have been dispatched.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const cloudCalls = hostRequestMock.mock.calls.filter((call) =>
+      String(call[0]).startsWith("host.notifications.cloudFeed."),
+    );
+    expect(cloudCalls).toEqual([]);
+    // Not even marked read locally: an optimistic read the write never sent
+    // would be a lie the next snapshot reverts.
+    expect(
+      useCloudNotificationsStore.getState().rows[
+        cloudNotificationFeedId("entry-a")
+      ]?.entry.readAt,
+    ).toBeNull();
+  });
+
+  it("does not write the Notifications room after the session is demoted to unverified", async () => {
+    // The room is account-backed Yjs state. Its stream closes on verdict
+    // loss, but the replica stays rendered, and a local transaction made now
+    // is an offline delta the reopen reconciles upstream - a cloud write the
+    // withdrawn verdict never authorized. Every room mutation re-reads the
+    // verdict at dispatch, like the cloud-feed legs above.
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    seedGlobal([
+      {
+        id: "epic-invite",
+        createdAt: 2,
+        readAt: null,
+        event: {
+          kind: NOTIFICATION_EVENT_TYPES.INVITED,
+          epicId: "epic-1",
+          actorName: "Alice",
+        },
+      },
+    ]);
+    const { result } = renderHook(
+      () => ({
+        actions: useMergedNotificationsActions(),
+        row: useMergedNotificationRow(globalFeedId("epic-invite")),
+      }),
+      { wrapper: createWrapper() },
+    );
+    const captured = result.current.row;
+    if (captured === null) throw new Error("expected global row");
+
+    demoteToUnverified();
+    act(() => {
+      result.current.actions.markAsRead(captured);
+      result.current.actions.markAllAsRead();
+      result.current.actions.clearAll();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const entries = useNotificationsStore.getState().entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.readAt).toBeNull();
+  });
+
+  it("captures clear-all at the observed version while a newer entry survives", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-observed", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.clearAll();
+      // A newer entry lands between the click and the request. Membership is
+      // decided by the observed version, not by a timestamp threshold, so this
+      // one is simply not in the set - whatever its clock says.
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [cloudDone("entry-later", 2, null)],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        version: 11,
+      });
+    });
+
+    await waitFor(() => {
+      const call = hostRequestMock.mock.calls.find(
+        (entry) => entry[0] === "host.notifications.cloudFeed.clearAll",
+      );
+      expect(call?.[1]).toEqual({ observedVersion: 10 });
+    });
+    expect(
+      useCloudNotificationsStore.getState().rows[
+        cloudNotificationFeedId("entry-later")
+      ]?.entryId,
+    ).toBe("entry-later");
+  });
+
+  it("clears the active host feed through the local clear-all RPC", async () => {
+    bindHostClient();
+    applyHostSnapshot([hostDone("entry-local", 1, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.clearAll();
+    });
+
+    await waitFor(() => {
+      expect(clearAllCallParams().beforeUpdatedAt).toBeTypeOf("number");
+      expect(useHostNotificationsStore.getState().byId).toEqual({});
+    });
+  });
+
+  it("sends a local home selector in cloud mode and omits it in local mode", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    applyHostSnapshot([hostDone("cloud-mode-entry", 1, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    const cloudHook = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      cloudHook.result.current.clearAll();
+    });
+
+    await waitFor(() => {
+      expect(clearAllRawParams().home).toBe("local");
+    });
+    expect(clearAllRawParams()).toHaveProperty("beforeUpdatedAt");
+
+    cleanup();
+    hostRequestMock.mockReset();
+    hostRequestMock.mockImplementation(defaultHostRequest);
+    notificationFeedMode.value = "local";
+    const localHook = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      localHook.result.current.clearAll();
+    });
+
+    await waitFor(() => {
+      expect(clearAllRawParams()).toHaveProperty("beforeUpdatedAt");
+    });
+    expect(clearAllRawParams()).not.toHaveProperty("home");
+  });
+
+  it("holds clear-all while a held cloud mode's host is re-negotiating, then dispatches", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    notificationFeedModeSettling.value = true;
+    applyHostSnapshot([hostDone("settling-entry", 1, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    const { result, rerender } = renderHook(
+      () => useMergedNotificationsActions(),
+      { wrapper: createWrapper() },
+    );
+
+    // The host `clearAll` would carry `home: "local"` to a host that may come
+    // back below `@1.1` and STRIP it - a whole-origin delete wearing the shape
+    // of a partitioned one. The gesture waits instead.
+    act(() => {
+      result.current.clearAll();
+    });
+    // Give the dispatch a real opportunity first. A synchronous read of the
+    // mock straight after `act` is vacuous: the mutation reaches the transport
+    // on a later tick, so an unguarded `clearAll` would also read as absent.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.clearAll",
+      ),
+    ).toBe(false);
+
+    // Non-vacuity: release ONLY the settling flag - same mode, same snapshot,
+    // same arrangement - and the identical gesture dispatches with the
+    // selector. Changing the feed mode here as well would make the absence
+    // above unattributable.
+    notificationFeedModeSettling.value = false;
+    rerender();
+    act(() => {
+      result.current.clearAll();
+    });
+    await waitFor(() => {
+      expect(clearAllRawParams()).toMatchObject({ home: "local" });
+    });
+  });
+
+  it("refuses a selector-bearing clear at DISPATCH when the process behind a settled render fell below clearAll@1.1", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    applyHostSnapshot([hostDone("dispatch-floor-entry", 1, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    // The render has SETTLED on mixed mode - the hold is not what is under
+    // test here, and leaving it armed would make the absence below prove the
+    // hold again rather than the floor.
+    expect(notificationFeedModeSettling.value).toBe(false);
+
+    // The process is replaced between that settled render and the gesture.
+    // Nothing re-renders: this is precisely the window the render guard
+    // cannot see, and on an `@1.0` peer `home` is an optional field that
+    // would be STRIPPED into a whole-origin delete answering 200.
+    negotiatedMinors.byMethod.set("host.notifications.clearAll", 0);
+
+    act(() => {
+      result.current.clearAll();
+    });
+    await waitFor(() => {
+      expect(floorsRequested.calls).toHaveLength(1);
+    });
+    expect(floorsRequested.calls[0]).toEqual({
+      method: "host.notifications.clearAll",
+      version: { major: 1, minor: 1 },
+    });
+    // Refused before send: the frame never reached the peer.
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.clearAll",
+      ),
+    ).toBe(false);
+
+    // Non-vacuity: the SAME gesture on the SAME render, with only the
+    // process's negotiated minor restored, does reach the peer and carries
+    // the selector it claimed the floor for.
+    negotiatedMinors.byMethod.clear();
+    act(() => {
+      result.current.clearAll();
+    });
+    await waitFor(() => {
+      expect(clearAllRawParams()).toMatchObject({ home: "local" });
+    });
+  });
+
+  it("refuses a selector-bearing mark-all at DISPATCH when the process fell below markAllRead@1.1", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    applyHostSnapshot([hostPrompt("mark-floor-entry", 200, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    // Same class as clear-all, one method over: `markAllRead` has an empty
+    // downgrade map, so an older peer STRIPS `home` and marks cloud-home rows
+    // read that this session was never shown.
+    negotiatedMinors.byMethod.set("host.notifications.markAllRead", 0);
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+    await waitFor(() => {
+      expect(
+        floorsRequested.calls.some(
+          (call) =>
+            isRecord(call) && call.method === "host.notifications.markAllRead",
+        ),
+      ).toBe(true);
+    });
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.markAllRead",
+      ),
+    ).toBe(false);
+
+    // Non-vacuity: only the negotiated minor moves, and the same gesture lands
+    // carrying the selector it claimed the floor for.
+    negotiatedMinors.byMethod.set("host.notifications.markAllRead", 1);
+    act(() => {
+      result.current.markAllAsRead();
+    });
+    await waitFor(() => {
+      expect(
+        hostRequestMock.mock.calls.find(
+          (call) => call[0] === "host.notifications.markAllRead",
+        )?.[1],
+      ).toMatchObject({ home: "local" });
+    });
+  });
+
+  it("refuses a selector-bearing page at DISPATCH on a SAME-MAJOR list rollback", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    // Applied directly rather than through `applyHostSnapshot`, which pins
+    // `nextCursor: null` - and `loadMoreHost` returns early with no cursor, so
+    // the helper would have made this case pass by never dispatching at all.
+    useHostNotificationsStore.getState().applySnapshot({
+      attention: { entries: [], nextCursor: null },
+      recent: {
+        entries: [hostDone("list-floor-entry", 1, null)],
+        // The real cursor SHAPE, not a placeholder string: the mocked
+        // transport never parses it, so a bare `"cursor-1"` runs green here
+        // and is rejected only by the compile.
+        nextCursor: {
+          kind: "chronological",
+          updatedAt: 1,
+          id: "list-floor-entry",
+        },
+      },
+      summary: { unreadCount: 1, attentionCount: 0 },
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    // `@2.1`, NOT a cross-major rollback. This is the case the cross-major
+    // refusing downgrade does not cover and that nearly kept `list` out of
+    // this class: the transport projects the params through the older MINOR's
+    // plain `z.object`, which STRIPS `home` and succeeds, so the peer answers
+    // 200 having merged whole-origin rows into the cloud lane.
+    negotiatedMinors.byMethod.set("host.notifications.list", 1);
+
+    act(() => {
+      result.current.loadMoreHost();
+    });
+    await waitFor(() => {
+      expect(
+        floorsRequested.calls.some(
+          (call) => isRecord(call) && call.method === "host.notifications.list",
+        ),
+      ).toBe(true);
+    });
+    expect(floorsRequested.calls.at(-1)).toEqual({
+      method: "host.notifications.list",
+      version: { major: 2, minor: 2 },
+    });
+    expect(
+      hostRequestMock.mock.calls.some(
+        (call) => call[0] === "host.notifications.list",
+      ),
+    ).toBe(false);
+
+    // Non-vacuity: only the negotiated minor moves.
+    negotiatedMinors.byMethod.set("host.notifications.list", 2);
+    act(() => {
+      result.current.loadMoreHost();
+    });
+    await waitFor(() => {
+      expect(
+        hostRequestMock.mock.calls.find(
+          (call) => call[0] === "host.notifications.list",
+        )?.[1],
+      ).toMatchObject({ home: "local" });
+    });
+  });
+
+  it("claims no dispatch floor for a whole-origin clear, which every peer serves", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "local";
+    applyHostSnapshot([hostDone("no-floor-entry", 1, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    // Below the floor, and it does not matter: local mode sends no `home`, so
+    // there is no selector for an older peer to strip and nothing to refuse.
+    // Claiming a floor here would break clear-all against every host that
+    // never needed the minor.
+    negotiatedMinors.byMethod.set("host.notifications.clearAll", 0);
+
+    act(() => {
+      result.current.clearAll();
+    });
+    await waitFor(() => {
+      expect(clearAllRawParams()).toHaveProperty("beforeUpdatedAt");
+    });
+    expect(clearAllRawParams()).not.toHaveProperty("home");
+    expect(floorsRequested.calls).toHaveLength(0);
+  });
+
+  it("quotes the newest version to clear-all even when the rendered feed did not change", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    const row = cloudDone("entry-a", 1, null);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [row],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    // A relay frame whose rendered rows are identical but whose version moved:
+    // something changed in the feed that this build cannot display. The
+    // clear-all the user issues next must name THAT feed, not the one from
+    // before - otherwise the change it could not render also escapes the
+    // clear.
+    act(() => {
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [row],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        version: 11,
+      });
+    });
+    act(() => {
+      result.current.clearAll();
+    });
+
+    await waitFor(() => {
+      const call = hostRequestMock.mock.calls.find(
+        (entry) => entry[0] === "host.notifications.cloudFeed.clearAll",
+      );
+      expect(call?.[1]).toEqual({ observedVersion: 11 });
+    });
+  });
+
+  it("retains an optimistic read marker until a later snapshot reconciles an unavailable command", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    hostRequestMock.mockImplementation((method: string) => {
+      if (method === "host.notifications.cloudFeed.markRead") {
+        return Promise.resolve({ status: "unavailable", version: null });
+      }
+      return defaultHostRequest(method);
+    });
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+    const { result } = renderHook(
+      () => ({
+        actions: useMergedNotificationsActions(),
+        row: useMergedNotificationRow(cloudNotificationFeedId("entry-a")),
+      }),
+      { wrapper: createWrapper() },
+    );
+    const captured = result.current.row;
+    if (captured === null) throw new Error("expected cloud row");
+
+    act(() => {
+      result.current.actions.markAsRead(captured);
+    });
+
+    await waitFor(() => {
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "unavailable",
+      );
+    });
+    // The row stays present and the set-once marker remains optimistic while
+    // unavailable; no rollback timer makes perceived state depend on a poll.
+    expect(
+      useCloudNotificationsStore.getState().rows[
+        cloudNotificationFeedId("entry-a")
+      ]?.entryId,
+    ).toBe("entry-a");
+    expect(result.current.row?.readAt).toBeTypeOf("number");
+
+    act(() => {
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [cloudDone("entry-a", 1, null)],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        version: 11,
+      });
+    });
+    expect(result.current.row?.readAt).toBeNull();
+  });
+
+  it("does not acknowledge a retained v1 row while cloud is authoritative", () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    applyHostSnapshot([hostDone("retained-local", 1, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+    act(() => {
+      result.current.markAsRead("host:retained-local");
+    });
+
+    expect(hostRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("uses one observed-version mark-all for renderable and summary-only unread entries", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    hostRequestMock.mockImplementation((method: string) => {
+      if (method === "host.notifications.cloudFeed.markAllRead") {
+        return Promise.resolve({ status: "applied", version: 2 });
+      }
+      return defaultHostRequest(method);
+    });
+    useCloudNotificationsStore.getState().applySnapshot({
+      // The second unread entry exists in the raw cloud feed but was omitted
+      // by the relay's renderer conversion, so it appears only in the summary.
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      version: 10,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+
+    expect(useCloudNotificationsStore.getState().summary?.unreadCount).toBe(0);
+    expect(
+      Object.values(useCloudNotificationsStore.getState().rows).every(
+        (row) => row?.entry.readAt !== null,
+      ),
+    ).toBe(true);
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markAllRead",
+        { observedVersion: 10 },
+      );
+    });
+    expect(
+      hostRequestMock.mock.calls.filter(
+        (call) => call[0] === "host.notifications.cloudFeed.markRead",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("marks renderer-local failures read alongside the cloud feed", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "terminal-crash",
+      updatedAt: 2,
+      readAt: null,
+      kind: "terminal.crashed",
+      sourceRef: "terminal-instance",
+      payload: {
+        kind: "terminal",
+        epicId: "epic-1",
+        terminalId: "terminal-1",
+        tabId: "tab-1",
+        paneId: "pane-1",
+        tileInstanceId: "terminal-instance",
+      },
+      message: "Build terminal exited unexpectedly.",
+      detail: "The terminal process ended with an error.",
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+
+    expect(
+      useAppLocalNotificationsStore.getState().byId["terminal-crash"].readAt,
+    ).toBeTypeOf("number");
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markAllRead",
+        { observedVersion: 10 },
+      );
+    });
+  });
+
+  it("marks Notifications-room collaboration rows read alongside the cloud feed", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+    seedGlobal([
+      {
+        id: "epic-invite",
+        createdAt: 2,
+        readAt: null,
+        event: {
+          kind: NOTIFICATION_EVENT_TYPES.INVITED,
+          epicId: "epic-1",
+          actorName: "Alice",
+        },
+      },
+    ]);
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+
+    expect(useNotificationsStore.getState().entries[0]?.readAt).toBeTypeOf(
+      "number",
+    );
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markAllRead",
+        { observedVersion: 10 },
+      );
+    });
+  });
+
+  it("marks renderer-local failures read without mutating a reconnecting cloud feed", () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+    useCloudNotificationsStore.getState().setConnectionState("reconnecting");
+    useAppLocalNotificationsStore.getState().upsert({
+      id: "terminal-crash",
+      updatedAt: 2,
+      readAt: null,
+      kind: "terminal.crashed",
+      sourceRef: "terminal-instance",
+      payload: null,
+      message: "Build terminal exited unexpectedly.",
+      detail: "The terminal process ended with an error.",
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+
+    expect(
+      useAppLocalNotificationsStore.getState().byId["terminal-crash"].readAt,
+    ).toBeTypeOf("number");
+    expect(useCloudNotificationsStore.getState().summary?.unreadCount).toBe(1);
+    expect(hostRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to renderable cloud entries when an older relay lacks mark-all", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    hostRequestMock.mockImplementation((method: string) => {
+      if (method === "host.notifications.cloudFeed.markAllRead") {
+        return Promise.reject(
+          new HostRpcError({
+            code: "E_HOST_UNSUPPORTED",
+            message: "host.notifications.cloudFeed.markAllRead is unsupported",
+            requestId: "test-request",
+            method,
+            fatalDetails: {
+              code: "E_HOST_UNSUPPORTED",
+              reason: "unsupported method",
+              incompatibleMethods: null,
+              upgradeGuidance: null,
+            },
+          }),
+        );
+      }
+      if (method === "host.notifications.cloudFeed.markRead") {
+        return Promise.resolve({ status: "applied", version: 10 });
+      }
+      return defaultHostRequest(method);
+    });
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null), cloudDone("entry-b", 2, null)],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      version: 10,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markRead",
+        { entryId: "entry-a" },
+      );
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markRead",
+        { entryId: "entry-b" },
+      );
+    });
+    expect(useCloudNotificationsStore.getState().connectionState).toBe(
+      "connected",
+    );
+  });
+
+  it("falls back when an older cloud server cannot acknowledge mark-all", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    hostRequestMock.mockImplementation((method: string) => {
+      if (method === "host.notifications.cloudFeed.markAllRead") {
+        return Promise.resolve({ status: "unsupported", version: null });
+      }
+      if (method === "host.notifications.cloudFeed.markRead") {
+        return Promise.resolve({ status: "applied", version: 10 });
+      }
+      return defaultHostRequest(method);
+    });
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null), cloudDone("entry-b", 2, null)],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      version: 10,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markRead",
+        { entryId: "entry-a" },
+      );
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markRead",
+        { entryId: "entry-b" },
+      );
+    });
+    expect(useCloudNotificationsStore.getState().connectionState).toBe(
+      "connected",
+    );
+  });
+
+  it("continues the compatibility fallback after one entry write fails", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    hostRequestMock.mockImplementation((method: string, params: unknown) => {
+      if (method === "host.notifications.cloudFeed.markAllRead") {
+        return Promise.resolve({ status: "unsupported", version: null });
+      }
+      if (method === "host.notifications.cloudFeed.markRead") {
+        if (isRecord(params) && params["entryId"] === "entry-a") {
+          return Promise.reject(new Error("transient entry write failure"));
+        }
+        return Promise.resolve({ status: "applied", version: 10 });
+      }
+      return defaultHostRequest(method);
+    });
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null), cloudDone("entry-b", 2, null)],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      version: 10,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markRead",
+        { entryId: "entry-b" },
+      );
+    });
+  });
+
+  it("does not replay a bulk compatibility fallback into a replacement cloud session", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    let resolveMarkAll:
+      | ((result: {
+          readonly status: "unsupported";
+          readonly version: null;
+        }) => void)
+      | undefined;
+    hostRequestMock.mockImplementation((method: string) => {
+      if (method === "host.notifications.cloudFeed.markAllRead") {
+        return new Promise((resolve) => {
+          resolveMarkAll = resolve;
+        });
+      }
+      if (method === "host.notifications.cloudFeed.markRead") {
+        return Promise.resolve({ status: "applied", version: 10 });
+      }
+      return defaultHostRequest(method);
+    });
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+
+    act(() => {
+      result.current.markAllAsRead();
+    });
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markAllRead",
+        { observedVersion: 10 },
+      );
+    });
+    act(() => {
+      useCloudNotificationsStore.getState().reset();
+    });
+    if (resolveMarkAll === undefined) {
+      throw new Error("expected pending cloud mark-all request");
+    }
+    const resolvePendingMarkAll = resolveMarkAll;
+    await act(async () => {
+      resolvePendingMarkAll({ status: "unsupported", version: null });
+      await Promise.resolve();
+    });
+
+    expect(
+      hostRequestMock.mock.calls.filter(
+        (call) => call[0] === "host.notifications.cloudFeed.markRead",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("does not mark a newer cloud snapshot from a stale action closure", () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 10,
+    });
+    const { result } = renderHook(() => useMergedNotificationsActions(), {
+      wrapper: createWrapper(),
+    });
+    const staleMarkAllAsRead = result.current.markAllAsRead;
+
+    act(() => {
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [cloudDone("entry-a", 1, null), cloudDone("entry-b", 2, null)],
+        summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+        version: 11,
+      });
+      staleMarkAllAsRead();
+    });
+
+    expect(useCloudNotificationsStore.getState().summary?.unreadCount).toBe(2);
+    expect(
+      Object.values(useCloudNotificationsStore.getState().rows).every(
+        (row) => row?.entry.readAt === null,
+      ),
+    ).toBe(true);
+    expect(hostRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a cloud command completion from a replaced ownership epoch", async () => {
+    bindHostClient();
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 1,
+    });
+    let settleRequest: (() => void) | null = null;
+    hostRequestMock.mockImplementation((method: string) => {
+      if (method === "host.notifications.cloudFeed.markRead") {
+        return new Promise((resolve) => {
+          settleRequest = () =>
+            resolve({ status: "unavailable", version: null });
+        });
+      }
+      return defaultHostRequest(method);
+    });
+
+    const { result } = renderHook(
+      () => ({
+        actions: useMergedNotificationsActions(),
+        row: useMergedNotificationRow(cloudNotificationFeedId("entry-a")),
+      }),
+      { wrapper: createWrapper() },
+    );
+    const captured = result.current.row;
+    if (captured === null) throw new Error("expected cloud row");
+    act(() => {
+      result.current.actions.markAsRead(captured);
+    });
+    await waitFor(() => {
+      expect(hostRequestMock).toHaveBeenCalledWith(
+        "host.notifications.cloudFeed.markRead",
+        expect.any(Object),
+      );
+    });
+
+    act(() => {
+      useCloudNotificationsStore.getState().reset();
+      useCloudNotificationsStore.setState({ accountId: "user-actions" });
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [cloudDone("entry-b", 2, null)],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        version: 2,
+      });
+      if (settleRequest === null) {
+        throw new Error("expected pending cloud request");
+      }
+      settleRequest();
+    });
+    await waitFor(() => {
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "connected",
+      );
+    });
+  });
+});

@@ -1,0 +1,1316 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, renderHook } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createElement, type ReactNode } from "react";
+import type {
+  HostLeaseSnapshot,
+  SelectionIncompatibility,
+} from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import {
+  deriveNoHostVariant,
+  deriveWindowNarration,
+  findLease,
+  hostUpdateActionApplies,
+  hostUpdateSkew,
+  isServingLease,
+  windowNarrationAwaitsDiscovery,
+  type WindowNarrationInput,
+} from "@/lib/host/window-narration";
+import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
+import { useWindowNarration } from "@/hooks/host/use-window-narration";
+import {
+  noteHostDoorState,
+  useHostDoorStateStore,
+} from "@/stores/host/host-door-state-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+
+const windowNarrationBinding = vi.hoisted(() => ({
+  directory: {
+    hasConcludedDiscovery: () => true,
+    hasFailedDiscovery: () => false,
+    getLocalHostId: () => null,
+    onChange: () => ({ dispose: () => undefined }),
+  },
+}));
+
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostBinding: () => ({ directory: windowNarrationBinding.directory }),
+  };
+});
+
+function incompatibility(
+  overrides: Partial<SelectionIncompatibility>,
+): SelectionIncompatibility {
+  return {
+    code: "protocol-major-behind",
+    hostVersion: "1.0.0",
+    minSupportedVersion: "1.2.0",
+    clientCompatibility: null,
+    ...overrides,
+  };
+}
+
+function lease(overrides: Partial<HostLeaseSnapshot>): HostLeaseSnapshot {
+  const base = {
+    hostId: "host-a",
+    status: "connecting" as const,
+    dead: null,
+  };
+  return { ...base, ...overrides } as HostLeaseSnapshot;
+}
+
+function deadLease(
+  hostId: string,
+  dead: HostLeaseSnapshot["dead"],
+): HostLeaseSnapshot {
+  return { hostId, status: "dead", dead } as HostLeaseSnapshot;
+}
+
+function baseInput(
+  overrides: Partial<WindowNarrationInput>,
+): WindowNarrationInput {
+  return {
+    attached: true,
+    effectiveHostId: null,
+    targetHostId: null,
+    leases: [],
+    hasBeenServed: false,
+    // Desktop is this module's population: the pre-serve ∅ grace is gated on
+    // a shell that can actually boot a local host, and every case below that
+    // does not say otherwise is describing a desktop launch.
+    localHostExpected: true,
+    // Discovery has ANSWERED unless a case says otherwise: every ∅ below is
+    // therefore a verdict rather than a vacuum, which is what the pre-serve
+    // grace and the ∅ arm are both written against. The pre-discovery arm has
+    // its own block.
+    discoveryConcluded: true,
+    // Discovery has not FAILED unless a case says so.
+    discoveryFailed: false,
+    // This machine is `host-local` throughout, so a case whose target is
+    // `host-local` is a LOCAL target and one that names anything else is
+    // remote - the distinction the restarting-target arm turns on, and one no
+    // test can express through `localHostExpected` alone.
+    localHostId: "host-local",
+    ...overrides,
+  };
+}
+
+describe("isServingLease", () => {
+  it("is false for a null lease", () => {
+    expect(isServingLease(null)).toBe(false);
+  });
+
+  it("is true for ready and degraded", () => {
+    expect(isServingLease(lease({ status: "ready", dead: null }))).toBe(true);
+    expect(isServingLease(lease({ status: "degraded", dead: null }))).toBe(
+      true,
+    );
+  });
+
+  it("is false for connecting, restarting-expected, and dead", () => {
+    expect(isServingLease(lease({ status: "connecting", dead: null }))).toBe(
+      false,
+    );
+    expect(
+      isServingLease(lease({ status: "restarting-expected", dead: null })),
+    ).toBe(false);
+    expect(isServingLease(deadLease("host-a", { reason: "offline" }))).toBe(
+      false,
+    );
+  });
+});
+
+describe("findLease", () => {
+  it("returns null for a null hostId", () => {
+    expect(findLease([lease({ hostId: "host-a" })], null)).toBeNull();
+  });
+
+  it("finds by hostId, else null", () => {
+    const leases = [lease({ hostId: "host-a" }), lease({ hostId: "host-b" })];
+    expect(findLease(leases, "host-b")?.hostId).toBe("host-b");
+    expect(findLease(leases, "host-z")).toBeNull();
+  });
+});
+
+describe("deriveWindowNarration", () => {
+  it("is silent when not attached, regardless of the rest of the input", () => {
+    const state = deriveWindowNarration(
+      baseInput({
+        attached: false,
+        effectiveHostId: null,
+        hasBeenServed: false,
+        leases: [deadLease("host-a", { reason: "offline" })],
+      }),
+    );
+    expect(state).toEqual({ kind: "silent" });
+  });
+
+  it("narrates no-usable-host on ∅ once the window has been served (the ∅ arm)", () => {
+    const state = deriveWindowNarration(
+      baseInput({
+        attached: true,
+        effectiveHostId: null,
+        // The ∅ verdict is unconditional AFTER the window has worked once -
+        // the pre-serve grace below is strictly a launch statement.
+        hasBeenServed: true,
+      }),
+    );
+    expect(state).toEqual({
+      kind: "narrating",
+      cause: "no-usable-host",
+      variant: { kind: "offline" },
+    });
+  });
+
+  describe("the pre-serve ∅ grace", () => {
+    /**
+     * ∅ before this window has ever been served is not automatically a
+     * verdict. Two ordinary launch shapes produce it - the attach snapshot
+     * landing before the fleet's first publish (empty leases), and the launch
+     * reconcile cycling the local host (`restarting-expected`, unusable, with
+     * no incumbent to hold at cold start) - and both used to flash "No host is
+     * available" with Retry and Report issue at every single boot.
+     *
+     * The discriminator is whether anything has CONCLUDED: a dead lease is a
+     * conclusion, an empty or merely-unsettled fleet is not.
+     */
+    it("narrates cold-start when nothing has concluded yet (empty fleet at launch)", () => {
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: false,
+          leases: [],
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "cold-start",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("narrates cold-start while the local host is cycling (restarting-expected)", () => {
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: false,
+          leases: [lease({ hostId: "host-a", status: "restarting-expected" })],
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "cold-start",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("yields to the ∅ scan as soon as ANY lease is dead - a conclusion is a verdict", () => {
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: false,
+          leases: [deadLease("host-a", { reason: "offline" })],
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("holds the grace through a dead lease while the TARGET is restarting - the authority is waiting on purpose", () => {
+      // The authority's cold-start hold answers ∅ for a bounded window while a
+      // never-proven local target cycles, declining a usable fallback so the
+      // app does not hop to a remote and get dragged back seconds later. So
+      // this ∅ does not mean "nothing can serve" - and without this arm, one
+      // retired machine anywhere in the account (dead, and every account
+      // accumulates them) would put "No host is available" over a launch that
+      // is going perfectly well, with a working remote sitting right there.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: false,
+          targetHostId: "host-local",
+          leases: [
+            lease({ hostId: "host-local", status: "restarting-expected" }),
+            lease({ hostId: "host-remote", status: "ready" }),
+            deadLease("host-retired", { reason: "offline" }),
+          ],
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "cold-start",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("P2 FIX - yields to an ACTIONABLE verdict even while the target is restarting: an incompatible other host still gets update-host", () => {
+      // The restarting-target arm has no clock, and the lease it reads can
+      // stay `restarting-expected` for the outage signal's ceiling - fifteen
+      // minutes, far past the authority's twenty-second hold. So whatever it
+      // hides, it can hide for the whole outage. Hiding `offline` costs
+      // nothing (the startup card carries the same Retry), but hiding a fix
+      // the user could walk right now is a lockout with a spinner on it.
+      const detail = {
+        code: "protocol-major-behind",
+        hostVersion: "1.2.3",
+        minSupportedVersion: "1.3.0",
+        clientCompatibility: null,
+      } as const;
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: false,
+          targetHostId: "host-local",
+          leases: [
+            lease({ hostId: "host-local", status: "restarting-expected" }),
+            deadLease("host-remote", { reason: "incompatible", detail }),
+          ],
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: {
+          kind: "update-host",
+          hostId: "host-remote",
+          isTargetHost: false,
+          detail,
+        },
+      });
+    });
+
+    it("P2 FIX - a restarting REMOTE target is not a local launch: the arm needs the target to be this machine, which localHostExpected cannot say", () => {
+      // `localHostExpected` describes the SHELL - "can this app boot some
+      // local host" - and stays true on a desktop whose target is a remote.
+      // The authority's own hold is local-target-only, so with a preferred
+      // remote cycling and the rest of the fleet offline it derives a REAL ∅.
+      // Relabelling that as cold-start put this machine's provisioning card
+      // (Retry, install progress, the bootstrap log) in front of a host this
+      // app has no lifecycle for, and withheld the offline recovery until the
+      // remote's restart episode expired.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: false,
+          targetHostId: "host-remote",
+          localHostId: "host-local",
+          leases: [
+            lease({ hostId: "host-remote", status: "restarting-expected" }),
+            deadLease("host-local", { reason: "offline" }),
+          ],
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("P2 FIX - and still holds it for a merely-offline fleet: the gate is the VERDICT, not the presence of a dead lease", () => {
+      // The other side of the same rule, and the reason it is stated over the
+      // scan's answer rather than over deadness: a retired laptop still
+      // resolves to `offline`, so the launch story survives it. Losing this
+      // would restore the flash the arm above was added to remove.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: false,
+          targetHostId: "host-local",
+          leases: [
+            lease({ hostId: "host-local", status: "restarting-expected" }),
+            deadLease("host-retired", { reason: "removed" }),
+          ],
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "cold-start",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("does not extend that exception past the first service - a restarting target after serving is the ∅ verdict", () => {
+      // The grace is a LAUNCH statement in both of its arms. Once the window
+      // has been served, ∅ is always the verdict, whatever the target's lease
+      // happens to say.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: true,
+          targetHostId: "host-local",
+          leases: [
+            lease({ hostId: "host-local", status: "restarting-expected" }),
+            deadLease("host-retired", { reason: "offline" }),
+          ],
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("keeps update-host reachable at first launch - the grace must not swallow a dead incompatible host", () => {
+      // The sharp edge of the rule above: `update-host` derives from a dead
+      // lease, so a grace that ignored deadness would make it unreachable on
+      // the very launch it matters most.
+      const detail = {
+        code: "protocol-major-behind",
+        hostVersion: "1.2.3",
+        minSupportedVersion: "1.3.0",
+        clientCompatibility: null,
+      } as const;
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: false,
+          targetHostId: "host-a",
+          leases: [deadLease("host-a", { reason: "incompatible", detail })],
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: {
+          kind: "update-host",
+          hostId: "host-a",
+          isTargetHost: true,
+          detail,
+        },
+      });
+    });
+
+    it("does not apply on a shell that cannot boot a local host", () => {
+      // Web/mobile: there is no local lifecycle to be "starting", so an empty
+      // fleet DISCOVERY HAS ANSWERED FOR really is "no host is available".
+      // Softening it would promise a boot that cannot happen. (The unanswered
+      // case is the pre-discovery arm's, below.)
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          hasBeenServed: false,
+          leases: [],
+          localHostExpected: false,
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: { kind: "offline" },
+      });
+    });
+  });
+
+  describe("the pre-discovery ∅ arm", () => {
+    /**
+     * ∅ BEFORE ANYTHING HAS ANSWERED is a vacuum, not a verdict.
+     *
+     * The authority derives its leases from the fleet it has been given, so on
+     * a launch the empty list it publishes before the first listing lands is
+     * byte-identical to the one an account with no hosts produces. On a shell
+     * with no local host the pre-serve grace above does not apply, so the
+     * second reading reached the screen: "No host is available", with Retry
+     * and Report issue, for the beat between the kernel attaching and
+     * discovery answering - on every launch of the phone app.
+     *
+     * These cases are what a build that IGNORED `discoveryConcluded` fails: the
+     * first two differ in nothing else.
+     */
+    it("is silent on ∅ while discovery has not answered", () => {
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          leases: [],
+          localHostExpected: false,
+          discoveryConcluded: false,
+        }),
+      );
+      expect(state).toEqual({ kind: "silent" });
+    });
+
+    it("narrates the unchanged ∅ verdict once discovery has answered", () => {
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          leases: [],
+          localHostExpected: false,
+          discoveryConcluded: true,
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("is silent after a re-attach withdraws the answer, whatever this window has already served", () => {
+      // NOT a launch latch. `hasBeenServed` is deliberately true here: the
+      // flag the arm reads is withdrawn on the identity edge that also wipes
+      // the authority's fleet, and a wait spent once per process would narrate
+      // that second vacuum as a verdict.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          leases: [],
+          hasBeenServed: true,
+          localHostExpected: false,
+          discoveryConcluded: false,
+        }),
+      );
+      expect(state).toEqual({ kind: "silent" });
+    });
+
+    it("narrates cold-start for a fleet that has answered with a connecting remote - the ∅ arm is never reached", () => {
+      // The settled half of the same launch: the listing landed, the authority
+      // published a lease, and the window is on a host that has not answered
+      // yet. `isUsableForSelection` counts `connecting`, so this is a cold
+      // start on a remote - and the modal draws nothing post-latch.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: "host-a",
+          leases: [
+            lease({ hostId: "host-a", status: "connecting", dead: null }),
+          ],
+          localHostExpected: false,
+          discoveryConcluded: true,
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "cold-start",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("does NOT wait over an incompatible lease - an actionable ∅ is not a vacuum", () => {
+      // The lease list and the directory's answer are two independent reads, so
+      // the authority can already know a fleet while discovery is still
+      // pending. `update-host` is a version fix the user could walk NOW, and a
+      // wait hides whatever it covers for as long as it lasts.
+      const detail = incompatibility({});
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          targetHostId: "host-a",
+          leases: [deadLease("host-a", { reason: "incompatible", detail })],
+          localHostExpected: false,
+          discoveryConcluded: false,
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: {
+          kind: "update-host",
+          hostId: "host-a",
+          isTargetHost: true,
+          detail,
+        },
+      });
+    });
+
+    it("still waits when the scan would have said offline anyway", () => {
+      // The discriminating control for the case above: same unconcluded
+      // discovery, a dead lease that is merely offline, and nothing actionable
+      // to withhold - so the wait applies.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          leases: [deadLease("host-a", { reason: "offline" })],
+          localHostExpected: false,
+          discoveryConcluded: false,
+        }),
+      );
+      expect(state).toEqual({ kind: "silent" });
+    });
+
+    it("waits over a CONNECTING lease that has not produced an effective host", () => {
+      // A lease that is not dead concludes nothing, so the scan answers
+      // `offline` and the wait applies. Pinned because the arm must not read a
+      // populated lease list as an answer in itself - what ends the wait is a
+      // conclusion, or an actionable verdict, never the mere presence of rows.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          leases: [lease({ hostId: "host-a", status: "connecting" })],
+          localHostExpected: false,
+          discoveryConcluded: false,
+        }),
+      );
+      expect(state).toEqual({ kind: "silent" });
+    });
+
+    it("waits over a RESTARTING-EXPECTED lease on a shell with no local host", () => {
+      // The restarting-target grace below is local-only (it requires
+      // `targetHostId === localHostId`), so on this shell that hold never
+      // applies and this arm is the only thing standing between an unconcluded
+      // ∅ and a verdict. `restarting-expected` is not dead, so the scan still
+      // answers `offline` and the wait holds.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          targetHostId: "host-remote",
+          leases: [
+            lease({ hostId: "host-remote", status: "restarting-expected" }),
+          ],
+          localHostExpected: false,
+          localHostId: null,
+          discoveryConcluded: false,
+        }),
+      );
+      expect(state).toEqual({ kind: "silent" });
+    });
+
+    it("narrates that same restarting remote once discovery concludes", () => {
+      // The discriminating control for the row above: identical fleet, the only
+      // difference being that an attempt has now concluded. Without the local
+      // grace there is nothing to soften it, so ∅ is the verdict.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          targetHostId: "host-remote",
+          leases: [
+            lease({ hostId: "host-remote", status: "restarting-expected" }),
+          ],
+          localHostExpected: false,
+          localHostId: null,
+          discoveryConcluded: true,
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("narrates host-list-unavailable instead of offline when discovery concluded on a failure", () => {
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          leases: [],
+          localHostExpected: false,
+          discoveryConcluded: true,
+          discoveryFailed: true,
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: { kind: "host-list-unavailable" },
+      });
+    });
+
+    it("keeps an actionable update-host verdict over a failed discovery", () => {
+      const detail = incompatibility({});
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          targetHostId: "host-a",
+          leases: [deadLease("host-a", { reason: "incompatible", detail })],
+          localHostExpected: false,
+          discoveryConcluded: true,
+          discoveryFailed: true,
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "no-usable-host",
+        variant: {
+          kind: "update-host",
+          hostId: "host-a",
+          isTargetHost: true,
+          detail,
+        },
+      });
+    });
+
+    it("keeps the desktop pre-serve cold-start grace over a failed discovery", () => {
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          leases: [],
+          localHostExpected: true,
+          discoveryConcluded: true,
+          discoveryFailed: true,
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "cold-start",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("does not silence a shell that can boot a local host", () => {
+      // Desktop's `cold-start` arm is untouched: something really is starting
+      // there, and "Starting Traycer…" is the truer sentence than silence.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: null,
+          leases: [],
+          localHostExpected: true,
+          discoveryConcluded: false,
+        }),
+      );
+      expect(state).toEqual({
+        kind: "narrating",
+        cause: "cold-start",
+        variant: { kind: "offline" },
+      });
+    });
+
+    it("does not silence a window that already has an effective host", () => {
+      // The arm is a statement about ∅ alone. A window that has been given a
+      // host is not waiting for discovery, whatever the directory has said.
+      const state = deriveWindowNarration(
+        baseInput({
+          attached: true,
+          effectiveHostId: "host-a",
+          leases: [lease({ hostId: "host-a", status: "ready", dead: null })],
+          localHostExpected: false,
+          discoveryConcluded: false,
+        }),
+      );
+      expect(state).toEqual({ kind: "silent" });
+      expect(
+        windowNarrationAwaitsDiscovery({
+          attached: true,
+          effectiveHostId: "host-a",
+          localHostExpected: false,
+          discoveryConcluded: false,
+          leases: [],
+          targetHostId: null,
+        }),
+      ).toBe(false);
+    });
+  });
+
+  describe("windowNarrationAwaitsDiscovery", () => {
+    // The predicate the gate's attach-pending cover shares with the narrator,
+    // pinned directly: the cover holds the boot surface over exactly the
+    // window the narrator is silent for, and a disagreement between the two is
+    // a frame with two cards or with none.
+    it("is false while unattached - the attach cover already owns that window", () => {
+      expect(
+        windowNarrationAwaitsDiscovery({
+          attached: false,
+          effectiveHostId: null,
+          localHostExpected: false,
+          discoveryConcluded: false,
+          leases: [],
+          targetHostId: null,
+        }),
+      ).toBe(false);
+    });
+
+    it("is true only for an attached ∅ on a no-local-host shell with no answer", () => {
+      expect(
+        windowNarrationAwaitsDiscovery({
+          attached: true,
+          effectiveHostId: null,
+          localHostExpected: false,
+          discoveryConcluded: false,
+          leases: [],
+          targetHostId: null,
+        }),
+      ).toBe(true);
+      expect(
+        windowNarrationAwaitsDiscovery({
+          attached: true,
+          effectiveHostId: null,
+          localHostExpected: true,
+          discoveryConcluded: false,
+          leases: [],
+          targetHostId: null,
+        }),
+      ).toBe(false);
+      expect(
+        windowNarrationAwaitsDiscovery({
+          attached: true,
+          effectiveHostId: null,
+          localHostExpected: false,
+          discoveryConcluded: true,
+          leases: [],
+          targetHostId: null,
+        }),
+      ).toBe(false);
+    });
+  });
+
+  it("narrates cold-start when the effective host exists but has never served and is not currently serving", () => {
+    const state = deriveWindowNarration(
+      baseInput({
+        attached: true,
+        effectiveHostId: "host-a",
+        leases: [lease({ hostId: "host-a", status: "connecting", dead: null })],
+        hasBeenServed: false,
+      }),
+    );
+    expect(state).toEqual({
+      kind: "narrating",
+      cause: "cold-start",
+      variant: { kind: "offline" },
+    });
+  });
+
+  /**
+   * Lane 9 item 6 (regression pin; the production code needed no change).
+   * `cold-start` is hard-coded to `variant: {kind: "offline"}` at BOTH sites
+   * in this module - the pre-serve grace above and the non-∅ arm here - so an
+   * INCOMPATIBLE lease death sitting elsewhere in the fleet can never leak
+   * through as the cold-start variant. If it ever did, `WindowHostStartupCard`
+   * ("Traycer Host didn't start") would render on top of an update-client /
+   * update-host verdict instead of the fleet-scan arms owning it.
+   */
+  it("stays offline at cold-start even with an incompatible lease elsewhere in the fleet", () => {
+    const state = deriveWindowNarration(
+      baseInput({
+        attached: true,
+        effectiveHostId: "host-a",
+        leases: [
+          lease({ hostId: "host-a", status: "connecting", dead: null }),
+          deadLease("host-b", {
+            reason: "incompatible",
+            detail: incompatibility({}),
+          }),
+        ],
+        hasBeenServed: false,
+      }),
+    );
+    expect(state).toEqual({
+      kind: "narrating",
+      cause: "cold-start",
+      variant: { kind: "offline" },
+    });
+  });
+
+  it("is silent once the effective host's lease is ready", () => {
+    const state = deriveWindowNarration(
+      baseInput({
+        attached: true,
+        effectiveHostId: "host-a",
+        leases: [lease({ hostId: "host-a", status: "ready", dead: null })],
+        hasBeenServed: false,
+      }),
+    );
+    expect(state).toEqual({ kind: "silent" });
+  });
+
+  it("is silent when the effective host's lease is degraded (a degraded host IS serving)", () => {
+    const state = deriveWindowNarration(
+      baseInput({
+        attached: true,
+        effectiveHostId: "host-a",
+        leases: [lease({ hostId: "host-a", status: "degraded", dead: null })],
+        hasBeenServed: false,
+      }),
+    );
+    expect(state).toEqual({ kind: "silent" });
+  });
+
+  it("latches silent once served: hasBeenServed true + a merely-connecting lease stays silent", () => {
+    const state = deriveWindowNarration(
+      baseInput({
+        attached: true,
+        effectiveHostId: "host-a",
+        leases: [lease({ hostId: "host-a", status: "connecting", dead: null })],
+        hasBeenServed: true,
+      }),
+    );
+    expect(state).toEqual({ kind: "silent" });
+  });
+
+  it("the latch does not survive a return to ∅: effectiveHostId null still narrates even after hasBeenServed", () => {
+    const state = deriveWindowNarration(
+      baseInput({
+        attached: true,
+        effectiveHostId: null,
+        leases: [],
+        hasBeenServed: true,
+      }),
+    );
+    expect(state).toEqual({
+      kind: "narrating",
+      cause: "no-usable-host",
+      variant: { kind: "offline" },
+    });
+  });
+});
+
+describe("deriveNoHostVariant precedence", () => {
+  it("1. names the TARGET host when it is dead-incompatible, even beside another incompatible host", () => {
+    const targetDetail = incompatibility({ code: "target-behind" });
+    const otherDetail = incompatibility({ code: "other-behind" });
+    const leases = [
+      deadLease("host-other", { reason: "incompatible", detail: otherDetail }),
+      deadLease("host-target", {
+        reason: "incompatible",
+        detail: targetDetail,
+      }),
+    ];
+    const variant = deriveNoHostVariant(leases, "host-target");
+    expect(variant).toEqual({
+      kind: "update-host",
+      hostId: "host-target",
+      detail: targetDetail,
+      // Arm 1 names the target, so the card and the local lifecycle's action
+      // are about the SAME machine and the Update button is offered.
+      isTargetHost: true,
+    });
+  });
+
+  it("2. no target incompatibility, some other lease is dead-incompatible => update-host on it", () => {
+    const detail = incompatibility({ code: "other-behind" });
+    const leases = [
+      deadLease("host-target", { reason: "offline" }),
+      deadLease("host-other", { reason: "incompatible", detail }),
+    ];
+    const variant = deriveNoHostVariant(leases, "host-target");
+    expect(variant).toEqual({
+      kind: "update-host",
+      hostId: "host-other",
+      detail,
+      // Arm 2: the incompatible host is NOT the target, so the action - which
+      // re-provisions THIS machine - must be withheld. Carried on the variant
+      // rather than re-derived at the card, because `canManageHost` answers a
+      // different question ("is the target this machine") and reads as this
+      // guard without being one.
+      isTargetHost: false,
+    });
+  });
+
+  it("3. empty lease list => offline", () => {
+    const variant = deriveNoHostVariant([], null);
+    expect(variant).toEqual({ kind: "offline" });
+  });
+});
+
+describe("hostUpdateSkew / hostUpdateActionApplies", () => {
+  it("names the HOST as the outdated leg when the host version is behind the client", () => {
+    const detail = incompatibility({ hostVersion: "1.0.0" });
+    const skew = hostUpdateSkew(detail, "1.2.0");
+    expect(skew.direction).toBe("host-outdated");
+    expect(hostUpdateActionApplies(detail, "1.2.0")).toBe(true);
+  });
+
+  it("names the CLIENT as the outdated leg when the host version is ahead of the client, and withholds the action", () => {
+    const detail = incompatibility({ hostVersion: "2.0.0" });
+    const skew = hostUpdateSkew(detail, "1.2.0");
+    expect(skew.direction).toBe("client-outdated");
+    expect(hostUpdateActionApplies(detail, "1.2.0")).toBe(false);
+  });
+});
+
+describe("update-client: the host's structured epoch rejection", () => {
+  const requirement = {
+    minimumCompatibilityEpoch: 2,
+    observedCompatibilityEpoch: 1,
+    failure: "below-minimum" as const,
+    observedClientKind: "desktop",
+    observedClientAppVersion: "1.1.10",
+    observedClientAppVersionStatus: "valid" as const,
+    minimumKnownClientAppVersion: "1.2.0-rc.2",
+    upgradeChannel: "rc" as const,
+  };
+
+  it("takes precedence over the generic update-host variant on the target arm", () => {
+    // The host NAMED what it needs. The generic arm would instead infer which
+    // leg is behind by comparing two version strings that have no shared
+    // ordering, and could land on "Update host" - an action that cannot help
+    // when the host is the newer leg by construction.
+    const variant = deriveNoHostVariant(
+      [
+        deadLease("host-a", {
+          reason: "incompatible",
+          detail: incompatibility({ clientCompatibility: requirement }),
+        }),
+      ],
+      "host-a",
+    );
+    expect(variant).toEqual({
+      kind: "update-client",
+      hostId: "host-a",
+      isTargetHost: true,
+      requirement,
+    });
+  });
+
+  it("takes precedence on the fallback arm too, and keeps isTargetHost false", () => {
+    const variant = deriveNoHostVariant(
+      [
+        deadLease("host-target", { reason: "offline" }),
+        deadLease("host-b", {
+          reason: "incompatible",
+          detail: incompatibility({ clientCompatibility: requirement }),
+        }),
+      ],
+      "host-target",
+    );
+    expect(variant).toEqual({
+      kind: "update-client",
+      hostId: "host-b",
+      isTargetHost: false,
+      requirement,
+    });
+  });
+
+  it("falls back to update-host when the host said nothing structured", () => {
+    // Every host that predates the epoch gate, and every incompatibility that
+    // was a method-manifest disagreement rather than an epoch rejection.
+    const variant = deriveNoHostVariant(
+      [
+        deadLease("host-a", {
+          reason: "incompatible",
+          detail: incompatibility({ clientCompatibility: null }),
+        }),
+      ],
+      "host-a",
+    );
+    expect(variant.kind).toBe("update-host");
+  });
+
+  it("is reachable as the ∅ verdict, and is NOT softened by the cold-start grace", () => {
+    // The grace exists to stop a launch flashing "No host is available" while
+    // a boot is running. An epoch rejection is a fix the user could walk RIGHT
+    // NOW, so hiding it behind "Starting Traycer…" for the length of an outage
+    // would be a suppression, not a softening.
+    const state = deriveWindowNarration(
+      baseInput({
+        effectiveHostId: null,
+        targetHostId: "host-a",
+        hasBeenServed: false,
+        leases: [
+          deadLease("host-a", {
+            reason: "incompatible",
+            detail: incompatibility({ clientCompatibility: requirement }),
+          }),
+        ],
+      }),
+    );
+    expect(state).toEqual({
+      kind: "narrating",
+      cause: "no-usable-host",
+      variant: {
+        kind: "update-client",
+        hostId: "host-a",
+        isTargetHost: true,
+        requirement,
+      },
+    });
+  });
+});
+
+const WINDOW_NARRATION_HOST_ID = "host-window-narration";
+
+function renderWindowNarrationHook(serving: boolean) {
+  act(() => {
+    useSelectionAuthorityStore.getState().applyKernelSnapshot({
+      attached: true,
+      preferredHostId: WINDOW_NARRATION_HOST_ID,
+      targetHostId: WINDOW_NARRATION_HOST_ID,
+      effectiveHostId: serving ? WINDOW_NARRATION_HOST_ID : null,
+      leases: [
+        {
+          hostId: WINDOW_NARRATION_HOST_ID,
+          status: serving ? ("ready" as const) : ("connecting" as const),
+          dead: null,
+        },
+      ],
+      selectionRevision: 1,
+    });
+  });
+
+  // `useHostClaim` reaches `useQueryClient()`, so every render needs a client.
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return renderHook(() => useWindowNarration(), {
+    wrapper: ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children),
+  });
+}
+
+describe("useWindowNarration door states through the real stores", () => {
+  afterEach(() => {
+    cleanup();
+    useSelectionAuthorityStore.getState().reset();
+    useHostDoorStateStore.setState({ byHost: new Map() });
+  });
+
+  it("covers a not-admitted target while no host serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "not-admitted",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "door-state",
+      variant: { kind: "not-admitted" },
+    });
+  });
+
+  it("keeps the not-admitted cover over a ready host that has served this window", () => {
+    const { result } = renderWindowNarrationHook(true);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "not-admitted",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "door-state",
+      variant: { kind: "not-admitted" },
+    });
+  });
+
+  it("uses the token-unavailable cover while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "token-unavailable",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "door-state",
+      variant: { kind: "token-unavailable", hostId: WINDOW_NARRATION_HOST_ID },
+    });
+  });
+
+  it("uses the keys-unavailable cover while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "keys-unavailable",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "door-state",
+      variant: { kind: "keys-unavailable", hostId: WINDOW_NARRATION_HOST_ID },
+    });
+  });
+
+  it("uses the clock-skew cover while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "clock-skew",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "door-state",
+      variant: { kind: "clock-skew", hostId: WINDOW_NARRATION_HOST_ID },
+    });
+  });
+
+  it("uses the token-expired cover while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "token-expired",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "door-state",
+      variant: { kind: "token-expired", hostId: WINDOW_NARRATION_HOST_ID },
+    });
+  });
+
+  it("uses the enrolment-broken cover while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "enrolment-broken",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "door-state",
+      variant: { kind: "enrolment-broken", hostId: WINDOW_NARRATION_HOST_ID },
+    });
+  });
+
+  it("uses the membership-removed cover while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "membership-removed",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "door-state",
+      variant: { kind: "membership-removed", hostId: WINDOW_NARRATION_HOST_ID },
+    });
+  });
+
+  it("keeps the current offline result for host-claimed while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "host-claimed",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "no-usable-host",
+      variant: { kind: "offline" },
+    });
+  });
+
+  it("covers an older host with the update cover while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "older-host",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "no-usable-host",
+      variant: {
+        kind: "update-host",
+        hostId: WINDOW_NARRATION_HOST_ID,
+        isTargetHost: true,
+        detail: {
+          code: "older-host",
+          hostVersion: null,
+          minSupportedVersion: MINIMUM_HOST_VERSION,
+          clientCompatibility: null,
+        },
+      },
+    });
+  });
+
+  it("shows the reason code for an unrecognised refusal while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "unrecognised-refusal",
+        detail: { code: "UNAUTHORIZED", doorReason: "some_future_reason" },
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "no-usable-host",
+      variant: { kind: "unrecognised-refusal", code: "UNAUTHORIZED" },
+    });
+  });
+
+  it("uses the team-membership cover for not-a-member while nothing serves", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "not-a-member",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "door-state",
+      variant: { kind: "team-membership-required" },
+    });
+  });
+
+  it("keeps the no-door result when access checks are delayed", () => {
+    const { result } = renderWindowNarrationHook(false);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "access-check-delayed",
+        detail: null,
+      });
+    });
+
+    expect(result.current.narration).toEqual({
+      kind: "narrating",
+      cause: "no-usable-host",
+      variant: { kind: "offline" },
+    });
+  });
+
+  it("is silent when an unrecognised refusal arrives after the host has served", () => {
+    const { result } = renderWindowNarrationHook(true);
+    act(() => {
+      noteHostDoorState({
+        hostId: WINDOW_NARRATION_HOST_ID,
+        kind: "unrecognised-refusal",
+        detail: { code: "UNAUTHORIZED", doorReason: "some_future_reason" },
+      });
+    });
+
+    expect(result.current.narration).toEqual({ kind: "silent" });
+  });
+});

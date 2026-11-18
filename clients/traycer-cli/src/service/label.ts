@@ -1,0 +1,161 @@
+import { homedir, platform as osPlatform } from "node:os";
+import { join } from "node:path";
+import { HOST_START_LAUNCHER_BASENAME } from "@traycer-clients/shared/host-lifecycle";
+import type { Environment } from "../runner/environment";
+import { devDesktopSlotForEnvironment } from "../store/dev-desktop-slot";
+import { traycerHomeDir } from "../store/paths";
+
+// A `ServiceLabel` namespaces an OS-service registration (LaunchAgent /
+// systemd unit / Scheduled Task) so hosts for different environments can
+// co-exist on the same machine. The label id is derived per environment
+// (`ai.traycer.host.<environment>`, with production keeping the bare
+// `ai.traycer.host`), so each channel owns an isolated slot and `environment`
+// still names the exact runtime so status/stop/restart read the matching pid
+// metadata.
+//
+// The service manifest never references the host binary directly - it
+// invokes the stable per-user CLI binary with `host start` (the slot is
+// baked into the CLI build via `config.environment`). That makes upgrades
+// simple: replacing the install directory in-place is enough; the manifest
+// never has to be rewritten.
+export interface ServiceLabel {
+  // Reverse-DNS service identifier (LaunchAgent label, systemd unit
+  // basename, Scheduled Task identifier seed).
+  readonly id: string;
+  // Human-readable display name surfaced by the OS service UI.
+  readonly displayName: string;
+  // Exact runtime environment this label operates on.
+  readonly environment: Environment;
+  // The dev-desktop run slot baked into `id`/`displayName`, or `null` when
+  // this label isn't slot-specific. First-class so consumers (e.g.
+  // `windowsTaskName`) never have to re-derive it by re-parsing `id`.
+  readonly devSlot: string | null;
+}
+
+const PRODUCTION_LABEL: ServiceLabel = {
+  id: "ai.traycer.host",
+  displayName: "Traycer Host",
+  environment: "production",
+  devSlot: null,
+};
+
+// Each non-production environment gets its OWN service slot
+// (`ai.traycer.host.<environment>`), mirroring the per-environment install
+// tree (`~/.traycer/<component>/<environment>/`). Collapsing them onto a
+// single shared label would make distinct channels - e.g. the `dev` channel
+// from `make dev-desktop` and an internal `staging` dogfood build - fight over
+// the same LaunchAgent id and plist path, and would make status/stop/uninstall
+// for one channel silently act on the other.
+function capitalizeEnvironment(environment: Environment): string {
+  if (environment.length === 0) return environment;
+  return environment.charAt(0).toUpperCase() + environment.slice(1);
+}
+
+/**
+ * The dev label for a NAMED slot, rather than for whichever slot this process
+ * happens to be running in.
+ *
+ * {@link serviceLabelFor} reads `DEV_DESKTOP_SLOT` from the environment, so it
+ * can only ever describe this process. The store-format floor needs the other
+ * slots' labels too: it enumerates every dev run slot's writer before a swap,
+ * and a job that can START one of those writers is exactly as disqualifying as
+ * a writer already running. `null` names the unslotted dev home.
+ */
+export function devServiceLabelForSlot(slot: string | null): ServiceLabel {
+  if (slot === null) {
+    return {
+      id: "ai.traycer.host.dev",
+      displayName: "Traycer Host (Dev)",
+      environment: "dev",
+      devSlot: null,
+    };
+  }
+  return {
+    id: `ai.traycer.host.dev.${slot}`,
+    displayName: `Traycer Host (Dev ${slot})`,
+    environment: "dev",
+    devSlot: slot,
+  };
+}
+
+export function serviceLabelFor(environment: Environment): ServiceLabel {
+  if (environment === "production") return PRODUCTION_LABEL;
+  const devSlot = devDesktopSlotForEnvironment(environment, process.env);
+  if (devSlot !== null) {
+    return {
+      id: `ai.traycer.host.dev.${devSlot}`,
+      displayName: `Traycer Host (Dev ${devSlot})`,
+      environment,
+      devSlot,
+    };
+  }
+  return {
+    id: `ai.traycer.host.${environment}`,
+    displayName: `Traycer Host (${capitalizeEnvironment(environment)})`,
+    environment,
+    devSlot: null,
+  };
+}
+
+// The label Traycer Desktop registers via SMAppService for the same
+// environment's host: `<cli-label>.agent`. Split from the CLI label because
+// macOS BTM matches an SMAppService registration to an existing legacy
+// record (a raw `~/Library/LaunchAgents` plist ever registered under the
+// label) BY LABEL, and that record survives file deletion and bootout -
+// same-label registration lands `not-registered` forever on such machines.
+// The CLI never registers this label; it only probes it (install refusal /
+// status ownership) and boots it out on uninstall.
+//
+// LOCKSTEP: the `.agent` derivation is duplicated in the desktop's
+// `electron-main/host/host-paths.ts` (`smAppServiceAgentLabelId`), the OSS
+// packaging injector (`clients/desktop/scripts/prepack/
+// inject-host-launch-agent.cjs`), and the internal repo's
+// `scripts/desktop-install-cloud.js` (`hostAgentLabel`) - separate bundles
+// that cannot import this module. Change all four together.
+export function smAppServiceAgentLabelId(label: ServiceLabel): string {
+  return `${label.id}.agent`;
+}
+
+// Platform-specific manifest path (plist / unit / task XML).
+// Windows Scheduled Tasks aren't filesystem-backed - we return the
+// empty string as a sentinel; the Windows controller uses the task
+// name for its identifier.
+export function serviceManifestPath(label: ServiceLabel): string {
+  const home = homedir();
+  const platform = osPlatform();
+  if (platform === "darwin") {
+    return join(home, "Library", "LaunchAgents", `${label.id}.plist`);
+  }
+  if (platform === "win32") {
+    return "";
+  }
+  return join(home, ".config", "systemd", "user", `${label.id}.service`);
+}
+
+// On-disk home of the macOS launcher file the LaunchAgent executes
+// (`<data root>/service/<label-id>/traycer-host-start`, `~/.traycer/...` by
+// default). The label id is the
+// parent directory - load-bearing, not tidiness: the shared recognizer
+// (`attestTraycerRegistration`) matches a launcher-form plist to a label by
+// finding `/<label-id>/` in `ProgramArguments[0]`, and the basename is the
+// name macOS shows in Login Items. Written by `service install` alongside
+// the plist and removed by `service uninstall`.
+export function serviceLauncherScriptPath(label: ServiceLabel): string {
+  return join(
+    traycerHomeDir(),
+    "service",
+    label.id,
+    HOST_START_LAUNCHER_BASENAME,
+  );
+}
+
+// Windows Scheduled Task identifier. production = `\Traycer\Host`,
+// non-production = `\Traycer\Host-<Environment>` (e.g. `Host-Dev`,
+// `Host-Staging`).
+export function windowsTaskName(label: ServiceLabel): string {
+  if (label.environment === "production") return "\\Traycer\\Host";
+  if (label.devSlot !== null) {
+    return `\\Traycer\\Host-Dev-${capitalizeEnvironment(label.devSlot)}`;
+  }
+  return `\\Traycer\\Host-${capitalizeEnvironment(label.environment)}`;
+}

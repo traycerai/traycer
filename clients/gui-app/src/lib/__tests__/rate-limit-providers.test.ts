@@ -1,0 +1,241 @@
+import { describe, expect, it } from "vitest";
+import type {
+  ProviderAuthStatus,
+  ProviderCliState,
+  ProviderId,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
+import {
+  isRateLimitCapableProvider,
+  isRateLimitProfileFetchEligible,
+  isRateLimitProviderConfigured,
+  rateLimitFetchLane,
+  resolveRateLimitFetchEligibility,
+} from "@/lib/rate-limit-providers";
+
+function state(
+  overrides: Partial<ProviderCliState> & { readonly providerId: ProviderId },
+): ProviderCliState {
+  return {
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: null,
+    availabilityPending: false,
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
+    profiles: [],
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
+    ...overrides,
+  };
+}
+
+describe("rateLimitFetchLane", () => {
+  it("maps codex and claude-code to the ephemeralProcess (subprocess) lane", () => {
+    expect(rateLimitFetchLane("codex")).toBe("ephemeralProcess");
+    expect(rateLimitFetchLane("claude-code")).toBe("ephemeralProcess");
+  });
+
+  it("maps grok to the ephemeralProcess (subprocess) lane", () => {
+    // Grok usage is read over the vendored CLI's `_x.ai/billing` ACP extension
+    // (a real subprocess spawn), not a cheap credential GET.
+    expect(rateLimitFetchLane("grok")).toBe("ephemeralProcess");
+  });
+
+  it("maps openrouter and kilocode to the httpFetch (cheap GET) lane", () => {
+    expect(rateLimitFetchLane("openrouter")).toBe("httpFetch");
+    expect(rateLimitFetchLane("kilocode")).toBe("httpFetch");
+  });
+
+  it("maps cursor to the httpFetch lane despite its two round trips", () => {
+    // Cursor mints a dashboard session from the API key before reading usage,
+    // so it costs two requests - but no subprocess, so it stays off the serial
+    // ephemeral queue.
+    expect(rateLimitFetchLane("cursor")).toBe("httpFetch");
+  });
+
+  it("maps antigravity to the httpFetch lane despite its three round trips", () => {
+    // A token exchange followed by two Cloud Code POSTs - still
+    // credential-and-fetch, no subprocess, so it keeps the table-owned fixed
+    // cadence like the other httpFetch providers.
+    expect(rateLimitFetchLane("antigravity")).toBe("httpFetch");
+  });
+
+  it("maps kimi to the httpFetch lane", () => {
+    // One credential-and-fetch read of the usage endpoint, no subprocess.
+    expect(rateLimitFetchLane("kimi")).toBe("httpFetch");
+  });
+});
+
+describe("isRateLimitCapableProvider", () => {
+  it("accepts rate-limit-capable providers and rejects others", () => {
+    expect(isRateLimitCapableProvider("codex")).toBe(true);
+    expect(isRateLimitCapableProvider("kilocode")).toBe(true);
+    // Cursor became rate-limit-capable once its dashboard usage arm landed; it
+    // used to be this test's negative example.
+    expect(isRateLimitCapableProvider("cursor")).toBe(true);
+    expect(isRateLimitCapableProvider("antigravity")).toBe(true);
+    expect(isRateLimitCapableProvider("kimi")).toBe(true);
+    expect(isRateLimitCapableProvider("traycer")).toBe(false);
+    expect(isRateLimitCapableProvider("copilot")).toBe(false);
+  });
+});
+
+describe("isRateLimitProviderConfigured", () => {
+  it("treats authenticated and configured (credential present) as eligible", () => {
+    expect(
+      isRateLimitProviderConfigured(
+        state({ providerId: "codex", auth: authStatus("authenticated") }),
+      ),
+    ).toBe(true);
+    expect(
+      isRateLimitProviderConfigured(
+        state({ providerId: "openrouter", auth: authStatus("configured") }),
+      ),
+    ).toBe(true);
+  });
+
+  it("excludes providers with no usable credential", () => {
+    for (const status of [
+      "unauthenticated",
+      "unavailable",
+      "unknown",
+    ] as const) {
+      expect(
+        isRateLimitProviderConfigured(
+          state({ providerId: "codex", auth: authStatus(status) }),
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it("excludes providers whose verdict has not settled", () => {
+    expect(
+      isRateLimitProviderConfigured(
+        state({ providerId: "codex", authPending: true }),
+      ),
+    ).toBe(false);
+    expect(
+      isRateLimitProviderConfigured(
+        state({ providerId: "codex", availabilityPending: true }),
+      ),
+    ).toBe(false);
+  });
+
+  it("excludes a provider the user has disabled", () => {
+    expect(
+      isRateLimitProviderConfigured(
+        state({ providerId: "codex", enabled: false }),
+      ),
+    ).toBe(false);
+  });
+});
+
+function authStatus(status: ProviderAuthStatus): ProviderCliState["auth"] {
+  return { status, badgeText: null, label: null, detail: null };
+}
+
+function profile(
+  profileId: string,
+  kind: ProviderProfile["kind"],
+  status: ProviderAuthStatus,
+  enabled: boolean,
+): ProviderProfile {
+  return {
+    profileId,
+    enabled,
+    kind,
+    authType: "oauth",
+    label: profileId,
+    auth: authStatus(status),
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+    accentColor: null,
+  };
+}
+
+describe("resolveRateLimitFetchEligibility", () => {
+  it("uses a present ambient row as the definitive ambient verdict and keeps the no-profile fallback summary-based", () => {
+    for (const summaryStatus of ["authenticated", "configured"] as const) {
+      const ambientSignedOut = state({
+        providerId: "codex",
+        auth: authStatus(summaryStatus),
+        profiles: [profile("ambient", "ambient", "unauthenticated", true)],
+      });
+
+      expect(resolveRateLimitFetchEligibility(ambientSignedOut)).toEqual({
+        ambient: false,
+        managedProfiles: true,
+      });
+      expect(isRateLimitProviderConfigured(ambientSignedOut)).toBe(false);
+    }
+
+    expect(
+      isRateLimitProviderConfigured(
+        state({ providerId: "codex", auth: authStatus("authenticated") }),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps an authenticated managed target eligible while another managed profile is pending, but still honors provider gates", () => {
+    const managed = profile("managed", "managed", "authenticated", true);
+    const pending = state({
+      providerId: "codex",
+      authPending: true,
+      profiles: [managed],
+    });
+
+    const pendingEligibility = resolveRateLimitFetchEligibility(pending);
+    expect(pendingEligibility.managedProfiles).toBe(true);
+    expect(isRateLimitProfileFetchEligible(pendingEligibility, managed)).toBe(
+      true,
+    );
+
+    for (const overrides of [
+      { enabled: false },
+      { availabilityPending: true },
+    ]) {
+      const gated = resolveRateLimitFetchEligibility(
+        state({ providerId: "codex", profiles: [managed], ...overrides }),
+      );
+      expect(gated.managedProfiles).toBe(false);
+      expect(isRateLimitProfileFetchEligible(gated, managed)).toBe(false);
+    }
+  });
+
+  it("rejects a disabled authenticated managed profile from ordinary usage fetches", () => {
+    const disabled = profile("disabled", "managed", "authenticated", false);
+    const eligibility = resolveRateLimitFetchEligibility(
+      state({ providerId: "codex", profiles: [disabled] }),
+    );
+
+    // Preserved auth keeps the provider-level managed lane visible, but the
+    // per-profile classifier must keep disabled rows out of every automatic
+    // usage lane.
+    expect(eligibility.managedProfiles).toBe(true);
+    expect(isRateLimitProfileFetchEligible(eligibility, disabled)).toBe(false);
+  });
+});

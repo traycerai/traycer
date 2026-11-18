@@ -1,0 +1,355 @@
+import { use, useCallback, type ReactNode } from "react";
+import { Pencil } from "lucide-react";
+import { useReducedMotion } from "motion/react";
+import * as m from "motion/react-m";
+import type {
+  InterviewQuestion,
+  InterviewQuestionOption,
+} from "@traycer/protocol/persistence/epic/schemas";
+import {
+  InterviewChoiceGlyph,
+  InterviewOptionDetailsButton,
+  InterviewOptionDetailsRegion,
+} from "@/components/chat/segments/interview-visuals";
+import { useInterviewOptionDetailsDisclosure } from "@/components/chat/segments/use-interview-option-details-disclosure";
+import { questionAllowsCustomAnswer } from "@/components/chat/segments/interview-custom-answer";
+import { ChatLoadAutofocusContext } from "@/components/chat/chat-load-focus-hold";
+import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
+import { isMobileApp } from "@/lib/mobile-app";
+import { cn } from "@/lib/utils";
+import type { DraftAnswer } from "./interview-draft";
+import { QUESTION_TRANSITION } from "./use-interview-card";
+
+const OTHER_LABEL = "Other";
+
+function interviewOptionKey(
+  options: ReadonlyArray<InterviewQuestionOption>,
+  option: InterviewQuestionOption,
+  index: number,
+): string {
+  const fingerprint = [
+    option.label,
+    option.description ?? "",
+    option.preview ?? "",
+  ].join("\u0000");
+  const occurrence = options.slice(0, index).filter((candidate) => {
+    const candidateFingerprint = [
+      candidate.label,
+      candidate.description ?? "",
+      candidate.preview ?? "",
+    ].join("\u0000");
+    return candidateFingerprint === fingerprint;
+  }).length;
+  return `${fingerprint}\u0000${occurrence}`;
+}
+
+const ANSWER_TEXTAREA_CLASS =
+  "w-full resize-none rounded-md border border-input bg-background/70 px-2.5 py-2 text-ui-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-60";
+
+interface QuestionPageProps {
+  question: InterviewQuestion;
+  draft: DraftAnswer;
+  // The card's own focus-ownership answer (`useInterviewCard`'s
+  // `focusActive`): the tile is active AND its pane is focused AND its tab is
+  // selected. Gates auto-focus so a field in a background pane - or in a
+  // background top-level tab, which the tile flag alone does not exclude -
+  // never steals focus.
+  focusActive: boolean;
+  // True while a Submit/Skip this card sent is in flight or accepted but
+  // unresolved. Natively disables every option button and text field so they
+  // are neither focusable, typeable, nor exposed as actionable to assistive
+  // tech - callbacks already reject while busy, but the controls must also
+  // look and behave disabled.
+  disabled: boolean;
+  pendingOptionIndex: number | null;
+  onToggleOption: (optionIndex: number) => void;
+  onToggleOther: () => void;
+  onOtherTextChange: (text: string) => void;
+  onFreeTextChange: (text: string) => void;
+}
+
+export function QuestionPage(props: QuestionPageProps) {
+  const {
+    question,
+    draft,
+    focusActive,
+    disabled,
+    pendingOptionIndex,
+    onToggleOption,
+    onToggleOther,
+    onOtherTextChange,
+    onFreeTextChange,
+  } = props;
+
+  // Callback ref for the free-text inputs: they appear exactly when the user
+  // chose to type, so focus belongs in them - but only when this card owns
+  // focus. Memoized on `focusActive` so the same node re-focuses when the tab
+  // becomes active (the ref re-runs) and never steals focus while the card is
+  // in a background pane or top-level tab. The focus is
+  // deferred one frame for the same reason as the card itself: a pane is
+  // activated on pointerdown, and the trailing mousedown's native focus would
+  // otherwise steal focus before this runs (see useInterviewCard).
+  // On the installed mobile app it does nothing: a question rendering, or its
+  // tab becoming active, is not a tap, and a phone keyboard must be summoned by
+  // a tap. Tapping the field there focuses it the ordinary way.
+  // It yields to the pane's focus intent, as the card and the composer do, so
+  // a field seated by a chat's first transcript leaves alone the menu or
+  // rename the reader opened while it loaded.
+  const paneActivationFocusIntent = usePaneActivationFocusIntent();
+  const loadAutofocus = use(ChatLoadAutofocusContext);
+  const focusFieldIfActive = useCallback(
+    (node: HTMLInputElement | HTMLTextAreaElement | null) => {
+      if (!focusActive || disabled || node === null || isMobileApp()) return;
+      // Decided at scheduling as well as before the focus: a key pressed in
+      // between releases the hold, and must not let this load's focus land.
+      if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
+      // A chat's load keeps its focus hold arming until this frame settles.
+      const settle = loadAutofocus.begin();
+      const frame = window.requestAnimationFrame(() => {
+        settle();
+        if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
+        node.focus({ preventScroll: true });
+      });
+      return () => {
+        window.cancelAnimationFrame(frame);
+        settle();
+      };
+    },
+    // `disabled` is a dependency (not just a guard) so the ref re-runs and
+    // restores focus when a rejected action clears the busy gate: a disabled
+    // field cannot take focus, and a callback ref only re-fires when its
+    // identity changes, not merely when the prop it reads changes.
+    [disabled, focusActive, loadAutofocus, paneActivationFocusIntent],
+  );
+
+  // A question with no options is pure free-text: a single textarea that
+  // focuses itself so the user can type right away.
+  //
+  // Withdrawing free text leaves such a question with no answer channel at
+  // all, which the raiser is not supposed to produce (see
+  // `allowsCustomAnswer`) - options are the only other channel and there are
+  // none. Render no input rather than a field whose contents provably cannot
+  // be delivered; Skip stays available, so the card is still resolvable.
+  if (question.options.length === 0) {
+    if (!questionAllowsCustomAnswer(question)) return null;
+    return (
+      <textarea
+        ref={focusFieldIfActive}
+        value={draft.otherText}
+        onChange={(e) => onFreeTextChange(e.target.value)}
+        placeholder="Type your answer…"
+        className={ANSWER_TEXTAREA_CLASS}
+        rows={2}
+        aria-label="Interview answer"
+        disabled={disabled}
+      />
+    );
+  }
+
+  return (
+    // Named query container: the option row spends its pixels on the label,
+    // so its number badge only shows once there is room for it.
+    <div className="@container/interview-options flex flex-col gap-1.5">
+      <ul className="m-0 flex list-none flex-col gap-1.5 pl-0">
+        {question.options.map((option, index) => {
+          const selected = draft.selected.has(index);
+          return (
+            <li key={interviewOptionKey(question.options, option, index)}>
+              <OptionRow
+                label={option.label}
+                ariaLabel={`${index + 1}. ${option.label}`}
+                option={option}
+                selected={selected}
+                pending={pendingOptionIndex === index}
+                disabled={disabled}
+                choiceKind={question.multiSelect ? "multi" : "single"}
+                badge={<OptionNumberBadge index={index + 1} />}
+                onToggle={() => onToggleOption(index)}
+              />
+            </li>
+          );
+        })}
+      </ul>
+      {questionAllowsCustomAnswer(question) ? (
+        <OtherRow
+          selected={draft.otherSelected}
+          value={draft.otherText}
+          disabled={disabled}
+          inputRef={focusFieldIfActive}
+          onSelect={onToggleOther}
+          onValueChange={onOtherTextChange}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+interface OtherRowProps {
+  selected: boolean;
+  value: string;
+  disabled: boolean;
+  inputRef: (node: HTMLTextAreaElement | null) => void;
+  onSelect: () => void;
+  onValueChange: (text: string) => void;
+}
+
+// The "write your own answer" affordance. Unselected it is a pickable row with
+// a pencil badge; selecting it (click or the N+1 key) morphs the row in place
+// into a focused multi-line answer field.
+function OtherRow(props: OtherRowProps) {
+  const { selected, value, disabled, inputRef, onSelect, onValueChange } =
+    props;
+  if (selected) {
+    return (
+      <div className="relative flex w-full items-start gap-2 rounded-md border border-input bg-background/70 px-2 py-1.5 transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/40">
+        <OtherIconBadge selected />
+        <textarea
+          ref={inputRef}
+          value={value}
+          onChange={(e) => onValueChange(e.target.value)}
+          placeholder="Type your answer…"
+          aria-label={`${OTHER_LABEL} answer`}
+          data-native-scrollbar="true"
+          rows={1}
+          className="field-sizing-content max-h-[3lh] min-w-0 flex-1 resize-none overflow-y-auto bg-transparent text-ui-sm text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={disabled}
+        />
+      </div>
+    );
+  }
+  return (
+    <OptionRow
+      label={OTHER_LABEL}
+      ariaLabel={OTHER_LABEL}
+      option={null}
+      selected={false}
+      pending={false}
+      disabled={disabled}
+      choiceKind={null}
+      badge={<OtherIconBadge selected={false} />}
+      onToggle={onSelect}
+    />
+  );
+}
+
+// Circular pencil badge for the "Other" affordance - filled once it is the
+// active custom answer, mirroring the option number badges.
+function OtherIconBadge(props: { selected: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "pointer-events-none relative z-10 ml-auto inline-flex size-5 shrink-0 items-center justify-center rounded-full border transition-colors",
+        props.selected
+          ? "border-primary/70 bg-primary/90 text-primary-foreground"
+          : "border-border/70 bg-background/60 text-muted-foreground/70",
+      )}
+    >
+      <Pencil className="size-3" aria-hidden />
+    </span>
+  );
+}
+
+interface OptionRowProps {
+  label: string;
+  ariaLabel: string;
+  option: InterviewQuestionOption | null;
+  selected: boolean;
+  pending: boolean;
+  disabled: boolean;
+  choiceKind: "single" | "multi" | null;
+  badge: ReactNode;
+  onToggle: () => void;
+}
+
+function OptionRow(props: OptionRowProps) {
+  const {
+    label,
+    ariaLabel,
+    option,
+    selected,
+    pending,
+    disabled,
+    choiceKind,
+    badge,
+    onToggle,
+  } = props;
+  const shouldReduceMotion = useReducedMotion();
+  const disclosure = useInterviewOptionDetailsDisclosure();
+  return (
+    <m.div
+      animate={
+        pending && !shouldReduceMotion ? { scale: [1, 1.015, 1] } : { scale: 1 }
+      }
+      transition={QUESTION_TRANSITION}
+      className="flex w-full flex-col gap-1.5"
+    >
+      <div
+        className={cn(
+          "relative flex w-full items-center gap-2 rounded-md border border-transparent bg-foreground/3 px-2 py-1.5 transition-colors",
+          selected
+            ? "border-border bg-foreground/6 text-foreground shadow-sm"
+            : "text-muted-foreground",
+          // `hover:*` matches an ancestor whenever ANY hit-tested descendant
+          // is hovered - including through this row's own `pointer-events:
+          // none` state, since the shared details button deliberately keeps
+          // `pointer-events-auto` so its tooltip stays usable. So hovering it
+          // alone would still light up the row unless these classes are
+          // omitted outright while disabled; `pointer-events-none` here
+          // can't suppress that.
+          !disabled &&
+            !selected &&
+            "hover:border-border/70 hover:bg-foreground/5 hover:text-foreground",
+          // The overlay button below is transparent (no visible pixels of
+          // its own), so a `disabled:` class on it has nothing to dim. Apply
+          // the disabled look to this visible container instead.
+          disabled && "opacity-60",
+        )}
+      >
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-pressed={selected}
+          aria-label={ariaLabel}
+          disabled={disabled}
+          className="absolute inset-0 z-0 rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
+        />
+        {choiceKind === null ? null : (
+          <InterviewChoiceGlyph
+            multiSelect={choiceKind === "multi"}
+            selected={selected}
+          />
+        )}
+        <span className="pointer-events-none relative z-10 min-w-0 break-words font-medium text-foreground/90">
+          {label}
+        </span>
+        {option === null ? null : (
+          <InterviewOptionDetailsButton
+            label={label}
+            option={option}
+            className="pointer-events-auto relative z-20 self-center"
+            pinnedDetailRegionId={null}
+            disclosure={disclosure}
+          />
+        )}
+        {badge}
+      </div>
+      {option === null ? null : (
+        <InterviewOptionDetailsRegion option={option} disclosure={disclosure} />
+      )}
+    </m.div>
+  );
+}
+
+// The right-side circular badge is the keyboard hint. Selection lives on the
+// left radio/checkbox glyph, so this stays a number even when the row is on.
+function OptionNumberBadge(props: { index: number }) {
+  return (
+    <span
+      aria-hidden
+      className="pointer-events-none relative z-10 ml-auto hidden size-5 shrink-0 items-center justify-center rounded-full border border-border/70 bg-background/60 text-[0.625rem] font-semibold tabular-nums text-muted-foreground/70 @[15rem]/interview-options:inline-flex"
+    >
+      {props.index}
+    </span>
+  );
+}

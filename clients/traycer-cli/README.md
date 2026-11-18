@@ -1,0 +1,215 @@
+# @traycerai/cli
+
+The npm distribution of the Traycer command line tool.
+
+Traycer Desktop already includes the CLI and runs it behind the scenes, so most people do not need to install this package directly. Install `@traycerai/cli` when you want to manage the local Traycer Host from a terminal, script Traycer workflows, or use the agent/workspace automation surface outside the desktop app.
+
+The npm package is a fully bundled JavaScript build with no runtime npm dependencies. It runs on Node.js 22.13.0 or newer.
+
+## Installation
+
+```sh
+npm install -g @traycerai/cli
+```
+
+You can also run it without a global install:
+
+```sh
+npx @traycerai/cli --help
+```
+
+For the full desktop app, install Traycer from [traycer.ai/download](https://traycer.ai/download).
+
+## Quick Start
+
+```sh
+traycer login
+traycer host ensure
+traycer host status
+```
+
+`traycer login` starts the browser-based sign-in flow, and authorizes a host that is already running on this machine. `traycer host ensure` installs the host version supported by this CLI, registers it with the operating system service manager when needed, and starts it. `traycer host status` confirms the local host process and endpoint.
+
+## What It Does
+
+- **Host lifecycle:** download, verify, install, start, stop, update, and supervise the local Traycer Host.
+- **Authentication:** sign in with OAuth PKCE and share credentials with Traycer Desktop.
+- **Diagnostics:** inspect host status, logs, service registration, and setup problems.
+- **Configuration:** manage shell selection and environment overrides used by host and agent sessions.
+- **Workspaces:** list Traycer workspaces and create isolated Git worktrees.
+- **Agent automation:** list, create, message, and inspect agents from Traycer-managed sessions.
+
+## Common Commands
+
+| Command                        | Purpose                                                                |
+| ------------------------------ | ---------------------------------------------------------------------- |
+| `traycer login`                | Sign in to Traycer and authorize the host running on this machine.     |
+| `traycer logout`               | Sign out and delete locally cached published-chat content.             |
+| `traycer whoami`               | Validate the stored credentials and show the signed-in user.           |
+| `traycer host ensure`          | Install, register, and start the local Traycer Host if needed.         |
+| `traycer host status`          | Show host process, endpoint, and activity status.                      |
+| `traycer host service start`   | Start the registered background host service and return.               |
+| `traycer host stop`            | Stop the running host.                                                 |
+| `traycer host doctor`          | Diagnose host installation and runtime issues.                         |
+| `traycer host logs --tail 200` | Print recent host logs.                                                |
+| `traycer host update`          | Update the installed host to the latest compatible release.            |
+| `traycer host available`       | List host versions available for this environment.                     |
+| `traycer cli upgrade`          | Upgrade the installed CLI binary when supported by the install source. |
+| `traycer config shell get`     | Show the shell used for host bootstrap and terminal tabs.              |
+| `traycer config env list`      | Show environment overrides used by Traycer.                            |
+| `traycer profile list`         | List provider profiles (accounts) and their sign-in state.             |
+
+`traycer host start` is the **foreground** supervisor - it runs the host in this
+terminal and blocks until the host exits. It is also the entrypoint launchd /
+systemd / Scheduled Tasks invoke. Interactive runs print a banner naming the log
+file and how to stop; use `traycer host logs --follow` in another terminal to
+watch the log. To start the background service and get your prompt back, use
+`traycer host service start`.
+
+Use `--help` on any command group for the full local reference:
+
+```sh
+traycer --help
+traycer host --help
+traycer agent --help
+```
+
+## Scripting
+
+```sh
+traycer host status --json
+```
+
+Most commands support `--json`, which emits structured NDJSON events suitable for automation. The CLI also supports `--quiet` and `--no-progress` for logs, and honors non-interactive environments such as CI.
+
+## Provider Profiles
+
+A profile is an account a provider can run under: the provider's own CLI login (`ambient`), or a managed profile Traycer keeps separately so you can use more than one account. These commands manage the same profiles as the app's provider settings, so a change made in either shows in the other.
+
+```sh
+traycer profile list                          # every provider that has profiles
+traycer profile add claude --label Work       # create a profile and sign it in
+traycer profile login codex ambient           # sign an existing profile in again
+traycer profile rename claude <profile-id> "Personal"
+traycer profile disable claude <profile-id>   # keep it, but stop using it
+traycer profile enable claude <profile-id>
+traycer profile remove claude <profile-id>    # asks first; --yes to skip
+```
+
+`add` and `login` print a sign-in link (and a code, where the provider uses one) and wait for the sign-in to finish, so they need a terminal: they are refused under `--json` and in CI, and for Claude Code also when input is piped or redirected (you may need to paste a code). Press Ctrl+C to cancel. Managed profiles exist for Claude Code, Codex, Grok and Antigravity.
+
+## Agent and Workspace Commands
+
+Traycer-launched agent sessions receive environment variables such as `TRAYCER_AGENT_ID` and `TRAYCER_EPIC_ID`. In that context, the CLI can inspect the current Task, communicate with other agents, and create worktrees:
+
+```sh
+traycer agent list
+traycer agent inbox
+traycer agent send --to <agent-id> --message "Can you review this change?"
+traycer workspace list
+traycer worktree create --workspace /path/to/repo --branch my-feature
+```
+
+These commands are mainly intended for Traycer-managed automation, but they are regular CLI commands and can be scripted when the host is running and the required IDs are supplied.
+
+`traycer agent list` takes two flags that shorten its output:
+
+| Flag        | Effect                                                                                                                  |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `--live`    | Leave archived agents out. Against a host too old to report which agents are archived, the command exits 1 and says so. |
+| `--compact` | One short line per agent, without folders, model, or session detail.                                                    |
+
+With `--json`, each agent carries an `archived` field: `true`, `false`, or `null` when the host is too old to report it.
+
+Each agent also carries `profile` and `permissionMode`, the account and permission mode it runs with, in the form `traycer agent configure` takes as `--profile` and `--permission-mode`. Both are `null` when the host cannot say: an agent on the Terminal interface, another person's agent, an unanswered host, or a host too old to report them. The text output shows them as `profile:` and `mode:`, with `unobservable` when it cannot say.
+
+## Host Security
+
+The npm package ships the CLI bundle only. The Traycer Host is a separate signed binary distributed through GitHub Releases. Before installation, host archives are verified by checksum and minisign signature against the trust root embedded in the CLI.
+
+On supported platforms, the CLI supervises the host through the operating system service manager, including launchd on macOS and systemd user services on Linux.
+
+## Authentication and Local Files
+
+Sign-in uses OAuth with PKCE on a local loopback callback. Credentials and CLI state are stored under your Traycer home directory, including shared auth state used by Traycer Desktop.
+
+Provider API keys are not configured through this CLI. Configure providers in Traycer Desktop under Settings > Providers.
+
+## Troubleshooting
+
+Start with:
+
+```sh
+traycer host doctor
+traycer host logs --tail 200
+```
+
+If the host is missing or stopped, run:
+
+```sh
+traycer host ensure
+```
+
+If the service is registered but not responding, restart it:
+
+```sh
+traycer host restart
+```
+
+### Stopping the host from inside Traycer
+
+The commands that stop the host - `host update`, `host apply`, `host install`,
+`host ensure`, `host restart`, `host stop`, `host uninstall`,
+`host free-port-and-restart` and `host service uninstall` - are frequently run
+by the host itself, or by a person in a terminal the host opened. On those runs
+the command is a child of the host, so a naive stop kills the command that
+issued it, part-way through its own work.
+
+On Linux the CLI re-runs such a command in a transient systemd scope of its own
+(`systemd-run --user --scope`) before the command body starts. The relocated
+process is a sibling of `ai.traycer.host.service` rather than a child of it, and
+survives the stop. The relocated CLI reports back to the process that launched
+it as soon as it starts, and only then is the move recorded in the CLI log as
+`relocated host-stopping command into a transient scope`.
+
+Every way that can fail leaves the host running and reports
+`E_SERVICE_CONTROL_FAILED` rather than proceeding:
+
+- `systemd-run` is missing, or starts and then exits before the command does -
+  there is no systemd user manager, or the transient scope was refused;
+- the CLI cannot read its own `/proc/self/cgroup`. Any read failure, absence
+  included, means the CLI cannot establish which cgroup it is in, and it refuses
+  the stop rather than proceeding: a mount namespace can hide procfs from a
+  process that is still inside the host's unit and can still reach the user
+  manager. The message says `absent` when that is what was seen, so a sandbox is
+  recognisable as the cause;
+- an argument contains `$`. systemd 258 expands variables in scope arguments by
+  default, and the option to turn that off does not exist before systemd 254, so
+  a path such as `--from '/tmp/${BUILD}/host.tar.gz'` is refused instead of being
+  silently rewritten;
+- the stop is reached with the CLI still inside the host's own unit. This is
+  checked again immediately before the host is stopped, so a scope that did not
+  actually move the process is caught even if everything above appeared to work.
+
+In each case, run the command again from a shell outside Traycer.
+
+On Windows there is no re-exec. The host's processes are terminated
+individually, and the CLI running the command, its children, and the shell that
+launched it are excluded from that set - terminating the host's whole tree would
+take them down with it. Each process is terminated through a handle whose
+creation time is first checked against the scan that selected it, so a process
+id that Windows has since handed to something unrelated is skipped rather than
+killed.
+
+macOS needs neither: stopping the host's launchd job does not touch the CLI.
+
+## Links
+
+- Documentation: [docs.traycer.ai](https://docs.traycer.ai)
+- Desktop app: [traycer.ai/download](https://traycer.ai/download)
+- Source code: [github.com/traycerai/traycer](https://github.com/traycerai/traycer)
+- CLI 1.0.0 release notes: [github.com/traycerai/traycer/releases/tag/cli-v1.0.0](https://github.com/traycerai/traycer/releases/tag/cli-v1.0.0)
+
+## License
+
+MIT. See the repository [LICENSE](https://github.com/traycerai/traycer/blob/main/LICENSE).

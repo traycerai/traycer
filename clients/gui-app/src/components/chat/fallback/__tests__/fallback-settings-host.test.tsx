@@ -1,0 +1,198 @@
+import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { RoutingCard } from "@/components/chat/fallback/routing-card";
+import { ProviderNoticeSegment } from "@/components/chat/segments/provider-notice-segment";
+import { FALLBACK_SETTINGS_SECTION_ID } from "@/lib/settings-sections";
+import { setSettingsHostSelection } from "@/stores/settings/__tests__/settings-host-scope-test-support";
+import {
+  FAILED_CLAUDE_TUPLE,
+  TARGET_CODEX_TUPLE,
+  pendingFallback,
+} from "./fallback-fixtures";
+
+const mocks = vi.hoisted(() => ({
+  mutate: vi.fn(),
+  openSettings: vi.fn(),
+}));
+
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({ data: undefined }),
+}));
+
+// `useFallbackModelLabels` alone, as a slug passthrough - the degradation the
+// resolver falls back to with no catalogue. None of this file's cases assert a
+// model name (only `openFallbackSettings` navigation is under test here).
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (_harnessId: string, model: string) =>
+        model,
+    };
+  },
+);
+
+// The chooser has its own suite and needs a host runtime this file has no
+// provider for; the gear under test does not touch it.
+vi.mock("@/components/chat/fallback/routing-destination-picker", () => ({
+  RoutingDestinationPicker: () => null,
+}));
+
+vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
+  useHostScopedMutationForClient: () => ({
+    mutate: mocks.mutate,
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({ openSettings: mocks.openSettings }),
+}));
+
+const TAB_HOST = "tab-host-b";
+const APP_HOST = "app-host-a";
+
+const DETAILS = [
+  { label: "via:", value: "Claude Code → Codex" },
+  { label: "reason", value: "Rate limit reached" },
+];
+
+function assertSettingsLandedOnTabHost(): void {
+  // Falsification: delete the carryViewedHostIntoSettingsScope call in open-fallback-settings.ts and THIS assertion must go red.
+  expect(useSettingsHostScopeStore.getState().pendingHostId).toBe(TAB_HOST);
+  expect(useSettingsHostScopeStore.getState().pendingHostId).not.toBe(APP_HOST);
+  expect(mocks.openSettings).toHaveBeenCalledWith({
+    section: FALLBACK_SETTINGS_SECTION_ID,
+    resetToGeneral: false,
+    tab: null,
+    draft: null,
+    // The host travels through the scope store above, not the intent.
+    hostId: null,
+  });
+}
+
+describe("fallback settings links carry the tab host", () => {
+  beforeEach(() => {
+    mocks.mutate.mockReset();
+    mocks.openSettings.mockReset();
+    setSettingsHostSelection(APP_HOST);
+  });
+
+  afterEach(() => {
+    cleanup();
+    useSettingsHostScopeStore.getState().reset();
+  });
+
+  it("opens Fallback settings on the tab host from the routing card's gear (countdown)", () => {
+    render(
+      <TooltipProvider>
+        <TabHostProvider hostId={TAB_HOST}>
+          <RoutingCard
+            state={{
+              kind: "countdown",
+              pending: pendingFallback({
+                state: "hold",
+                reason: "rate_limit",
+                failedTuple: FAILED_CLAUDE_TUPLE,
+                targetTuple: TARGET_CODEX_TUPLE,
+                impendingAction: null,
+                deadline: Date.now() + 12_000,
+                attempt: 1,
+                maxAttempts: 3,
+                queuedItemsMoving: 0,
+                siblingSwitching: 0,
+                traversalId: "traversal-settings",
+                revision: 1,
+              }),
+            }}
+            client={null}
+            chatId="chat-settings"
+            epicId="epic-settings"
+            hostId={TAB_HOST}
+            canAct
+          />
+        </TabHostProvider>
+      </TooltipProvider>,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Model routing settings" }),
+    );
+    assertSettingsLandedOnTabHost();
+  });
+
+  it("opens Fallback settings on the tab host from the routing card's gear (waiting)", () => {
+    render(
+      <TooltipProvider>
+        <TabHostProvider hostId={TAB_HOST}>
+          <RoutingCard
+            state={{
+              kind: "waiting",
+              pending: pendingFallback({
+                state: "waiting",
+                reason: "rate_limit",
+                failedTuple: FAILED_CLAUDE_TUPLE,
+                targetTuple: null,
+                impendingAction: null,
+                deadline: Date.now() + 60_000,
+                attempt: 1,
+                maxAttempts: 1,
+                queuedItemsMoving: 0,
+                siblingSwitching: 0,
+                traversalId: "traversal-settings",
+                revision: 1,
+              }),
+            }}
+            client={null}
+            chatId="chat-settings"
+            epicId="epic-settings"
+            hostId={TAB_HOST}
+            canAct
+          />
+        </TabHostProvider>
+      </TooltipProvider>,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Model routing settings" }),
+    );
+    assertSettingsLandedOnTabHost();
+  });
+
+  // Clutter cuts (2026-09-27): the notice and the resumed marker no longer
+  // carry a "Model routing" text action; the gear on the live cards above is
+  // the one way to settings, and neither notice opens settings on its own.
+  it.each(["fallback_applied", "fallback_wait_resumed"] as const)(
+    "offers no settings action from an expanded %s notice",
+    (noticeKind) => {
+      render(
+        <TabHostProvider hostId={TAB_HOST}>
+          <ProviderNoticeSegment
+            status="completed"
+            noticeKind={noticeKind}
+            tone="info"
+            title="Switched providers"
+            message="Moved to Codex."
+            details={DETAILS}
+            findUnitId={null}
+          />
+        </TabHostProvider>,
+      );
+      fireEvent.click(screen.getByRole("button"));
+      // The details did open, so the absence below is not an unopened box.
+      expect(screen.getByText("Claude Code → Codex")).toBeDefined();
+      expect(
+        screen.queryByRole("button", { name: "Model routing" }),
+      ).toBeNull();
+      expect(screen.queryByText("Model routing")).toBeNull();
+      expect(screen.getAllByRole("button")).toHaveLength(1);
+      expect(mocks.openSettings).not.toHaveBeenCalled();
+    },
+  );
+});

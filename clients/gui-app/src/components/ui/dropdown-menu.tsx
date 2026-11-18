@@ -1,0 +1,392 @@
+import * as React from "react";
+import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
+
+import { cn } from "@/lib/utils";
+import { CheckIcon, ChevronRightIcon } from "lucide-react";
+import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
+import { useDialogOverlayBoundaryEl } from "@/providers/dialog-overlay-boundary-context";
+import { useSurfaceOverlayContainerEl } from "@/providers/surface-overlay-container-context";
+import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
+import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
+import { MenuOpenMarker } from "@/components/ui/open-menus";
+import { useOverlayDragSuppressionRef } from "@/stores/layout/title-bar-drag-store";
+
+function DropdownMenu({
+  ...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Root>) {
+  return <DropdownMenuPrimitive.Root data-slot="dropdown-menu" {...props} />;
+}
+
+function DropdownMenuPortal({
+  ...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Portal>) {
+  return (
+    <DropdownMenuPrimitive.Portal data-slot="dropdown-menu-portal" {...props} />
+  );
+}
+
+function DropdownMenuTrigger({
+  ...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Trigger>) {
+  return (
+    <DropdownMenuPrimitive.Trigger
+      data-slot="dropdown-menu-trigger"
+      {...props}
+    />
+  );
+}
+
+type DropdownMenuContentProps = React.ComponentProps<
+  typeof DropdownMenuPrimitive.Content
+> & {
+  readonly container?: React.ComponentProps<
+    typeof DropdownMenuPrimitive.Portal
+  >["container"];
+};
+
+function DropdownMenuContent({
+  ref,
+  className,
+  align = "start",
+  sideOffset = 4,
+  collisionPadding,
+  container,
+  onCloseAutoFocus,
+  children,
+  ...props
+}: DropdownMenuContentProps) {
+  // A modal menu drives `hideOthers` + scroll-lock while open, so a background
+  // split pane un-presents it by unmounting. The guard preventDefaults Radix's
+  // The close-autofocus half lives in `usePaneAwareContentGuard`.
+  const { paneFocused, handleCloseAutoFocus } =
+    usePaneAwareContentGuard(onCloseAutoFocus);
+  // Concealed region (see `portal-concealment-context`): un-present the
+  // portal; it re-presents intact when the region returns.
+  const concealed = usePortalConcealed();
+  // A menu opened inside a top-layer surface must portal into it or it paints
+  // beneath it (see `surface-overlay-container-context`). `null` everywhere
+  // else, which is `document.body` as before.
+  const surfaceContainer = useSurfaceOverlayContainerEl();
+  // Read above the early returns so hook order does not depend on presentation.
+  const safeAreaInsets = useSafeAreaCollisionPadding();
+  const contentRef = useOverlayDragSuppressionRef(ref);
+  if (!paneFocused || concealed) return null;
+  return (
+    <DropdownMenuPrimitive.Portal
+      container={container ?? surfaceContainer ?? undefined}
+    >
+      <DropdownMenuPrimitive.Content
+        ref={contentRef}
+        data-slot="dropdown-menu-content"
+        sideOffset={sideOffset}
+        align={align}
+        collisionPadding={collisionPadding ?? safeAreaInsets}
+        className={cn(
+          // `max-w-safe-dvw` is primitive-owned and sits ahead of the caller's
+          // `className`, so an unmodified caller `max-w-*` displaces it -
+          // CSS allows one width clamp per element, so the cap is a default,
+          // not a floor. It only conflicts at all because the token is
+          // registered in `cn()`'s merge config (`lib/utils.ts`).
+          "z-50 max-h-(--radix-dropdown-menu-content-available-height) w-(--radix-dropdown-menu-trigger-width) max-w-safe-dvw min-w-32 origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:overflow-hidden data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          className,
+        )}
+        onCloseAutoFocus={handleCloseAutoFocus}
+        {...props}
+      >
+        {/* Mounted with the open menu: no hover card opens meanwhile. */}
+        <MenuOpenMarker />
+        {children}
+      </DropdownMenuPrimitive.Content>
+    </DropdownMenuPrimitive.Portal>
+  );
+}
+
+function DropdownMenuGroup({
+  ...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Group>) {
+  return (
+    <DropdownMenuPrimitive.Group data-slot="dropdown-menu-group" {...props} />
+  );
+}
+
+/**
+ * Every tappable ROW here - this one, the checkbox and radio items, and the
+ * sub-trigger - owns its coarse-pointer target through its own height
+ * (`pointer-coarse:min-h-11`), the same way `ui/select.tsx` sizes `SelectItem`.
+ * Keep the four in step: a row left behind reads as a ragged list on touch, and
+ * is the one that gets mis-tapped.
+ *
+ * Rows deliberately do NOT use the invisible `::after` slop that the
+ * `[data-*-touch-scope]` stylesheets give buttons and menu TRIGGERS. Either
+ * half of the reason rules it out on its own:
+ *
+ * - `DropdownMenuContent` renders through `DropdownMenuPrimitive.Portal`, so a
+ *   row is never a descendant of the surface that opened it. A scope attribute
+ *   cannot reach it, and a rule written as if it could is silently dead - which
+ *   is how a trigger ends up with a larger hit area than the rows it opens.
+ * - Rows stack flush, so slop that overhangs by design would reach into the
+ *   neighbouring row and take its tap.
+ *
+ * The rows grow on touch only; `items-center` keeps the label and any indicator
+ * centred in whatever height that yields, and pointer devices keep the dense
+ * list.
+ */
+function DropdownMenuItem({
+  className,
+  inset,
+  variant = "default",
+  ...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Item> & {
+  inset?: boolean;
+  variant?: "default" | "destructive" | "muted";
+}) {
+  return (
+    <DropdownMenuPrimitive.Item
+      data-slot="dropdown-menu-item"
+      data-inset={inset}
+      data-variant={variant}
+      className={cn(
+        "group/dropdown-menu-item relative flex cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground data-inset:pl-7 data-[variant=muted]:text-muted-foreground data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 data-[variant=destructive]:focus:text-destructive dark:data-[variant=destructive]:focus:bg-destructive/20 data-disabled:pointer-events-none data-disabled:opacity-50 aria-disabled:opacity-50 pointer-coarse:min-h-11 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 data-[variant=destructive]:*:[svg]:text-destructive",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function DropdownMenuCheckboxItem({
+  className,
+  children,
+  checked,
+  inset,
+  ...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.CheckboxItem> & {
+  inset?: boolean;
+}) {
+  return (
+    <DropdownMenuPrimitive.CheckboxItem
+      data-slot="dropdown-menu-checkbox-item"
+      data-inset={inset}
+      className={cn(
+        "relative flex cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground focus:**:text-accent-foreground data-inset:pl-7 data-[state=checked]:bg-foreground/5 data-disabled:pointer-events-none data-disabled:opacity-50 aria-disabled:opacity-50 pointer-coarse:min-h-11 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        className,
+      )}
+      checked={checked}
+      {...props}
+    >
+      <span
+        className="pointer-events-none absolute right-2 flex items-center justify-center"
+        data-slot="dropdown-menu-checkbox-item-indicator"
+      >
+        <DropdownMenuPrimitive.ItemIndicator>
+          <CheckIcon />
+        </DropdownMenuPrimitive.ItemIndicator>
+      </span>
+      {children}
+    </DropdownMenuPrimitive.CheckboxItem>
+  );
+}
+
+function DropdownMenuRadioGroup({
+  ...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.RadioGroup>) {
+  return (
+    <DropdownMenuPrimitive.RadioGroup
+      data-slot="dropdown-menu-radio-group"
+      {...props}
+    />
+  );
+}
+
+function DropdownMenuRadioItem({
+  className,
+  children,
+  inset,
+  ...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.RadioItem> & {
+  inset?: boolean;
+}) {
+  return (
+    <DropdownMenuPrimitive.RadioItem
+      data-slot="dropdown-menu-radio-item"
+      data-inset={inset}
+      className={cn(
+        "relative flex cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground focus:**:text-accent-foreground data-inset:pl-7 data-[state=checked]:bg-foreground/5 data-disabled:pointer-events-none data-disabled:opacity-50 aria-disabled:opacity-50 pointer-coarse:min-h-11 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        className,
+      )}
+      {...props}
+    >
+      <span
+        className="pointer-events-none absolute right-2 flex items-center justify-center"
+        data-slot="dropdown-menu-radio-item-indicator"
+      >
+        <DropdownMenuPrimitive.ItemIndicator>
+          <CheckIcon />
+        </DropdownMenuPrimitive.ItemIndicator>
+      </span>
+      {children}
+    </DropdownMenuPrimitive.RadioItem>
+  );
+}
+
+/**
+ * A menu label is a SECTION HEADING, and it is drawn as one: the overline rank,
+ * uppercase, with the tracking that rank needs to stay readable.
+ *
+ * That treatment used to live at the call sites - fourteen of the twenty-four
+ * labels in the app wrote some spelling of `text-overline uppercase
+ * tracking-wide`, and they disagreed (three reached for `text-ui-xs
+ * font-medium`, three dropped the tracking, six dimmed to
+ * `text-muted-foreground/70`). It is one heading style, so it is stated once
+ * here and nowhere else.
+ */
+function DropdownMenuLabel({
+  className,
+  inset,
+  ...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Label> & {
+  inset?: boolean;
+}) {
+  return (
+    <DropdownMenuPrimitive.Label
+      data-slot="dropdown-menu-label"
+      data-inset={inset}
+      className={cn(
+        "px-1.5 py-1 text-overline tracking-wide uppercase text-muted-foreground data-inset:pl-7",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function DropdownMenuSeparator({
+  className,
+  ...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Separator>) {
+  return (
+    <DropdownMenuPrimitive.Separator
+      data-slot="dropdown-menu-separator"
+      className={cn("-mx-1 my-1 h-px bg-border", className)}
+      {...props}
+    />
+  );
+}
+
+function DropdownMenuShortcut({
+  className,
+  ...props
+}: React.ComponentProps<"span">) {
+  return (
+    <span
+      data-slot="dropdown-menu-shortcut"
+      className={cn(
+        "ml-auto text-ui-xs text-muted-foreground group-focus/dropdown-menu-item:text-accent-foreground",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function DropdownMenuSub({
+  ...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Sub>) {
+  return <DropdownMenuPrimitive.Sub data-slot="dropdown-menu-sub" {...props} />;
+}
+
+function DropdownMenuSubTrigger({
+  className,
+  inset,
+  children,
+  ...props
+}: React.ComponentProps<typeof DropdownMenuPrimitive.SubTrigger> & {
+  inset?: boolean;
+}) {
+  return (
+    <DropdownMenuPrimitive.SubTrigger
+      data-slot="dropdown-menu-sub-trigger"
+      data-inset={inset}
+      className={cn(
+        "flex cursor-default items-center gap-1.5 rounded-md px-1.5 py-1 text-ui-sm outline-hidden select-none focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground data-inset:pl-7 data-open:bg-accent data-open:text-accent-foreground pointer-coarse:min-h-11 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        className,
+      )}
+      {...props}
+    >
+      {children}
+      <ChevronRightIcon className="ml-auto" />
+    </DropdownMenuPrimitive.SubTrigger>
+  );
+}
+
+type DropdownMenuSubContentProps = React.ComponentProps<
+  typeof DropdownMenuPrimitive.SubContent
+> & {
+  readonly container?: React.ComponentProps<
+    typeof DropdownMenuPrimitive.Portal
+  >["container"];
+  /**
+   * `menu` is a list of rows and gets the row gutter. `panel` is a submenu
+   * holding a small FORM or a paragraph rather than rows - the add-node
+   * launcher, the browser's site-information card - which needs a reading
+   * margin and body type instead. Both sites built it by hand and disagreed
+   * (`p-2` against `p-3`); this is that composition with one name. The rhythm
+   * BETWEEN the panel's children stays the caller's, because only the caller
+   * knows how many there are.
+   */
+  readonly layout?: "menu" | "panel";
+};
+
+function DropdownMenuSubContent({
+  ref,
+  className,
+  collisionPadding,
+  container,
+  layout = "menu",
+  ...props
+}: DropdownMenuSubContentProps) {
+  const dialogBoundary = useDialogOverlayBoundaryEl();
+  const surfaceContainer = useSurfaceOverlayContainerEl();
+  // A submenu opens sideways from a row that is itself already near an edge, so
+  // it is the surface most likely to need the clamp its parent content has.
+  const safeAreaInsets = useSafeAreaCollisionPadding();
+  return (
+    <DropdownMenuPrimitive.Portal
+      container={container ?? dialogBoundary ?? surfaceContainer ?? undefined}
+    >
+      <DropdownMenuPrimitive.SubContent
+        ref={ref}
+        data-slot="dropdown-menu-sub-content"
+        data-layout={layout}
+        collisionPadding={collisionPadding ?? safeAreaInsets}
+        className={cn(
+          // Same available-height cap as `DropdownMenuContent`. SubContent sets
+          // the same custom property. The closed-state overflow matches the
+          // parent so the exit animation does not flash a scrollbar.
+          "z-50 max-h-(--radix-dropdown-menu-content-available-height) max-w-safe-dvw min-h-0 min-w-24 origin-(--radix-dropdown-menu-content-transform-origin) overflow-x-hidden overflow-y-auto rounded-lg bg-popover text-popover-foreground shadow-lg ring-1 ring-foreground/10 duration-100 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:overflow-hidden data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          layout === "panel" ? "p-3 text-ui-sm" : "p-1",
+          className,
+        )}
+        {...props}
+      />
+    </DropdownMenuPrimitive.Portal>
+  );
+}
+
+export {
+  DropdownMenu,
+  DropdownMenuPortal,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuLabel,
+  DropdownMenuItem,
+  DropdownMenuCheckboxItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
+};

@@ -1,0 +1,220 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Raised in review of oss#1019. The two halves of the int#4840 fix combine
+// into a way to report a failed run as successful:
+//
+//   1. the CLI drains instead of calling `process.exit`, so a command
+//      interrupted by an unhandled rejection KEEPS RUNNING and can still
+//      return an `ok` result;
+//   2. exit-code arbitration is monotonic, so the fatal `1` survives;
+//   3. Desktop's `streamTraycerCli` now trusts a terminal `ok` OVER the
+//      non-zero exit code.
+//
+// Together: a process-fatal failure during `host install` would emit `ok`,
+// exit 1, and Desktop would report the install as successful.
+//
+// Fixed CLI-side rather than by narrowing Desktop's condition. Desktop cannot
+// tell a teardown abort from a fatal handler without guessing from exit codes
+// and stderr text - which is exactly the inference `sawTerminalOk` replaced.
+// The CLI knows, so the CLI must not make the claim.
+
+const stdoutChunks: string[] = [];
+const stderrChunks: string[] = [];
+// Both streams in the order they were written, for assertions about order.
+const writes: { stream: "stdout" | "stderr"; text: string }[] = [];
+
+describe("terminal result after a process-fatal failure", () => {
+  let priorExitCode: number | string | null | undefined;
+
+  beforeEach(() => {
+    priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    stdoutChunks.length = 0;
+    stderrChunks.length = 0;
+    writes.length = 0;
+    vi.spyOn(process.stdout, "write").mockImplementation(((
+      chunk: string | Uint8Array,
+      callback: (() => void) | undefined,
+    ) => {
+      stdoutChunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+      writes.push({ stream: "stdout", text: stdoutChunks.at(-1) ?? "" });
+      if (callback !== undefined) callback();
+      return true;
+    }) as never);
+    vi.spyOn(process.stderr, "write").mockImplementation(((
+      chunk: string | Uint8Array,
+      callback: (() => void) | undefined,
+    ) => {
+      stderrChunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+      writes.push({ stream: "stderr", text: stderrChunks.at(-1) ?? "" });
+      if (callback !== undefined) callback();
+      return true;
+    }) as never);
+    // `processFatal` is module state; a fresh import per test resets it.
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    process.exitCode = priorExitCode;
+  });
+
+  function terminalEnvelope(): Record<string, unknown> | null {
+    let terminal: Record<string, unknown> | null = null;
+    for (const line of stdoutChunks.join("").split("\n")) {
+      if (line.length === 0) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (parsed !== null && typeof parsed === "object") {
+        const env = parsed as Record<string, unknown>;
+        if (env.type === "result") terminal = env;
+      }
+    }
+    return terminal;
+  }
+
+  it("reports an error envelope when the command succeeded but the process did not", async () => {
+    const { markProcessFatal } = await import("../exit");
+    const { runCommand } = await import("../runner");
+
+    // The unhandled-rejection handler fires while the command is in flight.
+    markProcessFatal();
+
+    await runCommand(
+      async () => ({ data: { ok: true }, human: "ok", exitCode: 0 }),
+      { json: true, quiet: null, noProgress: null, noBootstrap: null },
+    );
+
+    const terminal = terminalEnvelope();
+    expect(terminal).not.toBeNull();
+    // The load-bearing assertion: NOT `ok`. Desktop keys on exactly this.
+    expect(terminal?.status).toBe("error");
+    expect((terminal?.error as Record<string, unknown>).code).toBe(
+      "E_UNEXPECTED",
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("a command that throws after a process-fatal failure still exits 1, not the thrown code", async () => {
+    // The fatal handler defers the watchdog to the runner while a command is
+    // in flight (see `finishAfterProcessFatal` in exit.ts) but records its 1
+    // at once; `recordExitCode` keeps the first non-zero code, so the thrown
+    // error's code cannot replace it. Ablation: drop the `recordExitCode(1)`
+    // from the in-flight arm and this reads 3.
+    const { finishAfterProcessFatal, markProcessFatal } =
+      await import("../exit");
+    const { runCommand } = await import("../runner");
+    const { CLI_ERROR_CODES, CliError } = await import("../errors");
+
+    await runCommand(
+      async () => {
+        markProcessFatal();
+        await finishAfterProcessFatal();
+        throw new CliError({
+          code: CLI_ERROR_CODES.UNEXPECTED,
+          message: "command failed after the fatal",
+          details: null,
+          exitCode: 3,
+        });
+      },
+      { json: true, quiet: null, noProgress: null, noBootstrap: null },
+    );
+
+    expect(terminalEnvelope()?.status).toBe("error");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("still emits the ok envelope when no process-fatal occurred", async () => {
+    const { runCommand } = await import("../runner");
+
+    await runCommand(
+      async () => ({ data: { ok: true }, human: "ok", exitCode: 0 }),
+      { json: true, quiet: null, noProgress: null, noBootstrap: null },
+    );
+
+    // Guards against the fix degenerating into "never report success".
+    const terminal = terminalEnvelope();
+    expect(terminal?.status).toBe("ok");
+    expect(process.exitCode).toBe(0);
+  });
+
+  // traycer#2093: a late uncaught exception used to turn a completed
+  // `host restart` into a bare "the process failed", leaving the caller unable
+  // to tell whether the host had been restarted.
+  const restartResult = {
+    data: { restarted: true, deferredForParkedActivation: false },
+    human: "host restarted",
+    exitCode: 0,
+  };
+
+  it("keeps the command's own result in the error envelope after a process-fatal failure", async () => {
+    const { markProcessFatal } = await import("../exit");
+    const { runCommand } = await import("../runner");
+
+    await runCommand(
+      async () => {
+        markProcessFatal();
+        return restartResult;
+      },
+      { json: true, quiet: null, noProgress: null, noBootstrap: null },
+    );
+
+    const terminal = terminalEnvelope();
+    expect(terminal?.status).toBe("error");
+    const error = terminal?.error as Record<string, unknown>;
+    expect(error.code).toBe("E_UNEXPECTED");
+    expect(error.details).toEqual({
+      commandExitCode: 0,
+      commandResult: { restarted: true, deferredForParkedActivation: false },
+    });
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("prints the command's human text ahead of the error line after a process-fatal failure", async () => {
+    const { markProcessFatal } = await import("../exit");
+    const { runCommand } = await import("../runner");
+
+    await runCommand(
+      async () => {
+        markProcessFatal();
+        return restartResult;
+      },
+      { json: false, quiet: null, noProgress: null, noBootstrap: null },
+    );
+
+    expect(stdoutChunks.join("")).toContain("host restarted");
+    expect(stdoutChunks.join("")).not.toContain('"status":"ok"');
+    expect(stderrChunks.join("")).toContain("E_UNEXPECTED");
+    // The separate buffers above cannot tell which came first.
+    const humanAt = writes.findIndex(
+      (w) => w.stream === "stdout" && w.text.includes("host restarted"),
+    );
+    const errorAt = writes.findIndex(
+      (w) => w.stream === "stderr" && w.text.includes("E_UNEXPECTED"),
+    );
+    expect(humanAt).toBeGreaterThanOrEqual(0);
+    expect(errorAt).toBeGreaterThanOrEqual(0);
+    expect(humanAt).toBeLessThan(errorAt);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("keeps the command's human text off stdout under --quiet after a process-fatal failure", async () => {
+    const { markProcessFatal } = await import("../exit");
+    const { runCommand } = await import("../runner");
+
+    await runCommand(
+      async () => {
+        markProcessFatal();
+        return restartResult;
+      },
+      { json: false, quiet: true, noProgress: null, noBootstrap: null },
+    );
+
+    expect(stdoutChunks.join("")).not.toContain("host restarted");
+    expect(process.exitCode).toBe(1);
+  });
+});

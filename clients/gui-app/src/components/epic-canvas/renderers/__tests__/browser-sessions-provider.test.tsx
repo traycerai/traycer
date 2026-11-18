@@ -1,0 +1,1550 @@
+import "../../../../../__tests__/test-browser-apis";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useState, type ReactNode } from "react";
+import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
+import {
+  PaneSurfaceActivityContext,
+  PaneVisibilityContext,
+} from "@/components/epic-tabs/pane-visibility-context";
+import {
+  BrowserOpenSessionsProvider,
+  BrowserSessionsHostBoundary,
+  BrowserSessionsHostProvider,
+  BrowserSessionsProvider,
+} from "@/components/epic-canvas/renderers/browser-sessions-provider";
+import {
+  useBrowserSessionsContext,
+  useMaybeBrowserOpenSessionsSnapshot,
+} from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import {
+  tabSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import type { HostOwnerPrincipal } from "@traycer/protocol/host/host-status";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/index";
+import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
+import {
+  epicScope,
+  independentScope,
+  openRequest,
+  sessionInfo,
+  tabInfo,
+} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
+import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
+
+const hookState = vi.hoisted(() => ({
+  streamClient: null as FakeStreamClient | null,
+  durableTransport: null as FakeDurableTransport | null,
+  durableTransportsByHostId: new Map<string, FakeDurableTransport>(),
+  durableTransportQueuesByHostId: new Map<string, FakeDurableTransport[]>(),
+  hostEntriesByHostId: new Map<string, HostDirectoryEntry>(),
+  ownerIdentityKeysByClient: new Map<object, string>(),
+  openedHostIds: [] as string[],
+  hostEntry: {
+    hostId: "host-test",
+    label: "Test host",
+    kind: "local" as const,
+    websocketUrl: null as string | null,
+    version: "test-version",
+    transportDialability: "dialable" as const,
+    owner: null as HostOwnerPrincipal | null,
+  } satisfies HostDirectoryEntry,
+  hostClient: {
+    getRequestContext: () => ({ credentials: null }),
+    getRequestContextUserId: () => "user-test",
+  },
+  transportKey: "authenticated-host-test",
+  ownerIdentityKey: "local\u0000host-test\u0000user-test",
+  localHostId: "host-test" as string | null,
+  browserView: null as BrowserViewBridge | null,
+}));
+
+const surfaceHostOpenedTabMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/hooks/browser/use-browser-catalog-inventory", () => ({
+  useBrowserCatalogInventory: () => undefined,
+}));
+
+vi.mock("@/lib/browser-view/tiles/surface-host-opened-tab", () => ({
+  surfaceHostOpenedTab: surfaceHostOpenedTabMock,
+}));
+
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => hookState.localHostId,
+}));
+
+vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
+  useCanvasHostId: () => "host-test",
+}));
+
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: (hostId: string) =>
+    hookState.hostEntriesByHostId.get(hostId) ??
+    (hostId === hookState.hostEntry.hostId ? hookState.hostEntry : null),
+}));
+
+// The owner identity is this file's to choose per client: the client's
+// request-context user stands in for it, and the key derivation hands it back.
+vi.mock("@/hooks/host/use-request-context-user-id", () => ({
+  useRequestContextUserId: (hostClient: object | null) =>
+    hostClient === null
+      ? null
+      : (hookState.ownerIdentityKeysByClient.get(hostClient) ??
+        hookState.ownerIdentityKey),
+}));
+
+vi.mock("@/lib/host/transport-key", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/transport-key")>()),
+  remoteAwareOwnerIdentityKey: (
+    _hostEntry: HostDirectoryEntry | null,
+    userId: string | null,
+  ) => userId,
+}));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
+vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
+  hostStreamTransportKeyFor: (
+    hostEntry: HostDirectoryEntry | null,
+    userId: string | null,
+  ) =>
+    hostEntry === null ||
+    hostEntry.websocketUrl === null ||
+    userId === null ||
+    hostDirectoryEntryNeedsUpdate(hostEntry, MINIMUM_HOST_VERSION)
+      ? null
+      : hookState.transportKey,
+}));
+
+vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
+  useEpicSessionHostClient: () => hookState.hostClient,
+}));
+
+// `BrowserSessionsHostBoundary` resolves its own client by host id, and the
+// real hook reads the host binding and the app-wide client - neither of which
+// this suite stands up. Same fake the epic provider is handed, so a boundary
+// that decides to wrap opens a stream through the same transport.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => hookState.hostClient,
+}));
+
+const openTransport = vi.hoisted(
+  () =>
+    (hostId: string): FakeDurableTransport => {
+      hookState.openedHostIds.push(hostId);
+      const queuedTransport =
+        hookState.durableTransportQueuesByHostId.get(hostId)?.shift() ?? null;
+      const transport =
+        queuedTransport ??
+        hookState.durableTransportsByHostId.get(hostId) ??
+        hookState.durableTransport;
+      if (transport === null) {
+        throw new Error("expected durable stream transport");
+      }
+      transport.open();
+      return transport;
+    },
+);
+
+vi.mock("@/lib/host/use-durable-stream-transport", () => ({
+  useDurableStreamTransportFactory: () => openTransport,
+}));
+
+vi.mock("@/lib/host/stream-auth-revalidator", () => ({
+  useStreamAuthRevalidator: () => null,
+}));
+
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({ browserView: hookState.browserView }),
+}));
+
+/** What a host serving the live `browser.sessions` line negotiates. */
+const LIVE_BROWSER_STREAM_VERSION: SchemaVersion = { major: 2, minor: 0 };
+
+/**
+ * Fake browser.sessions transport. When `dropUntilLive` is true, every client
+ * frame is discarded until the stream reports `open` (provider lifecycle
+ * `live`) - matching host behavior that drops pre-live readiness frames.
+ */
+class FakeStreamSession {
+  readonly sentFrames: Array<Record<string, unknown>> = [];
+  readonly droppedFrames: Array<Record<string, unknown>> = [];
+  throwOnNextSend: Error | null = null;
+  private readonly dropUntilLive: boolean;
+  private transportLive = false;
+  private serverHandler:
+    | ((
+        envelope: Record<string, unknown>,
+        binaryPayload: Uint8Array | null,
+      ) => void)
+    | null = null;
+  private statusHandler:
+    | ((status: StreamConnectionStatus, reason: null) => void)
+    | null = null;
+  closed = false;
+
+  constructor(options: { readonly dropUntilLive: boolean }) {
+    this.dropUntilLive = options.dropUntilLive;
+  }
+
+  sendClientFrame(
+    frame: Record<string, unknown>,
+    _binaryPayload: Uint8Array | null,
+  ): void {
+    if (this.throwOnNextSend !== null) {
+      const error = this.throwOnNextSend;
+      this.throwOnNextSend = null;
+      throw error;
+    }
+    if (this.dropUntilLive && !this.transportLive) {
+      this.droppedFrames.push(frame);
+      return;
+    }
+    this.sentFrames.push(frame);
+  }
+
+  onServerFrame(
+    handler: (
+      envelope: Record<string, unknown>,
+      binaryPayload: Uint8Array | null,
+    ) => void,
+  ): void {
+    this.serverHandler = handler;
+  }
+
+  onStatusChange(
+    handler: (status: StreamConnectionStatus, reason: null) => void,
+  ): void {
+    this.statusHandler = handler;
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+
+  /** A peer on the live line; the wrapper reads this to pick lift or not. */
+  getNegotiatedSchemaVersion(): SchemaVersion | null {
+    return LIVE_BROWSER_STREAM_VERSION;
+  }
+
+  emitStatus(status: StreamConnectionStatus): void {
+    if (this.dropUntilLive) {
+      this.transportLive = status === "open";
+    }
+    this.statusHandler?.(status, null);
+  }
+
+  emit(
+    envelope: Record<string, unknown>,
+    binaryPayload: Uint8Array | null,
+  ): void {
+    this.serverHandler?.(envelope, binaryPayload);
+  }
+}
+
+class FakeStreamClient {
+  readonly sessions: FakeStreamSession[] = [];
+  readonly subscribes: Array<{
+    readonly method: string;
+    readonly params: unknown;
+  }> = [];
+  readonly wireSubscriptions: Array<{
+    readonly endpoint: string;
+    readonly method: string;
+    readonly params: unknown;
+  }> = [];
+  readonly reconnects: Array<{
+    readonly reason: string;
+    readonly endpoint: string;
+  }> = [];
+  private readonly dropUntilLive: boolean;
+  private endpoint: string;
+  private readonly subscriptionBySession = new Map<
+    FakeStreamSession,
+    { readonly method: string; readonly params: unknown }
+  >();
+  closed = false;
+
+  constructor(options: {
+    readonly dropUntilLive: boolean;
+    readonly endpoint: string;
+  }) {
+    this.dropUntilLive = options.dropUntilLive;
+    this.endpoint = options.endpoint;
+  }
+
+  subscribe(method: string, params: unknown): FakeStreamSession {
+    const session = new FakeStreamSession({
+      dropUntilLive: this.dropUntilLive,
+    });
+    this.sessions.push(session);
+    this.subscribes.push({ method, params });
+    this.subscriptionBySession.set(session, { method, params });
+    this.wireSubscriptions.push({
+      endpoint: this.endpoint,
+      method,
+      params,
+    });
+    return session;
+  }
+
+  // These three are one seam, and a double must answer all three: the browser
+  // wrappers open through `subscribeWithParamsProvider` (the open request is
+  // shaped for the negotiated major) and through `subscribeAtVersion` for the
+  // `independent` scope, which pins `@2`. A double answering only `subscribe`
+  // sends this suite down a path production never takes.
+  subscribeWithParamsProvider(
+    method: string,
+    paramsProvider: (onWireVersion: SchemaVersion | null) => unknown,
+  ): FakeStreamSession {
+    return this.subscribe(method, paramsProvider(LIVE_BROWSER_STREAM_VERSION));
+  }
+
+  subscribeAtVersion(
+    method: string,
+    _schemaVersion: SchemaVersion,
+    params: unknown,
+  ): FakeStreamSession {
+    return this.subscribe(method, params);
+  }
+
+  setEndpoint(endpoint: string): void {
+    this.endpoint = endpoint;
+  }
+
+  reconnectAll(reason: string): void {
+    if (this.closed) return;
+    this.reconnects.push({ reason, endpoint: this.endpoint });
+    for (const session of this.sessions) {
+      const subscription = this.subscriptionBySession.get(session);
+      if (subscription === undefined) continue;
+      session.emitStatus("reconnecting");
+      this.wireSubscriptions.push({
+        endpoint: this.endpoint,
+        ...subscription,
+      });
+      session.emitStatus("open");
+    }
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    for (const session of this.sessions) {
+      session.close();
+    }
+  }
+}
+
+class FakeDurableTransport {
+  readonly wsStreamClient: FakeStreamClient;
+  readonly dialedEndpoints: string[] = [];
+  private readonly initialEndpoint: string;
+  closed = false;
+  private opened = false;
+
+  constructor(options: {
+    readonly dropUntilLive: boolean;
+    readonly initialEndpoint: string;
+  }) {
+    this.initialEndpoint = options.initialEndpoint;
+    this.wsStreamClient = new FakeStreamClient({
+      dropUntilLive: options.dropUntilLive,
+      endpoint: options.initialEndpoint,
+    });
+  }
+
+  open(): void {
+    if (this.opened || this.closed) return;
+    this.opened = true;
+    this.dialedEndpoints.push(this.initialEndpoint);
+  }
+
+  moveEndpoint(endpoint: string): void {
+    if (this.closed) return;
+    this.dialedEndpoints.push(endpoint);
+    this.wsStreamClient.setEndpoint(endpoint);
+    this.wsStreamClient.reconnectAll("host-endpoint-change");
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.wsStreamClient.close();
+  }
+}
+
+const INITIAL_ENDPOINT = "ws://host-a/stream";
+const RESTARTED_ENDPOINT = "ws://host-b/stream";
+
+function Probe(): ReactNode {
+  const sessions = useBrowserSessionsContext();
+  const [closeTabStatus, setCloseTabStatus] = useState("idle");
+  return (
+    <div>
+      <span data-testid="lifecycle">{sessions.lifecycle}</span>
+      <span data-testid="inventory-ready">
+        {sessions.inventoryReady ? "ready" : "loading"}
+      </span>
+      <span data-testid="count">{sessions.items.length}</span>
+      <span data-testid="can-materialize-electron">
+        {sessions.canMaterializeElectron ? "yes" : "no"}
+      </span>
+      <span data-testid="close-tab-status">{closeTabStatus}</span>
+      <ul>
+        {sessions.items.map((session) => (
+          <li key={session.sessionId}>{session.sessionId}</li>
+        ))}
+      </ul>
+      <button
+        type="button"
+        onClick={() => {
+          setCloseTabStatus("pending");
+          void sessions.closeTab("sess-1", "tab-1").then(
+            () => {
+              setCloseTabStatus("ok");
+            },
+            (error: unknown) => {
+              setCloseTabStatus(
+                error instanceof Error ? error.message : "failed",
+              );
+            },
+          );
+        }}
+      >
+        close-tab
+      </button>
+    </div>
+  );
+}
+
+function SharedProbe(props: { readonly id: string }): ReactNode {
+  const sessions = useBrowserSessionsContext();
+  return (
+    <div>
+      <span data-testid={`${props.id}-count`}>{sessions.items.length}</span>
+      <span data-testid={`${props.id}-sessions`}>
+        {sessions.items.map((session) => session.sessionId).join(",")}
+      </span>
+    </div>
+  );
+}
+
+function PresentedBrowserSessionsProvider(props: {
+  readonly viewTabId: string;
+  readonly visible: boolean;
+  readonly focused: boolean;
+  readonly id: string;
+}): ReactNode {
+  return (
+    <EpicViewTabContext.Provider value={props.viewTabId}>
+      <PaneSurfaceActivityContext.Provider
+        value={{ visible: props.visible, focused: props.focused }}
+      >
+        <PaneVisibilityContext.Provider value={props.visible}>
+          <BrowserSessionsProvider epicId="epic-1">
+            <SharedProbe id={props.id} />
+          </BrowserSessionsProvider>
+        </PaneVisibilityContext.Provider>
+      </PaneSurfaceActivityContext.Provider>
+    </EpicViewTabContext.Provider>
+  );
+}
+
+function renderProvider(): void {
+  render(
+    <BrowserSessionsProvider epicId="epic-1">
+      <Probe />
+    </BrowserSessionsProvider>,
+  );
+}
+
+function installTransport(dropUntilLive: boolean): void {
+  const transport = new FakeDurableTransport({
+    dropUntilLive,
+    initialEndpoint: INITIAL_ENDPOINT,
+  });
+  hookState.durableTransport = transport;
+  hookState.streamClient = transport.wsStreamClient;
+  hookState.durableTransportsByHostId.clear();
+  hookState.durableTransportQueuesByHostId.clear();
+  hookState.hostEntriesByHostId.clear();
+  hookState.ownerIdentityKeysByClient.clear();
+  hookState.openedHostIds = [];
+  hookState.hostEntry = {
+    ...hookState.hostEntry,
+    websocketUrl: INITIAL_ENDPOINT,
+    version: "test-version",
+  };
+}
+
+function installTransportForHost(
+  hostId: string,
+  endpoint: string,
+): FakeDurableTransport {
+  const transport = new FakeDurableTransport({
+    dropUntilLive: false,
+    initialEndpoint: endpoint,
+  });
+  hookState.durableTransportsByHostId.set(hostId, transport);
+  hookState.hostEntriesByHostId.set(hostId, {
+    hostId,
+    label: hostId,
+    kind: "local",
+    websocketUrl: endpoint,
+    version: "test-version",
+    transportDialability: "dialable",
+  });
+  return transport;
+}
+
+function createTestHostClient(id: string): HostClient<HostRpcRegistry> {
+  return new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `request-${id}`,
+      handlers: {},
+    }),
+  });
+}
+
+function browserSessionFixture(
+  hostId: string,
+  sessionId: string,
+): BrowserSessionInfo {
+  return sessionInfo({
+    sessionId,
+    hostId,
+    lastActivityAt: 2,
+    runtime: { kind: "electron", revision: 0 },
+  });
+}
+
+describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
+  beforeEach(() => {
+    surfaceHostOpenedTabMock.mockClear();
+    surfaceHostOpenedTabMock.mockReturnValue(true);
+    hookState.ownerIdentityKey = "local\u0000host-test\u0000user-test";
+    hookState.hostEntry = {
+      hostId: "host-test",
+      label: "Test host",
+      kind: "local",
+      websocketUrl: null,
+      version: "test-version",
+      transportDialability: "dialable",
+      owner: null,
+    };
+    hookState.localHostId = "host-test";
+    hookState.browserView = null;
+    installTransport(false);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("opens exactly one epic-scoped browser.sessions subscription", () => {
+    renderProvider();
+    const client = hookState.streamClient;
+    expect(client?.subscribes).toEqual([
+      {
+        method: "browser.sessions",
+        params: openRequest({}),
+      },
+    ]);
+  });
+
+  it("keeps an unknown local owner on the bridge until team ownership is learned", async () => {
+    const bridge = new FakeBrowserViewBridge({});
+    hookState.browserView = bridge;
+    hookState.hostEntry = {
+      ...hookState.hostEntry,
+      websocketUrl: INITIAL_ENDPOINT,
+    };
+    const rendered = render(
+      <BrowserSessionsProvider epicId="epic-1">
+        <Probe />
+      </BrowserSessionsProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("can-materialize-electron").textContent).toBe(
+        "yes",
+      );
+      expect(bridge.openSessionsStreamCalls).toHaveLength(1);
+    });
+
+    const replacement = new FakeDurableTransport({
+      dropUntilLive: false,
+      initialEndpoint: INITIAL_ENDPOINT,
+    });
+    hookState.durableTransportsByHostId.set("host-test", replacement);
+    hookState.hostEntry = {
+      ...hookState.hostEntry,
+      owner: { kind: "team", id: "team-a", name: "Alpha" },
+    };
+    rendered.rerender(
+      <BrowserSessionsProvider epicId="epic-1">
+        <Probe />
+      </BrowserSessionsProvider>,
+    );
+
+    await waitFor(() => {
+      expect(bridge.closeSessionsStreamCalls).toHaveLength(1);
+      expect(replacement.wsStreamClient.subscribes).toHaveLength(1);
+      expect(screen.getByTestId("can-materialize-electron").textContent).toBe(
+        "no",
+      );
+    });
+  });
+
+  it("mounts its own provider for an independent scope on the canvas host", async () => {
+    // The short-circuit exists so a boundary for the canvas host does not
+    // re-wrap the stream the canvas already provides. That stream is
+    // EPIC-scoped, so matching the host alone is not enough to reuse it: an
+    // independent-scope caller falling through would silently read the epic's
+    // inventory instead of the device's. Inert today - every call site passes
+    // epic scope - which is exactly why it needs a test rather than a reader
+    // noticing later.
+    render(
+      <BrowserSessionsHostBoundary
+        hostId="host-test"
+        scope={independentScope()}
+      >
+        <SharedProbe id="independent" />
+      </BrowserSessionsHostBoundary>,
+    );
+
+    await waitFor(() => {
+      expect(hookState.streamClient?.subscribes).toEqual([
+        {
+          method: "browser.sessions",
+          params: openRequest({ scope: independentScope() }),
+        },
+      ]);
+    });
+  });
+
+  it("still falls through for an epic scope on the canvas host", () => {
+    // The other half of the guard: the behavior it must not change. A canvas
+    // -host, epic-scope boundary opens nothing, because the canvas already
+    // provides exactly that stream.
+    render(
+      <BrowserSessionsHostBoundary
+        hostId="host-test"
+        scope={epicScope("epic-1")}
+      >
+        <div data-testid="fell-through" />
+      </BrowserSessionsHostBoundary>,
+    );
+
+    expect(screen.getByTestId("fell-through")).toBeTruthy();
+    expect(hookState.streamClient?.subscribes).toEqual([]);
+  });
+
+  it("shares one coordinator until the last same-owner provider unmounts", async () => {
+    const rendered = render(
+      <>
+        <BrowserSessionsProvider key="first" epicId="epic-1">
+          <SharedProbe id="first" />
+        </BrowserSessionsProvider>
+        <BrowserSessionsProvider key="second" epicId="epic-1">
+          <SharedProbe id="second" />
+        </BrowserSessionsProvider>
+      </>,
+    );
+    const transport = hookState.durableTransport;
+    if (transport === null) throw new Error("expected durable transport");
+    const client = transport.wsStreamClient;
+
+    await waitFor(() => {
+      expect(hookState.openedHostIds).toEqual(["host-test"]);
+      expect(client.subscribes).toEqual([
+        {
+          method: "browser.sessions",
+          params: openRequest({}),
+        },
+      ]);
+    });
+    const stream = client.sessions[0];
+    act(() => {
+      stream.emitStatus("open");
+      stream.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sessions: [browserSessionFixture("host-test", "shared-session")],
+        },
+        null,
+      );
+    });
+    expect(screen.getByTestId("first-count").textContent).toBe("1");
+    expect(screen.getByTestId("second-count").textContent).toBe("1");
+
+    rendered.rerender(
+      <BrowserSessionsProvider key="second" epicId="epic-1">
+        <SharedProbe id="second" />
+      </BrowserSessionsProvider>,
+    );
+    expect(transport.closed).toBe(false);
+    expect(stream.closed).toBe(false);
+    expect(client.subscribes).toHaveLength(1);
+    expect(screen.getByTestId("second-sessions").textContent).toBe(
+      "shared-session",
+    );
+
+    rendered.unmount();
+    expect(transport.closed).toBe(true);
+    expect(stream.closed).toBe(true);
+  });
+
+  it("presents a host-opened tab in the focused retained view, not the first coordinator consumer", async () => {
+    render(
+      <>
+        <PresentedBrowserSessionsProvider
+          viewTabId="view-background"
+          visible={false}
+          focused={false}
+          id="background"
+        />
+        <PresentedBrowserSessionsProvider
+          viewTabId="view-focused"
+          visible
+          focused
+          id="focused"
+        />
+      </>,
+    );
+    const client = hookState.streamClient;
+    await waitFor(() => {
+      expect(client?.subscribes).toHaveLength(1);
+    });
+    const stream = client?.sessions[0];
+    if (stream === undefined) throw new Error("expected shared stream");
+
+    act(() => {
+      stream.emitStatus("open");
+      stream.emit(
+        {
+          kind: "tabOpened",
+          hasBinaryPayload: false,
+          sessionId: "session-popup",
+          tabId: "tab-popup",
+          source: "page",
+          openerTabId: null,
+        },
+        null,
+      );
+    });
+
+    expect(surfaceHostOpenedTabMock).toHaveBeenCalledOnce();
+    expect(surfaceHostOpenedTabMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        epicId: "epic-1",
+        viewTabId: "view-focused",
+        sessionId: "session-popup",
+        tabId: "tab-popup",
+        source: "page",
+      }),
+    );
+  });
+
+  it("falls back when the preferred presenter was closed before delivery", async () => {
+    surfaceHostOpenedTabMock
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    render(
+      <>
+        <PresentedBrowserSessionsProvider
+          viewTabId="view-focused-stale"
+          visible
+          focused
+          id="focused-stale"
+        />
+        <PresentedBrowserSessionsProvider
+          viewTabId="view-visible-fallback"
+          visible
+          focused={false}
+          id="visible-fallback"
+        />
+      </>,
+    );
+    const client = hookState.streamClient;
+    await waitFor(() => {
+      expect(client?.subscribes).toHaveLength(1);
+    });
+    const stream = client?.sessions[0];
+    if (stream === undefined) throw new Error("expected shared stream");
+
+    act(() => {
+      stream.emitStatus("open");
+      stream.emit(
+        {
+          kind: "tabOpened",
+          hasBinaryPayload: false,
+          sessionId: "session-popup",
+          tabId: "tab-popup",
+          source: "page",
+          openerTabId: null,
+        },
+        null,
+      );
+    });
+
+    expect(surfaceHostOpenedTabMock).toHaveBeenCalledTimes(2);
+    expect(surfaceHostOpenedTabMock.mock.calls[0]?.[0]).toMatchObject({
+      viewTabId: "view-focused-stale",
+    });
+    expect(surfaceHostOpenedTabMock.mock.calls[1]?.[0]).toMatchObject({
+      viewTabId: "view-visible-fallback",
+    });
+  });
+
+  it("keeps different hosts separate for the same owner identity", async () => {
+    const hostATransport = installTransportForHost(
+      "host-a",
+      "ws://host-a/stream",
+    );
+    const hostBTransport = installTransportForHost(
+      "host-b",
+      "ws://host-b/stream",
+    );
+    const hostClientA = createTestHostClient("user-a");
+    const hostClientB = createTestHostClient("user-b");
+    hookState.ownerIdentityKeysByClient.set(
+      hostClientA,
+      "shared-owner-identity",
+    );
+    hookState.ownerIdentityKeysByClient.set(
+      hostClientB,
+      "shared-owner-identity",
+    );
+
+    const rendered = render(
+      <>
+        <BrowserSessionsHostProvider
+          hostId="host-a"
+          hostClient={hostClientA}
+          scope={epicScope("epic-1")}
+        >
+          <SharedProbe id="host-a" />
+        </BrowserSessionsHostProvider>
+        <BrowserSessionsHostProvider
+          hostId="host-b"
+          hostClient={hostClientB}
+          scope={epicScope("epic-1")}
+        >
+          <SharedProbe id="host-b" />
+        </BrowserSessionsHostProvider>
+      </>,
+    );
+
+    await waitFor(() => {
+      expect([...hookState.openedHostIds].sort()).toEqual(["host-a", "host-b"]);
+      expect(hostATransport.wsStreamClient.subscribes).toHaveLength(1);
+      expect(hostBTransport.wsStreamClient.subscribes).toHaveLength(1);
+    });
+    const hostAStream = hostATransport.wsStreamClient.sessions[0];
+    const hostBStream = hostBTransport.wsStreamClient.sessions[0];
+    act(() => {
+      hostAStream.emitStatus("open");
+      hostAStream.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sessions: [browserSessionFixture("host-a", "session-a")],
+        },
+        null,
+      );
+      hostBStream.emitStatus("open");
+      hostBStream.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sessions: [browserSessionFixture("host-b", "session-b")],
+        },
+        null,
+      );
+    });
+    expect(screen.getByTestId("host-a-sessions").textContent).toBe("session-a");
+    expect(screen.getByTestId("host-b-sessions").textContent).toBe("session-b");
+
+    rendered.unmount();
+    expect(hostATransport.closed).toBe(true);
+    expect(hostBTransport.closed).toBe(true);
+  });
+
+  it("keeps different owners on one host in separate coordinators", async () => {
+    const ownerATransport = new FakeDurableTransport({
+      dropUntilLive: false,
+      initialEndpoint: "ws://shared-host/owner-a",
+    });
+    const ownerBTransport = new FakeDurableTransport({
+      dropUntilLive: false,
+      initialEndpoint: "ws://shared-host/owner-b",
+    });
+    hookState.durableTransportQueuesByHostId.set("shared-host", [
+      ownerATransport,
+      ownerBTransport,
+    ]);
+    hookState.hostEntriesByHostId.set("shared-host", {
+      hostId: "shared-host",
+      label: "Shared host",
+      kind: "local",
+      websocketUrl: "ws://shared-host/stream",
+      version: "test-version",
+      transportDialability: "dialable",
+    });
+    const hostClientA = createTestHostClient("owner-a");
+    const hostClientB = createTestHostClient("owner-b");
+    hookState.ownerIdentityKeysByClient.set(hostClientA, "owner-a");
+    hookState.ownerIdentityKeysByClient.set(hostClientB, "owner-b");
+
+    const rendered = render(
+      <>
+        <BrowserSessionsHostProvider
+          hostId="shared-host"
+          hostClient={hostClientA}
+          scope={epicScope("epic-1")}
+        >
+          <SharedProbe id="owner-a" />
+        </BrowserSessionsHostProvider>
+        <BrowserSessionsHostProvider
+          hostId="shared-host"
+          hostClient={hostClientB}
+          scope={epicScope("epic-1")}
+        >
+          <SharedProbe id="owner-b" />
+        </BrowserSessionsHostProvider>
+      </>,
+    );
+
+    await waitFor(() => {
+      expect(hookState.openedHostIds).toEqual(["shared-host", "shared-host"]);
+      expect(ownerATransport.wsStreamClient.subscribes).toHaveLength(1);
+      expect(ownerBTransport.wsStreamClient.subscribes).toHaveLength(1);
+    });
+    const ownerAStream = ownerATransport.wsStreamClient.sessions[0];
+    const ownerBStream = ownerBTransport.wsStreamClient.sessions[0];
+    act(() => {
+      ownerAStream.emitStatus("open");
+      ownerAStream.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sessions: [browserSessionFixture("shared-host", "owner-a-session")],
+        },
+        null,
+      );
+      ownerBStream.emitStatus("open");
+      ownerBStream.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sessions: [browserSessionFixture("shared-host", "owner-b-session")],
+        },
+        null,
+      );
+    });
+    expect(screen.getByTestId("owner-a-sessions").textContent).toBe(
+      "owner-a-session",
+    );
+    expect(screen.getByTestId("owner-b-sessions").textContent).toBe(
+      "owner-b-session",
+    );
+
+    rendered.unmount();
+    expect(ownerATransport.closed).toBe(true);
+    expect(ownerBTransport.closed).toBe(true);
+  });
+
+  it("redials the same durable transport on a host restart", async () => {
+    installTransport(true);
+    const transport = hookState.durableTransport;
+    expect(transport).toBeDefined();
+    if (transport === null) {
+      throw new Error("expected durable stream transport");
+    }
+    const { rerender } = render(
+      <BrowserSessionsProvider epicId="epic-1">
+        <Probe />
+      </BrowserSessionsProvider>,
+    );
+    const client = transport.wsStreamClient;
+    await waitFor(() => {
+      expect(hookState.openedHostIds).toEqual(["host-test"]);
+      expect(client.subscribes).toEqual([
+        {
+          method: "browser.sessions",
+          params: openRequest({}),
+        },
+      ]);
+    });
+    expect(transport.dialedEndpoints).toEqual([INITIAL_ENDPOINT]);
+    expect(client.wireSubscriptions).toEqual([
+      {
+        endpoint: INITIAL_ENDPOINT,
+        method: "browser.sessions",
+        params: openRequest({}),
+      },
+    ]);
+
+    const stream = client.sessions[0];
+    expect(stream).toBeDefined();
+    act(() => {
+      stream.emitStatus("open");
+      stream.emit(
+        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
+        null,
+      );
+    });
+
+    act(() => {
+      hookState.hostEntry = {
+        ...hookState.hostEntry,
+        websocketUrl: null,
+      };
+      rerender(
+        <BrowserSessionsProvider epicId="epic-1">
+          <Probe />
+        </BrowserSessionsProvider>,
+      );
+    });
+    expect(hookState.openedHostIds).toEqual(["host-test"]);
+    expect(transport.closed).toBe(false);
+    expect(stream.closed).toBe(false);
+
+    act(() => {
+      hookState.hostEntry = {
+        ...hookState.hostEntry,
+        websocketUrl: RESTARTED_ENDPOINT,
+      };
+      rerender(
+        <BrowserSessionsProvider epicId="epic-1">
+          <Probe />
+        </BrowserSessionsProvider>,
+      );
+      transport.moveEndpoint(RESTARTED_ENDPOINT);
+    });
+    expect(hookState.openedHostIds).toEqual(["host-test"]);
+    expect(transport.dialedEndpoints).toEqual([
+      INITIAL_ENDPOINT,
+      RESTARTED_ENDPOINT,
+    ]);
+    expect(client.reconnects).toEqual([
+      { reason: "host-endpoint-change", endpoint: RESTARTED_ENDPOINT },
+    ]);
+    // The durable client keeps the public subscription and re-declares it on
+    // the new socket; the provider must not replace or close this session.
+    expect(client.subscribes).toHaveLength(1);
+    expect(client.wireSubscriptions).toHaveLength(2);
+    expect(client.wireSubscriptions[1]).toEqual({
+      endpoint: RESTARTED_ENDPOINT,
+      method: "browser.sessions",
+      params: openRequest({}),
+    });
+    expect(stream.closed).toBe(false);
+
+    cleanup();
+    expect(transport.closed).toBe(true);
+    expect(stream.closed).toBe(true);
+  });
+
+  it("releases a held coordinator when its host falls below the version floor", () => {
+    const transport = hookState.durableTransport;
+    if (transport === null) {
+      throw new Error("expected durable stream transport");
+    }
+    // A fresh element each time: React skips re-rendering an identical one.
+    const providerTree = (): ReactNode => (
+      <BrowserSessionsProvider epicId="epic-1">
+        <Probe />
+      </BrowserSessionsProvider>
+    );
+    const { rerender } = render(providerTree());
+    const stream = transport.wsStreamClient.sessions[0];
+    expect(stream).toBeDefined();
+    act(() => {
+      stream.emitStatus("open");
+    });
+
+    act(() => {
+      hookState.hostEntry = {
+        ...hookState.hostEntry,
+        version: MINIMUM_HOST_VERSION,
+      };
+      rerender(providerTree());
+    });
+    expect(transport.closed).toBe(false);
+    expect(stream.closed).toBe(false);
+
+    act(() => {
+      hookState.hostEntry = { ...hookState.hostEntry, version: "1.9.0" };
+      rerender(providerTree());
+    });
+    expect(hookState.openedHostIds).toEqual(["host-test"]);
+    expect(transport.closed).toBe(true);
+    expect(stream.closed).toBe(true);
+  });
+
+  it("opens one coordinator when the host rises back to the version floor", () => {
+    const transport = hookState.durableTransport;
+    if (transport === null) {
+      throw new Error("expected durable stream transport");
+    }
+    hookState.hostEntry = { ...hookState.hostEntry, version: "1.9.0" };
+    const providerTree = (): ReactNode => (
+      <BrowserSessionsProvider epicId="epic-1">
+        <Probe />
+      </BrowserSessionsProvider>
+    );
+    const { rerender } = render(providerTree());
+    expect(hookState.openedHostIds).toEqual([]);
+    expect(transport.wsStreamClient.sessions).toHaveLength(0);
+
+    act(() => {
+      hookState.hostEntry = {
+        ...hookState.hostEntry,
+        version: MINIMUM_HOST_VERSION,
+      };
+      rerender(providerTree());
+    });
+    expect(hookState.openedHostIds).toEqual(["host-test"]);
+    expect(transport.closed).toBe(false);
+    expect(transport.wsStreamClient.sessions).toHaveLength(1);
+  });
+
+  it("surfaces live snapshot sessions", () => {
+    renderProvider();
+    const stream = hookState.streamClient?.sessions[0];
+    act(() => {
+      stream?.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sessions: [
+            sessionInfo({
+              sessionId: "sess-1",
+              hostId: "host-test",
+              lastActivityAt: 2,
+              runtime: { kind: "electron", revision: 0 },
+              tabs: [
+                tabInfo({
+                  tabId: "tab-1",
+                  url: "https://example.com",
+                  title: "Example",
+                }),
+              ],
+            }),
+          ],
+        },
+        null,
+      );
+    });
+
+    expect(screen.getByTestId("count").textContent).toBe("1");
+    expect(screen.getByText("sess-1")).toBeTruthy();
+  });
+
+  it("hides inventory and blocks actions from a retired owner identity", async () => {
+    const rendered = render(
+      <BrowserSessionsProvider epicId="epic-1">
+        <Probe />
+      </BrowserSessionsProvider>,
+    );
+    const retiredTransport = hookState.durableTransport;
+    const retiredStream = retiredTransport?.wsStreamClient.sessions[0];
+    if (retiredTransport === null || retiredStream === undefined) {
+      throw new Error("expected retired browser sessions stream");
+    }
+    act(() => {
+      retiredStream.emitStatus("open");
+      retiredStream.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sessions: [
+            sessionInfo({
+              sessionId: "sess-1",
+              hostId: "host-test",
+              lastActivityAt: 2,
+              runtime: { kind: "electron", revision: 0 },
+              tabs: [
+                tabInfo({
+                  tabId: "tab-1",
+                  url: "https://example.com",
+                  title: "Example",
+                }),
+              ],
+            }),
+          ],
+        },
+        null,
+      );
+    });
+    expect(screen.getByTestId("count").textContent).toBe("1");
+
+    act(() => {
+      hookState.ownerIdentityKey = "local\u0000host-test\u0000other-user";
+      installTransport(false);
+      rendered.rerender(
+        <BrowserSessionsProvider epicId="epic-1">
+          <Probe />
+        </BrowserSessionsProvider>,
+      );
+    });
+
+    await waitFor(() => {
+      expect(retiredTransport.closed).toBe(true);
+      expect(hookState.streamClient?.sessions).toHaveLength(1);
+    });
+    expect(screen.getByTestId("count").textContent).toBe("0");
+    act(() => {
+      screen.getByRole("button", { name: "close-tab" }).click();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("close-tab-status").textContent).toBe(
+        "Browser sessions stream is not ready.",
+      );
+    });
+    expect(
+      retiredStream.sentFrames.filter((frame) => frame.kind === "closeTab"),
+    ).toEqual([]);
+  });
+
+  it("makes each stream inventory authoritative only after its snapshot", () => {
+    renderProvider();
+    const stream = hookState.streamClient?.sessions[0];
+    if (stream === undefined) throw new Error("expected browser stream");
+
+    expect(screen.getByTestId("inventory-ready").textContent).toBe("loading");
+    act(() => {
+      stream.emitStatus("open");
+    });
+    expect(screen.getByTestId("inventory-ready").textContent).toBe("loading");
+
+    act(() => {
+      stream.emit(
+        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
+        null,
+      );
+    });
+    expect(screen.getByTestId("inventory-ready").textContent).toBe("ready");
+
+    act(() => {
+      stream.emitStatus("reconnecting");
+    });
+    expect(screen.getByTestId("inventory-ready").textContent).toBe("loading");
+  });
+
+  it("sends closeTab frames and settles them on actionAck", async () => {
+    renderProvider();
+    const stream = hookState.streamClient?.sessions[0];
+    act(() => {
+      stream?.emitStatus("open");
+    });
+    act(() => {
+      screen.getByRole("button", { name: "close-tab" }).click();
+    });
+    const sent = stream?.sentFrames.find((frame) => frame.kind === "closeTab");
+    expect(sent).toMatchObject({
+      kind: "closeTab",
+      hasBinaryPayload: false,
+      sessionId: "sess-1",
+      tabId: "tab-1",
+    });
+    expect(typeof sent?.requestId).toBe("string");
+    const requestId =
+      sent !== undefined && typeof sent.requestId === "string"
+        ? sent.requestId
+        : null;
+    expect(requestId).not.toBeNull();
+    if (requestId === null) throw new Error("expected closeTab requestId");
+    act(() => {
+      stream?.emit(
+        {
+          kind: "actionAck",
+          hasBinaryPayload: false,
+          requestId,
+          ok: true,
+          reason: null,
+        },
+        null,
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("close-tab-status").textContent).toBe("ok");
+    });
+  });
+
+  it("rejects closeTab when actionAck is not ok", async () => {
+    renderProvider();
+    const stream = hookState.streamClient?.sessions[0];
+    act(() => {
+      stream?.emitStatus("open");
+    });
+    act(() => {
+      screen.getByRole("button", { name: "close-tab" }).click();
+    });
+    const sent = stream?.sentFrames.find((frame) => frame.kind === "closeTab");
+    const requestId =
+      sent !== undefined && typeof sent.requestId === "string"
+        ? sent.requestId
+        : null;
+    expect(requestId).not.toBeNull();
+    if (requestId === null) throw new Error("expected closeTab requestId");
+    act(() => {
+      stream?.emit(
+        {
+          kind: "actionAck",
+          hasBinaryPayload: false,
+          requestId,
+          ok: false,
+          reason: "Tab is already gone.",
+        },
+        null,
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("close-tab-status").textContent).toBe(
+        "Tab is already gone.",
+      );
+    });
+  });
+
+  it("rejects closeTab when the stream disconnects", async () => {
+    renderProvider();
+    const stream = hookState.streamClient?.sessions[0];
+    act(() => {
+      stream?.emitStatus("open");
+    });
+    act(() => {
+      screen.getByRole("button", { name: "close-tab" }).click();
+    });
+    expect(screen.getByTestId("close-tab-status").textContent).toBe("pending");
+    act(() => {
+      stream?.emitStatus("closed");
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("close-tab-status").textContent).toBe(
+        "Browser sessions stream closed.",
+      );
+    });
+  });
+
+  it("rejects closeTab immediately while reconnecting without enqueueing a frame", async () => {
+    renderProvider();
+    const stream = hookState.streamClient?.sessions[0];
+    act(() => {
+      stream?.emitStatus("open");
+    });
+    act(() => {
+      stream?.emitStatus("reconnecting");
+    });
+    const before = (stream?.sentFrames ?? []).filter(
+      (frame) => frame.kind === "closeTab",
+    ).length;
+    act(() => {
+      screen.getByRole("button", { name: "close-tab" }).click();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("close-tab-status").textContent).toBe(
+        "Browser sessions stream is not ready.",
+      );
+    });
+    expect(
+      (stream?.sentFrames ?? []).filter((frame) => frame.kind === "closeTab"),
+    ).toHaveLength(before);
+  });
+
+  it("rejects closeTab and drops the pending waiter when sendClientFrame throws", async () => {
+    renderProvider();
+    const stream = hookState.streamClient?.sessions[0];
+    act(() => {
+      stream?.emitStatus("open");
+    });
+    if (stream === undefined) throw new Error("expected stream");
+    stream.throwOnNextSend = new Error("send failed");
+    act(() => {
+      screen.getByRole("button", { name: "close-tab" }).click();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("close-tab-status").textContent).toBe(
+        "send failed",
+      );
+    });
+    act(() => {
+      screen.getByRole("button", { name: "close-tab" }).click();
+    });
+    expect(
+      stream.sentFrames.filter((frame) => frame.kind === "closeTab"),
+    ).toHaveLength(1);
+  });
+});
+
+describe("BrowserOpenSessionsProvider", () => {
+  const TAB_ID = "view-tab-open";
+  const LOCAL_HOST_ID = "local-host";
+  const PINNED_HOST_ID = "pinned-host";
+
+  // The ref is read at click time, so the probe reads it in a click handler.
+  function OpenSnapshotProbe(): ReactNode {
+    const snapshot = useMaybeBrowserOpenSessionsSnapshot();
+    const [published, setPublished] = useState("unread");
+    return (
+      <button
+        type="button"
+        data-testid="open-host"
+        onClick={() => {
+          setPublished(
+            snapshot === null ? "no-ref" : (snapshot.current?.hostId ?? "null"),
+          );
+        }}
+      >
+        {published}
+      </button>
+    );
+  }
+
+  function publishedOpenHost(): string | null {
+    fireEvent.click(screen.getByTestId("open-host"));
+    return screen.getByTestId("open-host").textContent;
+  }
+
+  function renderOpenProvider(): void {
+    render(
+      <BrowserOpenSessionsProvider epicId="epic-1" tabId={TAB_ID}>
+        <OpenSnapshotProbe />
+      </BrowserOpenSessionsProvider>,
+    );
+  }
+
+  beforeEach(() => {
+    installTransport(false);
+    installTransportForHost(LOCAL_HOST_ID, "ws://local-host/stream");
+    installTransportForHost(PINNED_HOST_ID, "ws://pinned-host/stream");
+    useSurfaceHostSelectionStore.getState().resetForTests();
+    useSelectionAuthorityStore.getState().reset();
+  });
+
+  afterEach(() => {
+    cleanup();
+    hookState.localHostId = "host-test";
+    useSurfaceHostSelectionStore.getState().resetForTests();
+    useSelectionAuthorityStore.getState().reset();
+  });
+
+  it("publishes this machine's host inventory when no pin picks one", () => {
+    hookState.localHostId = LOCAL_HOST_ID;
+
+    renderOpenProvider();
+
+    expect(publishedOpenHost()).toBe(LOCAL_HOST_ID);
+  });
+
+  it("publishes the panel's pinned host before this machine's", () => {
+    hookState.localHostId = LOCAL_HOST_ID;
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(tabSurfaceKey("browsers", TAB_ID), PINNED_HOST_ID);
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      leases: [
+        { hostId: LOCAL_HOST_ID, status: "ready", dead: null },
+        { hostId: PINNED_HOST_ID, status: "ready", dead: null },
+      ],
+    });
+
+    renderOpenProvider();
+
+    expect(publishedOpenHost()).toBe(PINNED_HOST_ID);
+  });
+
+  it("publishes nothing when neither a pin nor a local host picks one", () => {
+    hookState.localHostId = null;
+
+    renderOpenProvider();
+
+    expect(publishedOpenHost()).toBe("null");
+  });
+
+  it("publishes this machine's host when the pinned host is dead", () => {
+    hookState.localHostId = LOCAL_HOST_ID;
+    useSurfaceHostSelectionStore
+      .getState()
+      .setSelection(tabSurfaceKey("browsers", TAB_ID), PINNED_HOST_ID);
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      leases: [
+        { hostId: LOCAL_HOST_ID, status: "ready", dead: null },
+        { hostId: PINNED_HOST_ID, status: "dead", dead: { reason: "offline" } },
+      ],
+    });
+
+    renderOpenProvider();
+
+    expect(publishedOpenHost()).toBe(LOCAL_HOST_ID);
+  });
+
+  // Nothing published sends an open to the tile's own host, as before.
+  it("publishes nothing when this machine's host is dead", () => {
+    hookState.localHostId = LOCAL_HOST_ID;
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      leases: [
+        { hostId: LOCAL_HOST_ID, status: "dead", dead: { reason: "offline" } },
+      ],
+    });
+
+    renderOpenProvider();
+
+    expect(publishedOpenHost()).toBe("null");
+  });
+
+  it("keeps this machine's host through an expected restart", () => {
+    hookState.localHostId = LOCAL_HOST_ID;
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      leases: [
+        { hostId: LOCAL_HOST_ID, status: "restarting-expected", dead: null },
+      ],
+    });
+
+    renderOpenProvider();
+
+    expect(publishedOpenHost()).toBe(LOCAL_HOST_ID);
+  });
+});

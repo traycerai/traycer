@@ -1,0 +1,1203 @@
+import { SandboxSessionNotice } from "@/components/hosts/sandbox-session-notice";
+import { useMemo, useState, type ReactNode } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import type { UseQueryResult } from "@tanstack/react-query";
+import {
+  HOST_FROZEN_WORD,
+  HOST_SANDBOX_STATES,
+  hostSandboxStateWord,
+} from "@traycer/protocol/host/host-status";
+import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
+import { activateTabIntent } from "@/lib/tab-navigation";
+import { Bot, Clock, ListFilter, Search, Server, Workflow } from "lucide-react";
+import type {
+  SandboxAutomationResponse,
+  SandboxCatalogue,
+  SandboxListResponse,
+  SandboxCost,
+  SandboxSummary,
+  UserSandboxCost,
+} from "@traycer/protocol/host/sandbox-control";
+import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import { SANDBOXES } from "@/components/settings/environment/sandboxes-page.definitions";
+import { SandboxDestroyAllIdleDialog } from "@/components/hosts/sandbox-confirm-dialogs";
+import { SandboxRowActions } from "@/components/settings/panels/sandbox-row-actions";
+import { useOpenAutomationTerminal } from "@/components/settings/panels/use-open-automation-terminal";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useSandboxAutomation } from "@/hooks/sandboxes/use-sandbox-automation-query";
+import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import { useTeamBillingAdmin } from "@/hooks/sandboxes/use-team-billing-admin";
+import {
+  sandboxConfigurationOf,
+  useSandboxConfigurations,
+  useSandboxWakeString,
+} from "@/hooks/sandboxes/use-sandbox-configurations";
+import { useSandboxControlUnavailableReason } from "@/hooks/sandboxes/use-sandbox-control-unavailable-reason";
+import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
+import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import { useApplyRequestedSandboxesConfiguration } from "@/hooks/sandboxes/use-apply-requested-sandboxes-configuration";
+import type { EnvironmentPick } from "@/lib/settings-environment-pages";
+import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
+import { useSandboxRowSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
+import { useSandboxSettingsStatus } from "@/hooks/sandboxes/use-sandbox-settings-status";
+import {
+  sandboxSettingsFailed,
+  sandboxSettingsEvidence,
+  sandboxSettingsStepsLine,
+} from "@traycer/protocol/host/sandbox-settings";
+import { useSandboxRowUnreachable } from "@/hooks/sandboxes/use-sandbox-row-unreachable";
+import { useOpenLink } from "@/lib/links/open-link";
+import { useSampledNow } from "@/lib/relative-time";
+import {
+  AUTOMATIONS_RELEASED_LINE,
+  SANDBOX_KIND_FILTER_LABEL,
+  SANDBOX_ROW_FILTER_NONE,
+  SANDBOX_STARTER_FILTER_LABEL,
+  SANDBOX_STATE_FILTER_LABEL,
+  automationsShapeLine,
+  rowInConfiguration,
+  sandboxClockLine,
+  sandboxDestroyAllIdleOffered,
+  sandboxFilterCount,
+  sandboxFilterSummary,
+  sandboxFrozenCause,
+  sandboxFrozenClock,
+  sandboxFrozenOffersAddCredits,
+  sandboxKeptByLabel,
+  sandboxStartedByLabel,
+  sandboxSessionPills,
+  sandboxSessionsLine,
+  type SandboxSessionReport,
+  sandboxListHeader,
+  sandboxPublicState,
+  sandboxRowKind,
+  sandboxRowMatches,
+  sandboxRowShapeAndCostLine,
+  sandboxTeamUsageUrl,
+  sortSandboxRows,
+  unstartedAutomationsMatches,
+  type SandboxKindFilter,
+  type SandboxPageConfiguration,
+  type SandboxPublicState,
+  type SandboxRowFilter,
+  type SandboxStarterFilter,
+  type SandboxStateFilter,
+} from "@/lib/sandboxes/sandbox-row-lines";
+import { sandboxWithdrawalLine } from "@/components/hosts/sandbox-card-model";
+import {
+  ONLY_TEAM_ADMINS_CAN_ADD_CREDITS,
+  ONLY_TEAM_ADMINS_LINE,
+  SANDBOX_LIST_FAILED,
+  wakeString,
+} from "@/lib/sandboxes/sandbox-strings";
+import {
+  configurationStageShape,
+  stageProviderFor,
+  type StageShape,
+} from "@/lib/sandboxes/sandbox-stage-model";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import { useSandboxShapeMemoryStore } from "@/stores/composer/sandbox-shape-memory-store";
+import { useConfigurationSandboxDefaults } from "@/hooks/sandboxes/use-sandbox-defaults";
+import { SandboxDefaultsSection } from "@/components/settings/panels/sandbox-defaults-section";
+import { useRunnerHost } from "@/providers/use-runner-host";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+
+/**
+ * Settings › Sandboxes for one configuration: every sandbox on its
+ * settings, whoever started it, with its cost, under the configuration's
+ * defaults. It manages and never creates: a sandbox starts from a task's host
+ * picker, and the empty page's `New task` goes there.
+ */
+export function SandboxesSettingsPanel(): ReactNode {
+  const { configurations, teamEnvironmentIds, complete } =
+    useSandboxConfigurations();
+  // The configuration is the Environment group's pick; a caller that opens
+  // the page on one moves that pick.
+  const pick = useEnvironmentPick();
+  useApplyRequestedSandboxesConfiguration();
+  const configuration = configurationForPick(configurations, pick);
+  const runnerHost = useRunnerHost();
+  const openLink = useOpenLink();
+  return (
+    <SettingsPanelShell
+      title={SANDBOXES.page.label}
+      description={sandboxesPageDescription(configuration)}
+      bodyClassName="overflow-visible rounded-none border-0 bg-transparent"
+      headerAction={
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {configuration.kind === "team" ? (
+            <Button
+              type="button"
+              variant="link"
+              size="sm"
+              data-testid="sandboxes-team-usage"
+              onClick={() =>
+                void openLink(
+                  sandboxTeamUsageUrl(
+                    runnerHost.signInUrl,
+                    configuration.teamName,
+                  ),
+                  "account",
+                  null,
+                )
+              }
+            >
+              Team usage and credits ↗
+            </Button>
+          ) : null}
+        </div>
+      }
+    >
+      <SandboxDefaultsSection
+        // A configuration's form and save outcome are its own: two can share a
+        // revision, so the form's own key does not tell them apart.
+        key={`defaults:${configurationKey(configuration)}`}
+        configuration={configuration}
+      />
+      <SandboxListSection
+        // A configuration's filter and search are its own.
+        key={configurationKey(configuration)}
+        configuration={configuration}
+        teamEnvironmentIds={teamEnvironmentIds}
+        teamsComplete={complete}
+      />
+    </SettingsPanelShell>
+  );
+}
+
+function sandboxesPageDescription(
+  configuration: SandboxPageConfiguration,
+): string {
+  const start = "Start one from a task's host picker.";
+  if (configuration.kind === "team") {
+    return `Every sandbox running on ${configuration.teamName}'s settings, whoever started it, and what each one costs. ${start}`;
+  }
+  return `Every sandbox running on your settings and what each one costs. ${start}`;
+}
+
+function configurationKey(configuration: SandboxPageConfiguration): string {
+  return configuration.kind === "personal"
+    ? "personal"
+    : `team:${configuration.teamId}`;
+}
+
+/**
+ * The Environment group's pick as this page's configuration: Personal, or the
+ * team whose environment it names. Personal while that team is unresolved;
+ * its list waits for the teams there.
+ */
+function configurationForPick(
+  configurations: readonly SandboxPageConfiguration[],
+  pick: EnvironmentPick,
+): SandboxPageConfiguration {
+  const team =
+    pick.kind === "team"
+      ? configurations.find(
+          (candidate) =>
+            candidate.kind === "team" &&
+            candidate.environmentId === pick.environmentId,
+        )
+      : undefined;
+  return team ?? configurations[0];
+}
+
+// ── Defaults ────────────────────────────────────────────────────────────────
+
+/** The id a configuration's remembered picks and defaults are kept under. */
+function configurationMemoryKey(
+  configuration: SandboxPageConfiguration,
+): string {
+  return configuration.kind === "team" ? configuration.teamId : "personal";
+}
+
+/**
+ * The shape a configuration's New row stages when nobody opens its gear: the
+ * configuration's defaults, else the built-in defaults; `null` before the catalogue
+ * answers. The person's remembered gear pick seeds only their gear.
+ */
+function useConfigurationStageShape(configuration: SandboxPageConfiguration): {
+  readonly catalogue: SandboxCatalogue | null;
+  readonly memoryHostId: string | null;
+  readonly shape: StageShape | null;
+} {
+  const catalogue = useSandboxCatalogue(true).data ?? null;
+  const memoryHostId = useEffectiveHostId();
+  const { read } = useConfigurationSandboxDefaults(
+    configurationMemoryKey(configuration),
+  );
+  const defaults =
+    read !== null && read.kind === "ready" ? read.value.defaults : null;
+  return {
+    catalogue,
+    memoryHostId,
+    shape:
+      catalogue === null ? null : configurationStageShape(catalogue, defaults),
+  };
+}
+
+// ── The list ────────────────────────────────────────────────────────────────
+
+/**
+ * Today's total for the configuration, and the viewer's share of it, as the
+ * server totals each configuration's day: sandboxes destroyed today count,
+ * which the listed rows no longer carry. Personal is every environment that
+ * is none of the viewer's teams'. Personal's day is all the viewer's, so it
+ * names no share.
+ *
+ * A server before those totals: the configuration's rows summed. A team's
+ * share is the viewer's whole share less their Personal rows, which holds
+ * while they are in one team.
+ */
+function todayFigures(input: {
+  readonly configuration: SandboxPageConfiguration;
+  readonly rows: readonly SandboxSummary[];
+  readonly costs: UserSandboxCost | null;
+  readonly personalTodayMc: number;
+  readonly teamEnvironmentIds: ReadonlySet<string>;
+}): { readonly todayMc: number | null; readonly yoursMc: number | null } {
+  if (input.costs === null) return { todayMc: null, yoursMc: null };
+  const days = input.costs.todayByEnvironment;
+  if (days.length > 0) {
+    const { configuration } = input;
+    const ours = days.filter((day) =>
+      configuration.kind === "team"
+        ? day.environmentId === configuration.environmentId
+        : !input.teamEnvironmentIds.has(day.environmentId),
+    );
+    const todayMc = ours.reduce((sum, day) => sum + day.todayMillicredits, 0);
+    if (configuration.kind === "personal") return { todayMc, yoursMc: null };
+    return {
+      todayMc,
+      yoursMc: ours.reduce((sum, day) => sum + day.todayYoursMillicredits, 0),
+    };
+  }
+  const ids = new Set(input.rows.map((row) => row.id));
+  const todayMc = input.costs.sandboxes
+    .filter((cost) => ids.has(cost.sandboxId))
+    .reduce((sum, cost) => sum + cost.todayMillicredits, 0);
+  if (input.configuration.kind === "personal") {
+    return { todayMc, yoursMc: null };
+  }
+  if (input.teamEnvironmentIds.size !== 1) {
+    return { todayMc, yoursMc: null };
+  }
+  return {
+    todayMc,
+    yoursMc: Math.max(
+      0,
+      input.costs.todayYoursMillicredits - input.personalTodayMc,
+    ),
+  };
+}
+
+/**
+ * Whether the configuration's Automations host is listed before its first
+ * shell creates it: offered, with no sandbox or pod yet, and no Automations
+ * row among the configuration's own.
+ */
+function automationsUnstarted(input: {
+  readonly rows: readonly SandboxSummary[] | null;
+  readonly automation: SandboxAutomationResponse | null;
+  readonly configuration: SandboxPageConfiguration;
+  readonly environmentId: string | null;
+}): boolean {
+  const { rows, automation } = input;
+  if (rows === null || automation === null) return false;
+  return (
+    automation.available &&
+    automation.sandbox === null &&
+    automation.pods.length === 0 &&
+    (input.configuration.kind === "personal" || input.environmentId !== null) &&
+    !rows.some((row) => row.kind === "automation")
+  );
+}
+
+/**
+ * Keep positions until membership or a public state changes. Only ids and
+ * states are retained: reports, costs and sessions still render fresh data.
+ * The configuration-keyed list owns this order for as long as it is open.
+ */
+function useOrderedSandboxRows(
+  rows: readonly SandboxSummary[] | null,
+): readonly SandboxSummary[] {
+  const [order, setOrder] = useState<
+    readonly { readonly id: string; readonly state: SandboxPublicState }[]
+  >([]);
+  if (rows === null) return [];
+
+  const rowsById = new Map(rows.map((row) => [row.id, row]));
+  if (
+    order.length !== rows.length ||
+    order.some((entry) => {
+      const row = rowsById.get(entry.id);
+      return row === undefined || sandboxPublicState(row) !== entry.state;
+    })
+  ) {
+    const sorted = sortSandboxRows(rows);
+    setOrder(
+      sorted.map((row) => ({ id: row.id, state: sandboxPublicState(row) })),
+    );
+    return sorted;
+  }
+
+  return order.flatMap(({ id }) => {
+    const row = rowsById.get(id);
+    return row === undefined ? [] : [row];
+  });
+}
+
+interface SandboxListSectionProps {
+  readonly configuration: SandboxPageConfiguration;
+  readonly teamEnvironmentIds: ReadonlySet<string>;
+  readonly teamsComplete: boolean;
+}
+
+function SandboxListSection(props: SandboxListSectionProps): ReactNode {
+  const { configuration } = props;
+  useRefreshSandboxCosts();
+  const list = useSandboxList();
+  const costs = useSandboxCosts();
+  const unavailable = useSandboxControlUnavailableReason();
+  const viewerUserId = useAuthStore((s) => s.contextMetadata?.userId ?? null);
+  const [filter, setFilter] = useState<SandboxRowFilter>(
+    SANDBOX_ROW_FILTER_NONE,
+  );
+  const [destroyAllTargets, setDestroyAllTargets] = useState<
+    readonly SandboxSummary[] | null
+  >(null);
+
+  const allRows = list.data?.sandboxes ?? null;
+  // The configuration's Automations host before its first shell creates it:
+  // listed all the same, released, so it can be opened from here.
+  const automationEnvironmentId =
+    configuration.kind === "team" ? configuration.environmentId : null;
+  const automation = useSandboxAutomation(automationEnvironmentId).data ?? null;
+  const configurationRows = useMemo(() => {
+    if (allRows === null) return null;
+    // Personal's rows are told apart from a team's only once every team's
+    // environment is read.
+    if (configuration.kind === "personal" && !props.teamsComplete) return null;
+    return allRows.filter((row) =>
+      rowInConfiguration(row, configuration, props.teamEnvironmentIds),
+    );
+  }, [allRows, configuration, props.teamEnvironmentIds, props.teamsComplete]);
+  const orderedRows = useOrderedSandboxRows(configurationRows);
+  const shown = orderedRows.filter((row) =>
+    sandboxRowMatches(row, filter, viewerUserId),
+  );
+  const unstartedAutomations = automationsUnstarted({
+    rows: configurationRows,
+    automation,
+    configuration,
+    environmentId: automationEnvironmentId,
+  });
+  const unstartedShown =
+    unstartedAutomations && unstartedAutomationsMatches(filter);
+  const personalTodayMc = useMemo(() => {
+    const data = costs.data ?? null;
+    if (allRows === null || data === null) return 0;
+    const personal = new Set(
+      allRows
+        .filter((row) =>
+          rowInConfiguration(
+            row,
+            { kind: "personal" },
+            props.teamEnvironmentIds,
+          ),
+        )
+        .map((row) => row.id),
+    );
+    return data.sandboxes
+      .filter((cost) => personal.has(cost.sandboxId))
+      .reduce((sum, cost) => sum + cost.todayMillicredits, 0);
+  }, [allRows, costs.data, props.teamEnvironmentIds]);
+
+  const gate = (
+    <SandboxListGate
+      unavailable={unavailable}
+      failed={allRows === null ? list.isError : false}
+      refetching={list.isFetching}
+      onRetry={() => void list.refetch()}
+      rows={configurationRows}
+      configuration={configuration}
+    />
+  );
+  const destroyDialog = (
+    <SandboxDestroyAllIdleDialog
+      targets={destroyAllTargets ?? []}
+      open={destroyAllTargets !== null}
+      onOpenChange={(open) => {
+        if (!open) setDestroyAllTargets(null);
+      }}
+    />
+  );
+  if (
+    configurationRows === null ||
+    (configurationRows.length === 0 && !unstartedAutomations)
+  ) {
+    return (
+      <>
+        {gate}
+        {destroyDialog}
+      </>
+    );
+  }
+  const figures = todayFigures({
+    configuration,
+    rows: configurationRows,
+    costs: costs.data ?? null,
+    personalTodayMc,
+    teamEnvironmentIds: props.teamEnvironmentIds,
+  });
+  const summary = sandboxFilterSummary(
+    filter,
+    shown.length + (unstartedShown ? 1 : 0),
+    configurationRows.length + (unstartedAutomations ? 1 : 0),
+  );
+  const destroyAllOffered = sandboxDestroyAllIdleOffered(filter);
+  const idleTargets = shown.filter((row) => row.kind !== "automation");
+  return (
+    <section
+      aria-label="Sandboxes"
+      className="rounded-xl border border-border/60 bg-card/40"
+      data-testid="sandboxes-list"
+    >
+      <div className="flex flex-col gap-3 border-b border-border/60 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <SandboxListHeading
+          configuration={configuration}
+          summary={summary}
+          rows={configurationRows}
+          unstartedAutomations={unstartedAutomations}
+          figures={figures}
+        />
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <div className="relative min-w-0 flex-1 sm:w-56 sm:flex-none">
+            <Search
+              className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground"
+              aria-hidden
+            />
+            <Input
+              value={filter.search}
+              placeholder="Search by name or task"
+              aria-label="Search by name or task"
+              className="pl-7"
+              data-testid="sandboxes-search"
+              onChange={(event) =>
+                setFilter({ ...filter, search: event.target.value })
+              }
+            />
+          </div>
+          <SandboxFilterMenu filter={filter} onChange={setFilter} />
+          {!destroyAllOffered ? null : (
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              data-testid="sandboxes-destroy-all-idle"
+              disabled={idleTargets.length === 0}
+              onClick={() => setDestroyAllTargets(idleTargets)}
+            >
+              Destroy all idle
+            </Button>
+          )}
+        </div>
+      </div>
+      <ul className="divide-y divide-border/60">
+        {shown.map((row) => (
+          <SandboxListRow
+            key={row.id}
+            summary={row}
+            list={list}
+            configuration={configuration}
+            cost={
+              costs.data?.sandboxes.find((cost) => cost.sandboxId === row.id) ??
+              null
+            }
+            viewerUserId={viewerUserId}
+          />
+        ))}
+        {unstartedShown ? (
+          <UnstartedAutomationsRow
+            configuration={configuration}
+            teamEnvironmentId={automationEnvironmentId}
+          />
+        ) : null}
+      </ul>
+      {destroyDialog}
+    </section>
+  );
+}
+
+/**
+ * The filter summary while one applies, otherwise the count and today's spend.
+ */
+function SandboxListHeading(props: {
+  readonly configuration: SandboxPageConfiguration;
+  readonly summary: string | null;
+  readonly rows: readonly SandboxSummary[];
+  readonly unstartedAutomations: boolean;
+  readonly figures: {
+    readonly todayMc: number | null;
+    readonly yoursMc: number | null;
+  };
+}): ReactNode {
+  const { configuration, figures } = props;
+  const count = sandboxListHeader({
+    rows: props.rows,
+    unstartedAutomations: props.unstartedAutomations,
+    todayMc: figures.todayMc,
+    todayYoursMc: figures.yoursMc,
+  });
+  return (
+    <div className="min-w-0 space-y-1">
+      <h2 className="text-ui font-medium wrap-anywhere">
+        {configuration.kind === "team"
+          ? `${configuration.teamName}'s sandboxes`
+          : "Your sandboxes"}
+      </h2>
+      <p
+        className="text-ui-xs text-muted-foreground"
+        data-testid="sandboxes-list-header"
+      >
+        {props.summary ?? `${count}.`}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * What the list says before it has rows to show: the control plane is not
+ * reachable from this build, the read failed, it is still loading, or the
+ * configuration has none.
+ */
+function SandboxListGate(props: {
+  readonly unavailable: string | null;
+  readonly failed: boolean;
+  readonly refetching: boolean;
+  readonly onRetry: () => void;
+  readonly rows: readonly SandboxSummary[] | null;
+  readonly configuration: SandboxPageConfiguration;
+}): ReactNode {
+  if (props.unavailable !== null) {
+    return (
+      <p className="px-5 py-6 text-ui-sm text-muted-foreground">
+        {props.unavailable}
+      </p>
+    );
+  }
+  if (props.failed) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 px-5 py-6">
+        <p className="text-ui-sm text-muted-foreground">
+          {SANDBOX_LIST_FAILED}
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={props.refetching}
+          onClick={props.onRetry}
+        >
+          Retry
+        </Button>
+      </div>
+    );
+  }
+  if (props.rows === null) {
+    return (
+      <div className="space-y-3 px-5 py-5" data-testid="sandboxes-loading">
+        <Skeleton className="h-6 w-full max-w-96" />
+        <Skeleton className="h-16 w-full" />
+      </div>
+    );
+  }
+  return <SandboxesEmpty configuration={props.configuration} />;
+}
+
+/**
+ * `New task`: the landing composer with this configuration's New sandbox row
+ * staged in the configuration's default shape. Nothing is created until the
+ * send.
+ */
+function SandboxesEmpty(props: {
+  readonly configuration: SandboxPageConfiguration;
+}): ReactNode {
+  const { configuration } = props;
+  const { close } = useSystemTabModalActions();
+  const navigate = useNavigate();
+  const surfaceKey = useComposerSurfaceHostKey();
+  const { catalogue, memoryHostId, shape } =
+    useConfigurationStageShape(configuration);
+  const stageNewRow = (): void => {
+    if (catalogue === null || shape === null) return;
+    const provider = stageProviderFor(catalogue, shape.os);
+    useStagedSandboxStore.getState().stage(surfaceKey, {
+      kind: "new",
+      configuration:
+        configuration.kind === "team"
+          ? {
+              kind: "team",
+              teamId: configuration.teamId,
+              teamName: configuration.teamName,
+            }
+          : { kind: "personal" },
+      shape,
+      name: "",
+      wakeString:
+        provider === null ? null : wakeString(provider.suspendFidelity),
+    });
+    useSandboxShapeMemoryStore
+      .getState()
+      .rememberConfiguration(
+        memoryHostId,
+        configurationMemoryKey(configuration),
+      );
+  };
+  return (
+    <div
+      className="flex flex-col items-start gap-3 px-5 py-6"
+      data-testid="sandboxes-empty"
+    >
+      <p className="text-ui-sm text-muted-foreground">No sandboxes yet.</p>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => {
+          stageNewRow();
+          close();
+          // A new task's tab, not only its route: Settings may be a tab of its own.
+          activateTabIntent(navigate, openNewEpicIntent(), undefined);
+        }}
+      >
+        New task
+      </Button>
+    </div>
+  );
+}
+
+const KIND_FILTERS: readonly SandboxKindFilter[] = [
+  "all",
+  "sandbox",
+  "agent",
+  "automation",
+];
+const STATE_FILTERS: readonly SandboxStateFilter[] = [
+  "all",
+  ...HOST_SANDBOX_STATES,
+];
+const STARTER_FILTERS: readonly SandboxStarterFilter[] = [
+  "anyone",
+  "you",
+  "agent",
+  "others",
+];
+
+/** One filter button with a count, three radio groups behind it. */
+function SandboxFilterMenu(props: {
+  readonly filter: SandboxRowFilter;
+  readonly onChange: (filter: SandboxRowFilter) => void;
+}): ReactNode {
+  const { filter } = props;
+  const count = sandboxFilterCount(filter);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="muted"
+          size="icon-sm"
+          aria-label="Filter sandboxes"
+          data-testid="sandboxes-filter"
+          className="relative shrink-0"
+        >
+          <ListFilter className="size-3.5" aria-hidden />
+          {count === 0 ? null : (
+            <span
+              data-testid="sandboxes-filter-count"
+              className="absolute -top-1.5 -right-1.5 flex size-4 items-center justify-center rounded-full bg-primary text-ui-xs text-primary-foreground"
+            >
+              {count}
+            </span>
+          )}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        className="w-52"
+        data-testid="sandboxes-filter-menu"
+      >
+        <DropdownMenuLabel>Kind</DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={filter.kind}
+          onValueChange={(value) => {
+            const kind = KIND_FILTERS.find((candidate) => candidate === value);
+            if (kind !== undefined) props.onChange({ ...filter, kind });
+          }}
+        >
+          {KIND_FILTERS.map((kind) => (
+            <DropdownMenuRadioItem
+              key={kind}
+              value={kind}
+              onSelect={(event) => event.preventDefault()}
+              data-testid={`sandboxes-filter-kind-${kind}`}
+            >
+              {SANDBOX_KIND_FILTER_LABEL[kind]}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>State</DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={filter.state}
+          onValueChange={(value) => {
+            const state = STATE_FILTERS.find(
+              (candidate) => candidate === value,
+            );
+            if (state !== undefined) props.onChange({ ...filter, state });
+          }}
+        >
+          {STATE_FILTERS.map((state) => (
+            <DropdownMenuRadioItem
+              key={state}
+              value={state}
+              onSelect={(event) => event.preventDefault()}
+              data-testid={`sandboxes-filter-state-${state}`}
+            >
+              {SANDBOX_STATE_FILTER_LABEL[state]}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuLabel>Started by</DropdownMenuLabel>
+        <DropdownMenuRadioGroup
+          value={filter.startedBy}
+          onValueChange={(value) => {
+            const startedBy = STARTER_FILTERS.find(
+              (candidate) => candidate === value,
+            );
+            if (startedBy !== undefined) {
+              props.onChange({ ...filter, startedBy });
+            }
+          }}
+        >
+          {STARTER_FILTERS.map((starter) => (
+            <DropdownMenuRadioItem
+              key={starter}
+              value={starter}
+              onSelect={(event) => event.preventDefault()}
+              data-testid={`sandboxes-filter-started-${starter}`}
+            >
+              {SANDBOX_STARTER_FILTER_LABEL[starter]}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+        {count === 0 ? null : (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              data-testid="sandboxes-filter-clear"
+              onSelect={() =>
+                props.onChange({
+                  ...SANDBOX_ROW_FILTER_NONE,
+                  search: filter.search,
+                })
+              }
+            >
+              Clear filters
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// ── A row ───────────────────────────────────────────────────────────────────
+
+const STATE_BADGE: Record<
+  SandboxPublicState,
+  "success" | "info" | "warning" | "destructive" | "muted"
+> = {
+  creating: "info",
+  awake: "success",
+  suspended: "muted",
+  stopped: "muted",
+  destroying: "info",
+  frozen: "warning",
+  failed: "destructive",
+};
+
+function KindTile(props: { readonly summary: SandboxSummary }): ReactNode {
+  switch (sandboxRowKind(props.summary)) {
+    case "agent":
+      return <Bot className="size-4" aria-hidden />;
+    case "automation":
+      return <Workflow className="size-4" aria-hidden />;
+    case "sandbox":
+      return <Server className="size-4" aria-hidden />;
+  }
+}
+
+/**
+ * The configuration's Automations host before its first shell creates it:
+ * a released row whose `Open terminal` creates and starts it. Rename and
+ * Details come with the row once it exists.
+ */
+function UnstartedAutomationsRow(props: {
+  readonly configuration: SandboxPageConfiguration;
+  readonly teamEnvironmentId: string | null;
+}): ReactNode {
+  const open = useOpenAutomationTerminal({
+    existing: null,
+    teamEnvironmentId: props.teamEnvironmentId,
+  });
+  return (
+    <li
+      data-state="released"
+      data-testid="sandboxes-row-automations-unstarted"
+      className="flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+    >
+      <div className="flex min-w-0 flex-1 gap-3">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-foreground/8 text-muted-foreground">
+          <Workflow className="size-4" aria-hidden />
+        </div>
+        <div className="min-w-0 space-y-1">
+          <div className="space-y-1">
+            <div
+              className="text-ui-sm font-medium text-foreground wrap-anywhere"
+              data-testid="sandboxes-row-name"
+            >
+              Automations
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="muted" data-testid="sandboxes-row-state">
+                {hostSandboxStateWord("released")}
+              </Badge>
+              <Badge variant="muted" wrap>
+                Automations
+              </Badge>
+            </div>
+          </div>
+          <p className="text-ui-sm text-muted-foreground wrap-anywhere">
+            {automationsShapeLine(props.configuration)}
+          </p>
+          <p
+            className="flex items-start gap-1.5 text-ui-xs text-muted-foreground wrap-anywhere"
+            data-testid="sandboxes-row-clock"
+          >
+            <Clock className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+            <span>{AUTOMATIONS_RELEASED_LINE}</span>
+          </p>
+        </div>
+      </div>
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={open.starting}
+          data-testid="sandbox-row-open-terminal"
+          onClick={open.run}
+        >
+          {open.starting ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          Open terminal
+        </Button>
+      </div>
+    </li>
+  );
+}
+
+/** A row with no creator and no environment id is listed on Personal, but its payer is unknown (`null`). */
+function useRowCredits(
+  summary: SandboxSummary,
+  configuration: SandboxPageConfiguration,
+): SandboxPageConfiguration | null {
+  const configurations = useSandboxConfigurations();
+  return configuration.kind === "team"
+    ? configuration
+    : sandboxConfigurationOf(summary, configurations);
+}
+
+/** Add credits: Personal always, a team's only to its Admin; neither while ownership is unknown. */
+function useFrozenRowFacts(
+  summary: SandboxSummary,
+  credits: SandboxPageConfiguration | null,
+): { readonly cause: string | null; readonly offersAddCredits: boolean } {
+  const teamBillingAdmin = useTeamBillingAdmin(
+    credits?.kind === "team" ? credits.teamId : null,
+  );
+  if (credits === null) return { cause: null, offersAddCredits: false };
+  const offersAddCredits = sandboxFrozenOffersAddCredits(
+    credits,
+    teamBillingAdmin,
+  );
+  if (!summary.frozen) return { cause: null, offersAddCredits };
+  const cause = sandboxFrozenCause(credits);
+  return {
+    cause:
+      offersAddCredits || !ONLY_TEAM_ADMINS_LINE.shown
+        ? cause
+        : `${cause} ${ONLY_TEAM_ADMINS_CAN_ADD_CREDITS}`,
+    offersAddCredits,
+  };
+}
+
+function SandboxListRow(props: {
+  readonly summary: SandboxSummary;
+  readonly list: UseQueryResult<SandboxListResponse | null>;
+  readonly configuration: SandboxPageConfiguration;
+  readonly cost: SandboxCost | null;
+  readonly viewerUserId: string | null;
+}): ReactNode {
+  const { summary, configuration, viewerUserId } = props;
+  const settings = useSandboxSettingsStatus(summary);
+  const settingsItems = settings.data?.items ?? [];
+  const settingsFailed = sandboxSettingsFailed(settingsItems);
+  const publicState = sandboxPublicState(summary);
+  const state = summary.state;
+  const awake = publicState === "awake";
+  const sessions = useSandboxRowSessionReport(summary);
+  const wake = useSandboxWakeString(summary);
+  const now = useSampledNow();
+  const unreachable = useSandboxRowUnreachable(
+    summary,
+    sessions.failed && sessions.report.kind !== "live",
+    props.list,
+  );
+  const resumePending =
+    sessions.resumePending && !settingsFailed && !unreachable;
+  const reachability = {
+    unreachable,
+    lastContactAt: summary.lastActivityAt,
+  };
+  const setupFailed =
+    awake && (settingsFailed || summary.guestConfigured === false);
+  const credits = useRowCredits(summary, configuration);
+  const frozen = useFrozenRowFacts(summary, credits);
+  const frozenCause = frozen.cause;
+  let clock: string | null;
+  if (summary.frozen) clock = sandboxFrozenClock(summary.frozenAt);
+  else
+    clock = sandboxClockLine({
+      // A setting the host reports failed is a setup failure too, so its
+      // clock reads the same as a guest that was never configured.
+      summary: settingsFailed
+        ? { ...summary, guestConfigured: false }
+        : summary,
+      configuration,
+      credits,
+      cost: props.cost,
+      wakeString: wake,
+      viewerUserId,
+      reachability,
+      resumePending,
+      now,
+    });
+
+  return (
+    <li
+      data-sandbox-row={summary.id}
+      data-state={publicState}
+      data-testid="sandboxes-row"
+      className="flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+    >
+      <div className="flex min-w-0 flex-1 gap-3 sm:shrink-0 sm:basis-80">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-foreground/8 text-muted-foreground">
+          <KindTile summary={summary} />
+        </div>
+        <div className="min-w-0 space-y-1">
+          <div
+            className="text-ui-sm font-medium text-foreground wrap-anywhere"
+            data-testid="sandboxes-row-name"
+          >
+            {summary.displayName}
+          </div>
+          <SandboxRowIdentityBadges
+            summary={summary}
+            publicState={publicState}
+            viewerUserId={viewerUserId}
+          />
+          <p className="text-ui-sm text-muted-foreground wrap-anywhere">
+            {sandboxRowShapeAndCostLine(summary, credits)}
+          </p>
+          {clock === null ? null : (
+            <p
+              className="flex items-start gap-1.5 text-ui-xs text-muted-foreground wrap-anywhere"
+              data-testid="sandboxes-row-clock"
+            >
+              <Clock className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+              <span className="min-w-0">{clock}</span>
+            </p>
+          )}
+          <SandboxRowSetupEvidence
+            visible={setupFailed}
+            steps={sandboxSettingsStepsLine(
+              sandboxSettingsEvidence(settingsItems, summary.guestConfigured),
+            )}
+          />
+          {awake && !unreachable && !resumePending ? (
+            <SandboxRowSessions report={sessions.report} now={now} />
+          ) : null}
+          <SandboxSessionNotice
+            summary={summary}
+            state={state}
+            filesOutcomeStated={false}
+            testId="sandboxes-row-session-notice"
+          />
+          <SandboxRowWithdrawal summary={summary} />
+          {frozenCause === null ? null : (
+            <p
+              className="text-ui-xs text-muted-foreground wrap-anywhere"
+              data-testid="sandboxes-row-payer-consequence"
+            >
+              {frozenCause}
+            </p>
+          )}
+        </div>
+      </div>
+      <SandboxRowActions
+        summary={summary}
+        configuration={configuration}
+        credits={credits}
+        unreachable={unreachable}
+        frozenOffersAddCredits={frozen.offersAddCredits}
+        settingsFailed={settingsFailed}
+      />
+    </li>
+  );
+}
+
+function SandboxRowIdentityBadges(props: {
+  readonly summary: SandboxSummary;
+  readonly publicState: SandboxPublicState;
+  readonly viewerUserId: string | null;
+}): ReactNode {
+  const startedBy = sandboxStartedByLabel(props.summary, props.viewerUserId);
+  const keptBy = sandboxKeptByLabel(props.summary, props.viewerUserId);
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Badge
+        variant={STATE_BADGE[props.publicState]}
+        data-testid="sandboxes-row-state"
+      >
+        {hostSandboxStateWord(props.summary.state)}
+      </Badge>
+      {props.summary.frozen ? (
+        <Badge variant="warning">{HOST_FROZEN_WORD}</Badge>
+      ) : null}
+      {startedBy === null ? null : (
+        <Badge variant="muted" wrap>
+          <span className="wrap-anywhere">{startedBy}</span>
+        </Badge>
+      )}
+      {keptBy === null ? null : (
+        <Badge variant="muted" wrap>
+          <span className="wrap-anywhere">{keptBy}</span>
+        </Badge>
+      )}
+    </div>
+  );
+}
+
+function SandboxRowSetupEvidence(props: {
+  readonly visible: boolean;
+  readonly steps: string;
+}): ReactNode {
+  if (!props.visible) return null;
+  return (
+    <div className="text-ui-xs text-muted-foreground wrap-anywhere">
+      <p>Compute is charged while it is awake.</p>
+      <p>{props.steps}</p>
+    </div>
+  );
+}
+
+/**
+ * When this sandbox stops running, on a row whose kind the control plane is
+ * withdrawing. It sits under the clock line because it replaces what that
+ * line would say: an unfrozen withdrawn row carries no resting deadline while
+ * this date stands. A frozen one that carries its own day-30 deadline states
+ * it through the clock line, so both lines show — and this one drops its date
+ * then, rather than contradict the day the clock line names.
+ */
+function SandboxRowWithdrawal(props: {
+  readonly summary: SandboxSummary;
+}): ReactNode {
+  const line = sandboxWithdrawalLine(
+    props.summary.withdrawalEndsAt,
+    props.summary.destroyAt,
+  );
+  if (line === null) return null;
+  return (
+    <p
+      className="rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-ui-xs leading-snug wrap-anywhere text-warning-foreground"
+      data-testid="sandboxes-row-withdrawal"
+    >
+      {line}
+    </p>
+  );
+}
+
+function SandboxRowSessions(props: {
+  readonly report: SandboxSessionReport;
+  readonly now: number;
+}): ReactNode {
+  return (
+    <div
+      className="flex min-w-0 flex-wrap items-center gap-1.5 text-ui-xs text-muted-foreground"
+      data-testid="sandboxes-row-sessions"
+    >
+      {props.report.kind === "live" && props.report.busy ? (
+        <span
+          aria-hidden
+          className="size-1.5 shrink-0 rounded-full bg-success"
+        />
+      ) : null}
+      <span className="min-w-0 wrap-anywhere">
+        {sandboxSessionsLine(props.report, props.now)}
+      </span>
+      {sandboxSessionPills(props.report).map((pill) => (
+        <Badge
+          key={pill.key}
+          size="xs"
+          variant="muted"
+          wrap
+          data-testid="sandboxes-row-session-pill"
+        >
+          {pill.working ? (
+            <span
+              aria-hidden
+              className="size-1.5 shrink-0 rounded-full bg-success"
+            />
+          ) : null}
+          <span className="min-w-0 wrap-anywhere">{pill.label}</span>
+        </Badge>
+      ))}
+    </div>
+  );
+}

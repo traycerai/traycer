@@ -1,0 +1,1288 @@
+/**
+ * Desktop composition of the selection authority's engine ports (P1.1).
+ *
+ * The engine is transport-agnostic; these four adapters are what main already
+ * owns, expressed as the contract's ports:
+ *
+ *  - {@link DesktopAuthorityIdentitySource} - the auth-session state.
+ *  - {@link DesktopHostFleetSource} - the registry list fetch main already
+ *    runs for CORS reasons, plus this machine's durable local-host identity.
+ *  - {@link DesktopLocalHostOutageSignal} - the `HostController` mutation
+ *    lane (D5's expected-outage signal).
+ *  - {@link createDesktopLocalHostEnsurePort} - the provisioning controller,
+ *    wired but NOT invoked until P1.3.
+ *
+ * None of them is wire surface: they are constructor inputs to the engine.
+ */
+import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { FleetRefreshOutcome } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  HostListItem,
+  HostListResponse,
+} from "@traycer/protocol/host/host-status";
+import type {
+  AuthorityIdentitySource,
+  HostFleetEntry,
+  HostFleetSnapshot,
+  HostFleetSource,
+  LocalHostEnsurePort,
+  LocalHostOutageSignal,
+  SelectionSubscription,
+} from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import type { AuthorityLog } from "@traycer-clients/shared/host-selection/selection-authority-engine";
+import type { RegisteredHostsPush } from "../../ipc-contracts/host-types";
+import type { DesktopAuthSessionSnapshot } from "../../ipc-contracts/window-types";
+import type { HostControllerStatus } from "../host/host-controller-types";
+import { readLastKnownLocalHostId } from "../host/local-host-identity";
+import { appliedLocalHostCapability } from "../host/local-host-capability";
+import type {
+  IpcDesktopAuthSession,
+  IpcHostController,
+  IpcHostLifecycle,
+} from "../ipc/runner-ipc-bridge";
+
+/**
+ * The identity the persisted preference is scoped to, and the generation the
+ * engine keys membership on.
+ *
+ * The generation increments ONLY when the local USER changes - never on a
+ * token rotation or cloud verification. That distinction matters: the auth
+ * session emits a change on every credential refresh, and bumping the
+ * generation there would wipe every scrap of evidence (sessions, streaks,
+ * compat, tombstones) and force every window to re-attach on a routine token
+ * refresh. `signing-in` and `signed-out` both collapse to a null key, so
+ * signing back in as the same user is one transition out and one back.
+ */
+export class DesktopAuthorityIdentitySource implements AuthorityIdentitySource {
+  private readonly authSession: IpcDesktopAuthSession;
+  private identityKey: string | null;
+  private generation = 0;
+  private readonly listeners = new Set<
+    (identity: { identityKey: string | null; generation: number }) => void
+  >();
+  private readonly onAuthSessionChange: (
+    snapshot: DesktopAuthSessionSnapshot,
+  ) => void;
+
+  constructor(authSession: IpcDesktopAuthSession) {
+    this.authSession = authSession;
+    this.identityKey = localSessionUserId(authSession.get());
+    this.onAuthSessionChange = (snapshot: DesktopAuthSessionSnapshot) => {
+      const nextKey = localSessionUserId(snapshot);
+      if (nextKey === this.identityKey) return;
+      this.identityKey = nextKey;
+      this.generation += 1;
+      const identity = this.current();
+      for (const listener of Array.from(this.listeners)) {
+        listener(identity);
+      }
+    };
+    this.authSession.on("change", this.onAuthSessionChange);
+  }
+
+  current(): { identityKey: string | null; generation: number } {
+    return { identityKey: this.identityKey, generation: this.generation };
+  }
+
+  onChanged(
+    listener: (identity: {
+      identityKey: string | null;
+      generation: number;
+    }) => void,
+  ): SelectionSubscription {
+    this.listeners.add(listener);
+    return {
+      dispose: () => {
+        this.listeners.delete(listener);
+      },
+    };
+  }
+
+  dispose(): void {
+    this.authSession.off("change", this.onAuthSessionChange);
+    this.listeners.clear();
+  }
+}
+
+/** Local identity survives absent cloud verification, including a cold restore. */
+function localSessionUserId(
+  snapshot: DesktopAuthSessionSnapshot,
+): string | null {
+  return snapshot.status === "signed-in" || snapshot.status === "unverified"
+    ? (snapshot.profile?.userId ?? null)
+    : null;
+}
+
+/**
+ * One registry answer, with the time of the read that PRODUCED it.
+ *
+ * `readAtMs` is metadata beside the response, never inside it: the response is
+ * the cloud's own body and has no business carrying a reader's clock.
+ *
+ * The two producers stamp it from the same source, which is what makes the
+ * comparison meaningful. A local fetch stamps `now()` when it STARTS - not
+ * when it lands, because the question is which read OBSERVED the registry
+ * first. A pushed snapshot carries `fetchedAtMs`, which is the local host's
+ * clock at its own read: the host runs on THIS machine, so the two stamps come
+ * from one clock and are directly comparable. A remote host's clock would not
+ * be, and nothing here accepts one.
+ */
+export interface RegistryRead {
+  readonly response: HostListResponse;
+  readonly readAtMs: number;
+}
+
+/**
+ * A registry answer this port did not fetch, with the identity generation the
+ * SUBSCRIPTION that produced it was opened under.
+ *
+ * A stream speaks for one account for its whole life - the serving host bound
+ * the subscribing user at subscribe time - so a snapshot that was already in
+ * flight when this process changed accounts is A's rows arriving in B's world.
+ * Stamping it with the generation current at adoption, as a fetch of our own
+ * is stamped, would publish and adopt A's membership as B's. The producer
+ * tears its stream down on an identity change; this field is what does not
+ * depend on which callback ran first.
+ */
+export interface PushedRegistryRead extends RegistryRead {
+  readonly openedAtGeneration: number;
+}
+
+export interface DesktopHostFleetSourceOptions {
+  readonly authnBaseUrl: string;
+  readonly identity: AuthorityIdentitySource;
+  readonly authSession: IpcDesktopAuthSession;
+  readonly host: IpcHostLifecycle;
+  /** `fetchRegisteredHostsViaHttp` in production; a double in tests. */
+  readonly listRegisteredHosts: (
+    authnBaseUrl: string,
+    bearerToken: string,
+  ) => Promise<HostListFetchResult>;
+  /**
+   * Hands the FULL registry rows to whoever needs them for display, once per
+   * adopted read: the rows this port serves after it, every scope merged (see
+   * {@link RegistryScope}), so a push never shows windows a fleet without the
+   * team rows the last bearer read found.
+   *
+   * This is what makes main's cadence serve both consumers from ONE request.
+   * The authority needs ids; every window needs the rows (names, connectivity,
+   * update state) it used to fetch for itself. Rather than stand up a second
+   * poll - the exact duplication connection registry §6 says to collapse -
+   * this port publishes what it has already read, and the two projections
+   * diverge AFTER the single fetch.
+   *
+   * The snapshot half below is deliberately NOT widened to carry these rows:
+   * `HostFleetSnapshot` has no channel for a status DTO, which is invariant 5
+   * enforced by construction, and that stays true.
+   *
+   * Required rather than optional: a composition that forgets it produces an
+   * app whose windows silently stop learning about registry changes, which is
+   * not a failure anything reports.
+   */
+  readonly publishRegistryResponse: (push: RegisteredHostsPush) => void;
+  /**
+   * This machine's clock, for stamping when a registry read started.
+   *
+   * A port rather than a bare `Date.now()` because the ordering rule it feeds
+   * - a read that observed the registry EARLIER never overwrites one that
+   * observed it later - is otherwise only testable against wall time.
+   */
+  readonly now: () => number;
+  readonly log: AuthorityLog;
+}
+
+/**
+ * The authority's fleet port on desktop: WHICH hosts exist and which one is
+ * this machine's - and deliberately nothing else.
+ *
+ * The registry response carries a full status DTO per row (connectivity,
+ * viewer reachability, update state). NONE of it is projected here. The
+ * snapshot type has no channel for it, so a DTO flip cannot reach a lease
+ * verdict by any path - which is invariant 5 ("cloud verdicts are
+ * display/bootstrap only") enforced by construction rather than by care.
+ *
+ * Race rules the contract requires of this port:
+ *
+ *  - `{localHostId, hosts}` is ONE atomic tuple per snapshot: both are
+ *    resolved before anything is published, never composed from two reads.
+ *  - `onChanged` delivers the snapshot itself, so subscribe-before-read
+ *    cannot lose a change.
+ *  - `revision` is process-lifetime monotonic and never resets, including
+ *    across sign-out.
+ *  - Every snapshot is stamped with the identity generation captured when its
+ *    FETCH STARTED, so a late account-A completion is rejected by the engine
+ *    however high its revision is.
+ *  - Rows are held and ordered PER SCOPE ({@link RegistryScope}). The local
+ *    host's push speaks for the personal rows alone and replaces only those;
+ *    the user-bearer read is the one reader of the team rows, and speaks for
+ *    every row it returns. A push therefore never drops or freezes a team row,
+ *    and a read is declined only for the scopes a newer read already covers.
+ *
+ * The 60 s cadence that drives {@link DesktopHostFleetSource.refresh} lives in
+ * `ipc/registered-hosts-broadcast.ts` rather than here, and that split is the
+ * point: this port owns HOW a registry read becomes a fleet snapshot, and the
+ * broadcast module owns WHEN one happens and who else hears it. The earlier
+ * interim ("there is no poller here") is discharged - the consolidated timer
+ * this port was waiting for is that module, not a competitor to it, and every
+ * race rule above applies to its ticks unchanged because they arrive through
+ * `refresh()` like every other caller.
+ */
+export class DesktopHostFleetSource implements HostFleetSource {
+  private readonly options: DesktopHostFleetSourceOptions;
+  private currentSnapshot: HostFleetSnapshot;
+  private revisionCounter = 0;
+  /** The registry rows this port serves, held per scope. */
+  private readonly rows: Record<RegistryScope, readonly HostListItem[]> = {
+    personal: [],
+    team: [],
+  };
+  private localHostId: string | null = null;
+  /**
+   * Monotonic refresh sequence (same-identity ordering). The generation stamp
+   * orders completions ACROSS identities; within one identity, two overlapping
+   * refreshes (the 60s poll racing a registration's fire-and-forget refresh)
+   * complete in network order, and adopting the older completion last would
+   * resurrect rows the newer one removed - a deregistered host reappearing in
+   * the authority for up to a full poll interval. Stamped at fetch START,
+   * adopted only if no newer same-generation completion beat it.
+   *
+   * ⚠ ORDERING WITHOUT IN-FLIGHT DEDUPE IS THE DESIGN, NOT A MISSING
+   * OPTIMIZATION. A perf audit (2026-08-17) filed the absent dedupe as a
+   * finding: overlapping refreshes each issue a fetch and the older completion
+   * is declined, so one of the two round trips is "wasted". The measurement is
+   * right and the conclusion is not, and this note is here because the risk is
+   * not someone breaking it by accident - it is someone FIXING it, correctly
+   * following a number.
+   *
+   * What is actually paid, and what is not: the cost of no dedupe is a
+   * duplicate FETCH. It is never a duplicate ADOPTION - the per-scope
+   * `watermarks` below already guarantee at most one completion wins each
+   * scope, in request order. So the bug the dedupe would prevent does not
+   * exist; only the network call does, bounded to roughly two in practice (the
+   * 60s poll racing a deregister).
+   *
+   * What coalescing would cost is a correctness property, and it is one this
+   * port has already been bitten by. Callers refresh BECAUSE something
+   * changed - a registration, a deregistration, an identity change. Serving
+   * such a caller from a fetch that started BEFORE the change it is reacting
+   * to returns pre-change data, and the request that would have observed the
+   * change never happens. The seq watermark cannot catch that: the stale
+   * completion genuinely IS the newest completion of the only in-flight fetch,
+   * so the guard agrees with it rather than declining it.
+   *
+   * The proof that this is not hypothetical is the SECOND counter below.
+   * `localIdentitySeq` exists because a local-identity change that landed
+   * during a refresh's fetch was published and then overwritten by the id that
+   * refresh had read before its request - a shipped bug, from exactly the
+   * class dedupe re-introduces, and one that left the authority calling the
+   * stale host local and this machine remote until the next host event.
+   * Coalescing would recreate that shape for the ROWS, where there is no
+   * third counter to rescue it.
+   */
+  private refreshSeq = 0;
+  /**
+   * Monotonic LOCAL-IDENTITY sequence, and deliberately not the same counter
+   * as `refreshSeq`.
+   *
+   * `this.localHostId` has TWO writers - a full `refresh()`, which reads the
+   * id before its registry fetch and adopts it after, and
+   * `refreshLocalIdentity()`, which reads and adopts with no fetch in between.
+   * `refreshSeq` orders refreshes against each other only, so a local-identity
+   * change that landed DURING a refresh's fetch was published first and then
+   * overwritten by the id that refresh had read before the request: the
+   * authority classified the stale host as local and this machine as remote
+   * until the next host event or the 60s poll.
+   *
+   * Stamped at the moment each read STARTS, so the most recently OBSERVED disk
+   * state wins regardless of completion order, and adopted independently of
+   * the row projection - a refresh whose rows are current may still carry a
+   * superseded id, and only the id is declined.
+   */
+  private localIdentitySeq = 0;
+  private adoptedLocalIdentitySeq = 0;
+  private readonly listeners = new Set<(snapshot: HostFleetSnapshot) => void>();
+  /**
+   * The newest adopted read, PER SCOPE: its `refreshSeq` and its read TIME.
+   *
+   * `refreshSeq` orders answers by when they were REQUESTED here, which is the
+   * right rule for two of this port's own fetches and the wrong one the moment
+   * a second reader appears. A pushed snapshot is handed over when the
+   * subscription opens, and the rows in it were read by the host up to a full
+   * interval earlier: it arrives newest and observed oldest. Ordering on
+   * arrival let it overwrite a poll that had already landed, so a host
+   * deregistered in between came back until the host's next read.
+   *
+   * So adoption is ordered by when the registry was OBSERVED, and both rules
+   * stand: `readAtMs` rejects an older observation, `seq` still rejects an
+   * older request. Advanced only where rows are actually adopted.
+   *
+   * Per scope because the two readers do not read the same rows. One
+   * watermark let whichever reader landed last fence out the other's scope: a
+   * bearer read that went out before a push landed was dropped whole, team
+   * rows included, though no push ever carries one - so while the push ran,
+   * the team rows were whatever the last bearer read to beat every push had
+   * said. Each scope is fenced only by the reads that speak for it.
+   *
+   * NOT reset on an identity change, deliberately. Resetting would re-open the
+   * hole across an account switch - a push carrying rows read in the previous
+   * account's era could win again - and what not resetting costs is bounded
+   * and covered: a newly signed-in account whose host replays a snapshot older
+   * than the last adopted read is declined, and the bearer read serves the
+   * fleet until the host's next read supersedes it.
+   */
+  private readonly watermarks: Record<RegistryScope, ScopeWatermark> = {
+    personal: {
+      seq: 0,
+      readAtMs: Number.NEGATIVE_INFINITY,
+      replayFloorMs: Number.NEGATIVE_INFINITY,
+      generation: null,
+    },
+    team: {
+      seq: 0,
+      readAtMs: Number.NEGATIVE_INFINITY,
+      replayFloorMs: Number.NEGATIVE_INFINITY,
+      generation: null,
+    },
+  };
+  private readonly identitySubscription: SelectionSubscription;
+  private readonly onHostChange: () => void;
+  private disposed = false;
+
+  constructor(options: DesktopHostFleetSourceOptions) {
+    this.options = options;
+    this.currentSnapshot = {
+      revision: this.revisionCounter,
+      identityGeneration: options.identity.current().generation,
+      localHostId: null,
+      hosts: [],
+    };
+    this.identitySubscription = options.identity.onChanged(() => {
+      // Publish the empty fleet for the INCOMING generation immediately: the
+      // outgoing account's membership must not be re-published under the new
+      // identity, and the engine's own transition has already swapped to
+      // empty. The local id is cleared too - this machine's host belongs to
+      // the machine, but its MEMBERSHIP belongs to an account, and the new
+      // one has not been read yet. The refresh that follows lands as an
+      // ordinary fleet shift.
+      this.rows.personal = [];
+      this.rows.team = [];
+      this.localHostId = null;
+      this.publish();
+      void this.refresh();
+    });
+    this.onHostChange = () => {
+      void this.refreshLocalIdentity();
+    };
+    options.host.on("change", this.onHostChange);
+  }
+
+  snapshot(): HostFleetSnapshot {
+    return this.currentSnapshot;
+  }
+
+  onChanged(
+    listener: (snapshot: HostFleetSnapshot) => void,
+  ): SelectionSubscription {
+    this.listeners.add(listener);
+    return {
+      dispose: () => {
+        this.listeners.delete(listener);
+      },
+    };
+  }
+
+  /**
+   * Re-reads this machine's identity and the account's registry rows, then
+   * publishes ONE tuple. Safe to call at any time; a failed fetch publishes
+   * nothing rather than clobbering known membership with a network error.
+   *
+   * TOTAL BY CONTRACT: this never rejects, whatever its inputs do. It has
+   * THREE owners - startup's fire-and-forget `void fleet.refresh()`, the
+   * identity-change subscription, and the renderer's `refreshFleet` invoke -
+   * and only the last of those had a caller wrapping it. `listRegisteredHosts`
+   * returning a non-`ok` RESULT was already handled; `listRegisteredHosts` (or
+   * the local-host read) THROWING was not, so a genuine network exception
+   * escaped into an unhandled rejection on two of the three paths and, on the
+   * third, surfaced to the renderer as a failed invoke on an operation that had
+   * already succeeded. Containing it at the source rather than at each caller
+   * is what makes the guarantee independent of who remembers to wrap.
+   *
+   * Failing to refresh costs one stale cycle, which the next identity change,
+   * local-host change or explicit call re-reads anyway. The outcome says which
+   * happened, for the one caller that acts on it (the renderer's directory,
+   * through the `refreshFleet` invoke); a throw is `unavailable`.
+   */
+  async refresh(): Promise<FleetRefreshOutcome> {
+    if (this.disposed) return { kind: "superseded" };
+    try {
+      return await this.refreshWith(null);
+    } catch (error: unknown) {
+      // WARN, not debug: this is now the single place a thrown refresh is
+      // reported anywhere in the process, so it must not be the quiet level.
+      // Contained must never decay into invisible.
+      this.options.log.warn("[selection-fleet] registry refresh threw", {
+        error: String(error),
+      });
+      return { kind: "unavailable" };
+    }
+  }
+
+  /**
+   * The same adoption, for rows this process did not fetch.
+   *
+   * The local host reads `GET /api/v3/hosts` for its own reasons and can push
+   * the answer (`local-host-inventory-subscription.ts`), which is one fewer
+   * read of the same lease. What arrives is a registry RESPONSE, identical in
+   * shape and provenance to the one `listRegisteredHosts` returns - so it goes
+   * through the same path rather than a second, subtly different one: the same
+   * identity generation captured before the local-identity read, the same
+   * `refreshSeq` ordering against a poll that may be in flight, the same
+   * signed-out and unverified branches, the same publish-then-adopt order.
+   *
+   * What it does NOT share is reach. The host reads with its device
+   * credential, which authn scopes to the owner's personal hosts, so a push
+   * replaces the PERSONAL rows only and leaves the team rows to the bearer
+   * read, which keeps running beside it (`registered-hosts-broadcast.ts`).
+   *
+   * TOTAL, like {@link refresh}: its caller is a stream callback with nobody
+   * to reject to.
+   */
+  async acceptPushedRows(read: PushedRegistryRead): Promise<void> {
+    if (this.disposed) return;
+    try {
+      await this.adoptRegistryResponse(read);
+    } catch (error: unknown) {
+      this.options.log.warn("[selection-fleet] pushed registry adopt threw", {
+        error: String(error),
+      });
+    }
+  }
+
+  private async adoptRegistryResponse(read: PushedRegistryRead): Promise<void> {
+    await this.refreshWith(read);
+  }
+
+  /**
+   * One refresh, from a response this call fetches (`pushed === null`) or one
+   * the local host already read for us.
+   *
+   * The two share everything but the fetch, and that is the point: every race
+   * rule this port has - the generation captured before the local-identity
+   * read, `refreshSeq` ordering a push against a poll in flight, the
+   * signed-out and unverified branches, publishing before adopting - is a rule
+   * about ADOPTING registry rows, not about who read them.
+   */
+  private async refreshWith(
+    pushed: PushedRegistryRead | null,
+  ): Promise<FleetRefreshOutcome> {
+    // Stamped at fetch START (contract: "the generation this snapshot was
+    // FETCHED under"), so a completion that lands after an account switch is
+    // recognisably stale. The identity KEY is captured in the same read for
+    // the same reason: it is the account stamp the renderer push is fenced on,
+    // and reading it again after the await would name whoever is signed in
+    // when the response happens to land.
+    const identity = this.options.identity.current();
+    const generation = identity.generation;
+    this.refreshSeq += 1;
+    const seq = this.refreshSeq;
+    if (pushed !== null && pushed.openedAtGeneration !== generation) {
+      // Rows read for an account this process has left. Checked BEFORE the
+      // await, so nothing about them is published, adopted, or even read from
+      // disk on their behalf: the generation this port would otherwise stamp
+      // them with is the CURRENT one, which is exactly the mis-attribution.
+      this.options.log.debug(
+        "[selection-fleet] dropped a push from a retired identity",
+        {
+          openedAtGeneration: pushed.openedAtGeneration,
+          generation,
+        },
+      );
+      return { kind: "superseded" };
+    }
+    // The time the registry was OBSERVED, which is what adoption is ordered
+    // on. A fetch of our own is stamped HERE - at its start, before the await
+    // - so it is the moment this process went to look, not the moment the
+    // answer happened to land. A push brings the host's own read time with it.
+    const readAtMs = pushed === null ? this.options.now() : pushed.readAtMs;
+    // ONE read of the snapshot, not two: `token` and `verified` are committed
+    // together and a second `get()` could straddle a revoke, spending a bearer
+    // this snapshot had already disowned.
+    const authSnapshot = this.options.authSession.get();
+    const bearerToken = authSnapshot.token;
+    if (bearerToken === null) {
+      // Signed out: the account fleet is empty, and the local host is not
+      // addressable without a credential context either. Stamped like any
+      // other observation so it supersedes an identity read still in flight,
+      // rather than being overwritten by one that started before the sign-out.
+      this.localIdentitySeq += 1;
+      // `readAtMs` here is this observation's own time, not a registry read's:
+      // signing out is a fact about the account learned right now, and it must
+      // supersede any read that observed the fleet before it - in every scope.
+      this.applyFetched(
+        generation,
+        seq,
+        this.localIdentitySeq,
+        null,
+        { personal: [], team: [] },
+        readAtMs,
+      );
+      return this.fleetOutcome(generation, REGISTRY_SCOPES);
+    }
+    // Stamped BEFORE the read, so ordering follows what each read OBSERVED.
+    this.localIdentitySeq += 1;
+    const identitySeq = this.localIdentitySeq;
+    const localHostId = await this.readLocalHostId();
+    if (!authSnapshot.verified) {
+      // `revokeVerification` deliberately keeps `status: "signed-in"` and the
+      // token - flattening either would sign sibling windows out - so a
+      // revoked bearer is indistinguishable from a live one by the `!== null`
+      // test above, and this poll runs every 60s. Unverified means authn has
+      // rejected the refresh credential, so the account registry is exactly
+      // what this bearer may no longer speak to; spending it here would keep
+      // asking the cloud for account membership with a credential the
+      // renderer has already withdrawn, and could still be answered when only
+      // the refresh half was rejected.
+      //
+      // The LOCAL host is kept, by the same rule the two failure arms below
+      // apply: it was read from disk, it is real and dialable whatever the
+      // registry says, and the offline plane is precisely what an unverified
+      // session still needs. Membership rows wait for a verified fetch; local
+      // usability does not. `browser-view-ipc.ts` gates its own cloud read on
+      // this flag the same way.
+      this.options.log.debug("[selection-fleet] unverified session", {
+        generation,
+      });
+      this.adoptLocalIdentityRead(generation, identitySeq, localHostId);
+      return { kind: "unavailable" };
+    }
+    if (pushed !== null) {
+      // The host has already made the read this branch would make. It arrives
+      // with no `kind` to check because a snapshot IS the host's successful
+      // read - a host that could not read sends nothing, and a host serving
+      // rows it could not refresh marks them stale, which the subscription
+      // forwards anyway: they are still the freshest personal rows anyone has.
+      // It speaks for the personal scope alone (see `RegistryScope`).
+      this.publishAndAdopt(
+        identity,
+        generation,
+        seq,
+        identitySeq,
+        localHostId,
+        pushed.response,
+        scopeRows(pushed.response, PUSH_SCOPES),
+        readAtMs,
+        false,
+      );
+      return this.fleetOutcome(generation, PUSH_SCOPES);
+    }
+    let result: HostListFetchResult;
+    try {
+      result = await this.options.listRegisteredHosts(
+        this.options.authnBaseUrl,
+        bearerToken,
+      );
+    } catch (error: unknown) {
+      // The cloud read failing must not cost the LOCAL host: its identity was
+      // already read from disk, and it is real and dialable whatever the
+      // registry says. Adopt-and-publish it before letting the error reach
+      // `refresh`'s containment, or a machine with a flaky network boots into
+      // "No host is available" for up to a full poll interval (60s) - the
+      // membership rows can wait for the next successful fetch, local
+      // usability cannot.
+      this.adoptLocalIdentityRead(generation, identitySeq, localHostId);
+      throw error;
+    }
+    if (result.kind !== "ok") {
+      this.options.log.debug("[selection-fleet] registry fetch failed", {
+        kind: result.kind,
+      });
+      // Same rule as the thrown arm above: a refused registry read keeps the
+      // known rows AND still adopts this machine's own identity.
+      this.adoptLocalIdentityRead(generation, identitySeq, localHostId);
+      return { kind: "unavailable" };
+    }
+    this.publishAndAdopt(
+      identity,
+      generation,
+      seq,
+      identitySeq,
+      localHostId,
+      result.response,
+      scopeRows(result.response, REGISTRY_SCOPES),
+      readAtMs,
+      true,
+    );
+    return this.fleetOutcome(generation, REGISTRY_SCOPES);
+  }
+
+  /**
+   * Published BEFORE the id projection is adopted, and published even when
+   * `applyFetched` declines to adopt (a late completion for a retired
+   * identity). Both are deliberate: the push carries the identity it was
+   * FETCHED under, so a renderer on another account drops it by the same
+   * rule the engine rejects the snapshot by - one stamp, two readers, no
+   * second staleness policy.
+   *
+   * Both fences run per scope, and a read is published when ANY scope it
+   * speaks for is admitted. What a current-identity publish carries is the
+   * merged fleet the adoption is about to serve - the admitted scopes from
+   * this read, every other scope as held - so windows and the authority see
+   * one fleet. A retired identity's read is published verbatim, as before.
+   */
+  private publishAndAdopt(
+    identity: { readonly identityKey: string | null },
+    generation: number,
+    seq: number,
+    identitySeq: number,
+    localHostId: string | null,
+    response: HostListResponse,
+    scoped: ScopedRows,
+    readAtMs: number,
+    bearer: boolean,
+  ): void {
+    const current = generation === this.options.identity.current().generation;
+    const admitted: ScopedRows = {
+      personal: this.admitScope("personal", scoped, current, seq, readAtMs, {
+        generation,
+        bearer,
+      }),
+      team: this.admitScope("team", scoped, current, seq, readAtMs, {
+        generation,
+        bearer,
+      }),
+    };
+    if (admitted.personal === null && admitted.team === null) return;
+    this.options.publishRegistryResponse({
+      identityKey: identity.identityKey,
+      response: current
+        ? {
+            hosts: [
+              ...(admitted.personal ?? this.rows.personal),
+              ...(admitted.team ?? this.rows.team),
+            ],
+          }
+        : response,
+    });
+    this.applyFetched(
+      generation,
+      seq,
+      identitySeq,
+      localHostId,
+      admitted,
+      readAtMs,
+    );
+  }
+
+  /**
+   * This read's rows for `scope`, or null when it does not speak for the
+   * scope or a newer read of the scope has already been adopted.
+   *
+   * The read-time fence is {@link readTimeFence}: a push is held to every
+   * mark, the cross-account replay floor included; a bearer read for the
+   * current identity only to marks that identity's own adoptions set.
+   */
+  private admitScope(
+    scope: RegistryScope,
+    scoped: ScopedRows,
+    currentIdentity: boolean,
+    seq: number,
+    readAtMs: number,
+    read: { readonly generation: number; readonly bearer: boolean },
+  ): readonly HostListItem[] | null {
+    const rows = scoped[scope];
+    if (rows === null) return null;
+    const watermark = this.watermarks[scope];
+    if (readAtMs < readTimeFence(watermark, read, currentIdentity)) {
+      // An answer that observed the scope EARLIER than one already adopted.
+      // Declined before the publish, not just before the adoption: the renderer
+      // push is the display half of the same fact, and showing windows a fleet
+      // the authority has refused is the same bug with a different surface.
+      this.options.log.debug(
+        "[selection-fleet] dropped an older registry read",
+        {
+          scope,
+          readAtMs,
+          adopted: watermark.readAtMs,
+        },
+      );
+      return null;
+    }
+    if (currentIdentity && seq < watermark.seq) {
+      // Same-identity ordering, applied to the PUBLISH as well as the
+      // adoption. `applyFetched` has always declined an older request, but it
+      // declines it after `publishAndAdopt` has already told every window what
+      // that request found - and read-time ordering made that reachable: a
+      // poll that STARTED before a push's read completes after it, passes the
+      // read-time check (it did observe the registry later), publishes its
+      // rows, and is then refused on seq. Windows would be showing a fleet the
+      // authority had just rejected.
+      //
+      // Gated on the generation matching, which is what keeps the retired-
+      // identity path intact: a late completion for an account this process
+      // has left is still published, stamped with the generation it was
+      // fetched under, precisely so the renderer can drop it by the same rule
+      // the engine does.
+      this.options.log.debug(
+        "[selection-fleet] dropped a superseded registry read before publish",
+        {
+          scope,
+          seq,
+          adopted: watermark.seq,
+        },
+      );
+      return null;
+    }
+    return rows;
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.identitySubscription.dispose();
+    this.options.host.off("change", this.onHostChange);
+    this.listeners.clear();
+  }
+
+  /**
+   * pid.json moved: re-resolve local identity, keep the known rows.
+   *
+   * The generation is captured BEFORE the disk read for the same reason
+   * `refresh` captures it before the fetch. Without it, a read that started
+   * under account A and completed after a sign-out wrote A's local host into
+   * the cache and published it stamped with the CURRENT generation - so the
+   * engine's identity guard, which only inspects the stamp, admitted account
+   * A's machine into account B's fleet. That also contradicted the signed-out
+   * branch of `refresh`, which publishes `localHostId: null`.
+   */
+  private async refreshLocalIdentity(): Promise<void> {
+    if (this.disposed) return;
+    const generation = this.options.identity.current().generation;
+    // ELIGIBILITY is captured with the generation, not just the generation.
+    // The generation capture closes the RACE; it does not carry the rule.
+    // After a sign-out has fully committed there is no race left, and a
+    // later local-host change would still publish this machine's durable id
+    // under the CURRENT (signed-out) generation - which the engine accepts,
+    // repopulating a fleet that `refresh` has just declared empty. One
+    // predicate for one rule: the same bearer check `refresh` uses for its
+    // signed-out branch decides here too, so the two can never disagree
+    // about what a signed-out fleet contains.
+    const eligible = this.options.authSession.get().token !== null;
+    // Stamped BEFORE the read, on the SAME counter a full refresh uses, so the
+    // two writers of `localHostId` order by what each one observed.
+    this.localIdentitySeq += 1;
+    const identitySeq = this.localIdentitySeq;
+    const localHostId = eligible ? await this.readLocalHostId() : null;
+    if (this.disposed) return;
+    if (generation !== this.options.identity.current().generation) {
+      this.options.log.debug("[selection-fleet] stale local identity read", {
+        generation,
+      });
+      return;
+    }
+    if (identitySeq < this.adoptedLocalIdentitySeq) {
+      this.options.log.debug(
+        "[selection-fleet] dropped a superseded identity",
+        {
+          identitySeq,
+          adopted: this.adoptedLocalIdentitySeq,
+        },
+      );
+      return;
+    }
+    // Recorded even when the value is unchanged: this read is still the newest
+    // observation, and saying so is what stops an older in-flight refresh from
+    // adopting the id it read before this one.
+    this.adoptedLocalIdentitySeq = identitySeq;
+    if (localHostId === this.localHostId) return;
+    this.localHostId = localHostId;
+    this.publishAt(generation);
+  }
+
+  /**
+   * Adopts a local-identity read that has no registry rows to travel with -
+   * the failure arms of `refreshWith`. Same fences as
+   * `refreshLocalIdentity`, in the same order: the generation guard drops a
+   * read that straddled an account switch, the seq guard drops one a newer
+   * writer has superseded, and the value guard keeps an unchanged id from
+   * publishing a no-op revision.
+   */
+  private adoptLocalIdentityRead(
+    generation: number,
+    identitySeq: number,
+    localHostId: string | null,
+  ): void {
+    if (this.disposed) return;
+    if (generation !== this.options.identity.current().generation) return;
+    if (identitySeq < this.adoptedLocalIdentitySeq) return;
+    this.adoptedLocalIdentitySeq = identitySeq;
+    if (localHostId === this.localHostId) return;
+    this.localHostId = localHostId;
+    this.publishAt(generation);
+  }
+
+  private readLocalHostId(): Promise<string | null> {
+    // A desktop booted in the lifecycle policy's `none` mode runs no local
+    // host, so it names none: no `kind: "local"` entry is injected and a
+    // registry row for this machine's host reads as the remote it now is.
+    if (appliedLocalHostCapability() === "none") return Promise.resolve(null);
+    return readLastKnownLocalHostId({
+      identityEnrollmentFile: this.options.host.identityEnrollmentFile,
+      pidMetadataFile: this.options.host.pidMetadataFile,
+    }).catch((error: unknown) => {
+      this.options.log.debug("[selection-fleet] local identity read failed", {
+        error: String(error),
+      });
+      return null;
+    });
+  }
+
+  private applyFetched(
+    generation: number,
+    seq: number,
+    identitySeq: number,
+    localHostId: string | null,
+    scoped: ScopedRows,
+    readAtMs: number,
+  ): void {
+    if (this.disposed) return;
+    if (generation !== this.options.identity.current().generation) {
+      // A late completion for a RETIRED identity. It is still published -
+      // stamped with the generation it was fetched under, which is exactly
+      // what lets the engine reject it - but it is NOT adopted as this port's
+      // membership. Adopting it would be the subtle half of the bug: a later
+      // local-host republish would carry the old account's rows under the
+      // CURRENT generation and sail straight past the engine's guard.
+      this.publishSnapshot(
+        generation,
+        localHostId,
+        projectFleetRows([...(scoped.personal ?? []), ...(scoped.team ?? [])]),
+      );
+      return;
+    }
+    // Same-identity ordering (see `refreshSeq`), per scope: a scope whose
+    // newer completion was adopted while this one awaited is declined, so an
+    // older response landing last cannot resurrect rows the newer one
+    // removed. Ordered AFTER the generation branch above on purpose: a
+    // retired identity's stale-stamped publish is a contract of its own.
+    const adopting = REGISTRY_SCOPES.filter(
+      (scope) => scoped[scope] !== null && seq >= this.watermarks[scope].seq,
+    );
+    if (adopting.length === 0) {
+      this.options.log.debug("[selection-fleet] dropped a superseded refresh", {
+        seq,
+      });
+      return;
+    }
+    for (const scope of adopting) {
+      const watermark = this.watermarks[scope];
+      watermark.seq = seq;
+      // Advanced HERE and nowhere else: the watermark means "the newest read
+      // whose rows are the ones this port is serving for the scope", so a
+      // completion declined above - or one that never reached this method -
+      // must not raise it and lock out the read that should win.
+      if (watermark.generation === generation) {
+        watermark.readAtMs = Math.max(watermark.readAtMs, readAtMs);
+      } else {
+        watermark.replayFloorMs = Math.max(
+          watermark.replayFloorMs,
+          watermark.readAtMs,
+        );
+        watermark.readAtMs = readAtMs;
+      }
+      watermark.generation = generation;
+      this.rows[scope] = scoped[scope] ?? [];
+    }
+    // The ID is fenced SEPARATELY from the rows: this refresh's row projection
+    // can be the current one while the id it read before the fetch has since
+    // been superseded by a local-identity change. Adopting the tuple wholesale
+    // is what let the stale id win.
+    if (identitySeq >= this.adoptedLocalIdentitySeq) {
+      this.adoptedLocalIdentitySeq = identitySeq;
+      this.localHostId = localHostId;
+    } else {
+      this.options.log.debug("[selection-fleet] kept a newer local identity", {
+        identitySeq,
+        adopted: this.adoptedLocalIdentitySeq,
+      });
+    }
+    this.publishAt(generation);
+  }
+
+  /**
+   * What a read did to the authority's fleet, decided from the fleet rather
+   * than from whether this read was the one adopted.
+   *
+   * A disposed source, or a retired identity: nothing current came of it,
+   * `superseded`. Otherwise `published` exactly when every scope the read
+   * spoke for is serving rows adopted under this generation - by this read,
+   * or by a newer read of the same identity that won the scope - so a partial
+   * adoption with one scope still on another identity's marks is not
+   * `published`. Anything less is `unavailable`, and the caller keeps its
+   * obligation to re-ask. Generation alone is not proof: the seq and
+   * read-time fences outlive an identity change while the rows are cleared.
+   */
+  private fleetOutcome(
+    generation: number,
+    scopes: readonly RegistryScope[],
+  ): FleetRefreshOutcome {
+    if (
+      this.disposed ||
+      generation !== this.options.identity.current().generation
+    ) {
+      return { kind: "superseded" };
+    }
+    return scopes.every(
+      (scope) => this.watermarks[scope].generation === generation,
+    )
+      ? { kind: "published" }
+      : { kind: "unavailable" };
+  }
+
+  /** Publishes under the generation that is current right now. */
+  private publish(): void {
+    this.publishAt(this.options.identity.current().generation);
+  }
+
+  private publishAt(generation: number): void {
+    this.publishSnapshot(
+      generation,
+      this.localHostId,
+      projectFleetRows([...this.rows.personal, ...this.rows.team]),
+    );
+  }
+
+  private publishSnapshot(
+    generation: number,
+    localHostId: string | null,
+    rows: readonly FleetRow[],
+  ): void {
+    this.revisionCounter += 1;
+    this.currentSnapshot = {
+      revision: this.revisionCounter,
+      identityGeneration: generation,
+      localHostId,
+      hosts: composeFleetEntries(localHostId, rows),
+    };
+    for (const listener of Array.from(this.listeners)) {
+      listener(this.currentSnapshot);
+    }
+  }
+}
+
+/**
+ * One registry row as the fleet needs it: the id, whether the registry calls
+ * it a sandbox (a member the engine never auto-selects) and whether a team
+ * owns it (never the app-wide host); see `HostFleetEntry`.
+ */
+interface FleetRow {
+  readonly hostId: string;
+  readonly sandbox: boolean;
+  readonly teamOwned: boolean;
+}
+
+function projectFleetRows(rows: readonly HostListItem[]): readonly FleetRow[] {
+  return rows.map((row) => ({
+    hostId: row.hostId,
+    sandbox: row.kind === "sandbox",
+    teamOwned: registryScopeOf(row) === "team",
+  }));
+}
+
+/**
+ * Which reader may speak for a registry row, read off the row's own
+ * `owner.kind` (both readers ask with `include=owner`).
+ *
+ * The local host reads `GET /api/v3/hosts` with its DEVICE credential, which
+ * authn scopes to the owner's personal hosts: its push never carries a team's
+ * host. Only a person's bearer is also answered with the hosts of that
+ * person's teams. So the push speaks for `personal` alone, and the bearer read
+ * is the one reader of `team`. A row with no `owner` is personal - every team
+ * row carries one, a `team` arm being the only way a row says a team owns it.
+ */
+type RegistryScope = "personal" | "team";
+
+const REGISTRY_SCOPES: readonly RegistryScope[] = ["personal", "team"];
+const PUSH_SCOPES: readonly RegistryScope[] = ["personal"];
+
+function registryScopeOf(row: HostListItem): RegistryScope {
+  return row.owner?.kind === "team" ? "team" : "personal";
+}
+
+/**
+ * The read time a read must not be older than to be admitted for a scope.
+ *
+ * A BEARER read issued under the current identity is held only to the marks
+ * that identity's own adoptions set (`readAtMs` once the scope serves its
+ * generation, nothing before): this process made it with this identity's
+ * credential, so it is this identity's answer whatever the wall clock says,
+ * and a mark from an account the user has left (a clock that stepped back)
+ * must not decline it - or freeze the reads after it. A PUSH, and any read
+ * issued under an earlier identity, is held to every mark, the cross-account
+ * replay floor included: that is the reason the marks outlive the switch.
+ */
+function readTimeFence(
+  watermark: ScopeWatermark,
+  read: { readonly generation: number; readonly bearer: boolean },
+  currentIdentity: boolean,
+): number {
+  if (read.bearer && currentIdentity) {
+    return watermark.generation === read.generation
+      ? watermark.readAtMs
+      : Number.NEGATIVE_INFINITY;
+  }
+  return Math.max(watermark.readAtMs, watermark.replayFloorMs);
+}
+
+/** One read's rows per scope; null for a scope the read does not speak for. */
+type ScopedRows = Readonly<
+  Record<RegistryScope, readonly HostListItem[] | null>
+>;
+
+interface ScopeWatermark {
+  seq: number;
+  /** The newest read time adopted for this scope under `generation`. */
+  readAtMs: number;
+  /**
+   * The newest read time adopted for this scope under any EARLIER
+   * generation: the cross-account replay floor. It fences pushes only - a host
+   * snapshot read in a departed account's era must not win after a switch -
+   * and never the current identity's own bearer reads, whose ordering is
+   * `readAtMs` alone. Kept apart so a clock that stepped back across a switch
+   * freezes neither: B's later reads order against B's own adopted time.
+   */
+  replayFloorMs: number;
+  /**
+   * The identity generation whose read this scope's served rows were adopted
+   * under, or null before any adoption. The two fences above outlive an
+   * identity change while the rows do not, so only this says whether the
+   * scope is serving the CURRENT identity's rows.
+   */
+  generation: number | null;
+}
+
+/**
+ * Splits a response by scope. A scope outside `speaksFor` is null, and its
+ * rows are dropped rather than adopted: a push row that claimed a team would
+ * still be the host's word for something only the bearer read may say.
+ */
+function scopeRows(
+  response: HostListResponse,
+  speaksFor: readonly RegistryScope[],
+): ScopedRows {
+  const personal: HostListItem[] = [];
+  const team: HostListItem[] = [];
+  for (const row of response.hosts) {
+    if (registryScopeOf(row) === "team") team.push(row);
+    else personal.push(row);
+  }
+  return {
+    personal: speaksFor.includes("personal") ? personal : null,
+    team: speaksFor.includes("team") ? team : null,
+  };
+}
+
+/**
+ * The atomic membership tuple. The local host is SYNTHESIZED when this machine
+ * has a durable identity the registry response does not list: it is real and
+ * dialable over the local socket whatever the cloud says, and omitting it
+ * would hide the one candidate D8 wants first. Sorted so a server-side
+ * reordering is not mistaken for a membership change.
+ *
+ * Takes its inputs as arguments rather than reading the port's cache, so a
+ * stale-generation completion can be published verbatim without touching it.
+ */
+function composeFleetEntries(
+  localHostId: string | null,
+  rows: readonly FleetRow[],
+): readonly HostFleetEntry[] {
+  const entries: HostFleetEntry[] = rows.map((row) => ({
+    hostId: row.hostId,
+    kind:
+      row.hostId === localHostId ? "local" : row.sandbox ? "sandbox" : "remote",
+    teamOwned: row.teamOwned,
+  }));
+  if (localHostId !== null && !rows.some((row) => row.hostId === localHostId)) {
+    entries.push({ hostId: localHostId, kind: "local", teamOwned: false });
+  }
+  return entries.sort((left, right) =>
+    left.hostId < right.hostId ? -1 : left.hostId > right.hostId ? 1 : 0,
+  );
+}
+
+export interface DesktopLocalHostOutageSignalOptions {
+  /**
+   * Subscribes to the canonical two-lane status broadcast main already
+   * computes (`onHostControllerStatusBroadcast`), returning an unsubscribe.
+   * Reusing that tick source is deliberate: a second poll loop against
+   * `getStatus()` would re-create the main-thread starvation the broadcast's
+   * serialization exists to prevent.
+   */
+  readonly subscribe: (
+    listener: (status: HostControllerStatus) => void,
+  ) => () => void;
+  readonly readStatus: () => Promise<HostControllerStatus>;
+  readonly log: AuthorityLog;
+}
+
+/**
+ * D5's LOCAL expected-outage signal: true while the `HostController` mutation
+ * lane has an operation in flight.
+ *
+ * Every mutation kind counts, not just restarts. The lane is busy exactly
+ * when the desktop shell itself took the host down (ensure, apply, activate,
+ * install, respawn, recovery, free-port-and-restart, uninstall), and in every
+ * one of those the outage is deliberate - which is the whole predicate. The
+ * engine caps how long it will hold a lease on this signal, so a lane that
+ * never reports completion cannot pin a host in `restarting-expected`.
+ */
+export class DesktopLocalHostOutageSignal implements LocalHostOutageSignal {
+  private readonly options: DesktopLocalHostOutageSignalOptions;
+  private busy = false;
+  /**
+   * Whether a live broadcast tick has landed. The initial `readStatus()` is a
+   * READ racing a SUBSCRIPTION: a mutation that starts while that read is in
+   * flight arrives on the broadcast first, and letting the older read answer
+   * afterwards would clear the exemption for an outage that is genuinely
+   * under way - a false negative at exactly the wrong moment (P1.3 would fail
+   * over off a host the shell itself is restarting).
+   */
+  private observedBroadcast = false;
+  private readonly listeners = new Set<(inExpectedOutage: boolean) => void>();
+  private readonly unsubscribe: () => void;
+
+  constructor(options: DesktopLocalHostOutageSignalOptions) {
+    this.options = options;
+    this.unsubscribe = options.subscribe((status) => {
+      this.observedBroadcast = true;
+      this.apply(status.mutation !== null);
+    });
+    void options
+      .readStatus()
+      .then((status) => {
+        if (this.observedBroadcast) return;
+        this.apply(status.mutation !== null);
+      })
+      .catch((error: unknown) => {
+        // A failed read is not evidence of an outage; stay false and let the
+        // next broadcast tick correct it.
+        options.log.debug("[selection-outage] initial status read failed", {
+          error: String(error),
+        });
+      });
+  }
+
+  inExpectedOutage(): boolean {
+    return this.busy;
+  }
+
+  onChanged(
+    listener: (inExpectedOutage: boolean) => void,
+  ): SelectionSubscription {
+    this.listeners.add(listener);
+    return {
+      dispose: () => {
+        this.listeners.delete(listener);
+      },
+    };
+  }
+
+  dispose(): void {
+    this.unsubscribe();
+    this.listeners.clear();
+  }
+
+  private apply(busy: boolean): void {
+    if (busy === this.busy) return;
+    this.busy = busy;
+    for (const listener of Array.from(this.listeners)) {
+      listener(busy);
+    }
+  }
+}
+
+/**
+ * The engine's one sanctioned process action (D14/C5), wired to the real
+ * provisioning controller.
+ *
+ * P1.1 composes it and NEVER calls it: the caller is P1.3's derivation, which
+ * requests `ensure` whenever the local host is down (target-independent by
+ * decision, 2026-08-19), and surfaces the outcome as the local lease's own
+ * status. Wiring it now means P1.3 adds a call site, not a port.
+ */
+export function createDesktopLocalHostEnsurePort(
+  hostController: IpcHostController,
+): LocalHostEnsurePort {
+  return {
+    ensureReady: async () => {
+      // `none` mode: this desktop provisions nothing, for the life of the
+      // process. The same refusal as a shell that cannot provision at all
+      // (`unavailableLocalHostEnsurePort`), and for the same reason not a
+      // deferral: nothing will ever run here, so pacing a retry would only
+      // delay the honest answer. Nothing reaches the CLI.
+      if (appliedLocalHostCapability() === "none") {
+        return {
+          ok: false,
+          reason: "local-provisioning-unavailable",
+          deferred: false,
+        };
+      }
+      const outcome = await hostController.convergeReady(
+        false,
+        { kind: "background" },
+        "keep-installed",
+      );
+      if (outcome.kind === "ok") {
+        // `ok` ALONE IS NOT PROOF OF LIFE, and the engine reads this answer as
+        // exactly that (`onHostProvedAlive`: it clears the refusal streak and
+        // makes the lease usable). `HostController.convergeReady`
+        // short-circuits `ok {running:false}` while the removal sentinel
+        // stands - it starts nothing, by consent - so collapsing every `ok`
+        // credited a host the user had removed with being alive. Harmless
+        // while the ensure only fired for a WANTED local host; since it fires
+        // whichever host is effective, a machine whose fleet still names its
+        // removed local host (enrollment or a lingering `pid.json` outlives
+        // the uninstall, and the fleet snapshot outlives both until it
+        // refreshes) would hand failover a host that is not installed, and
+        // every 30s the same no-op ensure would clear the refusal streak that
+        // failing to dial it had just built.
+        //
+        // `running: false` reaches here from that short-circuit alone - every
+        // other `ok` path returns a version it just proved reachable - so the
+        // honest mapping is a plain failure: not deferred (nothing is going to
+        // change on its own), and paced by the engine's cooldown, whose retry
+        // costs one sentinel read until the user reinstalls.
+        if (outcome.value.running) return { ok: true };
+        return { ok: false, reason: "removed-by-user", deferred: false };
+      }
+      // NEITHER SURVIVING OUTCOME IS PROOF OF LIFE, and `busy` is the one that
+      // looks like it. It reads as "a host that is up with active work", and
+      // an earlier revision of this port resolved it `ok` on that reading, to
+      // spare a non-target local host one CLI spawn per pacing hold. The
+      // reading is wrong: `E_HOST_BUSY` is a FAIL-SAFE. `assertHostNotBusy`
+      // raises it when a live PID's idle state CANNOT BE DETERMINED - the
+      // `/activity` probe timed out, refused the connection, answered
+      // malformed, or 404'd from a pre-feature host - as much as when the host
+      // answers "I am working". A WEDGED host is exactly the first case, so
+      // crediting it handed `onHostProvedAlive` a host that cannot serve:
+      // refusal evidence cleared, the lease usable, failover free to pick it,
+      // and every following ensure clearing the refusals the failed dials had
+      // just rebuilt.
+      //
+      // So `busy` rejoins `deferred`: the lease is left alone and the request
+      // is paced, which is the honest answer to "nothing here was
+      // established". `failed` keeps its own answer - it ran and concluded, so
+      // it stays the one arm allowed to arm the engine's dead-lease cooldown.
+      // The cost is the spawn that reading was meant to avoid, once per hold
+      // while a host stays busy - accepted, because it is bounded, it ends by
+      // itself when real work finishes (the next converge answers `ok` with a
+      // version it proved), and no amount of it can select a host that is not
+      // serving. Only reachability independently confirmed could restore the
+      // shortcut, and this port has no such evidence - the engine's own dial
+      // is what has it.
+      return {
+        ok: false,
+        reason: outcome.kind,
+        deferred: outcome.kind === "deferred" || outcome.kind === "busy",
+      };
+    },
+  };
+}

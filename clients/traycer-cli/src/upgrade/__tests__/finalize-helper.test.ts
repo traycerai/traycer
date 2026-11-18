@@ -1,0 +1,1496 @@
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { powershellSingleQuoted } from "@traycer-clients/shared/platform/powershell-quote";
+
+// Coverage for the detached pending-CLI-upgrade finalize helper:
+//
+//  - scheduleFinalizationHelper writes a platform-appropriate script,
+//    launches it (Windows: an awaited, non-detached launcher), waits for
+//    the script's first line to write its armed sentinel, and returns a
+//    structured result that is `armed` only once that file exists.
+//  - The rendered script body contains the parent pid + live/staged
+//    binary paths and, once the parent exits, hands off to the staged
+//    binary's own hidden `cli finalize-upgrade` command (tested
+//    separately in commands/__tests__/cli-finalize-upgrade*.test.ts) -
+//    we don't actually execute the rendered script here, but the
+//    contract is asserted on the rendered body.
+//  - reconcilePostFinalizeMarker folds a "swapped" marker into the
+//    CLI install manifest (clears pendingUpgrade, promotes version),
+//    leaves the manifest unchanged on "swap-failed"/"parent-still-
+//    alive", and consumes the marker either way.
+
+// `store/paths` binds its home root from `os.homedir()` at module load.
+// Keep the environment mutation below, but redirect `homedir()` too.
+// `tmpdir()` is redirected the same way: the helper's script, sentinel and
+// abandoned files land under it.
+const osHome = vi.hoisted(() => ({ current: "" }));
+const osTmp = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return {
+    ...actual,
+    homedir: () => osHome.current || actual.tmpdir(),
+    tmpdir: () => osTmp.current || actual.tmpdir(),
+  };
+});
+
+const ORIGINAL_HOME = process.env.HOME;
+const ORIGINAL_USERPROFILE = process.env.USERPROFILE;
+
+let workHome: string;
+
+beforeEach(() => {
+  osTmp.current = "";
+  workHome = mkdtempSync(join(tmpdir(), "traycer-finalize-helper-test-"));
+  osHome.current = workHome;
+  osTmp.current = join(workHome, "tmp");
+  mkdirSync(osTmp.current, { recursive: true });
+  process.env.HOME = workHome;
+  process.env.USERPROFILE = workHome;
+  vi.resetModules();
+});
+
+afterEach(() => {
+  osTmp.current = "";
+  if (ORIGINAL_HOME === undefined) {
+    delete process.env.HOME;
+  } else {
+    process.env.HOME = ORIGINAL_HOME;
+  }
+  if (ORIGINAL_USERPROFILE === undefined) {
+    delete process.env.USERPROFILE;
+  } else {
+    process.env.USERPROFILE = ORIGINAL_USERPROFILE;
+  }
+  rmSync(workHome, { recursive: true, force: true });
+  vi.restoreAllMocks();
+});
+
+function writeManifest(opts: {
+  readonly liveBinaryPath: string;
+  readonly stagedBinaryPath: string;
+  readonly version: string;
+  readonly currentVersion: string;
+}): string {
+  const cliDir = join(workHome, ".traycer", "cli");
+  mkdirSync(cliDir, { recursive: true, mode: 0o700 });
+  const manifestPath = join(cliDir, "manifest.json");
+  writeFileSync(
+    manifestPath,
+    JSON.stringify(
+      {
+        version: opts.currentVersion,
+        installedAt: "2026-04-01T00:00:00Z",
+        binaryPath: opts.liveBinaryPath,
+        source: "manual",
+        pendingUpgrade: {
+          version: opts.version,
+          stagedBinaryPath: opts.stagedBinaryPath,
+          stagedAt: "2026-05-10T00:00:00Z",
+          reason: "binary-locked",
+        },
+      },
+      null,
+      2,
+    ),
+    { encoding: "utf8", mode: 0o600 },
+  );
+  return manifestPath;
+}
+
+// A clock the arm wait runs on without waiting: `sleep` advances `now`.
+function fakeArmWait(waitMs: number): {
+  readonly deps: {
+    readonly now: () => number;
+    readonly sleep: (ms: number) => Promise<void>;
+    readonly waitMs: number;
+    readonly pollIntervalMs: number;
+  };
+  readonly elapsedMs: () => number;
+} {
+  let t = 0;
+  return {
+    deps: {
+      now: () => t,
+      sleep: async (ms) => {
+        t += ms;
+      },
+      waitMs,
+      pollIntervalMs: 100,
+    },
+    elapsedMs: () => t,
+  };
+}
+
+interface LauncherExit {
+  readonly exitCode: number | null;
+  readonly errorMessage: string | null;
+}
+
+const LAUNCHER_OK: LauncherExit = { exitCode: 0, errorMessage: null };
+
+// Records every spawn and write. When `sentinel` is not null the spawn
+// plays the helper script's first line: it writes that text into the
+// `.armed` file beside the script the CLI just wrote.
+function makeHarness(opts: {
+  readonly sentinel: string | null;
+  readonly exited: Promise<LauncherExit>;
+}) {
+  const spawnCalls: Array<{
+    command: string;
+    args: readonly string[];
+    options: {
+      readonly detached?: boolean;
+      readonly stdio?: unknown;
+      readonly windowsHide?: boolean;
+    };
+  }> = [];
+  const writeCalls: Array<{ path: string; body: string }> = [];
+  const killed = { count: 0 };
+  const unrefed = { count: 0 };
+  return {
+    spawnCalls,
+    writeCalls,
+    killed,
+    unrefed,
+    spawnImpl: (
+      command: string,
+      args: readonly string[],
+      options: {
+        readonly detached?: boolean;
+        readonly stdio?: unknown;
+        readonly windowsHide?: boolean;
+      },
+    ) => {
+      spawnCalls.push({ command, args, options });
+      const scriptPath = writeCalls[0]?.path ?? "";
+      if (opts.sentinel !== null) {
+        writeFileSync(
+          scriptPath.replace(/\.(ps1|sh)$/, ".armed"),
+          opts.sentinel,
+        );
+      }
+      return {
+        pid: 55000,
+        unref: () => {
+          unrefed.count += 1;
+        },
+        kill: () => {
+          killed.count += 1;
+        },
+        exited: opts.exited,
+      };
+    },
+    writeImpl: async (path: string, body: string) => {
+      writeCalls.push({ path, body });
+    },
+  };
+}
+
+function decodeLauncher(args: readonly string[]): string {
+  const idx = args.indexOf("-EncodedCommand");
+  expect(idx).toBeGreaterThan(-1);
+  return Buffer.from(args[idx + 1] ?? "", "base64").toString("utf16le");
+}
+
+const BASE_OPTIONS = {
+  environment: "production",
+  stagedBinaryPath: "C:/Users/dev/AppData/.traycer/cli/traycer-1.5.0.exe",
+  livePath: "C:/Users/dev/AppData/.traycer/cli/traycer.exe",
+  parentPid: 4242,
+  parentExitTimeoutSeconds: 60,
+} as const;
+
+describe("scheduleFinalizationHelper", () => {
+  it("renders a PowerShell script with parent pid + paths, launches it through an awaited non-detached powershell.exe on Windows, and reports it armed", async () => {
+    let resolveExited: (exit: LauncherExit) => void = () => undefined;
+    const exited = new Promise<LauncherExit>((resolve) => {
+      resolveExited = resolve;
+    });
+    const harness = makeHarness({ sentinel: "4321", exited });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    // The clock never runs out, so only the launcher's exit can settle it.
+    const armWait = {
+      now: () => 0,
+      sleep: () => new Promise<void>((resolve) => setTimeout(resolve, 0)),
+      waitMs: 10_000,
+      pollIntervalMs: 100,
+    };
+    let settled = false;
+    const pending = scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait,
+    }).then((r) => {
+      settled = true;
+      return r;
+    });
+
+    // Ticks pass with the launcher still running: the CLI keeps waiting.
+    for (let i = 0; i < 20; i += 1) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+    expect(settled).toBe(false);
+
+    resolveExited(LAUNCHER_OK);
+    const result = await pending;
+
+    expect(result.status).toBe("armed");
+    expect(result.helperPid).toBe(4321);
+    expect(result.platform).toBe("win32");
+    expect(result.armedPath).toBe(
+      harness.writeCalls[0]?.path.replace(/\.ps1$/, ".armed"),
+    );
+
+    expect(harness.spawnCalls).toHaveLength(1);
+    const spawnCall = harness.spawnCalls[0];
+    expect(spawnCall?.command).toBe("powershell.exe");
+    expect(spawnCall?.args).toContain("-NoProfile");
+    expect(spawnCall?.args).toContain("-NonInteractive");
+    expect(spawnCall?.args).toContain("-ExecutionPolicy");
+    expect(spawnCall?.args).toContain("-EncodedCommand");
+    expect(spawnCall?.args).not.toContain("-File");
+    expect(spawnCall?.options.detached).toBe(false);
+    expect(spawnCall?.options.stdio).toBe("ignore");
+    expect(spawnCall?.options.windowsHide).toBe(true);
+
+    // The launcher hands off via a CreateProcessW P/Invoke with
+    // CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW, not Start-Process:
+    // Start-Process gave the freeze-9 job a way to silently inherit
+    // whatever job the launcher itself never explicitly broke out of.
+    const launcher = decodeLauncher(spawnCall?.args ?? []);
+    expect(launcher).not.toContain("Start-Process");
+    expect(launcher).toContain("CreateProcessW");
+    expect(launcher).toContain("0x01000000"); // CREATE_BREAKAWAY_FROM_JOB
+    expect(launcher).toContain("0x08000000"); // CREATE_NO_WINDOW
+    expect(launcher).toMatch(/CloseHandle/);
+    expect(launcher).toContain(
+      powershellSingleQuoted(harness.writeCalls[0]?.path ?? ""),
+    );
+
+    expect(harness.writeCalls).toHaveLength(1);
+    const body = harness.writeCalls[0]?.body ?? "";
+    expect(body).toMatch(/\$ParentPid\s*=\s*4242/);
+    expect(body).toContain("C:/Users/dev/AppData/.traycer/cli/traycer.exe");
+    expect(body).toContain(
+      "C:/Users/dev/AppData/.traycer/cli/traycer-1.5.0.exe",
+    );
+    // The parked-still-alive marker write (only reachable path owned by
+    // this script now) still targets post-finalize.json.
+    expect(body).toContain("post-finalize.json");
+    // Binary swap + service start hand off to the staged binary's own
+    // hidden `cli finalize-upgrade` command - it acquires cli-lock
+    // under its own PID + start-time identity (Host Update Layer
+    // Redesign Tech Plan, "Windows CLI-finalize helper").
+    expect(body).toContain("$StagedBinary cli finalize-upgrade");
+    expect(body).not.toContain("Move-Item -Force -LiteralPath $StagedBinary");
+    expect(body).not.toContain("Start-Service");
+  });
+
+  it("sizes the launcher's native STARTUPINFO/PROCESS_INFORMATION buffers off a fixed pointer-width byte count, never a marshaled struct", async () => {
+    // The launcher no longer marshals a `TraycerStartupInfo` struct at all -
+    // Windows PowerShell 5.1's `Marshal::SizeOf` cannot marshal a type
+    // literal (`SizeOf(Type)` chokes on a `RuntimeType` argument), so the
+    // native-binding rewrite sidesteps the whole struct-marshaling path:
+    // STARTUPINFO/PROCESS_INFORMATION are raw `AllocHGlobal` buffers sized
+    // off the documented x86/x64 byte layout, never a `[SomeType]::new()` +
+    // `Marshal]::SizeOf(...)` struct instance.
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+    const launcher = decodeLauncher(harness.spawnCalls[0]?.args ?? []);
+    expect(launcher).not.toMatch(/Marshal\]::SizeOf/);
+    expect(launcher).not.toContain("StartupInfo]::new()");
+    expect(launcher).toMatch(/\$startupSize\s*=\s*if\s*\(\[IntPtr\]::Size/);
+    expect(launcher).toContain("AllocHGlobal($startupSize)");
+  });
+
+  it("captures CreateProcessW's failure code inside the emitted native wrapper, never via a separate PowerShell-side Marshal.GetLastWin32Error call", async () => {
+    // Confirmed on a Windows PowerShell 5.1 VM: querying
+    // [Marshal]::GetLastWin32Error() from PowerShell AFTER the CreateProcessW
+    // P/Invoke returns reads a clobbered value (123 / 203 observed instead of
+    // the real 5/ACCESS_DENIED) - the PowerShell interpreter's own intervening
+    // calls (evaluating the `if`, formatting, etc.) overwrite the thread's
+    // last-error slot before the script gets to read it. The only reliable
+    // capture point is IMMEDIATELY after the native call, inside the same
+    // emitted method - no PowerShell interpreter frames run in between - so
+    // the failure code must come back as that method's own return value,
+    // never from the PowerShell script re-querying GetLastWin32Error itself
+    // afterwards. The bindings are now built via in-memory
+    // `System.Reflection.Emit`, not `Add-Type`, so the emitted-method body
+    // and the surrounding PowerShell orchestration are told apart by the
+    // `New-TraycerNativeType` function boundary rather than an
+    // `Add-Type -TypeDefinition` block.
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+    const launcher = decodeLauncher(harness.spawnCalls[0]?.args ?? []);
+    const emitFnMatch = /function New-TraycerNativeType \{[\s\S]*?\n\}/.exec(
+      launcher,
+    );
+    expect(emitFnMatch).not.toBeNull();
+    const emitScript = emitFnMatch?.[0] ?? "";
+    const orchestration = launcher.slice(
+      (emitFnMatch?.index ?? 0) + (emitFnMatch?.[0]?.length ?? 0),
+    );
+    // The emitted IL must itself call GetLastWin32Error - proving the
+    // capture happens in native-adjacent, uninterrupted code.
+    expect(emitScript).toMatch(/GetLastWin32Error/);
+    // The PowerShell orchestration that invokes the emitted method must NOT
+    // query it again itself - that second, later query is the unreliable one.
+    expect(orchestration).not.toMatch(/Marshal\]::GetLastWin32Error/);
+  });
+
+  it("builds the Windows launcher's native bindings with in-memory Reflection.Emit, never Add-Type/csc", async () => {
+    // Windows PowerShell 5.1's `Add-Type -TypeDefinition` shells out to
+    // csc.exe, which writes compiler temp files under the process TEMP
+    // path. Confirmed on a Windows VM: when that TEMP path contains CJK
+    // characters, `Add-Type` throws a Win32Exception before the launcher
+    // ever gets a chance to write any marker - the failure is silent and
+    // undiagnosable. The launcher must build its native P/Invoke bindings
+    // entirely via `System.Reflection.Emit` (an in-memory dynamic assembly),
+    // with zero dependency on an external compiler process or its temp
+    // files.
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+    const launcher = decodeLauncher(harness.spawnCalls[0]?.args ?? []);
+    expect(launcher).not.toContain("Add-Type");
+    expect(launcher).not.toContain("-TypeDefinition");
+    expect(launcher).toMatch(/System\.Reflection\.Emit/);
+    expect(launcher).toMatch(/DefineDynamicAssembly/);
+  });
+
+  it("writes a fixed 'launcher-failed' marker for a runtime failure that happens before CreateProcessW is ever attempted", async () => {
+    // Building the native bindings in-memory still runs PowerShell code
+    // that can throw (e.g. a hostile CLR policy, an out-of-memory
+    // DefineDynamicAssembly call) before CreateProcessW is reached. That
+    // failure must land as a prompt, fixed, recognized `.not-armed` reason
+    // - never a raw, unbounded exception message - so the reader can act on
+    // it the same way it acts on `create-denied`/`create-failed`.
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+    const launcher = decodeLauncher(harness.spawnCalls[0]?.args ?? []);
+    // The whole native-binding + CreateProcessW attempt must be wrapped so
+    // any failure before (or during) it falls through to one fixed write,
+    // not an echo of whatever `$_` the runtime threw.
+    expect(launcher).toContain("try {");
+    expect(launcher).toContain("} catch {");
+    expect(launcher).toMatch(
+      /WriteAllText\(\$notArmedPath,\s*'launcher-failed'\)/,
+    );
+    // The catch-all write must sit inside the outer catch block (the first
+    // one in the script), not inline with the CreateProcessW-specific
+    // create-denied/create-failed branch.
+    const catchIdx = launcher.indexOf("} catch {");
+    const launcherFailedIdx = launcher.indexOf("launcher-failed");
+    expect(catchIdx).toBeGreaterThan(-1);
+    expect(launcherFailedIdx).toBeGreaterThan(catchIdx);
+  });
+
+  it("recognizes the launcher's fixed 'launcher-failed' reason as a distinct, known refusal - not the generic unrecognized-content fallback", async () => {
+    // `readNotArmedReason` maps a closed set of fixed strings written by the
+    // launcher/helper to known reasons, and anything else to a fixed
+    // `unrecognized-refusal` label - it never echoes arbitrary file content
+    // into the result. `launcher-failed` must be a first-class member of
+    // that known set (distinguishable from both `create-failed` and the
+    // unrecognized-content fallback), since it identifies a fundamentally
+    // different failure point (before CreateProcessW is ever attempted).
+    const writeCalls: Array<{ path: string; body: string }> = [];
+    const spawnImpl = (
+      _command: string,
+      _args: readonly string[],
+      _options: unknown,
+    ) => {
+      const scriptPath = writeCalls[0]?.path ?? "";
+      const notArmedPath = scriptPath.replace(/\.(ps1|sh)$/, ".not-armed");
+      writeFileSync(notArmedPath, "launcher-failed");
+      return {
+        pid: 1,
+        unref: () => undefined,
+        kill: () => undefined,
+        exited: Promise.resolve(LAUNCHER_OK),
+      };
+    };
+    const clock = fakeArmWait(10_000);
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl,
+      writeImpl: async (path, body) => {
+        writeCalls.push({ path, body });
+      },
+      armWait: clock.deps,
+    });
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toContain("launcher-failed");
+    expect(result.errorMessage).not.toContain("unrecognized-refusal");
+    expect(clock.elapsedMs()).toBeLessThanOrEqual(100);
+  });
+
+  it("falls back to a fixed unrecognized-refusal label, never echoing raw file content, for an unknown '.not-armed' reason", async () => {
+    const writeCalls: Array<{ path: string; body: string }> = [];
+    const secretLookingPayload =
+      "unexpected PowerShell trace: password=hunter2 at line 42";
+    const spawnImpl = (
+      _command: string,
+      _args: readonly string[],
+      _options: unknown,
+    ) => {
+      const scriptPath = writeCalls[0]?.path ?? "";
+      const notArmedPath = scriptPath.replace(/\.(ps1|sh)$/, ".not-armed");
+      writeFileSync(notArmedPath, secretLookingPayload);
+      return {
+        pid: 1,
+        unref: () => undefined,
+        kill: () => undefined,
+        exited: Promise.resolve(LAUNCHER_OK),
+      };
+    };
+    const clock = fakeArmWait(10_000);
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl,
+      writeImpl: async (path, body) => {
+        writeCalls.push({ path, body });
+      },
+      armWait: clock.deps,
+    });
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toContain("unrecognized-refusal");
+    expect(result.errorMessage).not.toContain(secretLookingPayload);
+    expect(result.errorMessage).not.toContain("hunter2");
+  });
+
+  it("builds the Windows helper's job-membership check with in-memory Reflection.Emit, never Add-Type/csc", async () => {
+    // Same CJK-TEMP failure mode as the launcher applies to the helper's
+    // own `IsProcessInJob` guard: `Add-Type` there must also be replaced
+    // with in-memory `System.Reflection.Emit` bindings, so a hostile TEMP
+    // path can't take down the arm guard before it ever runs.
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+    const body = harness.writeCalls[0]?.body ?? "";
+    expect(body).not.toContain("Add-Type");
+    expect(body).not.toContain("-TypeDefinition");
+    expect(body).toMatch(/System\.Reflection\.Emit/);
+    expect(body).toMatch(/DefineDynamicAssembly/);
+    expect(body).toContain("IsProcessInJob");
+  });
+
+  it("emits each native P/Invoke method via DefineMethod + a complete DllImport attribute, never DefinePInvokeMethod (W-H5)", async () => {
+    // W-H5 (conclusive): `TypeBuilder.DefinePInvokeMethod` and a
+    // hand-attached `DllImportAttribute` custom attribute on the SAME
+    // method are two independent, overlapping descriptions of the same
+    // P/Invoke - `DefinePInvokeMethod` already implies its own interop
+    // metadata from the arguments it's given (entry point, calling
+    // convention, char set), and layering a second, manually built
+    // `DllImportAttribute` on top of that is undefined/fragile. The fix is
+    // to stop using `DefinePInvokeMethod` entirely and build every native
+    // method as a plain `DefineMethod` (flagged `PinvokeImpl`) carrying
+    // exactly ONE complete, manually constructed `DllImportAttribute` that
+    // itself carries every field that matters here: `EntryPoint`,
+    // `CharSet`, `CallingConvention`, `ExactSpelling` and `SetLastError`.
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+    const launcher = decodeLauncher(harness.spawnCalls[0]?.args ?? []);
+    const helperBody = harness.writeCalls[0]?.body ?? "";
+    for (const [label, script] of [
+      ["launcher", launcher],
+      ["helper", helperBody],
+    ] as const) {
+      expect(script, `${label}: must not use DefinePInvokeMethod`).not.toMatch(
+        /DefinePInvokeMethod/,
+      );
+      expect(
+        script,
+        `${label}: must build native methods via DefineMethod`,
+      ).toMatch(/DefineMethod\(/);
+      expect(
+        script,
+        `${label}: the emitted native method must be flagged PinvokeImpl`,
+      ).toMatch(/MethodAttributes\]::PinvokeImpl/);
+      // One complete DllImportAttribute, every field named:
+      for (const field of [
+        "EntryPoint",
+        "CharSet",
+        "CallingConvention",
+        "ExactSpelling",
+        "SetLastError",
+      ]) {
+        expect(
+          script,
+          `${label}: DllImportAttribute must carry ${field}`,
+        ).toMatch(new RegExp(`GetField\\(['"]${field}['"]\\)`));
+      }
+      expect(
+        script,
+        `${label}: must reference DllImportAttribute itself`,
+      ).toMatch(/DllImportAttribute/);
+    }
+  });
+
+  it("gates the Windows helper's arm write on IsProcessInJob, deriving a sibling '.not-armed' path for the still-in-a-job and query-error branches", async () => {
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+    const body = harness.writeCalls[0]?.body ?? "";
+    const armedPath = result.armedPath ?? "";
+    const notArmedPath = armedPath.replace(/\.armed$/, ".not-armed");
+    expect(notArmedPath).not.toBe(armedPath);
+    expect(notArmedPath.endsWith(".not-armed")).toBe(true);
+
+    // Breakaway is a request the confining job can silently refuse - the
+    // freeze-9 failure mode: CREATE_BREAKAWAY_FROM_JOB can succeed at
+    // creating the process while the new process is still a job member,
+    // because the job's own policy never granted the break. The helper
+    // proves it actually escaped before it ever claims to own the
+    // finalize; QueryInformationJobObject isn't needed for that proof.
+    expect(body).toContain("IsProcessInJob");
+    expect(body).not.toContain("QueryInformationJobObject");
+    expect(body).toContain(powershellSingleQuoted(notArmedPath));
+    expect(body).toContain("in-job");
+    expect(body).toContain("job-check-failed");
+    expect(body).toContain("# END ARM GUARD");
+
+    // The armed write is reachable only through the not-in-a-job branch:
+    // the job check comes first, the sentinel write follows it.
+    const jobCheckIdx = body.indexOf("IsProcessInJob");
+    const armWriteIdx = body.indexOf(powershellSingleQuoted(armedPath));
+    const guardEndIdx = body.indexOf("# END ARM GUARD");
+    expect(jobCheckIdx).toBeGreaterThan(-1);
+    expect(armWriteIdx).toBeGreaterThan(jobCheckIdx);
+    expect(guardEndIdx).toBeGreaterThan(armWriteIdx);
+  });
+
+  it("reports failed promptly, without waiting out the arm budget, when the helper writes '.not-armed' (in-job)", async () => {
+    const writeCalls: Array<{ path: string; body: string }> = [];
+    const spawnImpl = (
+      _command: string,
+      _args: readonly string[],
+      _options: unknown,
+    ) => {
+      const scriptPath = writeCalls[0]?.path ?? "";
+      const notArmedPath = scriptPath.replace(/\.(ps1|sh)$/, ".not-armed");
+      writeFileSync(notArmedPath, "in-job");
+      return {
+        pid: 1,
+        unref: () => undefined,
+        kill: () => undefined,
+        exited: Promise.resolve(LAUNCHER_OK),
+      };
+    };
+    const clock = fakeArmWait(10_000);
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl,
+      writeImpl: async (path, body) => {
+        writeCalls.push({ path, body });
+      },
+      armWait: clock.deps,
+    });
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toContain("in-job");
+    // The helper already announced it never armed - there is no reason to
+    // burn the 10 s budget waiting it out. One launcher-exit poll tick is
+    // the bound, not the full deadline.
+    expect(clock.elapsedMs()).toBeLessThanOrEqual(100);
+  });
+
+  it("reports failed promptly with a job-check-failed reason when the helper's job-membership query itself errors", async () => {
+    const writeCalls: Array<{ path: string; body: string }> = [];
+    const spawnImpl = (
+      _command: string,
+      _args: readonly string[],
+      _options: unknown,
+    ) => {
+      const scriptPath = writeCalls[0]?.path ?? "";
+      const notArmedPath = scriptPath.replace(/\.(ps1|sh)$/, ".not-armed");
+      writeFileSync(notArmedPath, "job-check-failed");
+      return {
+        pid: 1,
+        unref: () => undefined,
+        kill: () => undefined,
+        exited: Promise.resolve(LAUNCHER_OK),
+      };
+    };
+    const clock = fakeArmWait(10_000);
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl,
+      writeImpl: async (path, body) => {
+        writeCalls.push({ path, body });
+      },
+      armWait: clock.deps,
+    });
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toContain("job-check-failed");
+    expect(clock.elapsedMs()).toBeLessThanOrEqual(100);
+  });
+
+  it("reports failed within the wait bound, and abandons the helper, when the script never writes its armed sentinel", async () => {
+    const harness = makeHarness({
+      sentinel: null,
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const clock = fakeArmWait(10_000);
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: clock.deps,
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.helperPid).toBeNull();
+    expect(clock.elapsedMs()).toBeGreaterThanOrEqual(10_000);
+    expect(clock.elapsedMs()).toBeLessThanOrEqual(10_500);
+    // The script, then the abandoned file the late helper checks.
+    const scriptPath = harness.writeCalls[0]?.path ?? "";
+    expect(harness.writeCalls.map((c) => c.path)).toEqual([
+      scriptPath,
+      scriptPath.replace(/\.ps1$/, ".abandoned"),
+    ]);
+  });
+
+  it("reports armed with the pid the script wrote into its sentinel", async () => {
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+    expect(result.status).toBe("armed");
+    expect(result.helperPid).toBe(4321);
+    // Armed: nothing is abandoned.
+    expect(harness.writeCalls).toHaveLength(1);
+  });
+
+  it("reports failed without waiting for the deadline when the launcher exits non-zero", async () => {
+    const harness = makeHarness({
+      sentinel: null,
+      exited: Promise.resolve({ exitCode: 1, errorMessage: null }),
+    });
+    const clock = fakeArmWait(10_000);
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: clock.deps,
+    });
+    expect(result.status).toBe("failed");
+    expect(clock.elapsedMs()).toBeLessThan(10_000);
+  });
+
+  it("kills the launcher and reports failed when it has not exited by the deadline", async () => {
+    const harness = makeHarness({
+      sentinel: null,
+      exited: new Promise<LauncherExit>(() => undefined),
+    });
+    const clock = fakeArmWait(10_000);
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: clock.deps,
+    });
+    expect(result.status).toBe("failed");
+    expect(harness.killed.count).toBe(1);
+    expect(clock.elapsedMs()).toBeLessThanOrEqual(10_500);
+  });
+
+  it("keeps the arm wait bounded when the wall clock is set back", async () => {
+    let wallTime = 1_000_000;
+    let elapsedMs = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => wallTime);
+    vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    const harness = makeHarness({
+      sentinel: null,
+      exited: new Promise<LauncherExit>(() => undefined),
+    });
+    const { scheduleFinalizationHelper, defaultHelperArmWaitDeps } =
+      await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      // The production clock, with only the sleeping replaced. The wall
+      // clock is stepped back a minute during the first sleep.
+      armWait: {
+        ...defaultHelperArmWaitDeps,
+        sleep: async (ms) => {
+          if (elapsedMs === 0) wallTime -= 60_000;
+          elapsedMs += ms;
+          wallTime += ms;
+        },
+      },
+    });
+    expect(result.status).toBe("failed");
+    expect(harness.killed.count).toBe(1);
+    expect(elapsedMs).toBeLessThanOrEqual(10_500);
+  });
+
+  it("writes the Windows helper script to disk with a UTF-8 BOM, gated arming (IsProcessInJob before the write), then '# END ARM GUARD'", async () => {
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper, defaultWriteImpl } =
+      await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: async (path, body) => {
+        await harness.writeImpl(path, body);
+        await defaultWriteImpl(path, body);
+      },
+      armWait: fakeArmWait(10_000).deps,
+    });
+    expect(result.scriptPath).not.toBeNull();
+    const bytes = readFileSync(result.scriptPath ?? "");
+    expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    const text = bytes.subarray(3).toString("utf8");
+    // The write that arms it is gated on IsProcessInJob (a breakaway can
+    // silently fail to escape the job it targeted), so it is no longer
+    // unconditionally the very first line - but it is still the first
+    // thing the guard can DO, ahead of the rest of the script, and the
+    // guard still ends at the stable `# END ARM GUARD` anchor tests key
+    // off of.
+    const jobCheckIdx = text.indexOf("IsProcessInJob");
+    const armWriteIdx = text.indexOf(
+      `[System.IO.File]::WriteAllText(${powershellSingleQuoted(
+        result.armedPath ?? "",
+      )}, [string]$PID)`,
+    );
+    const guardEndIdx = text.indexOf("# END ARM GUARD");
+    expect(jobCheckIdx).toBeGreaterThan(-1);
+    expect(armWriteIdx).toBeGreaterThan(jobCheckIdx);
+    expect(guardEndIdx).toBeGreaterThan(armWriteIdx);
+  });
+
+  it("carries a script path with an apostrophe and non-ASCII characters through the encoded launcher unchanged", async () => {
+    const oddDir = join(workHome, "O'Brien-Zoë-日本");
+    mkdirSync(oddDir, { recursive: true });
+    osTmp.current = oddDir;
+    const harness = makeHarness({
+      sentinel: "4321",
+      exited: Promise.resolve(LAUNCHER_OK),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+
+    const scriptPath = harness.writeCalls[0]?.path ?? "";
+    expect(scriptPath.startsWith(oddDir)).toBe(true);
+    const args = harness.spawnCalls[0]?.args ?? [];
+    const launcher = decodeLauncher(args);
+    expect(launcher).not.toContain("Start-Process");
+    expect(launcher).toContain("CreateProcessW");
+    // The single-quoted literal between the concatenated pieces. The
+    // concatenation now spans a line break between the operator and the
+    // literal, so whitespace (including the newline) separates them.
+    const literal = /-File "'\s*\+\s*'((?:[^']|'')*)'\s*\+\s*'"'/.exec(
+      launcher,
+    );
+    expect(literal).not.toBeNull();
+    const undoubled = (literal?.[1] ?? "").replace(/(['‘-‛])\1/g, "$1");
+    expect(undoubled).toBe(scriptPath);
+    // The base64 is the launcher's UTF-16LE bytes, with nothing lost.
+    const encoded = args[args.indexOf("-EncodedCommand") + 1] ?? "";
+    expect(Buffer.from(launcher, "utf16le").toString("base64")).toBe(encoded);
+  });
+
+  const SMART_QUOTES = ["\u2018", "\u2019", "\u201A", "\u201B"];
+
+  it.each(SMART_QUOTES)(
+    "doubles PowerShell single-quote %s in the Windows helper path literals",
+    async (quoteChar: string) => {
+      const harness = makeHarness({
+        sentinel: "4321",
+        exited: Promise.resolve(LAUNCHER_OK),
+      });
+      const { scheduleFinalizationHelper } = await import("../finalize-helper");
+      const staged = `C:\\Users\\O${quoteChar}Brien\\cli\\traycer-1.5.0.exe`;
+      const live = `C:\\Users\\O${quoteChar}Brien\\cli\\traycer.exe`;
+      await scheduleFinalizationHelper({
+        ...BASE_OPTIONS,
+        stagedBinaryPath: staged,
+        livePath: live,
+        platform: "win32",
+        spawnImpl: harness.spawnImpl,
+        writeImpl: harness.writeImpl,
+        armWait: fakeArmWait(10_000).deps,
+      });
+      const body = harness.writeCalls[0]?.body ?? "";
+      expect(body).toContain(
+        `$StagedBinary = 'C:\\Users\\O${quoteChar}${quoteChar}Brien\\cli\\traycer-1.5.0.exe'`,
+      );
+      expect(body).toContain(
+        `$LiveBinary = 'C:\\Users\\O${quoteChar}${quoteChar}Brien\\cli\\traycer.exe'`,
+      );
+    },
+  );
+
+  it("renders a POSIX shell script with parent pid + paths, spawns /bin/sh detached on linux, and reports it armed", async () => {
+    const harness = makeHarness({
+      sentinel: "88001",
+      exited: new Promise<LauncherExit>(() => undefined),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      environment: "production",
+      stagedBinaryPath: "/usr/local/share/traycer/cli/traycer-1.5.0",
+      livePath: "/usr/local/share/traycer/cli/traycer",
+      parentPid: 4242,
+      parentExitTimeoutSeconds: 60,
+      platform: "linux",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+    expect(result.status).toBe("armed");
+    expect(result.helperPid).toBe(88001);
+    expect(harness.spawnCalls[0]?.command).toBe("/bin/sh");
+    expect(harness.spawnCalls[0]?.options.detached).toBe(true);
+    expect(harness.unrefed.count).toBe(1);
+    const body = harness.writeCalls[0]?.body ?? "";
+    expect(body).toContain("#!/usr/bin/env sh");
+    expect(body).toContain("4242");
+    expect(body).toContain("/usr/local/share/traycer/cli/traycer");
+    // Binary swap + service start hand off to the staged binary's own
+    // hidden `cli finalize-upgrade` command, same as the Windows script.
+    expect(body).toContain('"$STAGED" cli finalize-upgrade');
+    expect(body).not.toContain('mv -f "$STAGED" "$LIVE"');
+    expect(body).not.toContain("launchctl");
+    expect(body).not.toContain("systemctl");
+  });
+
+  it("reports failed when the POSIX script never writes its armed sentinel", async () => {
+    const harness = makeHarness({
+      sentinel: null,
+      exited: new Promise<LauncherExit>(() => undefined),
+    });
+    const clock = fakeArmWait(10_000);
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "linux",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: clock.deps,
+    });
+    expect(result.status).toBe("failed");
+    expect(clock.elapsedMs()).toBeLessThanOrEqual(10_500);
+  });
+
+  it("returns status='failed' when the write stub throws and never invokes spawn", async () => {
+    const spawnCalls: Array<{ command: string }> = [];
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: (command) => {
+        spawnCalls.push({ command });
+        return {
+          pid: 1,
+          unref: () => undefined,
+          kill: () => undefined,
+          exited: Promise.resolve(LAUNCHER_OK),
+        };
+      },
+      writeImpl: async () => {
+        throw new Error("ENOSPC: no space left on device");
+      },
+      armWait: fakeArmWait(10_000).deps,
+    });
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toMatch(/ENOSPC/);
+    expect(spawnCalls).toHaveLength(0);
+  });
+
+  it("returns status='failed' when spawn throws", async () => {
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    const result = await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      platform: "win32",
+      spawnImpl: () => {
+        throw new Error("EPERM: permission denied to spawn child");
+      },
+      writeImpl: async () => undefined,
+      armWait: fakeArmWait(10_000).deps,
+    });
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toMatch(/EPERM/);
+  });
+
+  it("removes any stale post-finalize marker before scheduling so the next reconcile reads only the fresh outcome", async () => {
+    // Prepare a stale marker on disk from a previous helper attempt.
+    const cliDir = join(workHome, ".traycer", "cli");
+    mkdirSync(cliDir, { recursive: true });
+    const markerPath = join(cliDir, "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swapped",
+        attemptedAt: "2026-04-29T00:00:00Z",
+        livePath: "/tmp/live",
+        stagedBinaryPath: "/tmp/staged",
+        errorMessage: null,
+        serviceStartError: null,
+      }),
+    );
+    expect(existsSync(markerPath)).toBe(true);
+
+    const harness = makeHarness({
+      sentinel: "1",
+      exited: new Promise<LauncherExit>(() => undefined),
+    });
+    const { scheduleFinalizationHelper } = await import("../finalize-helper");
+    await scheduleFinalizationHelper({
+      ...BASE_OPTIONS,
+      stagedBinaryPath: "/tmp/staged",
+      livePath: "/tmp/live",
+      platform: "linux",
+      spawnImpl: harness.spawnImpl,
+      writeImpl: harness.writeImpl,
+      armWait: fakeArmWait(10_000).deps,
+    });
+    // The stale marker must have been cleared so the helper's own
+    // marker write isn't conflated with the previous attempt.
+    expect(existsSync(markerPath)).toBe(false);
+  });
+});
+
+describe("reconcilePostFinalizeMarker", () => {
+  it("returns no-marker when the file is absent", async () => {
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
+    expect(outcome).toEqual({ status: "no-marker" });
+  });
+
+  it("on 'swapped' marker, clears pendingUpgrade, promotes version, and unlinks the marker", async () => {
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    // The real helper would have moved staged → live by now; mirror
+    // that.
+    writeFileSync(liveBinaryPath, "staged-bytes");
+    const manifestPath = writeManifest({
+      liveBinaryPath,
+      stagedBinaryPath,
+      version: "1.5.0",
+      currentVersion: "1.4.0",
+    });
+    const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swapped",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: liveBinaryPath,
+        stagedBinaryPath,
+        errorMessage: null,
+        serviceStartError: null,
+      }),
+    );
+
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
+    expect(outcome.status).toBe("applied-swapped");
+    if (outcome.status === "applied-swapped") {
+      expect(outcome.previousVersion).toBe("1.4.0");
+      expect(outcome.version).toBe("1.5.0");
+    }
+    expect(existsSync(markerPath)).toBe(false);
+    const reread = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(reread.version).toBe("1.5.0");
+    expect(reread.pendingUpgrade).toBeNull();
+  });
+
+  // The corruption this correlation exists to prevent. A helper that swapped
+  // 1.5.0 can leave its marker behind unconsumed; a later `cli upgrade` then
+  // records pendingUpgrade 1.6.0 next to it. Applying the stale marker would
+  // promote 1.6.0 to installed and clear the pending record without 1.6.0's
+  // staged binary ever reaching the live path - the manifest would claim a
+  // version the bytes on disk are not, with nothing left to detect it from.
+  //
+  // Doctor refuses the same stale marker and routes the user to `host
+  // restart`, i.e. straight into this function, so the read side alone would
+  // not have been enough.
+  it("on a 'swapped' marker for a DIFFERENT staged upgrade, discards it without touching the manifest", async () => {
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const pendingStagedPath = join(workHome, "bin", "traycer-1.6.0");
+    const staleStagedPath = join(workHome, "bin", "traycer-1.5.0");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(liveBinaryPath, "live-bytes");
+    writeFileSync(pendingStagedPath, "staged-1.6.0-bytes");
+    const manifestPath = writeManifest({
+      liveBinaryPath,
+      stagedBinaryPath: pendingStagedPath,
+      version: "1.6.0",
+      currentVersion: "1.4.0",
+    });
+    const manifestBefore = readFileSync(manifestPath, "utf8");
+    const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swapped",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: liveBinaryPath,
+        // Belongs to the PRIOR 1.5.0 swap, not the pending 1.6.0 one.
+        stagedBinaryPath: staleStagedPath,
+        errorMessage: null,
+        serviceStartError: null,
+      }),
+    );
+
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
+
+    expect(outcome.status).toBe("stale-marker-discarded");
+    if (outcome.status === "stale-marker-discarded") {
+      expect(outcome.markerStagedBinaryPath).toBe(staleStagedPath);
+      expect(outcome.pendingStagedBinaryPath).toBe(pendingStagedPath);
+    }
+    // The pending 1.6.0 upgrade is untouched and still pending - the whole
+    // point, since it genuinely has not been applied.
+    expect(readFileSync(manifestPath, "utf8")).toBe(manifestBefore);
+    const reread = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(reread.version).toBe("1.4.0");
+    expect(reread.pendingUpgrade?.version).toBe("1.6.0");
+    // The stale marker is removed: it describes a swap nobody is waiting on,
+    // and leaving it would re-pose the same question to every future caller.
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
+  // The staged filename carries the version, so it alone defeats a stale-
+  // VERSION marker - but not a re-anchor. `cli re-anchor` repoints
+  // `manifest.binaryPath` without deleting the marker, so a SAME-version retry
+  // produces the same deterministic staged filename and would match on staged
+  // path alone, promoting a version whose bytes never reached the re-anchored
+  // destination.
+  it("discards a same-version marker whose livePath predates a 'cli re-anchor'", async () => {
+    const reanchoredLivePath = join(workHome, "bin", "traycer-cli");
+    const oldLivePath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(reanchoredLivePath, "live-bytes");
+    writeFileSync(stagedBinaryPath, "staged-bytes");
+    const manifestPath = writeManifest({
+      liveBinaryPath: reanchoredLivePath,
+      stagedBinaryPath,
+      version: "1.5.0",
+      currentVersion: "1.4.0",
+    });
+    const manifestBefore = readFileSync(manifestPath, "utf8");
+    const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swapped",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        // Same staged path (same version), but the PRE-re-anchor destination.
+        livePath: oldLivePath,
+        stagedBinaryPath,
+        errorMessage: null,
+        serviceStartError: null,
+      }),
+    );
+
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
+
+    expect(outcome.status).toBe("stale-marker-discarded");
+    if (outcome.status === "stale-marker-discarded") {
+      expect(outcome.markerLivePath).toBe(oldLivePath);
+      expect(outcome.manifestBinaryPath).toBe(reanchoredLivePath);
+    }
+    expect(readFileSync(manifestPath, "utf8")).toBe(manifestBefore);
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
+  // BOTH paths are reusable by design, so matching them is not identity.
+  // `cli re-anchor` supports replacing the binary at the same path, and
+  // `cli upgrade` derives the staged filename deterministically from the
+  // version - so retrying the same version reproduces the exact tuple a prior
+  // marker carries. Only the ordering separates them: a marker written BEFORE
+  // the pending upgrade was staged cannot be describing it.
+  it("discards a path-identical marker that predates the pending upgrade's staging", async () => {
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(liveBinaryPath, "live-bytes");
+    writeFileSync(stagedBinaryPath, "freshly-staged-bytes");
+    // `writeManifest` stamps stagedAt = 2026-05-10T00:00:00Z.
+    const manifestPath = writeManifest({
+      liveBinaryPath,
+      stagedBinaryPath,
+      version: "1.5.0",
+      currentVersion: "1.4.0",
+    });
+    const manifestBefore = readFileSync(manifestPath, "utf8");
+    const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swapped",
+        // A DAY EARLIER than the pending staging - so this marker belongs to
+        // an earlier attempt that happened to use the same two paths.
+        attemptedAt: "2026-05-09T00:00:00Z",
+        livePath: liveBinaryPath,
+        stagedBinaryPath,
+        errorMessage: null,
+        serviceStartError: null,
+      }),
+    );
+
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
+
+    expect(outcome.status).toBe("stale-marker-discarded");
+    if (outcome.status === "stale-marker-discarded") {
+      expect(outcome.markerAttemptedAt).toBe("2026-05-09T00:00:00Z");
+      expect(outcome.pendingStagedAt).toBe("2026-05-10T00:00:00Z");
+    }
+    // The freshly staged 1.5.0 is still pending - it genuinely has not been
+    // applied, and stamping it from the old marker is the corruption.
+    expect(readFileSync(manifestPath, "utf8")).toBe(manifestBefore);
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
+  it("on 'swap-failed' marker, preserves the swap and service-start errors", async () => {
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(liveBinaryPath, "live-bytes");
+    writeFileSync(stagedBinaryPath, "staged-bytes");
+    const manifestPath = writeManifest({
+      liveBinaryPath,
+      stagedBinaryPath,
+      version: "1.5.0",
+      currentVersion: "1.4.0",
+    });
+    const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swap-failed",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: liveBinaryPath,
+        stagedBinaryPath,
+        errorMessage: "MoveFileEx error 5: Access denied",
+        serviceStartError: "schtasks /Run failed: service already stopped",
+      }),
+    );
+
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
+    expect(outcome.status).toBe("applied-swap-failed");
+    if (outcome.status === "applied-swap-failed") {
+      expect(outcome.errorMessage).toContain("Access denied");
+      expect(outcome.serviceStartError).toBe(
+        "schtasks /Run failed: service already stopped",
+      );
+    }
+    expect(existsSync(markerPath)).toBe(false);
+    const reread = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(reread.pendingUpgrade).not.toBeNull();
+    expect(reread.pendingUpgrade.version).toBe("1.5.0");
+    expect(reread.version).toBe("1.4.0");
+  });
+
+  it.each([
+    ["null", { serviceStartError: null }],
+    ["omitted", {}],
+  ])(
+    "normalises an %s swap-failed serviceStartError to null",
+    async (_label, markerExtra) => {
+      const liveBinaryPath = join(workHome, "bin", "traycer");
+      const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
+      mkdirSync(join(workHome, "bin"), { recursive: true });
+      writeFileSync(liveBinaryPath, "live-bytes");
+      writeFileSync(stagedBinaryPath, "staged-bytes");
+      writeManifest({
+        liveBinaryPath,
+        stagedBinaryPath,
+        version: "1.5.0",
+        currentVersion: "1.4.0",
+      });
+      const markerPath = join(
+        workHome,
+        ".traycer",
+        "cli",
+        "post-finalize.json",
+      );
+      writeFileSync(
+        markerPath,
+        JSON.stringify({
+          status: "swap-failed",
+          attemptedAt: "2026-05-11T00:00:00Z",
+          livePath: liveBinaryPath,
+          stagedBinaryPath,
+          errorMessage: "MoveFileEx error 5: Access denied",
+          ...markerExtra,
+        }),
+      );
+
+      const { reconcilePostFinalizeMarker } =
+        await import("../finalize-helper");
+      const outcome = await reconcilePostFinalizeMarker({
+        environment: "production",
+      });
+      expect(outcome.status).toBe("applied-swap-failed");
+      if (outcome.status === "applied-swap-failed") {
+        expect(outcome.serviceStartError).toBeNull();
+      }
+    },
+  );
+
+  it("preserves serviceStartError when swap-failed has no pending manifest", async () => {
+    const cliDir = join(workHome, ".traycer", "cli");
+    mkdirSync(cliDir, { recursive: true });
+    writeFileSync(
+      join(cliDir, "manifest.json"),
+      JSON.stringify({
+        version: "1.5.0",
+        installedAt: "2026-05-11T00:00:00Z",
+        binaryPath: join(workHome, "bin", "traycer"),
+        source: "manual",
+        pendingUpgrade: null,
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    writeFileSync(
+      join(cliDir, "post-finalize.json"),
+      JSON.stringify({
+        status: "swap-failed",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: join(workHome, "bin", "traycer"),
+        stagedBinaryPath: join(workHome, "bin", "traycer-1.5.0"),
+        errorMessage: "MoveFileEx error 5: Access denied",
+        serviceStartError: "schtasks /Run failed: service already stopped",
+      }),
+    );
+
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
+    expect(outcome.status).toBe("applied-swap-failed");
+    if (outcome.status === "applied-swap-failed") {
+      expect(outcome.serviceStartError).toBe(
+        "schtasks /Run failed: service already stopped",
+      );
+    }
+  });
+
+  it("on 'parent-still-alive' marker, preserves pendingUpgrade and reports the outcome", async () => {
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(liveBinaryPath, "live-bytes");
+    writeFileSync(stagedBinaryPath, "staged-bytes");
+    const manifestPath = writeManifest({
+      liveBinaryPath,
+      stagedBinaryPath,
+      version: "1.5.0",
+      currentVersion: "1.4.0",
+    });
+    const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "parent-still-alive",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: liveBinaryPath,
+        stagedBinaryPath,
+        errorMessage: "parent CLI process 4242 did not exit within 60s",
+        serviceStartError: null,
+      }),
+    );
+
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
+    expect(outcome.status).toBe("applied-parent-still-alive");
+    expect(existsSync(markerPath)).toBe(false);
+    const reread = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(reread.pendingUpgrade).not.toBeNull();
+  });
+
+  it("on a malformed marker JSON, returns marker-invalid and consumes the marker", async () => {
+    const liveBinaryPath = join(workHome, "bin", "traycer");
+    const stagedBinaryPath = join(workHome, "bin", "traycer-1.5.0");
+    mkdirSync(join(workHome, "bin"), { recursive: true });
+    writeFileSync(liveBinaryPath, "live");
+    writeFileSync(stagedBinaryPath, "staged");
+    writeManifest({
+      liveBinaryPath,
+      stagedBinaryPath,
+      version: "1.5.0",
+      currentVersion: "1.4.0",
+    });
+    const markerPath = join(workHome, ".traycer", "cli", "post-finalize.json");
+    writeFileSync(markerPath, "{ malformed json :::");
+
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
+    expect(outcome.status).toBe("marker-invalid");
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
+  it("is a no-op when the manifest no longer has a pendingUpgrade (idempotent on repeated apply)", async () => {
+    const cliDir = join(workHome, ".traycer", "cli");
+    mkdirSync(cliDir, { recursive: true });
+    writeFileSync(
+      join(cliDir, "manifest.json"),
+      JSON.stringify({
+        version: "1.5.0",
+        installedAt: "2026-05-11T00:00:00Z",
+        binaryPath: join(workHome, "bin", "traycer"),
+        source: "manual",
+        pendingUpgrade: null,
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    const markerPath = join(cliDir, "post-finalize.json");
+    writeFileSync(
+      markerPath,
+      JSON.stringify({
+        status: "swapped",
+        attemptedAt: "2026-05-11T00:00:00Z",
+        livePath: join(workHome, "bin", "traycer"),
+        stagedBinaryPath: join(workHome, "bin", "traycer-1.5.0"),
+        errorMessage: null,
+        serviceStartError: null,
+      }),
+    );
+
+    const { reconcilePostFinalizeMarker } = await import("../finalize-helper");
+    const outcome = await reconcilePostFinalizeMarker({
+      environment: "production",
+    });
+    // No pendingUpgrade to clear, but the marker is still consumed so
+    // we don't re-apply it next cycle.
+    expect(outcome.status).toBe("applied-swapped");
+    expect(existsSync(markerPath)).toBe(false);
+  });
+});

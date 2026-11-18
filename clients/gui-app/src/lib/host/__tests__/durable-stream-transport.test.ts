@@ -1,0 +1,276 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { AvailabilityRecoveryKind } from "@traycer-clients/shared/host-transport/availability-recovery-kind";
+
+// `openDurableStreamTransport` is the single place "durable stream = transport +
+// auth + bearer rotation + wake" is assembled. These tests pin its load-bearing
+// guarantees: forwarding rotations, teardown order, and that a failure while
+// wiring wake never leaks the socket. The socket builder and wake wiring are
+// mocked so the test is about the assembly contract, not the real transport.
+const mocks = vi.hoisted(() => ({
+  buildHostStreamClient: vi.fn(),
+  subscribeStreamWakeReconnect: vi.fn(),
+}));
+
+vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
+  buildHostStreamClient: mocks.buildHostStreamClient,
+}));
+vi.mock("@/lib/host/stream-wake-reconnect", () => ({
+  subscribeStreamWakeReconnect: mocks.subscribeStreamWakeReconnect,
+}));
+
+import { openDurableStreamTransport } from "@/lib/host/durable-stream-transport";
+
+const RUNNER_HOST = new MockRunnerHost({
+  signInUrl: "https://auth.traycer.invalid/sign-in",
+  authnBaseUrl: "http://localhost:5005",
+  localHost: null,
+  hosts: [],
+  workspaceFolderPickerPaths: undefined,
+  hasLocalHost: undefined,
+  traycerCli: undefined,
+});
+
+const AUTH: StreamAuthRevalidator = {
+  revalidateForReconnect: () => Promise.resolve("rotated"),
+};
+
+// `buildHostStreamClient` is mocked in these tests, so `target` only needs to
+// satisfy the type — its content plays no role in the assembly contract these
+// tests pin.
+const FAKE_TARGET: HostDirectoryEntry = {
+  hostId: "host-a",
+  label: "host-a",
+  kind: "local",
+  websocketUrl: "ws://host-a/rpc",
+  version: null,
+  transportDialability: "dialable",
+};
+
+function buildParams(closeWs: () => void) {
+  const order: string[] = [];
+  let availabilityListener: ((kind: AvailabilityRecoveryKind) => void) | null =
+    null;
+  const fakeWs = {
+    close: vi.fn(() => {
+      order.push("ws");
+      closeWs();
+    }),
+    reconnectAll: vi.fn(),
+    isReady: () => true,
+    notifyBearerRotated: vi.fn(),
+    subscribeAvailabilityRecovered: vi.fn(
+      (listener: (kind: AvailabilityRecoveryKind) => void) => {
+        availabilityListener = listener;
+        return () => {
+          availabilityListener = null;
+        };
+      },
+    ),
+  };
+  mocks.buildHostStreamClient.mockReturnValue(fakeWs);
+  const notifyRecoveredForNamedHost = vi.fn();
+  return {
+    order,
+    fakeWs,
+    notifyRecoveredForNamedHost,
+    fireAvailabilityRecovered: (kind: AvailabilityRecoveryKind): void => {
+      availabilityListener?.(kind);
+    },
+    params: {
+      target: FAKE_TARGET,
+      userId: "user-a",
+      endpoint: () => null,
+      bearer: () => null,
+      auth: AUTH,
+      runnerHost: RUNNER_HOST,
+      subscribeBearerRotation: (_onRotation: () => void) => {
+        return () => {
+          order.push("bearer");
+        };
+      },
+      // No case in this suite exercises a verdict change; a no-op satisfies
+      // the port without a second listener to drive.
+      subscribeCloudVerdictChange: (_onChange: () => void) => () => undefined,
+      // No endpoint ever moves in these assembly tests; return a no-op disposer.
+      subscribeEndpointChange: () => () => undefined,
+      notifyRecoveredForNamedHost,
+    },
+  };
+}
+
+beforeEach(() => {
+  mocks.buildHostStreamClient.mockReset();
+  mocks.subscribeStreamWakeReconnect.mockReset();
+});
+
+describe("openDurableStreamTransport", () => {
+  it("wires wake on the built socket and tears down wake BEFORE the socket on close", () => {
+    const { order, params } = buildParams(() => undefined);
+    const disposeWake = vi.fn(() => {
+      order.push("wake");
+    });
+    mocks.subscribeStreamWakeReconnect.mockReturnValue(disposeWake);
+
+    const transport = openDurableStreamTransport(params);
+
+    // Wake is subscribed against the freshly-built socket with the live host.
+    expect(mocks.buildHostStreamClient).toHaveBeenCalledTimes(1);
+    expect(mocks.subscribeStreamWakeReconnect).toHaveBeenCalledTimes(1);
+    expect(mocks.subscribeStreamWakeReconnect.mock.calls[0][0]).toBe(
+      transport.wsStreamClient,
+    );
+    expect(mocks.subscribeStreamWakeReconnect.mock.calls[0][1]).toBe(
+      RUNNER_HOST,
+    );
+    expect(disposeWake).not.toHaveBeenCalled();
+
+    transport.close();
+
+    // Disposing wake before closing the socket avoids a wake firing
+    // `reconnectAll` on a socket that is being torn down.
+    expect(order).toEqual(["bearer", "wake", "ws"]);
+  });
+
+  it("forwards bearer rotations to the built socket and removes the listener before close", () => {
+    const { order, params, fakeWs } = buildParams(() => undefined);
+    const disposeWake = vi.fn(() => {
+      order.push("wake");
+    });
+    let bearerListener: (() => void) | null = null;
+    const disposeBearer = vi.fn(() => {
+      order.push("bearer");
+      bearerListener = null;
+    });
+    mocks.subscribeStreamWakeReconnect.mockReturnValue(disposeWake);
+    params.subscribeBearerRotation = (listener: () => void) => {
+      bearerListener = listener;
+      return disposeBearer;
+    };
+    const fireBearerRotation = (): void => {
+      if (bearerListener !== null) {
+        bearerListener();
+      }
+    };
+
+    const transport = openDurableStreamTransport(params);
+
+    fireBearerRotation();
+    expect(fakeWs.notifyBearerRotated).toHaveBeenCalledTimes(1);
+
+    transport.close();
+    expect(disposeBearer).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["bearer", "wake", "ws"]);
+
+    fireBearerRotation();
+    expect(fakeWs.notifyBearerRotated).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws when buildHostStreamClient returns null (invalid remote public key)", () => {
+    const { params } = buildParams(() => undefined);
+    mocks.buildHostStreamClient.mockReturnValue(null);
+
+    expect(() => openDurableStreamTransport(params)).toThrow(
+      /invalid public key/,
+    );
+  });
+
+  it("closes the half-built socket and rethrows if wiring wake throws", () => {
+    const closeWs = vi.fn();
+    const { order, params, fakeWs } = buildParams(closeWs);
+    const wakeError = new Error("wake wiring failed");
+    mocks.subscribeStreamWakeReconnect.mockImplementation(() => {
+      throw wakeError;
+    });
+
+    expect(() => openDurableStreamTransport(params)).toThrow(wakeError);
+    // The socket built moments earlier must be closed so neither it nor any
+    // half-registered listener leaks for the lifetime of the window.
+    expect(fakeWs.close).toHaveBeenCalledTimes(1);
+    expect(closeWs).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["bearer", "ws"]);
+  });
+
+  it("wires the transport's recovery evidence to the bound-host notify callback", () => {
+    const built = buildParams(() => undefined);
+    mocks.subscribeStreamWakeReconnect.mockReturnValue(() => undefined);
+
+    const transport = openDurableStreamTransport(built.params);
+
+    // Evidence from THIS transport's heartbeat reaches the caller's notify -
+    // this is the only wiring that covers a tab bound to a non-active host.
+    expect(built.fakeWs.subscribeAvailabilityRecovered).toHaveBeenCalledTimes(
+      1,
+    );
+    built.fireAvailabilityRecovered("stall");
+    expect(built.notifyRecoveredForNamedHost).toHaveBeenCalledTimes(1);
+    // The kind is the transport's, passed through: a stall reported as a
+    // reconnect would re-ask every settled read on the host.
+    expect(built.notifyRecoveredForNamedHost).toHaveBeenCalledWith("stall");
+
+    transport.close();
+    built.fireAvailabilityRecovered("reconnect");
+    expect(built.notifyRecoveredForNamedHost).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-dials at once when the host's dialable endpoint moves, not on benign re-emits", () => {
+    const reconnectAll = vi.fn();
+    const fakeWs = {
+      close: vi.fn(),
+      reconnectAll,
+      subscribeAvailabilityRecovered: () => () => undefined,
+    };
+    mocks.buildHostStreamClient.mockReturnValue(fakeWs);
+    mocks.subscribeStreamWakeReconnect.mockReturnValue(() => undefined);
+
+    let websocketUrl: string | null = "ws://host-a/rpc";
+    let fireDirectoryChange: () => void = () => undefined;
+    const params = {
+      target: FAKE_TARGET,
+      userId: "user-a",
+      endpoint: () =>
+        websocketUrl === null ? null : { hostId: "host-a", websocketUrl },
+      bearer: () => null,
+      auth: AUTH,
+      runnerHost: RUNNER_HOST,
+      subscribeBearerRotation: () => () => undefined,
+      subscribeCloudVerdictChange: () => () => undefined,
+      subscribeEndpointChange: (onChange: () => void) => {
+        fireDirectoryChange = onChange;
+        return () => undefined;
+      },
+      notifyRecoveredForNamedHost: () => undefined,
+    };
+
+    const transport = openDurableStreamTransport(params);
+
+    // A benign re-emit with the SAME url (every `onLocalHostChange` rebuilds the
+    // entry) must NOT churn the socket.
+    fireDirectoryChange();
+    expect(reconnectAll).not.toHaveBeenCalled();
+
+    // Host restart / re-provision moves to a new `websocketUrl`: re-dial at once
+    // rather than waiting out the pong timeout on a half-open socket.
+    websocketUrl = "ws://host-a/rpc-2";
+    fireDirectoryChange();
+    expect(reconnectAll).toHaveBeenCalledTimes(1);
+    // Forced, not probed: the old socket addresses a url that no longer serves
+    // this host, so an answer from it would not mean it is still the right one.
+    expect(reconnectAll).toHaveBeenCalledWith("host-endpoint-change", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
+
+    // Endpoint goes away (host down), then returns on a new url: re-dial again -
+    // a null gap is recorded but not nudged, the next non-null move fires it.
+    websocketUrl = null;
+    fireDirectoryChange();
+    websocketUrl = "ws://host-a/rpc-3";
+    fireDirectoryChange();
+    expect(reconnectAll).toHaveBeenCalledTimes(2);
+
+    transport.close();
+  });
+});

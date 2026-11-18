@@ -1,0 +1,719 @@
+import { useEffect, type ReactNode } from "react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useMutation,
+} from "@tanstack/react-query";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import type {
+  HostRpcError,
+  RequestOfMethod,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ProviderLoginRefusal } from "@traycer/protocol/host/provider-schemas";
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
+import type { HostRpcRegistry } from "@/lib/host";
+import type { AwaitLoginVariables } from "@/hooks/providers/use-providers-await-login-mutation";
+import { useSubmittedSecretInput } from "@/hooks/use-submitted-secret-input";
+import {
+  awaitLoginTestAnswer,
+  type AwaitLoginTestAnswer,
+} from "./provider-profile-login-flow-test-support";
+import { appLogger } from "@/lib/logger";
+import { AddProfileWaitingStep } from "@/components/settings/panels/add-provider-profile-dialog";
+import {
+  useProviderProfileLoginFlow,
+  type AwaitLoginMutation,
+  type CancelLoginMutation,
+  type EnsurePackMutation,
+  type ProviderProfileLoginFlowMode,
+  type StartLoginMutation,
+  type SubmitLoginCodeMutation,
+  type TouchLoginMutation,
+} from "@/components/settings/panels/use-provider-profile-login-flow";
+
+// The flow's answer to a provider that accepted the browser consent and then
+// refused the account (`providers.awaitLogin@2.2` `refusal`). The sibling
+// `-cancel` suite never lets `awaitLogin` settle; this one drives the REAL hook
+// against real `useMutation` instances whose `awaitLogin` answers with exactly
+// what a host would.
+
+type StartLoginRequest = RequestOfMethod<
+  HostRpcRegistry,
+  "providers.startLogin"
+>;
+type StartLoginResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "providers.startLogin"
+>;
+type CancelLoginRequest = RequestOfMethod<
+  HostRpcRegistry,
+  "providers.cancelLogin"
+>;
+type CancelLoginResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "providers.cancelLogin"
+>;
+type AwaitLoginResponse = AwaitLoginTestAnswer;
+type SubmitLoginCodeRequest = RequestOfMethod<
+  HostRpcRegistry,
+  "providers.submitLoginCode"
+>;
+type SubmitLoginCodeVariables = Omit<SubmitLoginCodeRequest, "code">;
+
+function submitLoginCodeRequestMatches(
+  actual: SubmitLoginCodeRequest,
+  expected: SubmitLoginCodeRequest,
+): boolean {
+  const actualKeys = Object.keys(actual).sort();
+  const expectedKeys = Object.keys(expected).sort();
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every((key, index) => key === expectedKeys[index]) &&
+    actual.providerId === expected.providerId &&
+    actual.profileId === expected.profileId &&
+    actual.code === expected.code
+  );
+}
+type SubmitLoginCodeResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "providers.submitLoginCode"
+>;
+type TouchLoginRequest = RequestOfMethod<
+  HostRpcRegistry,
+  "providers.touchLogin"
+>;
+type TouchLoginResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "providers.touchLogin"
+>;
+type EnsurePackRequest = RequestOfMethod<
+  HostRpcRegistry,
+  "providers.ensurePack"
+>;
+type EnsurePackResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "providers.ensurePack"
+>;
+
+const PROVIDER_ID = "antigravity";
+const NOT_FINISHED = "Sign-in did not finish.";
+const NOT_STARTED = "Sign-in did not start.";
+
+const REFUSAL: ProviderLoginRefusal = {
+  reason:
+    "Your current account is not eligible for Antigravity. Verify your account to continue.",
+  actionUrl: "https://accounts.google.com/signin/continue?sarp=1&scc=1",
+};
+
+function startedAnswer(
+  overrides: Partial<StartLoginResponse>,
+): StartLoginResponse {
+  return {
+    url: "https://accounts.google.com/o/oauth2/v2/auth?client_id=agy",
+    started: true,
+    profileId: "p-1",
+    userCode: null,
+    failure: null,
+    pending: null,
+    pack: null,
+    ...overrides,
+  };
+}
+
+function awaitAnswer(
+  overrides: Partial<Omit<AwaitLoginTestAnswer, "signInRecordingEnded">>,
+): AwaitLoginResponse {
+  return awaitLoginTestAnswer({
+    state: null,
+    existingProfileId: null,
+    codeRejected: false,
+    refusal: null,
+    ...overrides,
+  });
+}
+
+function queryClientWrapper(): (props: {
+  readonly children: ReactNode;
+}) => ReactNode {
+  const queryClient = new QueryClient({
+    defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+  });
+  return function Wrapper(props: { readonly children: ReactNode }): ReactNode {
+    return (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+  };
+}
+
+function LoginFlowHarness(props: {
+  readonly mode: ProviderProfileLoginFlowMode;
+  readonly existingProfileId: string | null;
+  readonly startLoginImpl: (
+    request: StartLoginRequest,
+  ) => Promise<StartLoginResponse>;
+  readonly awaitLoginImpl: (
+    variables: AwaitLoginVariables,
+  ) => Promise<AwaitLoginResponse>;
+  readonly onCancel?: (request: CancelLoginRequest) => void;
+  readonly onSubmitCode?: (request: SubmitLoginCodeRequest) => void;
+  readonly onSubmitVariables: (variables: SubmitLoginCodeVariables) => void;
+  readonly onFailed: (message: string, hostSentence: boolean) => void;
+  readonly onIdentity: () => void;
+}): ReactNode {
+  const startLogin: StartLoginMutation = useMutation<
+    StartLoginResponse,
+    HostRpcError,
+    StartLoginRequest,
+    { readonly hostId: string | null }
+  >({
+    mutationFn: props.startLoginImpl,
+    onMutate: () => ({ hostId: null }),
+  });
+  const awaitLogin: AwaitLoginMutation = useMutation<
+    AwaitLoginResponse,
+    HostRpcError,
+    AwaitLoginVariables,
+    { readonly hostId: string | null }
+  >({
+    mutationFn: props.awaitLoginImpl,
+    onMutate: () => ({ hostId: null }),
+  });
+  const cancelLogin: CancelLoginMutation = useMutation<
+    CancelLoginResponse,
+    HostRpcError,
+    CancelLoginRequest,
+    { readonly hostId: string | null }
+  >({
+    mutationFn: (request) => {
+      props.onCancel?.(request);
+      return Promise.resolve({ cancelled: true });
+    },
+    onMutate: () => ({ hostId: null }),
+  });
+  const submittedLoginCode = useSubmittedSecretInput<string>(
+    "Test login code input is unavailable.",
+  );
+  const submitLoginCode: SubmitLoginCodeMutation = useMutation<
+    SubmitLoginCodeResponse,
+    HostRpcError,
+    SubmitLoginCodeVariables
+  >({
+    mutationFn: (variables) => {
+      props.onSubmitVariables(variables);
+      props.onSubmitCode?.({ ...variables, code: submittedLoginCode.read() });
+      return Promise.resolve({ outcome: "accepted" });
+    },
+    onSettled: submittedLoginCode.clear,
+  });
+  const touchLogin: TouchLoginMutation = useMutation<
+    TouchLoginResponse,
+    HostRpcError,
+    TouchLoginRequest
+  >({
+    mutationFn: () => Promise.resolve({ extended: true }),
+  });
+  const ensurePack: EnsurePackMutation = useMutation<
+    EnsurePackResponse,
+    HostRpcError,
+    EnsurePackRequest,
+    { readonly hostId: string | null }
+  >({
+    mutationFn: () => Promise.resolve({ managedInstallState: null }),
+    onMutate: () => ({ hostId: null }),
+  });
+
+  const flow = useProviderProfileLoginFlow({
+    supportsLoginOwnership: false,
+    mode: props.mode,
+    providerId: PROVIDER_ID,
+    existingProfileId: props.existingProfileId,
+    loginCapability: null,
+    hostBlock: null,
+    startLogin,
+    awaitLogin,
+    cancelLogin,
+    submitLoginCode,
+    setSubmittedLoginCode: submittedLoginCode.set,
+    touchLogin,
+    ensurePack,
+    failureMessages: { notStarted: NOT_STARTED, notFinished: NOT_FINISHED },
+    onFailed: props.onFailed,
+  });
+  const { onIdentity } = props;
+
+  useEffect(() => {
+    if (flow.state.kind === "identity") onIdentity();
+  }, [flow.state.kind, onIdentity]);
+
+  return (
+    <div>
+      <div data-testid="flow-state">{flow.state.kind}</div>
+      <div data-testid="flow-message">
+        {flow.state.kind === "failed" ? flow.state.message : ""}
+      </div>
+      <div data-testid="flow-refusal">
+        {flow.state.kind === "failed"
+          ? JSON.stringify(flow.state.refusal)
+          : "n/a"}
+      </div>
+      {flow.state.kind === "waiting" && flow.state.readerCount !== undefined ? (
+        <AddProfileWaitingStep
+          loginUrl={flow.state.url}
+          userCode={flow.state.userCode}
+          loginCapability={null}
+          isLocalHost={false}
+          queuePending={false}
+          startingCopy={null}
+          cancelRequested={false}
+          cancelPending={flow.cancelPending}
+          cancelDisabled={flow.commitPending}
+          waiting
+          readerCount={flow.state.readerCount}
+          codePaste={flow.codePaste}
+          onOpenExternalLink={() => undefined}
+          onCancel={flow.cancel}
+        />
+      ) : null}
+      <button
+        type="button"
+        onClick={() =>
+          flow.start({ label: "Test profile", shareSkillsAndPlugins: false })
+        }
+      >
+        start
+      </button>
+      <button
+        type="button"
+        onClick={() => flow.codePaste.submit("synthetic-code")}
+      >
+        Test submit code
+      </button>
+      <button type="button" onClick={() => flow.cancel()}>
+        Test cancel
+      </button>
+    </div>
+  );
+}
+
+function renderFlow(options: {
+  readonly mode: ProviderProfileLoginFlowMode;
+  readonly existingProfileId: string | null;
+  readonly startLoginImpl: (
+    request: StartLoginRequest,
+  ) => Promise<StartLoginResponse>;
+  readonly awaitLoginImpl: (
+    variables: AwaitLoginVariables,
+  ) => Promise<AwaitLoginResponse>;
+  readonly onCancel?: (request: CancelLoginRequest) => void;
+  readonly onSubmitCode?: (request: SubmitLoginCodeRequest) => void;
+  readonly onIdentity?: () => void;
+}): {
+  readonly onFailed: Mock<(message: string, hostSentence: boolean) => void>;
+  readonly onSubmitVariables: Mock<
+    (variables: SubmitLoginCodeVariables) => void
+  >;
+} {
+  const onFailed = vi.fn<(message: string, hostSentence: boolean) => void>();
+  const onSubmitVariables =
+    vi.fn<(variables: SubmitLoginCodeVariables) => void>();
+  render(
+    <LoginFlowHarness
+      {...options}
+      onFailed={onFailed}
+      onSubmitVariables={onSubmitVariables}
+      onIdentity={options.onIdentity ?? (() => undefined)}
+    />,
+    {
+      wrapper: queryClientWrapper(),
+    },
+  );
+  fireEvent.click(screen.getByRole("button", { name: "start" }));
+  return { onFailed, onSubmitVariables };
+}
+
+function flowState(): string | null {
+  return screen.getByTestId("flow-state").textContent;
+}
+
+function failedRefusal(): unknown {
+  return JSON.parse(screen.getByTestId("flow-refusal").textContent);
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolvePromise: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return { promise, resolve: resolvePromise };
+}
+
+function authenticatedState(): ProviderCliState {
+  const profile: ProviderProfile = {
+    profileId: "p-1",
+    enabled: true,
+    kind: "managed",
+    authType: "oauth",
+    label: "Test profile",
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: { email: null, tier: null, accountUuid: null },
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    accentColor: null,
+    ambientDriftNotice: null,
+  };
+  return {
+    providerId: PROVIDER_ID,
+    enabled: true,
+    disabledBy: null,
+    nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+    selected: { kind: "bundled" },
+    candidates: [],
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: null,
+    availabilityPending: false,
+    profiles: [profile],
+  };
+}
+
+afterEach(() => {
+  cleanup();
+});
+
+describe("useProviderProfileLoginFlow - a provider that refuses the completed sign-in", () => {
+  it.each([
+    { readerCount: 1, title: "Waiting for 1 agent on this profile" },
+    { readerCount: 2, title: "Waiting for 2 agents on this profile" },
+  ])(
+    "shows the wait for $readerCount reader(s) and Cancel control, then completes when the host reports authentication",
+    async ({ readerCount, title }) => {
+      const secondAwaitStarted = deferred<void>();
+      const secondAwaitResult = deferred<AwaitLoginResponse>();
+      const identityReached = deferred<void>();
+      let awaitCount = 0;
+
+      renderFlow({
+        mode: "create",
+        existingProfileId: null,
+        startLoginImpl: () => Promise.resolve(startedAnswer({})),
+        onIdentity: () => identityReached.resolve(),
+        awaitLoginImpl: (variables) => {
+          awaitCount += 1;
+          if (awaitCount === 1) {
+            return Promise.resolve(
+              awaitAnswer({
+                installation: {
+                  kind: "waiting-for-readers",
+                  admissionId: "admission-reader-wait",
+                  count: readerCount,
+                },
+              }),
+            );
+          }
+          expect(variables.request.profileId).toBe("admission-reader-wait");
+          expect(variables.request.lastSeenReaderCount).toBe(readerCount);
+          secondAwaitStarted.resolve();
+          return secondAwaitResult.promise;
+        },
+      });
+
+      await act(async () => {
+        await secondAwaitStarted.promise;
+      });
+      expect(screen.getByText(title)).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: "Cancel sign-in" }),
+      ).toBeTruthy();
+
+      await act(async () => {
+        secondAwaitResult.resolve(awaitAnswer({ state: authenticatedState() }));
+        await identityReached.promise;
+      });
+      expect(flowState()).toBe("identity");
+      expect(screen.queryByText(title)).toBeNull();
+    },
+  );
+
+  it("uses the waiting admission id for follow-up await, code submission, and cancellation", async () => {
+    const secondAwaitStarted = deferred<void>();
+    const secondAwaitResult = deferred<AwaitLoginResponse>();
+    const cancelCalls = vi.fn<(request: CancelLoginRequest) => void>();
+    const submitCalls = vi.fn<(request: SubmitLoginCodeRequest) => void>();
+    const cancelObserved = deferred<CancelLoginRequest>();
+    const submitObserved = deferred<SubmitLoginCodeRequest>();
+    let awaitCount = 0;
+
+    const flowHarness = renderFlow({
+      mode: "create",
+      existingProfileId: null,
+      startLoginImpl: () => Promise.resolve(startedAnswer({})),
+      onCancel: (request) => {
+        cancelCalls(request);
+        cancelObserved.resolve(request);
+      },
+      onSubmitCode: (request) => {
+        submitCalls(request);
+        submitObserved.resolve(request);
+      },
+      awaitLoginImpl: (variables) => {
+        awaitCount += 1;
+        if (awaitCount === 1) {
+          return Promise.resolve(
+            awaitAnswer({
+              installation: {
+                kind: "waiting-for-readers",
+                admissionId: "admission-reader-wait",
+                count: 2,
+              },
+            }),
+          );
+        }
+        expect(variables.request.profileId).toBe("admission-reader-wait");
+        expect(variables.request.lastSeenReaderCount).toBe(2);
+        secondAwaitStarted.resolve();
+        return secondAwaitResult.promise;
+      },
+    });
+
+    await act(async () => {
+      await secondAwaitStarted.promise;
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Test submit code" }));
+      const submittedRequest = await submitObserved.promise;
+      expect(
+        submitLoginCodeRequestMatches(submittedRequest, {
+          providerId: PROVIDER_ID,
+          profileId: "admission-reader-wait",
+          code: "synthetic-code",
+        }),
+      ).toBe(true);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Test cancel" }));
+      await expect(cancelObserved.promise).resolves.toEqual({
+        providerId: PROVIDER_ID,
+        profileId: "admission-reader-wait",
+        holderId: null,
+      });
+    });
+    expect(submitCalls).toHaveBeenCalledTimes(1);
+    expect(flowHarness.onSubmitVariables).toHaveBeenCalledWith({
+      providerId: PROVIDER_ID,
+      profileId: "admission-reader-wait",
+    });
+    expect(cancelCalls).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      secondAwaitResult.resolve(awaitAnswer({ state: authenticatedState() }));
+      await secondAwaitResult.promise;
+    });
+  });
+
+  it("lands a create-mode flow on `failed` carrying the refusal, with its reason as the message", async () => {
+    const { onFailed } = renderFlow({
+      mode: "create",
+      existingProfileId: null,
+      startLoginImpl: () => Promise.resolve(startedAnswer({})),
+      awaitLoginImpl: () => Promise.resolve(awaitAnswer({ refusal: REFUSAL })),
+    });
+
+    await waitFor(() => expect(flowState()).toBe("failed"));
+    expect(screen.getByTestId("flow-message").textContent).toBe(REFUSAL.reason);
+    expect(failedRefusal()).toEqual(REFUSAL);
+    expect(onFailed).toHaveBeenCalledTimes(1);
+    expect(onFailed).toHaveBeenCalledWith(REFUSAL.reason, false);
+  });
+
+  it("keeps a provider-authored refusal in the UI and callback, but never in the warning fields", async () => {
+    const sensitiveRefusal: ProviderLoginRefusal = {
+      reason: "blocked-person@example.test cannot use account acme-org-123",
+      actionUrl: null,
+    };
+    const warn = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+    try {
+      const { onFailed } = renderFlow({
+        mode: "create",
+        existingProfileId: null,
+        startLoginImpl: () => Promise.resolve(startedAnswer({})),
+        awaitLoginImpl: () =>
+          Promise.resolve(awaitAnswer({ refusal: sensitiveRefusal })),
+      });
+
+      await waitFor(() => expect(flowState()).toBe("failed"));
+      expect(screen.getByTestId("flow-message").textContent).toBe(
+        sensitiveRefusal.reason,
+      );
+      expect(onFailed).toHaveBeenCalledWith(sensitiveRefusal.reason, false);
+      expect(warn).toHaveBeenCalledWith("[provider-login] flow failed", {
+        provider: PROVIDER_ID,
+        mode: "create",
+        blocker: "authentication",
+        message: "Provider refused sign-in",
+      });
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(
+        sensitiveRefusal.reason,
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("does the same for a known-profile reauth", async () => {
+    renderFlow({
+      mode: "reauth",
+      existingProfileId: "p-existing",
+      startLoginImpl: () => Promise.resolve(startedAnswer({})),
+      awaitLoginImpl: () => Promise.resolve(awaitAnswer({ refusal: REFUSAL })),
+    });
+
+    await waitFor(() => expect(flowState()).toBe("failed"));
+    expect(screen.getByTestId("flow-message").textContent).toBe(REFUSAL.reason);
+    expect(failedRefusal()).toEqual(REFUSAL);
+  });
+
+  it("does the same for the ambient reconnect, which otherwise returns quietly to `start` when nothing authenticated", async () => {
+    renderFlow({
+      mode: "reauth",
+      existingProfileId: null,
+      startLoginImpl: () => Promise.resolve(startedAnswer({ profileId: null })),
+      awaitLoginImpl: () => Promise.resolve(awaitAnswer({ refusal: REFUSAL })),
+    });
+
+    await waitFor(() => expect(flowState()).toBe("failed"));
+    expect(failedRefusal()).toEqual(REFUSAL);
+  });
+
+  it("keeps a refusal that offers no link, with a null actionUrl", async () => {
+    const noLink: ProviderLoginRefusal = {
+      reason: "This account cannot be used.",
+      actionUrl: null,
+    };
+    renderFlow({
+      mode: "create",
+      existingProfileId: null,
+      startLoginImpl: () => Promise.resolve(startedAnswer({})),
+      awaitLoginImpl: () => Promise.resolve(awaitAnswer({ refusal: noLink })),
+    });
+
+    await waitFor(() => expect(flowState()).toBe("failed"));
+    expect(failedRefusal()).toEqual(noLink);
+  });
+
+  it("treats the refusal as final even when the same answer also reports a rejected code, instead of restarting the sign-in", async () => {
+    const startLoginImpl = vi.fn(() => Promise.resolve(startedAnswer({})));
+    renderFlow({
+      mode: "create",
+      existingProfileId: null,
+      startLoginImpl,
+      awaitLoginImpl: () =>
+        Promise.resolve(awaitAnswer({ codeRejected: true, refusal: REFUSAL })),
+    });
+
+    await waitFor(() => expect(flowState()).toBe("failed"));
+    expect(failedRefusal()).toEqual(REFUSAL);
+    // Falsification: classify `codeRejected` first and the flow restarts.
+    expect(startLoginImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useProviderProfileLoginFlow - failures the flow words itself carry no refusal", () => {
+  it("a sign-in that ends without authenticating and without a refusal fails with the flow's own message", async () => {
+    const warn = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+    try {
+      const { onFailed } = renderFlow({
+        mode: "create",
+        existingProfileId: null,
+        startLoginImpl: () => Promise.resolve(startedAnswer({})),
+        awaitLoginImpl: () => Promise.resolve(awaitAnswer({ refusal: null })),
+      });
+
+      await waitFor(() => expect(flowState()).toBe("failed"));
+      expect(screen.getByTestId("flow-message").textContent).toBe(NOT_FINISHED);
+      expect(failedRefusal()).toBeNull();
+      expect(onFailed).toHaveBeenCalledWith(NOT_FINISHED, false);
+      expect(warn).toHaveBeenCalledWith("[provider-login] flow failed", {
+        provider: PROVIDER_ID,
+        mode: "create",
+        blocker: "authentication",
+        message: NOT_FINISHED,
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("a rejected startLogin fails with the flow's own message", async () => {
+    renderFlow({
+      mode: "create",
+      existingProfileId: null,
+      startLoginImpl: () => Promise.reject(new Error("host refused")),
+      awaitLoginImpl: () => Promise.resolve(awaitAnswer({})),
+    });
+
+    await waitFor(() => expect(flowState()).toBe("failed"));
+    expect(screen.getByTestId("flow-message").textContent).toBe(NOT_STARTED);
+    expect(failedRefusal()).toBeNull();
+  });
+
+  it("a start answer the host declined fails with a null refusal", async () => {
+    renderFlow({
+      mode: "create",
+      existingProfileId: null,
+      startLoginImpl: () =>
+        Promise.resolve(
+          startedAnswer({ started: false, url: null, profileId: null }),
+        ),
+      awaitLoginImpl: () => Promise.resolve(awaitAnswer({})),
+    });
+
+    await waitFor(() => expect(flowState()).toBe("failed"));
+    expect(failedRefusal()).toBeNull();
+  });
+
+  it("a failed awaitLogin call fails create mode with a null refusal", async () => {
+    renderFlow({
+      mode: "create",
+      existingProfileId: null,
+      startLoginImpl: () => Promise.resolve(startedAnswer({})),
+      awaitLoginImpl: () => Promise.reject(new Error("transport down")),
+    });
+
+    await waitFor(() => expect(flowState()).toBe("failed"));
+    expect(screen.getByTestId("flow-message").textContent).toBe(NOT_FINISHED);
+    expect(failedRefusal()).toBeNull();
+  });
+});

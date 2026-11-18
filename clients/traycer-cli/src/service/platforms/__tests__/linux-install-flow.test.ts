@@ -1,0 +1,1650 @@
+import { mkdtempSync } from "node:fs";
+import { readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import {
+  createLinuxController,
+  setRestartStopGracesForTests,
+  type ProcessRunner,
+} from "../linux";
+import { serviceManifestPath, type ServiceLabel } from "../../label";
+import {
+  ProcessRunError,
+  ProcessTimeoutError,
+  type RunOptions,
+  type RunResult,
+} from "../../process-runner";
+import {
+  SHUTDOWN_FORCE_EXIT_MS,
+  STOP_EXIT_GRACE_MARGIN_MS,
+} from "@traycer/protocol/host/lifecycle-constants";
+import {
+  CRASH_REPORT_SCAN_TIMEOUT_MS,
+  STDERR_END_WAIT_TIMEOUT_MS,
+  STDERR_FLUSH_TIMEOUT_MS,
+  SYSTEMD_TIMEOUT_STOP_SECONDS,
+} from "../../spawn-edge-bounds";
+import { CLI_ERROR_CODES } from "../../../runner/errors";
+import { fileExists } from "../../install-binary";
+import { runWithLeaseAtServiceSpawnEdge } from "../../spawn-edge";
+import {
+  isServiceMutationAuthorityError,
+  withServiceMutationAuthority,
+} from "../../mutation-authority";
+
+// The rollback-failure pins need `rm(unitFile())` itself to reject, which a
+// real filesystem removal never does for a file this suite just wrote. Gate
+// it behind a per-test flag rather than mocking the whole module unavailable:
+// every other row in this file (including its own `afterEach` cleanup)
+// removes real files and must keep doing so.
+const RM_FAILURE = vi.hoisted(() => ({ message: null as string | null }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    rm: (async (
+      path: Parameters<typeof actual.rm>[0],
+      options: Parameters<typeof actual.rm>[1],
+    ) => {
+      if (RM_FAILURE.message !== null && String(path).endsWith(".service")) {
+        throw new Error(RM_FAILURE.message);
+      }
+      return actual.rm(path, options);
+    }) as typeof actual.rm,
+  };
+});
+
+// `stop --force`'s confirmed-settle branches finish with the SAME
+// child-kill engine the macOS force paths use (`forceStopHostProcess`) -
+// the local purge helper is gone, along with its own pid.json read/verdict
+// gating. Stub the engine exactly the way `macos.test.ts` already stubs
+// this identical seam (a WHOLE-MODULE factory - `linux.ts` imports only the
+// reporting variant, which the factory routes onto the same two-argument
+// mock so every assertion below keeps reading `(environment, operation)`).
+const MOCKS = vi.hoisted(() => ({
+  forceStopHostProcess: vi.fn(),
+}));
+vi.mock("../desktop-agent-shutdown", () => ({
+  forceStopHostProcess: MOCKS.forceStopHostProcess,
+  forceStopHostProcessReporting: (
+    environment: string,
+    operation: string,
+    _onHostAddressed: (() => void) | null,
+  ) => MOCKS.forceStopHostProcess(environment, operation),
+}));
+
+// CodeRabbit #1773 round 2 (r3951899621). The SAME isolation argument the unit
+// directory gets below, for the other file this suite reads through the real
+// home: `stopForRestart` reads the host's `pid.json` for environment "dev" on
+// every path, force included, BEFORE the mocked engine above is reached.
+// Unmocked, that is the developer's own `~/.traycer/host/dev/pid.json`, and
+// the `stopForRestart` rows had three different verdicts depending on what was
+// sitting in it:
+//
+//   * absent (this box, and CI) - the ladder falls straight through to the
+//     force finisher and the rows pass, quickly. Which is why nobody saw it.
+//   * present, naming a pid that is dead or recycled - PROVEN gone, so
+//     `stopForRestart` returns `{ forcedRecycle: false }` and never reaches
+//     `forceStopHostProcess` at all: every row that asserts a terminal outcome
+//     FAILS. A stale record from a crashed host is the ordinary case.
+//   * present and live - both graces run (32s + 10s against vitest's 5s
+//     default `testTimeout`), so the rows fail by timeout.
+//
+// A mock rather than a redirected HOME because the module boundary is what is
+// under test: these rows are about which engine `stopForRestart` reaches, not
+// about how a path is resolved. Whole-module factory, so it must supply every
+// symbol `linux.ts` imports from here - `readHostPidMetadataEvidence`
+// included, which the restart ladder now reads.
+const PID = vi.hoisted(() => ({
+  evidence: { kind: "absent" } as
+    | { readonly kind: "absent" }
+    | { readonly kind: "unreadable"; readonly cause: string }
+    | { readonly kind: "read"; readonly metadata: { readonly pid: number } },
+  // Whether the identity captured before the signal is PROVABLY gone.
+  gone: false,
+  // How often the identity predicate was consulted. Only a record that READS
+  // has an identity to ask about, so this separates "fell through with nothing
+  // to check" from "checked and could not prove" - two states whose
+  // `forcedRecycle` answer is identical.
+  goneCalls: 0,
+  // When set, answers the identity predicate per pid and per call (1-based),
+  // for the rows that need the published instance to change mid-route.
+  goneFn: null as ((pid: number, call: number) => boolean) | null,
+  // Evidence reads served first, in order, before `evidence` answers again.
+  evidenceReads: [] as Array<
+    | { readonly kind: "absent" }
+    | { readonly kind: "unreadable"; readonly cause: string }
+    | { readonly kind: "read"; readonly metadata: { readonly pid: number } }
+  >,
+}));
+vi.mock("../../../host/pid-metadata", () => ({
+  readHostPidMetadata: async () =>
+    PID.evidence.kind === "read" ? PID.evidence.metadata : null,
+  readHostPidMetadataEvidence: async () =>
+    PID.evidenceReads.shift() ?? PID.evidence,
+  publishedHostProcessGone: (metadata: { readonly pid: number }) => {
+    PID.goneCalls += 1;
+    return PID.goneFn === null
+      ? PID.gone
+      : PID.goneFn(metadata.pid, PID.goneCalls);
+  },
+}));
+
+/**
+ * The systemd install FLOW - as opposed to the emitted artifact, which
+ * `linux.test.ts` executes. Three defects fixed together, each pinned here:
+ *
+ *   1. no preflight: on a box with no reachable user manager (WSL with
+ *      systemd disabled, `sudo su`, headless SSH) the old flow wrote the
+ *      unit file FIRST and then threw a raw ProcessRunError out of
+ *      `daemon-reload` - residue plus an error naming neither systemd nor
+ *      WSL;
+ *   2. no rollback: a failed daemon-reload/enable left the just-written
+ *      unit file behind as an orphan;
+ *   3. no reset-failed on uninstall: a unit that had restart-looped into
+ *      `failed` kept its failed entry in the user manager after its file
+ *      was deleted.
+ */
+
+// Same isolation as macos.test.ts: `serviceManifestPath` resolves under the
+// real home dir, and this suite exercises real writes/removals of the
+// manifest, so redirect it to a private temp dir.
+const TEST_UNIT_DIR = mkdtempSync(
+  join(tmpdir(), "traycer-linux-service-test-"),
+);
+vi.mock("../../label", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../label")>();
+  return {
+    ...actual,
+    serviceManifestPath: (label: { readonly id: string }) =>
+      join(TEST_UNIT_DIR, `${label.id}.service`),
+  };
+});
+
+const label: ServiceLabel = {
+  id: "ai.traycer.host.dev",
+  displayName: "Traycer Host (test)",
+  environment: "dev",
+  devSlot: null,
+};
+
+const unitFile = (): string => serviceManifestPath(label);
+
+interface RecordedCall {
+  readonly command: string;
+  readonly args: readonly string[];
+}
+
+function ok(): RunResult {
+  return { stdout: "", stderr: "", exitCode: 0 };
+}
+
+function busError(command: string, args: readonly string[]): ProcessRunError {
+  return new ProcessRunError(
+    `${command} ${args.join(" ")} exited with code 1: Failed to connect to bus: No medium found`,
+    command,
+    args,
+    1,
+    "",
+    "Failed to connect to bus: No medium found",
+  );
+}
+
+/** A runner that records every call and fails those `failWhen` selects. */
+function recordingRunner(failWhen: (call: RecordedCall) => boolean): {
+  readonly calls: RecordedCall[];
+  readonly runner: ProcessRunner;
+} {
+  const calls: RecordedCall[] = [];
+  const runner: ProcessRunner = (command, args) => {
+    const call: RecordedCall = { command, args };
+    calls.push(call);
+    if (failWhen(call)) {
+      return Promise.reject(busError(command, args));
+    }
+    return Promise.resolve(ok());
+  };
+  return { calls, runner };
+}
+
+function installWith(runner: ProcessRunner): Promise<void> {
+  return createLinuxController(runner).install({
+    label,
+    cli: { command: "/usr/local/bin/traycer", args: [] },
+    enableLinger: true,
+  });
+}
+
+/** The systemctl verb (or loginctl verb) of a recorded call, for sequences. */
+function verbOf(call: RecordedCall): string {
+  return call.command === "systemctl"
+    ? isUserManagerVersionProbe(call)
+      ? "show --property=Version --value"
+      : (call.args[1] ?? "")
+    : `${call.command}:${call.args[0] ?? ""}`;
+}
+
+function isUserManagerVersionProbe(call: RecordedCall): boolean {
+  return (
+    call.command === "systemctl" &&
+    call.args.join(" ") === "--user show --property=Version --value"
+  );
+}
+
+afterEach(async () => {
+  await rm(unitFile(), { force: true });
+});
+
+afterAll(async () => {
+  await rm(TEST_UNIT_DIR, { recursive: true, force: true });
+});
+
+describe("linux service install flow", () => {
+  it("refuses to install - writing NOTHING - when the user manager is unreachable, and says so", async () => {
+    const { calls, runner } = recordingRunner(isUserManagerVersionProbe);
+
+    await expect(installWith(runner)).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: expect.stringContaining("WSL"),
+    });
+    // The preflight is the FIRST thing that runs, and on failure nothing
+    // else does: no unit file, no daemon-reload attempt.
+    expect(await fileExists(unitFile())).toBe(false);
+    expect(calls.map(verbOf)).toEqual(["show --property=Version --value"]);
+  });
+
+  it("rolls the unit file back when daemon-reload fails", async () => {
+    // Linger runs before the edge too (see linux.ts `installService`), so it
+    // still fires here even though the write that follows the edge fails.
+    vi.stubEnv("USER", "golden-user");
+    const { calls, runner } = recordingRunner(
+      (call) => call.args[1] === "daemon-reload",
+    );
+
+    await expect(installWith(runner)).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: expect.stringContaining("unit file was removed"),
+    });
+    expect(await fileExists(unitFile())).toBe(false);
+    // The rollback's own daemon-reload runs too (best-effort, tolerated),
+    // so systemd is told about the removal even though the initial reload
+    // is what failed.
+    expect(calls.map(verbOf)).toEqual([
+      "show --property=Version --value",
+      "loginctl:enable-linger",
+      "daemon-reload",
+      "disable",
+      "daemon-reload",
+    ]);
+
+    vi.unstubAllEnvs();
+  });
+
+  it("rolls the unit file back - and re-reloads - when enable --now fails", async () => {
+    vi.stubEnv("USER", "golden-user");
+    const { calls, runner } = recordingRunner(
+      (call) => call.args[1] === "enable",
+    );
+
+    await expect(installWith(runner)).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    });
+    expect(await fileExists(unitFile())).toBe(false);
+    // `disable --now` runs BEFORE the manifest is removed: `enable --now`
+    // failing on the start half still leaves the enablement symlinks in
+    // place, and removing the unit file first would leave them dangling.
+    // The rollback daemon-reload runs last, so systemd forgets the removed
+    // unit rather than holding a loaded orphan.
+    expect(calls.map(verbOf)).toEqual([
+      "show --property=Version --value",
+      "loginctl:enable-linger",
+      "daemon-reload",
+      "enable",
+      "disable",
+      "daemon-reload",
+    ]);
+
+    vi.unstubAllEnvs();
+  });
+
+  it("on success runs preflight → linger → reload → enable --now and leaves the unit installed", async () => {
+    // Linger runs BEFORE the install edge now (right after the preflight),
+    // not after `enable --now` - see linux.ts `installService`'s doc
+    // comment. `USER` must be set for `tryEnableLinger` to issue the call at
+    // all.
+    vi.stubEnv("USER", "golden-user");
+    const { calls, runner } = recordingRunner(() => false);
+
+    await installWith(runner);
+
+    expect(calls.map(verbOf)).toEqual([
+      "show --property=Version --value",
+      "loginctl:enable-linger",
+      "daemon-reload",
+      "enable",
+    ]);
+    const unit = await readFile(unitFile(), "utf8");
+    expect(unit).toContain(`SyslogIdentifier=${label.id}`);
+
+    vi.unstubAllEnvs();
+  });
+
+  it("replaces an existing unit with the OOM containment policy before reloading systemd", async () => {
+    vi.stubEnv("USER", "golden-user");
+    await writeFile(
+      unitFile(),
+      "[Unit]\nDescription=stale-unit-fixture\n",
+      "utf8",
+    );
+    const calls: RecordedCall[] = [];
+    const unitsSeenAtReload: string[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "systemctl" && args[1] === "daemon-reload") {
+        unitsSeenAtReload.push(await readFile(unitFile(), "utf8"));
+      }
+      return ok();
+    };
+
+    await installWith(runner);
+
+    expect(calls.map(verbOf)).toEqual([
+      "show --property=Version --value",
+      "loginctl:enable-linger",
+      "daemon-reload",
+      "enable",
+    ]);
+    expect(unitsSeenAtReload).toHaveLength(1);
+    expect(unitsSeenAtReload[0]).not.toContain("stale-unit-fixture");
+    expect(unitsSeenAtReload[0]).toContain("\nOOMPolicy=continue\n");
+    const unit = await readFile(unitFile(), "utf8");
+    expect(unit).not.toContain("stale-unit-fixture");
+    expect(unit).toContain("\nOOMPolicy=continue\n");
+
+    vi.unstubAllEnvs();
+  });
+
+  it("uninstall clears a failed unit entry after removing the file", async () => {
+    const { calls, runner } = recordingRunner(() => false);
+
+    await createLinuxController(runner).uninstall({
+      label,
+      leaveForegroundRun: null,
+    });
+
+    expect(calls.map(verbOf)).toEqual([
+      "disable",
+      "daemon-reload",
+      "reset-failed",
+    ]);
+  });
+});
+
+// The recycle timeout fix, on the `enable --now` leg of install: it queues
+// the same kind of start job `start`/`restart` do, so it needs the same
+// widened runner timeout - not the old flat 15s.
+describe("linux service install — enable --now recycle timeout", () => {
+  interface RecordedCallWithOptions extends RecordedCall {
+    readonly options: RunOptions;
+  }
+
+  function stageEnableNowRunner(
+    behavior: (
+      args: readonly string[],
+      options: RunOptions,
+    ) => Promise<RunResult>,
+  ): { calls: RecordedCallWithOptions[]; runner: ProcessRunner } {
+    const calls: RecordedCallWithOptions[] = [];
+    const runner: ProcessRunner = async (command, args, options) => {
+      calls.push({ command, args, options });
+      if (command === "systemctl" && args[1] === "enable") {
+        return behavior(args, options);
+      }
+      return ok();
+    };
+    return { calls, runner };
+  }
+
+  const independentFloorMs =
+    SHUTDOWN_FORCE_EXIT_MS +
+    STDERR_END_WAIT_TIMEOUT_MS +
+    STDERR_FLUSH_TIMEOUT_MS +
+    CRASH_REPORT_SCAN_TIMEOUT_MS +
+    STOP_EXIT_GRACE_MARGIN_MS +
+    15_000;
+  const pinnedTimeoutMs = SYSTEMD_TIMEOUT_STOP_SECONDS * 1_000 + 15_000;
+
+  it("gives enable --now a timeout past the stop-job bound", async () => {
+    const { calls, runner } = stageEnableNowRunner(async () => ok());
+
+    await installWith(runner);
+
+    const enableCall = calls.find(
+      (c) => c.command === "systemctl" && c.args[1] === "enable",
+    );
+    expect(enableCall?.args).toEqual([
+      "--user",
+      "enable",
+      "--now",
+      `${label.id}.service`,
+    ]);
+    const timeoutMs = enableCall?.options.timeoutMs;
+    // Independent floor, built only from symbols that exist on the
+    // unmodified code (protocol lifecycle constants + crash-diagnostics
+    // waits + the 15s the start half always had).
+    expect(timeoutMs).toBeGreaterThanOrEqual(independentFloorMs);
+    expect(timeoutMs).toBe(pinnedTimeoutMs);
+  });
+
+  it("an enable --now slower than the old 15s bound but inside the new one still resolves", async () => {
+    const { runner } = stageEnableNowRunner(async (args, options) => {
+      const simulatedDurationMs = 20_000;
+      if (simulatedDurationMs > options.timeoutMs) {
+        throw new ProcessRunError(
+          `systemctl ${args.join(" ")} timed out after ${options.timeoutMs}ms (killed via SIGTERM): `,
+          "systemctl",
+          args,
+          -1,
+          "",
+          "",
+        );
+      }
+      return ok();
+    });
+
+    await expect(installWith(runner)).resolves.toBeUndefined();
+  });
+
+  it("a runner timeout past the new bound still fails the install (rollback, not 'unconfirmed')", async () => {
+    // `enable --now`'s catch is install's own rollback path
+    // (SERVICE_INSTALL_FAILED), not `systemctlJobFailure` - a partially
+    // registered unit must not be left behind just because the failure was
+    // a timeout rather than systemd's own answer.
+    const { runner } = stageEnableNowRunner(async (args) => {
+      throw new ProcessTimeoutError(
+        `systemctl ${args.join(" ")} timed out after 62000ms (killed via SIGTERM): `,
+        "systemctl",
+        args,
+        -1,
+        "",
+        "",
+        62_000,
+      );
+    });
+
+    await expect(installWith(runner)).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+    });
+    expect(await fileExists(unitFile())).toBe(false);
+  });
+});
+
+// `stop --force`: a plain `systemctl stop` cannot promise the host is DOWN
+// when it returns (the runner caps the subprocess at 15s; the unit's stop job
+// may run for its whole TimeoutStopSec - 47s, or systemd's 90s default on a
+// unit not yet re-registered), so force confirms through the
+// unit's OWN state - `systemctl is-active`, never a pid - and escalates to
+// `systemctl kill --signal=SIGKILL` when the plain stop does not settle it
+// in time. Graces mirror the macOS/desktop-agent force-stop margins
+// (~32s SIGTERM, 10s SIGKILL), so these poll through fake timers exactly
+// the way `macos.test.ts` / `desktop-agent-shutdown.test.ts` already do for
+// the identical wait shape.
+describe("linux service stop --force", () => {
+  beforeEach(() => {
+    // The state these rows were silently assuming. Declared now, so the suite
+    // says what it depends on instead of inheriting it from whatever is in the
+    // developer's home.
+    PID.evidence = { kind: "absent" };
+    PID.gone = false;
+    PID.goneCalls = 0;
+    setRestartStopGracesForTests(null);
+    MOCKS.forceStopHostProcess.mockReset();
+    // Default outcome: no-metadata, which is SUCCESS on this finisher (the
+    // unit teardown already ran with positive confirmation, and an absent
+    // record is the normal trace of a host that exited gracefully and
+    // unlinked its own file - unlike the macOS ENTRY paths, where
+    // no-metadata is a failure). Every pre-existing force-success test below
+    // keeps passing through the finisher unchanged without staging its own
+    // outcome; tests targeting outcome mapping specifically override this.
+    MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-metadata" });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("settles 'inactive' right after the plain stop, so SIGKILL is never sent - cancels any scheduled auto-restart, RE-CONFIRMS, then purges pid.json", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "systemctl" && args[1] === "is-active") {
+        return { stdout: "inactive", stderr: "", exitCode: 3 };
+      }
+      return ok();
+    };
+
+    await createLinuxController(runner).stop(label, { force: true });
+
+    // The first is-active probe settles immediately - no poll wait, no
+    // kill, ever. A settled state alone is not proof nothing is scheduled
+    // (the unit can settle at `failed` from a CRASH mid-grace, with
+    // Restart=on-failure still queuing a relaunch) - the trailing `stop`
+    // cancels it, and a FRESH is-active re-confirms before the purge (the
+    // cancel's own failures/timeouts are swallowed, so only a positive
+    // re-read vouches).
+    expect(calls.map(verbOf)).toEqual([
+      "stop",
+      "is-active",
+      "stop",
+      "is-active",
+    ]);
+    expect(calls[2]?.args).toEqual([
+      "--user",
+      "stop",
+      "ai.traycer.host.dev.service",
+    ]);
+    // A CONFIRMED inactive unit hands off to the child-kill engine, which
+    // finishes the stop (and its own instance-matched purge) on the
+    // published host's behalf.
+    expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "stop");
+  });
+
+  it("stays 'active' through the full SIGTERM grace, escalates to SIGKILL, cancels any scheduled auto-restart BEFORE the second poll, then settles and succeeds", async () => {
+    vi.useFakeTimers();
+    const calls: RecordedCall[] = [];
+    let killIssued = false;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "systemctl" && args[1] === "kill") {
+        killIssued = true;
+        return ok();
+      }
+      if (command === "systemctl" && args[1] === "is-active") {
+        return killIssued
+          ? { stdout: "inactive", stderr: "", exitCode: 3 }
+          : { stdout: "active", stderr: "", exitCode: 0 };
+      }
+      return ok();
+    };
+
+    const pending = createLinuxController(runner).stop(label, {
+      force: true,
+    });
+    // SHUTDOWN_FORCE_EXIT_MS (30s) + STOP_EXIT_GRACE_MARGIN_MS (2s), plus
+    // slack for the final poll - the same margin the macOS/desktop-agent
+    // force-stop SIGTERM grace uses for the identical wait shape.
+    await vi.advanceTimersByTimeAsync(40_000);
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(calls.map(verbOf)).toContain("kill");
+    const killCall = calls.find(
+      (call) => call.command === "systemctl" && call.args[1] === "kill",
+    );
+    expect(killCall?.args).toEqual([
+      "--user",
+      "kill",
+      "--signal=SIGKILL",
+      "ai.traycer.host.dev.service",
+    ]);
+    // Shape: [stop, is-active...(active, never settling), kill, stop,
+    // is-active...(settles)] - the initial stop, the SIGTERM-grace poll
+    // that never settles, the SIGKILL, a renewed `stop` issued BEFORE the
+    // second poll (cancels a relaunch a crash-during-grace may have
+    // scheduled), and the SIGKILL-grace poll that settles.
+    const verbs = calls.map(verbOf);
+    expect(verbs[0]).toBe("stop");
+    const killIndex = verbs.indexOf("kill");
+    expect(killIndex).toBeGreaterThan(0);
+    // Everything before the kill is the initial stop plus SIGTERM-grace
+    // is-active polling - never another stop, never settling.
+    expect(
+      verbs.slice(0, killIndex).every((v) => v === "stop" || v === "is-active"),
+    ).toBe(true);
+    expect(verbs.slice(1, killIndex).every((v) => v === "is-active")).toBe(
+      true,
+    );
+    // The renewed stop is issued IMMEDIATELY after the kill, before the
+    // second poll even starts.
+    expect(verbs[killIndex + 1]).toBe("stop");
+    expect(calls[killIndex + 1]?.args).toEqual([
+      "--user",
+      "stop",
+      "ai.traycer.host.dev.service",
+    ]);
+    expect(verbs[killIndex + 2]).toBe("is-active");
+    // Exactly two `stop` verbs total: the initial one and the post-kill
+    // cancel - never a third.
+    expect(verbs.filter((v) => v === "stop")).toHaveLength(2);
+    // The finisher runs on the SIGKILL-confirmed path too - same as the
+    // SIGTERM one.
+    expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "stop");
+  });
+
+  it("is still 'active' after the SIGKILL grace too - SERVICE_CONTROL_FAILED, never a false success", async () => {
+    vi.useFakeTimers();
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "systemctl" && args[1] === "is-active") {
+        return { stdout: "active", stderr: "", exitCode: 0 };
+      }
+      return ok();
+    };
+
+    // Attach the rejection matcher BEFORE advancing timers - the promise
+    // settles mid-advance, and asserting after would risk an unhandled
+    // rejection between settling and the `await` below (same discipline
+    // `macos.test.ts`'s CLI-owned stop-timeout test uses).
+    const stopping = createLinuxController(runner).stop(label, {
+      force: true,
+    });
+    const assertion = expect(stopping).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      message: expect.stringContaining("still active after SIGKILL"),
+    });
+    // Both graces back to back: ~32s SIGTERM + 10s SIGKILL, plus slack.
+    await vi.advanceTimersByTimeAsync(50_000);
+
+    await assertion;
+    // The post-kill cancel `stop` still fires on the still-active failure
+    // path too - it runs unconditionally right after the kill, before the
+    // (here, never-settling) second poll.
+    const verbs = calls.map(verbOf);
+    const killIndex = verbs.indexOf("kill");
+    expect(killIndex).toBeGreaterThan(0);
+    expect(verbs[killIndex + 1]).toBe("stop");
+    // Never confirmed, so the throw happens BEFORE the finisher - the
+    // child-kill engine is never even asked about the published host.
+    expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+  });
+
+  it("'activating' does NOT count as settled - it drives the SIGKILL escalation exactly like 'active' does", async () => {
+    vi.useFakeTimers();
+    const calls: RecordedCall[] = [];
+    let killIssued = false;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "systemctl" && args[1] === "kill") {
+        killIssued = true;
+        return ok();
+      }
+      if (command === "systemctl" && args[1] === "is-active") {
+        // A concurrent restart bringing the unit back UP must never read as
+        // a successful stop.
+        return killIssued
+          ? { stdout: "inactive", stderr: "", exitCode: 3 }
+          : { stdout: "activating", stderr: "", exitCode: 3 };
+      }
+      return ok();
+    };
+
+    const pending = createLinuxController(runner).stop(label, {
+      force: true,
+    });
+    await vi.advanceTimersByTimeAsync(40_000);
+
+    await expect(pending).resolves.toBeUndefined();
+    const verbs = calls.map(verbOf);
+    expect(verbs).toContain("kill");
+    // The renewed stop still fires right after the kill even though the
+    // pre-kill state was 'activating' rather than 'active'.
+    const killIndex = verbs.indexOf("kill");
+    expect(verbs[killIndex + 1]).toBe("stop");
+    expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "stop");
+  });
+
+  it("a probe that throws (systemd unreachable) reads as NOT settled, not as a false success", async () => {
+    vi.useFakeTimers();
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "systemctl" && args[1] === "is-active") {
+        return Promise.reject(busError(command, args));
+      }
+      return ok();
+    };
+
+    const stopping = createLinuxController(runner).stop(label, {
+      force: true,
+    });
+    const assertion = expect(stopping).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+    });
+    await vi.advanceTimersByTimeAsync(50_000);
+
+    await assertion;
+    // The post-kill cancel `stop` is unaffected by the probe always
+    // throwing - it is a different command, and cancelScheduledAutoRestart
+    // has its own try/catch regardless.
+    const verbs = calls.map(verbOf);
+    const killIndex = verbs.indexOf("kill");
+    expect(killIndex).toBeGreaterThan(0);
+    expect(verbs[killIndex + 1]).toBe("stop");
+    expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+  });
+
+  // Codex's exact scenario: `tolerateNonZeroExit: true` means a probe that
+  // could not reach the systemd user manager RESOLVES (never throws) with
+  // an empty stdout and a nonzero exit - the OLD exclusion-list logic
+  // (`state !== "active" && state !== "activating" && ...`) treated that
+  // empty string as settled, reporting a stop it never confirmed. The
+  // positive-list rewrite closes it: nothing but a recognized settled
+  // state counts.
+  it("empty stdout with a nonzero, tolerated exit (bus unreachable) reads as NOT settled - escalates, still empty - SERVICE_CONTROL_FAILED", async () => {
+    vi.useFakeTimers();
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "systemctl" && args[1] === "is-active") {
+        return {
+          stdout: "",
+          stderr: "Failed to connect to bus: No medium found",
+          exitCode: 1,
+        };
+      }
+      return ok();
+    };
+
+    const stopping = createLinuxController(runner).stop(label, {
+      force: true,
+    });
+    const assertion = expect(stopping).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+      message: expect.stringContaining("still active after SIGKILL"),
+    });
+    await vi.advanceTimersByTimeAsync(50_000);
+
+    await assertion;
+    const verbs = calls.map(verbOf);
+    const killIndex = verbs.indexOf("kill");
+    expect(killIndex).toBeGreaterThan(0);
+    expect(verbs[killIndex + 1]).toBe("stop");
+    expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+  });
+
+  it("'failed' counts as a settled state - stop resolves without ever escalating to SIGKILL, and still cancels+RE-CONFIRMS any scheduled auto-restart before purging", async () => {
+    // 'failed' is exactly the state a CRASH mid-grace settles at (as
+    // opposed to a clean exit from our stop request) - Restart=on-failure
+    // may have a relaunch scheduled, which is precisely why the cancel runs
+    // even on this "already settled" path, and why a fresh re-confirm runs
+    // after it rather than trusting the cancel itself.
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "systemctl" && args[1] === "is-active") {
+        return { stdout: "failed", stderr: "", exitCode: 3 };
+      }
+      return ok();
+    };
+
+    await createLinuxController(runner).stop(label, { force: true });
+
+    expect(calls.map(verbOf)).toEqual([
+      "stop",
+      "is-active",
+      "stop",
+      "is-active",
+    ]);
+    expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "stop");
+  });
+
+  it("'unknown' counts as a settled state - stop resolves without ever escalating to SIGKILL, and still cancels+RE-CONFIRMS any scheduled auto-restart before purging", async () => {
+    // Older systemctl's answer for a unit that is not loaded at all.
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (command === "systemctl" && args[1] === "is-active") {
+        return { stdout: "unknown", stderr: "", exitCode: 3 };
+      }
+      return ok();
+    };
+
+    await createLinuxController(runner).stop(label, { force: true });
+
+    expect(calls.map(verbOf)).toEqual([
+      "stop",
+      "is-active",
+      "stop",
+      "is-active",
+    ]);
+    expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "stop");
+  });
+
+  it("without --force, a stop never probes is-active or escalates to kill - today's semantics, pinned", async () => {
+    const { calls, runner } = recordingRunner(() => false);
+
+    await createLinuxController(runner).stop(label, { force: false });
+
+    expect(calls.map(verbOf)).toEqual(["stop"]);
+    // Non-force never confirms the stop, so the finisher is never reached
+    // either.
+    expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+  });
+
+  // traycer#1563 D3a: a wedged host ignores SIGTERM and outlives the 15 s
+  // `systemctl stop` subprocess. The plain stop must not report success while
+  // the published host is still alive; it fails and names `--force`, the one
+  // stop that escalates to SIGKILL.
+  it("without --force, a stop that leaves the published host alive fails and names --force", async () => {
+    PID.evidence = { kind: "read", metadata: { pid: 4242 } };
+    PID.gone = false;
+    // The plain stop waits the SIGTERM grace before it gives up on the host;
+    // at production timing that is the host's own ~32 s force-exit watchdog.
+    setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+    const { runner } = recordingRunner(() => false);
+
+    try {
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining("--force"),
+      });
+    } finally {
+      setRestartStopGracesForTests(null);
+    }
+    expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+  });
+
+  // The old process being gone is not the host being gone: a stop job that
+  // timed out leaves the unit failed, and `Restart=on-failure` starts a
+  // replacement that publishes its own record. The plain stop re-reads the
+  // record after the old pid exits and fails naming the NEW pid.
+  it("without --force, a stop whose old process exited but left a different live host published fails naming that pid and --force", async () => {
+    PID.evidenceReads = [
+      { kind: "read", metadata: { pid: 4242 } },
+      { kind: "read", metadata: { pid: 5151 } },
+    ];
+    // 4242 is alive while the stop is judged and exits during the grace
+    // wait; 5151, the successor, is alive throughout.
+    PID.goneFn = (pid, call) => pid === 4242 && call > 2;
+    setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+    const { runner } = recordingRunner(() => false);
+
+    try {
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringMatching(/pid=5151.*--force/),
+      });
+    } finally {
+      setRestartStopGracesForTests(null);
+      PID.goneFn = null;
+      PID.evidenceReads = [];
+    }
+    expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+  });
+
+  // An unreadable pid record is no evidence either way: it may belong to a
+  // live host mid-write. The plain stop gives it the same grace a live record
+  // gets, looks again, and reports success only for "nothing published" or a
+  // process proven gone.
+  describe("without --force, a pid record that cannot be read", () => {
+    afterEach(() => {
+      setRestartStopGracesForTests(null);
+      PID.goneFn = null;
+      PID.evidenceReads = [];
+    });
+
+    it("unreadable before the stop and still unreadable after it: fails saying it could not confirm the stop", async () => {
+      PID.evidenceReads = [
+        { kind: "unreadable", cause: "EACCES" },
+        { kind: "unreadable", cause: "EACCES" },
+      ];
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("could not confirm the host stopped"),
+      });
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+    });
+
+    it("unreadable before the stop and absent after it: the stop is confirmed", async () => {
+      PID.evidenceReads = [
+        { kind: "unreadable", cause: "EACCES" },
+        { kind: "absent" },
+      ];
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("live before the stop, the process exits, then unreadable after it: fails saying it could not confirm the stop", async () => {
+      PID.evidenceReads = [
+        { kind: "read", metadata: { pid: 4242 } },
+        { kind: "unreadable", cause: "EACCES" },
+      ];
+      PID.goneFn = (pid, call) => pid === 4242 && call > 2;
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("could not confirm the host stopped"),
+      });
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+    });
+  });
+
+  // What was published BEFORE the stop - nothing, or a process already gone -
+  // is not the host being gone: a host can publish while `systemctl stop` is
+  // awaited, and a failed stop job leaves a unit that restarts itself. The
+  // record is always read again after the stop, and judged then.
+  describe("without --force, the record is always read again after the stop", () => {
+    afterEach(() => {
+      setRestartStopGracesForTests(null);
+      PID.goneFn = null;
+      PID.evidenceReads = [];
+    });
+
+    it("nothing published before the stop, a live host published by the time it returns: fails naming that pid", async () => {
+      PID.evidenceReads = [
+        { kind: "absent" },
+        { kind: "read", metadata: { pid: 5151 } },
+      ];
+      // 5151 is alive.
+      PID.goneFn = () => false;
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringMatching(/pid=5151.*still running.*--force/),
+      });
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+    });
+
+    it("a dead process published before the stop, a live host published after it: fails naming the live pid", async () => {
+      PID.evidenceReads = [
+        { kind: "read", metadata: { pid: 4242 } },
+        { kind: "read", metadata: { pid: 5151 } },
+      ];
+      PID.goneFn = (pid) => pid === 4242;
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringMatching(/pid=5151.*still running.*--force/),
+      });
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+    });
+
+    it("nothing published before the stop and nothing after it: resolves", async () => {
+      PID.evidenceReads = [{ kind: "absent" }, { kind: "absent" }];
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("a dead process published before the stop and the same one after it: resolves", async () => {
+      PID.evidenceReads = [
+        { kind: "read", metadata: { pid: 4242 } },
+        { kind: "read", metadata: { pid: 4242 } },
+      ];
+      PID.goneFn = () => true;
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("a dead process published before the stop and an unreadable record after it: fails saying it could not confirm the stop", async () => {
+      PID.evidenceReads = [
+        { kind: "read", metadata: { pid: 4242 } },
+        { kind: "unreadable", cause: "EACCES" },
+      ];
+      PID.goneFn = () => true;
+      setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+      const { runner } = recordingRunner(() => false);
+
+      await expect(
+        createLinuxController(runner).stop(label, { force: false }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("could not confirm the host stopped"),
+      });
+    });
+  });
+
+  // Branch-1 re-confirmation: the FIRST settle (right after the plain stop)
+  // can itself be a crash - `failed` - whose Restart=on-failure replacement
+  // is already coming back up by the time the cancel runs. The cancel's own
+  // failures/timeouts are swallowed, so it proves nothing; only a FRESH
+  // positive re-read after it does. An unconfirmed re-read falls through to
+  // the ordinary SIGKILL escalation rather than reporting a stop that was
+  // never actually proven.
+  describe("post-cancel re-confirmation (branch-1 settle can be a crash whose replacement is already restarting)", () => {
+    it("first settle is 'failed' (a crash), the post-cancel re-confirm sees 'activating' (the replacement) through the whole confirm grace, falls through to SIGKILL, which then settles for a successful stop", async () => {
+      vi.useFakeTimers();
+      const calls: RecordedCall[] = [];
+      let stopCount = 0;
+      let killIssued = false;
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (command === "systemctl" && args[1] === "stop") {
+          stopCount += 1;
+          return ok();
+        }
+        if (command === "systemctl" && args[1] === "kill") {
+          killIssued = true;
+          return ok();
+        }
+        if (command === "systemctl" && args[1] === "is-active") {
+          if (killIssued)
+            return { stdout: "inactive", stderr: "", exitCode: 3 };
+          // Before the cancel (stopCount is still 1, from the initial plain
+          // stop only): settle immediately at 'failed' - the crash. After
+          // the cancel (stopCount is 2): the replacement is coming back up.
+          return stopCount >= 2
+            ? { stdout: "activating", stderr: "", exitCode: 3 }
+            : { stdout: "failed", stderr: "", exitCode: 3 };
+        }
+        return ok();
+      };
+
+      const pending = createLinuxController(runner).stop(label, {
+        force: true,
+      });
+      // The SIGTERM-grace settle and the post-kill SIGKILL-grace settle are
+      // both immediate (first poll) - only the 10s confirm grace needs
+      // advancing, plus slack.
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(pending).resolves.toBeUndefined();
+      const verbs = calls.map(verbOf);
+      // stop, is-active(failed, settled on the first probe), stop(cancel),
+      // is-active...(activating, never settles through the confirm grace),
+      // kill, stop(cancel again), is-active(inactive, settles).
+      expect(verbs[0]).toBe("stop");
+      expect(verbs[1]).toBe("is-active");
+      expect(verbs[2]).toBe("stop");
+      const killIndex = verbs.indexOf("kill");
+      expect(killIndex).toBeGreaterThan(2);
+      expect(verbs.slice(3, killIndex).every((v) => v === "is-active")).toBe(
+        true,
+      );
+      expect(verbs.slice(3, killIndex).length).toBeGreaterThan(0);
+      expect(verbs[killIndex + 1]).toBe("stop");
+      expect(verbs[killIndex + 2]).toBe("is-active");
+      expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "stop");
+    });
+
+    it("if nothing ever settles after the kill either, SERVICE_CONTROL_FAILED - never a false success, and the finisher is never reached", async () => {
+      vi.useFakeTimers();
+      let stopCount = 0;
+      const runner: ProcessRunner = async (command, args) => {
+        if (command === "systemctl" && args[1] === "stop") {
+          stopCount += 1;
+          return ok();
+        }
+        if (command === "systemctl" && args[1] === "is-active") {
+          // Settles once, right at the very first probe (the crash) - then
+          // never again, through both the post-cancel re-confirm AND the
+          // post-kill SIGKILL grace.
+          return stopCount === 1
+            ? { stdout: "failed", stderr: "", exitCode: 3 }
+            : { stdout: "activating", stderr: "", exitCode: 3 };
+        }
+        return ok();
+      };
+
+      const stopping = createLinuxController(runner).stop(label, {
+        force: true,
+      });
+      const assertion = expect(stopping).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("still active after SIGKILL"),
+      });
+      // Confirm grace (10s) + SIGKILL grace (10s), plus slack.
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await assertion;
+      // The unit never settled, so the throw happens BEFORE the finisher -
+      // the child-kill engine is never even asked about the published host.
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+    });
+  });
+
+  // Outcome mapping: once the unit is CONFIRMED down,
+  // `finishForcedStopForPublishedHost` hands off to the SAME child-kill
+  // engine the macOS force paths use (`forceStopHostProcess`, mocked here
+  // exactly the way `macos.test.ts` mocks it). A confirmed-down unit is
+  // only HALF of what `--force` promises - a live host running OUTSIDE the
+  // unit (started manually, or orphaned by a corrupted teardown) still gets
+  // SIGTERM->SIGKILLed by the engine, and the engine's own instance-matched
+  // purge replaces the local gate entirely.
+  describe("forced-stop finisher: outcome mapping through forceStopHostProcess", () => {
+    function settledRunner(): ProcessRunner {
+      return async (command, args) => {
+        if (command === "systemctl" && args[1] === "is-active") {
+          return { stdout: "inactive", stderr: "", exitCode: 3 };
+        }
+        return ok();
+      };
+    }
+
+    it("resolves when forceStopHostProcess reports 'stopped' - an orphan host running outside the unit got SIGTERM/SIGKILLed", async () => {
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "stopped" });
+
+      await expect(
+        createLinuxController(settledRunner()).stop(label, { force: true }),
+      ).resolves.toBeUndefined();
+
+      expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "stop");
+    });
+
+    it("resolves when forceStopHostProcess reports 'no-host' (the published pid was already gone)", async () => {
+      MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-host" });
+
+      await expect(
+        createLinuxController(settledRunner()).stop(label, { force: true }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("throws SERVICE_CONTROL_FAILED naming the identity refusal when forceStopHostProcess reports identity-unverified", async () => {
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "identity-unverified",
+        pid: 4242,
+      });
+
+      await expect(
+        createLinuxController(settledRunner()).stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("cannot be verified"),
+      });
+      await expect(
+        createLinuxController(settledRunner()).stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining("host stop --force"),
+      });
+    });
+
+    it("throws SERVICE_CONTROL_FAILED naming the survived-SIGKILL pid when forceStopHostProcess reports hung", async () => {
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "hung",
+        pid: 4242,
+      });
+
+      await expect(
+        createLinuxController(settledRunner()).stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("survived SIGKILL"),
+      });
+    });
+
+    it("carries operation 'restart' through stopForRestart's force path, and a terminal outcome's message names 'host restart --force'", async () => {
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "hung",
+        pid: 4242,
+      });
+
+      await expect(
+        createLinuxController(settledRunner()).stopForRestart(label, {
+          force: true,
+        }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining("host restart --force"),
+      });
+      expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "restart");
+    });
+
+    it("the failure message describes the RESTART world, not the stop world", async () => {
+      // Only the verb was parameterised when `stopForRestart` started reusing
+      // this failure path; the premise stayed "the systemd unit is stopped".
+      // That is true after `stop --force` and FALSE after `restart --force`:
+      // Q13's ladder is `systemctl kill`, which runs no stop job, so the unit
+      // stays loaded with `Restart=` armed and systemd is very likely starting
+      // a replacement while the operator reads the message.
+      //
+      // This is the sentence someone reads while deciding whether their host
+      // is down, and the old remediation ("remove the stale record ... and
+      // reinstall") invites an uninstall in the middle of a relaunch.
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "identity-unverified",
+        pid: 4242,
+      });
+
+      const message = await createLinuxController(settledRunner())
+        .stopForRestart(label, { force: true })
+        .then(
+          () => "",
+          (error: { readonly message: string }) => error.message,
+        );
+
+      expect(message).toContain("remains armed");
+      expect(message).toContain("systemd will relaunch it");
+      // The two claims that were wrong for this path, asserted absent by the
+      // exact strings the `stop` path still uses.
+      expect(message).not.toContain("the systemd unit is stopped");
+      expect(message).not.toContain("host service uninstall");
+    });
+
+    it("...while the plain stop --force keeps the stopped-unit premise and its remediation", async () => {
+      // The twin. The `stop` path really does run `systemctl stop`, so its
+      // premise and its "remove the stale record" advice are both correct and
+      // must not be changed along with the restart path's.
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "identity-unverified",
+        pid: 4242,
+      });
+
+      await expect(
+        createLinuxController(settledRunner()).stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining("the systemd unit is stopped"),
+      });
+    });
+
+    it("a NON-force stopForRestart never escalates to the published host", async () => {
+      // The twin of the row above, and the reason the row above is not enough
+      // on its own.
+      //
+      // Q13 rewrote `stopForRestart` to signal the unit instead of stopping
+      // it, and the rewrite took no `force` parameter at all - so `host
+      // restart --force` silently stopped escalating and stopped reporting a
+      // forced stop that had not taken effect. One assertion that force DOES
+      // escalate would have caught that. It would not catch the opposite
+      // regression: wiring the escalation unconditionally, which would reach
+      // for the published host on every ordinary update restart - and with
+      // the manager left armed, `pid.json` by then may name the REPLACEMENT
+      // systemd has already started, not the instance we signalled.
+      //
+      // So the gate is pinned from both sides. Unprovable-and-not-forced is
+      // `forcedRecycle: true` and nothing more; the relaunch recycles, which
+      // is what actually repairs it.
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "hung",
+        pid: 4242,
+      });
+
+      const stopped = await createLinuxController(
+        settledRunner(),
+      ).stopForRestart(label, { force: false });
+
+      expect(stopped).toEqual({ forcedRecycle: true });
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["absent", { kind: "absent" } as const, false, true, false],
+      [
+        "unreadable",
+        { kind: "unreadable", cause: "not valid JSON" } as const,
+        false,
+        true,
+        false,
+      ],
+      [
+        "live",
+        { kind: "read", metadata: { pid: 4242 } } as const,
+        false,
+        true,
+        true,
+      ],
+      [
+        "proven gone",
+        { kind: "read", metadata: { pid: 4242 } } as const,
+        true,
+        false,
+        true,
+      ],
+    ])(
+      "the published record these rows read is the MOCK's, not this machine's: %s",
+      async (_name, evidence, gone, reachesFinisher, consultsIdentity) => {
+        // The row that names the defect is the last one. A `pid.json` naming a
+        // dead or recycled pid - what a crashed host leaves behind, and what
+        // sits in plenty of real home directories - is PROVEN gone, so
+        // `stopForRestart` returns `forcedRecycle: false` and never reaches
+        // the finisher. Every sibling row above asserts a terminal outcome
+        // FROM that finisher, so on such a machine they all failed, for a
+        // reason no diff could explain.
+        //
+        // The observable is deliberately "which engine was reached" rather
+        // than a duration: it is what the sibling rows depend on, and it
+        // cannot be satisfied by accident from either direction.
+        PID.evidence = evidence;
+        PID.gone = gone;
+        // The live row would otherwise poll the real ladder - 32s + 10s
+        // against a 5s default `testTimeout`, which is the OTHER way this
+        // suite failed off this box.
+        setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+        MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-host" });
+
+        const stopped = await createLinuxController(
+          settledRunner(),
+        ).stopForRestart(label, { force: true });
+
+        expect(stopped).toEqual({ forcedRecycle: reachesFinisher });
+        expect(MOCKS.forceStopHostProcess.mock.calls.length > 0).toBe(
+          reachesFinisher,
+        );
+        // The second observable, and the one that separates the two rows whose
+        // `forcedRecycle` answer is the same as the absent state's. Only a
+        // record that READS has an identity to ask about; without the mock
+        // this counter stays 0 for every row, because the real reader answers
+        // `absent` on any machine and the predicate is never reached.
+        expect(PID.goneCalls > 0).toBe(consultsIdentity);
+      },
+    );
+  });
+});
+
+describe("install — spawn-edge placement", () => {
+  it("the manager-version probe then linger precede publish, and daemon-reload is the entry right after it - the install edge sits in front of the unit write", async () => {
+    // `publish` pushes into the SAME log `recordingRunner` fills, in the
+    // order things actually happen - not a separately-kept count. The
+    // install edge (`atServiceInstallEdge`) sits in front of the unit's
+    // FIRST write, before `daemon-reload` even runs - not after it - so a
+    // refused publication touches nothing. Linger now runs BEFORE the edge
+    // too (see linux.ts `installService`'s doc comment): it is off the
+    // grant's clock entirely, which is the whole point of moving it.
+    vi.stubEnv("USER", "golden-user");
+    const { calls, runner } = recordingRunner(() => false);
+    const publish = vi.fn(async (): Promise<null> => {
+      calls.push({ command: "publish", args: [] });
+      return null;
+    });
+
+    await runWithLeaseAtServiceSpawnEdge(publish, () => installWith(runner));
+
+    const verbs = calls.map((call) =>
+      call.command === "publish" ? "publish" : verbOf(call),
+    );
+    expect(verbs.filter((verb) => verb === "publish")).toHaveLength(1);
+    const publishIndex = verbs.indexOf("publish");
+    expect(verbs.slice(0, publishIndex)).toEqual([
+      "show --property=Version --value",
+      "loginctl:enable-linger",
+    ]);
+    // `atServiceSpawnEdge()` runs again right before `enable --now` and
+    // returns the SAME already-published lease (no second "publish" entry
+    // above), so only one call separates the edge from `enable`.
+    expect(verbs[publishIndex + 1]).toBe("daemon-reload");
+    expect(verbs[publishIndex + 2]).toBe("enable");
+
+    vi.unstubAllEnvs();
+  });
+
+  it("a refused publication at the install edge propagates raw, by identity - nothing was written, so nothing is rolled back", async () => {
+    // The install edge sits in front of the unit's FIRST write
+    // (`atServiceInstallEdge`, awaited before `serviceManifestPath` is even
+    // touched), so a refusal there leaves the previous registration - here,
+    // none - exactly as it was: no unit file, no `disable`, no
+    // `daemon-reload` rollback, and `enable` never issued. Nothing was
+    // written, so there is nothing to roll back, and the refusal propagates
+    // as itself rather than being wrapped into a SERVICE_INSTALL_FAILED.
+    // Linger runs BEFORE the edge, so it still fires here even though the
+    // edge itself then refuses - it is off the grant's clock entirely and
+    // does not depend on the edge succeeding.
+    vi.stubEnv("USER", "golden-user");
+    const { calls, runner } = recordingRunner(() => false);
+    const publishError = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw publishError;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () => installWith(runner),
+    ).catch((cause: unknown) => cause);
+
+    expect(rejection).toBe(publishError);
+    // The preflight and linger ran before the edge rejected; no rollback
+    // verbs and no `enable` - the edge rejected before the unit was ever
+    // written.
+    expect(calls.map(verbOf)).toEqual([
+      "show --property=Version --value",
+      "loginctl:enable-linger",
+    ]);
+    expect(await fileExists(unitFile())).toBe(false);
+
+    vi.unstubAllEnvs();
+  });
+
+  it("an authority refusal at the pre-publish check leaves the rollback UNRUN, and the unit was never written - and rejects with the authority error", async () => {
+    // Derive the exact pre-edge verify-call count by dry run, the same
+    // technique `macos.test.ts` uses: `installService`'s own
+    // `verifyServiceMutationAuthority()` calls around the manifest write
+    // consult the SAME verifier the edge's pre-publish check does.
+    const dryRunOrder: string[] = [];
+    const dryRunPublish = vi.fn(async (): Promise<null> => {
+      dryRunOrder.push("publish");
+      return null;
+    });
+    const { runner: dryRunRunner } = recordingRunner(() => false);
+    await withServiceMutationAuthority(
+      async () => {
+        dryRunOrder.push("verify");
+      },
+      () =>
+        runWithLeaseAtServiceSpawnEdge(dryRunPublish, () =>
+          installWith(dryRunRunner),
+        ),
+    );
+    await rm(unitFile(), { force: true });
+    const preEdgeVerifyCalls = dryRunOrder
+      .slice(0, dryRunOrder.indexOf("publish"))
+      .filter((entry) => entry === "verify").length;
+
+    const { calls, runner } = recordingRunner(() => false);
+    const authorityError = new Error("mutation authority was lost");
+    let verifyCalls = 0;
+    const verify = async (): Promise<void> => {
+      verifyCalls += 1;
+      if (verifyCalls === preEdgeVerifyCalls) throw authorityError;
+    };
+    const publish = vi.fn(async (): Promise<null> => null);
+
+    const rejection: unknown = await withServiceMutationAuthority(verify, () =>
+      runWithLeaseAtServiceSpawnEdge(publish, () => installWith(runner)),
+    ).catch((cause: unknown) => cause);
+
+    expect(isServiceMutationAuthorityError(rejection)).toBe(true);
+    expect(publish).not.toHaveBeenCalled();
+    expect(calls.map(verbOf)).not.toContain("disable");
+    expect(calls.map(verbOf)).not.toContain("daemon-reload");
+    expect(calls.map(verbOf)).not.toContain("enable");
+    // The authority check that gates the edge fires BEFORE the unit's first
+    // write, same as an ordinary refusal there - so the file was never
+    // written, not "still present" from an earlier write.
+    expect(await fileExists(unitFile())).toBe(false);
+  });
+
+  it("P2-1: re-registering over a LIVE unit - a refusal at the install edge propagates raw and leaves the old unit file byte-identical", async () => {
+    // The install-edge round's timeline pin: even when a unit file already
+    // exists (an existing registration being re-installed), the edge sits
+    // in front of the write, so a refused publication never touches it -
+    // the old bytes on disk are exactly what they were, and systemd is
+    // never told anything (no daemon-reload/enable/disable/stop).
+    vi.stubEnv("USER", "golden-user");
+    const oldUnitContent = "[Unit]\nDescription=live-registration-fixture\n";
+    await writeFile(unitFile(), oldUnitContent, "utf8");
+    const { calls, runner } = recordingRunner(() => false);
+    const refusal = new Error("proof write failed");
+    const publish = vi.fn(async (): Promise<null> => {
+      throw refusal;
+    });
+
+    const rejection: unknown = await runWithLeaseAtServiceSpawnEdge(
+      publish,
+      () => installWith(runner),
+    ).catch((cause: unknown) => cause);
+
+    // Identity-preserved raw propagation - the edge refused before any
+    // write, so there is nothing for a wrapper to describe. Linger already
+    // ran (it precedes the edge and does not depend on it), so it appears
+    // ahead of the refusal.
+    expect(rejection).toBe(refusal);
+    expect(calls.map(verbOf)).toEqual([
+      "show --property=Version --value",
+      "loginctl:enable-linger",
+    ]);
+    expect(calls.map(verbOf)).not.toContain("daemon-reload");
+    expect(calls.map(verbOf)).not.toContain("enable");
+    expect(calls.map(verbOf)).not.toContain("disable");
+    expect(calls.map(verbOf)).not.toContain("stop");
+    // The pre-existing unit is UNCHANGED - byte-identical to what was there
+    // before the re-register attempt.
+    expect(await readFile(unitFile(), "utf8")).toBe(oldUnitContent);
+
+    vi.unstubAllEnvs();
+  });
+
+  it("enable --now failure plus a failing unit-file removal: the 'failed too' wording, not a claimed removal", async () => {
+    const { runner } = recordingRunner((call) => call.args[1] === "enable");
+    RM_FAILURE.message = "permission denied";
+
+    try {
+      await expect(installWith(runner)).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        message: expect.stringContaining(
+          "removing the partially-written unit file failed too: permission denied",
+        ),
+      });
+    } finally {
+      RM_FAILURE.message = null;
+    }
+  });
+});
+
+// traycer#1628, item 5. A headless Linux host with no user manager (no session
+// bus, no XDG_RUNTIME_DIR) answers every `systemctl --user` call with "Failed
+// to connect to bus". Install already proves the manager reachable first;
+// restart did not, so it stopped the host through a kill that fails quietly,
+// waited out the signal ladder, and then surfaced systemctl's raw text.
+describe("linux restart without a reachable user manager", () => {
+  /**
+   * The real runner's contract: a tolerated non-zero exit RESOLVES with the
+   * exit code, an untolerated one rejects. The manager-version probe is the
+   * reachability probe, so it carries `tolerateNonZeroExit: false`.
+   */
+  function headlessRunner(): {
+    readonly calls: RecordedCall[];
+    readonly runner: ProcessRunner;
+  } {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = (command, args, options: RunOptions) => {
+      calls.push({ command, args });
+      if (options.tolerateNonZeroExit) {
+        return Promise.resolve({
+          stdout: "",
+          stderr: "Failed to connect to bus: No medium found",
+          exitCode: 1,
+        });
+      }
+      return Promise.reject(busError(command, args));
+    };
+    return { calls, runner };
+  }
+
+  /** What `restartWithActuators` does with the controller, in order. */
+  async function restartSequence(
+    runner: ProcessRunner,
+    force: boolean,
+  ): Promise<void> {
+    const controller = createLinuxController(runner);
+    const stopped = await controller.stopForRestart(label, { force });
+    await controller.relaunchAfterRestart(label, stopped);
+  }
+
+  beforeEach(() => {
+    MOCKS.forceStopHostProcess.mockReset();
+    // The terminal-started host a `--force` restart reaches directly, outside
+    // the unit: with no user manager, that kill is all it would have done.
+    MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "stopped" });
+    PID.evidence = { kind: "absent" };
+    PID.evidenceReads = [];
+    PID.gone = false;
+    PID.goneFn = null;
+    PID.goneCalls = 0;
+    setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+  });
+
+  afterEach(() => {
+    setRestartStopGracesForTests(null);
+  });
+
+  it.each([false, true])(
+    "refuses before signalling anything, with the same guidance install gives (force: %s)",
+    async (force) => {
+      const { calls, runner } = headlessRunner();
+
+      await expect(restartSequence(runner, force)).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringMatching(
+          /systemd user manager is not reachable.*cannot be restarted.*WSL.*systemd session or enable lingering/s,
+        ),
+        details: expect.objectContaining({ userManagerReachable: false }),
+      });
+      // Only the probe ran: no `kill` of the unit, no `restart`, and no
+      // escalation to the published host (`--force`'s last resort).
+      expect(calls.map(verbOf)).toEqual(["show --property=Version --value"]);
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+    },
+  );
+
+  it("never surfaces systemctl's own failure text for the restart job", async () => {
+    const { runner } = headlessRunner();
+
+    const message = await createLinuxController(runner)
+      .restart(label)
+      .then(
+        () => "",
+        (error: { readonly message: string }) => error.message,
+      );
+
+    expect(message).toContain("systemd user manager is not reachable");
+    expect(message).not.toContain("systemctl restart failed");
+    // A caller can reach this after it already ended another process
+    // (`host free-port-and-restart`), so the refusal claims nothing about
+    // what was or was not stopped.
+    expect(message).not.toContain("Nothing was stopped");
+  });
+
+  it("leaves a reachable manager's restart exactly as it was", async () => {
+    const { calls, runner } = recordingRunner(() => false);
+
+    await restartSequence(runner, false);
+
+    // The probe now fronts each of the two legs; the signal ladder and the
+    // single `restart` job between them are untouched.
+    expect(calls.map(verbOf)).toEqual([
+      "show --property=Version --value",
+      "kill",
+      "kill",
+      "show --property=Version --value",
+      "restart",
+    ]);
+  });
+});

@@ -1,0 +1,839 @@
+import { useMemo } from "react";
+import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
+import type {
+  IStreamSession,
+  StreamCloseReason,
+  StreamConnectionStatus,
+} from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import {
+  hostNotificationsFeedSubscribeV15,
+  hostNotificationsSubscribeClientFrameSchema,
+  hostNotificationsSubscribeClientFrameSchemaV15,
+  hostNotificationsSubscribeServerFrameSchemaV18,
+  type HostNotificationCloudEntryV28,
+  type HostNotificationsAttentionCursor,
+  type HostNotificationsChronologicalCursor,
+  type HostNotificationsSubscribeServerFrameV18,
+  type HostNotificationsSummary,
+} from "@traycer/protocol/host/notifications/contracts";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import {
+  readHostNotificationPresenceFrame,
+  subscribeHostNotificationPresence,
+  type HostNotificationPresenceFrame,
+} from "@/lib/notifications/notification-presence";
+import {
+  isReopenableHostStreamClose,
+  type HostReconnectEngine,
+} from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
+import { compareFeedIdAscending } from "@/lib/notifications/notification-lifecycle";
+
+export const HOST_NOTIFICATIONS_INITIAL_ATTENTION_LIMIT = 50;
+export const HOST_NOTIFICATIONS_INITIAL_RECENT_LIMIT = 50;
+
+/**
+ * The host expires presence records after a short TTL (15s at the time of
+ * writing) so a dead window can't suppress deliveries forever. A change-driven
+ * presence send alone therefore goes stale whenever the user simply stays on
+ * one tab — exactly the case suppression exists for — so the stream re-sends
+ * the current presence on this cadence, comfortably inside that TTL.
+ */
+export const HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS = 5_000;
+
+/**
+ * The feed parses against the NEWEST frame union (`@1.7`), not a released one.
+ * Stream versions negotiate to `min(client, host)` per method, so a GUI built
+ * from this protocol tree lands on `@1.7` against a host built from it too -
+ * and parsing those frames with an older schema would reject any row of a
+ * kind that union added (hook removals at `@1.7`, environments at `@1.6`, secrets at
+ * `@1.4`), which this store treats as connection corruption and answers with
+ * a reconnect into a snapshot carrying the same row. Against an older host the
+ * negotiated version drops back, and every older minor's frames are strict
+ * subsets of this union and still parse.
+ */
+export type HostNotificationFeedEntry = HostNotificationCloudEntryV28;
+
+export type HostNotificationsFeedFrame = Extract<
+  HostNotificationsSubscribeServerFrameV18,
+  | { readonly kind: "snapshot" }
+  | { readonly kind: "partitionSnapshot" }
+  | { readonly kind: "upserted" }
+  | { readonly kind: "readStateChanged" }
+  | { readonly kind: "removed" }
+  | { readonly kind: "cleared" }
+>;
+
+/** Request lifecycle for one paginated projection. Whether more can be
+ * loaded is carried by the track's cursor (`null` = exhausted), not here. */
+export type HostNotificationsPageStatus = "idle" | "loading" | "error";
+
+interface PageMergeExpectation<Cursor> {
+  readonly snapshotEpoch: number;
+  /** Captured `liveLifecycleRevision` at request start. A page response can
+   * merge rows / advance its cursor only while this still matches - any live
+   * frame landing after the request began (e.g. an exact removal) must
+   * discard the whole response rather than risk resurrecting a pruned row. */
+  readonly liveLifecycleRevision: number;
+  readonly cursor: Cursor | null;
+}
+
+interface HostNotificationsState {
+  readonly byId: Readonly<Record<string, HostNotificationFeedEntry>>;
+  /** `null` means the exact host contribution is unknown: never derive a
+   * composite count from `byId`, which is only ever a partial window. */
+  readonly summary: HostNotificationsSummary | null;
+  readonly attentionCursor: HostNotificationsAttentionCursor | null;
+  readonly recentCursor: HostNotificationsChronologicalCursor | null;
+  readonly unreadRecentCursor: HostNotificationsChronologicalCursor | null;
+  /** Unlike the other two tracks, a `null` `unreadRecentCursor` is ambiguous
+   * between "never loaded" and "exhausted". This disambiguates it: `true`
+   * once any `unreadRecent` page has successfully merged, so `null` + `true`
+   * means genuinely exhausted. Resets alongside the cursor on every snapshot
+   * (host reconnect/switch/identity change). */
+  readonly unreadRecentHasLoadedOnce: boolean;
+  readonly attentionStatus: HostNotificationsPageStatus;
+  readonly recentStatus: HostNotificationsPageStatus;
+  readonly unreadRecentStatus: HostNotificationsPageStatus;
+  readonly connectionStatus: StreamConnectionStatus;
+  readonly snapshotEpoch: number;
+  /** Monotonic counter bumped on every live server-pushed lifecycle frame
+   * (upsert/read-state/removal). Page requests capture it; a response whose
+   * captured value no longer matches is discarded outright. */
+  readonly liveLifecycleRevision: number;
+
+  applySnapshot: (snapshot: {
+    readonly attention: {
+      readonly entries: ReadonlyArray<HostNotificationFeedEntry>;
+      readonly nextCursor: HostNotificationsAttentionCursor | null;
+    };
+    readonly recent: {
+      readonly entries: ReadonlyArray<HostNotificationFeedEntry>;
+      readonly nextCursor: HostNotificationsChronologicalCursor | null;
+    };
+    readonly summary: HostNotificationsSummary;
+  }) => void;
+  applyUpsertFrame: (
+    entry: HostNotificationFeedEntry,
+    removedIds: ReadonlyArray<string>,
+    summary: HostNotificationsSummary,
+  ) => void;
+  applyReadStateFrame: (
+    ids: ReadonlyArray<string>,
+    change: {
+      readonly readAt: number | null;
+      readonly resolvedAt: number | null;
+      readonly removedIds: ReadonlyArray<string>;
+      readonly summary: HostNotificationsSummary;
+    },
+  ) => void;
+  applyRemovalFrame: (
+    removedIds: ReadonlyArray<string>,
+    summary: HostNotificationsSummary,
+  ) => void;
+  markReadLocally: (
+    ids: ReadonlyArray<string>,
+    readAt: number,
+    expectedSnapshotEpoch: number,
+  ) => void;
+  markAllReadLocally: (
+    beforeUpdatedAt: number,
+    readAt: number,
+    expectedSnapshotEpoch: number,
+  ) => void;
+  clearAllLocally: (
+    beforeUpdatedAt: number,
+    expectedSnapshotEpoch: number,
+  ) => void;
+  markSummaryUnknown: () => void;
+  setPageStatus: (
+    track: "attention" | "recent" | "unreadRecent",
+    status: HostNotificationsPageStatus,
+  ) => void;
+  mergeAttentionPage: (
+    entries: ReadonlyArray<HostNotificationFeedEntry>,
+    nextCursor: HostNotificationsAttentionCursor | null,
+    expected: PageMergeExpectation<HostNotificationsAttentionCursor>,
+  ) => void;
+  mergeRecentPage: (
+    entries: ReadonlyArray<HostNotificationFeedEntry>,
+    nextCursor: HostNotificationsChronologicalCursor | null,
+    expected: PageMergeExpectation<HostNotificationsChronologicalCursor>,
+  ) => void;
+  mergeUnreadRecentPage: (
+    entries: ReadonlyArray<HostNotificationFeedEntry>,
+    nextCursor: HostNotificationsChronologicalCursor | null,
+    expected: PageMergeExpectation<HostNotificationsChronologicalCursor>,
+  ) => void;
+  setConnectionStatus: (status: StreamConnectionStatus) => void;
+  reset: () => void;
+}
+
+/** Matches the host's `updatedAt DESC, id ASC` tie-break exactly, so the
+ * renderer's projection order never disagrees with SQLite's. */
+export function compareHostNotificationEntries(
+  a: HostNotificationFeedEntry,
+  b: HostNotificationFeedEntry,
+): number {
+  const updatedAtDelta = b.updatedAt - a.updatedAt;
+  if (updatedAtDelta !== 0) return updatedAtDelta;
+  return compareFeedIdAscending(a.id, b.id);
+}
+
+function mergeById(
+  current: Readonly<Record<string, HostNotificationFeedEntry>>,
+  entries: ReadonlyArray<HostNotificationFeedEntry>,
+): Readonly<Record<string, HostNotificationFeedEntry>> {
+  if (entries.length === 0) return current;
+  const next: Record<string, HostNotificationFeedEntry> = { ...current };
+  for (const entry of entries) {
+    const hasCurrent = Object.hasOwn(current, entry.id);
+    if (hasCurrent && current[entry.id].updatedAt > entry.updatedAt) {
+      continue;
+    }
+    next[entry.id] =
+      hasCurrent && current[entry.id].updatedAt === entry.updatedAt
+        ? preserveReadState(current[entry.id], entry)
+        : entry;
+  }
+  return next;
+}
+
+function preserveReadState(
+  current: HostNotificationFeedEntry,
+  incoming: HostNotificationFeedEntry,
+): HostNotificationFeedEntry {
+  const readAt = current.readAt;
+  if (
+    "resolvedAt" in current &&
+    current.resolvedAt !== undefined &&
+    "resolvedAt" in incoming
+  ) {
+    return { ...incoming, readAt, resolvedAt: current.resolvedAt };
+  }
+  return { ...incoming, readAt };
+}
+
+function withoutIds(
+  byId: Readonly<Record<string, HostNotificationFeedEntry>>,
+  ids: ReadonlyArray<string>,
+): Readonly<Record<string, HostNotificationFeedEntry>> {
+  if (ids.length === 0) return byId;
+  const next = { ...byId };
+  for (const id of ids) {
+    delete next[id];
+  }
+  return next;
+}
+
+function applyReadStateById(
+  current: Readonly<Record<string, HostNotificationFeedEntry>>,
+  ids: ReadonlyArray<string>,
+  readAt: number | null,
+  resolvedAt: number | null | undefined,
+): Readonly<Record<string, HostNotificationFeedEntry>> {
+  let changed = false;
+  const next: Record<string, HostNotificationFeedEntry> = { ...current };
+  for (const id of ids) {
+    if (!Object.hasOwn(current, id)) continue;
+    const entry = current[id];
+    const resolvedAtChanged =
+      "resolvedAt" in entry &&
+      resolvedAt !== undefined &&
+      entry.resolvedAt !== resolvedAt;
+    if (entry.readAt === readAt && !resolvedAtChanged) continue;
+    next[id] =
+      "resolvedAt" in entry && resolvedAt !== undefined
+        ? { ...entry, readAt, resolvedAt }
+        : { ...entry, readAt };
+    changed = true;
+  }
+  return changed ? next : current;
+}
+
+function chronologicalCursorsEqual(
+  a: HostNotificationsChronologicalCursor | null,
+  b: HostNotificationsChronologicalCursor | null,
+): boolean {
+  if (a === null || b === null) return a === b;
+  return a.updatedAt === b.updatedAt && a.id === b.id;
+}
+
+function attentionCursorsEqual(
+  a: HostNotificationsAttentionCursor | null,
+  b: HostNotificationsAttentionCursor | null,
+): boolean {
+  if (a === null || b === null) return a === b;
+  return a.tier === b.tier && a.updatedAt === b.updatedAt && a.id === b.id;
+}
+
+function initialState(): Pick<
+  HostNotificationsState,
+  | "byId"
+  | "summary"
+  | "attentionCursor"
+  | "recentCursor"
+  | "unreadRecentCursor"
+  | "unreadRecentHasLoadedOnce"
+  | "attentionStatus"
+  | "recentStatus"
+  | "unreadRecentStatus"
+  | "connectionStatus"
+  | "snapshotEpoch"
+  | "liveLifecycleRevision"
+> {
+  return {
+    byId: {},
+    summary: null,
+    attentionCursor: null,
+    recentCursor: null,
+    unreadRecentCursor: null,
+    unreadRecentHasLoadedOnce: false,
+    attentionStatus: "idle",
+    recentStatus: "idle",
+    unreadRecentStatus: "idle",
+    connectionStatus: "connecting",
+    snapshotEpoch: 0,
+    liveLifecycleRevision: 0,
+  };
+}
+
+export const useHostNotificationsStore = create<HostNotificationsState>()(
+  (set) => ({
+    ...initialState(),
+
+    applySnapshot: (snapshot) => {
+      set((state) => ({
+        byId: mergeById({}, [
+          ...snapshot.attention.entries,
+          ...snapshot.recent.entries,
+        ]),
+        summary: snapshot.summary,
+        attentionCursor: snapshot.attention.nextCursor,
+        recentCursor: snapshot.recent.nextCursor,
+        unreadRecentCursor: null,
+        unreadRecentHasLoadedOnce: false,
+        attentionStatus: "idle",
+        recentStatus: "idle",
+        unreadRecentStatus: "idle",
+        snapshotEpoch: state.snapshotEpoch + 1,
+      }));
+    },
+
+    applyUpsertFrame: (entry, removedIds, summary) => {
+      set((state) => {
+        const withoutRemoved = withoutIds(state.byId, removedIds);
+        const byId = removedIds.includes(entry.id)
+          ? withoutRemoved
+          : { ...withoutRemoved, [entry.id]: entry };
+        return {
+          byId,
+          summary,
+          liveLifecycleRevision: state.liveLifecycleRevision + 1,
+        };
+      });
+    },
+
+    applyReadStateFrame: (ids, change) => {
+      set((state) => {
+        const patched = applyReadStateById(
+          state.byId,
+          ids,
+          change.readAt,
+          change.resolvedAt,
+        );
+        const byId = withoutIds(patched, change.removedIds);
+        return {
+          byId,
+          summary: change.summary,
+          liveLifecycleRevision: state.liveLifecycleRevision + 1,
+        };
+      });
+    },
+
+    applyRemovalFrame: (removedIds, summary) => {
+      set((state) => ({
+        byId: withoutIds(state.byId, removedIds),
+        summary,
+        liveLifecycleRevision: state.liveLifecycleRevision + 1,
+      }));
+    },
+
+    markReadLocally: (ids, readAt, expectedSnapshotEpoch) => {
+      set((state) => {
+        if (state.snapshotEpoch !== expectedSnapshotEpoch) return state;
+        const byId = applyReadStateById(state.byId, ids, readAt, undefined);
+        return byId === state.byId ? state : { byId };
+      });
+    },
+
+    markAllReadLocally: (beforeUpdatedAt, readAt, expectedSnapshotEpoch) => {
+      set((state) => {
+        if (state.snapshotEpoch !== expectedSnapshotEpoch) return state;
+        const ids = Object.values(state.byId)
+          .filter(
+            (entry) =>
+              entry.readAt === null && entry.updatedAt <= beforeUpdatedAt,
+          )
+          .map((entry) => entry.id);
+        const byId = applyReadStateById(state.byId, ids, readAt, undefined);
+        return byId === state.byId ? state : { byId };
+      });
+    },
+
+    clearAllLocally: (beforeUpdatedAt, expectedSnapshotEpoch) => {
+      set((state) => {
+        if (state.snapshotEpoch !== expectedSnapshotEpoch) return state;
+        const ids = Object.values(state.byId)
+          .filter((entry) => entry.updatedAt <= beforeUpdatedAt)
+          .map((entry) => entry.id);
+        const byId = withoutIds(state.byId, ids);
+        return byId === state.byId ? state : { byId, summary: null };
+      });
+    },
+
+    markSummaryUnknown: () => {
+      set({ summary: null });
+    },
+
+    setPageStatus: (track, status) => {
+      if (track === "attention") {
+        set({ attentionStatus: status });
+        return;
+      }
+      if (track === "recent") {
+        set({ recentStatus: status });
+        return;
+      }
+      set({ unreadRecentStatus: status });
+    },
+
+    mergeAttentionPage: (entries, nextCursor, expected) => {
+      set((state) => {
+        // Every expected token must match before ANY row merges or the
+        // cursor advances - a stale epoch/cursor is rejected outright rather
+        // than partially enriching `byId`, or a crossed reset/snapshot could
+        // still smuggle a prior identity's rows into the live replica.
+        const stale =
+          state.liveLifecycleRevision !== expected.liveLifecycleRevision ||
+          state.snapshotEpoch !== expected.snapshotEpoch ||
+          !attentionCursorsEqual(state.attentionCursor, expected.cursor);
+        if (stale) return { attentionStatus: "idle" };
+        return {
+          byId: mergeById(state.byId, entries),
+          attentionCursor: nextCursor,
+          attentionStatus: "idle",
+        };
+      });
+    },
+
+    mergeRecentPage: (entries, nextCursor, expected) => {
+      set((state) => {
+        const stale =
+          state.liveLifecycleRevision !== expected.liveLifecycleRevision ||
+          state.snapshotEpoch !== expected.snapshotEpoch ||
+          !chronologicalCursorsEqual(state.recentCursor, expected.cursor);
+        if (stale) return { recentStatus: "idle" };
+        return {
+          byId: mergeById(state.byId, entries),
+          recentCursor: nextCursor,
+          recentStatus: "idle",
+        };
+      });
+    },
+
+    mergeUnreadRecentPage: (entries, nextCursor, expected) => {
+      set((state) => {
+        const stale =
+          state.liveLifecycleRevision !== expected.liveLifecycleRevision ||
+          state.snapshotEpoch !== expected.snapshotEpoch ||
+          !chronologicalCursorsEqual(state.unreadRecentCursor, expected.cursor);
+        if (stale) return { unreadRecentStatus: "idle" };
+        return {
+          byId: mergeById(state.byId, entries),
+          unreadRecentCursor: nextCursor,
+          unreadRecentHasLoadedOnce: true,
+          unreadRecentStatus: "idle",
+        };
+      });
+    },
+
+    setConnectionStatus: (status) => {
+      set(() =>
+        status === "open"
+          ? { connectionStatus: status }
+          : { connectionStatus: status, summary: null },
+      );
+    },
+
+    // `snapshotEpoch`/`liveLifecycleRevision` are ADVANCED here, never
+    // restored to zero AND never merely preserved: an in-flight request
+    // captures one of these tokens before this fires, and preserving them
+    // unchanged would leave the exact captured pair still matching for the
+    // whole cleared pre-snapshot interval - until a replacement snapshot
+    // finally bumps the epoch - letting that stale, prior-identity response
+    // merge into the now-empty replica. Bumping both immediately, right here,
+    // closes that window entirely: no captured token can match again from the
+    // instant reset runs. Both counters only ever increase for the store's
+    // entire lifetime, across every reset, so a captured token can never
+    // match again once superseded.
+    reset: () =>
+      set((state) => ({
+        ...initialState(),
+        snapshotEpoch: state.snapshotEpoch + 1,
+        liveLifecycleRevision: state.liveLifecycleRevision + 1,
+      })),
+  }),
+);
+
+/**
+ * The cloud notification lane as the host's local feed needs to hear of it:
+ * whether it is delivering this client's cloud rows right now. Only a lane
+ * served by a peer other than this host (the server pool) is reported - the
+ * host observes its own relay.
+ */
+export interface HostNotificationsCloudLane {
+  readonly serving: () => boolean;
+  readonly subscribe: (listener: () => void) => () => void;
+}
+
+export function openHostNotificationsStream(
+  /**
+   * THE reconnect policy for this stream's host (redesign P4.1),
+   * acquired from the connection registry by the one
+   * place that opens these streams. This store no longer constructs its own
+   * scheduler: the constants, the terminal-close classification and the
+   * backoff shape live once, in the engine, and each stream still gets its
+   * own independent lane so a sibling stream's refusal cannot pace it.
+   */
+  reconnectEngine: HostReconnectEngine,
+  wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
+  onAuthError: (() => void) | null,
+  options: {
+    readonly windowId: string;
+    readonly now: () => number;
+    readonly displayChannelEmission: (
+      entries: ReadonlyArray<HostNotificationFeedEntry>,
+    ) => void;
+    readonly onFeedFrame: (frame: HostNotificationsFeedFrame) => void;
+    readonly onPresenceChanged: (frame: HostNotificationPresenceFrame) => void;
+    readonly onStreamOpened: () => void;
+    /** `null` when this host serves the cloud lane itself. */
+    readonly cloudLane: HostNotificationsCloudLane | null;
+  },
+): () => void {
+  let disposed = false;
+  let currentSession: IStreamSession | null = null;
+  let streamOpen = false;
+  let lastSentPresenceKey: string | null = null;
+  let lastNotifiedPresenceKey: string | null = null;
+  let lastSentCloudLaneServing: boolean | null = null;
+
+  // A terminal close ("closed" + fatalError) DISPOSES the transport session:
+  // `requestReconnect` and wake-time `forceReconnect` are both no-ops on it,
+  // so without this reopen a single bad window (e.g. the host briefly unable
+  // to validate bearers) leaves notifications dead until app restart while
+  // the rest of the app self-heals through per-interaction re-subscribes.
+  const reopenScheduler = reconnectEngine.openReopenLane(() => {
+    currentSession?.close();
+    currentSession = null;
+    openSession();
+  }, isReopenableHostStreamClose);
+
+  // Presence has two consumers with deliberately independent gates:
+  //  - `onPresenceChanged` (local): drives entity read-consumption over the
+  //    unary RPC channel, so focusing a tab clears its indicators even while
+  //    this stream is down. Deduplicated by content only.
+  //  - the stream send (host): refreshes the host's TTL'd presence record
+  //    for delivery suppression, and is only possible while subscribed.
+  //    `forceSend` bypasses the content dedupe for the heartbeat/open cases.
+  const emitPresence = (input: {
+    readonly forceSend: boolean;
+    readonly forceNotify: boolean;
+  }): void => {
+    const frame = readHostNotificationPresenceFrame({
+      windowId: options.windowId,
+      now: options.now,
+    });
+    const parsed = hostNotificationsSubscribeClientFrameSchema.safeParse(frame);
+    if (!parsed.success) return;
+    if (parsed.data.kind !== "presence") return;
+    const presence = parsed.data;
+    const presenceKey = JSON.stringify({
+      focused: presence.focused,
+      entity: presence.entity,
+    });
+    if (input.forceNotify || presenceKey !== lastNotifiedPresenceKey) {
+      lastNotifiedPresenceKey = presenceKey;
+      options.onPresenceChanged(presence);
+    }
+    const session = currentSession;
+    if (session === null || !streamOpen) return;
+    if (!input.forceSend && presenceKey === lastSentPresenceKey) return;
+    lastSentPresenceKey = presenceKey;
+    session.sendClientFrame(presence, null);
+  };
+  const unsubscribePresence = subscribeHostNotificationPresence(() => {
+    emitPresence({ forceSend: false, forceNotify: false });
+  });
+  // The heartbeat refreshes the host's TTL'd presence record even when
+  // nothing changed locally; it never re-notifies the local consumer.
+  const presenceHeartbeat = globalThis.setInterval(() => {
+    emitPresence({ forceSend: true, forceNotify: false });
+  }, HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS);
+
+  // Tells the host whether the cloud lane it does not run is delivering, so
+  // its local view serves the empty partition exactly while that lane
+  // carries the cloud rows - and the complete one otherwise. Sent on open and
+  // on every change; a host below `@1.5` cannot parse the frame and keeps
+  // deciding on its own relay.
+  const emitCloudLanePresence = (force: boolean): void => {
+    const lane = options.cloudLane;
+    const session = currentSession;
+    if (lane === null || session === null || !streamOpen) return;
+    const negotiated = wsStreamClient.getMethodSchemaVersion(
+      "host.notifications.feed.subscribe",
+    );
+    const floor = hostNotificationsFeedSubscribeV15.schemaVersion;
+    if (
+      negotiated === null ||
+      negotiated.major !== floor.major ||
+      negotiated.minor < floor.minor
+    ) {
+      return;
+    }
+    const serving = lane.serving();
+    if (!force && serving === lastSentCloudLaneServing) return;
+    const parsed = hostNotificationsSubscribeClientFrameSchemaV15.safeParse({
+      kind: "cloudLanePresence",
+      hasBinaryPayload: false,
+      serving,
+    });
+    if (!parsed.success) return;
+    lastSentCloudLaneServing = serving;
+    session.sendClientFrame(parsed.data, null);
+  };
+  const unsubscribeCloudLane =
+    options.cloudLane?.subscribe(() => emitCloudLanePresence(false)) ?? null;
+
+  // A stream frame that fails the contract-specific schema is a
+  // connection-integrity failure: the exact summary can no longer be
+  // trusted, so the store degrades to unknown and the session redials for a
+  // fresh atomic snapshot. Already-rendered rows are left untouched.
+  const reconnect = (): void => {
+    if (disposed) return;
+    useHostNotificationsStore.getState().markSummaryUnknown();
+    currentSession?.requestReconnect();
+  };
+
+  function openSession(): void {
+    if (disposed) return;
+    const session = wsStreamClient.subscribe(
+      "host.notifications.feed.subscribe",
+      {
+        initialAttentionLimit: HOST_NOTIFICATIONS_INITIAL_ATTENTION_LIMIT,
+        initialRecentLimit: HOST_NOTIFICATIONS_INITIAL_RECENT_LIMIT,
+      },
+    );
+    currentSession = session;
+    session.onServerFrame((envelope, binaryPayload) => {
+      // A superseded session (replaced by a reopen) must not touch the
+      // replica or the status projection its successor now owns.
+      if (currentSession !== session) return;
+      // Notification frames are contractually text-only; an unexpected
+      // binary payload is the same connection-integrity failure as a
+      // malformed text envelope, not a silently ignorable frame.
+      if (binaryPayload !== null) {
+        reconnect();
+        return;
+      }
+      // The `@1.7` union, deliberately: zod STRIPS unknown keys and rejects
+      // unknown discriminants, so parsing through `@1.4` would reject the
+      // environments rows this client negotiates for, through `@1.3` the
+      // secrets rows, and through `@1.2` the
+      // `partitionSnapshot` frame too. The superset parses every minor the
+      // client can be served.
+      const parsed =
+        hostNotificationsSubscribeServerFrameSchemaV18.safeParse(envelope);
+      if (!parsed.success) {
+        reconnect();
+        return;
+      }
+      const frame = parsed.data;
+      switch (frame.kind) {
+        case "snapshot":
+        case "partitionSnapshot":
+          useHostNotificationsStore.getState().applySnapshot(frame);
+          // A schema-valid snapshot — not the raw transport `open` — is the
+          // proof the stream is actually usable; the host resolver's async
+          // init can still terminate the session after `open`, and resetting
+          // there would pin the reopen backoff at its floor through an
+          // init-failure loop.
+          reopenScheduler.resetBackoff();
+          options.onFeedFrame(frame);
+          return;
+        case "upserted":
+          useHostNotificationsStore
+            .getState()
+            .applyUpsertFrame(frame.entry, frame.removedIds, frame.summary);
+          options.onFeedFrame(frame);
+          return;
+        case "readStateChanged":
+          useHostNotificationsStore.getState().applyReadStateFrame(frame.ids, {
+            readAt: frame.readAt,
+            resolvedAt: frame.resolvedAt,
+            removedIds: frame.removedIds,
+            summary: frame.summary,
+          });
+          options.onFeedFrame(frame);
+          return;
+        case "removed":
+        case "cleared":
+          useHostNotificationsStore
+            .getState()
+            .applyRemovalFrame(frame.removedIds, frame.summary);
+          options.onFeedFrame(frame);
+          return;
+        case "channelEmission":
+          if (frame.channelId === "renderer") {
+            const currentById = useHostNotificationsStore.getState().byId;
+            options.displayChannelEmission(
+              frame.rows.map((entry) => {
+                const current = currentById[entry.id];
+                return Object.hasOwn(currentById, entry.id) &&
+                  current.updatedAt >= entry.updatedAt
+                  ? current
+                  : entry;
+              }),
+            );
+          }
+          return;
+        case "pong":
+          return;
+      }
+    });
+    session.onStatusChange((status, reason, _retryCause, continuity) => {
+      if (currentSession !== session) return;
+      if (continuity === "held") {
+        useHostNotificationsStore.setState({ connectionStatus: status });
+      } else {
+        useHostNotificationsStore.getState().setConnectionStatus(status);
+      }
+      if (status === "open") {
+        streamOpen = true;
+        if (continuity !== "continued") {
+          lastSentPresenceKey = null;
+          options.onStreamOpened();
+        }
+        // `forceNotify`: `onStreamOpened` just reset the consumer's active
+        // entity, so the focused entity must be re-consumed even though its
+        // content key is unchanged.
+        emitPresence({
+          forceSend: true,
+          forceNotify: continuity !== "continued",
+        });
+        emitCloudLanePresence(true);
+      } else {
+        streamOpen = false;
+      }
+      if (status === "closed") {
+        reopenScheduler.scheduleAfterClose(reason);
+      }
+      handleHostNotificationsCloseReason(reason, onAuthError);
+    });
+  }
+
+  openSession();
+
+  return () => {
+    disposed = true;
+    globalThis.clearInterval(presenceHeartbeat);
+    reopenScheduler.dispose();
+    unsubscribePresence();
+    unsubscribeCloudLane?.();
+    currentSession?.close();
+    currentSession = null;
+  };
+}
+
+function handleHostNotificationsCloseReason(
+  reason: StreamCloseReason | null,
+  onAuthError: (() => void) | null,
+): void {
+  if (
+    reason !== null &&
+    reason.kind === "fatalError" &&
+    reason.details.code === "UNAUTHORIZED" &&
+    onAuthError !== null
+  ) {
+    onAuthError();
+  }
+}
+
+export function selectHostNotificationIds(
+  state: HostNotificationsState,
+): ReadonlyArray<string> {
+  const entries = Object.values(state.byId);
+  entries.sort(compareHostNotificationEntries);
+  return entries.map((entry) => entry.id);
+}
+
+export function selectHostNotificationRecentCursor(
+  state: HostNotificationsState,
+): HostNotificationsChronologicalCursor | null {
+  return state.recentCursor;
+}
+
+export function selectHostNotificationAttentionCursor(
+  state: HostNotificationsState,
+): HostNotificationsAttentionCursor | null {
+  return state.attentionCursor;
+}
+
+export function selectHostNotificationUnreadRecentCursor(
+  state: HostNotificationsState,
+): HostNotificationsChronologicalCursor | null {
+  return state.unreadRecentCursor;
+}
+
+export function selectHostNotificationUnreadRecentHasLoadedOnce(
+  state: HostNotificationsState,
+): boolean {
+  return state.unreadRecentHasLoadedOnce;
+}
+
+/** `null` means the exact host contribution is unknown - see the store's
+ * `summary` field doc. Never derive this from `byId`. */
+export function selectHostNotificationSummary(
+  state: HostNotificationsState,
+): HostNotificationsSummary | null {
+  return state.summary;
+}
+
+export function makeSelectHostNotificationById(id: string) {
+  return (state: HostNotificationsState): HostNotificationFeedEntry | null =>
+    state.byId[id] ?? null;
+}
+
+export function useHostNotificationIds(): ReadonlyArray<string> {
+  // `selectHostNotificationIds` always allocates a fresh array; shallow-
+  // compare the contents so subscribers don't re-render in a loop when
+  // `byId` is stable.
+  return useHostNotificationsStore(useShallow(selectHostNotificationIds));
+}
+
+export function useHostNotificationById(
+  id: string,
+): HostNotificationFeedEntry | null {
+  const selector = useMemo(() => makeSelectHostNotificationById(id), [id]);
+  return useHostNotificationsStore(selector);
+}
+
+// Bypasses the production `reset()` action deliberately: production reset
+// preserves `snapshotEpoch`/`liveLifecycleRevision` so they stay monotonic
+// (see `reset()`'s own comment), but test isolation between cases wants a
+// true zero-state so fixtures can assert on small absolute token values.
+export function __resetHostNotificationsStoreForTests(): void {
+  useHostNotificationsStore.setState(initialState());
+}

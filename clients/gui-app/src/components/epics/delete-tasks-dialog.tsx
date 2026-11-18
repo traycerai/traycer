@@ -1,0 +1,245 @@
+import type { ReactNode } from "react";
+import { AlertTriangle } from "lucide-react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import type { TaskDeleteWorktreeCandidate } from "@/hooks/epic/use-task-delete-worktree-candidates-query";
+
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+interface DeleteTasksDialogProps {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly title: string;
+  readonly description: string;
+  readonly isCheckingWorktrees: boolean;
+  readonly onConfirm: () => void;
+  /**
+   * Worktrees the deleted Task(s) alone reference. Empty (no candidates, or a
+   * failed candidate query) collapses this dialog to exactly today's
+   * confirmation - the cleanup section is additive and never blocks deletion.
+   */
+  readonly candidates: ReadonlyArray<TaskDeleteWorktreeCandidate>;
+  readonly isPathChecked: (worktreePath: string) => boolean;
+  readonly onTogglePath: (worktreePath: string, checked: boolean) => void;
+}
+
+/**
+ * The Task-delete confirmation. It keeps the irreversible action, optional
+ * local cleanup, and confirmation controls in distinct visual regions.
+ * Confirming closes it at once: the deletion runs in the background off the
+ * mutation cache (as a worktree Sweep does), so there is no pending hold here
+ * and an in-flight delete never locks a freshly opened dialog. The
+ * cleanup checklist appears only when the deleted Task(s) exclusively own
+ * worktrees on this host. Copy is deliberately "no longer used by any other
+ * Task" - never "orphaned", which the Settings tab reserves for
+ * `gitRemovable: false`.
+ */
+export function DeleteTasksDialog(props: DeleteTasksDialogProps) {
+  const {
+    open,
+    onOpenChange,
+    title,
+    description,
+    isCheckingWorktrees,
+    onConfirm,
+    candidates,
+    isPathChecked,
+    onTogglePath,
+  } = props;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        layout="banded"
+        showCloseButton={false}
+        className="flex max-h-[min(90dvh,40rem)] w-[min(92vw,32rem)] min-w-0 flex-col overflow-hidden sm:max-w-lg"
+        data-testid="delete-tasks-dialog"
+      >
+        <div className="flex min-w-0 shrink-0 items-start gap-3 px-5 pt-5 pb-4">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive ring-1 ring-destructive/15">
+            <AlertTriangle className="size-4" aria-hidden />
+          </div>
+          <div className="max-h-[min(32dvh,14rem)] min-h-0 min-w-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain pr-1">
+            <DialogTitle className="wrap-anywhere">{title}</DialogTitle>
+            <DialogDescription className="wrap-anywhere">
+              {description}
+            </DialogDescription>
+          </div>
+        </div>
+
+        {candidates.length > 0 ? (
+          <section
+            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-t border-border/60 bg-foreground/2 px-5 py-4"
+            aria-labelledby="delete-tasks-worktree-heading"
+            aria-describedby="delete-tasks-worktree-description"
+            data-testid="delete-tasks-worktree-cleanup"
+          >
+            <h3
+              id="delete-tasks-worktree-heading"
+              className="text-ui-sm font-semibold text-foreground"
+            >
+              Remove local worktrees too?
+            </h3>
+            <p
+              id="delete-tasks-worktree-description"
+              className="mt-1 text-ui-xs leading-relaxed text-muted-foreground"
+            >
+              Only worktrees on this host no longer used by any other Task are
+              shown. Proven-removable worktrees are pre-selected.
+            </p>
+            <ul className="mt-3 flex min-h-0 min-w-0 flex-1 flex-col gap-1 overflow-y-auto overscroll-contain rounded-lg border border-border/60 bg-background/40 p-1">
+              {candidates.map((candidate) => (
+                <WorktreeCleanupRow
+                  key={candidate.worktreePath}
+                  candidate={candidate}
+                  checked={isPathChecked(candidate.worktreePath)}
+                  onToggle={onTogglePath}
+                />
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
+        <div className="grid min-w-0 shrink-0 grid-cols-2 gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3 sm:flex sm:justify-end">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="w-full sm:w-auto"
+            onClick={() => {
+              onOpenChange(false);
+            }}
+            data-testid="delete-tasks-cancel"
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            className="w-full sm:w-auto"
+            disabled={isCheckingWorktrees}
+            onClick={onConfirm}
+            data-testid="delete-tasks-confirm"
+          >
+            {isCheckingWorktrees ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId={undefined}
+                variant={undefined}
+              />
+            ) : null}
+            Delete
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function WorktreeCleanupRow(props: {
+  readonly candidate: TaskDeleteWorktreeCandidate;
+  readonly checked: boolean;
+  readonly onToggle: (worktreePath: string, checked: boolean) => void;
+}) {
+  const { candidate, checked, onToggle } = props;
+  const branch = candidate.branch ?? "detached HEAD";
+  // Per-row loss/uncertainty hint. Dirty rows name the concrete uncommitted
+  // loss; clean rows with local-only commits name that concrete loss; clean rows
+  // whose branch status could not be probed carry a neutral "unverified" note
+  // (never "safe" / "loss-free"). A clean, proven row is quiet.
+  const status = candidate.branchStatus;
+  let hint: ReactNode = null;
+  if (candidate.uncommittedCount > 0) {
+    hint = (
+      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-warning-foreground">
+        <AlertTriangle className="size-3 shrink-0" aria-hidden />
+        {candidate.uncommittedCount} uncommitted change
+        {candidate.uncommittedCount === 1 ? "" : "s"} will be lost
+      </span>
+    );
+  } else if (candidate.branch === null) {
+    // Detached HEAD has no branch ref, so removal can orphan its commits -
+    // surface this before any branchStatus hint, which a detached row can
+    // still carry (e.g. probed against the workspace's default branch).
+    hint = (
+      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-warning-foreground">
+        <AlertTriangle className="size-3 shrink-0" aria-hidden />
+        Detached HEAD — commits could be orphaned by removal
+      </span>
+    );
+  } else if (
+    status !== null &&
+    status.ahead !== null &&
+    status.ahead > 0 &&
+    !status.mergedIntoDefault
+  ) {
+    hint = (
+      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-warning-foreground">
+        <AlertTriangle className="size-3 shrink-0" aria-hidden />
+        {status.ahead} commit{status.ahead === 1 ? "" : "s"} not on the default
+        branch
+      </span>
+    );
+  } else if (
+    status !== null &&
+    status.ahead === null &&
+    !status.mergedIntoDefault
+  ) {
+    // Never-pushed and not contained in the default branch: local-only commits
+    // exist but the count is unknown (no upstream). The branch ref survives
+    // removal, so this names the state without claiming unrecoverable loss.
+    hint = (
+      <span className="mt-0.5 flex items-center gap-1 text-ui-xs text-warning-foreground">
+        <AlertTriangle className="size-3 shrink-0" aria-hidden />
+        Local-only commits not on the default branch — never pushed
+      </span>
+    );
+  } else if (status === null) {
+    hint = (
+      <span className="mt-0.5 block text-ui-xs text-muted-foreground">
+        Branch status unverified — unpushed work not proven
+      </span>
+    );
+  }
+  return (
+    <li className="min-w-0">
+      <label className="flex min-w-0 cursor-pointer items-start gap-3 rounded-md px-2.5 py-2 transition-colors hover:bg-accent/40">
+        <Checkbox
+          checked={checked}
+          onCheckedChange={(value) =>
+            onToggle(candidate.worktreePath, value === true)
+          }
+          className="mt-0.5"
+          aria-label={`Remove worktree ${branch}`}
+          data-testid="delete-tasks-worktree-checkbox"
+        />
+        <span className="min-w-0 flex-1 overflow-hidden">
+          <span className="flex min-w-0 flex-col gap-0.5 text-ui-sm text-foreground sm:flex-row sm:flex-wrap sm:items-baseline sm:gap-x-2">
+            <span className="font-medium wrap-anywhere">{branch}</span>
+            <span className="text-ui-xs text-muted-foreground wrap-anywhere">
+              {candidate.repoLabel}
+            </span>
+          </span>
+          <TooltipWrapper
+            label={candidate.worktreePath}
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            <span className="mt-1 block max-w-full truncate font-mono text-ui-xs text-muted-foreground">
+              {candidate.worktreePath}
+            </span>
+          </TooltipWrapper>
+          {hint}
+        </span>
+      </label>
+    </li>
+  );
+}

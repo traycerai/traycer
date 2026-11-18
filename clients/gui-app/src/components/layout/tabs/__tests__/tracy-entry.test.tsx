@@ -1,0 +1,1607 @@
+/**
+ * The fixed Tracy entry (decision 150: the entry is the one
+ * Tracy surface), through the REAL `TracyEntryController`, the real top and
+ * vertical strips, the real keybinding dispatch and the real General
+ * settings panel, over the real settings, Tracy surface, tabs and layout
+ * stores. Only host boundaries are
+ * scripted: the bot list (a query over the real client cache, refetched by the
+ * real `bot.listChanged` subscription), Personal's id, method support, the
+ * connectable hosts, the notification indicators and the bot's activity (the
+ * real protocol schemas do not load in this suite's jsdom).
+ */
+import {
+  drawsColouredMascot,
+  expectedTracyGlyph,
+  renderedTracyGlyphs,
+} from "@/components/bots/__tests__/mascot-drawing";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import {
+  QueryClient,
+  QueryClientProvider,
+  queryOptions,
+  useQuery,
+} from "@tanstack/react-query";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  RouterProvider,
+} from "@tanstack/react-router";
+import type { ReactNode } from "react";
+import type {
+  BotListResponse,
+  BotReadCursorReadResponse,
+  BotRecord,
+} from "@traycer/protocol/host/bot/schemas";
+import type { StreamFrameEnvelope } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import { MockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-stream-test-fixtures";
+import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
+import { setMobileApp } from "@/lib/mobile-app";
+import { KeybindingProvider } from "@/providers/keybinding-provider";
+import { AppColumnFrame } from "@/components/layout/app-column-frame";
+import { PHONE_SHELL_STRIP_CHROME } from "@/components/layout/header/app-title-band-kind";
+import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
+import { useMobileStripForm } from "@/components/layout/tabs/mobile-strip-form-context";
+import { MobileStripFormScope } from "@/components/layout/tabs/mobile-strip-form-scope";
+import { useTabStripPlacement } from "@/components/layout/tabs/use-tab-strip-placement";
+import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
+import { SheetJoinScope } from "@/components/layout/tabs/sheet-join";
+import { TabStrip } from "@/components/layout/tabs/tab-strip";
+import { TracyEntryController } from "@/components/layout/tabs/tracy-entry-controller";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import type { BotActivity } from "@/hooks/bots/use-bot-activity";
+import { __resetBotListChangedSessionsForTesting } from "@/hooks/bots/use-bot-list-changed-subscription";
+import type { ConnectableHosts } from "@/hooks/host/use-connectable-host-ids";
+import {
+  getLeaderScopesTopDown,
+  LEADER_SCOPE_HEADER_TABS,
+} from "@/lib/keybindings/leader-scope";
+import {
+  registerBaseLeaderScope,
+  type KeybindingRouter,
+} from "@/lib/keybindings/dispatch";
+import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
+import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
+import { useSideTabStripStore } from "@/stores/layout/side-tab-strip-store";
+import { SIDE_STRIP_RAIL_WIDTH_PX } from "@/components/layout/tabs/side-strip/side-strip-tokens";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import { tabItemId, tabRefKey } from "@/stores/tabs/layout";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import { TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
+import { tabResolveIntent } from "@/stores/tabs/registry";
+import { useTabsStore } from "@/stores/tabs/store";
+import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
+import type { TabRef } from "@/stores/tabs/types";
+
+const PERSONAL_ENV = "env-personal";
+const TEAM_ENV = "env-team";
+const TRACY = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+const TEAM_BOT = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW";
+const TRACY_REF: TabRef = TRACY_TAB_REF;
+const TRACY_KEY = TRACY_TAB_REF.id;
+const NO_FLAGS = {
+  pendingApproval: false,
+  pendingInterview: false,
+  pendingFork: false,
+  unreadFailure: false,
+  unreadDone: false,
+  unreadCount: 0,
+};
+
+/** What the scripted host boundaries answer; each test sets what it needs. */
+const scripted = vi.hoisted(
+  (): {
+    list: BotListResponse | undefined;
+    activity: BotActivity | null;
+    indicators: SurfaceNotificationIndicators;
+    connectable: ConnectableHosts;
+    /** The environments the person belongs to, as `environment.list` answers. */
+    environments: Array<{
+      environmentId: string;
+      label: string;
+      ownerKind: "organization" | "user";
+    }>;
+    levels: Record<string, "all" | "mentions" | "off">;
+    /** The person's read cursors by bot id; a bot not listed is unread. */
+    readCursors: Record<string, BotReadCursorReadResponse>;
+    stream: MockWsStreamClient<StreamFrameEnvelope> | null;
+  } => ({
+    list: undefined,
+    activity: null,
+    indicators: { epics: {}, chats: {} },
+    connectable: { hostIds: [], resolved: true },
+    environments: [],
+    levels: {},
+    readCursors: {},
+    stream: null,
+  }),
+);
+
+// The list is a real query over the test's client cache, answering what the
+// test scripted, so a `bot.list` invalidation refetches it as it does in the
+// app.
+vi.mock("@/hooks/bots/use-bot-list-query", () => ({
+  useBotListQuery: (_client: unknown, enabled: boolean) =>
+    useQuery(
+      queryOptions({
+        queryKey: hostQueryKeys.methodScope("host-a", "bot.list"),
+        queryFn: () => {
+          if (scripted.list === undefined) throw new Error("No scripted list");
+          return Promise.resolve(scripted.list);
+        },
+        initialData: scripted.list,
+        enabled,
+      }),
+    ),
+}));
+// The app-wide stream the `bot.listChanged` doorbell rides.
+vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/host/stream-runtime-context")
+  >()),
+  useStreamHostId: () => "host-a",
+  useWsStreamClient: () => scripted.stream,
+}));
+// The person's notification levels, as the host answers them.
+vi.mock("@/hooks/host/use-host-query", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("@/hooks/host/use-host-query")>();
+  return {
+    ...original,
+    useHostQuery: (args: { method: string }) =>
+      args.method === "bot.notificationLevel.read"
+        ? { data: { levels: scripted.levels } }
+        : original.useHostQuery(args as never),
+  };
+});
+// The person's read cursors, one read per listed bot, as the host answers them.
+vi.mock("@/hooks/host/use-host-queries", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("@/hooks/host/use-host-queries")>();
+  return {
+    ...original,
+    useHostQueries: (args: {
+      requests: ReadonlyArray<{ method: string; params: { botId: string } }>;
+    }) =>
+      args.requests.every(
+        (request) =>
+          request.method === "bot.readCursor.read" ||
+          request.method === "bot.notificationLevel.read",
+      )
+        ? args.requests.map((request) => ({
+            data:
+              request.method === "bot.readCursor.read"
+                ? scripted.readCursors[request.params.botId]
+                : { levels: scripted.levels },
+          }))
+        : original.useHostQueries(args as never),
+  };
+});
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ({
+    status: "success",
+    data: { environments: scripted.environments },
+  }),
+}));
+vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
+  useConnectableHostIds: () => scripted.connectable,
+}));
+vi.mock(
+  "@/hooks/environment/use-addressed-environment",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/environment/use-addressed-environment")
+    >()),
+    usePersonalEnvironment: () => ({
+      environmentId: "env-personal",
+      resolved: true,
+    }),
+  }),
+);
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => "host-a",
+}));
+vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-supports-method")
+  >()),
+  useHostMethodSupport: () => true,
+}));
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
+  useHostClient: () => ({ getActiveHostId: () => "host-a" }),
+}));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => ({ getActiveHostId: () => "host-a" }),
+}));
+vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
+  useBotActivity: () => scripted.activity,
+}));
+vi.mock(
+  "@/hooks/notifications/use-notification-indicators-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/notifications/use-notification-indicators-query")
+    >()),
+    useNotificationIndicators: () => scripted.indicators,
+  }),
+);
+
+// Strip collaborators that reach a host runtime this harness does not mount;
+// the suite is about the entry, not the strip's own host reads.
+vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
+  useHostNotificationIndicators: () => ({
+    data: { epics: {}, chats: {} },
+    isPending: false,
+    isFetching: false,
+    error: null,
+    refetch: () => Promise.resolve(),
+  }),
+}));
+vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
+  useEpicTaskPinnedStates: () => new Map<string, boolean>(),
+  useRetryUnansweredTaskPinReading: () => () => undefined,
+}));
+vi.mock(
+  "@/hooks/epic/use-epic-set-pinned-mutation",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/epic/use-epic-set-pinned-mutation")
+    >()),
+    useEpicSetPinned: () => ({ mutate: vi.fn() }),
+    usePendingSetPinnedEpicIds: () => new Set<string>(),
+  }),
+);
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
+  useEpicPinLocalHomeSupported: () => false,
+}));
+vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/epic-selectors")>()),
+  useRegisteredEpicPermissionRole: () => "owner",
+  useRegisteredEpicLocalHome: () => true,
+}));
+vi.mock("@/components/layout/header/header-actions", () => ({
+  HeaderUsageRegion: () => <span data-testid="foot-usage" />,
+  HeaderResourceRegion: () => <span data-testid="foot-resource" />,
+}));
+vi.mock("@/components/layout/header/app-update-button", () => ({
+  AppUpdateHeaderButton: () => <span data-testid="foot-update" />,
+}));
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/host/use-host-directory-entry")
+  >()),
+  useHostDirectoryEntry: () => null,
+}));
+vi.mock("@/hooks/notifications/use-notification-host", () => ({
+  useNotificationResolveHostId: () => null,
+  useNotificationResolveHost: () => ({ hostId: null, client: null }),
+}));
+vi.mock("@/hooks/notifications/use-notification-activation", () => ({
+  useNotificationActivation: () => ({ activate: vi.fn() }),
+}));
+vi.mock("@/components/auth/user-menu", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/auth/user-menu")>()),
+  UserMenu: () => <span data-testid="foot-account" />,
+}));
+
+// Whether this window is the phone shell; the width rule itself runs for real
+// against the `#root` width each case sets.
+const phoneShell = vi.hoisted((): { headerActive: boolean } => ({
+  headerActive: false,
+}));
+vi.mock("@/components/layout/header/use-mobile-header-active", () => ({
+  useMobileHeaderActive: () => phoneShell.headerActive,
+}));
+// The header's global controls each reach a host runtime this harness does not
+// mount; the header's own hamburger, title and bell are what the shell cases read.
+vi.mock("@/components/layout/header/rate-limit-icon", () => ({
+  RateLimitIconButton: () => <span />,
+}));
+vi.mock("@/components/resources/resource-monitor-popover", () => ({
+  ResourceMonitorPopover: () => <span />,
+}));
+vi.mock("@/components/notifications/mobile-notifications-button", () => ({
+  MobileNotificationsButton: () => <span data-testid="mobile-header-bell" />,
+}));
+
+installTabSyncCoordinator({ readyPromise: Promise.resolve() });
+
+/** A stream client whose host serves every method, so a doorbell subscribes. */
+class ServingStreamClient extends MockWsStreamClient<StreamFrameEnvelope> {
+  override getMethodSupport(): StreamMethodSupport {
+    return "supported";
+  }
+
+  override subscribeMethodSupport(): () => void {
+    return () => undefined;
+  }
+}
+
+const CHANGED: StreamFrameEnvelope = {
+  kind: "changed",
+  hasBinaryPayload: false,
+};
+
+let queryClient: QueryClient;
+
+function bot(
+  botId: string,
+  environmentId: string,
+  title: string,
+  archivedAt: number | null,
+): BotRecord {
+  return {
+    botId,
+    environmentId,
+    createdByUserId: "user-1",
+    title,
+    harness: "claude",
+    model: "opus",
+    effort: null,
+    profile: null,
+    trunkChatId: `trunk-${botId}`,
+    boundHostId: "host-a",
+    hostEpoch: 0,
+    createdAt: 1_000,
+    archivedAt,
+    directive: null,
+    replyMode: "direct",
+    appConversationChatId: `app-${botId}`,
+  };
+}
+
+const ENVIRONMENTS: typeof scripted.environments = [
+  { environmentId: PERSONAL_ENV, label: "Personal", ownerKind: "user" },
+  { environmentId: TEAM_ENV, label: "Acme", ownerKind: "organization" },
+];
+
+/** The entry draws the one-colour Tracy glyph at 16px and no coloured mascot. */
+function expectEntryDrawsTracyGlyph(entry: HTMLElement): void {
+  const [icon] = within(entry).getAllByTestId("tracy-entry-icon");
+  expect(renderedTracyGlyphs(icon)).toEqual([expectedTracyGlyph(16)]);
+  expect(drawsColouredMascot(icon)).toBe(false);
+}
+
+function tracyIsMainBot(): void {
+  scripted.list = {
+    bots: [
+      bot(TRACY, PERSONAL_ENV, "Tracy", null),
+      bot(TEAM_BOT, TEAM_ENV, "Release Bot", null),
+    ],
+    mainBotIds: { [PERSONAL_ENV]: TRACY, [TEAM_ENV]: TEAM_BOT },
+  };
+}
+
+function replying(step: string | null): BotActivity {
+  return {
+    trunk: {
+      state: "replying",
+      startedAt: Date.now() - 3 * 60_000,
+      step,
+      requestId: "req-1",
+      reason: null,
+    },
+    threads: {},
+  };
+}
+
+function setHomeTabEnabled(enabled: boolean): void {
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  useLayoutStore
+    .getState()
+    .setRegionValues("homeTab", { shown: enabled ? "shown" : "hidden" });
+}
+
+function resetStores(): void {
+  __resetTabNavigationControllerForTesting();
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  useTabsStore.setState(useTabsStore.getInitialState(), true);
+  useTracySurfaceStore.setState(useTracySurfaceStore.getInitialState(), true);
+  // The window's host, which a surface the entry opens is bound to.
+  useSelectionAuthorityStore.setState({ effectiveHostId: "host-a" });
+  useSettingsStore.setState({ showTracy: true });
+  useSideTabStripStore.setState({
+    widthPx: 240,
+    collapsed: false,
+    dragCollapsed: null,
+  });
+  // The vertical strip's foot shows a signed-in account row.
+  useAuthStore.setState({
+    status: "signed-in",
+    profile: {
+      userId: "u-1",
+      userName: "Ada",
+      email: "ada@example.com",
+      avatarUrl: null,
+    },
+  });
+  useLayoutStore.getState().setArrangement({
+    ...useLayoutStore.getState().arrangement,
+    tabStripPlacement: "top",
+  });
+  phoneShell.headerActive = false;
+  tabCommandCoordinator.resetReconciliationForTesting();
+  __resetBotListChangedSessionsForTesting();
+  scripted.list = undefined;
+  scripted.environments = ENVIRONMENTS;
+  scripted.levels = {};
+  scripted.readCursors = {};
+  scripted.activity = null;
+  scripted.indicators = { epics: {}, chats: {} };
+  scripted.connectable = { hostIds: ["host-a"], resolved: true };
+  scripted.stream = new ServingStreamClient();
+}
+
+/** Opens epic tabs in the layout, the first one active. */
+function openEpicTabs(names: ReadonlyArray<string>): ReadonlyArray<TabRef> {
+  const refs = names.map((name): TabRef => {
+    const id = `e-${name.toLowerCase()}`;
+    useEpicCanvasStore.getState().seedEpic(id, { tabId: id, name }, []);
+    return { kind: "epic", id };
+  });
+  const first = refs.at(0);
+  useTabsStore.setState({
+    version: 2,
+    items: refs.map((ref) => ({ kind: "tab", id: tabItemId(ref), ref })),
+    activeItemId: first === undefined ? null : tabItemId(first),
+    stripOrder: refs,
+    systemTabs: { history: null, settings: null },
+  });
+  return refs;
+}
+
+interface Mounted {
+  readonly pathname: () => string;
+}
+
+function buildRouter(initialPath: string, body: ReactNode) {
+  const rootRoute = createRootRoute({
+    component: () => (
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <WindowsBridgeContext.Provider
+            value={{ bridge: null, hasHydrated: true }}
+          >
+            <SheetJoinScope>
+              <TracyEntryController />
+              {body}
+            </SheetJoinScope>
+          </WindowsBridgeContext.Provider>
+        </TooltipProvider>
+      </QueryClientProvider>
+    ),
+  });
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    component: () => null,
+  });
+  const epicTabRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/epics/$epicId/$tabId",
+    component: () => null,
+  });
+  const tracyRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/bot",
+    component: () => null,
+  });
+  const botRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/bot/$botId",
+    component: () => null,
+  });
+  return createRouter({
+    routeTree: rootRoute.addChildren([
+      indexRoute,
+      epicTabRoute,
+      tracyRoute,
+      botRoute,
+    ]),
+    history: createMemoryHistory({ initialEntries: [initialPath] }),
+  });
+}
+
+function mount(initialPath: string, body: ReactNode): Mounted {
+  const router = buildRouter(initialPath, body);
+  render(<RouterProvider router={router} />);
+  return { pathname: () => router.state.location.pathname };
+}
+
+function mountTopStrip(initialPath: string): Mounted {
+  return mount(initialPath, <TabStrip />);
+}
+
+function mountSideStrip(initialPath: string): Mounted {
+  return mount(initialPath, <SideTabStrip edge="left" ownsTitleBar={false} />);
+}
+
+function tracyItemId(): string {
+  return tabItemId(TRACY_REF);
+}
+
+/** The layout's top-level items, a tab by its ref id (the surface's is "tracy"). */
+function layoutRefKeys(): ReadonlyArray<string> {
+  return useTabsStore
+    .getState()
+    .items.map((item) => (item.kind === "tab" ? item.ref.id : item.id));
+}
+
+beforeEach(() => {
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  setHomeTabEnabled(true);
+  resetStores();
+});
+
+afterEach(() => {
+  cleanup();
+  queryClient.clear();
+  setHomeTabEnabled(false);
+  resetStores();
+  localStorage.clear();
+});
+
+describe("the fixed Tracy entry - top strip", () => {
+  beforeEach(tracyIsMainBot);
+
+  it("opens on a fresh install after Home, outside the scrolling tabs, first in the layout, without a close control", async () => {
+    openEpicTabs(["Alpha"]);
+    const view = mountTopStrip("/epics/e-alpha/e-alpha");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    const home = screen.getByTestId("tab-home");
+    const scroller = screen.getByTestId("header-tab-strip-scroll");
+
+    expect(entry.textContent).toContain("Tracy");
+    expect(within(entry).getByTestId("tracy-entry-icon")).toBeTruthy();
+    expectEntryDrawsTracyGlyph(entry);
+    expect(
+      home.compareDocumentPosition(entry) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(scroller.contains(entry)).toBe(false);
+    expect(within(scroller).queryByTestId("tab-tracy-tracy")).toBeNull();
+    expect(entry.querySelector("button")).toBeNull();
+    expect(screen.queryByTestId("tab-close-tracy-tracy")).toBeNull();
+    // Home is unchanged, and neither fixed entry takes an Alt-digit slot.
+    expect(screen.getByTestId("tab-strip").children[0].contains(home)).toBe(
+      true,
+    );
+    expect(home.hasAttribute("data-tab-index")).toBe(false);
+    expect(entry.hasAttribute("data-tab-index")).toBe(false);
+    expect(
+      within(scroller)
+        .getByTestId("tab-epic-e-alpha")
+        .getAttribute("data-tab-index"),
+    ).toBe("0");
+
+    expect(useTabsStore.getState().items[0].id).toBe(tracyItemId());
+    expect(useTracySurfaceStore.getState()).toMatchObject({
+      open: true,
+      hostId: "host-a",
+    });
+
+    // With no channel selected the entry opens the surface on none; the
+    // surface's own shell picks the default once it shows.
+    fireEvent.click(entry);
+    await waitFor(() => {
+      expect(view.pathname()).toBe("/bot");
+    });
+    await waitFor(() => {
+      expect(useTabsStore.getState().activeItemId).toBe(tracyItemId());
+    });
+    expect(screen.getByTestId("tab-tracy").getAttribute("aria-selected")).toBe(
+      "true",
+    );
+  });
+
+  it("refuses to move or close the entry, and puts it back first when another tab takes index 0", async () => {
+    openEpicTabs(["Alpha", "Beta"]);
+    mountTopStrip("/epics/e-alpha/e-alpha");
+    await screen.findByTestId("tab-tracy");
+    const before = useTabsStore.getState().items;
+    expect(before[0].id).toBe(tracyItemId());
+
+    expect(
+      tabCommandCoordinator.moveStripItem({
+        itemId: tracyItemId(),
+        targetIndex: before.length - 1,
+        groupId: null,
+      }),
+    ).toBe(false);
+    expect(tabCommandCoordinator.closeRef(TRACY_REF)).toBe(false);
+    expect(useTabsStore.getState().items).toBe(before);
+    expect(useTracySurfaceStore.getState().open).toBe(true);
+
+    const beta = tabItemId({ kind: "epic", id: "e-beta" });
+    act(() => {
+      expect(
+        tabCommandCoordinator.moveStripItem({
+          itemId: beta,
+          targetIndex: 0,
+          groupId: null,
+        }),
+      ).toBe(true);
+    });
+    await waitFor(() => {
+      expect(layoutRefKeys()).toEqual([TRACY_KEY, "e-beta", "e-alpha"]);
+    });
+  });
+
+  it("is released with Show Tracy off, leaving the surface open as an ordinary closable tab, and is pinned again when it is turned on", async () => {
+    openEpicTabs(["Alpha"]);
+    mountTopStrip("/epics/e-alpha/e-alpha");
+    await screen.findByTestId("tab-tracy");
+
+    act(() => {
+      useSettingsStore.getState().setShowTracy(false);
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("tab-tracy")).toBeNull();
+    });
+    expect(
+      within(screen.getByTestId("header-tab-strip-scroll")).getByTestId(
+        "tab-tracy-tracy",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByTestId("tab-close-tracy-tracy")).toBeTruthy();
+    expect(useTracySurfaceStore.getState().open).toBe(true);
+
+    act(() => {
+      useSettingsStore.getState().setShowTracy(true);
+    });
+    expect(await screen.findByTestId("tab-tracy")).not.toBeNull();
+    expect(screen.queryByTestId("tab-close-tracy-tracy")).toBeNull();
+    await waitFor(() => {
+      expect(layoutRefKeys()).toEqual([TRACY_KEY, "e-alpha"]);
+    });
+  });
+
+  it("keeps a group's chip on its tab with the entry first in the layout", async () => {
+    openEpicTabs(["Alpha", "Beta"]);
+    useTabsStore.setState({
+      groups: {
+        g1: {
+          name: "Work",
+          color: "#336699",
+          collapsed: false,
+          organizationOwnerId: "user-1",
+        },
+      },
+      customizations: {
+        "epic:e-alpha": { groupId: "g1", color: null, icon: null },
+      },
+    });
+    mountTopStrip("/epics/e-alpha/e-alpha");
+
+    const alpha = await screen.findByTestId("tab-epic-e-alpha");
+    await screen.findByTestId("tab-tracy");
+    const chip = screen.getByRole("button", { name: "Work: collapse group" });
+    expect(
+      chip.compareDocumentPosition(alpha) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("draws the entry with no personal main bot in the list: it is the surface, not a bot", async () => {
+    scripted.list = {
+      bots: [
+        bot(TRACY, PERSONAL_ENV, "Tracy", 5_000),
+        bot(TEAM_BOT, TEAM_ENV, "Release Bot", null),
+      ],
+      mainBotIds: { [TEAM_ENV]: TEAM_BOT },
+    };
+    mountTopStrip("/");
+
+    await screen.findByTestId("tab-tracy");
+    expect(
+      within(screen.getByTestId("header-tab-strip-scroll")).queryByTestId(
+        "tab-tracy-tracy",
+      ),
+    ).toBeNull();
+    expect(useTracySurfaceStore.getState()).toMatchObject({
+      open: true,
+      hostId: "host-a",
+    });
+  });
+});
+
+describe("the fixed Tracy entry - a surface that was paired or grouped before it became the entry", () => {
+  beforeEach(tracyIsMainBot);
+
+  /** The surface is open and in the layout while Show Tracy is still off. */
+  async function openTracyTabWithEntryOff(): Promise<void> {
+    useSettingsStore.setState({ showTracy: false });
+    useTracySurfaceStore.getState().openSurface("host-a");
+    await waitFor(() => {
+      expect(layoutRefKeys()).toContain(TRACY_KEY);
+    });
+  }
+
+  it("takes the surface out of a split it was paired in, leaving the partner a tab of its own", async () => {
+    openEpicTabs(["Alpha", "Beta"]);
+    await openTracyTabWithEntryOff();
+    expect(
+      tabCommandCoordinator.pairTabs({
+        left: { kind: "epic", id: "e-beta" },
+        right: TRACY_REF,
+        splitId: "split-beta-tracy",
+        leftRatio: 0.5,
+        focusedRef: TRACY_REF,
+      }),
+    ).toBe(true);
+    expect(useTabsStore.getState().items.map((item) => item.kind)).toEqual([
+      "tab",
+      "split",
+    ]);
+    mountTopStrip("/epics/e-alpha/e-alpha");
+
+    act(() => {
+      useSettingsStore.getState().setShowTracy(true);
+    });
+
+    await waitFor(() => {
+      expect(layoutRefKeys()).toEqual([TRACY_KEY, "e-alpha", "e-beta"]);
+    });
+    expect(await screen.findByTestId("tab-tracy")).not.toBeNull();
+  });
+
+  it("takes the surface out of the group it was in, leaving the group to its other tabs", async () => {
+    openEpicTabs(["Alpha", "Beta"]);
+    await openTracyTabWithEntryOff();
+    const tracyKey = tabRefKey(TRACY_REF);
+    const alphaKey = tabRefKey({ kind: "epic", id: "e-alpha" });
+    // The surface is first already, in the group with Alpha: only leaving the
+    // group moves it.
+    const alphaRef: TabRef = { kind: "epic", id: "e-alpha" };
+    const betaRef: TabRef = { kind: "epic", id: "e-beta" };
+    useTabsStore.setState({
+      items: [TRACY_REF, alphaRef, betaRef].map((ref) => ({
+        kind: "tab",
+        id: tabItemId(ref),
+        ref,
+      })),
+      stripOrder: [TRACY_REF, alphaRef, betaRef],
+      groups: {
+        g1: {
+          name: "Work",
+          color: "#336699",
+          collapsed: false,
+          organizationOwnerId: "user-1",
+        },
+      },
+      customizations: {
+        [tracyKey]: { groupId: "g1", color: null, icon: null },
+        [alphaKey]: { groupId: "g1", color: null, icon: null },
+      },
+    });
+    expect(layoutRefKeys()).toEqual([TRACY_KEY, "e-alpha", "e-beta"]);
+    mountTopStrip("/epics/e-alpha/e-alpha");
+
+    act(() => {
+      useSettingsStore.getState().setShowTracy(true);
+    });
+
+    await waitFor(() => {
+      expect(
+        useTabsStore.getState().customizations?.[tracyKey]?.groupId,
+      ).toBeNull();
+    });
+    expect(layoutRefKeys()).toEqual([TRACY_KEY, "e-alpha", "e-beta"]);
+    expect(useTabsStore.getState().customizations?.[alphaKey]?.groupId).toBe(
+      "g1",
+    );
+  });
+});
+
+describe("the fixed Tracy entry - opening the surface", () => {
+  beforeEach(tracyIsMainBot);
+
+  it.each([
+    {
+      label:
+        "moves a surface whose host this client can no longer dial onto this window's host",
+      bound: "host-gone",
+      connectable: { hostIds: ["host-a"], resolved: true },
+      expected: "host-a",
+    },
+    {
+      label:
+        "keeps a surface on its own host while this client can still dial it",
+      bound: "host-b",
+      connectable: { hostIds: ["host-a", "host-b"], resolved: true },
+      expected: "host-b",
+    },
+    {
+      label:
+        "keeps the surface's host while the host directory has not answered",
+      bound: "host-gone",
+      connectable: { hostIds: [], resolved: false },
+      expected: "host-gone",
+    },
+  ])("$label", async ({ bound, connectable, expected }) => {
+    scripted.connectable = connectable;
+    // A restored surface, on the channel it last showed.
+    useTracySurfaceStore.setState({
+      open: true,
+      hostId: bound,
+      botId: TRACY,
+      visitedBotIds: [],
+    });
+    const view = mountTopStrip("/");
+    const entry = await screen.findByTestId("tab-tracy");
+    // It keeps the host it was bound to until it is opened.
+    expect(useTracySurfaceStore.getState().hostId).toBe(bound);
+
+    fireEvent.click(entry);
+
+    await waitFor(() => {
+      expect(view.pathname()).toBe(`/bot/${TRACY}`);
+    });
+    expect(useTracySurfaceStore.getState().hostId).toBe(expected);
+  });
+});
+
+describe("the fixed Tracy entry - the bot list", () => {
+  beforeEach(tracyIsMainBot);
+
+  it("is refetched when the host announces a change, so an archived main bot leaves the entry's default channel with no other bots surface mounted", async () => {
+    openEpicTabs(["Alpha"]);
+    mountTopStrip("/epics/e-alpha/e-alpha");
+    const entry = await screen.findByTestId("tab-tracy");
+    await userEvent.hover(entry);
+    expect(
+      (await screen.findByTestId("tracy-entry-hover-body")).textContent,
+    ).toContain("Tracy");
+    await userEvent.unhover(entry);
+
+    scripted.list = {
+      bots: [
+        bot(TRACY, PERSONAL_ENV, "Tracy", 5_000),
+        bot(TEAM_BOT, TEAM_ENV, "Release Bot", null),
+      ],
+      mainBotIds: { [PERSONAL_ENV]: TRACY, [TEAM_ENV]: TEAM_BOT },
+    };
+    const doorbell = scripted.stream?.getSession("bot.listChanged", {});
+    if (doorbell === undefined) throw new Error("bot.listChanged not rung");
+    act(() => {
+      doorbell.emitFrame(CHANGED);
+    });
+
+    await userEvent.hover(entry);
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("tracy-entry-hover-body").textContent,
+      ).toContain("Release Bot");
+    });
+    // The entry is the surface: an archived main bot does not take it away.
+    expect(screen.getByTestId("tab-tracy")).toBe(entry);
+    expect(useTracySurfaceStore.getState().open).toBe(true);
+  });
+});
+
+describe("the fixed Tracy entry - signals", () => {
+  beforeEach(tracyIsMainBot);
+
+  it("shows how long Tracy has been replying, and its step on hover", async () => {
+    scripted.activity = replying("Reading the plan");
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(within(entry).getByTestId("tab-tracy-working").textContent).toBe(
+      "3m",
+    );
+
+    await userEvent.hover(entry);
+    const body = await screen.findByTestId("tracy-entry-hover-body");
+    expect(body.textContent).toContain("Reading the plan");
+  });
+
+  it("shows the timer and the step while a thread replies and the trunk is idle", async () => {
+    scripted.activity = {
+      trunk: {
+        state: "idle",
+        startedAt: null,
+        step: null,
+        requestId: null,
+        reason: null,
+      },
+      threads: {
+        "thread-1": {
+          state: "replying",
+          startedAt: Date.now() - 2 * 60_000,
+          step: "Reading the diff",
+          requestId: "req-9",
+          reason: null,
+        },
+      },
+    };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(within(entry).getByTestId("tab-tracy-working").textContent).toBe(
+      "2m",
+    );
+
+    await userEvent.hover(entry);
+    const body = await screen.findByTestId("tracy-entry-hover-body");
+    expect(body.textContent).toContain("Reading the diff");
+    expect(body.textContent).not.toContain("Idle");
+  });
+
+  it("shows the timer for a thread that replies while no trunk is open", async () => {
+    scripted.activity = {
+      trunk: null,
+      threads: {
+        "thread-1": {
+          state: "replying",
+          startedAt: Date.now() - 4 * 60_000,
+          step: null,
+          requestId: null,
+          reason: null,
+        },
+      },
+    };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(within(entry).getByTestId("tab-tracy-working").textContent).toBe(
+      "4m",
+    );
+  });
+
+  it("still says what Tracy is doing when a replying session has no start time", async () => {
+    scripted.activity = {
+      trunk: {
+        state: "replying",
+        startedAt: null,
+        step: "bun test",
+        requestId: null,
+        reason: null,
+      },
+      threads: {},
+    };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(screen.queryByTestId("tab-tracy-working")).toBeNull();
+
+    await userEvent.hover(entry);
+    const body = await screen.findByTestId("tracy-entry-hover-body");
+    expect(body.textContent).toContain("bun test");
+    expect(body.textContent).not.toContain("Idle");
+  });
+
+  it("shows no timer and an Idle hover while Tracy is not replying", async () => {
+    scripted.activity = {
+      trunk: {
+        state: "idle",
+        startedAt: null,
+        step: null,
+        requestId: null,
+        reason: null,
+      },
+      threads: {},
+    };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(screen.queryByTestId("tab-tracy-working")).toBeNull();
+
+    await userEvent.hover(entry);
+    const body = await screen.findByTestId("tracy-entry-hover-body");
+    expect(body.textContent).toContain("Idle");
+  });
+
+  it.each([
+    { label: "no activity at all", activity: null },
+    {
+      label: "activity whose trunk no host has written",
+      activity: { trunk: null, threads: {} },
+    },
+  ])(
+    "says nothing of Tracy's state, not Idle, for $label",
+    async ({ activity }) => {
+      scripted.activity = activity;
+      mountTopStrip("/");
+
+      const entry = await screen.findByTestId("tab-tracy");
+      await userEvent.hover(entry);
+
+      const body = await screen.findByTestId("tracy-entry-hover-body");
+      expect(body.textContent).toBe("Tracy");
+      expect(screen.queryByTestId("tab-tracy-working")).toBeNull();
+    },
+  );
+
+  it.each([["unreadDone"], ["unreadFailure"]] as const)(
+    "marks the entry and bolds its title with %s",
+    async (flag) => {
+      scripted.indicators = {
+        epics: { [TRACY]: { ...NO_FLAGS, [flag]: true } },
+        chats: {},
+      };
+      mountTopStrip("/");
+
+      const entry = await screen.findByTestId("tab-tracy");
+      expect(entry.hasAttribute("data-unread")).toBe(true);
+      expect(within(entry).getByText("Tracy").className).toContain(
+        "font-semibold",
+      );
+    },
+  );
+
+  it("bolds the entry for a row past the cursor in another bot's channel, though Tracy's indicator holds nothing", async () => {
+    tracyIsMainBot();
+    scripted.readCursors = {
+      [TRACY]: {
+        cursors: { [`app-${TRACY}`]: { messageId: "m-1", seq: 1_000 } },
+        latest: { [`app-${TRACY}`]: { messageId: "m-1", seq: 1_000 } },
+      },
+      [TEAM_BOT]: {
+        cursors: { [`app-${TEAM_BOT}`]: { messageId: "m-1", seq: 1_000 } },
+        latest: { [`app-${TEAM_BOT}`]: { messageId: "m-2", seq: 2_000 } },
+      },
+    };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    await waitFor(() => expect(entry.hasAttribute("data-unread")).toBe(true));
+  });
+
+  it("leaves the entry unmarked when every channel's cursor has caught up, whatever Tracy's indicator says", async () => {
+    tracyIsMainBot();
+    scripted.indicators = {
+      epics: { [TRACY]: { ...NO_FLAGS, unreadDone: true } },
+      chats: {},
+    };
+    scripted.readCursors = {
+      [TRACY]: {
+        cursors: { [`app-${TRACY}`]: { messageId: "m-1", seq: 1_000 } },
+        latest: { [`app-${TRACY}`]: { messageId: "m-1", seq: 1_000 } },
+      },
+      [TEAM_BOT]: {
+        cursors: { [`app-${TEAM_BOT}`]: { messageId: "m-2", seq: 2_000 } },
+        latest: { [`app-${TEAM_BOT}`]: { messageId: "m-2", seq: 2_000 } },
+      },
+    };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(entry.hasAttribute("data-unread")).toBe(false);
+  });
+
+  it("leaves the entry unmarked with nothing unread", async () => {
+    scripted.indicators = {
+      epics: { [TRACY]: { ...NO_FLAGS } },
+      chats: {},
+    };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(entry.hasAttribute("data-unread")).toBe(false);
+    expect(within(entry).getByText("Tracy").className).not.toContain(
+      "font-semibold",
+    );
+  });
+
+  it.each([
+    { label: "unread while Tracy has news", unreadDone: true },
+    { label: "read once there is none", unreadDone: false },
+  ])(
+    "marks the side strip's entry $label, as the header strip does",
+    async ({ unreadDone }) => {
+      scripted.indicators = {
+        epics: { [TRACY]: { ...NO_FLAGS, unreadDone } },
+        chats: {},
+      };
+      mountSideStrip("/");
+
+      const entry = await screen.findByTestId("tab-tracy");
+      expect(entry.hasAttribute("data-unread")).toBe(unreadDone);
+    },
+  );
+
+  describe("the unread signal", () => {
+    // The entry shows no number: the label is bold while unread, the
+    // collapsed rail (which has no label) shows the unread badge, and the
+    // accessible name still carries the count.
+    const PLACEMENTS = [
+      {
+        placement: "top strip",
+        railed: false,
+        mountEntry: () => mountTopStrip("/"),
+      },
+      {
+        placement: "vertical strip",
+        railed: false,
+        mountEntry: () => mountSideStrip("/"),
+      },
+      {
+        placement: "collapsed rail",
+        railed: true,
+        mountEntry: () => {
+          useSideTabStripStore.setState({ collapsed: true });
+          return mountSideStrip("/");
+        },
+      },
+    ];
+
+    function tracyIndicators(
+      state: Partial<Omit<typeof NO_FLAGS, "unreadCount">> & {
+        readonly unreadCount: number | null;
+      },
+    ): void {
+      scripted.indicators = {
+        epics: { [TRACY]: { ...NO_FLAGS, ...state } },
+        chats: {},
+      };
+    }
+
+    it.each(PLACEMENTS)(
+      "marks the entry in the $placement without drawing the count, and names it with the count",
+      async ({ railed, mountEntry }) => {
+        tracyIndicators({ unreadDone: true, unreadCount: 3 });
+        mountEntry();
+
+        const entry = await screen.findByRole("tab", {
+          name: "Tracy, 3 unread",
+        });
+        expect(entry.hasAttribute("data-unread")).toBe(true);
+        expect(within(entry).queryByText("3")).toBeNull();
+        if (railed) {
+          expect(
+            within(entry)
+              .getByTestId("side-tab-rail-badge")
+              .getAttribute("data-kind"),
+          ).toBe("unread");
+        } else {
+          // The top strip bolds the text; the vertical row bolds its title wrapper.
+          expect(
+            within(entry).getByText("Tracy").closest(".font-semibold"),
+          ).not.toBeNull();
+        }
+      },
+    );
+
+    it.each(PLACEMENTS)(
+      "leaves the $placement unmarked, with no badge, while nothing is unread",
+      async ({ mountEntry }) => {
+        tracyIndicators({ unreadCount: 0 });
+        mountEntry();
+
+        const entry = await screen.findByRole("tab", { name: "Tracy" });
+        expect(entry.hasAttribute("data-unread")).toBe(false);
+        expect(within(entry).queryByTestId("side-tab-rail-badge")).toBeNull();
+      },
+    );
+
+    it.each(PLACEMENTS)(
+      "marks the $placement for a host that does not count, naming it without a count",
+      async ({ railed, mountEntry }) => {
+        tracyIndicators({ unreadDone: true, unreadCount: null });
+        mountEntry();
+
+        const entry = await screen.findByRole("tab", { name: "Tracy" });
+        expect(entry.hasAttribute("data-unread")).toBe(true);
+        expect(
+          within(entry).queryByTestId("side-tab-rail-badge") !== null,
+        ).toBe(railed);
+      },
+    );
+  });
+});
+
+describe("the fixed Tracy entry - muted", () => {
+  const PLACEMENTS = [
+    { placement: "top strip", mountEntry: () => mountTopStrip("/") },
+    { placement: "vertical strip", mountEntry: () => mountSideStrip("/") },
+  ];
+
+  beforeEach(() => {
+    tracyIsMainBot();
+  });
+
+  it.each(PLACEMENTS)(
+    "carries the muted mark in the $placement while Tracy's channel is set to Nothing",
+    async ({ mountEntry }) => {
+      scripted.levels = { [`app-${TRACY}`]: "off" };
+      mountEntry();
+
+      const entry = await screen.findByTestId("tab-tracy");
+      expect(within(entry).getByTestId("tracy-entry-muted")).toBeTruthy();
+    },
+  );
+
+  it.each(["all", "mentions", null] as const)(
+    "carries no muted mark for the level %s",
+    async (level) => {
+      scripted.levels = level === null ? {} : { [`app-${TRACY}`]: level };
+      mountTopStrip("/");
+
+      const entry = await screen.findByTestId("tab-tracy");
+      expect(within(entry).queryByTestId("tracy-entry-muted")).toBeNull();
+    },
+  );
+
+  it("is not muted by another bot's channel being set to Nothing", async () => {
+    scripted.levels = { [`app-${TEAM_BOT}`]: "off" };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(within(entry).queryByTestId("tracy-entry-muted")).toBeNull();
+  });
+});
+
+describe("the fixed Tracy entry - a default channel with any title", () => {
+  beforeEach(() => {
+    scripted.list = {
+      bots: [bot(TRACY, PERSONAL_ENV, "Release Notes", null)],
+      mainBotIds: { [PERSONAL_ENV]: TRACY },
+    };
+  });
+
+  it("is labelled Tracy with the Tracy glyph in the top strip, and the hover names the default channel and its activity", async () => {
+    scripted.activity = replying("Reading the plan");
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(entry.textContent).toContain("Tracy");
+    expect(entry.textContent).not.toContain("Release Notes");
+    expect(within(entry).getByTestId("tracy-entry-icon")).toBeTruthy();
+    expectEntryDrawsTracyGlyph(entry);
+
+    await userEvent.hover(entry);
+    const body = await screen.findByTestId("tracy-entry-hover-body");
+    expect(body.textContent.startsWith("Release Notes")).toBe(true);
+    expect(body.textContent).toContain("Reading the plan");
+  });
+
+  it("is labelled Tracy with the Tracy glyph in the vertical strip", async () => {
+    mountSideStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(entry.getAttribute("aria-label")).toBe("Tracy");
+    expect(entry.textContent).not.toContain("Release Notes");
+    expect(
+      within(entry).getAllByTestId("tracy-entry-icon").length,
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe("the fixed Tracy entry - Alt-digit", () => {
+  beforeEach(tracyIsMainBot);
+
+  it("numbers the other tabs from 1 and never reaches Tracy", async () => {
+    openEpicTabs(["Alpha"]);
+    mountTopStrip("/epics/e-alpha/e-alpha");
+    await screen.findByTestId("tab-tracy");
+    expect(getHeaderTabs().map((tab) => tab.id)).toEqual([
+      TRACY_KEY,
+      "e-alpha",
+    ]);
+
+    const intents: unknown[] = [];
+    const router: KeybindingRouter = {
+      getPathname: () => "/",
+      navigateHome: () => undefined,
+      navigateSettings: () => undefined,
+      navigateToEpic: () => undefined,
+      navigateToEpicTab: () => undefined,
+      navigateToEpicList: () => undefined,
+      navigateSettingsSection: () => undefined,
+      navigateToTabIntent: (intent) => {
+        intents.push(intent);
+      },
+      goBack: () => undefined,
+      goForward: () => undefined,
+      isHistoryNavAvailable: () => false,
+      canGoBack: () => false,
+      canGoForward: () => false,
+    };
+    const unregister = registerBaseLeaderScope(router);
+    try {
+      const digits = getLeaderScopesTopDown()
+        .find((scope) => scope.id === LEADER_SCOPE_HEADER_TABS)
+        ?.actions.find((action) => action.actionId === "epic.switch.byDigit");
+      if (digits === undefined) throw new Error("No header-tabs digit action");
+
+      expect(digits.dispatch(1)).toBe(true);
+      expect(digits.dispatch(2)).toBe(false);
+      expect(digits.sequenceState?.([2])).toBe("invalid");
+      const alpha = getHeaderTabs().find((tab) => tab.id === "e-alpha");
+      if (alpha === undefined) throw new Error("No Alpha header tab");
+      expect(intents).toEqual([tabResolveIntent(alpha)]);
+    } finally {
+      unregister();
+    }
+  });
+});
+
+describe("the fixed Tracy entry - vertical strip", () => {
+  beforeEach(tracyIsMainBot);
+
+  it("draws the entry after Home in the top block and keeps the bot out of the tab rows", async () => {
+    openEpicTabs(["Alpha"]);
+    const view = mountSideStrip("/epics/e-alpha/e-alpha");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    const home = screen.getByTestId("tab-home");
+    const topBlock = screen.getByTestId("side-strip-top-block");
+
+    expect(topBlock.contains(entry)).toBe(true);
+    expect(
+      within(entry).getAllByTestId("tracy-entry-icon").length,
+    ).toBeGreaterThan(0);
+    expectEntryDrawsTracyGlyph(entry);
+    expect(entry.getAttribute("aria-label")).toBe("Tracy");
+    expect(
+      home.compareDocumentPosition(entry) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getAllByTestId("tab-tracy")).toHaveLength(1);
+    expect(screen.getByTestId("tab-epic-e-alpha")).not.toBeNull();
+    expect(screen.queryByTestId("tab-tracy-tracy")).toBeNull();
+    // The Tasks count is the tabs alone.
+    expect(screen.getByTestId("side-strip-tasks-label").textContent).toBe(
+      "Tasks1",
+    );
+
+    fireEvent.click(entry);
+    await waitFor(() => {
+      expect(view.pathname()).toBe("/bot");
+    });
+  });
+
+  it("joins the strip's edge to its channel column in the sidebar's fill while selected, as a task row joins its panel", async () => {
+    openEpicTabs(["Alpha"]);
+    mountSideStrip("/epics/e-alpha/e-alpha");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    const alpha = screen.getByTestId("tab-epic-e-alpha");
+    expect(alpha.getAttribute("data-sheet-joined")).toBe("left");
+    expect(entry.hasAttribute("data-sheet-joined")).toBe(false);
+
+    fireEvent.click(entry);
+    await waitFor(() => {
+      expect(entry.getAttribute("aria-selected")).toBe("true");
+    });
+
+    expect(entry.getAttribute("data-sheet-joined")).toBe("left");
+    expect(entry.getAttribute("data-join-pane")).toBe("panel");
+    expect(alpha.hasAttribute("data-sheet-joined")).toBe(false);
+    expect(
+      document
+        .querySelector('[data-sheet-join-bridge="left"]')
+        ?.getAttribute("data-join-pane"),
+    ).toBe("panel");
+  });
+});
+
+describe("the Show Tracy setting", () => {
+  beforeEach(tracyIsMainBot);
+
+  it("is a switch in the Bots group, on by default, and turning it off removes the entry", async () => {
+    openEpicTabs(["Alpha"]);
+    mount(
+      "/epics/e-alpha/e-alpha",
+      <>
+        <TabStrip />
+        <GeneralSettingsPanel />
+      </>,
+    );
+    await screen.findByTestId("tab-tracy");
+
+    const group = screen.getByTestId("settings-general-bots");
+    const toggle = within(group).getByRole("switch", { name: "Show Tracy" });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(toggle);
+
+    expect(useSettingsStore.getState().showTracy).toBe(false);
+    await waitFor(() => {
+      expect(screen.queryByTestId("tab-tracy")).toBeNull();
+    });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+  });
+});
+
+/** What the app shell draws from the form: the strip beside the header, or neither. */
+function PhoneShellHarness(): ReactNode {
+  const form = useMobileStripForm();
+  const placement = useTabStripPlacement();
+  const chrome =
+    form === null
+      ? ({ placement: "top", titleBand: "header" } as const)
+      : PHONE_SHELL_STRIP_CHROME;
+  return (
+    <AppColumnFrame
+      {...chrome}
+      columnRef={() => undefined}
+      header={<MobileAppHeader />}
+      strip={
+        placement === "left" ? (
+          <SideTabStrip edge="left" ownsTitleBar={false} />
+        ) : null
+      }
+      banners={null}
+      surface={null}
+      mainTail={null}
+      tail={null}
+    />
+  );
+}
+
+/** Where each form's width lands on the phones and tablets the rule names. */
+const RAIL_WIDTH_PX = 750;
+const EXPANDED_WIDTH_PX = 1210;
+const DRAWER_WIDTH_PX = 400;
+
+function setRootWidth(contentWidthPx: number): void {
+  document.getElementById("root")?.remove();
+  const root = document.createElement("div");
+  root.id = "root";
+  root.getBoundingClientRect = () => new DOMRect(0, 0, contentWidthPx, 402);
+  document.body.append(root);
+  phoneShell.headerActive = true;
+}
+
+function PhoneShell(): ReactNode {
+  return (
+    <MobileStripFormScope>
+      <PhoneShellHarness />
+    </MobileStripFormScope>
+  );
+}
+
+function mountPhoneShell(contentWidthPx: number): void {
+  setRootWidth(contentWidthPx);
+  mount("/", <PhoneShell />);
+}
+
+describe("the phone shell's strip", () => {
+  beforeEach(tracyIsMainBot);
+  afterEach(() => {
+    document.getElementById("root")?.remove();
+    setMobileApp(false);
+  });
+
+  it("draws the rail beside the header over a stored expanded choice, with Tracy after Home and no hamburger or bell", async () => {
+    mountPhoneShell(RAIL_WIDTH_PX);
+
+    const strip = await screen.findByTestId("side-tab-strip");
+    expect(strip.getAttribute("data-collapsed")).toBe("true");
+    expect(strip.style.width).toBe(`${SIDE_STRIP_RAIL_WIDTH_PX}px`);
+    const home = await screen.findByTestId("tab-home");
+    const tracy = await screen.findByTestId("tab-tracy");
+    expect(
+      home.compareDocumentPosition(tracy) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+    expect(screen.queryByTestId("mobile-nav-trigger")).toBeNull();
+    expect(screen.queryByTestId("mobile-header-bell")).toBeNull();
+    expect(screen.getByTestId("mobile-header-title")).not.toBeNull();
+    expect(strip.nextElementSibling?.contains(screen.getByRole("banner"))).toBe(
+      true,
+    );
+  });
+
+  it("draws no strip in the drawer form, and keeps the hamburger and the bell", async () => {
+    mountPhoneShell(DRAWER_WIDTH_PX);
+
+    expect(await screen.findByTestId("mobile-nav-trigger")).not.toBeNull();
+    expect(screen.queryByTestId("side-tab-strip")).toBeNull();
+    expect(screen.getByTestId("mobile-header-bell")).not.toBeNull();
+  });
+
+  it("takes the strip's side from the form, over a stored pick of the right edge", async () => {
+    useLayoutStore.getState().setArrangement({
+      ...useLayoutStore.getState().arrangement,
+      tabStripPlacement: "right",
+    });
+    mountPhoneShell(RAIL_WIDTH_PX);
+
+    const strip = await screen.findByTestId("side-tab-strip");
+    expect(strip.getAttribute("data-edge")).toBe("left");
+  });
+
+  it("draws the expanded form at the default width with no resize handle, over a wider stored width", async () => {
+    useSideTabStripStore.setState({ widthPx: 400 });
+    mountPhoneShell(EXPANDED_WIDTH_PX);
+
+    const strip = await screen.findByTestId("side-tab-strip");
+    expect(strip.getAttribute("data-collapsed")).toBe("false");
+    expect(strip.style.width).toBe("240px");
+    expect(screen.queryByTestId("side-tab-strip-resize-handle")).toBeNull();
+  });
+
+  it("keeps the stored width and the handle on desktop, where no form applies", async () => {
+    useSideTabStripStore.setState({ widthPx: 400 });
+    mountSideStrip("/");
+
+    const strip = await screen.findByTestId("side-tab-strip");
+    expect(strip.style.width).toBe("400px");
+    expect(screen.getByTestId("side-tab-strip-resize-handle")).not.toBeNull();
+  });
+
+  it("offers the collapse toggle only where the expanded strip fits, so a stored collapse cannot be flipped at 750", async () => {
+    useSideTabStripStore.setState({ collapsed: true });
+    mountPhoneShell(RAIL_WIDTH_PX);
+
+    await screen.findByTestId("side-tab-strip");
+    expect(screen.queryByTestId("side-tab-strip-collapse")).toBeNull();
+    expect(useSideTabStripStore.getState().collapsed).toBe(true);
+
+    cleanup();
+    mountPhoneShell(EXPANDED_WIDTH_PX);
+
+    fireEvent.click(await screen.findByTestId("side-tab-strip-collapse"));
+    expect(useSideTabStripStore.getState().collapsed).toBe(false);
+  });
+
+  it("takes the collapse chord in the installed app at 1210, and has no handler for it at 750", async () => {
+    setMobileApp(true);
+    const pressCollapseChord = (): void => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          code: "KeyS",
+          key: "S",
+          shiftKey: true,
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    };
+    const mountWithKeybindings = async (
+      contentWidthPx: number,
+    ): Promise<void> => {
+      setRootWidth(contentWidthPx);
+      const router = buildRouter("/", <PhoneShell />);
+      render(
+        <KeybindingProvider router={router}>
+          <RouterProvider router={router} />
+        </KeybindingProvider>,
+      );
+      await screen.findByTestId("side-tab-strip");
+    };
+
+    await mountWithKeybindings(RAIL_WIDTH_PX);
+    pressCollapseChord();
+    expect(useSideTabStripStore.getState().collapsed).toBe(false);
+
+    cleanup();
+    await mountWithKeybindings(EXPANDED_WIDTH_PX);
+    pressCollapseChord();
+    expect(useSideTabStripStore.getState().collapsed).toBe(true);
+  });
+});

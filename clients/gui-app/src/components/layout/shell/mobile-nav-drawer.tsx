@@ -1,0 +1,787 @@
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import {
+  formatUnreadCount,
+  labelWithUnreadCount,
+} from "@/lib/notifications/unread-count";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useRouterState } from "@tanstack/react-router";
+import {
+  Bell,
+  History,
+  House,
+  LayersPlus,
+  LogOut,
+  Pin,
+  Settings,
+  SquareArrowOutUpRight,
+} from "lucide-react";
+import { UserMenuAvatar } from "@/components/auth/user-menu";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { HistoryRowStatusIcon } from "@/components/epics/epics-list-shared";
+import {
+  PullIndicator,
+  SETTLE_CLASS,
+} from "@/components/epics/mobile/mobile-history-list";
+import { usePullToRefresh } from "@/components/epics/mobile/use-pull-to-refresh";
+import {
+  historyRowProvenance,
+  historyRowProvenanceLabel,
+} from "@/components/epics/history-row-provenance";
+import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
+import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
+import { useOpenMobileNotificationCenter } from "@/hooks/notifications/use-open-mobile-notification-center";
+import "@/components/layout/shell/mobile-shell-touch-targets.css";
+import { MobileNavDrawerSurface } from "@/components/layout/shell/mobile-nav-drawer-surface";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { isMobileApp } from "@/lib/mobile-app";
+import { usePlatformBillingUrl } from "@/hooks/auth/use-platform-billing-url";
+import { useOpenLink } from "@/lib/links/open-link";
+import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
+import { openEpicFromList } from "@/lib/commands/actions/open-epic-from-list";
+import {
+  activateTabIntent,
+  homeTabIntent,
+  openPhaseMigrationIntent,
+} from "@/lib/tab-navigation";
+import { useRegionShown } from "@/lib/layout-overrides";
+import { openTracyEntry } from "@/lib/bots/open-bot-channel";
+import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
+import { useTracyEntryItemId } from "@/stores/bots/tracy-entry";
+import { useTracyEntrySignals } from "@/components/layout/tabs/use-tracy-entry-signals";
+import {
+  TRACY_ENTRY_LABEL,
+  TracyEntryIcon,
+} from "@/components/layout/tabs/tracy-strip-entry";
+import { cn } from "@/lib/utils";
+import { epicDisplayTitle } from "@/lib/display-title";
+import { useAmbientHistorySearchState } from "@/hooks/home/use-history-search-state";
+import { useOptimisticActivityHistoryItems } from "@/hooks/home/use-optimistic-activity-history-items";
+import { hasActiveHistoryFilters } from "@/lib/history-search";
+import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
+import {
+  historyRowTimeMs,
+  type HistoryItem,
+} from "@/components/home/data/home-page.data";
+import { useHistoryQuery } from "@/hooks/home/use-history-query";
+import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
+import {
+  notificationBellAccessibleLabel,
+  useNotificationBellState,
+} from "@/stores/notifications/merged-notifications";
+import { useSignOutConfirmStore } from "@/stores/auth/sign-out-confirm-store";
+import { useEpicDeleteInFlightReader } from "@/hooks/epic/use-epic-batch-delete-mutation";
+import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
+import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
+import {
+  useMobileDrawerTaskPaintGate,
+  useMobileDrawerTaskPainted,
+} from "./mobile-drawer-history-state";
+import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+
+const ROW_CLASS = "h-11 w-full justify-start gap-3 px-3";
+
+// The task scroller fades its bottom edge rather than slicing a row against the
+// footer's border. The list carries matching bottom padding, so the gradient
+// only ever covers blank space - at full scroll the last row stays crisp.
+const LIST_FADE_CLASS =
+  "[-webkit-mask-image:linear-gradient(to_bottom,black_calc(100%-2rem),transparent)] [mask-image:linear-gradient(to_bottom,black_calc(100%-2rem),transparent)]";
+
+/**
+ * Left hamburger drawer for the mobile shell. It re-homes the global controls
+ * that the desktop header carries (Settings, identity / account) into a single
+ * menu. Its rows follow the vertical tab strip's order, so the drawer and the
+ * strip are one list in two frames: Notifications, All tasks, Home, Tracy, New
+ * task, then an inline recent task list (the same `useHistoryQuery` source the
+ * landing page renders). Sign out rides the identity row as an icon, joined by
+ * Manage subscription on every shell EXCEPT the installed mobile app (see the
+ * identity row below). Every action reuses the same helper the desktop surfaces
+ * call. Mounted only on mobile while the form is the drawer (see AppShell), so
+ * desktop is untouched.
+ */
+export function MobileNavDrawer(): ReactNode {
+  const open = useMobileNavStore((state) => state.open);
+  const setOpen = useMobileNavStore((state) => state.setOpen);
+  const navigate = useNavigate();
+  const profile = useAuthStore((state) => state.profile);
+  const { openSettings, openHistory } = useSystemTabModalActions();
+  const billingUrl = usePlatformBillingUrl();
+  const openLink = useOpenLink();
+  // Latched on the first open: closing before the first task paint must not
+  // unmount the list (and its query) out from under the closing panel.
+  const [drawerRequested, setDrawerRequested] = useState(open);
+  if (open && !drawerRequested) setDrawerRequested(true);
+  const homeTabEnabled = useRegionShown("homeTab");
+  const historyEligible = useMobileDrawerTaskPainted();
+  const taskPaintGate = useMobileDrawerTaskPaintGate();
+  useEffect(() => {
+    if (open) taskPaintGate?.markDrawerRequested();
+  }, [open, taskPaintGate]);
+  // A rotation into the strip's form unmounts the drawer while it may be open,
+  // and the store's open flag also hides the footer.
+  useEffect(() => {
+    return () => {
+      setOpen(false);
+    };
+  }, [setOpen]);
+  // Immutable after boot, so a plain read is stable for this component's
+  // whole life - no resize can flip it the way the viewport hook flips.
+  const installedApp = isMobileApp();
+
+  const close = () => {
+    setOpen(false);
+  };
+  const handleNewTask = () => {
+    close();
+    activateTabIntent(navigate, openNewEpicIntent(), undefined);
+  };
+  const handleHome = () => {
+    close();
+    activateTabIntent(navigate, homeTabIntent(), undefined);
+  };
+  const handleSettings = () => {
+    close();
+    // Mirror the desktop user-menu call site's telemetry (user-menu.tsx). Not
+    // lifted into the shared action, which would double-fire for the desktop
+    // callers that already track here.
+    Analytics.getInstance().track(AnalyticsEvent.SettingsOpened, {
+      source: "direct_ui",
+      section: "general",
+    });
+    openSettings({
+      section: null,
+      resetToGeneral: true,
+      tab: null,
+      draft: null,
+      hostId: null,
+    });
+  };
+  const handleManageSubscription = () => {
+    close();
+    void openLink(billingUrl, "account", null);
+    Analytics.getInstance().track(AnalyticsEvent.SubscriptionManagementOpened, {
+      source: "direct_ui",
+    });
+  };
+
+  // The panel is identical on both primitives; only the frame around it
+  // differs, so it is built once rather than duplicated per branch.
+  const panel = (
+    <>
+      {/* Identity plus the account actions as icons beside the name - the same
+            pair the desktop `UserMenu` offers behind the avatar, both one tap
+            here. Manage subscription took the slot the notification bell
+            vacated when it moved to the header, and it is WITHHELD from the
+            installed app: App Store review guideline 3.1.1 forbids linking out
+            to a subscription that cannot be bought through Apple, and this
+            link opens exactly that page. It stays for the other shell that
+            renders this drawer - a narrow DESKTOP window, which is why this is
+            a branch rather than a deletion, and why it reads the product flag
+            rather than the viewport. Sign out is unaffected. */}
+      {/* `px-5` is the nav rows' effective inset below (`p-2` + `px-3`), so
+            the avatar shares a left edge with their glyphs; no bottom padding
+            beyond `pb-2` because the `nav` supplies the rest of the gap. */}
+      {profile === null ? null : (
+        <div className="flex shrink-0 items-center gap-3 px-5 pt-4 pb-2">
+          <UserMenuAvatar
+            userName={profile.userName}
+            email={profile.email}
+            avatarUrl={profile.avatarUrl ?? null}
+          />
+          <div className="flex min-w-0 flex-1 flex-col pointer-coarse:touch-chrome">
+            <span className="truncate text-ui-sm font-medium text-foreground">
+              {profile.userName}
+            </span>
+            <span className="truncate text-ui-xs text-muted-foreground">
+              {profile.email}
+            </span>
+          </div>
+          {installedApp ? null : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Manage subscription"
+              data-testid="mobile-nav-manage-subscription"
+              onClick={handleManageSubscription}
+            >
+              <SquareArrowOutUpRight className="size-4" />
+            </Button>
+          )}
+          {/* Opens the confirm rather than signing out: unlike its
+                neighbours this control doesn't `close()` first, so cancelling
+                puts the user back in the drawer where they were. */}
+          <Button
+            type="button"
+            variant="destructive-ghost"
+            size="icon-sm"
+            aria-label="Sign out"
+            data-testid="mobile-nav-sign-out"
+            onClick={() => {
+              useSignOutConfirmStore.getState().setOpen(true);
+            }}
+          >
+            <LogOut className="size-4" />
+          </Button>
+        </div>
+      )}
+      {/* "New task" sits outside the scroll container so it stays pinned
+            while the recent-task list below it scrolls. */}
+      <nav className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-2">
+        <MobileNavNotificationsRow onOpen={close} />
+        <Button
+          type="button"
+          variant="ghost"
+          className={cn(ROW_CLASS, "mb-1 shrink-0")}
+          data-testid="mobile-nav-all-tasks"
+          onClick={() => {
+            close();
+            openHistory();
+          }}
+        >
+          <History className="size-4" />
+          <span className="flex-1 text-left">All tasks</span>
+        </Button>
+        {/* Above "New task": on the phone this row is the whole tab strip's
+            job - the one way back to what is happening across every task. It
+            stays a flat ghost row so the create action keeps the drawer's only
+            resting fill. */}
+        {homeTabEnabled ? (
+          <Button
+            type="button"
+            variant="ghost"
+            className={cn(ROW_CLASS, "mb-1 shrink-0")}
+            data-testid="mobile-nav-home"
+            onClick={handleHome}
+          >
+            <House className="size-4" />
+            <span className="flex-1 text-left">Home</span>
+          </Button>
+        ) : null}
+        <MobileNavTracyRow onOpened={close} />
+        <Button
+          type="button"
+          variant="default"
+          // The drawer's ONE filled element: a compact accent pill separates
+          // the create action from the flat history rows without spanning a
+          // heavy full-height slab. Nothing else in this panel may take a
+          // resting fill, or the distinction dies.
+          // Visually a compact h-9 pill, but the tap target must still meet
+          // the 44px touch floor: the ::after overlay extends the hit area
+          // invisibly without growing the rendered button.
+          className="relative h-9 w-full shrink-0 justify-center px-4 after:absolute after:inset-x-0 after:-inset-y-1.5 after:content-['']"
+          data-testid="mobile-nav-new-task"
+          onClick={handleNewTask}
+        >
+          <span>New task</span>
+        </Button>
+        {open || historyEligible || drawerRequested ? (
+          <DrawerTaskList onNavigate={close} />
+        ) : null}
+      </nav>
+      <div className="flex shrink-0 flex-col gap-1 border-t border-border/60 p-2">
+        <Button
+          type="button"
+          variant="ghost"
+          className={ROW_CLASS}
+          onClick={() => {
+            close();
+            useDesktopDialogStore.getState().openDrafts("menu");
+          }}
+        >
+          <LayersPlus className="size-4" />
+          <span className="flex-1 text-left">Drafts</span>
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          className={ROW_CLASS}
+          data-testid="mobile-nav-settings"
+          onClick={handleSettings}
+        >
+          <Settings className="size-4" />
+          <span className="flex-1 text-left">Settings</span>
+        </Button>
+      </div>
+    </>
+  );
+
+  return installedApp ? (
+    /* A hand-driven surface rather than a dialog primitive, for one
+       reason: dismissal has to follow the finger and stay interruptible
+       mid-flight. Every dialog primitive available here plays a canned
+       exit the hand cannot catch or reverse, and no amount of
+       configuration produces one - a panel that tracks a pointer 1:1 has
+       to own its transform outright.
+
+       Branched on the PRODUCT flag, not the viewport, because the drawer
+       itself is mounted by form factor: a narrow desktop window renders
+       this component too, and it has a pointer rather than a finger. A
+       surface whose only dismissal is a drag would be a surface that
+       window cannot close, so it takes the Sheet. */
+    <MobileNavDrawerSurface open={open} onOpenChange={setOpen}>
+      {panel}
+    </MobileNavDrawerSurface>
+  ) : (
+    <Sheet open={open} onOpenChange={setOpen}>
+      <SheetContent
+        side="left"
+        showCloseButton={false}
+        className="gap-0 pb-safe-bottom"
+        data-testid="mobile-nav-drawer"
+        data-mobile-shell-touch-scope=""
+      >
+        <SheetTitle className="sr-only">Menu</SheetTitle>
+        {panel}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+/**
+ * The strip's Notifications row in the drawer: it opens the notifications sheet
+ * and picks its mark as the phone header's bell does (the count of what
+ * needs attention, else a dot for anything unread, and none while the status
+ * is unavailable, which its name alone says), drawn neutral as the strip's
+ * row draws it, and it is gated as the strip's row is.
+ */
+function MobileNavNotificationsRow(props: {
+  readonly onOpen: () => void;
+}): ReactNode {
+  const admitted = useAuthStore((state) => admitsLocalPlane(state.status));
+  const bellState = useNotificationBellState();
+  const openNotifications = useOpenMobileNotificationCenter();
+  if (!admitted) return null;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      className={cn(ROW_CLASS, "mb-1 shrink-0")}
+      data-testid="mobile-nav-notifications"
+      aria-label={notificationBellAccessibleLabel(bellState)}
+      onClick={() => {
+        props.onOpen();
+        openNotifications();
+      }}
+    >
+      <Bell className="size-4" />
+      <span className="flex-1 text-left">Notifications</span>
+      {bellState.kind === "attention" ? (
+        <Badge
+          variant="muted"
+          size="sm"
+          aria-hidden
+          data-testid="mobile-nav-notifications-attention-count"
+        >
+          <span className="tabular-nums">
+            {formatUnreadCount(bellState.count)}
+          </span>
+        </Badge>
+      ) : null}
+      {bellState.kind === "quietDot" ? (
+        <span
+          aria-hidden
+          data-testid="mobile-nav-notifications-quiet-dot"
+          className="size-2 shrink-0 rounded-full bg-primary"
+        />
+      ) : null}
+    </Button>
+  );
+}
+
+/**
+ * The fixed Tracy entry, beneath Home, as the strip draws it beside Home. It
+ * opens as the strip's entry does: the surface on the channel it shows, a
+ * restored surface whose host this client can no longer dial first moving
+ * to this window's host.
+ */
+function MobileNavTracyRow(props: {
+  readonly onOpened: () => void;
+}): ReactNode {
+  const { onOpened } = props;
+  const itemId = useTracyEntryItemId();
+  const navigate = useNavigate();
+  const connectable = useConnectableHostIds();
+  if (itemId === null) return null;
+  return (
+    <MobileNavTracyButton
+      onOpen={() => {
+        onOpened();
+        openTracyEntry(
+          navigate,
+          connectable.resolved
+            ? (id) => connectable.hostIds.includes(id)
+            : null,
+        );
+      }}
+    />
+  );
+}
+
+function MobileNavTracyButton(props: {
+  readonly onOpen: () => void;
+}): ReactNode {
+  const signals = useTracyEntrySignals();
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      className={cn(ROW_CLASS, "mb-1 shrink-0")}
+      data-testid="mobile-nav-tracy"
+      data-unread={signals.unread ? "" : undefined}
+      aria-label={labelWithUnreadCount(TRACY_ENTRY_LABEL, signals.unreadCount)}
+      onClick={() => {
+        props.onOpen();
+      }}
+    >
+      <TracyEntryIcon className={undefined} muted={signals.muted} />
+      <span
+        className={cn(
+          "min-w-0 flex-1 truncate text-left",
+          signals.unread && "font-semibold",
+        )}
+      >
+        {TRACY_ENTRY_LABEL}
+      </span>
+    </Button>
+  );
+}
+
+// Single source of a row's display label; raw epic titles can be empty, so
+// apply the source-aware "Untitled task" fallback (phases carry their own
+// baked fallback and render verbatim). Mirrors the landing list.
+function drawerItemDisplayTitle(item: HistoryItem): string {
+  return item.taskType === "phase"
+    ? item.title
+    : epicDisplayTitle({
+        title: item.title,
+        initialUserPrompt: item.initialUserPrompt,
+      });
+}
+
+interface DrawerTaskListProps {
+  readonly onNavigate: () => void;
+}
+
+/**
+ * The visible half of a drawer row's provenance: "Not synced" or "Deleted,
+ * edits kept" after the timestamp, on the rows that have one. Rendered as
+ * plain text rather than a tooltip because this row's tap opens the task,
+ * which leaves a tooltip nothing to open on.
+ */
+function DrawerRowProvenanceLabel(props: {
+  readonly item: HistoryItem;
+}): ReactNode {
+  const provenance = historyRowProvenance(props.item);
+  if (provenance === null) return null;
+  return (
+    <span
+      data-testid={`mobile-nav-task-provenance-label-${provenance}`}
+      className={cn(
+        "shrink-0 text-ui-xs text-muted-foreground",
+        provenance === "preserved-orphan" && "text-destructive",
+      )}
+    >
+      {historyRowProvenanceLabel(provenance)}
+    </span>
+  );
+}
+
+/**
+ * Inline recent-task list under "New task". Same data source as the landing
+ * page's embedded list (`useHistoryQuery` → `useCloudEpicTasksQuery`) and the
+ * same ambient search memory every history surface shares - the drawer shows
+ * the list the way the user last filtered it, with no filter/sort/selection
+ * chrome of its own; the full surface stays one tap away through All tasks.
+ */
+function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
+  const navigate = useNavigate();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const isEpicDeleteInFlight = useEpicDeleteInFlightReader();
+  // One subscription to the shared 60s clock for the whole list, then the pure
+  // formatter per row - rather than a per-row `useRelativeTimestamp`, which
+  // would take one subscription each to re-render the same list anyway.
+  const now = useSampledNow();
+  const { search } = useAmbientHistorySearchState();
+  const {
+    data,
+    isPending,
+    error,
+    refetch,
+    refetchTasks,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    cloudPagePending,
+    currentUserId,
+    activityRefreshScope,
+    hostId,
+    sort,
+  } = useHistoryQuery({ search, nowMs: null });
+  // Memoized so the id list below only changes when the page does, not on
+  // every render's fresh empty array.
+  const pageItems = useMemo(() => data?.items ?? [], [data]);
+  const items = useOptimisticActivityHistoryItems({
+    items: pageItems,
+    userId: currentUserId,
+    hostId,
+    // The sort the rows are in, as History's panel judges it.
+    enabled: !hasActiveHistoryFilters({ ...search, sort }) && sort === "recent",
+    refreshEnabled: sort === "recent",
+    refreshScope: activityRefreshScope,
+    refetch: refetchTasks,
+  });
+
+  // The rows' status indicator reads notification state from context, and the
+  // drawer is mounted by the shell outside the providers the tab strip and the
+  // list panel each put around their own rows - so it provides its own, for
+  // exactly the ids on screen. Same call as the list panel's: epic ids only,
+  // so the app-wide active host is the right one to ask (an Epic is a shared
+  // cloud entity, not a host-owned record). A phase row's `epicId` is a phase
+  // id and names no epic, so it is left out of the question.
+  const indicatorEpicIds = useMemo(
+    () =>
+      items.flatMap((item) => (item.taskType === "epic" ? [item.epicId] : [])),
+    [items],
+  );
+  const notificationIndicators = useNotificationIndicators({
+    hostId: null,
+    epicIds: indicatorEpicIds,
+    chatIds: [],
+    enabled: indicatorEpicIds.length > 0,
+  });
+
+  // The same pull History runs on a phone, over the same query: the drawer is
+  // the list the phone shows most, so it answers the same gesture.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const pull = usePullToRefresh({
+    scrollRef,
+    onRefresh: refetch,
+    disabled: isPending || error !== null,
+  });
+
+  const openItem = (item: HistoryItem) => {
+    // Same refusal as every History list: this drawer lists the same tasks,
+    // and a delete confirmed there is still running while the row is here.
+    if (isEpicDeleteInFlight(item.epicId)) return;
+    props.onNavigate();
+    // The end of the mobile "your tasks" branch of the first-task guide: it
+    // asked the user to pick up where they left off, and this is them doing
+    // it. Read imperatively - the drawer has no reason to re-render on the
+    // guide's state, and every other row in this list is a task too.
+    const guide = useFirstTaskGuideStore.getState();
+    if (guide.status === "active") guide.dismiss();
+    if (item.taskType === "phase") {
+      activateTabIntent(
+        navigate,
+        openPhaseMigrationIntent({
+          phaseId: item.epicId,
+          name: item.title,
+          focus: {
+            focusedAt: undefined,
+            focusArtifactId: undefined,
+            focusThreadId: undefined,
+            migrationSource: "phase",
+          },
+        }),
+        undefined,
+      );
+      return;
+    }
+    // Passing the row's raw title threads it through tab creation so the
+    // cold-open canvas skeleton renders the real epic title immediately.
+    openEpicFromList(navigate, item.epicId, pathname, {
+      title: item.title,
+      source: "direct_ui",
+      tracyOrigin: null,
+    });
+  };
+
+  let body: ReactNode;
+  if (error !== null) {
+    body = (
+      <div className="flex items-center justify-between gap-2 px-3 py-2 text-ui-sm text-muted-foreground">
+        <span>Couldn&apos;t load tasks</span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          data-testid="mobile-nav-task-list-retry"
+          onClick={() => {
+            void refetch();
+          }}
+        >
+          Retry
+        </Button>
+      </div>
+    );
+  } else if (isPending) {
+    body = (
+      <div
+        className="flex flex-col gap-1 px-1"
+        data-testid="mobile-nav-task-list-loading"
+        aria-busy="true"
+        aria-label="Loading tasks"
+      >
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} className="h-10 w-full rounded-md" />
+        ))}
+      </div>
+    );
+  } else if (cloudPagePending) {
+    body = (
+      <div
+        className="flex flex-col gap-1 px-1"
+        data-testid="mobile-nav-task-list-loading"
+        aria-busy="true"
+        aria-label="Loading tasks"
+      >
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} className="h-10 w-full rounded-md" />
+        ))}
+      </div>
+    );
+  } else if (data?.hostRequiresCloudToList === true) {
+    // No listing was requested: no cloud verdict, and a host too old to list
+    // from this device. `items` is empty because nothing was asked, so the
+    // "No tasks yet" arm below would state as fact something this session has
+    // no evidence for. The full explanation lives on History proper; this
+    // drawer is a shortcut list, so it says only what it can stand behind.
+    body = (
+      <p
+        className="px-3 py-2 text-ui-sm text-muted-foreground"
+        data-testid="mobile-nav-task-list-host-requires-cloud"
+      >
+        Tasks can&apos;t be listed until your sign-in is confirmed
+      </p>
+    );
+  } else if (items.length === 0) {
+    body = (
+      <p className="px-3 py-2 text-ui-sm text-muted-foreground">No tasks yet</p>
+    );
+  } else {
+    body = (
+      <>
+        {items.map((item) => (
+          <Button
+            key={item.id}
+            type="button"
+            variant="ghost"
+            className="h-10 w-full justify-start gap-3"
+            data-testid="mobile-nav-task-row"
+            onClick={() => {
+              openItem(item);
+            }}
+          >
+            {/* No default glyph on ordinary rows: every row in this list is a
+                task, so a repeated glyph carried no information and cost the
+                title ~28px. What does take the leading slot is information:
+                the pin on pinned rows (mirrors the list panel's pinned style,
+                primary + filled), and the task's STATUS - an agent working, or
+                a result waiting to be read - through the same indicator the
+                desktop list and the history page render. A row with neither
+                gives its title the full width. Pinned and running shows both,
+                pin first. */}
+            {item.isPinned ? (
+              <Pin
+                aria-label="Pinned"
+                data-testid="mobile-nav-task-pin"
+                className="size-3.5 shrink-0 fill-current text-primary"
+              />
+            ) : null}
+            <HistoryRowStatusIcon
+              item={item}
+              testIdPrefix="mobile-nav-task"
+              className="text-muted-foreground"
+              defaultIcon={null}
+            />
+            <span className="min-w-0 flex-1 truncate text-left font-normal">
+              {drawerItemDisplayTitle(item)}
+            </span>
+            {/* The shared `updatedLabel` ("about 1 month ago") spends ~100px on
+                a secondary detail and is why titles truncated mid-word. The
+                bucketed formatter the notification rows use says the same thing
+                in a third of the width. Formatted here rather than by changing
+                `updatedLabel`, which the landing list and the tray also read. */}
+            <span className="shrink-0 text-ui-xs text-muted-foreground">
+              {formatRelativeTimestamp(historyRowTimeMs(item, sort), now)}
+            </span>
+            {/* A tap on this row opens the task, so the status dot's sentence
+                has no hover to live in. The two-word label is the visible
+                half; the dot keeps the full sentence as its accessible name. */}
+            <DrawerRowProvenanceLabel item={item} />
+          </Button>
+        ))}
+        {hasNextPage ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="mx-auto"
+            disabled={isFetchingNextPage}
+            data-testid="mobile-nav-task-list-show-more"
+            onClick={() => {
+              fetchNextPage();
+            }}
+          >
+            {isFetchingNextPage ? (
+              <AgentSpinningDots
+                variant="dots"
+                className={undefined}
+                testId={undefined}
+                tone="muted"
+              />
+            ) : null}
+            Show more
+          </Button>
+        ) : null}
+      </>
+    );
+  }
+
+  return (
+    <div className="relative mt-1 min-h-48 flex-1 overflow-hidden">
+      <PullIndicator
+        pullPx={pull.pullPx}
+        isArmed={pull.isArmed}
+        isRefreshing={pull.isRefreshing}
+      />
+      <div
+        ref={scrollRef}
+        data-testid="mobile-nav-task-scroller"
+        // `overscroll-contain` for the same reason as History's scroller: the
+        // webview's own bounce would move under the pull's indicator.
+        className={cn(
+          "h-full overflow-y-auto overscroll-contain",
+          LIST_FADE_CLASS,
+          !pull.isPulling && SETTLE_CLASS,
+        )}
+        style={{ transform: `translate3d(0, ${pull.pullPx}px, 0)` }}
+      >
+        <div
+          // `pb-8` is the blank strip `LIST_FADE_CLASS` fades over, so a full
+          // scroll never leaves the last row half-faded. Grouping here is
+          // whitespace rather than another rule: the drawer had four of them
+          // (identity, New task, this list, footer) and only the footer's - which
+          // separates the pinned actions from a moving list - earns its keep.
+          className="flex flex-col gap-1 pb-8"
+          data-testid="mobile-nav-task-list"
+        >
+          {/* Pinned while the rows scroll. Solid drawer background
+          (`bg-popover`) so rows slide under it rather than through it. */}
+          <div className="sticky top-0 z-10 flex items-center bg-popover px-3 py-1">
+            <span className="text-overline text-muted-foreground">
+              Recent tasks
+            </span>
+          </div>
+          <NotificationIndicatorsProvider indicators={notificationIndicators}>
+            {body}
+          </NotificationIndicatorsProvider>
+        </div>
+      </div>
+    </div>
+  );
+}

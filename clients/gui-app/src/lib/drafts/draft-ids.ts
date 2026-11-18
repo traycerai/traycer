@@ -1,0 +1,68 @@
+import { v4 as uuidv4, v5 as uuidv5 } from "uuid";
+
+export function mintDraftId(): string {
+  return uuidv4();
+}
+
+/**
+ * Namespace for the one draft id that is derived rather than minted
+ * (`legacyComposerDraftId`). Fixed forever: every window, and the host's
+ * re-key of rows written under the earlier prefixed form, must land on the
+ * same id for the same composer. The host mirrors this constant
+ * (`traycer-host/src/persistence/draft-store/legacy-composer-draft-id.ts`).
+ */
+export const LEGACY_COMPOSER_DRAFT_NAMESPACE =
+  "848a7355-4280-4cfc-8bc6-f9d5aa3996cc";
+
+/**
+ * The id a composer draft persisted BEFORE drafts carried ids takes on when
+ * it is hydrated. Deterministic on purpose: hydration's `merge` result is
+ * never written back by the persist middleware, so two windows hydrating
+ * the same legacy draft would each mint their own id and publish both.
+ * Deriving it from the composer key makes every window converge on one id
+ * without a single-writer handshake. The key is a chat id, unique per
+ * composer, and the fixed namespace keeps the result out of the minted-uuid
+ * space (version nibble 5, never 4).
+ *
+ * A uuid rather than a prefixed key because the id is published as the
+ * cloud chat id, and that column is 36 chars wide: the earlier
+ * `legacy-composer-<uuid>` form was 52 and every publish of it was refused.
+ */
+export function legacyComposerDraftId(composerKey: string): string {
+  return uuidv5(composerKey, LEGACY_COMPOSER_DRAFT_NAMESPACE);
+}
+
+/**
+ * The form `legacyComposerDraftId` produced before it derived a uuid:
+ * `legacy-composer-<composer key>`. The store persists whatever id a row
+ * carries on its next write, so that form is on disk wherever a legacy
+ * draft was edited or acknowledged; hydration maps it forward with
+ * `migratedLegacyComposerDraftId`.
+ */
+export const LEGACY_COMPOSER_DRAFT_ID_PREFIX = "legacy-composer-";
+
+/**
+ * A persisted id in the retired prefixed form, mapped to the uuid v5 the
+ * same composer key derives to now; any other id unchanged. Applied at
+ * hydration to `draftId`, `supersedes` and the submitted-delete fence keys,
+ * so a persisted row lines up with the host's re-keyed row instead of
+ * rejecting it as a foreign id and re-sending the long one.
+ */
+export function migratedLegacyComposerDraftId(draftId: string): string {
+  if (!draftId.startsWith(LEGACY_COMPOSER_DRAFT_ID_PREFIX)) return draftId;
+  const composerKey = draftId.slice(LEGACY_COMPOSER_DRAFT_ID_PREFIX.length);
+  return composerKey.length === 0
+    ? draftId
+    : legacyComposerDraftId(composerKey);
+}
+
+export function interviewDraftBindingKey(
+  chatId: string,
+  blockId: string,
+): string {
+  // The separator is U+0000, WRITTEN AS AN ESCAPE. It was a literal NUL byte,
+  // which makes grep and ripgrep treat this whole file as binary and skip it
+  // in a directory walk, so every search of the codebase silently missed this
+  // module. The runtime string is unchanged, so persisted keys still match.
+  return `${chatId}\u0000${blockId}`;
+}

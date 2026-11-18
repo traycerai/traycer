@@ -1,0 +1,264 @@
+import { useMemo, type RefObject } from "react";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type {
+  ProviderId,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
+import {
+  ProfileDropdown,
+  type ProfileDropdownShortcutHint,
+} from "@/components/providers/profile-dropdown";
+import type { ProfileDropdownUsagePresentation } from "@/components/providers/profile-dropdown-usage";
+import { useProfileUsagePresentation } from "@/hooks/rate-limits/use-profile-usage-presentation";
+import {
+  useHostClientForHostId,
+  useHostDirectoryEntryForHostId,
+} from "@/hooks/host/use-host-client-for-host-id";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
+import {
+  profileCommitId,
+  profileTerminalAccountLine,
+  removedProfilesForProvider,
+  resolveProfilePin,
+  type ProfileRowAdmission,
+  type RemovedProviderProfile,
+} from "@/components/providers/provider-profile-model";
+import { hostNameFromLabel, UNNAMED_HOST_LABEL } from "@/lib/host/host-name";
+
+const EMPTY_PROFILES: ReadonlyArray<ProviderProfile> = [];
+const NO_REMOVED_PROFILES: readonly RemovedProviderProfile[] = [];
+
+interface PickerProfileDropdownProps {
+  readonly providerId: GuiHarnessId;
+  readonly providerLabel: string;
+  readonly profiles: ReadonlyArray<ProviderProfile>;
+  readonly activeProfileId: string | null;
+  readonly onSelectProfile: (profileId: string | null) => void;
+  readonly onCreateProfile: () => void;
+  readonly createProfileDisabled: boolean;
+  readonly createProfileDisabledReason: string | undefined;
+  readonly shortcutHintForIndex: (
+    index: number,
+  ) => ProfileDropdownShortcutHint | null;
+  readonly profileEnablementPending: (profileId: string | null) => boolean;
+  readonly contentContainer: HTMLElement | null;
+  readonly inputRef: RefObject<HTMLInputElement | null>;
+  readonly runTargetHostId: string | null;
+  readonly admissionByProfileId: ReadonlyMap<
+    string | null,
+    ProfileRowAdmission
+  > | null;
+}
+
+/** Picker-only opt-in boundary: Settings never mounts this component. */
+export function PickerProfileDropdown(props: PickerProfileDropdownProps) {
+  const providerId = guiHarnessIdToProviderId(props.providerId);
+  if (providerId === null) {
+    return (
+      <PickerProfileDropdownView
+        props={props}
+        usagePresentation={null}
+        removedProfiles={NO_REMOVED_PROFILES}
+      />
+    );
+  }
+  return (
+    <ProfileUsagePickerProfileDropdown props={props} providerId={providerId} />
+  );
+}
+
+function ProfileUsagePickerProfileDropdown({
+  props,
+  providerId,
+}: {
+  readonly props: PickerProfileDropdownProps;
+  readonly providerId: ProviderId;
+}) {
+  const runTargetClient = useHostClientForHostId(props.runTargetHostId);
+  const runTargetProvidersQuery = useProvidersListForClient(runTargetClient, {
+    enabled: true,
+    subscribed: true,
+  });
+  const runTargetProvider = runTargetProvidersQuery.data?.providers.find(
+    (candidate) => candidate.providerId === providerId,
+  );
+  const usageProfiles = useMemo(() => {
+    if (runTargetClient === null) return EMPTY_PROFILES;
+    if (runTargetProvider === undefined) return EMPTY_PROFILES;
+    return resolveHostConsistentUsageProfiles(
+      props.profiles,
+      runTargetProvider.profiles,
+    );
+  }, [props.profiles, runTargetClient, runTargetProvider]);
+  const usagePresentation = useProfileUsagePresentation({
+    runTargetHostId: props.runTargetHostId,
+    providerId,
+    profiles: usageProfiles,
+  });
+  return (
+    <PickerProfileDropdownView
+      props={props}
+      usagePresentation={usagePresentation}
+      removedProfiles={removedProfilesForProvider(
+        runTargetProvidersQuery.data,
+        providerId,
+      )}
+    />
+  );
+}
+
+/**
+ * Usage rows must never combine one host's visible identity with another
+ * host's rate-limit summary. Only enable comparison when the run target
+ * reports the same complete set of profile identities the dropdown is
+ * rendering; return the target host's objects so every summary field consumed
+ * by `useProfileUsageComparison` comes from that same host. A missing, partial,
+ * renamed, recolored, or differently-authenticated target set stays
+ * identity-only until the picker receives a coherent snapshot.
+ *
+ * `visibleProfiles` is caller-supplied, so this stays as the structural guard
+ * for a caller whose rail is scoped to some other host. Today no such caller
+ * exists: `HarnessModelPicker` resolves its rail's `providers.list` through
+ * the SAME `runTargetHostId` this dropdown queries, so both arrays come from
+ * one host's cached response and the join is a self-comparison that passes.
+ *
+ * Account identity is compared structurally, unresolved included: two
+ * `identity === null` rows (or two resolved rows with no `accountUuid` /
+ * `email` key) are the SAME row seen twice, not two independently queried
+ * hosts that happen to both be unresolved. The guard used to demand a resolved
+ * identity whenever the run target was explicit - back when the rail's
+ * visible rows came from the app-wide default host and the dropdown's from
+ * the tab host, so a null on each side proved nothing. That cross-host join no
+ * longer exists, and keeping the requirement made every tab-bound picker drop
+ * usage for the whole dropdown as soon as ONE profile's identity had not
+ * resolved yet - a state the same picker on the landing page (`null` target)
+ * always rendered through.
+ */
+function resolveHostConsistentUsageProfiles(
+  visibleProfiles: ReadonlyArray<ProviderProfile>,
+  runTargetProfiles: ReadonlyArray<ProviderProfile>,
+): ReadonlyArray<ProviderProfile> {
+  if (visibleProfiles.length !== runTargetProfiles.length) {
+    return EMPTY_PROFILES;
+  }
+  const runTargetByCommitId = new Map(
+    runTargetProfiles.map((profile) => [profileCommitId(profile), profile]),
+  );
+  const resolved = visibleProfiles.map((visibleProfile) => {
+    const runTargetProfile = runTargetByCommitId.get(
+      profileCommitId(visibleProfile),
+    );
+    if (
+      runTargetProfile === undefined ||
+      !hasSameVisibleProfileIdentity(visibleProfile, runTargetProfile)
+    ) {
+      return null;
+    }
+    return runTargetProfile;
+  });
+  return resolved.every(
+    (profile): profile is ProviderProfile => profile !== null,
+  )
+    ? resolved
+    : EMPTY_PROFILES;
+}
+
+function hasSameVisibleProfileIdentity(
+  left: ProviderProfile,
+  right: ProviderProfile,
+): boolean {
+  return (
+    left.kind === right.kind &&
+    left.label === right.label &&
+    left.auth.status === right.auth.status &&
+    left.auth.badgeText === right.auth.badgeText &&
+    left.auth.label === right.auth.label &&
+    left.auth.detail === right.auth.detail &&
+    hasSameAccountIdentity(left, right) &&
+    left.accentColor === right.accentColor
+  );
+}
+
+function hasSameAccountIdentity(
+  left: ProviderProfile,
+  right: ProviderProfile,
+): boolean {
+  if (left.identity === null || right.identity === null) {
+    return left.identity === right.identity;
+  }
+  return (
+    left.identity.email === right.identity.email &&
+    left.identity.tier === right.identity.tier &&
+    left.identity.accountUuid === right.identity.accountUuid
+  );
+}
+
+function useRunTargetComputerName(
+  runTargetHostId: string | null,
+): string | null {
+  const runTargetClient = useHostClientForHostId(runTargetHostId);
+  const hostId = runTargetClient?.getActiveHostId() ?? runTargetHostId;
+  const label = useHostDirectoryEntryForHostId(hostId)?.label ?? null;
+  if (hostId === null) return null;
+  const name = hostNameFromLabel(label, hostId);
+  return name === UNNAMED_HOST_LABEL ? null : name;
+}
+
+interface PickerProfileDropdownViewInput {
+  readonly props: PickerProfileDropdownProps;
+  readonly usagePresentation: ProfileDropdownUsagePresentation | null;
+  readonly removedProfiles: readonly RemovedProviderProfile[];
+}
+
+// The directory is read only when a row that is this computer's Terminal login is listed.
+function PickerProfileDropdownView(input: PickerProfileDropdownViewInput) {
+  return input.props.profiles.some(
+    (profile) => profileTerminalAccountLine(profile, null) !== null,
+  ) ? (
+    <PickerProfileDropdownWithComputerName {...input} />
+  ) : (
+    <PickerProfileDropdownRows {...input} computerName={null} />
+  );
+}
+
+function PickerProfileDropdownWithComputerName(
+  input: PickerProfileDropdownViewInput,
+) {
+  const computerName = useRunTargetComputerName(input.props.runTargetHostId);
+  return <PickerProfileDropdownRows {...input} computerName={computerName} />;
+}
+
+function PickerProfileDropdownRows({
+  props,
+  usagePresentation,
+  removedProfiles,
+  computerName,
+}: PickerProfileDropdownViewInput & {
+  readonly computerName: string | null;
+}) {
+  return (
+    <ProfileDropdown
+      providerLabel={props.providerLabel}
+      profiles={props.profiles}
+      pin={resolveProfilePin(
+        props.profiles,
+        removedProfiles,
+        props.activeProfileId,
+      )}
+      onSelectProfile={props.onSelectProfile}
+      onCreateProfile={props.onCreateProfile}
+      createProfileDisabled={props.createProfileDisabled}
+      createProfileDisabledReason={props.createProfileDisabledReason}
+      shortcutHintForIndex={props.shortcutHintForIndex}
+      profileEnablementPending={props.profileEnablementPending}
+      contentContainer={props.contentContainer}
+      onCloseAutoFocus={() => props.inputRef.current?.focus()}
+      usagePresentation={usagePresentation}
+      eligibilityControls={null}
+      admissionByProfileId={props.admissionByProfileId}
+      showTerminalBadge
+      terminalComputerName={computerName}
+    />
+  );
+}

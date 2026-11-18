@@ -1,0 +1,686 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const electronState = vi.hoisted(() => ({
+  appPath: "/desktop-app",
+  browserWindowOptions: [] as unknown[],
+  browserWindows: [] as Array<{
+    readonly readyToShow: () => void;
+    readonly maximizeCalls: number;
+    readonly pageTitleUpdated: () => void;
+    readonly preventDefault: () => void;
+    readonly setTitleCalls: string[];
+    readonly setMenuBarVisibilityCalls: boolean[];
+  }>,
+  webContentsOnChannels: [] as string[],
+  // Captures the LATEST listener registered per channel, so a test can drive
+  // it directly (e.g. `console-message`) without wiring a real BrowserWindow.
+  webContentsListeners: new Map<string, (...args: unknown[]) => void>(),
+  // EVERY listener registered, in order: the map above keeps only the latest
+  // per channel, and several modules listen on `render-process-gone`.
+  webContentsListenerLog: [] as Array<{
+    readonly channel: string;
+    readonly listener: (...args: unknown[]) => void;
+  }>,
+  // The webContents' background-throttling state; Electron's default is on.
+  throttlingAllowed: true,
+}));
+
+const perfTelemetryState = vi.hoisted(() => ({
+  events: [] as unknown[],
+}));
+
+// The renderer-load branch keys off the deploy slot (`config.isDevBuild`),
+// not `app.isPackaged`: dev → Vite dev server, shipped → `app://`.
+// DevTools have their own production-only policy so staging can keep the
+// inspector while still using shipped renderer/runtime wiring.
+const configState = vi.hoisted(() => ({
+  isDevBuild: true,
+  canOpenDevTools: true,
+}));
+
+vi.mock("@sentry/electron/main", () => ({
+  init: vi.fn(),
+  captureMessage: vi.fn(),
+  captureException: vi.fn(),
+}));
+
+vi.mock("../../perf/perf-telemetry-writer", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../perf/perf-telemetry-writer")
+  >("../../perf/perf-telemetry-writer");
+  return {
+    ...actual,
+    appendPerfEvent: (event: unknown) => {
+      perfTelemetryState.events.push(event);
+    },
+  };
+});
+
+vi.mock("electron", () => ({
+  app: {
+    getAppPath: (): string => electronState.appPath,
+    getPath: (): string => "/tmp/traycer-user-data",
+    on: vi.fn(),
+  },
+  BrowserWindow: class {
+    maximizeCalls = 0;
+    setTitleCalls: string[] = [];
+    setMenuBarVisibilityCalls: boolean[] = [];
+    private readyToShow: (() => void) | null = null;
+    private pageTitleUpdated:
+      | ((event: { preventDefault(): void }) => void)
+      | null = null;
+    readonly webContents = {
+      setVisualZoomLevelLimits: vi.fn(() => Promise.resolve()),
+      setWindowOpenHandler: vi.fn(),
+      getBackgroundThrottling: (): boolean => electronState.throttlingAllowed,
+      setBackgroundThrottling: (allowed: boolean) => {
+        electronState.throttlingAllowed = allowed;
+      },
+      on: (channel: string, listener: (...args: unknown[]) => void) => {
+        electronState.webContentsOnChannels.push(channel);
+        electronState.webContentsListeners.set(channel, listener);
+        electronState.webContentsListenerLog.push({ channel, listener });
+      },
+    };
+
+    constructor(options: unknown) {
+      const self = this;
+      const preventDefault = vi.fn();
+      electronState.browserWindowOptions.push(options);
+      electronState.browserWindows.push({
+        readyToShow: () => {
+          this.readyToShow?.();
+        },
+        get maximizeCalls() {
+          return self.maximizeCalls;
+        },
+        pageTitleUpdated: () => {
+          self.pageTitleUpdated?.({ preventDefault });
+        },
+        preventDefault,
+        get setTitleCalls() {
+          return self.setTitleCalls;
+        },
+        get setMenuBarVisibilityCalls() {
+          return self.setMenuBarVisibilityCalls;
+        },
+      });
+    }
+
+    once(event: string, listener: () => void): void {
+      if (event === "ready-to-show") {
+        this.readyToShow = listener;
+      }
+    }
+
+    on(
+      event: string,
+      listener: (event: { preventDefault(): void }) => void,
+    ): void {
+      if (event === "page-title-updated") {
+        this.pageTitleUpdated = listener;
+      }
+    }
+
+    maximize(): void {
+      this.maximizeCalls += 1;
+    }
+
+    show(): void {}
+
+    hide(): void {}
+
+    minimize(): void {}
+
+    setSkipTaskbar(): void {}
+
+    setTitle(title: string): void {
+      this.setTitleCalls.push(title);
+    }
+
+    setMenuBarVisibility(visible: boolean): void {
+      this.setMenuBarVisibilityCalls.push(visible);
+    }
+  },
+  shell: { openExternal: vi.fn() },
+}));
+
+vi.mock("electron-log", () => ({
+  default: {
+    transports: {
+      file: { level: "info", resolvePathFn: null },
+      console: { level: "info" },
+    },
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
+vi.mock("../../../config", async (importActual) => {
+  const actual = await importActual<typeof import("../../../config")>();
+  return {
+    ...actual,
+    get isDevBuild(): boolean {
+      return configState.isDevBuild;
+    },
+    get canOpenDevTools(): boolean {
+      return configState.canOpenDevTools;
+    },
+  };
+});
+
+import {
+  createMainWindow,
+  loadMainWindow,
+  type MainWindowOptions,
+  type MainWindowLoadTarget,
+} from "../window-factory";
+import { createFirstLaunchWindowPlacement } from "../window-geometry";
+
+const originalResourcesPathDescriptor = Object.getOwnPropertyDescriptor(
+  process,
+  "resourcesPath",
+);
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(
+  process,
+  "platform",
+);
+const originalEnv = process.env;
+
+function createMainWindowForTest(
+  options: Omit<MainWindowOptions, "devWindowTitle">,
+): void {
+  createMainWindow({
+    devWindowTitle: "Traycer Dev — spry-panda",
+    ...options,
+  });
+}
+
+describe("loadMainWindow", () => {
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+    configState.isDevBuild = true;
+    configState.canOpenDevTools = true;
+    electronState.appPath = "/desktop-app";
+    electronState.browserWindowOptions = [];
+    electronState.browserWindows = [];
+    electronState.webContentsOnChannels = [];
+    electronState.webContentsListeners.clear();
+    electronState.webContentsListenerLog = [];
+    electronState.throttlingAllowed = true;
+    perfTelemetryState.events = [];
+    Object.defineProperty(process, "resourcesPath", {
+      configurable: true,
+      value: "/packaged/Resources",
+    });
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+    restoreProcessProperty("resourcesPath", originalResourcesPathDescriptor);
+    restoreProcessProperty("platform", originalPlatformDescriptor);
+  });
+
+  it("loads the shipped renderer shell root", async () => {
+    configState.isDevBuild = false;
+    const target = createLoadTarget();
+
+    await loadMainWindow(target);
+
+    // Shipped (non-dev) builds load through the privileged `app://` scheme so
+    // the renderer gets a real web origin (service workers, strict CSP). The
+    // protocol handler serves files from disk, so app routes must travel via
+    // preload bootstrap args rather than the app:// URL path.
+    expect(target.loadedUrls).toEqual(["app://renderer/"]);
+  });
+
+  it("passes the initial route through the preload bootstrap arguments", () => {
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/epics/epic-a",
+      zoomFactor: 1,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.browserWindowOptions).toEqual([
+      expect.objectContaining({
+        webPreferences: expect.objectContaining({
+          additionalArguments: ["--traycer-initial-route=%2Fepics%2Fepic-a"],
+          webviewTag: true,
+        }),
+      }),
+    ]);
+  });
+
+  it("installs webview attach guards on the trusted main window", () => {
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.webContentsOnChannels).toEqual(
+      expect.arrayContaining([
+        "will-attach-webview",
+        "did-attach-webview",
+        "did-start-navigation",
+        "render-process-gone",
+        "destroyed",
+      ]),
+    );
+  });
+
+  it("keeps the dev display name after the renderer updates its document title", () => {
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.browserWindowOptions).toEqual([
+      expect.objectContaining({ title: "Traycer Dev — spry-panda" }),
+    ]);
+
+    electronState.browserWindows[0].pageTitleUpdated();
+
+    expect(
+      electronState.browserWindows[0].preventDefault,
+    ).toHaveBeenCalledOnce();
+    expect(electronState.browserWindows[0].setTitleCalls).toEqual([
+      "Traycer Dev — spry-panda",
+    ]);
+  });
+
+  it("leaves the renderer title flow unchanged when no dev slot is active", () => {
+    createMainWindow({
+      devWindowTitle: null,
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.browserWindowOptions[0]).not.toHaveProperty("title");
+
+    electronState.browserWindows[0].pageTitleUpdated();
+
+    expect(electronState.browserWindows[0].setTitleCalls).toEqual([]);
+  });
+
+  it("omits preload bootstrap route arguments when no initial route is provided", () => {
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: null,
+      zoomFactor: 1,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.browserWindowOptions).toEqual([
+      expect.objectContaining({
+        webPreferences: expect.objectContaining({
+          additionalArguments: [],
+        }),
+      }),
+    ]);
+  });
+
+  it("applies the zoom factor without scaling native window bounds", () => {
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: null,
+      zoomFactor: 1.5,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.browserWindowOptions).toEqual([
+      expect.objectContaining({
+        width: 1280,
+        height: 800,
+        minWidth: 960,
+        minHeight: 600,
+        webPreferences: expect.objectContaining({
+          zoomFactor: 1.5,
+        }),
+      }),
+    ]);
+  });
+
+  it("keeps the original macOS hidden-inset overlay titlebar", () => {
+    setProcessPlatform("darwin");
+
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.browserWindowOptions).toEqual([
+      expect.objectContaining({
+        titleBarStyle: "hiddenInset",
+        trafficLightPosition: { x: 12, y: 12 },
+        titleBarOverlay: true,
+      }),
+    ]);
+  });
+
+  it("scales the Window Controls Overlay configuration with initial zoom on Windows", () => {
+    setProcessPlatform("win32");
+
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1.5,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.browserWindowOptions).toEqual([
+      expect.objectContaining({
+        titleBarStyle: "hidden",
+        titleBarOverlay: {
+          color: "#0b0b0d",
+          symbolColor: "#e5e5e5",
+          height: 54,
+        },
+      }),
+    ]);
+  });
+
+  it("uses the integrated title bar overlay and hides the native menu bar on Linux", () => {
+    setProcessPlatform("linux");
+
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1.5,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.browserWindowOptions).toEqual([
+      expect.objectContaining({
+        titleBarStyle: "hidden",
+        titleBarOverlay: {
+          color: "#0b0b0d",
+          symbolColor: "#e5e5e5",
+          height: 54,
+        },
+      }),
+    ]);
+    expect(electronState.browserWindows[0]?.setMenuBarVisibilityCalls).toEqual([
+      false,
+    ]);
+  });
+
+  it("creates the window background-throttled and wires the reset to a committed navigation, a failed main-frame load and a renderer crash", () => {
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    // Throttled by default: a covered (macOS), minimised or hidden window must
+    // be allowed to stop rendering (traycer#2355).
+    expect(electronState.browserWindowOptions).toEqual([
+      expect.objectContaining({
+        webPreferences: expect.objectContaining({
+          backgroundThrottling: true,
+        }),
+      }),
+    ]);
+
+    // A demand a document made (throttling off) must not outlive that
+    // document, whichever way it ends.
+    // `did-fail-load` carries (event, code, description, url, isMainFrame);
+    // the factory's own logging listener on it reads the first four too.
+    for (const channel of [
+      "did-navigate",
+      "did-fail-load",
+      "render-process-gone",
+    ]) {
+      electronState.throttlingAllowed = false;
+      for (const entry of electronState.webContentsListenerLog) {
+        if (entry.channel === channel) {
+          entry.listener({}, -105, "ERR_NAME_NOT_RESOLVED", "app://x", true);
+        }
+      }
+      expect(electronState.throttlingAllowed, channel).toBe(true);
+    }
+  });
+
+  it("keeps DevTools enabled for the shipped staging policy", () => {
+    configState.isDevBuild = false;
+    configState.canOpenDevTools = true;
+
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.browserWindowOptions).toEqual([
+      expect.objectContaining({
+        webPreferences: expect.objectContaining({
+          devTools: true,
+        }),
+      }),
+    ]);
+  });
+
+  it("disables DevTools at the BrowserWindow level for production policy", () => {
+    configState.isDevBuild = false;
+    configState.canOpenDevTools = false;
+
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.browserWindowOptions).toEqual([
+      expect.objectContaining({
+        webPreferences: expect.objectContaining({
+          devTools: false,
+        }),
+      }),
+    ]);
+  });
+
+  it("does not subscribe to Chromium native find result events", () => {
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.webContentsOnChannels).not.toContain("found-in-page");
+  });
+
+  it("redacts a secret-bearing string field on a perf-telemetry console line before persisting it", () => {
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    const consoleMessageListener =
+      electronState.webContentsListeners.get("console-message");
+    expect(consoleMessageListener).toBeDefined();
+
+    const perfLine = `[traycer-perf] ${JSON.stringify({
+      name: "test-event",
+      tsMs: 1_700_000_000_000,
+      fields: {
+        // A future call site could pass a user-derived string as a field -
+        // this must scrub the same way every other renderer log path does.
+        detail: "Bearer abc123secrettoken",
+        count: 3,
+      },
+    })}`;
+    consoleMessageListener?.({
+      level: "info",
+      message: perfLine,
+      lineNumber: 0,
+      sourceId: "app://renderer/",
+    });
+
+    expect(perfTelemetryState.events).toEqual([
+      {
+        name: "test-event",
+        tsMs: 1_700_000_000_000,
+        fields: { detail: "Bearer <redacted>", count: 3 },
+      },
+    ]);
+  });
+
+  it("honors resolution harness window bounds without changing zoom minimums", () => {
+    process.env.TRAYCER_RESOLUTION_TEST_WINDOW_BOUNDS = "3840x2160";
+    process.env.TRAYCER_RESOLUTION_TEST_DISABLE_MAXIMIZE = "1";
+
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.browserWindowOptions).toEqual([
+      expect.objectContaining({
+        width: 3840,
+        height: 2160,
+        minWidth: 960,
+        minHeight: 600,
+      }),
+    ]);
+
+    electronState.browserWindows[0].readyToShow();
+
+    expect(electronState.browserWindows[0].maximizeCalls).toBe(0);
+  });
+
+  it("creates maximized restored windows at their remembered normal bounds", () => {
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1,
+      placement: {
+        x: 120,
+        y: 140,
+        width: 1800,
+        height: 1200,
+        maximized: true,
+      },
+    });
+
+    expect(electronState.browserWindowOptions).toEqual([
+      expect.objectContaining({
+        x: 120,
+        y: 140,
+        width: 1800,
+        height: 1200,
+      }),
+    ]);
+
+    electronState.browserWindows[0].readyToShow();
+
+    expect(electronState.browserWindows[0].maximizeCalls).toBe(1);
+  });
+
+  it("can load the built renderer in a dev build for resolution screenshots", async () => {
+    configState.isDevBuild = true;
+    process.env.TRAYCER_RESOLUTION_TEST_USE_BUILT_RENDERER = "1";
+    const target = createLoadTarget();
+
+    await loadMainWindow(target);
+
+    expect(target.loadedUrls).toEqual(["app://renderer/"]);
+  });
+
+  it("loads the Vite dev renderer shell on the dev slot without auto-opening DevTools", async () => {
+    configState.isDevBuild = true;
+    const target = createLoadTarget();
+
+    await loadMainWindow(target);
+
+    // DevTools must NOT auto-open - they're opt-in via the View menu's
+    // "Toggle Developer Tools". We assert the loaded URL only; the target has
+    // no devtools hook to call.
+    expect(target.loadedUrls).toEqual(["http://localhost:5173"]);
+  });
+
+  it("loads the dynamic Vite dev renderer URL when provided", async () => {
+    configState.isDevBuild = true;
+    process.env.TRAYCER_DESKTOP_DEV_URL = "http://localhost:21005";
+    const target = createLoadTarget();
+
+    await loadMainWindow(target);
+
+    expect(target.loadedUrls).toEqual(["http://localhost:21005"]);
+  });
+
+  it("rejects non-loopback dev renderer URLs", async () => {
+    configState.isDevBuild = true;
+    process.env.TRAYCER_DESKTOP_DEV_URL = "http://example.com:21005";
+    const target = createLoadTarget();
+
+    await expect(loadMainWindow(target)).rejects.toThrow(/loopback/);
+    expect(target.loadedUrls).toEqual([]);
+  });
+});
+
+function createLoadTarget(): MainWindowLoadTarget & {
+  readonly loadedUrls: string[];
+} {
+  const loadedUrls: string[] = [];
+  return {
+    loadedUrls,
+    loadURL: (url) => {
+      loadedUrls.push(url);
+      return Promise.resolve();
+    },
+  };
+}
+
+function restoreProcessProperty(
+  key: "resourcesPath" | "platform",
+  descriptor: PropertyDescriptor | undefined,
+): void {
+  if (descriptor === undefined) {
+    Reflect.deleteProperty(process, key);
+    return;
+  }
+  Object.defineProperty(process, key, descriptor);
+}
+
+function setProcessPlatform(platform: NodeJS.Platform): void {
+  Object.defineProperty(process, "platform", {
+    value: platform,
+    writable: true,
+    configurable: true,
+  });
+}

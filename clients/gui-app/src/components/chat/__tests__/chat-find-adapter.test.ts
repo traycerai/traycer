@@ -1,0 +1,1249 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  chatFindCoverageMessage,
+  createChatFindAdapter,
+  type ChatFindAdapter,
+  type ChatFindReconcileTarget,
+  type ChatFindRevealTarget,
+  type ChatFindRow,
+} from "@/components/chat/chat-find";
+import type { ChatCollapsibleKey } from "@/components/chat/chat-collapsible-key";
+import {
+  ChatFindIndexDemandSource,
+  FULLY_LOADED_TRANSCRIPT,
+} from "@/components/chat/chat-find-index";
+import {
+  FIND_BLOCK_ATTR,
+  FIND_HIT_ATTR,
+  FIND_MIRROR_ATTR,
+  FIND_VISIBLE_ATTR,
+} from "@/lib/find-engine/find-blocks";
+
+class TestHighlight {
+  readonly ranges: ReadonlyArray<Range>;
+
+  constructor(...ranges: ReadonlyArray<Range>) {
+    this.ranges = ranges;
+  }
+}
+
+interface MockHighlightRegistry {
+  readonly values: ReadonlyMap<string, TestHighlight>;
+  readonly setCalls: ReadonlyArray<string>;
+}
+
+let restoreHighlights: (() => void) | null = null;
+let restoreFrames: (() => void) | null = null;
+const TILE_INSTANCE_ID = "chat-find-test-tile";
+
+beforeEach(() => {
+  restoreFrames = installFrameQueue();
+});
+
+afterEach(() => {
+  restoreFrames?.();
+  restoreFrames = null;
+  restoreHighlights?.();
+  restoreHighlights = null;
+  vi.restoreAllMocks();
+});
+
+describe("chat find coverage message", () => {
+  it("says nothing when the scan saw the whole transcript", () => {
+    expect(chatFindCoverageMessage(0)).toBeNull();
+  });
+
+  it("agrees in number with the row it is describing", () => {
+    expect(chatFindCoverageMessage(1)).toBe(
+      "Partial results: 1 older message is not loaded.",
+    );
+    expect(chatFindCoverageMessage(2)).toBe(
+      "Partial results: 2 older messages are not loaded.",
+    );
+  });
+
+  it("groups a long chat's digits", () => {
+    // These counts run to five figures on the chats this feature exists for.
+    //
+    // The expectation is DERIVED, not the `en-US` literal it used to be:
+    // `chatFindCoverageMessage` calls `toLocaleString()` with no locale
+    // deliberately - the grouping a reader sees should be the reader's - and
+    // Vitest pins no locale, so a runtime defaulting to `de-DE` ("12.400") or
+    // `hi-IN` ("12,400" only by coincidence) failed a correct implementation.
+    expect(chatFindCoverageMessage(12_400)).toContain(
+      `${(12_400).toLocaleString()} older messages`,
+    );
+  });
+});
+
+describe("chat find adapter", () => {
+  it("counts projection matches and reports pending when the row is not mounted", () => {
+    const revealMatch = vi.fn();
+    const { adapter, setRows } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-a",
+      revealMatch,
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => null,
+      getMountedUnitRoot: () => null,
+    });
+    setRows([
+      testRow("row-1", "unit-1", "alpha beta alpha"),
+      testRow("row-2", "unit-2", "gamma"),
+    ]);
+
+    void adapter.search({ requestId: 1, query: "alpha", matchCase: false });
+
+    expect(adapter.getSnapshot()).toMatchObject({
+      requestId: 1,
+      status: "ready",
+      current: 1,
+      total: 2,
+      activeUnitId: "unit-1",
+      exactHighlight: "pending",
+    });
+    expect(revealMatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "row-1",
+        unitId: "unit-1",
+      }),
+    );
+  });
+
+  it("maps chat matches after an expanding lowercase character to original offsets", () => {
+    const registry = installMockHighlights();
+    const row = document.createElement("div");
+    const unit = document.createElement("div");
+    unit.textContent = "İstanbul report";
+    row.append(unit);
+    const { adapter, setRows } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-unicode-offset",
+      revealMatch: (target) => target.paint(),
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => row,
+      getMountedUnitRoot: () => unit,
+    });
+    setRows([testRow("row-1", "unit-1", "İstanbul report")]);
+
+    void adapter.search({ requestId: 13, query: "report", matchCase: false });
+    flushFrames();
+
+    expect(adapter.getSnapshot()).toMatchObject({
+      total: 1,
+      activeUnitId: "unit-1",
+      exactHighlight: "painted",
+    });
+    const activeEntry = Array.from(registry.values.entries()).find(([name]) =>
+      name.includes("active"),
+    );
+    const range = activeEntry?.[1].ranges[0];
+    expect(range?.startOffset).toBe(9);
+    expect(range?.endOffset).toBe(15);
+    expect(range?.cloneContents().textContent).toBe("report");
+  });
+
+  it("qualifies a ZERO-match answer that only scanned part of a windowed transcript", () => {
+    const { adapter, setRows, setCoverageMessage } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-a",
+      revealMatch: vi.fn(),
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => null,
+      getMountedUnitRoot: () => null,
+    });
+    setRows([testRow("row-1", "unit-1", "alpha")]);
+    setCoverageMessage("Partial results: 412 older messages are not loaded.");
+
+    void adapter.search({ requestId: 1, query: "zeta", matchCase: false });
+
+    // The reading this exists to prevent: "0 results" over a subset, which is
+    // indistinguishable from "not in this chat" without the caveat.
+    expect(adapter.getSnapshot()).toMatchObject({
+      status: "ready",
+      total: 0,
+      coverageMessage: "Partial results: 412 older messages are not loaded.",
+    });
+  });
+
+  it("carries the caveat onto a found match and drops it once the window completes", () => {
+    const { adapter, setRows, setCoverageMessage } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-a",
+      revealMatch: vi.fn(),
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => null,
+      getMountedUnitRoot: () => null,
+    });
+    setRows([testRow("row-1", "unit-1", "alpha beta")]);
+    setCoverageMessage("Partial results: 1 older message is not loaded.");
+
+    void adapter.search({ requestId: 1, query: "alpha", matchCase: false });
+    expect(adapter.getSnapshot()).toMatchObject({
+      total: 1,
+      coverageMessage: "Partial results: 1 older message is not loaded.",
+    });
+
+    // Hydration completes and the renderer's supplier starts answering null.
+    // The caveat has to be re-read with the rows, not remembered.
+    setCoverageMessage(null);
+    setRows([testRow("row-1", "unit-1", "alpha beta")]);
+
+    expect(adapter.getSnapshot()).toMatchObject({
+      total: 1,
+      coverageMessage: null,
+    });
+  });
+
+  it("reads no coverage while the bar is closed", () => {
+    const { adapter, setRows, getCoverageCalls } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-a",
+      revealMatch: vi.fn(),
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => null,
+      getMountedUnitRoot: () => null,
+    });
+
+    // Same closed-bar fast path the rows supplier is on: streaming must not
+    // pay for a caveat nothing is displaying.
+    setRows([testRow("row-1", "unit-1", "alpha")]);
+    expect(getCoverageCalls()).toBe(0);
+
+    void adapter.search({ requestId: 1, query: "alpha", matchCase: false });
+    expect(getCoverageCalls()).toBe(1);
+
+    adapter.clear();
+    setRows([testRow("row-1", "unit-1", "alpha")]);
+    expect(getCoverageCalls()).toBe(1);
+    expect(adapter.getSnapshot().coverageMessage).toBeNull();
+  });
+
+  it("scrolls to an offscreen match and paints after the row mounts", () => {
+    const registry = installMockHighlights();
+    const mountedRows = new Map<string, HTMLElement>();
+    const { adapter, setRows } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-b",
+      revealMatch: vi.fn(),
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: (messageId) => mountedRows.get(messageId) ?? null,
+      getMountedUnitRoot: (messageId, unitId) =>
+        mountedRows
+          .get(messageId)
+          ?.querySelector<HTMLElement>(`[data-unit-id="${unitId}"]`) ?? null,
+    });
+    setRows([
+      testRow("visible-row", "visible-unit", "ordinary text"),
+      testRow("offscreen-row", "offscreen-unit", "needle text"),
+    ]);
+
+    void adapter.search({ requestId: 2, query: "needle", matchCase: false });
+    flushFrames();
+    expect(adapter.getSnapshot().exactHighlight).toBe("pending");
+
+    const row = document.createElement("div");
+    row.dataset.messageId = "offscreen-row";
+    const unit = document.createElement("div");
+    unit.dataset.unitId = "offscreen-unit";
+    unit.textContent = "needle text";
+    row.append(unit);
+    mountedRows.set("offscreen-row", row);
+    adapter.syncMountedHighlight();
+    flushFrames();
+
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+    const activeEntry = Array.from(registry.values.entries()).find(([name]) =>
+      name.includes("active"),
+    );
+    expect(activeEntry).not.toBeUndefined();
+    const activeRange = activeEntry?.[1].ranges[0];
+    expect(activeRange?.startContainer.parentElement).toBe(unit);
+  });
+
+  it("repaints a replaced source block after DOM redraw without rescanning or navigating", async () => {
+    const registry = installMockHighlights();
+    const row = document.createElement("div");
+    const unit = document.createElement("div");
+    row.append(unit);
+    document.body.append(row);
+    const makeBlock = () => {
+      const block = document.createElement("div");
+      block.setAttribute(FIND_BLOCK_ATTR, "mermaid");
+      const mirror = document.createElement("span");
+      mirror.setAttribute(FIND_MIRROR_ATTR, "");
+      mirror.textContent = "graph TD\nA[Save]";
+      const visible = document.createElement("figure");
+      visible.setAttribute(FIND_VISIBLE_ATTR, "");
+      const label = document.createElement("span");
+      label.textContent = "Save";
+      visible.append(label);
+      block.append(mirror, visible);
+      return { block, label };
+    };
+    const first = makeBlock();
+    unit.append(first.block);
+    const animate = vi.fn().mockReturnValue({ cancel: vi.fn() });
+    Object.defineProperty(first.block, "animate", {
+      configurable: true,
+      value: animate,
+    });
+    const scroll = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const revealTargets: ChatFindRevealTarget[] = [];
+    const revealMatch = vi.fn((target: ChatFindRevealTarget) => {
+      revealTargets.push(target);
+    });
+    const { adapter, setRows, getRowsCalls } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-source-redraw",
+      revealMatch,
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => row,
+      getMountedUnitRoot: () => unit,
+    });
+    setRows([testRow("row-1", "source-unit", "graph TD\nA[Save]")]);
+    void adapter.search({ requestId: 21, query: "Save", matchCase: false });
+    expect(revealTargets).toHaveLength(1);
+    revealTargets[0]?.paint();
+    expect(first.block.getAttribute(FIND_HIT_ATTR)).toBe("active");
+    expect(revealMatch).toHaveBeenCalledTimes(1);
+    expect(animate).toHaveBeenCalledTimes(1);
+    const initialRowsCalls = getRowsCalls();
+    const initialScrollCalls = scroll.mock.calls.length;
+
+    const replacement = makeBlock();
+    unit.replaceChildren(replacement.block);
+    await Promise.resolve();
+    flushFrames();
+
+    expect(replacement.block.getAttribute(FIND_HIT_ATTR)).toBe("active");
+    const paintedLabels = [...registry.values.values()].flatMap(
+      (highlight) => highlight.ranges,
+    );
+    expect(
+      paintedLabels.some(
+        (range) => range.startContainer === replacement.label.firstChild,
+      ),
+    ).toBe(true);
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+    expect(getRowsCalls()).toBe(initialRowsCalls);
+    expect(revealMatch).toHaveBeenCalledTimes(1);
+    expect(scroll).toHaveBeenCalledTimes(initialScrollCalls);
+    expect(animate).toHaveBeenCalledTimes(1);
+    adapter.dispose();
+    row.remove();
+  });
+
+  it("stops watching the mounted unit after clear, no matches, dismissal, and disposal", async () => {
+    const registry = installMockHighlights();
+    const row = document.createElement("div");
+    const unit = document.createElement("div");
+    unit.textContent = "needle";
+    row.append(unit);
+    document.body.append(row);
+    const { adapter, setRows, getRowsCalls } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-observer-lifetime",
+      revealMatch: (target) => target.paint(),
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => row,
+      getMountedUnitRoot: () => unit,
+    });
+    const matchedRows = [testRow("row-1", "unit-1", "needle")];
+    setRows(matchedRows);
+
+    const expectNoObservedRepaint = async () => {
+      const paintedCalls = registry.setCalls.length;
+      const rowCalls = getRowsCalls();
+      unit.append(document.createElement("span"));
+      await Promise.resolve();
+      flushFrames();
+      expect(registry.setCalls).toHaveLength(paintedCalls);
+      expect(getRowsCalls()).toBe(rowCalls);
+    };
+
+    void adapter.search({ requestId: 30, query: "needle", matchCase: false });
+    adapter.clear();
+    await expectNoObservedRepaint();
+
+    void adapter.search({ requestId: 31, query: "needle", matchCase: false });
+    setRows([testRow("row-1", "unit-1", "absent")]);
+    await expectNoObservedRepaint();
+
+    setRows(matchedRows);
+    void adapter.search({ requestId: 32, query: "needle", matchCase: false });
+    adapter.dismissActiveMatch();
+    await expectNoObservedRepaint();
+
+    void adapter.search({ requestId: 33, query: "needle", matchCase: false });
+    adapter.dispose();
+    await expectNoObservedRepaint();
+    row.remove();
+  });
+
+  it("paints visible content-bearing header text inside buttons", () => {
+    const registry = installMockHighlights();
+    const row = document.createElement("div");
+    const trigger = document.createElement("button");
+    trigger.dataset.findInclude = "true";
+    const label = document.createElement("span");
+    label.textContent = "Ran 1 command";
+    trigger.append(label);
+    const control = document.createElement("button");
+    control.textContent = "Copy reply";
+    row.append(trigger);
+    row.append(control);
+    const { adapter, setRows } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-header",
+      revealMatch: (target) => target.paint(),
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => row,
+      getMountedUnitRoot: () => trigger,
+    });
+    setRows([testRow("row-1", "header-unit", "Ran 1 command")]);
+
+    void adapter.search({ requestId: 3, query: "Ran", matchCase: false });
+    flushFrames();
+
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+    const activeEntry = Array.from(registry.values.entries()).find(([name]) =>
+      name.includes("active"),
+    );
+    expect(activeEntry).not.toBeUndefined();
+    const activeRange = activeEntry?.[1].ranges[0];
+    expect(activeRange?.startContainer.parentElement).toBe(label);
+
+    setRows([testRow("row-1", "header-unit", "Ran 1 command Copy reply")]);
+    void adapter.search({
+      requestId: 4,
+      query: "Copy reply",
+      matchCase: false,
+    });
+    flushFrames();
+
+    expect(adapter.getSnapshot().exactHighlight).toBe("pending");
+  });
+
+  it("scrolls the active match element into view on reveal but not on passive repaint", () => {
+    installMockHighlights();
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const row = document.createElement("div");
+    // Mirrors a subagent/A2A body: the unit anchor wraps a height-capped inner
+    // scroll container, and the match sits below its fold.
+    const unit = document.createElement("div");
+    const matchLine = document.createElement("p");
+    matchLine.textContent = "needle below the fold";
+    unit.append(matchLine);
+    row.append(unit);
+    const { adapter, setRows } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-inner-scroll",
+      revealMatch: (target) => target.paint(),
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => row,
+      getMountedUnitRoot: () => unit,
+    });
+    setRows([testRow("row-1", "unit-1", "needle below the fold")]);
+
+    void adapter.search({ requestId: 7, query: "needle", matchCase: false });
+    flushFrames();
+
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+    // Reveal scrolls the match's own element, walking every scroll ancestor
+    // (the card's inner overflow-auto container included).
+    expect(scrollIntoView.mock.instances).toContain(matchLine);
+
+    // A passive re-sync (streaming/rendered-data change) repaints without
+    // yanking the scroll position.
+    scrollIntoView.mockClear();
+    adapter.syncMountedHighlight();
+    flushFrames();
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("a passive repaint between a navigation and its reveal paint does not drop the reveal's scroll", () => {
+    installMockHighlights();
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const row = document.createElement("div");
+    const unit = document.createElement("div");
+    unit.textContent = "needle text";
+    row.append(unit);
+    // Held in an object: a `let` assigned only inside the callback stays
+    // narrowed to `null` for the type checker at the call site below.
+    const captured: { paint: (() => void) | null } = { paint: null };
+    const { adapter, setRows } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-reveal-passive-race",
+      // The real reveal controller invokes `paint` on a LATER animation frame,
+      // not synchronously on `revealMatch` itself - capture it instead of
+      // calling it right away, so a passive repaint can be driven to
+      // completion before the navigation's own paint ever runs.
+      revealMatch: (target) => {
+        captured.paint = target.paint;
+      },
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => row,
+      getMountedUnitRoot: () => unit,
+    });
+    setRows([testRow("row-1", "unit-1", "needle text")]);
+
+    void adapter.search({ requestId: 21, query: "needle", matchCase: false });
+    const revealPaint = captured.paint;
+    if (revealPaint === null) throw new Error("reveal paint was not captured");
+
+    // A passive repaint - e.g. a virtual-row mount sync - races in before the
+    // reveal controller gets around to invoking the captured paint. It must
+    // repaint without scrolling, and without stealing the navigation's
+    // generation.
+    adapter.syncMountedHighlight();
+    flushFrames();
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    // The reveal controller finally invokes the paint callback it was handed.
+    // It must still run (not be dropped as stale) and scroll the match into
+    // view - only the navigation paint may do that, and it must not have been
+    // skipped by the passive repaint in between.
+    revealPaint();
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+  });
+
+  it("keeps a missing exact DOM occurrence pending instead of clamping to another range", () => {
+    const registry = installMockHighlights();
+    const row = document.createElement("div");
+    const unit = document.createElement("div");
+    unit.textContent = "needle";
+    row.append(unit);
+    const { adapter, setRows } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-exact-occurrence",
+      revealMatch: (target) => target.paint(),
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => row,
+      getMountedUnitRoot: () => unit,
+    });
+    setRows([testRow("row-1", "unit-1", "needle needle")]);
+
+    void adapter.search({ requestId: 5, query: "needle", matchCase: false });
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+
+    void adapter.next();
+
+    expect(adapter.getSnapshot().exactHighlight).toBe("pending");
+    const activeEntry = Array.from(registry.values.entries()).find(([name]) =>
+      name.includes("active"),
+    );
+    expect(activeEntry).toBeUndefined();
+  });
+
+  it("clears mounted title/detail highlights on manual dismissal while preserving navigation", () => {
+    const registry = installMockHighlights();
+    const row = document.createElement("div");
+    const title = document.createElement("span");
+    title.dataset.unitId = "title-unit";
+    title.textContent = "needle title";
+    const detail = document.createElement("span");
+    detail.dataset.unitId = "detail-unit";
+    detail.textContent = "needle detail";
+    row.append(title, detail);
+    const { adapter, setRows } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-dismissal",
+      revealMatch: (target) => target.paint(),
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => row,
+      getMountedUnitRoot: (_messageId, unitId) =>
+        row.querySelector<HTMLElement>(`[data-unit-id="${unitId}"]`),
+    });
+    setRows([
+      testRow("row-1", "title-unit", "needle title"),
+      testRow("row-1", "detail-unit", "needle detail"),
+    ]);
+
+    void adapter.search({ requestId: 12, query: "needle", matchCase: false });
+    flushFrames();
+    expect(adapter.getSnapshot()).toMatchObject({
+      query: "needle",
+      activeUnitId: "title-unit",
+      exactHighlight: "painted",
+    });
+    expect(registry.values.size).toBeGreaterThan(0);
+
+    adapter.dismissActiveMatch();
+    expect(adapter.getSnapshot()).toMatchObject({
+      query: "needle",
+      activeUnitId: null,
+      exactHighlight: "none",
+    });
+    expect(registry.values.size).toBe(0);
+
+    // Passive transcript rescans and virtual-row mount sync are not user
+    // navigation. Neither may resurrect the match the user dismissed.
+    setRows([
+      testRow("row-1", "title-unit", "needle title"),
+      testRow("row-1", "detail-unit", "needle detail"),
+    ]);
+    adapter.syncMountedHighlight();
+    flushFrames();
+    expect(adapter.getSnapshot()).toMatchObject({
+      current: 1,
+      total: 2,
+      activeUnitId: null,
+      exactHighlight: "none",
+    });
+    expect(registry.values.size).toBe(0);
+
+    void adapter.next();
+    flushFrames();
+    expect(adapter.getSnapshot()).toMatchObject({
+      query: "needle",
+      current: 2,
+      total: 2,
+      activeUnitId: "detail-unit",
+      exactHighlight: "painted",
+    });
+  });
+
+  it("can degrade a missing unit anchor to message-root paint when reveal falls back", () => {
+    const registry = installMockHighlights();
+    const row = document.createElement("div");
+    row.textContent = "fallback needle";
+    const { adapter, setRows } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-anchor-fallback",
+      revealMatch: (target) => target.paintFallback(),
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => row,
+      getMountedUnitRoot: () => null,
+    });
+    setRows([testRow("row-1", "missing-unit", "fallback needle")]);
+
+    void adapter.search({
+      requestId: 6,
+      query: "needle",
+      matchCase: false,
+    });
+
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+    const activeRange = Array.from(registry.values.entries()).find(([name]) =>
+      name.includes("active"),
+    )?.[1].ranges[0];
+    expect(activeRange?.startContainer.parentElement).toBe(row);
+  });
+
+  it("paints the message-scoped occurrence when reveal degrades to message root", () => {
+    const registry = installMockHighlights();
+    const row = document.createElement("div");
+    const earlier = document.createElement("p");
+    earlier.textContent = "needle one";
+    const target = document.createElement("p");
+    target.textContent = "needle two";
+    row.append(earlier);
+    row.append(target);
+    const { adapter, setRows } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-message-fallback",
+      // The unit anchor never mounts, so every reveal degrades to the
+      // message-root paint that walks BOTH units.
+      revealMatch: (target_) => target_.paintFallback(),
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => row,
+      getMountedUnitRoot: () => null,
+    });
+    setRows([
+      {
+        messageId: "row-1",
+        recordIds: ["row-1"],
+        units: [
+          { unitId: "earlier-unit", text: "needle one", owningChain: [] },
+          { unitId: "target-unit", text: "needle two", owningChain: [] },
+        ],
+      },
+    ]);
+
+    // First match: earlier unit, message occurrence 0 -> the first DOM range.
+    void adapter.search({ requestId: 10, query: "needle", matchCase: false });
+    expect(activeHighlightParent(registry)).toBe(earlier);
+
+    // Second match: the target unit. Its per-unit ordinal is 0, but its
+    // message-wide ordinal is 1 - the fallback must paint the SECOND DOM
+    // occurrence, not re-highlight the earlier matching unit.
+    void adapter.next();
+    expect(adapter.getSnapshot()).toMatchObject({
+      current: 2,
+      total: 2,
+      activeUnitId: "target-unit",
+    });
+    expect(activeHighlightParent(registry)).toBe(target);
+  });
+
+  it("keeps a fallback match through message redraw and upgrades when its unit mounts", async () => {
+    const registry = installMockHighlights();
+    const row = document.createElement("div");
+    document.body.append(row);
+    const earlier = document.createElement("p");
+    earlier.textContent = "needle one";
+    const target = document.createElement("p");
+    target.textContent = "needle two";
+    row.append(earlier, target);
+    let mountedUnit: HTMLElement | null = null;
+    const revealMatch = vi.fn((revealTarget: ChatFindRevealTarget) => {
+      revealTarget.paintFallback();
+    });
+    const scroll = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    const { adapter, setRows, getRowsCalls } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-message-fallback-redraw",
+      revealMatch,
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => row,
+      getMountedUnitRoot: () => mountedUnit,
+    });
+    setRows([
+      {
+        messageId: "row-1",
+        recordIds: ["row-1"],
+        units: [
+          { unitId: "earlier-unit", text: "needle one", owningChain: [] },
+          { unitId: "target-unit", text: "needle two", owningChain: [] },
+        ],
+      },
+    ]);
+    void adapter.search({ requestId: 40, query: "needle", matchCase: false });
+    void adapter.next();
+    expect(activeHighlightParent(registry)).toBe(target);
+    expect(adapter.getSnapshot()).toMatchObject({
+      current: 2,
+      total: 2,
+      activeUnitId: "target-unit",
+      exactHighlight: "painted",
+    });
+    const initialRowCalls = getRowsCalls();
+    const initialScrollCalls = scroll.mock.calls.length;
+
+    // The fallback watches the message root: a renderer redraw must retain
+    // the message-wide second occurrence while the unit anchor is absent.
+    const replacement = document.createElement("p");
+    replacement.textContent = "needle two";
+    target.replaceWith(replacement);
+    await Promise.resolve();
+    flushFrames();
+    expect(activeHighlightParent(registry)).toBe(replacement);
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+    expect(getRowsCalls()).toBe(initialRowCalls);
+    expect(revealMatch).toHaveBeenCalledTimes(2);
+    expect(scroll).toHaveBeenCalledTimes(initialScrollCalls);
+
+    // Once the unit is mounted, passive paint uses its per-unit occurrence 0.
+    // Reusing the message ordinal 1 here would leave the highlight pending.
+    mountedUnit = replacement;
+    row.append(document.createElement("span"));
+    await Promise.resolve();
+    flushFrames();
+    expect(activeHighlightParent(registry)).toBe(replacement);
+    expect(adapter.getSnapshot().exactHighlight).toBe("painted");
+    expect(getRowsCalls()).toBe(initialRowCalls);
+    expect(revealMatch).toHaveBeenCalledTimes(2);
+    expect(scroll).toHaveBeenCalledTimes(initialScrollCalls);
+    adapter.dispose();
+    row.remove();
+  });
+
+  it("prevents stale highlight work from overwriting a newer query", () => {
+    installMockHighlights();
+    const row = document.createElement("div");
+    row.textContent = "old newer";
+    const { adapter, setRows } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-c",
+      revealMatch: (target) => {
+        window.requestAnimationFrame(() => target.paint());
+      },
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => row,
+      getMountedUnitRoot: () => row,
+    });
+    setRows([testRow("row-1", "unit-1", "old newer")]);
+
+    void adapter.search({ requestId: 1, query: "old", matchCase: false });
+    expect(adapter.getSnapshot().exactHighlight).toBe("pending");
+    void adapter.search({ requestId: 2, query: "missing", matchCase: false });
+    expect(adapter.getSnapshot()).toMatchObject({
+      requestId: 2,
+      query: "missing",
+      total: 0,
+      exactHighlight: "none",
+    });
+    flushFrames();
+
+    expect(adapter.getSnapshot()).toMatchObject({
+      requestId: 2,
+      query: "missing",
+      total: 0,
+      exactHighlight: "none",
+    });
+  });
+
+  it("preserves the active streaming match by unit occurrence as totals grow", () => {
+    const revealMatch = vi.fn();
+    const reconcileMatch = vi.fn();
+    const chain = [testCollapsibleKey("subagent", "streaming-subagent")];
+    const { adapter, setRows } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-streaming-identity",
+      revealMatch,
+      reconcileMatch,
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => null,
+      getMountedUnitRoot: () => null,
+    });
+    setRows([
+      testRowWithChain(
+        "row-1",
+        "streaming-unit",
+        "prefix needle before needle active",
+        chain,
+      ),
+    ]);
+    void adapter.search({ requestId: 7, query: "needle", matchCase: false });
+    void adapter.next();
+
+    expect(adapter.getSnapshot()).toMatchObject({
+      current: 2,
+      total: 2,
+      activeUnitId: "streaming-unit",
+    });
+
+    reconcileMatch.mockClear();
+    setRows([
+      testRowWithChain(
+        "row-1",
+        "streaming-unit",
+        "prefix needle before inserted streaming text needle active needle tail",
+        chain,
+      ),
+    ]);
+
+    expect(adapter.getSnapshot()).toMatchObject({
+      current: 2,
+      total: 3,
+      activeUnitId: "streaming-unit",
+    });
+    expect(reconcileMatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "row-1",
+        unitId: "streaming-unit",
+        matchKey: "row-1:streaming-unit:1",
+      }),
+    );
+    expect(revealMatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the active match when a streamed query insert lands before it in a concatenated unit", () => {
+    const revealMatch = vi.fn();
+    const reconcileMatch = vi.fn();
+    const chain = [testCollapsibleKey("subagent", "streaming-body")];
+    const { adapter, setRows } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-streaming-insert",
+      revealMatch,
+      reconcileMatch,
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => null,
+      getMountedUnitRoot: () => null,
+    });
+    // One concatenated body unit (task + progress + result). The only match is
+    // the occurrence in the trailing "result" text.
+    setRows([
+      testRowWithChain(
+        "row-1",
+        "body-unit",
+        "task line result needle here",
+        chain,
+      ),
+    ]);
+    void adapter.search({ requestId: 11, query: "needle", matchCase: false });
+    expect(adapter.getSnapshot()).toMatchObject({
+      current: 1,
+      total: 1,
+      activeUnitId: "body-unit",
+    });
+
+    reconcileMatch.mockClear();
+    // A streamed progress line containing the query streams in BEFORE the active
+    // occurrence. Its per-unit ordinal shifts 0 -> 1, so the old exact-ordinal
+    // identity would have yanked the active match onto the inserted occurrence.
+    setRows([
+      testRowWithChain(
+        "row-1",
+        "body-unit",
+        "task line needle progress result needle here",
+        chain,
+      ),
+    ]);
+
+    // The active match stays on the original (now second) occurrence.
+    expect(adapter.getSnapshot()).toMatchObject({
+      current: 2,
+      total: 2,
+      activeUnitId: "body-unit",
+    });
+    expect(reconcileMatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "row-1",
+        unitId: "body-unit",
+        matchKey: "row-1:body-unit:1",
+      }),
+    );
+    // Streaming rescans reconcile in place; no second navigation occurs.
+    expect(revealMatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconciles an active chain change on rescan without navigating", () => {
+    const revealMatch = vi.fn();
+    const reconcileMatch = vi.fn();
+    const { adapter, setRows } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-rescan-chain",
+      revealMatch,
+      reconcileMatch,
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => null,
+      getMountedUnitRoot: () => null,
+    });
+    const firstChain = [testCollapsibleKey("activity-group", "activity:old")];
+    const nextChain = [testCollapsibleKey("subagent", "promoted:subagent")];
+    setRows([testRowWithChain("row-1", "unit-1", "needle", firstChain)]);
+    void adapter.search({ requestId: 8, query: "needle", matchCase: false });
+
+    revealMatch.mockClear();
+    setRows([testRowWithChain("row-1", "unit-1", "needle", nextChain)]);
+
+    expect(adapter.getSnapshot()).toMatchObject({
+      current: 1,
+      total: 1,
+      activeUnitId: "unit-1",
+    });
+    expect(revealMatch).not.toHaveBeenCalled();
+    expect(reconcileMatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "row-1",
+        unitId: "unit-1",
+        owningChain: nextChain,
+      }),
+    );
+  });
+
+  it("reconciles to the fallback active match when the previous unit disappears", () => {
+    const reconcileMatch = vi.fn();
+    const { adapter, setRows } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-rescan-release",
+      revealMatch: vi.fn(),
+      reconcileMatch,
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => null,
+      getMountedUnitRoot: () => null,
+    });
+    setRows([
+      testRowWithChain("row-1", "removed-unit", "needle", [
+        testCollapsibleKey("subagent", "removed-subagent"),
+      ]),
+      testRow("row-2", "visible-unit", "needle"),
+    ]);
+    void adapter.search({ requestId: 9, query: "needle", matchCase: false });
+
+    reconcileMatch.mockClear();
+    setRows([
+      testRowWithChain("row-1", "removed-unit", "no remaining target", [
+        testCollapsibleKey("subagent", "removed-subagent"),
+      ]),
+      testRow("row-2", "visible-unit", "needle"),
+    ]);
+
+    expect(adapter.getSnapshot()).toMatchObject({
+      current: 1,
+      total: 1,
+      activeUnitId: "visible-unit",
+    });
+    expect(reconcileMatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "row-2",
+        unitId: "visible-unit",
+        owningChain: [],
+      }),
+    );
+  });
+
+  it("ends scanning after clear so post-close streaming does no projection work", () => {
+    const reconcileMatch = vi.fn();
+    const { adapter, setRows, getRowsCalls } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-clear",
+      revealMatch: vi.fn(),
+      reconcileMatch,
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => null,
+      getMountedUnitRoot: () => null,
+    });
+    setRows([testRow("row-1", "unit-1", "alpha beta alpha")]);
+    void adapter.search({ requestId: 1, query: "alpha", matchCase: false });
+    expect(adapter.getSnapshot().total).toBe(2);
+
+    adapter.clear();
+    expect(adapter.getSnapshot()).toMatchObject({
+      query: "",
+      total: 0,
+      status: "idle",
+    });
+
+    reconcileMatch.mockClear();
+    const closedGetRowsCalls = getRowsCalls();
+    // Simulate streaming tokens after the bar closed: notifyRowsChanged runs
+    // from a layout effect on every messages change. With scanning ended it
+    // must neither pull rows from the supplier (no transcript projection /
+    // markdown tokenization) nor re-run findMatches, so matches stay empty and
+    // nothing is reconciled.
+    setRows([
+      testRow("row-1", "unit-1", "alpha alpha alpha"),
+      testRow("row-2", "unit-2", "alpha"),
+    ]);
+    expect(adapter.getSnapshot().total).toBe(0);
+    expect(adapter.getSnapshot().query).toBe("");
+    expect(reconcileMatch).not.toHaveBeenCalled();
+    // The closed-find fast path never invokes the row supplier.
+    expect(getRowsCalls()).toBe(closedGetRowsCalls);
+
+    // Reopening still works: a fresh search scans the current rows again.
+    void adapter.search({ requestId: 2, query: "alpha", matchCase: false });
+    expect(adapter.getSnapshot().total).toBe(4);
+  });
+
+  it("does not rebuild the projection on message changes while the bar is closed", () => {
+    const { adapter, setRows, getRowsCalls } = createChatFindTestAdapter({
+      tileInstanceId: "chat-tile-closed-projection",
+      revealMatch: vi.fn(),
+      reconcileMatch: vi.fn(),
+      clearReveal: vi.fn(),
+      getMountedMessageRoot: () => null,
+      getMountedUnitRoot: () => null,
+    });
+
+    // The bar has never opened: every streaming message change must be free,
+    // pulling no rows from the supplier.
+    setRows([testRow("row-1", "unit-1", "alpha beta")]);
+    setRows([testRow("row-1", "unit-1", "alpha beta gamma")]);
+    setRows([testRow("row-1", "unit-1", "alpha beta gamma delta")]);
+    expect(getRowsCalls()).toBe(0);
+    expect(adapter.getSnapshot().total).toBe(0);
+
+    // Opening the search is the first time rows are projected.
+    void adapter.search({ requestId: 1, query: "alpha", matchCase: false });
+    expect(getRowsCalls()).toBe(1);
+    expect(adapter.getSnapshot().total).toBe(1);
+
+    // While open, a streaming message change rebuilds rows once to rescan.
+    setRows([testRow("row-1", "unit-1", "alpha beta gamma delta alpha")]);
+    expect(getRowsCalls()).toBe(2);
+    expect(adapter.getSnapshot().total).toBe(2);
+  });
+});
+
+function activeHighlightParent(
+  registry: MockHighlightRegistry,
+): Element | null {
+  const activeEntry = Array.from(registry.values.entries()).find(([name]) =>
+    name.includes("active"),
+  );
+  return activeEntry?.[1].ranges[0]?.startContainer.parentElement ?? null;
+}
+function testRow(messageId: string, unitId: string, text: string): ChatFindRow {
+  return testRowWithChain(messageId, unitId, text, []);
+}
+
+function testRowWithChain(
+  messageId: string,
+  unitId: string,
+  text: string,
+  owningChain: ReadonlyArray<ChatCollapsibleKey>,
+): ChatFindRow {
+  return {
+    messageId,
+    recordIds: [messageId],
+    units: [
+      {
+        unitId,
+        text,
+        owningChain,
+      },
+    ],
+  };
+}
+
+function testCollapsibleKey(
+  kind: ChatCollapsibleKey["kind"],
+  id: string,
+): ChatCollapsibleKey {
+  return {
+    tileInstanceId: TILE_INSTANCE_ID,
+    kind,
+    id,
+  };
+}
+
+interface ChatFindAdapterCallbacks {
+  readonly tileInstanceId: string;
+  readonly revealMatch: (target: ChatFindRevealTarget) => void;
+  readonly reconcileMatch: (target: ChatFindReconcileTarget) => void;
+  readonly clearReveal: () => void;
+  readonly getMountedMessageRoot: (messageId: string) => HTMLElement | null;
+  readonly getMountedUnitRoot: (
+    messageId: string,
+    unitId: string,
+  ) => HTMLElement | null;
+}
+
+interface ChatFindTestAdapter {
+  readonly adapter: ChatFindAdapter;
+  // Publish a new transcript projection and notify the adapter, mirroring the
+  // renderer's per-message layout effect. The adapter only rebuilds matches
+  // while a find session is active, so this is a no-op for a closed bar.
+  readonly setRows: (rows: ReadonlyArray<ChatFindRow>) => void;
+  // Number of times the adapter has pulled rows from the supplier - used to
+  // prove a closed find session does no projection work.
+  readonly getRowsCalls: () => number;
+  // Stand in for a windowed transcript that only partly hydrated. Mirrors the
+  // renderer, which recomputes the caveat from the CURRENT window every time
+  // the adapter asks.
+  readonly setCoverageMessage: (next: string | null) => void;
+  readonly getCoverageCalls: () => number;
+}
+
+function createChatFindTestAdapter(
+  callbacks: ChatFindAdapterCallbacks,
+): ChatFindTestAdapter {
+  let rows: ReadonlyArray<ChatFindRow> = [];
+  let getRowsCalls = 0;
+  let coverageMessage: string | null = null;
+  let getCoverageCalls = 0;
+  const adapter = createChatFindAdapter({
+    tileInstanceId: callbacks.tileInstanceId,
+    getRows: () => {
+      getRowsCalls += 1;
+      return rows;
+    },
+    getCoverageMessage: () => {
+      getCoverageCalls += 1;
+      return coverageMessage;
+    },
+    revealMatch: callbacks.revealMatch,
+    reconcileMatch: callbacks.reconcileMatch,
+    clearReveal: callbacks.clearReveal,
+    getMountedMessageRoot: callbacks.getMountedMessageRoot,
+    getMountedUnitRoot: callbacks.getMountedUnitRoot,
+    // Every row here is loaded: the index never has anything to add.
+    getPlacement: () => FULLY_LOADED_TRANSCRIPT,
+    getQueuePauseReasonSupport: () => null,
+    getReaderNavigationGeneration: () => 0,
+    indexDemand: new ChatFindIndexDemandSource(),
+    jumpToIndexHit: () => undefined,
+    readIndexHit: () => undefined,
+  });
+  return {
+    adapter,
+    setRows: (next) => {
+      rows = next;
+      adapter.notifyRowsChanged();
+    },
+    getRowsCalls: () => getRowsCalls,
+    setCoverageMessage: (next) => {
+      coverageMessage = next;
+    },
+    getCoverageCalls: () => getCoverageCalls,
+  };
+}
+
+function installMockHighlights(): MockHighlightRegistry {
+  const globalWithHighlights: {
+    readonly CSS?: typeof CSS;
+    readonly Highlight?: typeof Highlight;
+  } = globalThis;
+  const previousCss = globalWithHighlights.CSS;
+  const previousHighlight = globalWithHighlights.Highlight;
+  const values = new Map<string, TestHighlight>();
+  const setCalls: string[] = [];
+  Object.defineProperty(globalThis, "Highlight", {
+    configurable: true,
+    writable: true,
+    value: TestHighlight,
+  });
+  Object.defineProperty(globalThis, "CSS", {
+    configurable: true,
+    writable: true,
+    value: {
+      highlights: {
+        set: (name: string, highlight: TestHighlight) => {
+          setCalls.push(name);
+          values.set(name, highlight);
+        },
+        delete: (name: string) => {
+          values.delete(name);
+        },
+      },
+    },
+  });
+  restoreHighlights = () => {
+    if (previousCss === undefined) Reflect.deleteProperty(globalThis, "CSS");
+    else {
+      Object.defineProperty(globalThis, "CSS", {
+        configurable: true,
+        writable: true,
+        value: previousCss,
+      });
+    }
+    if (previousHighlight === undefined) {
+      Reflect.deleteProperty(globalThis, "Highlight");
+    } else {
+      Object.defineProperty(globalThis, "Highlight", {
+        configurable: true,
+        writable: true,
+        value: previousHighlight,
+      });
+    }
+  };
+  return { values, setCalls };
+}
+
+function installFrameQueue(): () => void {
+  const frames: FrameRequestCallback[] = [];
+  const request = vi
+    .spyOn(window, "requestAnimationFrame")
+    .mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+  const cancel = vi
+    .spyOn(window, "cancelAnimationFrame")
+    .mockImplementation((id) => {
+      const index = id - 1;
+      frames[index] = () => undefined;
+    });
+  flushFrames = () => {
+    const pending = frames.splice(0, frames.length);
+    pending.forEach((callback) => callback(performance.now()));
+  };
+  return () => {
+    request.mockRestore();
+    cancel.mockRestore();
+    flushFrames = () => undefined;
+  };
+}
+
+let flushFrames: () => void = () => undefined;

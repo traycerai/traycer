@@ -1,0 +1,786 @@
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { runInNewContext } from "node:vm";
+import { describe, expect, it } from "vitest";
+
+/**
+ * `patches/@legendapp%2Flist@<version>.patch` makes the web build's scroll
+ * adjustments absolute writes. iOS WebKit applies a relative `scrollBy` twice
+ * (the synchronous move, then the same delta again on the next scroll event),
+ * so every `maintainVisibleContentPosition` compensation issued while a row
+ * above the viewport is measured during a touch fling landed doubled, and the
+ * library re-requested it: a flick through the chat transcript on the phone
+ * bounced by whole screens. An absolute `scrollTo` lands once on every engine.
+ *
+ * `patchedDependencies` is keyed by the exact package version, so a bump of
+ * the list silently drops the patch. This reads the installed web build, not
+ * the patch file, so what it certifies is the code the renderer loads.
+ */
+
+interface SizedItem {
+  type: string;
+}
+
+interface AverageEntry {
+  avg: number;
+  num: number;
+}
+
+/**
+ * `updateOneItemSize` of the installed build, evaluated on its own: it is not
+ * exported, and the two helpers it calls (`getItemSize`, `setSize`) are
+ * stubbed, so what runs is the build's own averaging. The list state is a
+ * proxy that answers a field the build adds to it (the patch records which
+ * type each key's measurement is averaged under) with an empty map, as the
+ * list's state creation does.
+ */
+function loadUpdateOneItemSize(
+  source: string,
+): (
+  ctx: unknown,
+  itemKey: string,
+  sizeObj: { height: number; width: number },
+  resolvedMeasurementItem: undefined,
+) => unknown {
+  const start = source.indexOf("function updateOneItemSize(");
+  const end = source.indexOf("\n}\n", start);
+  if (start === -1 || end === -1) {
+    throw new Error("updateOneItemSize is not in the installed build");
+  }
+  const body = source.slice(start, end + 2);
+  const factory: unknown = runInNewContext(
+    `(function (getItemSize, setSize) { ${body}\n return updateOneItemSize; })`,
+    {},
+  );
+  if (typeof factory !== "function") throw new Error("no factory");
+  const updateOneItemSize: unknown = Reflect.apply(factory, undefined, [
+    () => 0,
+    () => undefined,
+  ]);
+  if (typeof updateOneItemSize !== "function") {
+    throw new Error("no updateOneItemSize");
+  }
+  return (ctx, itemKey, sizeObj, resolvedMeasurementItem) => {
+    const result: unknown = Reflect.apply(updateOneItemSize, undefined, [
+      ctx,
+      itemKey,
+      sizeObj,
+      resolvedMeasurementItem,
+    ]);
+    return result;
+  };
+}
+
+interface AnnouncedMove {
+  readonly from: number;
+  readonly fromEnd: number;
+  readonly to: number;
+  readonly intended: number;
+  // What moved the view: "offset" for a write of the offset itself, which
+  // carried the content with it, and "range" for one that moved the view only
+  // by taking away the end it rested on, which moved no content at all. A
+  // consumer needs it to know whether its content-relative references have
+  // already netted the move out.
+  readonly cause: "offset" | "range";
+}
+
+interface ClampingScroller {
+  scrollHeight: number;
+  clientHeight: number;
+  scrollTop: number;
+  dispatchEvent: (event: CustomEvent<AnnouncedMove>) => boolean;
+}
+
+/**
+ * A scroll node whose `scrollTop` jsdom does not clamp on its own: reading it
+ * back clamps to the live range, as a real scroller's does the instant a
+ * write (the test's own `write`, standing in for the pad restore) shrinks
+ * `scrollHeight` out from under the stored offset.
+ *
+ * The clamp sticks, as the browser's does: it moves the offset the scroller
+ * holds, so growing the range afterwards leaves the view where the clamp put
+ * it rather than springing it back. The whole defect this patch fixes lives
+ * on that: the restore's clamp and a commit that regrows the end land in one
+ * frame, and the view stays down at the clamp while the end goes back up.
+ */
+function makeClampingScroller(initial: {
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+}): { scroller: ClampingScroller; announcements: AnnouncedMove[] } {
+  let storedScrollTop = initial.scrollTop;
+  const announcements: AnnouncedMove[] = [];
+  const scroller: ClampingScroller = {
+    scrollHeight: initial.scrollHeight,
+    clientHeight: initial.clientHeight,
+    get scrollTop(): number {
+      storedScrollTop = Math.max(
+        0,
+        Math.min(
+          storedScrollTop,
+          scroller.scrollHeight - scroller.clientHeight,
+        ),
+      );
+      return storedScrollTop;
+    },
+    set scrollTop(value: number) {
+      storedScrollTop = value;
+    },
+    dispatchEvent(event: CustomEvent<AnnouncedMove>): boolean {
+      announcements.push(event.detail);
+      return true;
+    },
+  };
+  return { scroller, announcements };
+}
+
+/**
+ * `moveScrollerByRangeAnnounced` of the installed build, evaluated on its
+ * own along with the two helpers it calls (`announcesScrollerMoves`,
+ * `announceScrollerMove`) and the unrelated `moveScrollerAnnounced` the same
+ * slice carries - the function is not exported, so there is nothing to
+ * import. A bare vm context defines no DOM globals, so `CustomEvent` is
+ * supplied as a factory argument; `window` is left undefined, which is what
+ * lets `announcesScrollerMoves` see the fake scroller as "not window", as it
+ * would in a browser.
+ */
+function loadMoveScrollerByRangeAnnounced(
+  source: string,
+): (target: ClampingScroller, write: () => void) => void {
+  const start = source.indexOf("function announcesScrollerMoves(");
+  const end = source.indexOf("function scrollAdjustBy(", start);
+  if (start === -1 || end === -1) {
+    throw new Error(
+      "the announced-move helpers are not in the installed build",
+    );
+  }
+  const body = source.slice(start, end);
+  const factory: unknown = runInNewContext(
+    `(function (CustomEvent) { ${body}\n return moveScrollerByRangeAnnounced; })`,
+    {},
+  );
+  if (typeof factory !== "function") throw new Error("no factory");
+  const moveScrollerByRangeAnnounced: unknown = Reflect.apply(
+    factory,
+    undefined,
+    [CustomEvent],
+  );
+  if (typeof moveScrollerByRangeAnnounced !== "function") {
+    throw new Error("no moveScrollerByRangeAnnounced");
+  }
+  return (target, write) => {
+    Reflect.apply(moveScrollerByRangeAnnounced, undefined, [target, write]);
+  };
+}
+
+/**
+ * The installed end-pad expression. `totalSize` is the content node's
+ * scroll height, which already includes `paddingEnd`. A second adjustment
+ * before the reset frame therefore has to add its shortfall to that pad.
+ */
+function loadEndPad(
+  source: string,
+): (input: {
+  nextScroll: number;
+  viewportSize: number;
+  totalSize: number;
+  paddingEnd: string;
+}) => number {
+  const match =
+    /const appliedPad = Number\.parseFloat\(contentNode\.style\[axis\.paddingEndProp\]\);\s*const pad = \(Number\.isFinite\(appliedPad\) \? appliedPad : 0\) \+ \(nextScroll \+ viewportSize - totalSize\);/.exec(
+      source,
+    );
+  if (match === null) {
+    throw new Error("temporary end pad is not in the installed build");
+  }
+  const compute: unknown = runInNewContext(
+    `(function (nextScroll, viewportSize, totalSize, paddingEnd) {
+      const contentNode = { style: { paddingBottom: paddingEnd, paddingRight: paddingEnd } };
+      const axis = { paddingEndProp: "paddingBottom" };
+      ${match[0]}
+      return pad;
+    })`,
+  );
+  if (typeof compute !== "function") {
+    throw new Error("temporary end pad did not evaluate");
+  }
+  return (input) => {
+    const pad: unknown = Reflect.apply(compute, undefined, [
+      input.nextScroll,
+      input.viewportSize,
+      input.totalSize,
+      input.paddingEnd,
+    ]);
+    if (typeof pad !== "number") throw new Error("pad was not a number");
+    return pad;
+  };
+}
+
+interface AdjustFixture {
+  readonly ctx: {
+    state: {
+      scroll: number;
+      scrollingTo: undefined;
+      touchScroll: { touching: boolean; momentum: boolean } | undefined;
+      adjustingFromInitialMount: number;
+      refScroller: { current: { getCurrentScrollOffset: () => number } };
+      scrollLength: number;
+      scrollForNextCalculateItemsInView: undefined;
+    };
+    values: Map<string, unknown>;
+  };
+  readonly recalculations: { count: number };
+}
+
+/**
+ * `ScrollAdjustHandler` and the gate beside it (`shouldAbsorbAdjustInLayout`),
+ * evaluated from the installed build. The handler is the one object every
+ * adjust of the list's reaches, and the patch decides there whether an adjust
+ * is written to the scroller or waits in the pending term; this runs the
+ * build's own decision and commit. The list helpers it calls are supplied:
+ * the signal store is a map, and `clampScrollOffset` clamps to a content of
+ * `contentSize` as the build's does from its own size state.
+ */
+function loadScrollAdjustHandler(
+  source: string,
+  contentSize: number,
+): {
+  make: (fixture: AdjustFixture) => {
+    requestAdjust: (add: number) => void;
+    commitPendingAdjust: () => void;
+  };
+} {
+  const start = source.indexOf("function shouldAbsorbAdjustInLayout(");
+  const end = source.indexOf(
+    "\n};\n\n// src/core/updateContentInsetEndAdjustment.ts",
+    start,
+  );
+  if (start === -1 || end === -1) {
+    throw new Error("the adjust handler is not in the installed build");
+  }
+  const body = source.slice(start, end + 3);
+  const factory: unknown = runInNewContext(
+    `(function (set$, peek$, clampScrollOffset, checkFinishedScroll, calculateItemsInView, calculateOffsetForIndex, calculateOffsetWithOffsetPosition) { ${body}\n return ScrollAdjustHandler; })`,
+    {},
+  );
+  if (typeof factory !== "function") throw new Error("no factory");
+  return {
+    make(fixture) {
+      const Handler: unknown = Reflect.apply(factory, undefined, [
+        (ctx: AdjustFixture["ctx"], name: string, value: unknown) => {
+          ctx.values.set(name, value);
+        },
+        (ctx: AdjustFixture["ctx"], name: string) => ctx.values.get(name),
+        (ctx: AdjustFixture["ctx"], offset: number) =>
+          Math.max(0, Math.min(offset, contentSize - ctx.state.scrollLength)),
+        () => undefined,
+        () => {
+          fixture.recalculations.count += 1;
+        },
+        () => {
+          throw new Error("no index target in these cases");
+        },
+        () => {
+          throw new Error("no index target in these cases");
+        },
+      ]);
+      if (typeof Handler !== "function") throw new Error("no handler class");
+      const handler: unknown = Reflect.construct(Handler, [fixture.ctx]);
+      const requestAdjust: unknown = Reflect.get(
+        handler as object,
+        "requestAdjust",
+      );
+      const commitPendingAdjust: unknown = Reflect.get(
+        handler as object,
+        "commitPendingAdjust",
+      );
+      if (
+        typeof requestAdjust !== "function" ||
+        typeof commitPendingAdjust !== "function"
+      ) {
+        throw new Error("handler methods missing");
+      }
+      return {
+        requestAdjust: (add) => {
+          Reflect.apply(requestAdjust, handler, [add]);
+        },
+        commitPendingAdjust: () => {
+          Reflect.apply(commitPendingAdjust, handler, [undefined]);
+        },
+      };
+    },
+  };
+}
+
+/** A rendered list whose scroller holds `scrollTop`, with the view 700 tall. */
+function adjustFixture(scrollTop: number): AdjustFixture {
+  const scroller = { scrollTop };
+  return {
+    ctx: {
+      state: {
+        scroll: scrollTop,
+        scrollingTo: undefined,
+        touchScroll: undefined,
+        adjustingFromInitialMount: 0,
+        refScroller: {
+          current: { getCurrentScrollOffset: () => scroller.scrollTop },
+        },
+        scrollLength: 700,
+        scrollForNextCalculateItemsInView: undefined,
+      },
+      values: new Map<string, unknown>([
+        ["readyToRender", true],
+        ["scrollAdjustPending", 0],
+      ]),
+    },
+    recalculations: { count: 0 },
+  };
+}
+
+/** A list of two rows, `a` and `k`, whose `k` changes item type as the chat's
+ *  transcript does when a placeholder hydrates. */
+function twoRowList() {
+  const data: SizedItem[] = [{ type: "assistant" }, { type: "assistant" }];
+  const averageSizes: Partial<Record<string, AverageEntry>> = {};
+  const state = {
+    indexByKey: new Map([
+      ["a", 0],
+      ["k", 1],
+    ]),
+    sizesKnown: new Map<string, number>(),
+    averageSizes,
+    props: {
+      data,
+      horizontal: false,
+      getItemType: (item: SizedItem) => item.type,
+      getFixedItemSize: undefined,
+    },
+  };
+  const extra = new Map<PropertyKey, unknown>();
+  const proxy = new Proxy(state, {
+    get(target, property) {
+      if (property in target) {
+        const present: unknown = Reflect.get(target, property);
+        return present;
+      }
+      let value = extra.get(property);
+      if (value === undefined) {
+        value = new Map();
+        extra.set(property, value);
+      }
+      return value;
+    },
+  });
+  return { ctx: { state: proxy }, data, averageSizes };
+}
+
+describe("@legendapp/list web patch", () => {
+  const require = createRequire(import.meta.url);
+  // The package's `exports` map hides `package.json` and has no main entry;
+  // every entry point sits in the package root, so a subpath's directory is
+  // that root.
+  const packageDir = dirname(require.resolve("@legendapp/list/react"));
+
+  // `react.*` is the `@legendapp/list/react` entry the chat timeline imports;
+  // the `react-native.web.*` pair carries the same code for the other entry.
+  for (const file of [
+    "react.js",
+    "react.mjs",
+    "react-native.web.js",
+    "react-native.web.mjs",
+  ]) {
+    it(`${file} writes the scroll adjustment as an absolute offset`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        'el.scrollTo({ behavior: "auto", left: el.scrollLeft + left, top: el.scrollTop + top });',
+      );
+      expect(source).not.toContain(
+        'el.scrollBy({ behavior: "auto", left, top });',
+      );
+      expect(source).not.toContain(
+        'target.scrollBy({ behavior: "auto", left: x, top: y });',
+      );
+    });
+
+    // The chat restores a saved row with `viewPosition: 0`, its top at the
+    // viewport's top. Unpatched, any defined `viewPosition` on the last row
+    // added the footer's height, so each restore of a reading position on the
+    // last turn landed one footer lower than saved, and every remount moved
+    // it again.
+    it(`${file} adds the footer only when the last row aligns below the top`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        "if (!isOutOfBounds && index === state.props.data.length - 1 && viewPosition > 0) {",
+      );
+      expect(source).not.toContain(
+        "if (!isOutOfBounds && index === state.props.data.length - 1) {",
+      );
+    });
+
+    // Unpatched, a re-measured row cut by the viewport's top edge moved the
+    // view by all of its growth: a card opened in a reply read from its middle
+    // threw its own header off screen, and a narrower window drifted the
+    // reading row. The patch holds the element at that edge instead.
+    it(`${file} anchors a re-measured row at the element on the top edge`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        "updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });\n  recordEdgeAnchor(ctx);",
+      );
+      expect(source).toContain("positionDiff += edgeAnchorShift;");
+    });
+
+    // The anchor looks for the element on the viewport's top edge inside the
+    // row. Markdown and component wrappers are `display: contents` and have no
+    // box, so the search stopped at the row's content wrapper and missed the
+    // element the reader was looking at; a re-measured row then drifted by
+    // whole lines. A child with no box is searched in its children's stead.
+    it(`${file} searches through a child with no box for the edge element`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain("function findEdgeChild(parent, edgeY) {");
+      expect(source).toContain(
+        "if (rect.height === 0) {\n      const inner = findEdgeChild(child, edgeY);",
+      );
+      expect(source).toContain("const next = findEdgeChild(node, edgeY);");
+    });
+
+    // A renderer that reuses an element for other content (blocks inserted
+    // above it, keyed by position) leaves a node whose movement says nothing
+    // about the reader's text, so the anchor remembers what the node held.
+    it(`${file} records what the anchored element held`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain("head: edgeAnchorHead(node)\n  };");
+    });
+
+    // The anchor is recorded on every scroll event, and the element on the
+    // edge can be a whole code block: reading its `textContent` built the
+    // block's entire text each frame to keep 64 characters of it. The head
+    // walks the text nodes and stops once it has them.
+    it(`${file} reads only the head of the anchored element's text`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        'const walker = node.ownerDocument.createTreeWalker(node, 4 | 8);\n  let head = "";\n  for (let part = walker.nextNode(); part !== null && head.length < 64; part = walker.nextNode()) {\n    head += part.data;\n  }\n  return head.slice(0, 64);',
+      );
+      expect(source).not.toContain("const text = node.textContent;");
+    });
+
+    // ...and the list's own anchor decides once the element holds other text.
+    it(`${file} gives up an anchor whose element now holds other content`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        "edgeAnchorHead(anchor.node) !== anchor.head) {\n    return void 0;",
+      );
+    });
+
+    // The chat cancels a restore's or navigation's command the list still
+    // holds when the reader scrolls: left alone, it lands after the reader's
+    // own scroll and undoes it. The cancel lets the adjusts a scroll in flight
+    // deferred land, and reports false when nothing was held. It keeps the
+    // runner later `scrollToEnd` commands need: the unmount's cancel drops it,
+    // and without it every later one never ran.
+    it(`${file} lets a held scroll command be cancelled and settled`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        'if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {\n        return false;\n      }\n      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);\n      ++imperativeScrollToken;\n      const runPendingScrollToEnd = state.runPendingScrollToEnd;\n      cancelImperativeScroll(state);\n      state.runPendingScrollToEnd = runPendingScrollToEnd;\n      state.scrollAdjustHandler.commitPendingAdjust(void 0);\n',
+      );
+      expect(source).toContain(
+        "      return true;\n    },\n    setScrollProcessingEnabled:",
+      );
+    });
+
+    // A restore's first-paint scroll the list has issued and not finished is
+    // held in `scrollingTo` with `isInitialScroll`. Cancelling it for the
+    // reader's gesture used to clear that, so the next measurement re-issued
+    // the first-paint scroll over the reader and the list withheld its scroll
+    // reports until it finished: hiding then saved the restored row, not the
+    // one the reader had scrolled to. The cancel finishes the initial scroll
+    // at the observed offset instead; one not yet issued is left alone.
+    it(`${file} finishes an in-flight first-paint scroll where the reader is when it is cancelled`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        "const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);\n      ++imperativeScrollToken;\n      const runPendingScrollToEnd = state.runPendingScrollToEnd;\n      cancelImperativeScroll(state);\n      state.runPendingScrollToEnd = runPendingScrollToEnd;",
+      );
+      expect(source).toContain(
+        "        clearBootstrapInitialScrollSession(state);\n        finishInitialScroll(ctx, {\n          recalculateItems: true,\n          resolvedOffset: getObservedBootstrapInitialScrollOffset(state)\n        });\n      }\n      return true;",
+      );
+    });
+
+    // The end pad's rAF restore shrinks the scroll range it grew, and the
+    // browser clamps the view down with it in the same layout the restore's
+    // own forced read lands in. Left unannounced, that clamp reads to the
+    // chat's follow latch as the reader scrolling up. The announced helper is
+    // what makes it land through the same channel as every other write of the
+    // list's.
+    it(`${file} announces a write that clamps the view, and nothing for a write that leaves it reachable`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      const moveScrollerByRangeAnnounced =
+        loadMoveScrollerByRangeAnnounced(source);
+
+      // The range shrinks under the view: the browser clamps the stored 1000
+      // down to the new end, 900, and that clamp is announced.
+      const shrinks = makeClampingScroller({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      moveScrollerByRangeAnnounced(shrinks.scroller, () => {
+        shrinks.scroller.scrollHeight = 1400;
+      });
+      // `cause: "range"`: the view moved only because the end it rested on
+      // went away. No row moved, so nothing nets this out for a consumer.
+      expect(shrinks.announcements).toEqual([
+        { from: 1000, fromEnd: 1000, to: 900, intended: 900, cause: "range" },
+      ]);
+
+      // The frame the defect lives in: a commit regrows the end right after
+      // the clamp. The view stays where the clamp left it, so the offset the
+      // announcement carried is still the reader's - and the regrowth, moving
+      // no view, announces nothing of its own.
+      shrinks.scroller.scrollHeight = 1450;
+      expect(shrinks.scroller.scrollTop).toBe(900);
+      expect(shrinks.announcements).toHaveLength(1);
+
+      // The common restore: the range shrinks by as much, but the content has
+      // grown past the view since the pad went up, so the end stays above it
+      // and the view never moves. Nothing is announced.
+      const staysReachable = makeClampingScroller({
+        scrollTop: 500,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      moveScrollerByRangeAnnounced(staysReachable.scroller, () => {
+        staysReachable.scroller.scrollHeight = 1400;
+      });
+      expect(staysReachable.announcements).toEqual([]);
+    });
+
+    // The behavioural case above proves the range helper declares its cause.
+    // The offset helper's cannot be read off a slice of it - it writes
+    // `target.scrollTop` and reports what landed - and it is the half that
+    // must NOT move a consumer's content-relative references, so the call
+    // site is pinned here. A regenerated patch that dropped it would make the
+    // chat latch carry a finger's reference through every compensation of the
+    // list's, and on iOS, where the list compensates all through a fling
+    // while the finger's own scroll arrives only by report, the finger would
+    // never be detected at all.
+    it(`${file} declares a write of the offset itself as one`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        'announceScrollerMove(target, from, fromEnd, target.scrollTop, intendedTop, "offset");',
+      );
+      expect(source).not.toContain(
+        "announceScrollerMove(target, from, fromEnd, target.scrollTop, intendedTop);",
+      );
+    });
+
+    // A downward adjustment past the content's current end pads that end so
+    // the write is not clamped, and the next frame takes the pad away. Twice
+    // the shortfall leaves the shortfall itself scrollable on the frame the
+    // pad is visible. Browser job 126446321582 painted that: content 16658,
+    // viewport 700, the adjustment at 15972, 12px off the padded end after
+    // the content box shrank 2px. One shortfall puts the padded end on the
+    // adjustment.
+    it(`${file} sizes the temporary end pad to the shortfall once`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      const pad = loadEndPad(source)({
+        nextScroll: 15972,
+        viewportSize: 700,
+        totalSize: 16658,
+        paddingEnd: "",
+      });
+      expect(16658 + pad - 700).toBe(15972);
+    });
+
+    // The reset frame is cancelled and rescheduled when another adjustment
+    // arrives first. The content height then includes the pad, so a new
+    // shortfall of 3px on top of the 14px already applied has to leave 17px.
+    // Assigning 3px would drop the end from 15972 to 15961.
+    it(`${file} adds a later adjustment's shortfall to the pad still applied`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      const pad = loadEndPad(source)({
+        nextScroll: 15975,
+        viewportSize: 700,
+        totalSize: 16672,
+        paddingEnd: "14px",
+      });
+      expect(16658 + pad - 700).toBe(15975);
+    });
+
+    // The restore cannot be sliced out of the build on its own (it closes
+    // over `resetPaddingRafRef`/`contentNode`/`axis`), so this pins the call
+    // site instead: the restore's write goes through the announced helper,
+    // forces the same layout read the pad's own growth does, and the bare
+    // unannounced assignment the patch replaced is gone.
+    it(`${file} routes the pad restore through the announced write, forcing the clamp into this frame`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        "moveScrollerByRangeAnnounced(el, () => {\n                contentNode.style[axis.paddingEndProp] = previousPaddingEnd;",
+      );
+      expect(source).toContain(
+        "void contentNode.offsetHeight;\n              });\n            });",
+      );
+      expect(source).not.toContain(
+        "contentNode.style[axis.paddingEndProp] = previousPaddingEnd;\n            });",
+      );
+    });
+
+    // While an animated scroll runs, the list defers the visible-content
+    // adjusts into `pendingAdjust`. A new command replaces the one the list
+    // holds, and nothing committed them: the new end target was then computed
+    // from positions the screen had not taken, and landed short.
+    it(`${file} commits the adjusts a replaced scroll command deferred`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        "const startImperativeScroll = (resolve) => {\n    // Patched: a new command replaces the one the list holds.",
+      );
+      expect(source).toContain(
+        'if (state.scrollingTo !== void 0) {\n      state.scrollAdjustHandler.commitPendingAdjust(void 0);\n    }\n    state.scheduledWork.cancel("imperativeScrollReady");\n    const token = ++imperativeScrollToken;',
+      );
+    });
+
+    // A finished scroll re-estimates every unmeasured row, which can move the
+    // rows above the view by tens of thousands of pixels after a long jump.
+    // Anchoring that re-layout keeps the rows the scroll left on screen there,
+    // except at the end, where anchoring inflates the content for a frame.
+    // `react.*` alone holds the estimates above the view in that pass, and
+    // releases them only after the initial scroll to the end.
+    it(`${file} recalculates a settled scroll with MVCP unless it finished at the end`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        "const finishedAtEnd = contentSize < state.scrollLength || distanceFromEnd <= EDGE_POSITION_EPSILON;",
+      );
+      expect(source).toContain(
+        file.startsWith("react.")
+          ? "state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { doMVCP: !finishedAtEnd, forceFullItemPositions: true, refreshEstimatesAtEnd: finishedAtEnd && !!initialScrollToEnd && liveAtEnd });"
+          : "state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { doMVCP: !finishedAtEnd, forceFullItemPositions: true });",
+      );
+    });
+
+    // A placeholder row and the hydrated row that replaces it share a key and
+    // differ in item type. The list averaged the hydrated measurement against
+    // the placeholder's, in a type that never counted the key: measuring `k`
+    // as a 700px placeholder and then as a 100px row, with one 100px row in
+    // the type, left an average of -500, and every evict-and-rehydrate cycle
+    // took another turn's height off. Unmeasured rows of that type were then
+    // placed at negative sizes, over the rows on screen.
+    it(`${file} counts a key's size once, under the item type it was measured as`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      const updateOneItemSize = loadUpdateOneItemSize(source);
+      const { ctx, data, averageSizes } = twoRowList();
+      const measure = (key: string, height: number) =>
+        updateOneItemSize(ctx, key, { height, width: 0 }, undefined);
+
+      measure("a", 100);
+      expect(averageSizes.assistant).toMatchObject({ avg: 100, num: 1 });
+
+      for (let cycle = 0; cycle < 3; cycle += 1) {
+        data[1].type = "placeholder:assistant";
+        measure("k", 700);
+        data[1].type = "assistant";
+        measure("k", 100);
+        expect(averageSizes.assistant).toMatchObject({ avg: 100, num: 2 });
+        expect(averageSizes["placeholder:assistant"]?.num ?? 0).toBe(0);
+      }
+    });
+
+    // A row measured above the view during a touch fling asks for an adjust.
+    // Written to the scroller, it ended the fling (iOS WebKit through 26 stops
+    // momentum on any offset write) and painted a step: on the phone every
+    // flick through older messages died within a second. While a touch scroll
+    // owns the scroller the adjust waits in the pending term instead, which
+    // the build already lays out without moving anything on screen; the end
+    // of the touch scroll commits it as one write. The caller
+    // (`requestAdjust`) has already stepped `state.scroll` by the adjust when
+    // the handler runs, and the handler gives that step back, since the
+    // pending term now carries it.
+    it(`${file} holds a touch fling's adjust in the pending term and commits it at rest`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      const handlers = loadScrollAdjustHandler(source, 5000);
+      const fixture = adjustFixture(500);
+      fixture.ctx.state.touchScroll = { touching: false, momentum: true };
+      const handler = handlers.make(fixture);
+
+      fixture.ctx.state.scroll = 800;
+      handler.requestAdjust(300);
+      expect(fixture.ctx.values.get("scrollAdjustPending")).toBe(300);
+      expect(fixture.ctx.values.has("scrollAdjust")).toBe(false);
+      expect(fixture.ctx.state.scroll).toBe(500);
+
+      // Under the finger the next measurement joins it; nothing is written.
+      fixture.ctx.state.touchScroll = { touching: true, momentum: false };
+      fixture.ctx.state.scroll = 450;
+      handler.requestAdjust(-50);
+      expect(fixture.ctx.values.get("scrollAdjustPending")).toBe(250);
+      expect(fixture.ctx.values.has("scrollAdjust")).toBe(false);
+      expect(fixture.ctx.state.scroll).toBe(500);
+
+      // At rest: one write of the whole, the pending term cleared, and the
+      // containers re-laid in the same step.
+      fixture.ctx.state.touchScroll = { touching: false, momentum: false };
+      handler.commitPendingAdjust();
+      expect(fixture.ctx.values.get("scrollAdjust")).toBe(250);
+      expect(fixture.ctx.state.scroll).toBe(750);
+      expect(fixture.ctx.values.get("scrollAdjustPending")).toBe(0);
+      expect(fixture.recalculations.count).toBe(1);
+    });
+
+    // Without a touch scroll (a wheel, a trackpad, a keyboard) the adjust is
+    // written as before: the pending term is for a scroller that cannot be
+    // written, and a desktop fling takes a write without stopping.
+    it(`${file} writes an adjust at once when no touch scroll owns the scroller`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      const fixture = adjustFixture(500);
+      const handler = loadScrollAdjustHandler(source, 5000).make(fixture);
+
+      fixture.ctx.state.scroll = 800;
+      handler.requestAdjust(300);
+      expect(fixture.ctx.values.get("scrollAdjust")).toBe(300);
+      expect(fixture.ctx.values.get("scrollAdjustPending")).toBe(0);
+      expect(fixture.ctx.state.scroll).toBe(800);
+    });
+
+    // Near an edge the commit would be clamped: the pending term would hold a
+    // gap on screen that the clamped commit then closes with a visible step,
+    // where a write now moves the view by the adjust alone. The content is
+    // 5000 tall and the view 700, so the far end is 4300: an adjust that
+    // would carry the offset past it is written now, during the fling.
+    it(`${file} writes a touch fling's adjust at once when its commit would be clamped`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      const fixture = adjustFixture(4200);
+      fixture.ctx.state.touchScroll = { touching: false, momentum: true };
+      const handler = loadScrollAdjustHandler(source, 5000).make(fixture);
+
+      fixture.ctx.state.scroll = 4500;
+      handler.requestAdjust(300);
+      expect(fixture.ctx.values.get("scrollAdjust")).toBe(300);
+      expect(fixture.ctx.values.get("scrollAdjustPending")).toBe(0);
+      expect(fixture.ctx.state.scroll).toBe(4500);
+    });
+
+    // The scroller shim is where the touch scroll is known, and its behaviour
+    // (touch input, scroll reports, the quiet timer, the commit at rest and
+    // the early commit before an edge) runs through the real list in
+    // `browser-tests/legend-list-touch-fling-adjust.spec.ts`. What is pinned
+    // here is the one piece the browser spec cannot tell apart: that the
+    // shim's settle is the handler's commit, not a write of its own.
+    it(`${file} settles a touch scroll through the handler's commit`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        "touchScroll.momentum = false;\n    const scrollingTo = state.scrollingTo;\n    if (!(scrollingTo && scrollingTo.animated && !scrollingTo.isInitialScroll)) {\n      state.scrollAdjustHandler.commitPendingAdjust(void 0);\n    }",
+      );
+    });
+  }
+
+  // Only the `react.*` entries hold the anchor lock for a size pass deferred to
+  // a frame: the cancel leaves such a lock for that pass to release once it has
+  // compensated, and drops any other. The `react-native.web.*` pair lacks the
+  // size-only data pass this relies on.
+  for (const file of ["react.js", "react.mjs"]) {
+    it(`${file} leaves a lock a deferred size pass waits on to that pass`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        'cancelPendingScroll: () => {\n      // Patched: a lock that a deferred size pass waits on is released by that\n      // pass, once it has compensated (`resolveAnchorLock`), rather than here\n      // with the size change still uncompensated.\n      if (state.mvcpAnchorLock !== void 0 && deferredSizePassWaits(state)) {\n        state.mvcpAnchorLock.releaseRequested = true;\n      } else {\n        state.mvcpAnchorLock = void 0;\n      }\n      if (!state.scheduledWork.has("imperativeScrollReady")',
+      );
+    });
+  }
+});

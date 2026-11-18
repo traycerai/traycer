@@ -1,0 +1,1181 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Same UI/infra scaffolding `harness-model-picker.test.tsx` mocks - none of it
+// is the network boundary this suite cares about. The one deliberate
+// difference from that file: `@/hooks/harnesses/use-gui-harness-catalog` is
+// NOT mocked here - the whole point of this suite is to exercise the real
+// query hooks against a mocked host transport so an actual RPC undercount (or
+// overcount) is observable, which a wholesale hook mock structurally cannot
+// catch.
+const systemTabModalMock = vi.hoisted(() => ({
+  openSettings: vi.fn(),
+  openHistory: vi.fn(),
+  close: vi.fn(),
+  setSection: vi.fn(),
+}));
+const providersQueryMock = vi.hoisted(() => ({
+  providers: [] as ReadonlyArray<ProviderCliState>,
+}));
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => systemTabModalMock,
+}));
+vi.mock("@/components/home/pickers/terminal-account-first-mention", () => ({
+  TerminalAccountFirstMention: () => null,
+}));
+vi.mock("@/components/ui/dropdown-menu", () => {
+  const passthrough = (props: { readonly children: ReactNode }): ReactNode =>
+    props.children;
+  return {
+    DropdownMenu: passthrough,
+    DropdownMenuTrigger: passthrough,
+    DropdownMenuContent: (props: {
+      readonly children: ReactNode;
+      readonly container: HTMLElement | null | undefined;
+    }): ReactNode => (
+      <div
+        data-testid="profile-dropdown-content"
+        data-has-container={props.container instanceof HTMLElement}
+      >
+        {props.children}
+      </div>
+    ),
+    DropdownMenuItem: (props: {
+      readonly children: ReactNode;
+      readonly onSelect: (() => void) | undefined;
+      readonly "aria-label": string | undefined;
+      readonly "aria-current": "true" | undefined;
+      readonly className: string | undefined;
+      readonly disabled: boolean | undefined;
+      readonly title: string | undefined;
+    }): ReactNode => (
+      <button
+        type="button"
+        role="menuitem"
+        aria-label={props["aria-label"]}
+        aria-current={props["aria-current"]}
+        className={props.className}
+        disabled={props.disabled}
+        title={props.title}
+        onClick={props.onSelect}
+      >
+        {props.children}
+      </button>
+    ),
+    DropdownMenuSeparator: (): ReactNode => <div role="separator" />,
+    DropdownMenuShortcut: (props: {
+      readonly children: ReactNode;
+      readonly "data-testid": string | undefined;
+    }): ReactNode => (
+      <span data-testid={props["data-testid"]}>{props.children}</span>
+    ),
+  };
+});
+
+interface QueryActivity {
+  readonly enabled: boolean;
+  readonly subscribed: boolean;
+}
+
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersList: (activity: QueryActivity) => ({
+    data: activity.enabled
+      ? { providers: providersQueryMock.providers }
+      : undefined,
+    isPending: false,
+    isError: false,
+    isFetching: false,
+  }),
+  useProvidersListForClient: (
+    _client: string | null,
+    activity: QueryActivity,
+  ) => ({
+    data: activity.enabled
+      ? { providers: providersQueryMock.providers }
+      : undefined,
+    isPending: false,
+    isError: false,
+    isFetching: false,
+  }),
+}));
+
+// `runTargetHostId` is always `null` in this suite's fixtures (see
+// `renderPickerWithFixture`), so this mirrors the real hook's `null` branch
+// exactly: fall back to the app-wide default host's client
+// (`hostBindingMock.current?.hostClient`, the same real `HostClient` over a
+// `MockHostMessenger` the suite's RPC-count assertions depend on) rather than
+// a bare sentinel string. The picker now threads this client straight into
+// `useHostQuery` (via the REAL, unmocked `…ForClient` catalog hooks - see the
+// file header), which calls `client?.getActiveHostId()` - a plain string
+// lacks that method and throws, which is exactly what regressed every test
+// in this file before this fix.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === null
+      ? (hostBindingMock.current?.hostClient ?? null)
+      : { getActiveHostId: () => hostId },
+  useHostDirectoryEntryForHostId: (_hostId: string | null): null => null,
+}));
+
+// This suite's host binding is a bare fake with no directory, which the real
+// hook reads; the hook has its own test.
+vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
+  useHostCredentialRefusal: () => null,
+}));
+
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "local",
+}));
+
+vi.mock("@/hooks/host/use-host-directory-list-query", () => {
+  const useHostDirectoryList = () => ({
+    data: [
+      {
+        hostId: "local",
+        kind: "local",
+        label: "Local host",
+        transportDialability: "dialable",
+        websocketUrl: "ws://127.0.0.1:0",
+      },
+    ],
+  });
+  return {
+    useHostDirectoryList,
+    useHostDirectoryListQuery: useHostDirectoryList,
+  };
+});
+
+vi.mock("react-virtuoso", async () => {
+  const React = await import("react");
+
+  interface MockVirtuosoHandle {
+    readonly scrollIntoView: (location: unknown) => void;
+    readonly scrollToIndex: (location: unknown) => void;
+    readonly scrollBy: (location: unknown) => void;
+    readonly scrollTo: (location: unknown) => void;
+    readonly autoscrollToBottom: () => void;
+    readonly getState: (callback: (state: null) => void) => void;
+  }
+
+  interface MockVirtuosoProps {
+    readonly id: string | undefined;
+    readonly role: string | undefined;
+    readonly "aria-label": string | undefined;
+    readonly className: string | undefined;
+    readonly data: ReadonlyArray<unknown> | undefined;
+    readonly totalCount: number | undefined;
+    readonly computeItemKey:
+      | ((index: number, item: undefined) => Key)
+      | undefined;
+    readonly initialTopMostItemIndex:
+      | number
+      | { readonly index: number | "LAST" }
+      | undefined;
+    readonly itemContent:
+      | ((index: number, item: undefined) => ReactNode)
+      | undefined;
+  }
+
+  const Virtuoso = React.forwardRef<MockVirtuosoHandle, MockVirtuosoProps>(
+    (props, ref) => {
+      React.useImperativeHandle(ref, () => ({
+        autoscrollToBottom: () => undefined,
+        getState: (callback) => {
+          callback(null);
+        },
+        scrollBy: () => undefined,
+        scrollIntoView: () => undefined,
+        scrollTo: () => undefined,
+        scrollToIndex: () => undefined,
+      }));
+
+      const totalCount = props.totalCount ?? props.data?.length ?? 0;
+      const indexes = mockVirtuosoIndexes(
+        totalCount,
+        mockInitialIndex(props.initialTopMostItemIndex, totalCount),
+      );
+      const children = indexes.map((index) =>
+        React.createElement(
+          React.Fragment,
+          { key: props.computeItemKey?.(index, undefined) ?? index },
+          props.itemContent?.(index, undefined),
+        ),
+      );
+
+      return React.createElement(
+        "div",
+        {
+          id: props.id,
+          role: props.role,
+          "aria-label": props["aria-label"],
+          className: props.className,
+          "data-testid": "virtuoso-scroller",
+        },
+        ...children,
+      );
+    },
+  );
+
+  function mockInitialIndex(
+    value: MockVirtuosoProps["initialTopMostItemIndex"],
+    totalCount: number,
+  ): number {
+    if (totalCount === 0) return 0;
+    let rawIndex = 0;
+    if (typeof value === "number") {
+      rawIndex = value;
+    } else if (value?.index === "LAST") {
+      rawIndex = totalCount - 1;
+    } else if (value?.index !== undefined) {
+      rawIndex = value.index;
+    }
+    if (rawIndex < 0) return 0;
+    if (rawIndex >= totalCount) return totalCount - 1;
+    return rawIndex;
+  }
+
+  function mockVirtuosoIndexes(
+    totalCount: number,
+    initialIndex: number,
+  ): ReadonlyArray<number> {
+    const windowSize = 12;
+    const start = Math.max(0, initialIndex - Math.floor(windowSize / 2));
+    const end = Math.min(totalCount, start + windowSize);
+    return Array.from(
+      { length: end - start },
+      (_unused, index) => start + index,
+    );
+  }
+
+  return { Virtuoso };
+});
+
+const hostBindingMock = vi.hoisted(() => ({
+  current: null as { readonly hostClient: unknown } | null,
+}));
+vi.mock("@/lib/host/runtime", () => ({
+  useHostBinding: () => hostBindingMock.current,
+  // `useRefreshHarnessCatalog` (wired to the picker's manual refresh button,
+  // not part of this suite's intent-edge assertions) reads the client via
+  // `useHostClient()` rather than `useHostBinding()?.hostClient` - both must
+  // resolve to the same fixture client or the component throws on render.
+  useHostClient: () => hostBindingMock.current?.hostClient,
+  // The SPINE, a separate export.
+  useHostRuntimeClient: () => hostBindingMock.current?.hostClient,
+}));
+
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import {
+  defaultScheduler,
+  notifyManager,
+  QueryClientProvider,
+  type QueryClient,
+} from "@tanstack/react-query";
+import type { Key, ReactElement, ReactNode } from "react";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  MockHostMessenger,
+  type MockHostMessengerOptions,
+} from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import {
+  HostMethodVersionUnsatisfiedError,
+  type HostRequestOptions,
+  type RequestOfMethod,
+  type ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import {
+  AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION,
+  type GuiHarnessId,
+  type ListGuiAgentCommandsResponse,
+  type ListGuiAgentModelsResponse,
+  type ListGuiHarnessesResponse,
+} from "@traycer/protocol/host/index";
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-native-schemas";
+import type {
+  ProviderCliState,
+  ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { HeldTimers } from "@/lib/host/test-support/held-timers";
+import { createAppQueryClient } from "@/lib/query-client";
+import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
+import { HARNESS_CATALOG_REFRESH_AFTER_MS } from "@/hooks/harnesses/use-gui-harness-catalog";
+import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
+import {
+  createComposerToolbarStore,
+  type ComposerToolbarStore,
+} from "@/stores/composer/composer-toolbar-store";
+import { useComposerHarnessMemoryStore } from "@/stores/composer/composer-harness-memory-store";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { useProviderProfileAddFlowStore } from "@/stores/settings/provider-profile-add-flow-store";
+import { useKeybindingStore } from "@/stores/settings/keybinding-store";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundation";
+import type { HarnessModelSelection } from "@/components/home/data/landing-options";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+
+function harnessEntry(
+  id: GuiHarnessId,
+  available: boolean,
+): ListGuiHarnessesResponse["harnesses"][number] {
+  return {
+    id,
+    label: id,
+    enabled: true,
+    available,
+    error: available ? null : `${id} not available`,
+    modes: ["gui", "tui"],
+    requiresApiKey: false,
+    supportedPermissionModes: [...ALL_PERMISSION_MODES],
+    nativeAutoJudge: false,
+    availabilityPending: false,
+  };
+}
+
+function providerProfile(
+  profileId: string,
+  kind: "ambient" | "managed",
+  label: string,
+): ProviderProfile {
+  return {
+    profileId,
+    enabled: true,
+    kind,
+    authType: "oauth",
+    label,
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+    accentColor: null,
+  };
+}
+
+function codexProviderWithProfiles(): ProviderCliState {
+  return {
+    providerId: "codex",
+    enabled: true,
+    disabledBy: null,
+    nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+    selected: { kind: "bundled" },
+    candidates: [],
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: null,
+    availabilityPending: false,
+    profiles: [
+      providerProfile("ambient", "ambient", "Default account"),
+      providerProfile("profile-work", "managed", "Work account"),
+    ],
+  };
+}
+
+function modelsResponseFor(
+  harnessId: GuiHarnessId,
+): ListGuiAgentModelsResponse {
+  return {
+    harnessId,
+    models: [
+      {
+        harnessId,
+        slug: `${harnessId}-model-1`,
+        label: `${harnessId} Model 1`,
+        description: null,
+        contextWindow: null,
+        maxOutputTokens: null,
+        defaultReasoningEffort: null,
+        supportedReasoningEfforts: [],
+        defaultServiceTier: null,
+        supportedServiceTiers: [],
+        deprecationNotice: null,
+        metadata: {},
+      },
+    ],
+  };
+}
+
+interface RpcCallLog {
+  readonly listModels: Array<{ readonly harnessId: GuiHarnessId }>;
+  readonly listCommands: Array<{
+    readonly harnessId: GuiHarnessId;
+    readonly profileId: string | null;
+  }>;
+}
+
+interface PickerRpcFixture {
+  readonly calls: RpcCallLog;
+  readonly requiredModelFloors: Array<
+    HostRequestOptions["requiredHostMethodVersion"]
+  >;
+  readonly queryClient: QueryClient;
+  readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+}
+
+class PickerMockHostMessenger extends MockHostMessenger<HostRpcRegistry> {
+  constructor(
+    options: MockHostMessengerOptions<HostRpcRegistry>,
+    private readonly refuseProfileModels: boolean,
+    private readonly requiredModelFloors: Array<
+      HostRequestOptions["requiredHostMethodVersion"]
+    >,
+  ) {
+    super(options);
+  }
+
+  override async request<Method extends keyof HostRpcRegistry & string>(
+    method: Method,
+    params: RequestOfMethod<HostRpcRegistry, Method>,
+    options: HostRequestOptions,
+  ): Promise<ResponseOfMethod<HostRpcRegistry, Method>> {
+    if (method === "agent.gui.listModels") {
+      this.requiredModelFloors.push(options.requiredHostMethodVersion);
+    }
+    const requiredVersion = options.requiredHostMethodVersion;
+    if (
+      this.refuseProfileModels &&
+      method === "agent.gui.listModels" &&
+      requiredVersion !== null &&
+      requiredVersion.method ===
+        AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION.method &&
+      (requiredVersion.version.major > 1 ||
+        (requiredVersion.version.major === 1 &&
+          requiredVersion.version.minor > 1))
+    ) {
+      throw new HostMethodVersionUnsatisfiedError({
+        requirement: requiredVersion,
+        negotiated: { major: 1, minor: 1 },
+        requestId: "req-old-host-profile-models",
+        method,
+        hostId: mockLocalHostEntry.hostId,
+      });
+    }
+    return super.request(method, params, options);
+  }
+}
+
+/**
+ * Real `HostClient` over a `MockHostMessenger`, mirroring the fixture in
+ * `use-gui-harness-catalog.test.tsx` (~L210-245) - the only faked boundary is
+ * the network; every query hook, TanStack cache, and React effect above it is
+ * real. `calls` is populated from inside the typed mock handlers (rather than
+ * parsed back out of the messenger's untyped `calls` log) so counting a
+ * harness's RPCs never needs an `as`-cast on `unknown` params.
+ */
+function createPickerRpcFixture(
+  harnesses: ReadonlyArray<ListGuiHarnessesResponse["harnesses"][number]>,
+  options: {
+    readonly refuseProfileModels?: boolean;
+    readonly profileModelsErrorMessage?: string;
+  },
+): PickerRpcFixture {
+  const calls: RpcCallLog = { listModels: [], listCommands: [] };
+  const requiredModelFloors: Array<
+    HostRequestOptions["requiredHostMethodVersion"]
+  > = [];
+  const queryClient = createAppQueryClient();
+  if (options.refuseProfileModels === true) {
+    // Host-version refusal is terminal for this assertion. Avoid the app's
+    // single generic query retry so the test records exactly one preflight.
+    const defaults = queryClient.getDefaultOptions();
+    queryClient.setDefaultOptions({
+      ...defaults,
+      queries: { ...defaults.queries, retry: false },
+    });
+  }
+  let requestCounter = 0;
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    // The app's real policy: catalog reads carry its response allowance.
+    schedulingPolicy: hostRpcSchedulingPolicy,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    messenger: new PickerMockHostMessenger(
+      {
+        registry: hostRpcRegistry,
+        requestId: () => {
+          requestCounter += 1;
+          return `req-${String(requestCounter)}`;
+        },
+        handlers: {
+          "agent.gui.listHarnesses": () => ({ harnesses: [...harnesses] }),
+          "agent.gui.listModels": (params) => {
+            calls.listModels.push({ harnessId: params.harnessId });
+            if (
+              params.profileId !== null &&
+              options.profileModelsErrorMessage !== undefined
+            ) {
+              throw new Error(options.profileModelsErrorMessage);
+            }
+            return modelsResponseFor(params.harnessId);
+          },
+          "agent.gui.listCommands": (params) => {
+            calls.listCommands.push({
+              harnessId: params.harnessId,
+              profileId: params.profileId,
+            });
+            return {
+              harnessId: params.harnessId,
+              commands: [],
+            } satisfies ListGuiAgentCommandsResponse;
+          },
+        },
+      },
+      options.refuseProfileModels ?? false,
+      requiredModelFloors,
+    ),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  const client = spine.createRequester(mockLocalHostEntry);
+  hostBindingMock.current = { hostClient: client };
+  const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+  return { calls, requiredModelFloors, queryClient, Wrapper };
+}
+
+function countFor(
+  entries: ReadonlyArray<{ readonly harnessId: GuiHarnessId }>,
+  harnessId: GuiHarnessId,
+): number {
+  return entries.filter((entry) => entry.harnessId === harnessId).length;
+}
+
+function defaultSelection(harnessId: GuiHarnessId): HarnessModelSelection {
+  return { harnessId, modelSlug: "", profileId: null };
+}
+
+function profileSelection(
+  harnessId: GuiHarnessId,
+  profileId: string,
+): HarnessModelSelection {
+  return { harnessId, modelSlug: "", profileId };
+}
+
+/** Lets pending query/effect work settle before an absence is asserted. */
+async function flushPendingWork(): Promise<void> {
+  for (let turn = 0; turn < 5; turn += 1) {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+}
+
+function commandProfiles(
+  fixture: PickerRpcFixture,
+  harnessId: GuiHarnessId,
+): ReadonlyArray<string | null> {
+  return fixture.calls.listCommands
+    .filter((entry) => entry.harnessId === harnessId)
+    .map((entry) => entry.profileId);
+}
+
+function renderPickerWithFixture(
+  fixture: PickerRpcFixture,
+  selection: HarnessModelSelection,
+): ComposerToolbarStore {
+  return renderPickerWithActivity(fixture, selection, true).store;
+}
+
+interface ActivityPickerHandle {
+  readonly store: ComposerToolbarStore;
+  /** Re-renders the SAME mounted picker under the other activity. */
+  readonly setSurfaceActive: (surfaceActive: boolean) => void;
+}
+
+function renderPickerWithActivity(
+  fixture: PickerRpcFixture,
+  selection: HarnessModelSelection,
+  surfaceActive: boolean,
+): ActivityPickerHandle {
+  const store = createComposerToolbarStore({
+    purpose: "run",
+    reasoningFallback: "model-default",
+    seedKey: "picker-intent-rpc-test",
+    values: {
+      ultracode: false,
+      permission: "supervised",
+      selection,
+      reasoning: "",
+      serviceTier: "",
+    },
+    onSettingsChange: null,
+    tuiOnly: false,
+    chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
+    hostId: "host-a",
+  });
+  const tree = (active: boolean): ReactElement => (
+    <fixture.Wrapper>
+      <SurfaceActivityProvider active={active}>
+        <TooltipProvider delayDuration={0}>
+          <HarnessModelPicker
+            withUltracode={false}
+            labelDisplay="responsive"
+            store={store}
+            maxModeContext={{ kind: "none" }}
+            withServiceTier={false}
+            withReasoning
+            tuiOnly={false}
+            lockedHarnessId={null}
+            disabled={false}
+            registerActivation={false}
+            createProfileHostId={null}
+            runTargetHostId={null}
+            profileAdmission={null}
+            terminalLoginSurface={null}
+            embedding={null}
+          />
+        </TooltipProvider>
+      </SurfaceActivityProvider>
+    </fixture.Wrapper>
+  );
+  const view = render(tree(surfaceActive));
+  return {
+    store,
+    setSurfaceActive: (next) => {
+      view.rerender(tree(next));
+    },
+  };
+}
+
+async function openPickerByTriggerName(
+  triggerName: string | RegExp,
+): Promise<void> {
+  fireEvent.click(screen.getByRole("button", { name: triggerName }));
+  await screen.findByRole("textbox", { name: /^Search/ });
+}
+
+/**
+ * Waits for `label` to appear among the MODEL ROWS. Scoped to the row list
+ * because the trigger shows the same text after a commit - and re-queried on
+ * every retry because a cold browse renders the "Loading models" state row
+ * (no scroller) until the browsed provider's real fetch lands, then remounts
+ * the Virtuoso list under a fresh node.
+ */
+async function findModelRow(label: string): Promise<void> {
+  await waitFor(() => {
+    within(screen.getByTestId("virtuoso-scroller")).getByText(label);
+  });
+}
+
+async function closePickerByTriggerName(
+  triggerName: string | RegExp,
+): Promise<void> {
+  fireEvent.click(screen.getByRole("button", { name: triggerName }));
+  await waitFor(() => {
+    expect(screen.queryByRole("textbox", { name: /^Search/ })).toBeNull();
+  });
+}
+
+/**
+ * Ages every cached catalog entry past the refresh window. Both
+ * `harnessCatalogEntryNeedsRefresh` and TanStack's own `dataUpdatedAt` read
+ * `Date.now()`, so moving the system clock is what puts a cache entry "15
+ * minutes old" without any real waiting.
+ */
+function ageCachePastRefreshWindow(): void {
+  vi.setSystemTime(Date.now() + HARNESS_CATALOG_REFRESH_AFTER_MS + 1_000);
+}
+
+describe("<HarnessModelPicker /> real-RPC intent edges", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    hostBindingMock.current = null;
+    cleanup();
+    useKeybindingStore.getState().resetAll();
+    useComposerHarnessMemoryStore.getState().resetForTests();
+    useProviderProfileAddFlowStore.getState().close();
+    useProvidersFocusStore.getState().clearFocusHarnessId();
+    systemTabModalMock.openSettings.mockReset();
+    systemTabModalMock.openHistory.mockReset();
+    systemTabModalMock.close.mockReset();
+    systemTabModalMock.setSection.mockReset();
+    providersQueryMock.providers = [];
+  });
+
+  beforeEach(() => {
+    // Fake `Date` only. The refresh window is measured in wall-clock time, so
+    // `ageCachePastRefreshWindow` needs a movable `Date.now()` - but timers
+    // themselves must stay real, or Testing Library's `findBy*` / `waitFor`
+    // (and the mocked transport's async replies) would never settle.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    useKeybindingStore.getState().resetAll();
+    useComposerHarnessMemoryStore.getState().resetForTests();
+    useProviderProfileAddFlowStore.getState().close();
+    useProvidersFocusStore.getState().clearFocusHarnessId();
+  });
+
+  it("fetches models on mount (it feeds the UI) but issues zero commands prewarm calls on mount", async () => {
+    const fixture = createPickerRpcFixture(
+      [harnessEntry("codex", true), harnessEntry("opencode", false)],
+      {},
+    );
+    renderPickerWithFixture(fixture, defaultSelection("codex"));
+
+    // Let the harnesses fetch resolve, `selectedHarnessAvailable` flip true,
+    // and `selectedModelsQuery`'s own `enabled` gate transition - this is a
+    // real TanStack "enabled just turned true" fetch, not the guarded intent
+    // edge, and it is legitimate: `selectedModelsQuery` feeds the trigger /
+    // footer UI directly.
+    await screen.findByText("codex Model 1");
+
+    expect(countFor(fixture.calls.listModels, "codex")).toBe(1);
+    // The commands prewarm query is held `enabled: false` - only the guarded
+    // intent-edge refetch below may ever fire it. Nothing has opened the
+    // picker or changed selection yet, so it must still be zero.
+    expect(countFor(fixture.calls.listCommands, "codex")).toBe(0);
+  });
+
+  it("does not refetch the selected harness's models when the picker opens inside the refresh window", async () => {
+    const fixture = createPickerRpcFixture(
+      [harnessEntry("codex", true), harnessEntry("opencode", false)],
+      {},
+    );
+    renderPickerWithFixture(fixture, defaultSelection("codex"));
+    await screen.findByText("codex Model 1");
+    const modelsBeforeOpen = countFor(fixture.calls.listModels, "codex");
+    expect(countFor(fixture.calls.listCommands, "codex")).toBe(0);
+
+    await openPickerByTriggerName(/^codex Model 1/);
+
+    // The mount fetch filled this entry seconds ago, so the open edge has
+    // nothing to refresh. `.refetch()` ignores `staleTime` as well as
+    // `enabled`, so without the freshness guard EVERY open would re-hit
+    // `listModels` - and respawn a reaped OpenCode server - however warm the
+    // cache was.
+    expect(countFor(fixture.calls.listModels, "codex")).toBe(modelsBeforeOpen);
+    // The commands prewarm has never loaded, so it IS due on this edge. It is
+    // the only call that reaches a Traycer/OpenRouter server (their models come
+    // from remote HTTP and never touch it), which is the whole point of firing
+    // it here.
+    expect(countFor(fixture.calls.listCommands, "codex")).toBe(1);
+  });
+
+  it("first open on a cold host fetches ONLY the selected harness's models - never the whole rail", async () => {
+    const fixture = createPickerRpcFixture(
+      [
+        harnessEntry("codex", true),
+        harnessEntry("claude", true),
+        harnessEntry("opencode", true),
+      ],
+      {},
+    );
+    renderPickerWithFixture(fixture, defaultSelection("codex"));
+    await screen.findByText("codex Model 1");
+
+    await openPickerByTriggerName(/^codex Model 1/);
+    // The open edge prewarms the selected harness's commands - wait for that
+    // real RPC so the open has fully settled before asserting an absence.
+    await waitFor(() => {
+      expect(countFor(fixture.calls.listCommands, "codex")).toBe(1);
+    });
+
+    // The cold-host regression this suite now holds: the picker's catalog
+    // read is `"cached-only"`, so opening it on a host whose model slots are
+    // all empty (this fixture's fresh client stands in for a remote host no
+    // prefetcher ever filled) issues zero rail-wide listModels - previously
+    // one spawned provider server per available entry - and exactly one for
+    // the harness the user is actually on.
+    expect(countFor(fixture.calls.listModels, "codex")).toBe(1);
+    expect(countFor(fixture.calls.listModels, "claude")).toBe(0);
+    expect(countFor(fixture.calls.listModels, "opencode")).toBe(0);
+  });
+
+  it("browsing a rail entry fetches exactly that provider's models, exactly once - the rest of the rail stays cold", async () => {
+    const fixture = createPickerRpcFixture(
+      [
+        harnessEntry("codex", true),
+        harnessEntry("claude", true),
+        harnessEntry("opencode", true),
+      ],
+      {},
+    );
+    renderPickerWithFixture(fixture, defaultSelection("codex"));
+    await screen.findByText("codex Model 1");
+    await openPickerByTriggerName(/^codex Model 1/);
+
+    fireEvent.click(screen.getByRole("tab", { name: "claude" }));
+    await findModelRow("claude Model 1");
+
+    // Exactly once: browsing an available entry commits the selection in the
+    // same commit that enables its first fetch, so the browsed-provider and
+    // selected-harness queries land on ONE cold slot and dedupe into one
+    // fetch. (The selection intent edge also races this slot; its in-flight
+    // guard is covered as a unit in `use-gui-harness-catalog.test.tsx` - this
+    // mock transport honors the abort before its handler runs, so a canceled
+    // re-issue would not be countable here.)
+    expect(countFor(fixture.calls.listModels, "claude")).toBe(1);
+    expect(countFor(fixture.calls.listModels, "opencode")).toBe(0);
+  });
+
+  it("refetches ONLY the selected harness when the picker opens after the refresh window, never the rest of the rail", async () => {
+    const fixture = createPickerRpcFixture(
+      [harnessEntry("codex", true), harnessEntry("claude", true)],
+      {},
+    );
+    renderPickerWithFixture(fixture, defaultSelection("codex"));
+    await screen.findByText("codex Model 1");
+
+    await openPickerByTriggerName(/^codex Model 1/);
+    // Warm claude the way anything warms on a cold host now: by browsing it.
+    // Then return the committed selection to codex before closing.
+    fireEvent.click(screen.getByRole("tab", { name: "claude" }));
+    await findModelRow("claude Model 1");
+    fireEvent.click(screen.getByRole("tab", { name: "codex" }));
+    await findModelRow("codex Model 1");
+    await closePickerByTriggerName(/^codex Model 1/);
+    const codexBeforeReopen = countFor(fixture.calls.listModels, "codex");
+    const claudeBeforeReopen = countFor(fixture.calls.listModels, "claude");
+
+    ageCachePastRefreshWindow();
+    await openPickerByTriggerName(/^codex Model 1/);
+
+    // The aged open re-pulls exactly the harness the user is on...
+    await waitFor(() => {
+      expect(countFor(fixture.calls.listModels, "codex")).toBe(
+        codexBeforeReopen + 1,
+      );
+    });
+    // ...and NOT the warm-but-aged one they aren't: no fan-out exists to
+    // re-pull the rail, and the open edge refreshes only the selection.
+    expect(countFor(fixture.calls.listModels, "claude")).toBe(
+      claudeBeforeReopen,
+    );
+  });
+
+  it("prewarms the newly selected harness's commands on a rail selection change, without re-pulling the models that switch just fetched", async () => {
+    const fixture = createPickerRpcFixture(
+      [harnessEntry("codex", true), harnessEntry("claude", true)],
+      {},
+    );
+    renderPickerWithFixture(fixture, defaultSelection("codex"));
+    await screen.findByText("codex Model 1");
+
+    await openPickerByTriggerName(/^codex Model 1/);
+
+    fireEvent.click(screen.getByRole("tab", { name: "claude" }));
+    // "claude Model 1" now matches both the trigger's updated label AND the
+    // browsed row - scope to the row list to disambiguate.
+    await findModelRow("claude Model 1");
+
+    // Commands have never loaded for claude, so selecting it warms its server.
+    await waitFor(() => {
+      expect(countFor(fixture.calls.listCommands, "claude")).toBe(1);
+    });
+    // ONE models fetch for the whole browse+commit: the browsed-provider and
+    // selected-harness queries share the cache slot, and the intent edge
+    // joins the fetch in flight rather than re-issuing it.
+    expect(countFor(fixture.calls.listModels, "claude")).toBe(1);
+  });
+
+  it("refetches only the newly selected harness's models on a rail selection change after the refresh window, and never the harness it left", async () => {
+    const fixture = createPickerRpcFixture(
+      [harnessEntry("codex", true), harnessEntry("claude", true)],
+      {},
+    );
+    renderPickerWithFixture(fixture, defaultSelection("codex"));
+    await screen.findByText("codex Model 1");
+
+    await openPickerByTriggerName(/^codex Model 1/);
+    // Warm claude by browsing it, then return to codex, so the aged switch
+    // below is a real selection CHANGE landing on warm-but-aged data.
+    fireEvent.click(screen.getByRole("tab", { name: "claude" }));
+    await findModelRow("claude Model 1");
+    fireEvent.click(screen.getByRole("tab", { name: "codex" }));
+    await findModelRow("codex Model 1");
+
+    ageCachePastRefreshWindow();
+    const codexModelsAged = countFor(fixture.calls.listModels, "codex");
+    const claudeModelsAged = countFor(fixture.calls.listModels, "claude");
+
+    fireEvent.click(screen.getByRole("tab", { name: "claude" }));
+    await findModelRow("claude Model 1");
+
+    await waitFor(() => {
+      expect(countFor(fixture.calls.listModels, "claude")).toBe(
+        claudeModelsAged + 1,
+      );
+    });
+    // The harness the user left gets no new calls from this edge, aged or not.
+    expect(countFor(fixture.calls.listModels, "codex")).toBe(codexModelsAged);
+  });
+
+  it("prewarms the new profile's commands once when the selected profile changes on the same harness, and not again for a same-profile reselection or a return to a warm profile", async () => {
+    const fixture = createPickerRpcFixture(
+      [harnessEntry("codex", true), harnessEntry("opencode", false)],
+      {},
+    );
+    const store = renderPickerWithFixture(
+      fixture,
+      profileSelection("codex", "profile-a"),
+    );
+    await screen.findByText("codex Model 1");
+    await openPickerByTriggerName(/^codex Model 1/);
+    await waitFor(() => {
+      expect(commandProfiles(fixture, "codex")).toEqual(["profile-a"]);
+    });
+
+    // Same harness, other account: profile B's commands slot has never
+    // loaded, so the selection edge must prewarm it. Keyed on the harness
+    // alone, this edge never fires and B's server stays cold.
+    act(() => {
+      store.getState().setSelection(profileSelection("codex", "profile-b"));
+    });
+    await waitFor(() => {
+      expect(commandProfiles(fixture, "codex")).toEqual([
+        "profile-a",
+        "profile-b",
+      ]);
+    });
+
+    // Control: reselecting the same profile is not an edge.
+    act(() => {
+      store.getState().setSelection(profileSelection("codex", "profile-b"));
+    });
+    await flushPendingWork();
+    expect(commandProfiles(fixture, "codex")).toEqual([
+      "profile-a",
+      "profile-b",
+    ]);
+
+    // Control: back to A, whose entry is fresh, is an edge with nothing due.
+    act(() => {
+      store.getState().setSelection(profileSelection("codex", "profile-a"));
+    });
+    await flushPendingWork();
+    expect(commandProfiles(fixture, "codex")).toEqual([
+      "profile-a",
+      "profile-b",
+    ]);
+  });
+
+  it("issues no commands prewarm for a profile change while the surface is inactive", async () => {
+    const fixture = createPickerRpcFixture([harnessEntry("codex", true)], {});
+    const { store, setSurfaceActive } = renderPickerWithActivity(
+      fixture,
+      profileSelection("codex", "profile-a"),
+      true,
+    );
+    // Availability is established through the real harnesses query while the
+    // surface is active (the models row proves the selected harness resolved
+    // available); mounting alone prewarms no commands.
+    await screen.findByText("codex Model 1");
+    expect(commandProfiles(fixture, "codex")).toEqual([]);
+
+    // The SAME mounted picker goes inactive: the cached availability stays
+    // (the query data is kept), so the only thing left closing the refetch
+    // gate is activity itself.
+    act(() => {
+      setSurfaceActive(false);
+    });
+    await flushPendingWork();
+    expect(screen.getByText("codex Model 1")).toBeDefined();
+
+    act(() => {
+      store.getState().setSelection(profileSelection("codex", "profile-b"));
+    });
+    await flushPendingWork();
+
+    expect(commandProfiles(fixture, "codex")).toEqual([]);
+  });
+
+  it("issues no commands prewarm for a profile change on an unavailable harness", async () => {
+    const fixture = createPickerRpcFixture(
+      [harnessEntry("codex", true), harnessEntry("opencode", false)],
+      {},
+    );
+    const store = renderPickerWithFixture(
+      fixture,
+      profileSelection("opencode", "profile-a"),
+    );
+    await screen.findByRole("button", { name: "Select model" });
+    await openPickerByTriggerName("Select model");
+
+    act(() => {
+      store.getState().setSelection(profileSelection("opencode", "profile-b"));
+    });
+    await flushPendingWork();
+
+    expect(commandProfiles(fixture, "opencode")).toEqual([]);
+    expect(countFor(fixture.calls.listModels, "opencode")).toBe(0);
+  });
+
+  it("issues zero listModels and zero listCommands calls when the picker opens on an unavailable/disabled selection", async () => {
+    const fixture = createPickerRpcFixture(
+      [harnessEntry("codex", true), harnessEntry("opencode", false)],
+      {},
+    );
+    renderPickerWithFixture(fixture, defaultSelection("opencode"));
+    await screen.findByRole("button", { name: "Select model" });
+
+    await openPickerByTriggerName("Select model");
+
+    expect(countFor(fixture.calls.listModels, "opencode")).toBe(0);
+    expect(countFor(fixture.calls.listCommands, "opencode")).toBe(0);
+  });
+
+  it("shows an account-specific host update state when the host refuses profile model reads", async () => {
+    providersQueryMock.providers = [codexProviderWithProfiles()];
+    const fixture = createPickerRpcFixture([harnessEntry("codex", true)], {
+      refuseProfileModels: true,
+    });
+    renderPickerWithFixture(fixture, profileSelection("codex", "profile-work"));
+    await screen.findByRole("button", { name: /^Select model/ });
+
+    await openPickerByTriggerName(/^Select model/);
+    await screen.findByText(
+      "Update this host to load models for this account.",
+    );
+    expect(fixture.requiredModelFloors).toEqual([
+      AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION,
+    ]);
+
+    expect(screen.queryByText("Loading models")).toBeNull();
+    expect(screen.queryByTestId("virtuoso-scroller")).toBeNull();
+    expect(screen.queryByText("codex Model 1")).toBeNull();
+    // The 1.1 host refusal happens before dispatch. An ambient retry would
+    // enter the mock handler, return its ambient row, and fail these checks.
+    expect(fixture.calls.listModels).toEqual([]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Host updates" }));
+    expect(systemTabModalMock.openSettings).toHaveBeenCalledWith({
+      section: "host",
+      resetToGeneral: false,
+      tab: "updates",
+      draft: null,
+      hostId: mockLocalHostEntry.hostId,
+    });
+  });
+
+  it("keeps the host's specific model error visible when the profile request reaches the host", async () => {
+    // The app's own query retry (one retry after 1000 ms) stays real. Its
+    // backoff timer is held, so the test observes the pending retry and fires
+    // exactly that timer instead of racing a real second. Install before the
+    // query client exists; the notify scheduler stays real so DOM updates flow.
+    const held = new HeldTimers();
+    try {
+      held.install();
+      notifyManager.setScheduler(defaultScheduler);
+      const fixture = createPickerRpcFixture([harnessEntry("codex", true)], {
+        profileModelsErrorMessage: "Account model catalog is unavailable.",
+      });
+      try {
+        providersQueryMock.providers = [codexProviderWithProfiles()];
+        renderPickerWithFixture(
+          fixture,
+          profileSelection("codex", "profile-work"),
+        );
+        await screen.findByRole("button", { name: /^Select model/ });
+
+        await openPickerByTriggerName(/^Select model/);
+        // The first profile RPC failed and the query's retry backoff is pending.
+        const retry = await waitFor(() => {
+          const pending = held
+            .pending()
+            .filter(
+              (timer) =>
+                timer.kind === "timeout" &&
+                timer.delay === 1_000 &&
+                /query-core\/build\/[^/]+\/retryer\./.test(timer.stack),
+            );
+          expect(pending).toHaveLength(1);
+          return pending[0];
+        });
+        expect(fixture.requiredModelFloors).toEqual([
+          AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION,
+        ]);
+        expect(countFor(fixture.calls.listModels, "codex")).toBe(1);
+        expect(screen.getByText("Loading models")).toBeTruthy();
+        expect(
+          screen.queryByRole("option", {
+            name: "Account model catalog is unavailable.",
+          }),
+        ).toBeNull();
+
+        act(() => {
+          held.fire(retry);
+        });
+        await screen.findByRole("option", {
+          name: "Account model catalog is unavailable.",
+        });
+        expect(fixture.requiredModelFloors).toEqual([
+          AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION,
+          AGENT_GUI_LIST_MODELS_PROFILE_REQUIRED_HOST_VERSION,
+        ]);
+        expect(countFor(fixture.calls.listModels, "codex")).toBe(2);
+        expect(screen.queryByText("Loading models")).toBeNull();
+        expect(
+          held.pending().filter((timer) => /retryer\./.test(timer.stack)),
+        ).toEqual([]);
+        expect(
+          screen.queryByText(
+            "Update this host to load models for this account.",
+          ),
+        ).toBeNull();
+        expect(
+          screen.queryByRole("button", { name: "Host updates" }),
+        ).toBeNull();
+      } finally {
+        cleanup();
+        await fixture.queryClient.cancelQueries();
+        fixture.queryClient.clear();
+      }
+    } finally {
+      held.restore();
+    }
+  });
+
+  it("issues zero listModels and zero listCommands calls on a programmatic selection change to an unavailable/disabled harness", async () => {
+    const fixture = createPickerRpcFixture(
+      [harnessEntry("codex", true), harnessEntry("opencode", false)],
+      {},
+    );
+    const store = renderPickerWithFixture(fixture, defaultSelection("codex"));
+    await screen.findByText("codex Model 1");
+    await openPickerByTriggerName(/^codex Model 1/);
+
+    // Bypasses the rail-click gate (which only commits available harnesses)
+    // to reproduce a selection change arriving from elsewhere while
+    // unavailable, mirroring the equivalent case in
+    // `harness-model-picker.test.tsx`.
+    act(() => {
+      store.getState().setSelection(defaultSelection("opencode"));
+    });
+    await screen.findByRole("button", { name: "Select model" });
+
+    expect(countFor(fixture.calls.listModels, "opencode")).toBe(0);
+    expect(countFor(fixture.calls.listCommands, "opencode")).toBe(0);
+  });
+});

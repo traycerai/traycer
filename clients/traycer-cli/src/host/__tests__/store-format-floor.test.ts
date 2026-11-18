@@ -1,0 +1,2209 @@
+import {
+  mkdir,
+  mkdtemp,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ILogger, LogFields } from "../../logger";
+import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
+import { EPIC_STATE_DIRNAME, taskStoreDbPathFor } from "../chat-store-survey";
+import { singleChatStoreSurveyRoot } from "../chat-store-survey-roots";
+import { SOURCE_TREE_HOST_VERSION } from "@traycer/protocol/host/store-formats";
+
+const fetchTextMock = vi.fn();
+vi.mock("../../registry/fetch-resource", () => ({
+  fetchText: (...args: unknown[]) => fetchTextMock(...args),
+}));
+
+import {
+  assertHostStoreFormatFloor,
+  assertStoreFormatFloorAfterStop,
+  assertStoreFormatFloorAtCommit,
+  gateStoreFormatFloor,
+  storeFormatFloorBuildVersion,
+  STORE_FORMAT_FLOOR_LISTED_EPICS,
+  ungatedStoreFormatFloorEvidence,
+} from "../store-format-floor";
+import type {
+  StoreFloorProvenance,
+  StoreFormatFloorInput,
+} from "../store-format-floor";
+import type { SwapQuiescence } from "../swap-quiescence";
+
+interface RecordedCall {
+  readonly level: "debug" | "info" | "warn" | "error";
+  readonly message: string;
+  readonly fields: LogFields;
+}
+
+const NO_PROVENANCE: StoreFloorProvenance = {
+  installed: null,
+  targetEntry: null,
+  sameArchive: false,
+};
+
+function fakeLogger(): ILogger & { readonly calls: RecordedCall[] } {
+  const calls: RecordedCall[] = [];
+  return {
+    calls,
+    debug: (message, fields) => {
+      calls.push({ level: "debug", message, fields });
+    },
+    info: (message, fields) => {
+      calls.push({ level: "info", message, fields });
+    },
+    warn: (message, fields) => {
+      calls.push({ level: "warn", message, fields });
+    },
+    error: (message, fields) => {
+      calls.push({ level: "error", message, fields });
+    },
+  };
+}
+
+let hostHome: string;
+
+beforeEach(async () => {
+  hostHome = await mkdtemp(join(tmpdir(), "store-format-floor-test-"));
+  fetchTextMock.mockReset();
+});
+
+afterEach(async () => {
+  await rm(hostHome, { recursive: true, force: true });
+});
+
+/**
+ * A `chat.db` that FAILS to be read - garbage bytes at the expected path.
+ * Used to prove "no disk walk happened": if the gate resolved despite this
+ * being on disk, it never asked, because reading it would have surfaced an
+ * indeterminate/blocked refusal.
+ */
+async function writeGarbageChatDb(epicId: string): Promise<void> {
+  const dir = join(hostHome, EPIC_STATE_DIRNAME, epicId, "chat");
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "chat.db"), "not a sqlite file", "utf8");
+}
+
+async function writeStampedChatDb(
+  epicId: string,
+  schemaVersion: number,
+): Promise<void> {
+  const dir = join(hostHome, EPIC_STATE_DIRNAME, epicId, "chat");
+  await mkdir(dir, { recursive: true });
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(join(dir, "chat.db"));
+  try {
+    db.exec(
+      "CREATE TABLE chat_db_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+    );
+    db.prepare("INSERT INTO chat_db_meta (key, value) VALUES (?, ?)").run(
+      "schema_version",
+      String(schemaVersion),
+    );
+  } finally {
+    db.close();
+  }
+}
+
+describe("assertHostStoreFormatFloor", () => {
+  it("clears an upgrade without touching disk", async () => {
+    await writeGarbageChatDb("epic-would-fail-if-walked");
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor({
+        environment: "production",
+        targetIdentity: "registry-artifact",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.4.0",
+        publishedStoreFormats: null,
+        declaredStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        acceptStoreFormatLoss: false,
+        site: "host update",
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("clears from formats alone on an rc rollback, without touching disk", async () => {
+    // Target OLDER than installed - rc.1 after rc.4 - so this is an actual
+    // rollback that reaches the format comparison rather than an upgrade
+    // `storeFloorApplicability` would send out before either version's
+    // chatDb is ever looked at. With the versions the wrong way round this
+    // test would stay green even if `storeFloorClearedByFormats` were
+    // deleted outright - it would just resolve via `target-not-older`
+    // instead, proving nothing about the short-circuit it claims to cover.
+    await writeGarbageChatDb("epic-would-fail-if-walked");
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor({
+        environment: "production",
+        targetIdentity: "registry-artifact",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.3.0-rc.1",
+        publishedStoreFormats: null,
+        declaredStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        acceptStoreFormatLoss: false,
+        site: "host update",
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+
+    // Both rc.1 and rc.4 write chatDb 9 (same era), so the format short-
+    // circuit clears it - proven by the SPECIFIC debug line, not merely a
+    // resolved promise, so this cannot pass via the wrong branch (the
+    // "not consulted" line an upgrade would have logged instead).
+    const clearedCall = logger.calls.find(
+      (call) =>
+        call.message === "Host store-format floor cleared without a disk walk",
+    );
+    expect(clearedCall).toBeDefined();
+    expect(
+      logger.calls.some(
+        (call) => call.message === "Host store-format floor not consulted",
+      ),
+    ).toBe(false);
+  });
+
+  it("blocks a downgrade whose target reads an older chat store format than one on disk", async () => {
+    await writeStampedChatDb("epic-newer-store", 9);
+    const logger = fakeLogger();
+
+    let thrown: unknown;
+    try {
+      await assertHostStoreFormatFloor({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.2.0",
+        publishedStoreFormats: null,
+        declaredStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    const err = thrown as CliError;
+    expect(err.code).toBe(CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR);
+    expect(err.message).toContain("1.2.0");
+    expect(err.message).toContain("1.3.0-rc.4");
+    expect(err.message).toContain("format 8");
+    expect(err.message).toContain("epic-newer-store");
+    expect(err.message).toContain("--accept-store-format-loss");
+    const details = err.details as {
+      readonly blockedEpics: readonly {
+        readonly epicId: string;
+        readonly schemaVersion: number;
+      }[];
+    };
+    expect(details.blockedEpics).toEqual([
+      { epicId: "epic-newer-store", schemaVersion: 9 },
+    ]);
+  });
+
+  it("names the unreadable epics too on a blocked refusal, not only the proven ones", async () => {
+    // `blocked` outranks `indeterminate` - the proven reading leads the
+    // refusal - but a store that could not be read is still a store the
+    // verdict cannot vouch for, and dropping it from the message/details
+    // would under-report what the downgrade puts at risk.
+    await writeStampedChatDb("epic-newer-store", 9);
+    await writeGarbageChatDb("epic-unreadable-too");
+    const logger = fakeLogger();
+
+    let thrown: unknown;
+    try {
+      await assertHostStoreFormatFloor({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.2.0",
+        publishedStoreFormats: null,
+        declaredStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    const err = thrown as CliError;
+    expect(err.code).toBe(CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR);
+    expect(err.message).toContain("epic-newer-store");
+    expect(err.message).toContain("epic-unreadable-too");
+    const details = err.details as {
+      readonly verdict: string;
+      readonly blockedEpics: readonly { readonly epicId: string }[];
+      readonly unreadableEpics: readonly { readonly epicId: string }[];
+    };
+    expect(details.verdict).toBe("blocked");
+    expect(details.blockedEpics).toEqual([
+      { epicId: "epic-newer-store", schemaVersion: 9 },
+    ]);
+    expect(details.unreadableEpics).toEqual([
+      { epicId: "epic-unreadable-too", reason: "unreadable-chat-db" },
+    ]);
+  });
+
+  it("lists at most STORE_FORMAT_FLOOR_LISTED_EPICS blocked epics, collapsing the rest into +N more", async () => {
+    for (let i = 0; i < 15; i += 1) {
+      await writeStampedChatDb(`epic-${String(i).padStart(2, "0")}`, 9);
+    }
+    const logger = fakeLogger();
+
+    let thrown: unknown;
+    try {
+      await assertHostStoreFormatFloor({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.2.0",
+        publishedStoreFormats: null,
+        declaredStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    const err = thrown as CliError;
+    expect(err.message).toContain("+5 more");
+    const details = err.details as {
+      readonly blockedEpicCount: number;
+      readonly blockedEpics: readonly unknown[];
+    };
+    expect(details.blockedEpicCount).toBe(15);
+    expect(details.blockedEpics).toHaveLength(STORE_FORMAT_FLOOR_LISTED_EPICS);
+  });
+
+  it("refuses indeterminate when a store on disk cannot be read, naming it and its reason", async () => {
+    await writeStampedChatDb("epic-readable", 8);
+    await writeGarbageChatDb("epic-unreadable");
+    const logger = fakeLogger();
+
+    let thrown: unknown;
+    try {
+      await assertHostStoreFormatFloor({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.2.0",
+        publishedStoreFormats: null,
+        declaredStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    const err = thrown as CliError;
+    expect(err.message).toContain("epic-unreadable");
+    const details = err.details as { readonly verdict: string };
+    expect(details.verdict).toBe("indeterminate");
+  });
+
+  it("refuses indeterminate when the target's chat store format cannot be named", async () => {
+    // A non-empty survey is required - `decideStoreFormatFloor` reads an
+    // EMPTY survey as unconditionally `clear`, regardless of the target.
+    await writeStampedChatDb("epic-on-disk", 9);
+    const logger = fakeLogger();
+
+    let thrown: unknown;
+    try {
+      await assertHostStoreFormatFloor({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.5.0",
+        publishedStoreFormats: null,
+        declaredStoreFormats: null,
+        installedVersion: "1.9.0",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    const err = thrown as CliError;
+    const details = err.details as { readonly verdict: string };
+    expect(details.verdict).toBe("indeterminate");
+    expect(err.message).toContain("1.5.0");
+  });
+
+  it("resolves the target from published store formats when the table cannot name it", async () => {
+    await writeStampedChatDb("epic-matching", 9);
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.5.0",
+        publishedStoreFormats: { chatDb: 9 },
+        declaredStoreFormats: null,
+        installedVersion: "1.9.0",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("--accept-store-format-loss bypasses a blocked refusal and logs the same facts at warn", async () => {
+    await writeStampedChatDb("epic-newer-store", 9);
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.2.0",
+        publishedStoreFormats: null,
+        declaredStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        acceptStoreFormatLoss: true,
+        site: "host install",
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+
+    const warnCall = logger.calls.find((call) => call.level === "warn");
+    expect(warnCall).toBeDefined();
+    expect(warnCall?.fields.blockedEpics).toEqual([
+      { epicId: "epic-newer-store", schemaVersion: 9 },
+    ]);
+  });
+
+  it("--accept-store-format-loss bypasses an indeterminate refusal and logs the same facts at warn", async () => {
+    await writeStampedChatDb("epic-readable", 8);
+    await writeGarbageChatDb("epic-unreadable");
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.2.0",
+        publishedStoreFormats: null,
+        declaredStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        acceptStoreFormatLoss: true,
+        site: "host install",
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+
+    const warnCall = logger.calls.find((call) => call.level === "warn");
+    expect(warnCall).toBeDefined();
+    expect(warnCall?.fields.unreadableEpicCount).toBe(1);
+    const unreadableEpics = warnCall?.fields.unreadableEpics as readonly {
+      readonly epicId: string;
+    }[];
+    expect(unreadableEpics[0]?.epicId).toBe("epic-unreadable");
+  });
+
+  describe("off-ladder targets", () => {
+    const OFF_LADDER_TARGET = "production.1757000000000.abc1234";
+
+    it("stands aside for an off-ladder target with no declaration, logging info", async () => {
+      await writeStampedChatDb("epic-on-disk", 9);
+      const logger = fakeLogger();
+
+      await expect(
+        assertHostStoreFormatFloor({
+          environment: "production",
+          targetIdentity: "local-archive",
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
+          targetVersion: OFF_LADDER_TARGET,
+          publishedStoreFormats: null,
+          declaredStoreFormats: null,
+          installedVersion: "1.3.0-rc.4",
+          installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
+          acceptStoreFormatLoss: false,
+          site: "host install",
+          logger,
+        }),
+      ).resolves.toBeUndefined();
+
+      const infoCall = logger.calls.find((call) => call.level === "info");
+      expect(infoCall).toBeDefined();
+      expect(infoCall?.message.toLowerCase()).toContain("stood aside");
+      // Debug is the "not consulted" path for an ordinary upgrade - standing
+      // aside for an off-ladder target must not be silently folded into it.
+      expect(logger.calls.some((call) => call.level === "debug")).toBe(false);
+    });
+
+    it("refuses an off-ladder target that declares a format lower than what is on disk", async () => {
+      await writeStampedChatDb("epic-on-disk", 9);
+      const logger = fakeLogger();
+
+      let thrown: unknown;
+      try {
+        await assertHostStoreFormatFloor({
+          environment: "production",
+          targetIdentity: "local-archive",
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
+          targetVersion: OFF_LADDER_TARGET,
+          publishedStoreFormats: null,
+          declaredStoreFormats: { chatDb: 8 },
+          installedVersion: "1.3.0-rc.4",
+          installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
+          acceptStoreFormatLoss: false,
+          site: "host install",
+          logger,
+        });
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown).toBeInstanceOf(CliError);
+      expect((thrown as CliError).code).toBe(
+        CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+      );
+    });
+
+    it("clears an off-ladder target that declares a format matching what is on disk", async () => {
+      await writeStampedChatDb("epic-on-disk", 9);
+      const logger = fakeLogger();
+
+      await expect(
+        assertHostStoreFormatFloor({
+          environment: "production",
+          targetIdentity: "local-archive",
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
+          targetVersion: OFF_LADDER_TARGET,
+          publishedStoreFormats: null,
+          declaredStoreFormats: { chatDb: 9 },
+          installedVersion: "1.3.0-rc.4",
+          installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
+          acceptStoreFormatLoss: false,
+          site: "host install",
+          logger,
+        }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("still refuses a RELEASED downgrade target over an off-ladder installed version - the exemption is not blanket", async () => {
+      await writeStampedChatDb("epic-on-disk", 9);
+      const logger = fakeLogger();
+
+      let thrown: unknown;
+      try {
+        await assertHostStoreFormatFloor({
+          environment: "production",
+          targetIdentity: "local-archive",
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
+          targetVersion: "1.2.0",
+          publishedStoreFormats: null,
+          declaredStoreFormats: null,
+          installedVersion: OFF_LADDER_TARGET,
+          installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
+          acceptStoreFormatLoss: false,
+          site: "host install",
+          logger,
+        });
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown).toBeInstanceOf(CliError);
+      expect((thrown as CliError).code).toBe(
+        CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+      );
+    });
+  });
+
+  describe("installed side declaration", () => {
+    // Both tests carry a `writeGarbageChatDb` fixture, so a walk that
+    // happens anyway cannot silently pass - it would surface as an
+    // indeterminate refusal instead.
+    const BUILD_STAMPED_INSTALLED = "production.1757000000000.abc1234";
+
+    it("clears via the no-disk-walk short-circuit when the build-stamped installed side declares a format the target meets", async () => {
+      await writeGarbageChatDb("epic-would-fail-if-walked");
+      const logger = fakeLogger();
+
+      await expect(
+        assertHostStoreFormatFloor({
+          environment: "production",
+          targetIdentity: "local-archive",
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
+          targetVersion: "1.3.0-rc.4",
+          publishedStoreFormats: null,
+          declaredStoreFormats: null,
+          installedVersion: BUILD_STAMPED_INSTALLED,
+          installedStoreFormats: { chatDb: 9 },
+          provenance: NO_PROVENANCE,
+          acceptStoreFormatLoss: false,
+          site: "host ensure",
+          logger,
+        }),
+      ).resolves.toBeUndefined();
+
+      // The regression this pins: without the declaration, `host ensure`
+      // converging FORWARD onto its own bundled host - a build-stamped
+      // version the fixed table can never place - could be refused by one
+      // unreadable store, with no `--accept-store-format-loss` anywhere in
+      // the desktop flow that reaches this site.
+      const clearedCall = logger.calls.find(
+        (call) =>
+          call.message ===
+          "Host store-format floor cleared without a disk walk",
+      );
+      expect(clearedCall).toBeDefined();
+    });
+
+    it("still walks disk (and refuses on the unreadable fixture) when the build-stamped installed side declares nothing", async () => {
+      // Same installed version as above, but WITHOUT the declaration - pins
+      // that the declaration is what changed the previous test's outcome,
+      // not some blanket "a build-stamped install always skips the floor".
+      await writeGarbageChatDb("epic-would-fail-if-walked");
+      const logger = fakeLogger();
+
+      let thrown: unknown;
+      try {
+        await assertHostStoreFormatFloor({
+          environment: "production",
+          targetIdentity: "local-archive",
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
+          targetVersion: "1.3.0-rc.4",
+          publishedStoreFormats: null,
+          declaredStoreFormats: null,
+          installedVersion: BUILD_STAMPED_INSTALLED,
+          installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
+          acceptStoreFormatLoss: false,
+          site: "host ensure",
+          logger,
+        });
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown).toBeInstanceOf(CliError);
+      expect((thrown as CliError).code).toBe(
+        CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+      );
+      const details = (thrown as CliError).details as {
+        readonly verdict: string;
+      };
+      expect(details.verdict).toBe("indeterminate");
+    });
+
+    it("refuses a released downgrade over the source-tree sentinel installed side, rather than skipping it as an upgrade", async () => {
+      // R4: `0.0.0-dev` parses as SemVer and sorts below every release, so
+      // ordering alone would call `1.2.0` an upgrade over it and skip the
+      // floor entirely - while a build of today's source writes chatDb 9.
+      // `storeFloorApplicability` has to name the sentinel explicitly for
+      // this refusal to happen at all.
+      await writeStampedChatDb("epic-on-disk", 9);
+      const logger = fakeLogger();
+
+      let thrown: unknown;
+      try {
+        await assertHostStoreFormatFloor({
+          environment: "production",
+          targetIdentity: "local-archive",
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
+          targetVersion: "1.2.0",
+          publishedStoreFormats: null,
+          declaredStoreFormats: null,
+          installedVersion: SOURCE_TREE_HOST_VERSION,
+          installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
+          acceptStoreFormatLoss: false,
+          site: "host install",
+          logger,
+        });
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown).toBeInstanceOf(CliError);
+      expect((thrown as CliError).code).toBe(
+        CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+      );
+    });
+  });
+});
+
+describe("gateStoreFormatFloor", () => {
+  it("does not consult the registry on an upgrade, even when asked to", async () => {
+    const logger = fakeLogger();
+
+    const evidence = await gateStoreFormatFloor({
+      environment: "production",
+      surveyRoots: singleChatStoreSurveyRoot(hostHome),
+      targetVersion: "1.4.0",
+      installedVersion: "1.3.0-rc.4",
+      installedStoreFormats: null,
+      installedProvenance: null,
+      consultRegistry: true,
+      acceptStoreFormatLoss: false,
+      site: "host install",
+      logger,
+    });
+
+    expect(fetchTextMock).not.toHaveBeenCalled();
+    expect(evidence.clearedVersion).toBe("1.4.0");
+  });
+
+  it("does not consult the registry on a downgrade when consultRegistry is false, and the fixed table decides", async () => {
+    const logger = fakeLogger();
+
+    const evidence = await gateStoreFormatFloor({
+      environment: "production",
+      surveyRoots: singleChatStoreSurveyRoot(hostHome),
+      targetVersion: "1.3.0-rc.1",
+      installedVersion: "1.3.0-rc.4",
+      installedStoreFormats: null,
+      installedProvenance: null,
+      consultRegistry: false,
+      acceptStoreFormatLoss: false,
+      site: "host update",
+      logger,
+    });
+
+    expect(fetchTextMock).not.toHaveBeenCalled();
+    expect(evidence.clearedVersion).toBe("1.3.0-rc.1");
+    expect(evidence.publishedStoreFormats).toBeNull();
+  });
+
+  it("logs the INFO 'stood aside' line on its own early return for an off-ladder target, not only inside assertHostStoreFormatFloor", async () => {
+    // P2-10: this early return - a pre-stage site with no archive to
+    // declare a format - used to return silently, so the "stood aside"
+    // record the module promises appeared at a pre-stage site exactly
+    // never. `assertHostStoreFormatFloor` is never reached on this path (no
+    // formats to check), so only THIS call site can log it here.
+    const logger = fakeLogger();
+
+    const evidence = await gateStoreFormatFloor({
+      environment: "production",
+      surveyRoots: singleChatStoreSurveyRoot(hostHome),
+      targetVersion: "local-something",
+      installedVersion: "1.3.0-rc.4",
+      installedStoreFormats: null,
+      installedProvenance: null,
+      consultRegistry: true,
+      acceptStoreFormatLoss: false,
+      site: "host install",
+      logger,
+    });
+
+    expect(fetchTextMock).not.toHaveBeenCalled();
+    expect(evidence.publishedStoreFormats).toBeNull();
+    const infoCall = logger.calls.find((call) => call.level === "info");
+    expect(infoCall).toBeDefined();
+    expect(infoCall?.message.toLowerCase()).toContain("stood aside");
+  });
+});
+
+describe("ungatedStoreFormatFloorEvidence", () => {
+  it("returns clearedVersion: null", () => {
+    const evidence = ungatedStoreFormatFloorEvidence("host install", false);
+    expect(evidence).toEqual({
+      clearedVersion: null,
+      publishedStoreFormats: null,
+      acceptStoreFormatLoss: false,
+      site: "host install",
+    });
+  });
+});
+
+describe("assertStoreFormatFloorAtCommit", () => {
+  it("drops the published formats and re-checks against the fixed table when the committing bytes differ from what was gated", async () => {
+    // A non-empty survey is required - an empty one is unconditionally
+    // `clear` regardless of the target, which would pass this test for the
+    // wrong reason.
+    await writeStampedChatDb("epic-on-disk", 9);
+    const logger = fakeLogger();
+
+    let thrown: unknown;
+    try {
+      await assertStoreFormatFloorAtCommit({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        committingVersion: "1.5.0",
+        declaredRuntimeVersion: null,
+        declaredStoreFormats: null,
+        installedVersion: "1.9.0",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        evidence: {
+          clearedVersion: "1.4.0",
+          publishedStoreFormats: { chatDb: 9 },
+          acceptStoreFormatLoss: false,
+          site: "host install",
+        },
+        logger,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    const warnedAboutDifferentBytes = logger.calls.some(
+      (call) =>
+        call.level === "warn" &&
+        call.message.toLowerCase().includes("different bytes"),
+    );
+    expect(warnedAboutDifferentBytes).toBe(true);
+  });
+
+  it("uses the published formats when the committing bytes match what was gated", async () => {
+    await writeStampedChatDb("epic-matching", 9);
+    const logger = fakeLogger();
+
+    await expect(
+      assertStoreFormatFloorAtCommit({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        committingVersion: "1.5.0",
+        declaredRuntimeVersion: null,
+        declaredStoreFormats: null,
+        installedVersion: "1.9.0",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        evidence: {
+          clearedVersion: "1.5.0",
+          publishedStoreFormats: { chatDb: 9 },
+          acceptStoreFormatLoss: false,
+          site: "host install",
+        },
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("still applies a DECLARED format even when the committing bytes differ from what was gated - the declaration describes the actual bytes", async () => {
+    await writeStampedChatDb("epic-matching", 9);
+    const logger = fakeLogger();
+
+    // clearedVersion differs from committingVersion, so the PUBLISHED formats
+    // would be dropped - but declaredStoreFormats is read off the bytes
+    // actually landing, so it must still clear a target the table alone
+    // (above the ceiling) could not vouch for.
+    await expect(
+      assertStoreFormatFloorAtCommit({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        committingVersion: "1.5.0",
+        declaredRuntimeVersion: null,
+        declaredStoreFormats: { chatDb: 9 },
+        installedVersion: "1.9.0",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        evidence: {
+          clearedVersion: "1.4.0",
+          publishedStoreFormats: null,
+          acceptStoreFormatLoss: false,
+          site: "host install",
+        },
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  describe("--from a local archive of a released build (declaredRuntimeVersion resolution)", () => {
+    // `host install --from` records `deriveLocalVersion(sourcePath)`, a
+    // synthetic `local-<basename>-<timestamp>` string, as the install
+    // RECORD's version. Judged by that string, a genuinely released 1.2.0
+    // archive reads as off-ladder and the floor stands aside on precisely
+    // the downgrade it exists to refuse - this is the bug the production
+    // change fixes, and these tests pin the fix rather than the symptom.
+    const LOCAL_COMMITTING_VERSION =
+      "local-host-v1.2.0.tar.gz-2026-01-01T00-00-00-000Z";
+
+    it("throws E_HOST_STORE_FORMAT_FLOOR, judging by the declared release rather than the local record string", async () => {
+      await writeStampedChatDb("epic-on-disk", 9);
+      const logger = fakeLogger();
+
+      let thrown: unknown;
+      try {
+        await assertStoreFormatFloorAtCommit({
+          environment: "production",
+          targetIdentity: "local-archive",
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
+          committingVersion: LOCAL_COMMITTING_VERSION,
+          declaredRuntimeVersion: "1.2.0",
+          declaredStoreFormats: null,
+          installedVersion: "1.3.0-rc.4",
+          installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
+          evidence: ungatedStoreFormatFloorEvidence("host install", false),
+          logger,
+        });
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown).toBeInstanceOf(CliError);
+      const err = thrown as CliError;
+      expect(err.code).toBe(CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR);
+      // The refusal must name the release the user will recognize, not the
+      // synthetic local-install bookkeeping string - that is the whole point
+      // of resolving through the declaration before judging.
+      expect(err.message).toContain("1.2.0");
+      expect(err.message).not.toContain("local-host-v1.2.0");
+    });
+
+    it("resolves when the archive declares a chatDb format that clears what is on disk", async () => {
+      await writeStampedChatDb("epic-on-disk", 9);
+      const logger = fakeLogger();
+
+      await expect(
+        assertStoreFormatFloorAtCommit({
+          environment: "production",
+          targetIdentity: "local-archive",
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
+          committingVersion: LOCAL_COMMITTING_VERSION,
+          declaredRuntimeVersion: "1.2.0",
+          declaredStoreFormats: { chatDb: 9 },
+          installedVersion: "1.3.0-rc.4",
+          installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
+          evidence: ungatedStoreFormatFloorEvidence("host install", false),
+          logger,
+        }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("stands aside, logging info, when the archive declares no runtime version at all (unchanged off-ladder behaviour)", async () => {
+      await writeStampedChatDb("epic-on-disk", 9);
+      const logger = fakeLogger();
+
+      await expect(
+        assertStoreFormatFloorAtCommit({
+          environment: "production",
+          targetIdentity: "local-archive",
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
+          committingVersion: LOCAL_COMMITTING_VERSION,
+          declaredRuntimeVersion: null,
+          declaredStoreFormats: null,
+          installedVersion: "1.3.0-rc.4",
+          installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
+          evidence: ungatedStoreFormatFloorEvidence("host install", false),
+          logger,
+        }),
+      ).resolves.toBeUndefined();
+
+      const infoCall = logger.calls.find((call) => call.level === "info");
+      expect(infoCall).toBeDefined();
+      expect(infoCall?.message.toLowerCase()).toContain("stood aside");
+    });
+
+    it("--accept-store-format-loss bypasses the refusal and warns with the same message the refusal would have shown", async () => {
+      await writeStampedChatDb("epic-on-disk", 9);
+      const logger = fakeLogger();
+
+      await expect(
+        assertStoreFormatFloorAtCommit({
+          environment: "production",
+          targetIdentity: "local-archive",
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
+          committingVersion: LOCAL_COMMITTING_VERSION,
+          declaredRuntimeVersion: "1.2.0",
+          declaredStoreFormats: null,
+          installedVersion: "1.3.0-rc.4",
+          installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
+          evidence: ungatedStoreFormatFloorEvidence("host install", true),
+          logger,
+        }),
+      ).resolves.toBeUndefined();
+
+      const warnCall = logger.calls.find(
+        (call) =>
+          call.level === "warn" &&
+          call.message ===
+            "Host store-format floor overridden by --accept-store-format-loss",
+      );
+      expect(warnCall).toBeDefined();
+      const warnedMessage = warnCall?.fields.message;
+      expect(warnedMessage).toContain("1.2.0");
+      expect(warnedMessage).not.toContain("local-host-v1.2.0");
+    });
+
+    it("keeps the published formats when clearedVersion equals the DECLARED version, not the local record string", async () => {
+      await writeStampedChatDb("epic-on-disk", 9);
+      const logger = fakeLogger();
+
+      await expect(
+        assertStoreFormatFloorAtCommit({
+          environment: "production",
+          targetIdentity: "local-archive",
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
+          committingVersion: LOCAL_COMMITTING_VERSION,
+          declaredRuntimeVersion: "1.2.0",
+          declaredStoreFormats: null,
+          installedVersion: "1.3.0-rc.4",
+          installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
+          evidence: {
+            clearedVersion: "1.2.0",
+            publishedStoreFormats: { chatDb: 9 },
+            acceptStoreFormatLoss: false,
+            site: "host install",
+          },
+          logger,
+        }),
+      ).resolves.toBeUndefined();
+
+      const warnedAboutDifferentBytes = logger.calls.some(
+        (call) =>
+          call.level === "warn" &&
+          call.message.toLowerCase().includes("different bytes"),
+      );
+      expect(warnedAboutDifferentBytes).toBe(false);
+    });
+
+    it("drops the published formats, warns, and refuses when clearedVersion equals the local RECORD string while the declaration differs", async () => {
+      // This is the fail-closed direction, and the one a regression would
+      // silently flip: an early gate that (incorrectly) cleared the local
+      // record string must not have its published formats trusted for a
+      // commit that resolves to a different, declared version.
+      await writeStampedChatDb("epic-on-disk", 9);
+      const logger = fakeLogger();
+
+      let thrown: unknown;
+      try {
+        await assertStoreFormatFloorAtCommit({
+          environment: "production",
+          targetIdentity: "local-archive",
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
+          committingVersion: LOCAL_COMMITTING_VERSION,
+          declaredRuntimeVersion: "1.2.0",
+          declaredStoreFormats: null,
+          installedVersion: "1.3.0-rc.4",
+          installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
+          evidence: {
+            clearedVersion: LOCAL_COMMITTING_VERSION,
+            publishedStoreFormats: { chatDb: 9 },
+            acceptStoreFormatLoss: false,
+            site: "host install",
+          },
+          logger,
+        });
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown).toBeInstanceOf(CliError);
+      expect((thrown as CliError).code).toBe(
+        CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+      );
+      const warnedAboutDifferentBytes = logger.calls.some(
+        (call) =>
+          call.level === "warn" &&
+          call.message.toLowerCase().includes("different bytes"),
+      );
+      expect(warnedAboutDifferentBytes).toBe(true);
+    });
+  });
+});
+
+describe("target identity (provenance) and the archive declaration", () => {
+  // A registry artifact is signed and named by its version: the version
+  // shortcuts hold even though the extracted tree declares formats, so an
+  // ordinary registry upgrade or same-version reinstall never walks the disk
+  // and never waits on the service manager. A local archive names itself,
+  // so its declaration judges applicability and no string shortcut applies.
+  const NOT_ESTABLISHED: SwapQuiescence = {
+    established: false,
+    reason: "writer-still-running",
+  };
+
+  it("registry artifact: an identical version WITH a declaration stands aside - the probe is never asked", async () => {
+    await writeGarbageChatDb("epic-would-fail-if-walked");
+    const logger = fakeLogger();
+    const observeQuiescence = vi.fn(
+      async (): Promise<SwapQuiescence> => NOT_ESTABLISHED,
+    );
+
+    await expect(
+      assertStoreFormatFloorAfterStop({
+        environment: "production",
+        targetIdentity: "registry-artifact",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.3.0",
+        declaredStoreFormats: { chatDb: 9 },
+        publishedStoreFormats: null,
+        installedVersion: "1.3.0",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        observeQuiescence,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+    expect(observeQuiescence).not.toHaveBeenCalled();
+  });
+
+  it("registry artifact: a strictly newer version WITH an older declaration stands aside on precedence", async () => {
+    await writeStampedChatDb("epic-newer-store", 9);
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor({
+        environment: "production",
+        targetIdentity: "registry-artifact",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.4.0",
+        publishedStoreFormats: null,
+        declaredStoreFormats: { chatDb: 8 },
+        installedVersion: "1.3.0",
+        installedStoreFormats: { chatDb: 9 },
+        provenance: NO_PROVENANCE,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("local archive: a strictly newer version WITH an older declaration is judged by the declaration and refused over a format-9 store (CodeRabbit)", async () => {
+    await writeStampedChatDb("epic-newer-store", 9);
+    const logger = fakeLogger();
+
+    let thrown: unknown;
+    try {
+      await assertHostStoreFormatFloor({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.4.0",
+        publishedStoreFormats: null,
+        declaredStoreFormats: { chatDb: 8 },
+        installedVersion: "1.3.0",
+        installedStoreFormats: { chatDb: 9 },
+        provenance: NO_PROVENANCE,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    expect((thrown as CliError).code).toBe(
+      CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+    );
+    expect((thrown as CliError).message).toContain("epic-newer-store");
+  });
+
+  it("local archive on the INSTALLED side: a shipped release declaring nothing, over an `ensure --from` install recorded as the same version, still evaluates and is refused over a newer store", async () => {
+    // The installed 1.2.0 is a local build that writes format 9 (its sidecar
+    // says so); the target is the shipped 1.2.0, which predates archive
+    // declarations and resolves to format 8 from the table. By string this is
+    // a reinstall; by bytes it is a downgrade, and only withholding the
+    // installed version from applicability lets the formats say so.
+    await writeStampedChatDb("epic-newer-store", 9);
+    const logger = fakeLogger();
+
+    let thrown: unknown;
+    try {
+      await assertHostStoreFormatFloor({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.2.0",
+        publishedStoreFormats: null,
+        declaredStoreFormats: null,
+        installedVersion: "1.2.0",
+        installedStoreFormats: { chatDb: 9 },
+        provenance: NO_PROVENANCE,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    expect((thrown as CliError).code).toBe(
+      CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+    );
+    expect((thrown as CliError).message).toContain("epic-newer-store");
+  });
+
+  it("local archive: a strictly newer version WITH a matching declaration clears from formats without a disk walk", async () => {
+    await writeGarbageChatDb("epic-would-fail-if-walked");
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.4.0",
+        publishedStoreFormats: null,
+        declaredStoreFormats: { chatDb: 9 },
+        installedVersion: "1.3.0",
+        installedStoreFormats: { chatDb: 9 },
+        provenance: NO_PROVENANCE,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+    expect(
+      logger.calls.some(
+        (call) =>
+          call.message ===
+          "Host store-format floor cleared without a disk walk",
+      ),
+    ).toBe(true);
+  });
+
+  // The KNOWN COST named on `StoreFloorTargetIdentity`: a desktop provisions
+  // from its bundled archive, so the first registry upgrade over it is a
+  // local-archive move that evaluates. Three shapes pin what that costs.
+  describe("a registry upgrade over a bundled desktop install (the known cost)", () => {
+    it("clears from formats alone when the installed side can be placed by its sidecar - no disk walk", async () => {
+      await writeGarbageChatDb("epic-would-fail-if-walked");
+      const logger = fakeLogger();
+
+      await expect(
+        assertHostStoreFormatFloor({
+          environment: "production",
+          targetIdentity: "local-archive",
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
+          targetVersion: "1.3.1",
+          publishedStoreFormats: { chatDb: 9 },
+          declaredStoreFormats: null,
+          installedVersion: "1.3.0",
+          installedStoreFormats: { chatDb: 9 },
+          provenance: NO_PROVENANCE,
+          acceptStoreFormatLoss: false,
+          site: "host update",
+          logger,
+        }),
+      ).resolves.toBeUndefined();
+      expect(
+        logger.calls.some(
+          (call) =>
+            call.message ===
+            "Host store-format floor cleared without a disk walk",
+        ),
+      ).toBe(true);
+    });
+
+    it("walks the stores when the installed side cannot be placed, and clears when every store reads at or below the target", async () => {
+      // Installed 1.3.0 is above the table's ceiling and its archive predates
+      // the sidecar: nothing places it, so only the stores can vouch.
+      await writeStampedChatDb("epic-current", 9);
+      const logger = fakeLogger();
+
+      await expect(
+        assertHostStoreFormatFloor({
+          environment: "production",
+          targetIdentity: "local-archive",
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
+          targetVersion: "1.3.1",
+          publishedStoreFormats: { chatDb: 9 },
+          declaredStoreFormats: null,
+          installedVersion: "1.3.0",
+          installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
+          acceptStoreFormatLoss: false,
+          site: "host update",
+          logger,
+        }),
+      ).resolves.toBeUndefined();
+      expect(
+        logger.calls.some(
+          (call) =>
+            call.message ===
+            "Host store-format floor cleared without a disk walk",
+        ),
+      ).toBe(false);
+    });
+
+    it("refuses that same upgrade as indeterminate on one unreadable store - the cost, paid loudly and with the override named", async () => {
+      await writeGarbageChatDb("epic-unreadable");
+      const logger = fakeLogger();
+
+      let thrown: unknown;
+      try {
+        await assertHostStoreFormatFloor({
+          environment: "production",
+          targetIdentity: "local-archive",
+          surveyRoots: singleChatStoreSurveyRoot(hostHome),
+          targetVersion: "1.3.1",
+          publishedStoreFormats: { chatDb: 9 },
+          declaredStoreFormats: null,
+          installedVersion: "1.3.0",
+          installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
+          acceptStoreFormatLoss: false,
+          site: "host update",
+          logger,
+        });
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown).toBeInstanceOf(CliError);
+      expect((thrown as CliError).code).toBe(
+        CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+      );
+      expect((thrown as CliError).message).toContain("epic-unreadable");
+      expect((thrown as CliError).message).toContain(
+        "--accept-store-format-loss",
+      );
+    });
+  });
+});
+
+describe("assertStoreFormatFloorAfterStop", () => {
+  const NOT_ESTABLISHED: SwapQuiescence = {
+    established: false,
+    reason: "writer-still-running",
+  };
+  const ESTABLISHED: SwapQuiescence = { established: true };
+
+  it.each([
+    [
+      "an unplaced target",
+      "1.9.0",
+      "1.3.0-rc.4",
+      "its chat store format is unknown",
+    ],
+    [
+      "nothing installed",
+      "1.2.0",
+      null,
+      "no installed build vouches for this machine's chat stores",
+    ],
+  ])(
+    "names what the formats could not settle with %s",
+    async (_case, targetVersion, installedVersion, verdict) => {
+      const refusal = assertStoreFormatFloorAfterStop({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion,
+        declaredStoreFormats: null,
+        publishedStoreFormats: null,
+        installedVersion,
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        observeQuiescence: async () => NOT_ESTABLISHED,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger: fakeLogger(),
+      });
+
+      await expect(refusal).rejects.toThrow(verdict);
+    },
+  );
+
+  it("asks for no quiescence over the identical archive, a move no writer can spoil", async () => {
+    const logger = fakeLogger();
+    const observeQuiescence = vi.fn(async () => NOT_ESTABLISHED);
+
+    await expect(
+      assertStoreFormatFloorAfterStop({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.2.0",
+        declaredStoreFormats: null,
+        publishedStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        provenance: { ...NO_PROVENANCE, sameArchive: true },
+        observeQuiescence,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(observeQuiescence).not.toHaveBeenCalled();
+  });
+
+  it("refuses on an unproven quiescence WITHOUT ever surveying disk - the reason is named, not the epics", async () => {
+    // A garbage fixture that would surface as an "unreadable" epic-named
+    // failure if the survey ran at all. The point of this arm is that it
+    // does not: it refuses on the quiescence gap alone.
+    await writeGarbageChatDb("epic-would-fail-if-walked");
+    const logger = fakeLogger();
+
+    let thrown: unknown;
+    try {
+      await assertStoreFormatFloorAfterStop({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.2.0",
+        declaredStoreFormats: null,
+        publishedStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        observeQuiescence: async () => NOT_ESTABLISHED,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    const err = thrown as CliError;
+    expect(err.code).toBe(CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR);
+    const details = err.details as {
+      readonly verdict: string;
+      readonly quiescenceGap: string;
+    };
+    expect(details.verdict).toBe("quiescence-unproven");
+    expect(details.quiescenceGap).toBe("writer-still-running");
+    // Names the GAP, not the epics - the garbage fixture's id must never
+    // appear, because naming it would claim a survey ran.
+    expect(err.message).toContain("still running");
+    expect(err.message).not.toContain("epic-would-fail-if-walked");
+  });
+
+  it("a quiescence refusal over an installed build the table cannot place says the formats are INCOMPARABLE, not that the target reads an older one", async () => {
+    // A same-version repair reinstall: the staged tree declares its format,
+    // the installed tree's sidecar is unreadable and 1.3.0 sits above the
+    // table's ceiling, so the installed side is unknown and formats cannot
+    // settle the move. The refusal must not assert an ordering it never
+    // established - the two builds are, by their strings, the same.
+    const logger = fakeLogger();
+
+    let thrown: unknown;
+    try {
+      await assertStoreFormatFloorAfterStop({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.3.0",
+        declaredStoreFormats: { chatDb: 9 },
+        publishedStoreFormats: null,
+        installedVersion: "1.3.0",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        observeQuiescence: async () => NOT_ESTABLISHED,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    const err = thrown as CliError;
+    expect(err.code).toBe(CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR);
+    expect(err.message).toContain(
+      "its chat store format cannot be compared with the installed build's",
+    );
+    expect(err.message).not.toContain("reads an older chat store format");
+  });
+
+  it("--accept-store-format-loss bypasses the quiescence refusal, and the warn carries the same message", async () => {
+    await writeGarbageChatDb("epic-would-fail-if-walked");
+    const logger = fakeLogger();
+
+    await expect(
+      assertStoreFormatFloorAfterStop({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.2.0",
+        declaredStoreFormats: null,
+        publishedStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        observeQuiescence: async () => NOT_ESTABLISHED,
+        acceptStoreFormatLoss: true,
+        site: "host install",
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+
+    const warnCall = logger.calls.find(
+      (call) =>
+        call.level === "warn" &&
+        call.message.toLowerCase().includes("quiescence"),
+    );
+    expect(warnCall).toBeDefined();
+    const warnedMessage = warnCall?.fields.message;
+    expect(warnedMessage).toContain("still running");
+  });
+
+  describe("a first install the service manager gap leaves unproven", () => {
+    // Nothing installed, a target that declares its format: the formats cannot
+    // settle the move, so the quiescence reading decides it.
+    async function firstInstall(
+      quiescence: SwapQuiescence,
+      acceptStoreFormatLoss: boolean,
+      logger: ILogger,
+    ): Promise<void> {
+      await assertStoreFormatFloorAfterStop({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.3.0",
+        declaredStoreFormats: { chatDb: 9 },
+        publishedStoreFormats: null,
+        installedVersion: null,
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        observeQuiescence: async () => quiescence,
+        acceptStoreFormatLoss,
+        site: "host install",
+        logger,
+      });
+    }
+
+    it("service-manager-unreachable refuses in the person's terms - no format wording and no override to offer", async () => {
+      let thrown: unknown;
+      try {
+        await firstInstall(
+          { established: false, reason: "service-manager-unreachable" },
+          false,
+          fakeLogger(),
+        );
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown).toBeInstanceOf(CliError);
+      const err = thrown as CliError;
+      expect(err.code).toBe(CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR);
+      expect(err.message).toBe(
+        "host install: Traycer can't reach your systemd user session, so it can't confirm that no host will start during the install. Nothing has been replaced. Run this from a desktop or login session.",
+      );
+      expect(err.message).not.toContain("accept-store-format-loss");
+      const details = err.details as {
+        readonly verdict: string;
+        readonly quiescenceGap: string;
+      };
+      expect(details.verdict).toBe("quiescence-unproven");
+      expect(details.quiescenceGap).toBe("service-manager-unreachable");
+    });
+
+    it("--accept-store-format-loss still bypasses a service-manager-unreachable gap, and the warn names the gap", async () => {
+      const logger = fakeLogger();
+
+      await expect(
+        firstInstall(
+          { established: false, reason: "service-manager-unreachable" },
+          true,
+          logger,
+        ),
+      ).resolves.toBeUndefined();
+
+      const warnCall = logger.calls.find((call) => call.level === "warn");
+      expect(warnCall?.fields.quiescenceGap).toBe(
+        "service-manager-unreachable",
+      );
+    });
+
+    it("service-may-respawn keeps the formats wording and the override hint", async () => {
+      let thrown: unknown;
+      try {
+        await firstInstall(
+          { established: false, reason: "service-may-respawn" },
+          false,
+          fakeLogger(),
+        );
+      } catch (err) {
+        thrown = err;
+      }
+
+      expect(thrown).toBeInstanceOf(CliError);
+      const err = thrown as CliError;
+      expect(err.message).toContain("refusing to install host 1.3.0");
+      expect(err.message).toContain(
+        "the service manager still held a host job",
+      );
+      expect(err.message).toContain("--accept-store-format-loss");
+      expect(err.message).not.toContain("systemd user session");
+    });
+  });
+
+  it("resolves when quiescence is established and every store is fine", async () => {
+    await writeStampedChatDb("epic-fine", 8);
+    const logger = fakeLogger();
+
+    await expect(
+      assertStoreFormatFloorAfterStop({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.2.0",
+        declaredStoreFormats: null,
+        publishedStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        observeQuiescence: async () => ESTABLISHED,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("refuses with the ordinary blocked message when quiescence is established but a store reads newer than the target - single root, guards the formats-first clearance from swallowing a real refusal", async () => {
+    // Undeclared on both sides, so `storeFloorClearedByFormats` cannot
+    // settle this from the table alone (target 1.2.0 -> chatDb 8, installed
+    // 1.3.0-rc.4 -> chatDb 9, 8 < 9) and the check must fall through to the
+    // survey exactly as it did before the formats-first reordering.
+    await writeStampedChatDb("epic-newer-store", 9);
+    const logger = fakeLogger();
+
+    let thrown: unknown;
+    try {
+      await assertStoreFormatFloorAfterStop({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.2.0",
+        declaredStoreFormats: null,
+        publishedStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        observeQuiescence: async () => ESTABLISHED,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    const err = thrown as CliError;
+    expect(err.code).toBe(CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR);
+    const details = err.details as { readonly verdict: string };
+    expect(details.verdict).toBe("blocked");
+    expect(err.message).toContain("epic-newer-store");
+    expect(err.message).toContain("format 8");
+  });
+
+  it("clears on formats alone across a MULTI-root survey WITHOUT ever consulting quiescence - the ordering fix (P1)", async () => {
+    // The exact regression: a routine `0.0.0-dev` -> `0.0.0-dev` dev
+    // convergence, both declaring chatDb 9. A slotted dev machine always
+    // spans more than one survey root, so quiescence there is never
+    // `established` - demanding it BEFORE the formats short-circuit refused
+    // this move and claimed the target read an OLDER format with both sides
+    // at 9. An unestablished quiescence here makes the test fail loudly if
+    // the ordering regresses - that is the whole point, not an incidental
+    // fixture choice - and the probe is a spy so the test also pins that it
+    // was never ASKED: it is host downtime, taken lazily and only past the
+    // formats.
+    const logger = fakeLogger();
+    const multiRootSurvey = {
+      roots: [
+        { path: join(hostHome, "slot"), label: "host" },
+        { path: join(hostHome, "identity-a"), label: "identity-a" },
+      ],
+      enumerationFailed: false,
+    };
+    const observeQuiescence = vi.fn(async (): Promise<SwapQuiescence> => ({
+      established: false,
+      reason: "unseen-writers",
+    }));
+
+    await expect(
+      assertStoreFormatFloorAfterStop({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: multiRootSurvey,
+        targetVersion: "0.0.0-dev",
+        declaredStoreFormats: { chatDb: 9 },
+        publishedStoreFormats: null,
+        installedVersion: "0.0.0-dev",
+        installedStoreFormats: { chatDb: 9 },
+        provenance: NO_PROVENANCE,
+        observeQuiescence,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+    expect(observeQuiescence).not.toHaveBeenCalled();
+
+    const clearedCall = logger.calls.find(
+      (call) =>
+        call.message ===
+        "Host store-format floor cleared after the stop without a disk walk",
+    );
+    expect(clearedCall).toBeDefined();
+  });
+
+  it("refuses with the quiescence gap across a MULTI-root survey when formats do NOT settle it (target older)", async () => {
+    const logger = fakeLogger();
+    const multiRootSurvey = {
+      roots: [
+        { path: join(hostHome, "slot"), label: "host" },
+        { path: join(hostHome, "identity-a"), label: "identity-a" },
+      ],
+      enumerationFailed: false,
+    };
+
+    let thrown: unknown;
+    try {
+      await assertStoreFormatFloorAfterStop({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: multiRootSurvey,
+        targetVersion: "1.2.0",
+        declaredStoreFormats: null,
+        publishedStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        observeQuiescence: async () => ({
+          established: false,
+          reason: "unseen-writers",
+        }),
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(CliError);
+    const err = thrown as CliError;
+    expect(err.code).toBe(CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR);
+    const details = err.details as {
+      readonly verdict: string;
+      readonly quiescenceGap: string;
+    };
+    expect(details.verdict).toBe("quiescence-unproven");
+    expect(details.quiescenceGap).toBe("unseen-writers");
+  });
+
+  it("resolves without consulting quiescence at all when the floor does not apply (an upgrade) - the ordering guard", async () => {
+    // The regression this pins: if the arms ran in the wrong order, every
+    // ordinary upgrade on a machine with a running host would start
+    // refusing. Quiescence is NOT established here, and the call must still
+    // resolve, because applicability is checked first and an upgrade
+    // returns before the quiescence arm is ever reached - and, since the
+    // probe is up to two 10-second `launchctl print` waits with the host
+    // already stopped, before the probe is ever ASKED.
+    await writeGarbageChatDb("epic-would-fail-if-walked");
+    const logger = fakeLogger();
+    const observeQuiescence = vi.fn(
+      async (): Promise<SwapQuiescence> => NOT_ESTABLISHED,
+    );
+
+    await expect(
+      assertStoreFormatFloorAfterStop({
+        environment: "production",
+        targetIdentity: "registry-artifact",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.4.0",
+        declaredStoreFormats: null,
+        publishedStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        observeQuiescence,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+    expect(observeQuiescence).not.toHaveBeenCalled();
+  });
+});
+
+describe("storeFormatFloorBuildVersion", () => {
+  it("returns the declaration when present", () => {
+    expect(
+      storeFormatFloorBuildVersion(
+        "1.2.0",
+        "local-host-v1.2.0.tar.gz-2026-01-01T00-00-00-000Z",
+      ),
+    ).toBe("1.2.0");
+  });
+
+  it("returns the record version when the declaration is null", () => {
+    expect(
+      storeFormatFloorBuildVersion(
+        null,
+        "local-host-v1.2.0.tar.gz-2026-01-01T00-00-00-000Z",
+      ),
+    ).toBe("local-host-v1.2.0.tar.gz-2026-01-01T00-00-00-000Z");
+  });
+});
+
+describe("the task store floor", () => {
+  const TASK_FLOOR_STOPPED_ASIDE =
+    "Host task store could not be read; the task-store floor stood aside";
+
+  /** Every exit that returns before the floor reaches the task store. */
+  const FLOOR_EXITS_BEFORE_THE_TASK_STORE = [
+    "Host store-format floor cleared: the target is the installed archive",
+    "Host store-format floor not consulted",
+    "Host store-format floor stood aside",
+  ];
+
+  /**
+   * The floor reached the task-store DECISION instead of returning before it.
+   *
+   * Three exits return first, each logging its own line: the target is the
+   * installed archive, the move is not a downgrade, and the target is off the
+   * ladder. A case that writes a store and then takes one of them passes
+   * without the floor ever reading what it wrote - which is how an inherited
+   * installed version silently turned one of these cases into an upgrade. A
+   * fourth exit would need its line added here.
+   *
+   * Asserted as the absence of all three rather than the presence of a
+   * clearance line, because every clearance line past this point belongs to
+   * the chat side, and a case about the task store should not redden when the
+   * chat shortcut stops applying to it.
+   *
+   * The decision, not the read: `findTaskStoreFloorBlock` returns null without
+   * a line for a target the table does not judge, so a case still has to put
+   * its target inside the era it means to exercise.
+   */
+  function expectFloorReachedTaskStoreDecision(
+    logger: ILogger & { readonly calls: RecordedCall[] },
+  ): void {
+    // Collected rather than asserted one by one, so a failure names the exit
+    // that fired instead of only the line that caught it.
+    expect(
+      logger.calls
+        .map((call) => call.message)
+        .filter((message) =>
+          FLOOR_EXITS_BEFORE_THE_TASK_STORE.includes(message),
+        ),
+    ).toEqual([]);
+  }
+
+  async function writeTaskStoreDb(
+    userVersion: number,
+    wal: boolean,
+  ): Promise<void> {
+    const dbPath = taskStoreDbPathFor(hostHome);
+    await mkdir(dirname(dbPath), { recursive: true });
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(dbPath);
+    try {
+      if (wal) db.exec("PRAGMA journal_mode = WAL");
+      db.exec("CREATE TABLE epic_homes (id TEXT PRIMARY KEY)");
+      db.exec(`PRAGMA user_version = ${userVersion}`);
+    } finally {
+      db.close();
+    }
+  }
+
+  /** 1.5.0 rolled back to `targetVersion`, both reading chat format 20. */
+  function rollbackInput(
+    logger: ILogger,
+    overrides: Partial<StoreFormatFloorInput>,
+  ): StoreFormatFloorInput {
+    return {
+      environment: "production",
+      targetIdentity: "registry-artifact",
+      surveyRoots: singleChatStoreSurveyRoot(hostHome),
+      targetVersion: "1.4.2",
+      publishedStoreFormats: { chatDb: 20 },
+      declaredStoreFormats: null,
+      // The default pairs with the 1.4.x and 1.3.x targets below, which it
+      // is above. A case whose target is NEWER than this has to name its own
+      // installed build, or the move is an upgrade: `storeFloorApplicability`
+      // sends every upgrade straight out, and nothing the case puts on disk
+      // is ever read. A case that writes a store and expects no refusal calls
+      // `expectFloorReachedTaskStoreDecision`, which fails on that exit.
+      installedVersion: "1.5.0",
+      installedStoreFormats: { chatDb: 20 },
+      provenance: NO_PROVENANCE,
+      acceptStoreFormatLoss: false,
+      site: "host update",
+      logger,
+      ...overrides,
+    };
+  }
+
+  async function refusalOf(input: StoreFormatFloorInput): Promise<CliError> {
+    try {
+      await assertHostStoreFormatFloor(input);
+    } catch (err) {
+      if (err instanceof CliError) return err;
+      throw err;
+    }
+    throw new Error("expected the floor to refuse");
+  }
+
+  it("refuses a 1.4.2 target over a format-4 store where the chat formats clear without a disk walk", async () => {
+    await writeTaskStoreDb(4, false);
+    await writeGarbageChatDb("epic-would-fail-if-walked");
+    const logger = fakeLogger();
+
+    const err = await refusalOf(rollbackInput(logger, {}));
+
+    expect(err.code).toBe(CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR);
+    expect(err.details?.verdict).toBe("task-store-blocked");
+    expect(err.details?.targetTaskStore).toBe(2);
+    expect(err.details?.onDiskTaskStore).toBe(4);
+    expect(err.message).toContain("task store format 2");
+    expect(err.message).toContain("format 4");
+    expect(err.message).toContain("--accept-store-format-loss");
+    expect(err.message).toContain("nothing in the task store is deleted");
+  });
+
+  it("refuses at the survey-clear return too, when the formats cannot settle it", async () => {
+    await writeTaskStoreDb(4, false);
+    const logger = fakeLogger();
+
+    const err = await refusalOf(
+      rollbackInput(logger, { installedStoreFormats: null }),
+    );
+
+    expect(err.details?.verdict).toBe("task-store-blocked");
+    expect(err.details?.onDiskTaskStore).toBe(4);
+  });
+
+  it("refuses from a real WAL-mode database through the real engine, nothing mocked", async () => {
+    await writeTaskStoreDb(4, true);
+    const logger = fakeLogger();
+
+    const err = await refusalOf(rollbackInput(logger, {}));
+
+    expect(err.details?.verdict).toBe("task-store-blocked");
+    expect(err.details?.targetTaskStore).toBe(2);
+    expect(err.details?.onDiskTaskStore).toBe(4);
+    expect(
+      logger.calls.some((call) => call.message === TASK_FLOOR_STOPPED_ASIDE),
+    ).toBe(false);
+  });
+
+  it("gives the chat refusal the task sentence and names local tasks in the remedy", async () => {
+    await writeStampedChatDb("epic-newer-store", 20);
+    await writeTaskStoreDb(4, false);
+    const logger = fakeLogger();
+
+    const err = await refusalOf(
+      rollbackInput(logger, {
+        targetVersion: "1.3.1",
+        publishedStoreFormats: { chatDb: 9 },
+        site: "host install",
+      }),
+    );
+
+    expect(err.details?.verdict).not.toBe("task-store-blocked");
+    expect(err.message).toContain("epic-newer-store");
+    expect(err.message).toContain(
+      "It also reads task store format 2, and this machine's task store is at format 4.",
+    );
+    expect(err.message).toContain(
+      "lose access to those chats and to local tasks.",
+    );
+    expect(err.details?.targetTaskStore).toBe(2);
+    expect(err.details?.onDiskTaskStore).toBe(4);
+    const errorCall = logger.calls.find((call) => call.level === "error");
+    expect(errorCall?.fields.targetTaskStore).toBe(2);
+  });
+
+  it("leaves the chat refusal untouched when the task store has nothing to say", async () => {
+    await writeStampedChatDb("epic-newer-store", 20);
+    const logger = fakeLogger();
+
+    const err = await refusalOf(
+      rollbackInput(logger, {
+        targetVersion: "1.3.1",
+        publishedStoreFormats: { chatDb: 9 },
+      }),
+    );
+
+    expect(err.message).not.toContain("task store");
+    expect(err.message).toContain("anyway and lose access to those chats.");
+    expect(err.details).not.toHaveProperty("targetTaskStore");
+  });
+
+  it("does not judge a staging-train target", async () => {
+    await writeTaskStoreDb(4, false);
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(
+        rollbackInput(logger, { targetVersion: "1.4.3-staging.92.g8b2f6ce" }),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not refuse a forward install of a staging build from a local archive", async () => {
+    await writeTaskStoreDb(4, false);
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(
+        rollbackInput(logger, {
+          targetIdentity: "local-archive",
+          targetVersion: "1.4.3-staging.92.g8b2f6ce",
+          publishedStoreFormats: null,
+          declaredStoreFormats: { chatDb: 20 },
+          installedVersion: "1.4.2",
+          installedStoreFormats: { chatDb: 20 },
+          provenance: NO_PROVENANCE,
+        }),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("never refuses an upgrade, whatever the store holds", async () => {
+    await writeTaskStoreDb(4, false);
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(
+        rollbackInput(logger, {
+          targetVersion: "1.4.2",
+          installedVersion: "1.4.0",
+        }),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not refuse a rollback inside the newest era and opens no task store", async () => {
+    const dbPath = taskStoreDbPathFor(hostHome);
+    await mkdir(dirname(dbPath), { recursive: true });
+    await writeFile(dbPath, "not a sqlite file", "utf8");
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(
+        rollbackInput(logger, {
+          targetVersion: "1.5.5",
+          installedVersion: "1.5.6",
+        }),
+      ),
+    ).resolves.toBeUndefined();
+    expect(
+      logger.calls.some((call) => call.message === TASK_FLOOR_STOPPED_ASIDE),
+    ).toBe(false);
+    expectFloorReachedTaskStoreDecision(logger);
+  });
+
+  it("consent passes the task-only refusal and logs it at WARN", async () => {
+    await writeTaskStoreDb(4, false);
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(
+        rollbackInput(logger, { acceptStoreFormatLoss: true }),
+      ),
+    ).resolves.toBeUndefined();
+
+    const warnCall = logger.calls.find((call) => call.level === "warn");
+    expect(warnCall?.message).toBe(
+      "Host task-store floor overridden by --accept-store-format-loss",
+    );
+    expect(warnCall?.fields.targetTaskStore).toBe(2);
+    expect(warnCall?.fields.onDiskTaskStore).toBe(4);
+    expect(String(warnCall?.fields.message)).toContain("task store format 2");
+  });
+
+  it("consent passes a chat refusal that carries the task sentence and logs the same facts", async () => {
+    await writeStampedChatDb("epic-newer-store", 20);
+    await writeTaskStoreDb(4, false);
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(
+        rollbackInput(logger, {
+          targetVersion: "1.3.1",
+          publishedStoreFormats: { chatDb: 9 },
+          acceptStoreFormatLoss: true,
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    const warnCall = logger.calls.find((call) => call.level === "warn");
+    expect(warnCall?.fields.targetTaskStore).toBe(2);
+    expect(warnCall?.fields.onDiskTaskStore).toBe(4);
+    expect(String(warnCall?.fields.message)).toContain(
+      "It also reads task store format 2",
+    );
+  });
+
+  it("passes and logs INFO when the task store is not a database", async () => {
+    const dbPath = taskStoreDbPathFor(hostHome);
+    await mkdir(dirname(dbPath), { recursive: true });
+    await writeFile(dbPath, "not a sqlite file", "utf8");
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(rollbackInput(logger, {})),
+    ).resolves.toBeUndefined();
+    expect(
+      logger.calls.some(
+        (call) =>
+          call.level === "info" && call.message === TASK_FLOOR_STOPPED_ASIDE,
+      ),
+    ).toBe(true);
+  });
+
+  it("passes and logs INFO when a directory sits at the task store path", async () => {
+    await mkdir(taskStoreDbPathFor(hostHome), { recursive: true });
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(rollbackInput(logger, {})),
+    ).resolves.toBeUndefined();
+    expect(
+      logger.calls.some(
+        (call) =>
+          call.level === "info" && call.message === TASK_FLOOR_STOPPED_ASIDE,
+      ),
+    ).toBe(true);
+  });
+
+  // `symlink()` is EPERM for a Windows developer without the create-
+  // symbolic-link privilege.
+  it.skipIf(process.platform === "win32")(
+    "passes and logs INFO when the task store is a symlink, even to a real format-4 database",
+    async () => {
+      await writeTaskStoreDb(4, false);
+      const dbPath = taskStoreDbPathFor(hostHome);
+      const elsewhere = join(hostHome, "elsewhere.db");
+      await rename(dbPath, elsewhere);
+      await symlink(elsewhere, dbPath);
+      const logger = fakeLogger();
+
+      await expect(
+        assertHostStoreFormatFloor(rollbackInput(logger, {})),
+      ).resolves.toBeUndefined();
+      expect(
+        logger.calls.some(
+          (call) =>
+            call.level === "info" && call.message === TASK_FLOOR_STOPPED_ASIDE,
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("passes silently when there is no task store", async () => {
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(rollbackInput(logger, {})),
+    ).resolves.toBeUndefined();
+    expect(
+      logger.calls.some((call) => call.message === TASK_FLOOR_STOPPED_ASIDE),
+    ).toBe(false);
+  });
+
+  // Not the cap: a newest-era target never reaches `taskStoreFloorBlock`, so
+  // nothing here can tell `min(onDisk, NEWEST)` from `onDisk`. The protocol's
+  // own suite owns that. The newest-era pass below is setup: it establishes
+  // that a stamp above the table refuses nothing, and over a READABLE file an
+  // open leaves no trace at all, so "opens no store" is the corrupt-file
+  // case's claim and not this one's. What this case carries is the refusal -
+  // the stamp it names is the one on disk, UNCAPPED.
+  it("names a stamp above the table uncapped when it refuses a target the table proves too old", async () => {
+    await writeTaskStoreDb(6, false);
+    const logger = fakeLogger();
+
+    await expect(
+      assertHostStoreFormatFloor(
+        rollbackInput(logger, {
+          targetVersion: "1.5.5",
+          installedVersion: "1.5.6",
+        }),
+      ),
+    ).resolves.toBeUndefined();
+
+    // Before the refusal below, so it reads a logger holding only the
+    // newest-era half's calls and isolates that half.
+    expectFloorReachedTaskStoreDecision(logger);
+
+    const err = await refusalOf(rollbackInput(logger, {}));
+    expect(err.details?.onDiskTaskStore).toBe(6);
+    expect(err.details?.targetTaskStore).toBe(2);
+  });
+
+  /**
+   * The format-5 era, through the CLI: a 1.5.0 host reads 4, so a
+   * format-5 task store blocks it. It is the one behaviour the new era row
+   * adds here - before it, 4 was the newest format the table knew and such
+   * a target opened no task store at all.
+   */
+  it("refuses a format-4 era target over a format-5 task store", async () => {
+    await writeTaskStoreDb(5, false);
+    const logger = fakeLogger();
+
+    const err = await refusalOf(
+      rollbackInput(logger, { targetVersion: "1.5.0-rc.1" }),
+    );
+
+    expect(err.details?.verdict).toBe("task-store-blocked");
+    expect(err.details?.targetTaskStore).toBe(4);
+    expect(err.details?.onDiskTaskStore).toBe(5);
+  });
+});

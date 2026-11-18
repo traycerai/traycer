@@ -1,0 +1,771 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { StatusBarProviderSegment } from "@/components/layout/status-bar/status-bar-provider-segment";
+import {
+  STATUS_BAR_TRANSIENT_LABEL,
+  STATUS_BAR_TRANSIENT_RUNNING_LABEL,
+  type StatusBarUsageDisplay,
+} from "@/components/layout/status-bar/status-bar-usage-display";
+import type {
+  StatusBarProviderSegmentModel,
+  StatusBarProviderSegmentState,
+  StatusBarRateLimitWindow,
+} from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
+import { RUNNING_LOW_TEXT_CLASS_NAME } from "@/lib/rate-limits/window-severity";
+import type { RateLimitWindowSeverity } from "@/lib/rate-limits/window-severity";
+
+/**
+ * A reset instant `days:hours` out, sampled when the TEST runs. A function
+ * rather than a `describe`-scoped constant: a `describe` body runs at
+ * COLLECTION, so a constant there is minutes old by the last case. The extra
+ * minutes keep the countdown off a day boundary for the render itself.
+ */
+function resetsAtIn(days: number, hours: number): number {
+  return Date.now() + ((days * 24 + hours) * 60 + 5) * 60_000;
+}
+
+function windowFixture(overrides: {
+  readonly windowKey: string;
+  readonly label?: string;
+  readonly labelIsDuration?: boolean;
+  readonly usedPercent?: number;
+  readonly resetsAt?: number | null;
+  readonly severity?: RateLimitWindowSeverity;
+}): StatusBarRateLimitWindow {
+  return {
+    windowKey: overrides.windowKey,
+    label: overrides.label ?? "5h",
+    labelIsDuration: overrides.labelIsDuration ?? true,
+    kind: "session",
+    usedPercent: overrides.usedPercent ?? 40,
+    resetsAt: overrides.resetsAt ?? null,
+    severity: overrides.severity ?? "healthy",
+  };
+}
+
+function segmentFixture(overrides: {
+  readonly providerId?: StatusBarProviderSegmentModel["providerId"];
+  readonly state?: StatusBarProviderSegmentState;
+  readonly reason?: StatusBarProviderSegmentModel["reason"];
+  readonly chatCredential?: StatusBarProviderSegmentModel["chatCredential"];
+  readonly windows?: ReadonlyArray<StatusBarRateLimitWindow>;
+  readonly shown?: ReadonlyArray<StatusBarRateLimitWindow>;
+  readonly profileId?: string | null;
+  readonly account?: StatusBarProviderSegmentModel["account"];
+  readonly fetching?: boolean;
+  readonly retryOffered?: boolean;
+}): StatusBarProviderSegmentModel {
+  const windows = overrides.windows ?? [];
+  const tightest = windows.length > 0 ? windows[0] : null;
+  return {
+    providerId: overrides.providerId ?? "codex",
+    profileId: overrides.profileId ?? null,
+    account: overrides.account ?? null,
+    hidden: false,
+    state: overrides.state ?? "live",
+    reason: overrides.reason ?? null,
+    chatCredential: overrides.chatCredential ?? null,
+    fetching: overrides.fetching ?? false,
+    retryOffered: overrides.retryOffered ?? false,
+    windows,
+    shown: overrides.shown ?? windows,
+    tightest,
+  };
+}
+
+function singleWindowSegment(
+  severity: RateLimitWindowSeverity,
+  usedPercent: number,
+  resetsAt: number | null,
+): StatusBarProviderSegmentModel {
+  return segmentFixture({
+    windows: [
+      windowFixture({
+        windowKey: "codex:primary",
+        severity,
+        usedPercent,
+        resetsAt,
+      }),
+    ],
+  });
+}
+
+function renderSegment(
+  segment: StatusBarProviderSegmentModel,
+  display: StatusBarUsageDisplay,
+) {
+  return render(
+    <TooltipProvider delayDuration={0}>
+      <StatusBarProviderSegment segment={segment} display={display} />
+    </TooltipProvider>,
+  );
+}
+
+/** The same specimen under a new model, so one row can walk a state's phases. */
+function redrawSegment(segment: StatusBarProviderSegmentModel): void {
+  cleanup();
+  renderSegment(segment, DISPLAY);
+}
+
+const DISPLAY: StatusBarUsageDisplay = {
+  percentMode: "used",
+  showTimer: true,
+  readingStyle: "bar",
+};
+
+const WORK = { profileId: "work", accentColor: "#ff0000", label: "Work" };
+
+function text(testId: string): string {
+  return screen.getByTestId(testId).textContent;
+}
+
+afterEach(() => {
+  cleanup();
+});
+
+describe("<StatusBarProviderSegment /> severity forms", () => {
+  let resetsAt = 0;
+  beforeEach(() => {
+    resetsAt = resetsAtIn(5, 1);
+  });
+
+  it("draws a healthy profile calm: a 16px bar and its reset time, nothing else", () => {
+    renderSegment(singleWindowSegment("healthy", 41, resetsAt), DISPLAY);
+
+    expect(text("status-bar-provider-reading")).toBe("5d");
+
+    expect(
+      screen.getByTestId("status-bar-provider-mini-bar").className,
+    ).toContain("w-4");
+    expect(screen.queryByTestId("status-bar-window-codex:primary")).toBeNull();
+    expect(
+      screen.queryByTestId("status-bar-window-percent-codex:primary"),
+    ).toBeNull();
+    expect(screen.queryByTestId("status-bar-provider-name")).toBeNull();
+  });
+
+  it("gives a profile its numbers in its tooltip", async () => {
+    renderSegment(
+      segmentFixture({
+        account: WORK,
+        windows: [
+          windowFixture({
+            windowKey: "codex:primary",
+            usedPercent: 41,
+            resetsAt,
+          }),
+        ],
+      }),
+      DISPLAY,
+    );
+
+    fireEvent.focus(screen.getByTestId("status-bar-provider-tooltip-target"));
+
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "Work · 41% used · resets in 5d",
+    );
+  });
+
+  it("expands a running_low profile: name, 32px bar, percent and reset time", () => {
+    renderSegment(
+      segmentFixture({
+        account: WORK,
+        windows: [
+          windowFixture({
+            windowKey: "codex:primary",
+            severity: "running_low",
+            usedPercent: 86,
+            resetsAt,
+          }),
+        ],
+      }),
+      DISPLAY,
+    );
+
+    expect(text("status-bar-provider-account")).toBe("Work");
+    expect(
+      screen.getByTestId("status-bar-provider-mini-bar").className,
+    ).toContain("w-8");
+    expect(text("status-bar-window-codex:primary")).toBe("86%5d");
+    expect(
+      screen.getByTestId("status-bar-window-percent-codex:primary").className,
+    ).toContain(RUNNING_LOW_TEXT_CLASS_NAME);
+  });
+
+  it("names an expanded profile by its provider when it has no account", () => {
+    renderSegment(singleWindowSegment("running_low", 86, resetsAt), DISPLAY);
+
+    expect(text("status-bar-provider-name")).toBe("Codex");
+  });
+
+  it("expands a limited profile with 'Limit' for the percent and 'resets Xd'", () => {
+    renderSegment(singleWindowSegment("limited", 100, resetsAt), DISPLAY);
+
+    expect(text("status-bar-window-percent-codex:primary")).toBe("Limit");
+    expect(
+      screen.getByTestId("status-bar-window-percent-codex:primary").className,
+    ).toContain("text-destructive");
+    expect(text("status-bar-window-codex:primary")).toBe("Limitresets 5d");
+    expect(
+      screen.getByTestId("status-bar-provider-mini-bar-fill").style.width,
+    ).toBe("100%");
+  });
+
+  it("reads the worst window's severity, so a profile is never calmer than one of its limits", () => {
+    const calmWindow = windowFixture({
+      windowKey: "codex:primary",
+      usedPercent: 10,
+    });
+    const lowWindow = windowFixture({
+      windowKey: "codex:secondary",
+      label: "wk",
+      severity: "running_low",
+      usedPercent: 88,
+    });
+    renderSegment(
+      segmentFixture({
+        windows: [calmWindow, lowWindow],
+        shown: [calmWindow, lowWindow],
+      }),
+      DISPLAY,
+    );
+
+    expect(text("status-bar-provider-name")).toBe("Codex");
+    // Each window still prints its own tier inside the expanded profile.
+    expect(text("status-bar-window-percent-codex:primary")).toBe("10%");
+    expect(text("status-bar-window-percent-codex:secondary")).toBe("88%");
+  });
+});
+
+describe("<StatusBarProviderSegment /> reading style", () => {
+  // The Bar style, which is the default, is the calm form pinned above.
+  let resetsAt = 0;
+  beforeEach(() => {
+    resetsAt = resetsAtIn(5, 1);
+  });
+
+  it("draws a calm profile as its percentage alone under Percent", () => {
+    renderSegment(singleWindowSegment("healthy", 41, resetsAt), {
+      ...DISPLAY,
+      readingStyle: "percent",
+    });
+
+    expect(screen.queryByTestId("status-bar-provider-mini-bar")).toBeNull();
+    expect(text("status-bar-window-percent-codex:primary")).toBe("41%");
+    expect(screen.queryByTestId("status-bar-window-codex:primary")).toBeNull();
+    expect(screen.queryByTestId("status-bar-provider-name")).toBeNull();
+  });
+
+  it("draws a calm profile as the 16px bar then the percentage under Bar and percent", () => {
+    renderSegment(singleWindowSegment("healthy", 41, resetsAt), {
+      ...DISPLAY,
+      readingStyle: "both",
+    });
+
+    expect(
+      screen.getByTestId("status-bar-provider-mini-bar").className,
+    ).toContain("w-4");
+    expect(text("status-bar-window-percent-codex:primary")).toBe("41%");
+    expect(screen.queryByTestId("status-bar-provider-name")).toBeNull();
+  });
+
+  it("prints a calm profile's reset time after its glyph or value under every calm style", () => {
+    const expected = { bar: "5d", percent: "41%5d", both: "41%5d" } as const;
+    for (const readingStyle of ["bar", "percent", "both"] as const) {
+      renderSegment(singleWindowSegment("healthy", 41, resetsAt), {
+        ...DISPLAY,
+        readingStyle,
+      });
+
+      expect(text("status-bar-provider-reading")).toBe(expected[readingStyle]);
+      cleanup();
+    }
+  });
+
+  it("prints no reset time on a calm profile when Reset time is off, and keeps it in the tooltip", async () => {
+    const expected = { bar: "", percent: "41%", both: "41%" } as const;
+    for (const readingStyle of ["bar", "percent", "both"] as const) {
+      renderSegment(singleWindowSegment("healthy", 41, resetsAt), {
+        ...DISPLAY,
+        showTimer: false,
+        readingStyle,
+      });
+
+      expect(text("status-bar-provider-reading")).toBe(expected[readingStyle]);
+      cleanup();
+    }
+
+    renderSegment(singleWindowSegment("healthy", 41, resetsAt), {
+      ...DISPLAY,
+      showTimer: false,
+    });
+    fireEvent.focus(screen.getByTestId("status-bar-provider-tooltip-target"));
+    expect((await screen.findByRole("tooltip")).textContent).toContain(
+      "41% used · resets in 5d",
+    );
+  });
+
+  it("prints no reset time on a calm window that has no reset instant", () => {
+    renderSegment(singleWindowSegment("healthy", 41, null), {
+      ...DISPLAY,
+      readingStyle: "percent",
+    });
+
+    expect(text("status-bar-provider-reading")).toBe("41%");
+  });
+
+  it("hides the reset time under Everything and on a running low or limited profile when Reset time is off", () => {
+    const off = { ...DISPLAY, showTimer: false };
+    // The window's name takes the countdown's place; see "gives the reset
+    // time's place" below.
+    renderSegment(singleWindowSegment("healthy", 41, resetsAt), {
+      ...off,
+      readingStyle: "full",
+    });
+    expect(text("status-bar-window-codex:primary")).toBe("41%used5h");
+    cleanup();
+
+    renderSegment(singleWindowSegment("running_low", 86, resetsAt), off);
+    expect(text("status-bar-window-codex:primary")).toBe("86%5h");
+    cleanup();
+
+    renderSegment(singleWindowSegment("limited", 100, resetsAt), {
+      ...off,
+      readingStyle: "percent",
+    });
+    expect(text("status-bar-window-codex:primary")).toBe("Limit5h");
+  });
+
+  it("expands a healthy profile under Everything, with the word after the percentage", () => {
+    renderSegment(singleWindowSegment("healthy", 41, resetsAt), {
+      ...DISPLAY,
+      readingStyle: "full",
+    });
+
+    expect(text("status-bar-provider-name")).toBe("Codex");
+    expect(
+      screen.getByTestId("status-bar-provider-mini-bar").className,
+    ).toContain("w-8");
+    expect(text("status-bar-window-codex:primary")).toBe("41%used5d");
+    cleanup();
+
+    renderSegment(singleWindowSegment("healthy", 41, resetsAt), {
+      percentMode: "remaining",
+      showTimer: true,
+      readingStyle: "full",
+    });
+    expect(text("status-bar-window-codex:primary")).toBe("59%remaining5d");
+  });
+
+  it("keeps 'Limit' without a word under Everything", () => {
+    renderSegment(singleWindowSegment("limited", 100, resetsAt), {
+      ...DISPLAY,
+      readingStyle: "full",
+    });
+
+    expect(text("status-bar-window-codex:primary")).toBe("Limitresets 5d");
+  });
+
+  it("expands a running low profile with a 32px bar under every style but Percent", () => {
+    for (const readingStyle of ["bar", "both", "full"] as const) {
+      renderSegment(singleWindowSegment("running_low", 86, resetsAt), {
+        ...DISPLAY,
+        readingStyle,
+      });
+
+      expect(text("status-bar-provider-name")).toBe("Codex");
+      expect(
+        screen.getByTestId("status-bar-provider-mini-bar").className,
+      ).toContain("w-8");
+      cleanup();
+    }
+  });
+
+  it("expands a running low profile without a bar under Percent", () => {
+    renderSegment(singleWindowSegment("running_low", 86, resetsAt), {
+      ...DISPLAY,
+      readingStyle: "percent",
+    });
+
+    expect(text("status-bar-provider-name")).toBe("Codex");
+    expect(screen.queryByTestId("status-bar-provider-mini-bar")).toBeNull();
+    expect(text("status-bar-window-codex:primary")).toBe("86%5d");
+  });
+
+  it("expands a limited profile without a bar under Percent", () => {
+    renderSegment(singleWindowSegment("limited", 100, resetsAt), {
+      ...DISPLAY,
+      readingStyle: "percent",
+    });
+
+    expect(text("status-bar-provider-name")).toBe("Codex");
+    expect(screen.queryByTestId("status-bar-provider-mini-bar")).toBeNull();
+    expect(text("status-bar-window-codex:primary")).toBe("Limitresets 5d");
+  });
+});
+
+describe("<StatusBarProviderSegment /> in place", () => {
+  it("keeps every profile where it was when one expands", () => {
+    const profiles = ["a", "b", "c"];
+    function row(severityOfB: RateLimitWindowSeverity) {
+      return (
+        <TooltipProvider delayDuration={0}>
+          {profiles.map((profileId) => (
+            <StatusBarProviderSegment
+              key={profileId}
+              display={DISPLAY}
+              segment={segmentFixture({
+                profileId,
+                account: { profileId, accentColor: "#00f", label: profileId },
+                windows: [
+                  windowFixture({
+                    windowKey: `codex:${profileId}`,
+                    severity: profileId === "b" ? severityOfB : "healthy",
+                  }),
+                ],
+              })}
+            />
+          ))}
+        </TooltipProvider>
+      );
+    }
+    const order = () =>
+      [...document.querySelectorAll("[data-profile-id]")].map((node) =>
+        node.getAttribute("data-profile-id"),
+      );
+
+    const { rerender } = render(row("healthy"));
+    expect(order()).toEqual(["a", "b", "c"]);
+
+    rerender(row("limited"));
+
+    expect(order()).toEqual(["a", "b", "c"]);
+    // Only the limited profile expands to print its name.
+    expect(
+      [...document.querySelectorAll("[data-profile-id]")].map(
+        (node) =>
+          node.querySelector('[data-testid="status-bar-provider-account"]')
+            ?.textContent ?? null,
+      ),
+    ).toEqual([null, "b", null]);
+  });
+});
+
+describe("<StatusBarProviderSegment /> settings", () => {
+  it("prints the remaining percent when Percent shows is Remaining", () => {
+    renderSegment(singleWindowSegment("running_low", 86, null), {
+      percentMode: "remaining",
+      showTimer: false,
+      readingStyle: "bar",
+    });
+
+    expect(text("status-bar-window-percent-codex:primary")).toBe("14%");
+  });
+
+  it("prints remaining as the complement of the ROUNDED used percentage", () => {
+    // 33.5% used reads 34% used, so remaining is 66%; rounding the complement
+    // instead would print 67%, and the two numbers would not add up.
+    renderSegment(singleWindowSegment("running_low", 33.5, null), {
+      percentMode: "used",
+      showTimer: false,
+      readingStyle: "bar",
+    });
+    expect(text("status-bar-window-percent-codex:primary")).toBe("34%");
+    cleanup();
+
+    renderSegment(singleWindowSegment("running_low", 33.5, null), {
+      percentMode: "remaining",
+      showTimer: false,
+      readingStyle: "bar",
+    });
+    expect(text("status-bar-window-percent-codex:primary")).toBe("66%");
+  });
+
+  it("gives the reset time's place to the window's name when Reset time is off", () => {
+    const resetsAt = resetsAtIn(5, 1);
+    renderSegment(singleWindowSegment("running_low", 86, resetsAt), {
+      percentMode: "used",
+      showTimer: false,
+      readingStyle: "bar",
+    });
+
+    // A bare percentage under an icon names no limit at all.
+    expect(text("status-bar-window-codex:primary")).toBe("86%5h");
+    cleanup();
+
+    renderSegment(singleWindowSegment("limited", 100, resetsAt), {
+      percentMode: "used",
+      showTimer: false,
+      readingStyle: "bar",
+    });
+    expect(text("status-bar-window-codex:primary")).toBe("Limit5h");
+  });
+
+  it("drops a named window's name once it is the provider's only limit", () => {
+    renderSegment(
+      segmentFixture({
+        windows: [
+          windowFixture({
+            windowKey: "claude-code:model:Fable",
+            label: "Fable",
+            labelIsDuration: false,
+            severity: "running_low",
+            usedPercent: 57,
+            resetsAt: resetsAtIn(4, 1),
+          }),
+        ],
+      }),
+      DISPLAY,
+    );
+
+    expect(text("status-bar-window-claude-code:model:Fable")).toBe("57%4d");
+  });
+
+  it("falls back to a lone window's short name with no countdown to print", () => {
+    renderSegment(
+      segmentFixture({
+        windows: [
+          windowFixture({
+            windowKey: "grok:period",
+            label: "wk",
+            labelIsDuration: false,
+            severity: "running_low",
+            usedPercent: 86,
+            resetsAt: null,
+          }),
+        ],
+      }),
+      DISPLAY,
+    );
+
+    expect(text("status-bar-window-grok:period")).toBe("86%wk");
+  });
+
+  it("keeps the window's name beside two limits so two bars can be told apart", () => {
+    const primary = windowFixture({
+      windowKey: "cursor:cursorModels",
+      label: "Cursor models",
+      labelIsDuration: false,
+      severity: "running_low",
+      resetsAt: resetsAtIn(2, 1),
+    });
+    const other = windowFixture({
+      windowKey: "cursor:otherModels",
+      label: "Other models",
+      labelIsDuration: false,
+      severity: "running_low",
+      resetsAt: resetsAtIn(2, 1),
+    });
+    renderSegment(
+      segmentFixture({ windows: [primary, other], shown: [primary, other] }),
+      DISPLAY,
+    );
+
+    expect(text("status-bar-window-cursor:cursorModels")).toContain(
+      "Cursor models",
+    );
+    expect(text("status-bar-window-cursor:otherModels")).toContain(
+      "Other models",
+    );
+  });
+
+  it("draws one bar per shown limit, in order, each filled from its own window", () => {
+    const primary = windowFixture({
+      windowKey: "codex:primary",
+      usedPercent: 30,
+    });
+    const secondary = windowFixture({
+      windowKey: "codex:secondary",
+      label: "wk",
+      usedPercent: 92,
+      severity: "limited",
+    });
+    renderSegment(
+      segmentFixture({
+        windows: [primary, secondary],
+        shown: [primary, secondary],
+      }),
+      DISPLAY,
+    );
+
+    expect(
+      screen
+        .getAllByTestId("status-bar-provider-mini-bar")
+        .map((bar) => bar.getAttribute("data-window-key")),
+    ).toEqual(["codex:primary", "codex:secondary"]);
+    expect(
+      screen
+        .getAllByTestId("status-bar-provider-mini-bar-fill")
+        .map((fill) => fill.style.width),
+    ).toEqual(["30%", "92%"]);
+  });
+
+  it("clamps the percentage text to 0-100 in both modes", () => {
+    renderSegment(singleWindowSegment("running_low", 104, null), {
+      percentMode: "used",
+      showTimer: false,
+      readingStyle: "bar",
+    });
+    expect(text("status-bar-window-percent-codex:primary")).toBe("100%");
+    cleanup();
+
+    renderSegment(singleWindowSegment("running_low", 104, null), {
+      percentMode: "remaining",
+      showTimer: false,
+      readingStyle: "bar",
+    });
+    expect(text("status-bar-window-percent-codex:primary")).toBe("0%");
+  });
+});
+
+describe("<StatusBarProviderSegment /> states", () => {
+  it("cold renders the neutral track at the calm width", () => {
+    renderSegment(segmentFixture({ state: "cold" }), DISPLAY);
+
+    expect(
+      screen.getByTestId("status-bar-provider-cold-track").className,
+    ).toContain("w-4");
+    expect(screen.queryByTestId("status-bar-provider-reading")).toBeNull();
+  });
+
+  it("unavailable renders the dash", () => {
+    renderSegment(
+      segmentFixture({ state: "unavailable", reason: "cli_not_found" }),
+      DISPLAY,
+    );
+
+    expect(
+      screen.getByTestId("status-bar-provider-unavailable"),
+    ).not.toBeNull();
+  });
+
+  it("names the chat credential in the tooltip of an unavailable claude-code segment, not the reason", async () => {
+    renderSegment(
+      segmentFixture({
+        providerId: "claude-code",
+        state: "unavailable",
+        reason: "rate_limits_not_available",
+        chatCredential: { kind: "api-key", source: "ANTHROPIC_API_KEY" },
+      }),
+      DISPLAY,
+    );
+
+    fireEvent.focus(screen.getByTestId("status-bar-provider-tooltip-target"));
+
+    const text = (await screen.findByRole("tooltip")).textContent;
+    expect(text).toContain(
+      "Chats here are billed to ANTHROPIC_API_KEY, not your Claude plan, so there are no plan limits to show.",
+    );
+    expect(text).not.toContain("not available for this account");
+  });
+
+  it("transient says it could not load, and underlines that only while a click would read again", () => {
+    renderSegment(
+      segmentFixture({
+        state: "transient",
+        reason: "timeout",
+        retryOffered: true,
+      }),
+      DISPLAY,
+    );
+
+    const offered = screen.getByTestId("status-bar-provider-transient");
+    expect(offered.textContent).toBe(STATUS_BAR_TRANSIENT_LABEL);
+    expect(offered.className).toContain("underline");
+    expect(screen.queryByTestId("status-bar-provider-unavailable")).toBeNull();
+
+    // Withheld: the same words, and nothing that says a click does anything.
+    redrawSegment(
+      segmentFixture({
+        state: "transient",
+        reason: "timeout",
+        retryOffered: false,
+      }),
+    );
+    const withheld = screen.getByTestId("status-bar-provider-transient");
+    expect(withheld.textContent).toBe(STATUS_BAR_TRANSIENT_LABEL);
+    expect(withheld.className).not.toContain("underline");
+
+    // Running: the words change, and the affordance is the read itself.
+    redrawSegment(
+      segmentFixture({
+        state: "transient",
+        reason: "timeout",
+        fetching: true,
+        retryOffered: false,
+      }),
+    );
+    expect(
+      screen.getByTestId("status-bar-provider-transient").textContent,
+    ).toBe(STATUS_BAR_TRANSIENT_RUNNING_LABEL);
+  });
+
+  it("degraded keeps the warning glyph and the last reading, undimmed", () => {
+    renderSegment(
+      segmentFixture({
+        state: "degraded",
+        reason: "usage_fetch_failed",
+        windows: [windowFixture({ windowKey: "codex:primary" })],
+      }),
+      DISPLAY,
+    );
+
+    expect(
+      screen.getByTestId("status-bar-provider-segment-codex").className,
+    ).not.toContain("opacity-60");
+    expect(screen.getByTestId("status-bar-provider-degraded")).not.toBeNull();
+    expect(screen.getByTestId("status-bar-provider-mini-bar")).not.toBeNull();
+  });
+
+  it("animates the reading in when a cold provider first reports, and not on first paint", () => {
+    const live = segmentFixture({
+      windows: [windowFixture({ windowKey: "codex:primary" })],
+    });
+    renderSegment(live, DISPLAY);
+    expect(
+      screen.getByTestId("status-bar-provider-reading").style.opacity,
+    ).toBe("1");
+    cleanup();
+
+    const cold = renderSegment(segmentFixture({ state: "cold" }), DISPLAY);
+    cold.rerender(
+      <TooltipProvider delayDuration={0}>
+        <StatusBarProviderSegment segment={live} display={DISPLAY} />
+      </TooltipProvider>,
+    );
+    expect(screen.queryByTestId("status-bar-provider-cold-track")).toBeNull();
+    expect(
+      screen.getByTestId("status-bar-provider-reading").style.opacity,
+    ).toBe("0");
+  });
+});
+
+describe("<StatusBarProviderSegment /> account", () => {
+  it("draws the accent dot beside the icon for a segment with an account mark", () => {
+    renderSegment(
+      segmentFixture({
+        profileId: "work",
+        account: WORK,
+        windows: [windowFixture({ windowKey: "codex:primary" })],
+      }),
+      DISPLAY,
+    );
+
+    expect(
+      screen.getByTestId("status-bar-provider-segment-codex").dataset.profileId,
+    ).toBe("work");
+    expect(screen.getByTestId("status-bar-provider-account-dot")).toBeTruthy();
+  });
+
+  it("draws no dot for a segment with no account mark", () => {
+    renderSegment(
+      segmentFixture({
+        windows: [windowFixture({ windowKey: "codex:primary" })],
+      }),
+      DISPLAY,
+    );
+
+    expect(screen.queryByTestId("status-bar-provider-account-dot")).toBeNull();
+  });
+});

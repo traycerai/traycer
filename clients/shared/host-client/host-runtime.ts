@@ -1,0 +1,366 @@
+import type { Disposable } from "../platform/uri-callback";
+import { liveRemoteSessionHostIds } from "../host-transport/remote/active-remote-sessions";
+import { forgetHostTokensOnSignOut } from "../auth/host-token-sign-out";
+import type { IRunnerHost } from "../platform/runner-host";
+import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
+import type {
+  AuthEra,
+  RequestContextProvider,
+} from "../auth/request-context-provider";
+import type { IHostMessenger } from "../host-transport/host-messenger";
+import { HostClient, type IHostQueryInvalidator } from "./host-client";
+import { POOL_HOST_ID, type HostDirectoryEntry } from "./host-directory";
+import { settleProcessHostRpcTierPlan } from "./host-rpc-routing";
+import {
+  installHostConnectionRegistrySource,
+  resetHostConnectionRegistry,
+  type HostConnectionRegistrySource,
+} from "./host-connection-registry";
+import { HostBindingAuthorityRegistry } from "./host-binding-authority-registry";
+import { HostRequestCoordinator } from "./host-request-coordinator";
+import type { RpcSchedulingPolicy } from "./rpc-scheduling-policy";
+
+/**
+ * Minimal host-directory surface the shared runtime depends on.
+ *
+ * The concrete `HostDirectoryService` lives in `gui-app`; it composes the
+ * runner-host's local-host snapshot with the stubbed remote fetcher (see
+ * `remote-fetcher.ts`) and owns selection state. Shared code only needs the
+ * read/observe subset below.
+ */
+export interface IHostDirectoryService {
+  list(): Promise<readonly HostDirectoryEntry[]>;
+  findById(hostId: string): HostDirectoryEntry | null;
+  refresh(): Promise<readonly HostDirectoryEntry[]>;
+  /**
+   * Refresh on behalf of an explicitly named {@link AuthEra}. The
+   * context-change path uses this rather than `refresh()`: an era assembled
+   * from ambient accessors inside an emission is a mix of state that has
+   * already moved and state that has not, and the implementation needs the
+   * SAME era for its memo key, its commit stamp, its destructive fence and
+   * the credential its fetch runs under.
+   */
+  refreshForEra(era: AuthEra): Promise<readonly HostDirectoryEntry[]>;
+  /** Drop any in-flight refresh — used when the credential rotates. */
+  invalidateInFlightRefresh(): void;
+}
+
+export interface HostRuntimeOptions<Registry extends VersionedRpcRegistry> {
+  readonly runnerHost: IRunnerHost;
+  /** `delayed`: authn could not be reached; the host keeps its held token until a later renewal. */
+  readonly onHostTokenRenewal: (hostId: string, delayed: boolean) => void;
+  readonly registry: Registry;
+  readonly messenger: IHostMessenger<Registry>;
+  /**
+   * `null` only when `messenger` already sends once per call. Required so a shell
+   * cannot silently retry a call promised to go out once.
+   */
+  readonly singleAttemptMessenger: IHostMessenger<Registry> | null;
+  /**
+   * Client `RequestContextProvider` boundary. The runtime threads
+   * `provider.current()` into `HostClient` on `start()` and rebinds on
+   * every `provider.onChange(...)` emission (sign-in, sign-out, cross-user
+   * transition). Same-user credential rotation does NOT emit through the
+   * provider - the lease is mutated in place - so the host-scoped cache
+   * survives token refreshes intact.
+   *
+   * The runtime also takes `onSessionVerified`, which is neither of those: it
+   * is the post-commit edge for a session the servers have just confirmed, and
+   * it is what refreshes the directory when a promotion rotates in place (so
+   * `onChange` is silent) or when `onChange` fires one commit too early to be
+   * allowed to read the registry.
+   */
+  readonly requestContextProvider: RequestContextProvider;
+  readonly directory: IHostDirectoryService;
+  readonly invalidator: IHostQueryInvalidator;
+  readonly schedulingPolicy: RpcSchedulingPolicy<Registry>;
+  /**
+   * The window's connection-registry wiring (connection-registry §1), or
+   * `null` for a shell that runs without one (the standalone/test path).
+   *
+   * REQUIRED rather than optional on purpose. The registry carries the
+   * per-host "row changed" signal that replaces the active slot's change
+   * event, so a shell that forgets to wire it produces windows whose pinned
+   * consumers never re-read when a host's row lands - a silent staleness
+   * bug, not a crash. A required field turns "did you wire it" into a
+   * compile error at every shell, which is the only census that cannot rot.
+   */
+  readonly connectionRegistry: HostConnectionRegistrySource | null;
+  /**
+   * Provider-owned binding registry. `null` keeps the standalone-runtime
+   * convenience path for tests and non-React shells.
+   */
+  readonly authorityRegistry?: HostBindingAuthorityRegistry | null;
+  /** Provider-owned in GUI; standalone runtimes may create one. */
+  readonly requestCoordinator: HostRequestCoordinator<Registry> | null;
+  /**
+   * The person's selected host, read at dispatch: where `selected-host`
+   * methods (the person's input devices) go, whatever the caller's target.
+   */
+  readonly selectedHostId: () => string | null;
+}
+
+/**
+ * Shared orchestrator consumed by desktop, mobile, and browser-preview shells.
+ *
+ * `HostRuntime`:
+ * 1. Builds a `HostClient<Registry>` around the messenger the shell built
+ *    (shells pick their transport: `WsRpcClient` on desktop/mobile,
+ *    `MockHostMessenger` under dev/preview).
+ * 2. On `start()`, applies the current `RequestContext` and current host
+ *    selection, then subscribes to context, selection, and local-host
+ *    transitions. Each signal maps to a `HostClient` call so the
+ *    TanStack query cache invalidates coherently on every identity change.
+ * 3. Releases all subscriptions on `dispose()`.
+ *
+ * The runtime does not own transport construction: it receives the messenger
+ * from its caller. That keeps the shared module free of `globalThis.fetch`
+ * coupling and lets tests drive the full lifecycle with an in-memory
+ * `MockHostMessenger`.
+ */
+export class HostRuntime<Registry extends VersionedRpcRegistry> {
+  readonly hostClient: HostClient<Registry>;
+  readonly requestContextProvider: RequestContextProvider;
+  readonly directory: IHostDirectoryService;
+
+  private readonly runnerHost: IRunnerHost;
+  private readonly connectionRegistry: HostConnectionRegistrySource | null;
+  readonly authorityRegistry: HostBindingAuthorityRegistry;
+  readonly requestCoordinator: HostRequestCoordinator<Registry>;
+  private readonly ownsAuthorityRegistry: boolean;
+  private readonly ownsRequestCoordinator: boolean;
+  private started = false;
+  private disposed = false;
+  private readonly disposables: Disposable[] = [];
+  private contextUnsubscribe: (() => void) | null = null;
+  private bearerRotationUnsubscribe: (() => void) | null = null;
+  private cloudVerdictUnsubscribe: (() => void) | null = null;
+  private sessionVerifiedUnsubscribe: (() => void) | null = null;
+  private localHostId: string | null = null;
+  private readonly onHostTokenRenewal: (
+    hostId: string,
+    delayed: boolean,
+  ) => void;
+
+  constructor(options: HostRuntimeOptions<Registry>) {
+    this.runnerHost = options.runnerHost;
+    this.onHostTokenRenewal = options.onHostTokenRenewal;
+    this.requestContextProvider = options.requestContextProvider;
+    this.directory = options.directory;
+    this.connectionRegistry = options.connectionRegistry;
+    this.ownsAuthorityRegistry =
+      options.authorityRegistry === null ||
+      options.authorityRegistry === undefined;
+    this.authorityRegistry =
+      options.authorityRegistry ?? new HostBindingAuthorityRegistry();
+    this.ownsRequestCoordinator = options.requestCoordinator === null;
+    this.requestCoordinator =
+      options.requestCoordinator ??
+      new HostRequestCoordinator({
+        registry: options.registry,
+        schedulingPolicy: options.schedulingPolicy,
+      });
+    this.hostClient = new HostClient<Registry>({
+      registry: options.registry,
+      messenger: options.messenger,
+      singleAttemptMessenger:
+        options.singleAttemptMessenger ?? options.messenger,
+      invalidator: options.invalidator,
+      authorityRegistry: this.authorityRegistry,
+      schedulingPolicy: options.schedulingPolicy,
+      requestCoordinator: this.requestCoordinator,
+      findHostById: (hostId) => options.directory.findById(hostId),
+      routing: {
+        // The directory synthesizes the pool's entry from the build's own
+        // configuration, so this is the build's answer, frozen for the
+        // process life.
+        plan: settleProcessHostRpcTierPlan(
+          options.directory.findById(POOL_HOST_ID),
+        ),
+        selectedHostId: options.selectedHostId,
+      },
+    });
+  }
+
+  /**
+   * Wires context / directory / local-host signals into `hostClient`.
+   *
+   * Safe to call multiple times: subsequent calls are no-ops. Callers that
+   * need to rewire must `dispose()` and build a fresh runtime.
+   */
+  start(): void {
+    if (this.disposed) {
+      throw new Error("HostRuntime cannot be started after dispose().");
+    }
+    if (this.started) {
+      return;
+    }
+    this.started = true;
+
+    // BEFORE anything else reads it, so a consumer that subscribes during the
+    // opening commit sees the registry already answering off the live
+    // directory rather than the empty answers an uninstalled source gives.
+    // This used to be sequenced "before the first bind"; there is no bind, and
+    // the registry is now the ONLY thing that tells a pinned consumer its row
+    // arrived, which makes the ordering more load-bearing than it was, not
+    // less.
+    if (this.connectionRegistry !== null) {
+      installHostConnectionRegistrySource(this.connectionRegistry);
+    }
+
+    this.hostClient.setRequestContext(this.requestContextProvider.current());
+
+    this.contextUnsubscribe = this.requestContextProvider.onChange(
+      (ctx, era) => {
+        this.hostClient.setRequestContext(ctx);
+        // The era comes FROM the emission and is passed through untouched -
+        // not rebuilt here out of `ctx` plus a generation read, and not left
+        // for the directory to read off its own accessors. Those accessors
+        // answer for a transition that may not have finished landing: this is
+        // the one refresh whose entire job is to load the INCOMING account,
+        // and every previous attempt to key it ambiently picked up one field
+        // from after the switch and another from before it.
+        // On sign-out the era's identity is `null`, which is exactly right:
+        // `null` IS the incoming identity, and stamping it is what lets the
+        // signed-out clear commit instead of being discarded as stale.
+        void this.directory.refreshForEra(era);
+      },
+    );
+
+    // Same-user token refresh rotates the lease in place (silent on `onChange`);
+    // forward it so stream transports can push the fresh credential onto open
+    // connections without a reconnect.
+    // The verdict counterpart of the rotation forward below. It is a SEPARATE
+    // subscription rather than extra work inside that one because the two
+    // events do not coincide: a demotion rotates and withdraws together, but a
+    // promotion can assert a verdict on a bearer that did not move, and every
+    // ordinary refresh rotates with the verdict untouched. Folding them would
+    // make each refresh push a redundant verdict frame and still miss the
+    // rotation-free changes.
+    this.cloudVerdictUnsubscribe =
+      this.requestContextProvider.onCloudVerdictChanged(() => {
+        this.hostClient.notifyCloudVerdictChanged();
+      });
+
+    this.bearerRotationUnsubscribe =
+      this.requestContextProvider.onBearerRotated(() => {
+        // A rotation is invisible to a user-id fence — same account, new
+        // credential — so the in-flight refresh is dropped here rather than
+        // joined. The pending request carries the OLD bearer, and if it comes
+        // back 401 its `signed-out` outcome would clear a directory the new
+        // credential had just legitimately filled.
+        this.directory.invalidateInFlightRefresh();
+        this.hostClient.notifyBearerRotated();
+        this.renewHostTokens();
+      });
+
+    // A session that has just been CONFIRMED by the account's servers, with the
+    // verdict already committed everywhere it is readable. Two shapes reach
+    // here and both need this, which is why it is not filtered further:
+    //
+    //  - `unverified` -> verified for the same user. The lease rotates in
+    //    place, so `onChange` above is silent by contract and nothing else
+    //    would ever refresh the directory.
+    //  - signed-out -> signed-in. `onChange` DOES fire, but it fires from
+    //    inside the context transition, one commit before the verdict lands -
+    //    so that refresh asks the fetcher for a credential it is told this
+    //    session may not spend yet, and comes back empty.
+    //
+    // In both cases the previous read is worthless rather than merely stale, so
+    // the in-flight slot is DROPPED before re-asking: `refreshForEra` coalesces
+    // on the era, this era is the same era, and joining is how the second
+    // attempt would inherit the first one's empty answer.
+    this.sessionVerifiedUnsubscribe =
+      this.requestContextProvider.onSessionVerified((era) => {
+        this.directory.invalidateInFlightRefresh();
+        void this.directory.refreshForEra(era);
+      });
+
+    this.disposables.push(
+      this.runnerHost.onLocalHostChange((snapshot) => {
+        this.localHostId = snapshot?.hostId ?? null;
+        void this.directory.refresh();
+      }),
+    );
+    const stopHostTokenChanges = this.runnerHost.hostTokens.subscribe(() => {
+      this.hostClient.notifyBearerRotated();
+    });
+    this.disposables.push({ dispose: stopHostTokenChanges });
+    // A mint, adoption or state write for a person that began before their era
+    // advanced is dropped here, whichever process answers it.
+    const provider = this.requestContextProvider;
+    const stopForgetting = forgetHostTokensOnSignOut(
+      {
+        current: () =>
+          Promise.resolve(provider.current()?.identity.userId ?? null),
+        onChange: (listener) =>
+          provider.onChange((ctx) => {
+            listener(ctx?.identity.userId ?? null);
+          }),
+      },
+      this.runnerHost.hostTokens,
+    );
+    this.disposables.push({ dispose: stopForgetting });
+  }
+
+  // Only this computer's host and hosts with a live connection; any other host's
+  // token is minted when it is next opened.
+  private renewHostTokens(): void {
+    const userId = this.requestContextProvider.current()?.identity.userId;
+    if (userId === undefined) return;
+    const hostIds = [...liveRemoteSessionHostIds(userId)];
+    if (this.localHostId !== null) hostIds.push(this.localHostId);
+    if (hostIds.length === 0) return;
+    const tokens = this.runnerHost.hostTokens;
+    const era = tokens.era(userId);
+    void tokens.renew(userId, hostIds).then(
+      (renewal) => {
+        // A renewal answered after this person left raises nothing for the
+        // next one.
+        if (renewal.kind !== "renewed" || tokens.era(userId) !== era) return;
+        for (const hostId of new Set(hostIds))
+          this.onHostTokenRenewal(hostId, renewal.delayed.includes(hostId));
+      },
+      () => undefined,
+    );
+  }
+
+  /** Releases every subscription `start()` installed. */
+  dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+
+    if (this.connectionRegistry !== null) {
+      resetHostConnectionRegistry();
+    }
+
+    if (this.contextUnsubscribe !== null) {
+      this.contextUnsubscribe();
+      this.contextUnsubscribe = null;
+    }
+    if (this.bearerRotationUnsubscribe !== null) {
+      this.bearerRotationUnsubscribe();
+      this.bearerRotationUnsubscribe = null;
+    }
+    if (this.cloudVerdictUnsubscribe !== null) {
+      this.cloudVerdictUnsubscribe();
+      this.cloudVerdictUnsubscribe = null;
+    }
+    if (this.sessionVerifiedUnsubscribe !== null) {
+      this.sessionVerifiedUnsubscribe();
+      this.sessionVerifiedUnsubscribe = null;
+    }
+    for (const disposable of this.disposables) {
+      disposable.dispose();
+    }
+    this.disposables.length = 0;
+    if (this.ownsAuthorityRegistry) {
+      this.authorityRegistry.dispose();
+    }
+    if (this.ownsRequestCoordinator) {
+      this.requestCoordinator.dispose();
+    }
+  }
+}

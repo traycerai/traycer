@@ -1,0 +1,49 @@
+import { describe, expect, it } from "vitest";
+import { createLegacyMentionAttachment } from "../legacy";
+
+describe("createLegacyMentionAttachment browser-tab rehydration", () => {
+  it("rebuilds a reference-only browser-tab attachment from the LLM token's title", () => {
+    const mention = createLegacyMentionAttachment("browser-tab:GitHub");
+    expect(mention).toEqual({
+      kind: "mention",
+      contextType: "browser-tab",
+      path: "browser-tab:GitHub",
+      pathKind: null,
+      relPath: null,
+      absolutePath: null,
+      workspacePath: null,
+      label: "GitHub",
+      description: "",
+      tabId: "",
+      sessionId: "",
+      url: "",
+    });
+  });
+
+  it("rebuilds a canvas artifact mention from its LLM token", () => {
+    const mention = createLegacyMentionAttachment("canvas:epic-1/canvas-1");
+    expect(mention).toMatchObject({
+      kind: "mention",
+      contextType: "canvas",
+      artifactType: "canvas",
+      epicId: "epic-1",
+      artifactId: "canvas-1",
+    });
+  });
+
+  it("rebuilds a file artifact mention under its own context type", () => {
+    const mention = createLegacyMentionAttachment("file-artifact:epic-1/logo");
+    expect(mention).toMatchObject({
+      kind: "mention",
+      contextType: "file-artifact",
+      artifactType: "file",
+      epicId: "epic-1",
+      artifactId: "logo",
+    });
+  });
+
+  it("falls back to a plain file mention for an unrelated path", () => {
+    const mention = createLegacyMentionAttachment("src/index.ts");
+    expect(mention.contextType).toBe("file");
+  });
+});

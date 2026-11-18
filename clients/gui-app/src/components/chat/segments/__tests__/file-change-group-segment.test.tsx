@@ -1,0 +1,583 @@
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChatAccess } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { TurnCheckpointManifest } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
+import { ChatRestoreProvider } from "@/components/chat/chat-restore-context";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
+import type {
+  ArtifactChangeRow,
+  FileChangeSegment as FileChangeSegmentModel,
+} from "@/stores/composer/chat-store";
+import type { ArtifactProjection } from "@/stores/epics/open-epic/types";
+import { groupArtifactFolderChanges } from "@/lib/chat/artifact-folder-bundles";
+import {
+  disposeArtifactEpicSessions,
+  withArtifactEpicSession,
+} from "./artifact-epic-session";
+import type { ChatRestoreSlot } from "@/stores/chats/chat-session-store";
+import { FileChangeGroupSegment } from "@/components/chat/segments/file-change-group-segment";
+import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+
+vi.mock("@/components/diff/diff-content-primitive", () => ({
+  DiffContentFrame: (props: {
+    readonly sizing: string;
+    readonly children: ReactNode;
+  }) => (
+    <div data-testid="inline-diff-frame" data-sizing={props.sizing}>
+      {props.children}
+    </div>
+  ),
+  DiffContentPrimitive: (props: {
+    readonly mode: string;
+    readonly backgrounds: boolean;
+    readonly lineNumbers: boolean;
+    readonly indicatorStyle: string;
+  }) => (
+    <div
+      data-testid="inline-diff"
+      data-mode={props.mode}
+      data-backgrounds={String(props.backgrounds)}
+      data-line-numbers={String(props.lineNumbers)}
+      data-indicator-style={props.indicatorStyle}
+    />
+  ),
+}));
+
+// The inline diff lazy-fetches before/after by hash; stub the query so the
+// expanded diff renders synchronously without a HostRuntimeProvider.
+// The transcript renders inside a chat TILE, so its file-change rows resolve
+// the snapshot store on the TAB's host (D15). The query itself is mocked just
+// below, so `null` is enough here - what matters is that the seam exists and is
+// this one, not the app-wide read it replaced.
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+}));
+
+vi.mock("@/hooks/snapshots/use-snapshot-diff-query", () => ({
+  useSnapshotDiffQuery: () => ({
+    data: {
+      beforeContent: "old();\n",
+      afterContent: "const a = 1;\n",
+      reason: "snapshot",
+    },
+    isPending: false,
+  }),
+}));
+
+const FILES = [
+  {
+    id: "file-1",
+    kind: "file_change",
+    filePath: "/repo/src/app.ts",
+    operation: "edit",
+    diffSource: "snapshot",
+    beforeHash: "a".repeat(64),
+    afterHash: "b".repeat(64),
+    additions: 1,
+    deletions: 1,
+    sourceBlockIds: ["file-1"],
+    reason: "snapshot",
+    isStreaming: false,
+    endState: null,
+    parentId: null,
+  },
+  {
+    id: "file-2",
+    kind: "file_change",
+    filePath: "/repo/src/new.ts",
+    operation: "create",
+    diffSource: "snapshot",
+    beforeHash: null,
+    afterHash: "b".repeat(64),
+    additions: 1,
+    deletions: 0,
+    sourceBlockIds: ["file-2"],
+    reason: "snapshot",
+    isStreaming: false,
+    endState: null,
+    parentId: null,
+  },
+  {
+    id: "file-3",
+    kind: "file_change",
+    filePath: "/repo/assets/logo.png",
+    operation: "delete",
+    diffSource: "none",
+    beforeHash: null,
+    afterHash: null,
+    additions: 0,
+    deletions: 0,
+    sourceBlockIds: ["file-3"],
+    reason: "not_intercepted",
+    isStreaming: false,
+    endState: null,
+    parentId: null,
+  },
+] satisfies ReadonlyArray<FileChangeSegmentModel>;
+
+const MANIFEST = {
+  schemaVersion: 1,
+  checkpointId: "turn-1",
+  capturingUserId: "owner-1",
+  capturingHostId: "host-1",
+  allowedRoots: ["/repo"],
+  workingDirectory: "/repo",
+  capturedAt: 1,
+  entries: [
+    {
+      filePath: "/repo/src/app.ts",
+      operation: "edit",
+      beforeHash: "before-1",
+      afterHash: "after-1",
+      undoable: true,
+      reason: null,
+    },
+    {
+      filePath: "/repo/src/new.ts",
+      operation: "create",
+      beforeHash: null,
+      afterHash: "after-2",
+      undoable: true,
+      reason: null,
+    },
+    {
+      filePath: "/repo/assets/logo.png",
+      operation: "delete",
+      beforeHash: null,
+      afterHash: null,
+      undoable: false,
+      reason: "binary",
+    },
+  ],
+} satisfies TurnCheckpointManifest;
+
+interface RenderGroupInput {
+  readonly files: ReadonlyArray<FileChangeSegmentModel>;
+  readonly artifactRows: ReadonlyArray<ArtifactChangeRow>;
+  readonly epicArtifacts: ReadonlyArray<ArtifactProjection>;
+  readonly accessRole: ChatAccess["role"] | null;
+  readonly activeHostId: string | null;
+  readonly activeTurnStatus: ChatActiveTurn["status"] | null;
+  readonly localSnapshotsClearedAt: number | null;
+  readonly manifest: TurnCheckpointManifest;
+  readonly hasLaterOverlappingChanges: boolean;
+  readonly restore: ChatRestoreSlot | null;
+  readonly restoreActionPending: boolean;
+  readonly restoreCheckpoint: (checkpointId: string) => string | null;
+}
+
+function renderGroup(input: RenderGroupInput) {
+  return render(
+    withArtifactEpicSession(
+      input.epicArtifacts,
+      <TooltipProvider delayDuration={0}>
+        <ResolvedThemeContext.Provider
+          value={{ resolvedTheme: "dark", themePreset: "traycer-green" }}
+        >
+          <ChatRestoreProvider
+            value={{
+              accessRole: input.accessRole,
+              activeHostId: input.activeHostId,
+              activeTurnStatus: input.activeTurnStatus,
+              localSnapshotsClearedAt: input.localSnapshotsClearedAt,
+              restore: input.restore,
+              restoreActionPending: input.restoreActionPending,
+              restoreCheckpoint: input.restoreCheckpoint,
+              accumulatedFileChanges: [],
+              undeliveredChangeCount: 0,
+              accumulatedSetComplete: true,
+              revertFileChanges: () => null,
+            }}
+          >
+            <FileChangeGroupSegment
+              findUnitId={null}
+              files={input.files}
+              artifacts={groupArtifactFolderChanges(
+                input.artifactRows,
+                (row) => ({
+                  artifactId: row.artifactId,
+                  kind: row.artifactKind,
+                  title: row.title,
+                }),
+              )}
+              checkpointManifest={input.manifest}
+              hasLaterOverlappingChanges={input.hasLaterOverlappingChanges}
+            />
+          </ChatRestoreProvider>
+        </ResolvedThemeContext.Provider>
+      </TooltipProvider>,
+    ),
+  );
+}
+
+function baseInput(
+  restoreCheckpoint: (checkpointId: string) => string | null,
+): RenderGroupInput {
+  return {
+    files: FILES,
+    artifactRows: [],
+    epicArtifacts: [],
+    accessRole: "owner",
+    activeHostId: "host-1",
+    activeTurnStatus: null,
+    localSnapshotsClearedAt: null,
+    manifest: MANIFEST,
+    hasLaterOverlappingChanges: false,
+    restore: null,
+    restoreActionPending: false,
+    restoreCheckpoint,
+  };
+}
+
+async function tooltipText(): Promise<string | null> {
+  fireEvent.focus(screen.getByTestId("checkpoint-undo-button"));
+  return (await screen.findByRole("tooltip")).textContent;
+}
+
+function expectUndoUnavailable(): void {
+  expect(
+    screen
+      .getByRole<HTMLButtonElement>("button", {
+        name: "Undo changes",
+      })
+      .getAttribute("aria-disabled"),
+  ).toBe("true");
+}
+
+describe("<FileChangeGroupSegment /> checkpoint undo", () => {
+  afterEach(() => {
+    cleanup();
+    disposeArtifactEpicSessions();
+    vi.clearAllMocks();
+    useSettingsStore.setState({
+      diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
+    });
+  });
+
+  it("enables Undo for the owner on the capturing host", async () => {
+    renderGroup(baseInput(vi.fn(() => "action-1")));
+
+    const button = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Undo changes",
+    });
+
+    expect(button.disabled).toBe(false);
+    expect(await tooltipText()).toBe("Undo this turn.");
+  });
+
+  it("disables Undo for non-owners", async () => {
+    renderGroup({
+      ...baseInput(vi.fn(() => "action-1")),
+      accessRole: "viewer",
+    });
+
+    expectUndoUnavailable();
+    expect(await tooltipText()).toBe("Only the agent owner can restore files.");
+  });
+
+  it("disables Undo on the wrong host", async () => {
+    renderGroup({
+      ...baseInput(vi.fn(() => "action-1")),
+      activeHostId: "host-2",
+    });
+
+    expectUndoUnavailable();
+    expect(await tooltipText()).toBe("Undo unavailable on this device.");
+  });
+
+  it("disables Undo for pre-clear local snapshot manifests", async () => {
+    renderGroup({
+      ...baseInput(vi.fn(() => "action-1")),
+      localSnapshotsClearedAt: MANIFEST.capturedAt,
+    });
+
+    expectUndoUnavailable();
+    expect(await tooltipText()).toBe("Undo unavailable on this device.");
+  });
+
+  it("keeps Undo enabled for manifests captured after local snapshots were cleared", async () => {
+    renderGroup({
+      ...baseInput(vi.fn(() => "action-1")),
+      localSnapshotsClearedAt: MANIFEST.capturedAt - 1,
+    });
+
+    const button = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Undo changes",
+    });
+
+    expect(button.disabled).toBe(false);
+    expect(await tooltipText()).toBe("Undo this turn.");
+  });
+
+  it("disables Undo while a chat turn is active", async () => {
+    renderGroup({
+      ...baseInput(vi.fn(() => "action-1")),
+      activeTurnStatus: "running",
+    });
+
+    expectUndoUnavailable();
+    expect(await tooltipText()).toBe(
+      "Wait for the active turn to finish or stop it before restoring.",
+    );
+  });
+
+  it("disables Undo when nothing is undoable", async () => {
+    renderGroup({
+      ...baseInput(vi.fn(() => "action-1")),
+      manifest: {
+        ...MANIFEST,
+        entries: MANIFEST.entries.map((entry) => ({
+          ...entry,
+          beforeHash: null,
+          undoable: false,
+          reason: "not_intercepted",
+        })),
+      },
+    });
+
+    expectUndoUnavailable();
+    expect(await tooltipText()).toBe("Nothing to restore.");
+  });
+
+  it("renders mixed undoability counts and dispatches restore", () => {
+    const restoreCheckpoint = vi.fn(() => "restore-action-1");
+    renderGroup({
+      ...baseInput(restoreCheckpoint),
+      hasLaterOverlappingChanges: true,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Undo changes",
+      }),
+    );
+
+    expect(screen.getByTestId("restore-checkpoint-dialog")).toBeTruthy();
+    expect(screen.getByText("/repo/src/app.ts")).toBeTruthy();
+    expect(screen.getByText("/repo/src/new.ts")).toBeTruthy();
+    expect(screen.getByText("/repo/assets/logo.png")).toBeTruthy();
+    expect(screen.getByText("Skipped")).toBeTruthy();
+    expect(screen.getByTestId("restore-cumulative-note").textContent).toContain(
+      "later turns",
+    );
+    expect(screen.getByTestId("restore-summary").textContent).toContain(
+      "Restoring",
+    );
+    expect(screen.getByTestId("restore-summary").textContent).toContain("2");
+    expect(screen.getByTestId("restore-summary").textContent).toContain(
+      "1 cannot be undone",
+    );
+
+    fireEvent.click(screen.getByTestId("restore-confirm"));
+
+    expect(restoreCheckpoint).toHaveBeenCalledWith("turn-1", true);
+  });
+
+  it("hides net-zero entries from the modal and excludes them from the count", () => {
+    // A file the turn touched but left byte-identical (before === after) is not
+    // a change of this turn: the "Changes" group already drops it on the file
+    // side, so the modal must not list it or count it either.
+    renderGroup({
+      ...baseInput(vi.fn(() => "action-1")),
+      manifest: {
+        ...MANIFEST,
+        entries: [
+          {
+            filePath: "/repo/src/app.ts",
+            operation: "edit",
+            beforeHash: "before-1",
+            afterHash: "after-1",
+            undoable: true,
+            reason: null,
+          },
+          {
+            filePath: "/repo/src/touched-noop.ts",
+            operation: "edit",
+            beforeHash: "same-hash",
+            afterHash: "same-hash",
+            undoable: true,
+            reason: null,
+          },
+        ],
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo changes" }));
+
+    expect(screen.getByTestId("restore-checkpoint-dialog")).toBeTruthy();
+    // The real change is listed; the net-zero touch is not.
+    expect(screen.getByText("/repo/src/app.ts")).toBeTruthy();
+    expect(screen.queryByText("/repo/src/touched-noop.ts")).toBeNull();
+    // "Restoring 1 file ..." - the no-op is excluded from the count.
+    const summary = screen.getByTestId("restore-summary").textContent;
+    expect(summary).toContain("Restoring");
+    expect(summary).toContain("1 file to the state at the start of this turn");
+    expect(summary).not.toContain("2");
+  });
+
+  it("offers no Undo button when every entry is a net-zero no-op", () => {
+    // Defensive: a turn whose manifest holds only no-op touches has nothing to
+    // undo, so the action must not render at all (it normally wouldn't even
+    // reach a "Changes" group, but enablement must agree regardless).
+    renderGroup({
+      ...baseInput(vi.fn(() => "action-1")),
+      manifest: {
+        ...MANIFEST,
+        entries: [
+          {
+            filePath: "/repo/src/touched-noop.ts",
+            operation: "edit",
+            beforeHash: "same-hash",
+            afterHash: "same-hash",
+            undoable: true,
+            reason: null,
+          },
+        ],
+      },
+    });
+
+    expect(screen.queryByRole("button", { name: "Undo changes" })).toBeNull();
+  });
+
+  it("expands file diffs at full height with changed-line backgrounds and gutter", () => {
+    renderGroup(baseInput(vi.fn(() => "action-1")));
+
+    fireEvent.click(screen.getByText("Changes"));
+    const groupBody = screen.getByTestId("file-change-group-body");
+    expect(groupBody.className).not.toContain("max-h-");
+    expect(groupBody.className).not.toContain("overflow-y-auto");
+
+    const fileHeader = screen.getByText("/repo/src/app.ts").closest("button");
+    if (fileHeader === null) throw new Error("Missing file-change row header");
+    fireEvent.click(fileHeader);
+
+    // The sticky treatment sits on the header WRAPPER, not the trigger: the
+    // trigger's containing block is only as tall as the header, so a sticky
+    // trigger would have nothing to travel within. The wrapper's containing
+    // block is the row, whose body is what scrolls past.
+    const stickyHeader = fileHeader.parentElement;
+    if (stickyHeader === null) throw new Error("Missing sticky header wrapper");
+    expect(stickyHeader.className).toContain("sticky");
+    expect(stickyHeader.className).toContain("bg-background");
+    expect(stickyHeader.className).not.toContain("backdrop-blur");
+    const diff = screen.getByTestId("inline-diff");
+    // Backgrounds, line numbers and gutter marks follow the shared diff
+    // viewer preferences (default values here, since this test does not
+    // override the store); mode stays unified regardless.
+    expect(diff.getAttribute("data-backgrounds")).toBe("true");
+    expect(diff.getAttribute("data-line-numbers")).toBe("true");
+    expect(diff.getAttribute("data-indicator-style")).toBe("bars");
+    expect(diff.getAttribute("data-mode")).toBe("unified");
+    expect(screen.getByTestId("inline-diff-frame").dataset.sizing).toBe(
+      "content",
+    );
+  });
+
+  it("threads custom diff viewer preferences into the expanded diff", () => {
+    useSettingsStore.setState({
+      diffViewerPreferences: {
+        ...DEFAULT_DIFF_VIEWER_PREFERENCES,
+        lineNumbers: true,
+        backgrounds: false,
+        indicatorStyle: "classic",
+      },
+    });
+    renderGroup(baseInput(vi.fn(() => "action-1")));
+
+    fireEvent.click(screen.getByText("Changes"));
+    const fileHeader = screen.getByText("/repo/src/app.ts").closest("button");
+    if (fileHeader === null) throw new Error("Missing file-change row header");
+    fireEvent.click(fileHeader);
+
+    const diff = screen.getByTestId("inline-diff");
+    expect(diff.getAttribute("data-line-numbers")).toBe("true");
+    expect(diff.getAttribute("data-backgrounds")).toBe("false");
+    expect(diff.getAttribute("data-indicator-style")).toBe("classic");
+    expect(diff.getAttribute("data-mode")).toBe("unified");
+  });
+});
+
+describe("<FileChangeGroupSegment /> html and canvas artifacts", () => {
+  afterEach(() => {
+    cleanup();
+    disposeArtifactEpicSessions();
+  });
+
+  function pageRow(
+    filePath: string,
+    operation: ArtifactChangeRow["operation"],
+  ): ArtifactChangeRow {
+    return {
+      artifactId: "page-1",
+      artifactKind: "html",
+      title: "Checkout",
+      operation,
+      filePath,
+      beforeHash: null,
+      afterHash: "b".repeat(64),
+    };
+  }
+
+  const PAGE_PROJECTION: ArtifactProjection = {
+    id: "page-1",
+    kind: "html",
+    title: "Checkout",
+    folderName: "checkout",
+    parentId: null,
+    artifactRoomId: null,
+    createdAt: 1,
+    updatedAt: 1,
+    status: null,
+    createdManually: false,
+    layout: "folder",
+  };
+
+  function renderArtifacts(
+    artifactRows: ReadonlyArray<ArtifactChangeRow>,
+    epicArtifacts: ReadonlyArray<ArtifactProjection>,
+  ) {
+    renderGroup({
+      ...baseInput(vi.fn(() => "action-1")),
+      files: [],
+      artifactRows,
+      epicArtifacts,
+    });
+  }
+
+  it("counts an artifact folder once and expands to its changed files", () => {
+    renderArtifacts(
+      [
+        pageRow("/repo/artifacts/checkout/index.html", "create"),
+        pageRow("/repo/artifacts/checkout/style.css", "create"),
+      ],
+      [PAGE_PROJECTION],
+    );
+
+    expect(screen.getByText("1 artifact")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Changes/ }));
+    expect(screen.getByText("Checkout")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Checkout.*2 files/ }));
+
+    expect(screen.getByRole("button", { name: /index\.html/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /style\.css/ })).toBeTruthy();
+  });
+
+  it("shows a loose page as one artifact row with its own verb", () => {
+    renderArtifacts(
+      [pageRow("/repo/artifacts/checkout.html", "create")],
+      [{ ...PAGE_PROJECTION, layout: "file" }],
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^Changes/ }));
+
+    expect(screen.getByText("Checkout")).toBeTruthy();
+    expect(screen.getByText("Created")).toBeTruthy();
+    expect(screen.queryByText("1 file")).toBeNull();
+    expect(screen.queryByText("2 files")).toBeNull();
+  });
+});

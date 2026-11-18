@@ -1,0 +1,213 @@
+import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework/index";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { hostVersionNeedsUpdate } from "@traycer-clients/shared/host-client/minimum-host-version";
+import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { appLogger } from "@/lib/logger";
+
+export interface VersionSkewCopy {
+  readonly title: string;
+  /** The affordance label; never uses "Update required" (below-floor only). */
+  readonly action: string;
+  /** Machine-readable discriminant for which leg the handshake says is behind. */
+  readonly direction: "host-outdated" | "client-outdated";
+}
+
+/**
+ * The words for "this host is the leg that has to move".
+ *
+ * Exported as a value so a surface whose evidence is NOT a version comparison
+ * can say the same thing without routing through {@link describeVersionSkew}
+ * and getting its version ordering applied. The chat tile's data-format
+ * refusal is that surface: a store written by a build newer than the host is
+ * a fact about the host's own reader, and updating the app cannot change it.
+ * One definition, so the two surfaces cannot drift apart.
+ */
+export const HOST_UPDATE_SKEW_COPY: VersionSkewCopy = {
+  title: "Host update needed",
+  action: "Update now",
+  direction: "host-outdated",
+};
+
+export const CLIENT_UPDATE_SKEW_COPY: VersionSkewCopy = {
+  title: "Your app is too old",
+  action: "Update the app",
+  direction: "client-outdated",
+};
+
+export const REMOTE_HOST_UPDATE_DESCRIPTION =
+  "That computer's Traycer Host is running a version this app can't talk to. Update it to continue - its agents and history are untouched.";
+
+export const HOST_UPDATE_PENDING_LABEL = "Update pending";
+
+export interface VersionSkewInput {
+  readonly hostAppVersion: string | null;
+  readonly clientAppVersion: string | null;
+  readonly guidance: IncompatibilityUpgradeGuidance | null;
+}
+
+/**
+ * Direction-aware `INCOMPATIBLE` copy (R4-D2): "every
+ * supported app version can open a session to every host >= floor" is the
+ * two-sided invariant, so above the floor an `INCOMPATIBLE` failure is a
+ * genuine bug, not routine drift — the failure copy names the leg that's
+ * actually behind instead of a generic fatal.
+ *
+ * Prefer the directory/status DTO's host `appVersion` against this app's build
+ * manifest version. The handshake's `upgradeGuidance` is only a secondary hint
+ * for surfaces that do not have DTO version evidence available.
+ *
+ * "Update required" is deliberately never used here — that copy is reserved
+ * for a host below the global support floor (`updateState: "required"`), a
+ * different failure this function's caller must not conflate with a version
+ * skew above the floor.
+ */
+export function describeVersionSkew(input: VersionSkewInput): VersionSkewCopy {
+  const comparison = compareAppVersions(
+    input.hostAppVersion,
+    input.clientAppVersion,
+  );
+  if (comparison === "host-behind") {
+    return HOST_UPDATE_SKEW_COPY;
+  }
+  if (comparison === "client-behind") {
+    return CLIENT_UPDATE_SKEW_COPY;
+  }
+  if (
+    input.guidance !== null &&
+    input.guidance.hostShouldUpgrade &&
+    !input.guidance.clientShouldUpgrade
+  ) {
+    return HOST_UPDATE_SKEW_COPY;
+  }
+  if (
+    input.guidance !== null &&
+    input.guidance.clientShouldUpgrade &&
+    !input.guidance.hostShouldUpgrade
+  ) {
+    return CLIENT_UPDATE_SKEW_COPY;
+  }
+  // Reached only when `guidance` doesn't single out one leg — either both
+  // flags are set (multiple incompatible methods diverging in opposite
+  // directions) or neither is (no guidance at all, with an unparsable/"same"
+  // comparison). Per this function's own doc comment, an `INCOMPATIBLE`
+  // failure above the floor is "a genuine bug, not routine drift", so this
+  // fallback is worth a log rather than a silent default.
+  appLogger.warn(
+    "[version-skew] ambiguous guidance; defaulting to host-update copy",
+    {
+      comparison,
+      guidance:
+        input.guidance === null
+          ? null
+          : {
+              hostShouldUpgrade: input.guidance.hostShouldUpgrade,
+              clientShouldUpgrade: input.guidance.clientShouldUpgrade,
+            },
+    },
+  );
+  return HOST_UPDATE_SKEW_COPY;
+}
+
+/**
+ * Whether the host version proves it is below the caller's minimum.
+ *
+ * The question a surface asks when it has no handshake verdict to go on - a
+ * stalled load rather than a refused one - and deliberately not answerable by
+ * calling {@link describeVersionSkew} with `guidance: null`: that function is
+ * a copy chooser for a failure already attributed to a skew, so its last
+ * branch WARNS and falls back to host-update copy for versions it cannot
+ * compare. A surface that is merely wondering must get `false` there, not a
+ * warning and an update offer aimed at a host that may be perfectly current.
+ *
+ * Callers that then want to say something use `describeVersionSkew` for the
+ * words, so one skew is described one way everywhere.
+ */
+export function hostIsBehindClient(input: {
+  readonly hostAppVersion: string | null;
+  readonly clientAppVersion: string | null;
+}): boolean {
+  return (
+    input.clientAppVersion !== null &&
+    hostVersionNeedsUpdate(input.hostAppVersion, input.clientAppVersion)
+  );
+}
+
+export function hostAppVersionFromDirectoryEntry(
+  entry: HostDirectoryEntry | null,
+): string | null {
+  if (entry === null) {
+    return null;
+  }
+  if (isRemoteHostDirectoryEntry(entry)) {
+    return cleanVersion(entry.remoteStatus.appVersion);
+  }
+  return cleanVersion(entry.version);
+}
+
+type VersionComparison = "host-behind" | "client-behind" | "same";
+
+function compareAppVersions(
+  hostAppVersion: string | null,
+  clientAppVersion: string | null,
+): VersionComparison | null {
+  const host = versionParts(hostAppVersion);
+  const client = versionParts(clientAppVersion);
+  if (host === null || client === null) {
+    return null;
+  }
+  for (let index = 0; index < host.length; index += 1) {
+    if (host[index] < client[index]) {
+      return "host-behind";
+    }
+    if (host[index] > client[index]) {
+      return "client-behind";
+    }
+  }
+  return "same";
+}
+
+// `undefined` as well as `null`: a directory row is built from a snapshot
+// whose version field predates some hosts and some test doubles, and a tile
+// must render (with no version verdict) rather than throw on a missing one.
+function cleanVersion(version: string | null | undefined): string | null {
+  if (version === null || version === undefined) {
+    return null;
+  }
+  const trimmed = version.trim();
+  return trimmed.length === 0 ? null : trimmed;
+}
+
+function versionParts(
+  version: string | null,
+): readonly [number, number, number] | null {
+  const clean = cleanVersion(version);
+  if (clean === null) {
+    return null;
+  }
+  const matched = /^v?\d+(?:\.\d+){0,2}/i.exec(clean);
+  if (matched === null) {
+    return null;
+  }
+  const segments = matched[0].replace(/^v/i, "").split(".");
+  const major = parseVersionSegment(segments[0]);
+  if (major === null) {
+    return null;
+  }
+  const minor = segments.length < 2 ? 0 : parseVersionSegment(segments[1]);
+  if (minor === null) {
+    return null;
+  }
+  const patch = segments.length < 3 ? 0 : parseVersionSegment(segments[2]);
+  if (patch === null) {
+    return null;
+  }
+  return [major, minor, patch];
+}
+
+function parseVersionSegment(segment: string): number | null {
+  const parsed = Number.parseInt(segment, 10);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return parsed;
+}

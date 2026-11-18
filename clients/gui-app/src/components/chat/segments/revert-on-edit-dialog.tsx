@@ -1,0 +1,135 @@
+import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { RevertArtifactsCheckbox } from "./revert-artifacts-checkbox";
+
+interface RevertOnEditDialogProps {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly onRevert: (revertArtifacts: boolean) => void;
+  readonly onDontRevert: () => void;
+  /**
+   * `null` when the transcript below the edit point is not fully hydrated and
+   * the artifacts in scope therefore cannot be counted from this side. The
+   * opt-out still renders, without a number.
+   */
+  readonly artifactCount: number | null;
+  /**
+   * Items parked in the message queue. The edit neither clears them nor
+   * changes when they run, so the dialog names them to avoid surprise. The
+   * copy deliberately says "when the queue next runs" rather than "after this
+   * turn": a queue paused by an errored turn holds its items individually
+   * paused, which blocks the host's auto-resume, so those messages wait for
+   * the user to resume rather than following the replacement turn.
+   */
+  readonly queuedCount: number;
+}
+
+/**
+ * Shown when the owner submits an edit to a previous message that has file
+ * edits below it. Revert restores those files to before the edited message
+ * (and clears later messages); Don't revert keeps the files as-is. Enter
+ * confirms Revert, Shift+Enter confirms Don't revert, Esc cancels - matching
+ * the keyboard hints in the footer. Each action closes the dialog
+ * synchronously (the composer/message list reflects the result), so there is
+ * no in-dialog pending state.
+ */
+export function RevertOnEditDialog(props: RevertOnEditDialogProps) {
+  return (
+    <RevertOnEditDialogContent
+      key={props.open ? "open" : "closed"}
+      {...props}
+    />
+  );
+}
+
+function RevertOnEditDialogContent(props: RevertOnEditDialogProps) {
+  const {
+    artifactCount,
+    onDontRevert,
+    onOpenChange,
+    onRevert,
+    open,
+    queuedCount,
+  } = props;
+  const [revertArtifacts, setRevertArtifacts] = useState(true);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        layout="banded"
+        className="flex w-full min-w-0 flex-col overflow-hidden"
+        style={{ maxWidth: "min(92vw, 34rem)" }}
+        showCloseButton={false}
+        data-testid="revert-on-edit-dialog"
+        onKeyDown={(event) => {
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          if (event.shiftKey) {
+            onDontRevert();
+            return;
+          }
+          onRevert(revertArtifacts);
+        }}
+      >
+        <DialogHeader className="space-y-1">
+          <DialogTitle>Submit from a previous message?</DialogTitle>
+        </DialogHeader>
+        <div className="-m-1 min-h-0 space-y-3 overflow-y-auto px-6 py-5">
+          <DialogDescription>
+            Submitting from a previous message will revert file changes to
+            before this message and clear the messages after this one.
+            {queuedCount > 0
+              ? ` ${queuedCount} queued ${queuedCount === 1 ? "message stays" : "messages stay"} queued and will send after the edited message when the queue next runs.`
+              : null}
+          </DialogDescription>
+
+          {artifactCount === null || artifactCount > 0 ? (
+            <RevertArtifactsCheckbox
+              count={artifactCount}
+              checked={revertArtifacts}
+              onCheckedChange={setRevertArtifacts}
+              disabled={false}
+            />
+          ) : null}
+        </div>
+
+        <DialogFooter className="mt-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              onOpenChange(false);
+            }}
+          >
+            Cancel <span className="text-muted-foreground/70">(esc)</span>
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onDontRevert}
+            data-testid="revert-on-edit-keep"
+          >
+            Don't revert
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => onRevert(revertArtifacts)}
+            data-testid="revert-on-edit-confirm"
+          >
+            Revert
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

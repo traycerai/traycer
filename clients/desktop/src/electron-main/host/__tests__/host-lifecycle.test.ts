@@ -1,0 +1,1188 @@
+import { describe, expect, it, vi, type MockInstance } from "vitest";
+import { EventEmitter } from "node:events";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+function listenOnEphemeralPort(): Promise<{ server: Server; port: number }> {
+  return new Promise((resolve, reject) => {
+    const server = createServer((socket) => {
+      socket.once("data", () => {
+        socket.write(
+          [
+            "HTTP/1.1 101 Switching Protocols",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Accept: test",
+            "",
+            "",
+          ].join("\r\n"),
+        );
+      });
+    });
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        reject(new Error("ephemeral listener has no port"));
+        return;
+      }
+      resolve({ server, port: address.port });
+    });
+  });
+}
+
+vi.mock("electron", () => ({
+  app: { isPackaged: false, getAppPath: (): string => "/fake/app/path" },
+}));
+
+vi.mock("electron-log", () => ({
+  default: {
+    transports: { file: { level: "info" }, console: { level: "info" } },
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
+const tlsConnect = vi.hoisted(() => vi.fn());
+
+vi.mock("node:tls", () => ({
+  connect: tlsConnect,
+  default: { connect: tlsConnect },
+}));
+
+// A passthrough spy, not a fake: `watch` still does the real FSEvents/inotify
+// subscription. This lets a test assert bootstrap actually CALLED `watch`
+// against a given directory and that the call RETURNED rather than threw
+// (the ENOENT regression, traycer#961/#996/#1001), without depending on the
+// lossy real-world timing of whether an edge is ever delivered.
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const watchSpy = vi.fn(actual.watch);
+  // Builtins resolve named imports through `default` too, so spy on both.
+  return {
+    ...actual,
+    watch: watchSpy,
+    default: { ...actual, watch: watchSpy },
+  };
+});
+
+import { watch } from "node:fs";
+import {
+  canReachHostWebsocketUrl,
+  HostLifecycle,
+  isCurrentHostWebsocketUrl,
+  PRODUCTION_LABEL,
+  readPidMetadata,
+  readPidMetadataState,
+} from "../host-lifecycle";
+import { __setAsyncProcessLivenessReaderForTest } from "../process-identity";
+import { DEV_LABEL } from "../host-paths";
+import { config } from "../../../config";
+import {
+  startHostHealthMonitor,
+  type HostHealthMonitor,
+} from "../host-health-monitor";
+import { createHostRecoveryGovernor } from "../host-recovery-governor";
+
+// These fixtures deliberately use synthetic PIDs. Their endpoint listener is
+// the positive readiness evidence under test; an OS liveness result is
+// unavailable for a synthetic pid, just as it can be unavailable for a real
+// host because of permissions or a failed platform probe. Model that state
+// locally, so no unrelated test can inherit the test-only global seam.
+function useIndeterminateProcessLiveness(): () => void {
+  const restore = __setAsyncProcessLivenessReaderForTest(
+    async () => "indeterminate",
+  );
+  return () => __setAsyncProcessLivenessReaderForTest(restore);
+}
+
+/**
+ * `process.kill`, captured before any test in this file spies on it, so the
+ * fixture-pid spy below can delegate every OTHER pid to the real syscall.
+ */
+const realProcessKill = process.kill.bind(process);
+
+/**
+ * The dead-host guard gates `HostLifecycle`'s cached identity verdict
+ * (`readIdentityVerdict`) on `probeProcessExistenceWithoutSpawn(pid)`, which
+ * is `process.kill(pid, 0)` with no test seam of its own. Fixture pid 12345
+ * (below) names no process on the machine running this suite, so once a
+ * verdict for it is cached, a later reload with a failed probe would call
+ * the REAL syscall against an arbitrary pid instead of exercising the cache
+ * deliberately. Scoped to `pid` only, mirroring
+ * `spyProcessKillExists` in `host-lifecycle-reachability-retry.test.ts`:
+ * every other pid still gets the real syscall, and this one always reads
+ * `exists` - the fixture is meant to model a live-but-silent host, never a
+ * dead one.
+ */
+function spyProcessKillExists(pid: number): MockInstance<typeof process.kill> {
+  return vi
+    .spyOn(process, "kill")
+    .mockImplementation(
+      (target: number, signal: string | number | undefined): true => {
+        if (target === pid && (signal === 0 || signal === undefined)) {
+          return true;
+        }
+        return realProcessKill(target, signal);
+      },
+    );
+}
+
+describe("isCurrentHostWebsocketUrl", () => {
+  it("accepts the canonical ws URL shape", () => {
+    expect(isCurrentHostWebsocketUrl("ws://127.0.0.1:55555/rpc")).toBe(true);
+  });
+  it("rejects mismatched paths", () => {
+    expect(isCurrentHostWebsocketUrl("ws://127.0.0.1:55555/stream")).toBe(
+      false,
+    );
+  });
+  it("rejects non-loopback hosts", () => {
+    expect(isCurrentHostWebsocketUrl("ws://example.com:55555/rpc")).toBe(false);
+  });
+  it("rejects URLs without an explicit port", () => {
+    expect(isCurrentHostWebsocketUrl("ws://127.0.0.1/rpc")).toBe(false);
+  });
+});
+
+describe("readPidMetadata", () => {
+  it("returns null on missing file", async () => {
+    const result = await readPidMetadata(join(tmpdir(), "non-existent.json"));
+    expect(result).toBeNull();
+  });
+  it("parses valid PID metadata", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
+    const path = join(dir, "host.pid.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        hostId: "test-host",
+        websocketUrl: "ws://127.0.0.1:55555/rpc",
+        version: "0.0.0",
+        pid: 12345,
+      }),
+      "utf8",
+    );
+    try {
+      const result = await readPidMetadata(path);
+      expect(result).toMatchObject({
+        hostId: "test-host",
+        websocketUrl: "ws://127.0.0.1:55555/rpc",
+        version: "0.0.0",
+        pid: 12345,
+      });
+      expect(result?.displayName).toBe(result?.systemHostName);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// Review finding 4: the retry ladder must distinguish a CONFIRMED-absent file
+// (deliberate stop → clear the ladder) from a present-but-indeterminate read (a
+// partial write / transient error → keep retrying). Collapsing both to `null`
+// let a coalesced watcher edge that landed mid-write silently clear the ladder.
+describe("readPidMetadataState", () => {
+  it("reports `absent` only for a missing file (ENOENT)", async () => {
+    const state = await readPidMetadataState(
+      join(tmpdir(), "definitely-not-here.json"),
+    );
+    expect(state.kind).toBe("absent");
+  });
+
+  // A non-ENOENT read failure (EISDIR here - deterministic regardless of
+  // root/CI, unlike a chmod-based EACCES) must classify as `indeterminate`,
+  // never `absent`. If every read error collapsed to `absent`, a transient
+  // EACCES/EIO on a present file would clear the retry ladder exactly like a
+  // deliberate stop - the bug this discrimination exists to prevent.
+  it("reports `indeterminate` for a non-ENOENT read failure", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-pidstate-"));
+    const path = join(dir, "pid.json");
+    // A directory at the pid.json path: readFile throws EISDIR, not ENOENT.
+    await mkdir(path);
+    try {
+      const state = await readPidMetadataState(path);
+      expect(state.kind).toBe("indeterminate");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports `indeterminate` for a partially-written (invalid JSON) file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-pidstate-"));
+    const path = join(dir, "pid.json");
+    // A torn write: the host had only flushed the opening bytes.
+    await writeFile(path, '{"hostId":"test-host","websocket', "utf8");
+    try {
+      const state = await readPidMetadataState(path);
+      expect(state.kind).toBe("indeterminate");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports `indeterminate` for valid JSON of the wrong shape", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-pidstate-"));
+    const path = join(dir, "pid.json");
+    await writeFile(path, JSON.stringify({ hostId: "x" }), "utf8");
+    try {
+      const state = await readPidMetadataState(path);
+      expect(state.kind).toBe("indeterminate");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports `parsed` with the snapshot for a complete file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-pidstate-"));
+    const path = join(dir, "pid.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        hostId: "test-host",
+        websocketUrl: "ws://127.0.0.1:55555/rpc",
+        version: "0.0.0",
+        pid: 12345,
+      }),
+      "utf8",
+    );
+    try {
+      const state = await readPidMetadataState(path);
+      expect(state.kind).toBe("parsed");
+      if (state.kind === "parsed") {
+        expect(state.snapshot.hostId).toBe("test-host");
+        expect(state.snapshot.pid).toBe(12345);
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// Directly exercises the real TCP probe that `HostLifecycle` uses by default
+// (`reachabilityProbe: undefined`). Deterministic - a single listener for the
+// reachable case, an immediate ECONNREFUSED on a freed port for the
+// unreachable case - without the close/rebind-same-port race that made the
+// orchestration test flaky.
+describe("canReachHostWebsocketUrl", () => {
+  it("returns true when the endpoint completes a WebSocket handshake", async () => {
+    const { server, port } = await listenOnEphemeralPort();
+    try {
+      expect(await canReachHostWebsocketUrl(`ws://127.0.0.1:${port}/rpc`)).toBe(
+        true,
+      );
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("returns false when nothing is listening on the port", async () => {
+    // Bind to get an OS-assigned port, then free it so the connect is refused.
+    const { server, port } = await listenOnEphemeralPort();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    expect(await canReachHostWebsocketUrl(`ws://127.0.0.1:${port}/rpc`)).toBe(
+      false,
+    );
+  });
+
+  it("returns false for an unrelated TCP listener that does not speak WebSocket", async () => {
+    const server = createServer((socket) => {
+      socket.once("data", () => {
+        socket.write("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("ephemeral listener has no port");
+    }
+    try {
+      expect(
+        await canReachHostWebsocketUrl(`ws://127.0.0.1:${address.port}/rpc`),
+      ).toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("uses a completed TLS handshake before probing a wss endpoint", async () => {
+    class TestTlsSocket extends EventEmitter {
+      setTimeout = vi.fn();
+      destroy = vi.fn();
+
+      write(_request: string): boolean {
+        this.emit(
+          "data",
+          Buffer.from(
+            [
+              "HTTP/1.1 101 Switching Protocols",
+              "Upgrade: websocket",
+              "Connection: Upgrade",
+              "Sec-WebSocket-Accept: test",
+              "",
+              "",
+            ].join("\r\n"),
+          ),
+        );
+        return true;
+      }
+    }
+
+    const socket = new TestTlsSocket();
+    tlsConnect.mockImplementationOnce((options: unknown) => {
+      queueMicrotask(() => socket.emit("secureConnect"));
+      return socket;
+    });
+
+    expect(await canReachHostWebsocketUrl("wss://127.0.0.1:45678/rpc")).toBe(
+      true,
+    );
+    expect(tlsConnect).toHaveBeenCalledWith({
+      host: "127.0.0.1",
+      port: 45678,
+      rejectUnauthorized: false,
+    });
+  });
+});
+
+describe("HostLifecycle.bootstrap (metadata-first)", () => {
+  // Ticket 7c890b39 - steady-state Desktop boot is metadata-first. The
+  // legacy platform service-manager dispatch was deleted from the desktop
+  // tree alongside `electron-main/service/`; bootstrap now reads pid.json
+  // and probes the websocket endpoint, nothing else.
+
+  it("publishes a snapshot from reachable PID metadata", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
+    const layout = {
+      rootDir: dir,
+      pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
+      logFile: join(dir, "host.log"),
+      installDir: join(dir, "install"),
+      installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
+      environment: "production" as const,
+    };
+    const { server, port } = await listenOnEphemeralPort();
+    await writeFile(
+      layout.pidMetadataFile,
+      JSON.stringify({
+        hostId: "test-host",
+        websocketUrl: `ws://127.0.0.1:${port}/rpc`,
+        version: config.version,
+        pid: 12345,
+      }),
+      "utf8",
+    );
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 5_000,
+      reachabilityProbe: undefined,
+    });
+    const restoreLiveness = useIndeterminateProcessLiveness();
+    const errors: { code: string }[] = [];
+    lifecycle.on("error", (err) => errors.push({ code: err.code }));
+    try {
+      await Promise.race([
+        lifecycle.bootstrap({ hostInstalled: true }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), 5000),
+        ),
+      ]);
+      expect(errors).toEqual([]);
+      const snapshot = lifecycle.getSnapshot();
+      expect(snapshot?.pid).toBe(12345);
+      expect(snapshot?.version).toBe(config.version);
+    } finally {
+      restoreLiveness();
+      lifecycle.dispose();
+      server.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("A1: rejects a handshake-reachable legacy pid record when liveness proves its PID dead", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
+    const layout = {
+      rootDir: dir,
+      pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
+      logFile: join(dir, "host.log"),
+      installDir: join(dir, "install"),
+      installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
+      environment: "production" as const,
+    };
+    const reachabilityProbe = vi.fn(async () => true);
+    const restoreLiveness = __setAsyncProcessLivenessReaderForTest(
+      async () => "dead",
+    );
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 300,
+      reachabilityProbe,
+    });
+    try {
+      await writeFile(
+        layout.pidMetadataFile,
+        JSON.stringify({
+          hostId: "stale-host",
+          websocketUrl: "ws://127.0.0.1:55555/rpc",
+          version: "1.0.0",
+          pid: 999_999,
+        }),
+        "utf8",
+      );
+
+      await expect(lifecycle.reloadSnapshotFromDisk()).resolves.toBeNull();
+      expect(reachabilityProbe).toHaveBeenCalledOnce();
+    } finally {
+      lifecycle.dispose();
+      __setAsyncProcessLivenessReaderForTest(restoreLiveness);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("emits HOST_NOT_READY (Doctor/CLI recovery) when no PID metadata appears within the wait window", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
+    const layout = {
+      rootDir: dir,
+      pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
+      logFile: join(dir, "host.log"),
+      installDir: join(dir, "install"),
+      installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
+      environment: "production" as const,
+    };
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 300,
+      reachabilityProbe: undefined,
+    });
+    const errors: { code: string; message: string }[] = [];
+    lifecycle.on("error", (err) =>
+      errors.push({ code: err.code, message: err.message }),
+    );
+    try {
+      await Promise.race([
+        lifecycle.bootstrap({ hostInstalled: true }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), 5000),
+        ),
+      ]);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HOST_NOT_READY");
+      expect(errors[0]?.message.toLowerCase()).toContain("doctor");
+    } finally {
+      lifecycle.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // traycer#961 / #996 / #1001, int #4845: on a machine where no host has
+  // EVER been installed, the launch converge refuses to provision before
+  // sign-in, so no provisioning lane exists to re-arm the quiet budget - the
+  // wait below could only ever run to completion and then report that a host
+  // "did not start" when nothing asked it to. That ERROR rides in the
+  // desktop.log attached to every fresh-install support report (it misdirected
+  // three field investigations) and holding bootstrap open delays the deferred
+  // work gated on it.
+  //
+  // The budget here is 30s against a 3s race: a regression to the waiting path
+  // fails this test outright rather than merely slowing it down.
+  it("skips the readiness wait entirely when no host is installed on this machine", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
+    // A never-installed machine has NO host root at all - the CLI creates it
+    // during provisioning. Rooting the layout at an absent nested directory
+    // is what makes this the real fresh-install shape: watching an existing
+    // `mkdtemp` root would pass even with the ENOENT bug present.
+    const dir = join(parent, "host");
+    const layout = {
+      rootDir: dir,
+      pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
+      logFile: join(dir, "host.log"),
+      installDir: join(dir, "install"),
+      installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
+      environment: "production" as const,
+    };
+    const websocketUrl = "ws://127.0.0.1:54322/rpc";
+    let reachable = false;
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 30_000,
+      reachabilityProbe: (url) =>
+        Promise.resolve(url === websocketUrl && reachable),
+    });
+    const restoreLiveness = useIndeterminateProcessLiveness();
+    const errors: { code: string }[] = [];
+    lifecycle.on("error", (err) => errors.push({ code: err.code }));
+    let monitor: HostHealthMonitor | null = null;
+    try {
+      await Promise.race([
+        lifecycle.bootstrap({ hostInstalled: false }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("bootstrap waited")), 3_000),
+        ),
+      ]);
+
+      // The watcher went in against a root that did not exist when bootstrap
+      // started: `watch` RETURNED rather than threw ENOENT, which would leave
+      // the desktop with no watcher for the session. Asserted on the call, not
+      // on a delivered edge, because FSEvents can drop a write that lands in
+      // the first few ms after `watch()` (see `HostLifecycle.installWatcher`).
+      const watchMock = vi.mocked(watch);
+      const rootWatchCallIndex = watchMock.mock.calls.findIndex(
+        ([target]) => target === dir,
+      );
+      expect(watchMock.mock.calls.map((call) => String(call[0]))).toContain(
+        dir,
+      );
+      expect(watchMock.mock.results[rootWatchCallIndex]?.type).toBe("return");
+
+      // No host, but also no failure to report: nothing was asked to start.
+      expect(errors).toEqual([]);
+      expect(lifecycle.getSnapshot()).toBeNull();
+
+      // Exactly what provisioning does after sign-in: create the host root,
+      // then publish pid.json into it. The host must be picked up by the
+      // watcher OR the health monitor's null-snapshot re-read, whichever comes
+      // first; one forced tick makes convergence certain. Only the interval
+      // clock is faked, so real fs I/O and the lifecycle's own setTimeout
+      // ladder are untouched.
+      reachable = true;
+      await mkdir(dir, { recursive: true });
+
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const intervalMs = 25;
+      const respawn = vi.fn(async () => {});
+      monitor = startHostHealthMonitor({
+        host: lifecycle,
+        intervalMs,
+        // A real network probe here would either need something actually
+        // listening on `websocketUrl` or eat a real ~750ms timeout per tick;
+        // this mirrors the lifecycle's own injected reachability stub so the
+        // tick can converge without touching a socket.
+        probe: (url) => Promise.resolve(url === websocketUrl && reachable),
+        readMetadata: undefined,
+        respawn,
+        automaticRecoverySuspended: () => false,
+        governor: createHostRecoveryGovernor({
+          readLiveness: async () => "alive",
+          now: undefined,
+        }),
+        readLiveness: undefined,
+        readLiveSupervisorPid: () => Promise.resolve(null),
+        onHostUnresponsive: () => undefined,
+      });
+
+      // Listening BEFORE the write, since the watcher may fire first.
+      const changed = new Promise((resolve) => {
+        lifecycle.once("change", resolve);
+      });
+
+      await writeFile(
+        layout.pidMetadataFile,
+        JSON.stringify({
+          hostId: "post-signin-host",
+          websocketUrl,
+          version: config.version,
+          pid: 4321,
+        }),
+        "utf8",
+      );
+
+      // One tick forces the backstop re-read if the watcher edge was lost.
+      await vi.advanceTimersByTimeAsync(intervalMs);
+      await changed;
+
+      expect(lifecycle.getSnapshot()?.hostId).toBe("post-signin-host");
+      expect(errors).toEqual([]);
+      expect(respawn).not.toHaveBeenCalled();
+    } finally {
+      monitor?.dispose();
+      vi.useRealTimers();
+      restoreLiveness();
+      lifecycle.dispose();
+      // `parent`, not `dir` - the layout is rooted one level down, so removing
+      // only `dir` would leave an empty temp directory behind on every run.
+      await rm(parent, { recursive: true, force: true });
+    }
+  }, 10_000);
+
+  // traycer#862: a fresh install downloaded ~800MB and extracted a 2.2GB
+  // runtime tree - 3m17s on that machine - and the flat wall-clock budget
+  // reported "Could not start Traycer Host" at the 60s mark, over an install
+  // that was still visibly running. The budget is quiet-time, not wall-clock:
+  // installer progress re-arms it, and only silence spends it.
+  it("holds the startup budget open while host provisioning reports progress", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
+    const layout = {
+      rootDir: dir,
+      pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
+      logFile: join(dir, "host.log"),
+      installDir: join(dir, "install"),
+      installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
+      environment: "production" as const,
+    };
+    const readyTimeoutMs = 300;
+    const progressWindowMs = 900;
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs,
+      reachabilityProbe: undefined,
+    });
+    const errors: { code: string; message: string }[] = [];
+    lifecycle.on("error", (err) =>
+      errors.push({ code: err.code, message: err.message }),
+    );
+    // Stand in for the CLI's NDJSON progress stream: events well inside the
+    // quiet budget, for three times as long as that budget.
+    let lastProgressAt = Date.now();
+    const ticker = setInterval(() => {
+      lastProgressAt = Date.now();
+      lifecycle.notifyProvisioningActivity();
+    }, 50);
+    const stopTicker = setTimeout(
+      () => clearInterval(ticker),
+      progressWindowMs,
+    );
+    const startedAt = Date.now();
+    try {
+      await Promise.race([
+        lifecycle.bootstrap({ hostInstalled: true }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), 10_000),
+        ),
+      ]);
+      const elapsedMs = Date.now() - startedAt;
+      // No host ever appeared, so it still ends in HOST_NOT_READY - but only
+      // after the installer went quiet. Under a flat budget this fired at
+      // ~`readyTimeoutMs`, long before the progress stream stopped.
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HOST_NOT_READY");
+      expect(elapsedMs).toBeGreaterThanOrEqual(progressWindowMs);
+      // ...and the budget is still a BUDGET once progress stops. Outliving the
+      // progress window alone cannot tell "re-armed, then spent the full quiet
+      // budget" apart from "re-armed, then fired the instant the stream went
+      // quiet" - which is the regression a quiet-time deadline can actually
+      // have. Measuring from the last event is what separates them.
+      expect(Date.now() - lastProgressAt).toBeGreaterThanOrEqual(
+        readyTimeoutMs,
+      );
+    } finally {
+      clearTimeout(stopTicker);
+      clearInterval(ticker);
+      lifecycle.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The build-stamp gate was removed: a reachable host is surfaced regardless
+  // of its version stamp, and the renderer negotiates protocol compatibility
+  // over the WS handshake. This is what prevents the permanent "Starting Local
+  // Host" loop when the Desktop build stamp and the host release version differ
+  // but are still compatible.
+  it("surfaces a reachable host whose stamp differs from config.version on a non-production slot", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
+    const layout = {
+      rootDir: dir,
+      pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
+      logFile: join(dir, "host.log"),
+      installDir: join(dir, "install"),
+      installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
+      environment: "dev" as const,
+    };
+    const { server, port } = await listenOnEphemeralPort();
+    await writeFile(
+      layout.pidMetadataFile,
+      JSON.stringify({
+        hostId: "different-version-host",
+        websocketUrl: `ws://127.0.0.1:${port}/rpc`,
+        version: `${config.version}-stale`,
+        pid: 12345,
+      }),
+      "utf8",
+    );
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: DEV_LABEL,
+      readyTimeoutMs: 300,
+      reachabilityProbe: undefined,
+    });
+    const restoreLiveness = useIndeterminateProcessLiveness();
+    const errors: { code: string }[] = [];
+    lifecycle.on("error", (err) => errors.push({ code: err.code }));
+    try {
+      await Promise.race([
+        lifecycle.bootstrap({ hostInstalled: true }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), 5000),
+        ),
+      ]);
+      // Reachable host on a different version is surfaced, not nulled - no
+      // HOST_NOT_READY error fires.
+      expect(errors).toEqual([]);
+      expect(lifecycle.getSnapshot()?.hostId).toBe("different-version-host");
+      expect(lifecycle.getSnapshot()?.version).toBe(`${config.version}-stale`);
+    } finally {
+      restoreLiveness();
+      lifecycle.dispose();
+      server.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A reachable host on a different stamp is surfaced in PRODUCTION too (no
+  // environment exemption) - the headline "same flow on all environments"
+  // behavior, pinned with a production layout specifically.
+  it("surfaces a reachable stamp-mismatched host in PRODUCTION too", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
+    const layout = {
+      rootDir: dir,
+      pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
+      logFile: join(dir, "host.log"),
+      installDir: join(dir, "install"),
+      installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
+      environment: "production" as const,
+    };
+    const { server, port } = await listenOnEphemeralPort();
+    await writeFile(
+      layout.pidMetadataFile,
+      JSON.stringify({
+        hostId: "busy-mismatched-host",
+        websocketUrl: `ws://127.0.0.1:${port}/rpc`,
+        version: `${config.version}-stale`,
+        pid: 12345,
+      }),
+      "utf8",
+    );
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 5_000,
+      reachabilityProbe: undefined,
+    });
+    const restoreLiveness = useIndeterminateProcessLiveness();
+    const errors: { code: string }[] = [];
+    lifecycle.on("error", (err) => errors.push({ code: err.code }));
+    try {
+      // reloadSnapshotFromDisk returns the snapshot it derived; the desktop
+      // judges "surfaced" off this return rather than a racy getSnapshot().
+      const surfaced = await lifecycle.reloadSnapshotFromDisk();
+      expect(surfaced?.hostId).toBe("busy-mismatched-host");
+      expect(errors).toEqual([]);
+      expect(lifecycle.getSnapshot()?.hostId).toBe("busy-mismatched-host");
+    } finally {
+      restoreLiveness();
+      lifecycle.dispose();
+      server.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts a reachable host whose stamp matches config.version on a non-production slot", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
+    const layout = {
+      rootDir: dir,
+      pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
+      logFile: join(dir, "host.log"),
+      installDir: join(dir, "install"),
+      installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
+      environment: "dev" as const,
+    };
+    const { server, port } = await listenOnEphemeralPort();
+    await writeFile(
+      layout.pidMetadataFile,
+      JSON.stringify({
+        hostId: "matching-host",
+        websocketUrl: `ws://127.0.0.1:${port}/rpc`,
+        version: config.version,
+        pid: 12345,
+      }),
+      "utf8",
+    );
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: DEV_LABEL,
+      readyTimeoutMs: 5_000,
+      reachabilityProbe: undefined,
+    });
+    const restoreLiveness = useIndeterminateProcessLiveness();
+    const errors: { code: string }[] = [];
+    lifecycle.on("error", (err) => errors.push({ code: err.code }));
+    try {
+      await Promise.race([
+        lifecycle.bootstrap({ hostInstalled: true }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), 5000),
+        ),
+      ]);
+      expect(errors).toEqual([]);
+      expect(lifecycle.getSnapshot()?.version).toBe(config.version);
+    } finally {
+      restoreLiveness();
+      lifecycle.dispose();
+      server.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects malformed PID metadata", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
+    const layout = {
+      rootDir: dir,
+      pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
+      logFile: join(dir, "host.log"),
+      installDir: join(dir, "install"),
+      installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
+      environment: "production" as const,
+    };
+    await writeFile(
+      layout.pidMetadataFile,
+      JSON.stringify({
+        hostId: "bad-host",
+        websocketUrl: "ws://127.0.0.1:55555/rpc",
+        version: "0.0.0",
+        // pid intentionally missing
+      }),
+      "utf8",
+    );
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 500,
+      reachabilityProbe: undefined,
+    });
+    const errors: { code: string }[] = [];
+    lifecycle.on("error", (err) => errors.push({ code: err.code }));
+    try {
+      await Promise.race([
+        lifecycle.bootstrap({ hostInstalled: true }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), 5000),
+        ),
+      ]);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HOST_NOT_READY");
+      expect(lifecycle.getSnapshot()).toBeNull();
+    } finally {
+      lifecycle.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an unreachable / wrong-shape websocket URL", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
+    const layout = {
+      rootDir: dir,
+      pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
+      logFile: join(dir, "host.log"),
+      installDir: join(dir, "install"),
+      installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
+      environment: "production" as const,
+    };
+    await writeFile(
+      layout.pidMetadataFile,
+      JSON.stringify({
+        hostId: "wrong-shape",
+        websocketUrl: "ws://127.0.0.1:55555/legacy",
+        version: "0.0.0",
+        pid: 12345,
+      }),
+      "utf8",
+    );
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 500,
+      reachabilityProbe: undefined,
+    });
+    const errors: { code: string }[] = [];
+    lifecycle.on("error", (err) => errors.push({ code: err.code }));
+    try {
+      await Promise.race([
+        lifecycle.bootstrap({ hostInstalled: true }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), 5000),
+        ),
+      ]);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.code).toBe("HOST_NOT_READY");
+    } finally {
+      lifecycle.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("holds one failed probe, degrades the second to busy - never to absent - and recovers on the next success", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-test-"));
+    const layout = {
+      rootDir: dir,
+      pidMetadataFile: join(dir, "host.pid.json"),
+      identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
+      logFile: join(dir, "host.log"),
+      installDir: join(dir, "install"),
+      installRecordFile: join(dir, "install", "install.json"),
+      stagedDir: join(dir, "staged"),
+      stagedRecordFile: join(dir, "staged", "staged.json"),
+      pendingLoginItemRevisionFile: join(
+        dir,
+        "pending-login-item-revision.json",
+      ),
+      substrateFile: join(dir, "substrate.json"),
+      transitionJournalFile: join(dir, "transition.json"),
+      browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(dir, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
+      environment: "production" as const,
+    };
+    const websocketUrl = "ws://127.0.0.1:54321/rpc";
+    await writeFile(
+      layout.pidMetadataFile,
+      JSON.stringify({
+        hostId: "same-host",
+        websocketUrl,
+        version: config.version,
+        pid: 12345,
+      }),
+      "utf8",
+    );
+    // Inject reachability so the reachable -> unreachable -> reachable
+    // transitions are deterministic rather than racing real socket
+    // bind/close/rebind on the same port (the CI flake).
+    let reachable = true;
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 5_000,
+      reachabilityProbe: (url) =>
+        Promise.resolve(url === websocketUrl && reachable),
+    });
+    const restoreLiveness = useIndeterminateProcessLiveness();
+    // Once the first reload caches an identity verdict for pid 12345, the
+    // second and third reloads below (both with a failed probe) reach
+    // `readIdentityVerdict`'s cache-reuse check, which calls
+    // `probeProcessExistenceWithoutSpawn(12345)` - see the helper's comment.
+    const killSpy = spyProcessKillExists(12345);
+    const changes: Array<string | null> = [];
+    lifecycle.on("change", (snapshot) => {
+      changes.push(snapshot?.hostId ?? null);
+    });
+    // This test drives EVERY reload explicitly, because counting consecutive
+    // failed probes is what it tests - so the two mechanisms that can start
+    // an UNSOLICITED reload behind its back must both be kept out for the
+    // test's own duration:
+    //   - the pid-metadata watcher (measured: a late FSEvents edge for the
+    //     `writeFile` above can land inside the second explicit reload below
+    //     and supersede it via a generation bump) - never installed, because
+    //     the seed below is a plain reload rather than `bootstrap()`; and
+    //   - the reachability retry ladder `scheduleReachabilityRetry` arms on
+    //     the FIRST failed reload, which would supersede the same way if this
+    //     test ever spanned its 250ms - held behind fake timers below.
+    // The watcher is the source measured under load; the ladder is the same
+    // class, reproduced by delaying the probe past its first rung. Both end in
+    // the same `expected 'available' to be 'busy'`.
+    try {
+      // Seed with a plain reload, not `bootstrap()`: this test counts probes, so
+      // it must own every reload. `bootstrap()` installs the real pid.json
+      // watcher, and macOS FSEvents can replay the fixture write above into it
+      // after install. That extra reload supersedes a manual one mid-flight, so
+      // the manual one skips its fold and the assertion reads the old verdict.
+      await lifecycle.reloadSnapshotFromDisk();
+      expect(lifecycle.getSnapshot()?.hostId).toBe("same-host");
+      expect(changes).toEqual(["same-host"]);
+      // The explicit reloads below drive both failures; frozen timers keep the
+      // first failure's retry from superseding the second manual reload.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+      // ONE failed probe against a live process changes nothing the renderer
+      // can see. This assertion used to demand `null` - and that is the
+      // 2026-08-11 outage in one line: a single unanswered loopback probe
+      // telling the renderer a host it was actively using no longer exists.
+      reachable = false;
+      await lifecycle.reloadSnapshotFromDisk();
+      expect(lifecycle.getSnapshot()?.availability).toBe("available");
+      expect(changes).toEqual(["same-host"]);
+      // The dead-host guard added: this failed-probe reload consulted the
+      // pinned pid rather than trusting the cache's age alone. If the pin
+      // stops being load-bearing (the cache-reuse check is removed or
+      // bypassed), this assertion is what goes red instead of the test
+      // silently passing on an unconsulted spy.
+      expect(killSpy).toHaveBeenCalledWith(12345, 0);
+      // Mechanism, not end state: the ladder was armed by the failure above
+      // (`needsReprobe` is true through the hysteresis hold) AND held - the
+      // fake `setTimeout` it scheduled is still pending, not fired.
+      expect(vi.getTimerCount()).toBeGreaterThanOrEqual(1);
+
+      // The SECOND consecutive failure is corroboration, so the verdict
+      // degrades - to `busy`, never to absence. The host is still named, still
+      // carries its real websocketUrl, and stays dialable throughout.
+      await lifecycle.reloadSnapshotFromDisk();
+      expect(lifecycle.getSnapshot()?.availability).toBe("busy");
+      expect(lifecycle.getSnapshot()?.websocketUrl).toBe(websocketUrl);
+      expect(changes).toEqual(["same-host", "same-host"]);
+
+      // Recovery takes exactly one success and no app relaunch.
+      reachable = true;
+      await lifecycle.reloadSnapshotFromDisk();
+      expect(lifecycle.getSnapshot()?.availability).toBe("available");
+      expect(lifecycle.getSnapshot()?.hostId).toBe("same-host");
+      expect(changes).toEqual(["same-host", "same-host", "same-host"]);
+    } finally {
+      vi.useRealTimers();
+      killSpy.mockRestore();
+      restoreLiveness();
+      lifecycle.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

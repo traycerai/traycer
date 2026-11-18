@@ -1,0 +1,336 @@
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { Check } from "lucide-react";
+import type { WorktreeEntryScripts } from "@traycer/protocol/host/worktree-schemas";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { createReportIssueContext } from "@/lib/report-issue-context";
+import { RepoScriptsFields } from "@/components/workspaces/repo-scripts-fields";
+import {
+  repoScriptsRequestPayload,
+  repoScriptsValueFromScripts,
+  type RepoScriptsSeed,
+  type RepoScriptsValue,
+} from "@/components/workspaces/repo-scripts-form";
+
+type ScriptReviewSaveState = "idle" | "saving" | "saved";
+
+const SCRIPT_REVIEW_SAVED_CLOSE_MS = 650;
+
+/**
+ * The agreed setup/teardown editor surface, shared by Settings ▸ Worktrees and
+ * the composer's Environment footer. It owns presentation + the save-feedback
+ * animation only - it persists NOTHING. Each caller wires `onSave` to its own
+ * behavior (Settings stashes the reviewed scripts for its delete flow; the
+ * composer stages them onto the worktree intent or writes them via
+ * `setRepoScripts`). The dialog is always-open while mounted; the caller mounts
+ * it conditionally and reacts to `onOpenChange(false)`.
+ */
+export function ScriptsReviewDialog(props: {
+  readonly title: string;
+  readonly description: string;
+  /**
+   * `null` to omit the path block entirely - the "Worktree environment"
+   * dialog drops it for a staged new-branch target, since the branch name it
+   * would show is now redundant with Branch naming's own effective-branch
+   * preview. One slot
+   * instead of two independently-nullable `pathLabel`/`pathValue` props: the
+   * two were never set or omitted independently, so the type says so.
+   */
+  readonly path: { readonly label: string; readonly value: string } | null;
+  readonly scriptSeed: RepoScriptsSeed | null;
+  // `true` while the seed is still being fetched (e.g. reading a source branch's
+  // committed scripts). The fields are replaced by a spinner so the editor never
+  // flashes a stale seed before the real one resolves; the caller remounts (via
+  // `key`) with the resolved seed once it lands.
+  readonly seedPending: boolean;
+  // A non-blocking warning rendered above the fields (e.g. the source-branch
+  // scripts read failed, so the editor starts blank). `null` when there's none.
+  readonly errorNote: string | null;
+  // Explanatory caption for the scripts section (e.g. where this save
+  // targets) - relocated here from the old top-level `description` so that
+  // prop can carry the dialog-wide framing text instead. `null` for callers
+  // that don't need it.
+  readonly scriptsNote: string | null;
+  readonly inUseNote: string | null;
+  // Visually separate "Branch naming" section (the Environment dialog's
+  // layered branch-prefix setting), rendered BELOW the scripts section once
+  // this is non-null - scripts stay first in the information hierarchy.
+  // When present, the scripts block also gains a "Setup & teardown scripts"
+  // eyebrow. `null` for callers that never show it (e.g. the Settings ▸
+  // Worktrees delete-review flow, which reuses this same presentational shell
+  // as a single, unlabeled section).
+  readonly repositoryDefaultsSlot: ReactNode | null;
+  readonly testId: string;
+  // Footer action label (idle state only - a successful save always shows
+  // "Saved" regardless). Callers name what they're persisting - both current
+  // callers use "Save".
+  readonly saveLabel: string;
+  // Returns a promise that resolves when the save actually succeeded and rejects
+  // when it failed, so the dialog only shows "Saved"/closes on real success
+  // (a synchronous caller returns an already-resolved promise).
+  readonly onSave: (scripts: WorktreeEntryScripts) => Promise<unknown>;
+  // Radix's `DialogContent` calls this on Escape BEFORE it dismisses the
+  // dialog; call `event.preventDefault()` to keep the dialog open (e.g. a
+  // nested editor inside `repositoryDefaultsSlot` wants to consume Escape as
+  // its own "cancel" instead). A no-op (`() => {}`) preserves plain
+  // Escape-closes-the-dialog behavior.
+  readonly onEscapeKeyDown: (event: KeyboardEvent) => void;
+  readonly onOpenChange: (open: boolean) => void;
+}): ReactNode {
+  const [scripts, setScripts] = useState<RepoScriptsValue>(() =>
+    repoScriptsValueFromScripts(props.scriptSeed),
+  );
+  const { saveState, saveBusy, canSave, handleSave, handleOpenChange } =
+    useScriptsReviewSave({
+      scripts,
+      scriptSeed: props.scriptSeed,
+      seedPending: props.seedPending,
+      onSave: props.onSave,
+      onOpenChange: props.onOpenChange,
+    });
+
+  return (
+    <Dialog open onOpenChange={handleOpenChange}>
+      <DialogContent
+        layout="banded"
+        className="flex max-h-[calc(var(--spacing-safe-svh)-var(--safe-area-inset-bottom)-2rem)] w-full flex-col overflow-hidden sm:max-w-[min(52rem,var(--safe-area-width),calc(100%-2rem))]"
+        data-testid={props.testId}
+        showCloseButton={!saveBusy}
+        onEscapeKeyDown={props.onEscapeKeyDown}
+      >
+        <DialogHeader className="shrink-0 gap-1.5">
+          <DialogTitle size="lg">{props.title}</DialogTitle>
+          <DialogDescription>{props.description}</DialogDescription>
+        </DialogHeader>
+        <fieldset
+          disabled={saveBusy}
+          className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain border-0 p-0 px-6"
+        >
+          <div className="flex flex-col gap-3 py-4">
+            {props.repositoryDefaultsSlot !== null ? (
+              <h3 className="text-ui-sm font-semibold text-foreground">
+                Setup &amp; teardown scripts
+              </h3>
+            ) : null}
+            <ScriptsPathRow path={props.path} />
+            {props.scriptsNote !== null ? (
+              <p className="text-ui-xs text-muted-foreground">
+                {props.scriptsNote}
+              </p>
+            ) : null}
+            <ScriptsErrorNote note={props.errorNote} testId={props.testId} />
+            {props.seedPending ? (
+              <div
+                className="flex min-h-[8rem] items-center justify-center gap-2 text-muted-foreground"
+                data-testid={`${props.testId}-seed-loading`}
+                role="status"
+                aria-live="polite"
+              >
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={`${props.testId}-seed-spinner`}
+                  variant={undefined}
+                />
+                <span className="sr-only">Loading scripts…</span>
+              </div>
+            ) : (
+              <RepoScriptsFields value={scripts} onChange={setScripts} />
+            )}
+            {props.inUseNote !== null ? (
+              <p className="text-ui-xs text-muted-foreground">
+                {props.inUseNote}
+              </p>
+            ) : null}
+          </div>
+          {props.repositoryDefaultsSlot !== null ? (
+            <div className="flex flex-col gap-4 border-t border-foreground/10 py-4">
+              {props.repositoryDefaultsSlot}
+            </div>
+          ) : null}
+        </fieldset>
+        <DialogFooter className="shrink-0 flex-row justify-end">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={saveBusy}
+            onClick={() => props.onOpenChange(false)}
+          >
+            Close
+          </Button>
+          <Button
+            type="button"
+            variant="default"
+            size="sm"
+            disabled={!canSave}
+            aria-live="polite"
+            onClick={handleSave}
+          >
+            {saveState === "saving" ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId={`${props.testId}-save-spinner`}
+                variant={undefined}
+              />
+            ) : null}
+            {saveState === "saved" ? <Check className="size-4" /> : null}
+            <span>{saveState === "saved" ? "Saved" : props.saveLabel}</span>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Holds the edit lock until all writes settle, then closes after confirmation. */
+function useScriptsReviewSave(props: {
+  readonly scripts: RepoScriptsValue;
+  readonly scriptSeed: RepoScriptsSeed | null;
+  readonly seedPending: boolean;
+  readonly onSave: (scripts: WorktreeEntryScripts) => Promise<unknown>;
+  readonly onOpenChange: (open: boolean) => void;
+}) {
+  const { scripts } = props;
+  const [saveState, setSaveState] = useState<ScriptReviewSaveState>("idle");
+  const closeTimerRef = useRef<number | null>(null);
+  const mountedRef = useRef(true);
+  const clearSaveTimers = useCallback((): void => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  const initialScripts = useMemo(
+    () => repoScriptsValueFromScripts(props.scriptSeed),
+    [props.scriptSeed],
+  );
+  const scriptsChanged = useMemo(
+    () =>
+      !worktreeScriptsEqual(
+        repoScriptsRequestPayload(scripts),
+        repoScriptsRequestPayload(initialScripts),
+      ),
+    [initialScripts, scripts],
+  );
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      clearSaveTimers();
+    };
+  }, [clearSaveTimers]);
+
+  const saveBusy = saveState !== "idle";
+  const canSave = !saveBusy && !props.seedPending && scriptsChanged;
+
+  const handleOpenChange = (nextOpen: boolean): void => {
+    if (!nextOpen && saveBusy) return;
+    props.onOpenChange(nextOpen);
+  };
+
+  const handleSave = (): void => {
+    if (!canSave) return;
+    const payload = repoScriptsRequestPayload(scripts);
+    clearSaveTimers();
+    setSaveState("saving");
+    // Drive the confirmation off the real save outcome: "Saved" + auto-close on
+    // success only; a failed save (the caller surfaces its own error toast)
+    // returns to idle so the user can retry instead of seeing a false success.
+    void props.onSave(payload).then(
+      () => {
+        if (!mountedRef.current) return;
+        setSaveState("saved");
+        closeTimerRef.current = window.setTimeout(() => {
+          props.onOpenChange(false);
+        }, SCRIPT_REVIEW_SAVED_CLOSE_MS);
+      },
+      () => {
+        if (mountedRef.current) setSaveState("idle");
+      },
+    );
+  };
+
+  return { saveState, saveBusy, canSave, handleSave, handleOpenChange };
+}
+
+function ScriptsPathRow(props: {
+  readonly path: { readonly label: string; readonly value: string } | null;
+}): ReactNode {
+  if (props.path === null) return null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-ui-xs font-medium text-muted-foreground">
+        {props.path.label}
+      </span>
+      <code className="rounded-md bg-foreground/5 px-2.5 py-2 font-mono text-code-xs text-foreground wrap-anywhere select-all">
+        {props.path.value}
+      </code>
+    </div>
+  );
+}
+
+function ScriptsErrorNote(props: {
+  readonly note: string | null;
+  readonly testId: string;
+}): ReactNode {
+  if (props.note === null) return null;
+  return (
+    <div
+      className="text-ui-xs text-destructive"
+      role="alert"
+      data-testid={`${props.testId}-error-note`}
+    >
+      <span>{props.note}</span>
+      <ReportIssueAction
+        context={createReportIssueContext({
+          title: "Could not load folder scripts",
+          message: null,
+          code: null,
+          source: "Folder scripts",
+        })}
+        presentation="link"
+        className="ml-1"
+      />
+    </div>
+  );
+}
+
+function worktreeScriptsEqual(
+  left: WorktreeEntryScripts,
+  right: WorktreeEntryScripts,
+): boolean {
+  return (
+    osScriptsEqual(left.setup, right.setup) &&
+    osScriptsEqual(left.teardown, right.teardown)
+  );
+}
+
+function osScriptsEqual(
+  left: WorktreeEntryScripts["setup"],
+  right: WorktreeEntryScripts["setup"],
+): boolean {
+  return (
+    left.default === right.default &&
+    left.macos === right.macos &&
+    left.windows === right.windows &&
+    left.linux === right.linux
+  );
+}

@@ -1,0 +1,813 @@
+import { describe, expect, it } from "vitest";
+import type {
+  ProviderRateLimits,
+  ProviderRateLimitWindow,
+} from "@traycer/protocol/host/rate-limit";
+import type { ProviderRateLimitEnvelope } from "@/lib/rate-limits/rate-limit-envelope";
+import { NO_EPISODE } from "@/lib/rate-limits/rate-limit-envelope";
+import { projectProfileUsage } from "@/lib/rate-limits/profile-usage-projection";
+
+const NOW = 1_000_000;
+const STALE_AFTER_MS = 300_000;
+
+function window(
+  usedPercent: number,
+  durationMinutes: number | null,
+  resetsAt: number | null,
+): ProviderRateLimitWindow {
+  return { usedPercent, durationMinutes, resetsAt };
+}
+
+function codex(overrides: {
+  readonly primary: ProviderRateLimitWindow | null;
+  readonly secondary: ProviderRateLimitWindow | null;
+  readonly extraWindows: Extract<
+    ProviderRateLimits,
+    { provider: "codex"; available: true }
+  >["extraWindows"];
+  readonly rateLimitReachedType: string | null;
+}): Extract<ProviderRateLimits, { provider: "codex"; available: true }> {
+  return {
+    provider: "codex",
+    available: true,
+    planType: null,
+    limitId: null,
+    limitName: null,
+    primary: overrides.primary,
+    secondary: overrides.secondary,
+    extraWindows: overrides.extraWindows,
+    credits: null,
+    individualLimit: null,
+    resetCredits: null,
+    rateLimitReachedType: overrides.rateLimitReachedType,
+  };
+}
+
+function openRouter(
+  limit: number | null,
+  limitRemaining: number | null,
+): Extract<ProviderRateLimits, { provider: "openrouter"; available: true }> {
+  return {
+    provider: "openrouter",
+    available: true,
+    limit,
+    limitRemaining,
+    dailySpend: null,
+    weeklySpend: null,
+    monthlySpend: null,
+    totalCredits: null,
+    totalUsage: null,
+    balance: null,
+  };
+}
+
+function huggingFace(
+  includedUsd: number | null,
+  usedUsd: number,
+): Extract<ProviderRateLimits, { provider: "huggingface"; available: true }> {
+  return {
+    provider: "huggingface",
+    available: true,
+    includedUsd,
+    usedUsd,
+    remainingIncludedUsd: includedUsd === null ? null : includedUsd - usedUsd,
+    limitUsd: null,
+    remainingLimitUsd: null,
+    numRequests: null,
+    periodStart: null,
+    periodEnd: null,
+  };
+}
+
+function claude(
+  fiveHour: ProviderRateLimitWindow | null,
+  sevenDay: ProviderRateLimitWindow | null,
+): Extract<ProviderRateLimits, { provider: "claude-code"; available: true }> {
+  return {
+    provider: "claude-code",
+    available: true,
+    subscriptionType: null,
+    fiveHour,
+    sevenDay,
+    sevenDayOpus: null,
+    sevenDaySonnet: null,
+    modelScoped: [],
+    extraUsage: null,
+  };
+}
+
+function openCode(args: {
+  readonly fiveHourStatus: "ok" | "rate-limited";
+  readonly fiveHourPercent: number;
+}): Extract<ProviderRateLimits, { provider: "opencode"; available: true }> {
+  return {
+    provider: "opencode",
+    available: true,
+    credentialGeneration: "gen-1",
+    fiveHour: {
+      status: args.fiveHourStatus,
+      usedPercent: args.fiveHourPercent,
+      durationMinutes: 300,
+      resetsAt: NOW + 1,
+    },
+    weekly: {
+      status: "ok",
+      usedPercent: 8,
+      durationMinutes: 10_080,
+      resetsAt: NOW + 1,
+    },
+    monthly: {
+      status: "ok",
+      usedPercent: 4,
+      durationMinutes: null,
+      resetsAt: NOW + 1,
+    },
+  };
+}
+
+function grok(
+  period: ProviderRateLimitWindow | null,
+): Extract<ProviderRateLimits, { provider: "grok"; available: true }> {
+  return {
+    provider: "grok",
+    available: true,
+    subscriptionTier: "SuperGrok",
+    periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+    periodStart: NOW,
+    periodEnd: NOW + 7 * 24 * 60 * 60 * 1000,
+    period,
+    monthlyLimit: null,
+    onDemandCap: null,
+    onDemandUsed: null,
+    prepaidBalance: null,
+  };
+}
+
+function cursor(
+  otherModels: ProviderRateLimitWindow | null,
+  cursorModels: ProviderRateLimitWindow | null,
+): Extract<ProviderRateLimits, { provider: "cursor"; available: true }> {
+  const cycleEnd = NOW + 31 * 24 * 60 * 60 * 1000;
+  return {
+    provider: "cursor",
+    available: true,
+    cycleStart: NOW,
+    cycleEnd: otherModels?.resetsAt ?? cursorModels?.resetsAt ?? cycleEnd,
+    cursorModels,
+    otherModels,
+    // A reachable account that reported no bucket percentages: proto3 JSON
+    // omits zero-valued fields, so these arrive absent rather than as 0.
+    includedLimitUsd: null,
+    usedUsd: null,
+    remainingUsd: null,
+    bonusUsedUsd: null,
+    onDemandLimitType: "user",
+    onDemandLimitUsd: null,
+    onDemandUsedUsd: null,
+    onDemandRemainingUsd: null,
+    displayMessage: null,
+  };
+}
+
+type AntigravityRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "antigravity"; available: true }
+>;
+
+function antigravityWindow(
+  usedPercent: number,
+  durationMinutes: number | null,
+  resetsAt: number | null,
+  bucketId: string,
+): AntigravityRateLimits["groups"][number]["windows"][number] {
+  return { usedPercent, durationMinutes, resetsAt, bucketId, windowKind: null };
+}
+
+function antigravity(
+  groups: AntigravityRateLimits["groups"],
+): AntigravityRateLimits {
+  return {
+    provider: "antigravity",
+    available: true,
+    planName: null,
+    groups,
+  };
+}
+
+function kimi(
+  fiveHour: ProviderRateLimitWindow | null,
+  weekly: ProviderRateLimitWindow | null,
+  monthly: ProviderRateLimitWindow | null,
+): Extract<ProviderRateLimits, { provider: "kimi"; available: true }> {
+  return { provider: "kimi", available: true, fiveHour, weekly, monthly };
+}
+
+function envelope(
+  data: Extract<ProviderRateLimits, { available: true }>,
+  lastGoodAt: number,
+): ProviderRateLimitEnvelope {
+  return {
+    latest: data,
+    lastGood: data,
+    lastGoodAt,
+    lastFailureAt: null,
+    credentialGeneration: null,
+    episode: NO_EPISODE,
+  };
+}
+
+function project(
+  rateLimitStatus: "ok" | "near_limit" | "hard_limit" | "unknown",
+  usageUpdatedAt: number | null,
+  value: ProviderRateLimitEnvelope | null,
+  detailError: boolean,
+) {
+  return projectProfileUsage({
+    rateLimitStatus,
+    usageUpdatedAt,
+    envelope: value,
+    detailError,
+    now: NOW,
+    staleAfterMs: STALE_AFTER_MS,
+  });
+}
+
+describe("projectProfileUsage", () => {
+  it("selects the most severe compact window before comparing percentages", () => {
+    const projection = project(
+      "near_limit",
+      NOW,
+      envelope(
+        claude(window(85, 300, NOW + 1), window(90, 10_080, NOW + 1)),
+        NOW,
+      ),
+      false,
+    );
+    expect(projection.kind).toBe("detail");
+    expect(projection.severity).toBe("running_low");
+    expect(projection.compactWindow?.id).toBe("five-hour");
+    expect(projection.compactWindow?.severity).toBe("running_low");
+  });
+
+  it("projects Hugging Face included credits as a Credits meter with the projected severity", () => {
+    // Regression guard: `classifyProviderRateLimits` answers "unknown" for a
+    // credit provider (it has no windows by design), so taking severity from
+    // there instead of from the projected window discarded the bar entirely and
+    // reported the profile as unavailable.
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(huggingFace(2, 1.8), NOW),
+      false,
+    );
+    expect(projection).toMatchObject({
+      kind: "detail",
+      severity: "limited",
+      compactWindow: {
+        id: "credits",
+        name: "Included credits",
+        severity: "limited",
+        window: { usedPercent: 90, durationMinutes: null, resetsAt: null },
+      },
+    });
+  });
+
+  it("projects no Hugging Face window when the account has no included allowance", () => {
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(huggingFace(null, 5), NOW),
+      false,
+    );
+    // No denominator, so nothing to meter - not a failure state.
+    expect(projection.compactWindow).toBeNull();
+  });
+
+  it("projects OpenRouter hard limits as an equivalent Credits meter", () => {
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(openRouter(100, 10), NOW),
+      false,
+    );
+    expect(projection).toMatchObject({
+      kind: "detail",
+      severity: "limited",
+      compactWindow: {
+        id: "credits",
+        name: "Credits",
+        severity: "limited",
+        window: {
+          usedPercent: 90,
+          durationMinutes: null,
+          resetsAt: null,
+        },
+      },
+    });
+    expect(projection.windows).toHaveLength(1);
+  });
+
+  it("keeps OpenRouter percentage-free when no hard limit is available", () => {
+    expect(
+      project("ok", NOW, envelope(openRouter(null, null), NOW), false),
+    ).toMatchObject({
+      kind: "unavailable",
+      reason: "missing_windows",
+      compactWindow: null,
+      windows: [],
+    });
+  });
+
+  it("treats an OpenCode rate-limited window as limited even at a low percent", () => {
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(
+        openCode({ fiveHourStatus: "rate-limited", fiveHourPercent: 12 }),
+        NOW,
+      ),
+      false,
+    );
+    expect(projection).toMatchObject({
+      kind: "detail",
+      severity: "limited",
+      compactWindow: {
+        id: "five-hour",
+        name: "5-hour",
+        severity: "limited",
+        window: {
+          usedPercent: 12,
+          durationMinutes: 300,
+          resetsAt: NOW + 1,
+        },
+      },
+    });
+  });
+
+  it("projects Grok's billing-period window via the shared window path", () => {
+    // Grok rides `rateLimits.period` through the shared window projection, not
+    // the OpenRouter-style credit path - a live period yields a real compact
+    // bar and a non-unknown severity.
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(grok(window(12, 10_080, NOW + 1)), NOW),
+      false,
+    );
+    expect(projection.kind).toBe("detail");
+    expect(projection.severity).not.toBe("unknown");
+    expect(projection).toMatchObject({
+      kind: "detail",
+      severity: "healthy",
+      compactWindow: {
+        id: "period",
+        severity: "healthy",
+        window: {
+          usedPercent: 12,
+          durationMinutes: 10_080,
+          resetsAt: NOW + 1,
+        },
+      },
+    });
+    expect(projection.windows).toHaveLength(1);
+  });
+
+  it("projects a period-less Grok snapshot as unmeasured, not unavailable", () => {
+    // Zero-usage SuperGrok returns tier + period bounds only - no synthesized
+    // period window - so there is nothing to meter. That is available-but-
+    // unmeasured (severity `unknown`, consistent with protocol semantics), not
+    // the alarming unavailable/`missing_windows` state that reads as a fetch or
+    // account failure for a perfectly healthy account.
+    expect(project("ok", NOW, envelope(grok(null), NOW), false)).toEqual({
+      kind: "not_checked",
+      severity: "unknown",
+      compactWindow: null,
+      windows: [],
+      checkedAt: null,
+    });
+  });
+
+  it("projects a bucket-less Cursor snapshot as unmeasured, not unavailable", () => {
+    // Cursor synthesizes its bucket windows only when the payload reports the
+    // Spending-page percentages, and proto3 JSON omits zero-valued fields - so
+    // a reachable account can legitimately arrive with both windows null.
+    // Without the unmeasured arm it renders as unavailable/`missing_windows`,
+    // reading as a fetch or account failure purely because Cursor reported
+    // nothing to meter.
+    expect(
+      project("ok", NOW, envelope(cursor(null, null), NOW), false),
+    ).toEqual({
+      kind: "not_checked",
+      severity: "unknown",
+      compactWindow: null,
+      windows: [],
+      checkedAt: null,
+    });
+  });
+
+  it("meters both Cursor buckets and headlines the most consumed one", () => {
+    // Guards the unmeasured arm from over-reaching, and pins the live-account
+    // regression: the compact bar must be a Spending-page bucket ("Other
+    // Models" 38%), never the blended included-usage pool (78%) that appears
+    // nowhere on Cursor's dashboard.
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(
+        cursor(window(38, 44_640, NOW + 1), window(6, 44_640, NOW + 1)),
+        NOW,
+      ),
+      false,
+    );
+    expect(projection.kind).toBe("detail");
+    expect(projection.windows).toHaveLength(2);
+    expect(projection.compactWindow?.name).toBe("Other Models");
+    expect(projection.compactWindow?.window.usedPercent).toBe(38);
+  });
+
+  it("selects the most consumed live window and ignores expired windows", () => {
+    const projection = project(
+      "ok",
+      NOW - 1_000,
+      envelope(
+        codex({
+          primary: window(100, 300, NOW - 1),
+          secondary: window(72, 10_080, NOW + 1),
+          extraWindows: [
+            {
+              limitId: "spark",
+              limitName: "Spark",
+              primary: window(84, 300, NOW + 1),
+              secondary: null,
+            },
+          ],
+          rateLimitReachedType: null,
+        }),
+        NOW - 1_000,
+      ),
+      false,
+    );
+    expect(projection.kind).toBe("detail");
+    expect(projection.compactWindow?.id).toBe("extra:spark:primary");
+    expect(projection.compactWindow?.window.usedPercent).toBe(84);
+  });
+
+  it("keeps core windows first and includes warning extras without duplicating the constraining extra", () => {
+    const projection = project(
+      "near_limit",
+      NOW - 1_000,
+      envelope(
+        codex({
+          primary: window(82, 300, NOW + 1),
+          secondary: window(96, 10_080, NOW + 1),
+          extraWindows: [
+            {
+              limitId: "healthy-extra",
+              limitName: "Healthy extra",
+              primary: window(70, 300, NOW + 1),
+              secondary: null,
+            },
+            {
+              limitId: "low-extra",
+              limitName: "Low extra",
+              primary: window(85, 300, NOW + 1),
+              secondary: null,
+            },
+          ],
+          rateLimitReachedType: null,
+        }),
+        NOW - 1_000,
+      ),
+      false,
+    );
+    expect(projection.windows.map((entry) => entry.id)).toEqual([
+      "primary",
+      "secondary",
+      "extra:low-extra:primary",
+    ]);
+    expect(projection.compactWindow?.id).toBe("secondary");
+  });
+
+  it("includes a healthy extra only when it is the constraining window", () => {
+    const projection = project(
+      "ok",
+      NOW - 1_000,
+      envelope(
+        codex({
+          primary: window(40, 300, NOW + 1),
+          secondary: window(50, 10_080, NOW + 1),
+          extraWindows: [
+            {
+              limitId: "extra",
+              limitName: "Extra",
+              primary: window(70, 300, NOW + 1),
+              secondary: null,
+            },
+          ],
+          rateLimitReachedType: null,
+        }),
+        NOW - 1_000,
+      ),
+      false,
+    );
+    expect(projection.windows.map((entry) => entry.id)).toEqual([
+      "primary",
+      "secondary",
+      "extra:extra:primary",
+    ]);
+    expect(projection.compactWindow?.id).toBe("extra:extra:primary");
+  });
+
+  it("represents retained and aged detail as stale without changing percentages", () => {
+    const data = codex({
+      primary: window(40, 300, NOW + 1),
+      secondary: window(20, 10_080, NOW + 1),
+      extraWindows: [],
+      rateLimitReachedType: null,
+    });
+    const retained: ProviderRateLimitEnvelope = {
+      latest: { provider: "codex", available: false, reason: "timeout" },
+      lastGood: data,
+      lastGoodAt: NOW - 1_000,
+      lastFailureAt: NOW,
+      credentialGeneration: null,
+      episode: NO_EPISODE,
+    };
+    const retainedProjection = project("ok", NOW - 1_000, retained, false);
+    expect(retainedProjection.kind).toBe("stale");
+    expect(retainedProjection.compactWindow?.window.usedPercent).toBe(40);
+    expect(
+      retainedProjection.kind === "stale"
+        ? retainedProjection.unavailableReason
+        : null,
+    ).toBe("timeout");
+
+    const agedProjection = project(
+      "ok",
+      NOW - STALE_AFTER_MS,
+      envelope(data, NOW - STALE_AFTER_MS),
+      false,
+    );
+    expect(agedProjection.kind).toBe("stale");
+  });
+
+  it("keeps semantic-only and never-checked states percentage-free", () => {
+    const semantic = project("near_limit", NOW - 1_000, null, false);
+    expect(semantic).toMatchObject({
+      kind: "semantic_only",
+      severity: "running_low",
+      compactWindow: null,
+      windows: [],
+      unavailableReason: null,
+    });
+    const neverChecked = project("unknown", null, null, false);
+    expect(neverChecked).toEqual({
+      kind: "not_checked",
+      severity: "unknown",
+      compactWindow: null,
+      windows: [],
+      checkedAt: null,
+    });
+    expect(project("ok", null, null, false)).toEqual(neverChecked);
+  });
+
+  it("preserves unavailable diagnostics without treating them as Healthy", () => {
+    const unavailable: ProviderRateLimitEnvelope = {
+      latest: {
+        provider: "claude-code",
+        available: false,
+        reason: "insufficient_permissions",
+      },
+      lastGood: null,
+      lastGoodAt: null,
+      lastFailureAt: null,
+      credentialGeneration: null,
+      episode: NO_EPISODE,
+    };
+    expect(project("unknown", NOW, unavailable, false)).toEqual({
+      kind: "unavailable",
+      severity: "unknown",
+      reason: "insufficient_permissions",
+      chatCredential: null,
+      compactWindow: null,
+      windows: [],
+      checkedAt: NOW,
+    });
+  });
+
+  it("carries the chat credential the host named on an unavailable reading", () => {
+    const unavailable: ProviderRateLimitEnvelope = {
+      latest: {
+        provider: "claude-code",
+        available: false,
+        reason: "rate_limits_not_available",
+        chatCredential: { kind: "cloud-provider", source: "bedrock" },
+      },
+      lastGood: null,
+      lastGoodAt: null,
+      lastFailureAt: null,
+      credentialGeneration: null,
+      episode: NO_EPISODE,
+    };
+    expect(project("unknown", NOW, unavailable, false)).toMatchObject({
+      kind: "unavailable",
+      reason: "rate_limits_not_available",
+      chatCredential: { kind: "cloud-provider", source: "bedrock" },
+    });
+  });
+
+  it("does not fabricate a fill for provider-authoritative semantic limits without windows", () => {
+    const projection = project(
+      "hard_limit",
+      NOW,
+      envelope(
+        codex({
+          primary: null,
+          secondary: null,
+          extraWindows: [],
+          rateLimitReachedType: "primary",
+        }),
+        NOW,
+      ),
+      false,
+    );
+    expect(projection).toMatchObject({
+      kind: "semantic_only",
+      severity: "limited",
+      compactWindow: null,
+      windows: [],
+      unavailableReason: null,
+    });
+  });
+
+  it("projects thrown detail errors without losing retained last-good data", () => {
+    const data = codex({
+      primary: window(40, 300, NOW + 1),
+      secondary: window(20, 10_080, NOW + 1),
+      extraWindows: [],
+      rateLimitReachedType: null,
+    });
+    const stale = project("ok", NOW - 1_000, envelope(data, NOW - 1_000), true);
+    expect(stale.kind).toBe("stale");
+    expect(stale.compactWindow?.window.usedPercent).toBe(40);
+    expect(stale.kind === "stale" ? stale.unavailableReason : null).toBe(
+      "fetch_failed",
+    );
+    expect(project("unknown", null, null, true)).toMatchObject({
+      kind: "unavailable",
+      severity: "unknown",
+      reason: "fetch_failed",
+      compactWindow: null,
+    });
+  });
+
+  it("names Antigravity's first group's windows primary/secondary with no name, and a later window in that same group extra with no name too", () => {
+    // Codex's shape: only the first group is the unqualified base pair. A
+    // third window IN THAT SAME GROUP still reads unqualified ("5h" beside
+    // "Weekly"), while every window of a LATER group is named for its group
+    // ("Claude and GPT models · 5h") so it can't be confused with the base
+    // pair it shares a duration with. Both extras are put at running-low
+    // usage so the healthy-extra filter (covered separately below) does not
+    // remove either one from the list this assertion reads.
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(
+        antigravity([
+          {
+            displayName: "Gemini Models",
+            description: null,
+            windows: [
+              antigravityWindow(10, 300, NOW + 1, "gemini-5h"),
+              antigravityWindow(20, 10_080, NOW + 1, "gemini-weekly"),
+              antigravityWindow(85, 300, NOW + 1, "gemini-extra"),
+            ],
+          },
+          {
+            displayName: "Claude and GPT models",
+            description: null,
+            windows: [antigravityWindow(82, 300, NOW + 1, "3p-5h")],
+          },
+        ]),
+        NOW,
+      ),
+      false,
+    );
+    expect(
+      projection.windows.map((entry) => [entry.id, entry.role, entry.name]),
+    ).toEqual([
+      ["bucket:gemini-5h", "primary", null],
+      ["bucket:gemini-weekly", "secondary", null],
+      ["bucket:gemini-extra", "extra", null],
+      ["bucket:3p-5h", "extra", "Claude and GPT models"],
+    ]);
+  });
+
+  it("keeps a healthy Antigravity extra out of the window list but a running-low one in", () => {
+    const projection = project(
+      "near_limit",
+      NOW - 1_000,
+      envelope(
+        antigravity([
+          {
+            displayName: "Gemini Models",
+            description: null,
+            windows: [
+              antigravityWindow(30, 300, NOW + 1, "gemini-5h"),
+              antigravityWindow(96, 10_080, NOW + 1, "gemini-weekly"),
+            ],
+          },
+          {
+            displayName: "Healthy group",
+            description: null,
+            windows: [antigravityWindow(20, 300, NOW + 1, "healthy-extra")],
+          },
+          {
+            displayName: "Running-low group",
+            description: null,
+            windows: [antigravityWindow(85, 300, NOW + 1, "low-extra")],
+          },
+        ]),
+        NOW - 1_000,
+      ),
+      false,
+    );
+    expect(projection.windows.map((entry) => entry.id)).toEqual([
+      "bucket:gemini-5h",
+      "bucket:gemini-weekly",
+      "bucket:low-extra",
+    ]);
+    expect(projection.compactWindow?.id).toBe("bucket:gemini-weekly");
+  });
+
+  it("projects an Antigravity snapshot whose groups all report no windows as unmeasured, not unavailable", () => {
+    // Upstream allows a purely informational group, so a snapshot of only
+    // those is a reachable account with nothing metered - not a failed read.
+    expect(
+      project(
+        "ok",
+        NOW,
+        envelope(
+          antigravity([
+            {
+              displayName: "Gemini Models",
+              description: null,
+              windows: [],
+            },
+            {
+              displayName: "Claude and GPT models",
+              description: "info only",
+              windows: [],
+            },
+          ]),
+          NOW,
+        ),
+        false,
+      ),
+    ).toEqual({
+      kind: "not_checked",
+      severity: "unknown",
+      compactWindow: null,
+      windows: [],
+      checkedAt: null,
+    });
+  });
+
+  it("names Kimi's three windows 5-hour/Weekly/Monthly, the monthly one an extra shown because it is the constraining window", () => {
+    const projection = project(
+      "ok",
+      NOW,
+      envelope(
+        kimi(
+          window(10, 300, NOW + 1),
+          window(20, 10_080, NOW + 1),
+          window(60, 43_200, NOW + 1),
+        ),
+        NOW,
+      ),
+      false,
+    );
+    expect(
+      projection.windows.map((entry) => [entry.id, entry.role, entry.name]),
+    ).toEqual([
+      ["five-hour", "primary", "5-hour"],
+      ["weekly", "secondary", "Weekly"],
+      ["monthly", "extra", "Monthly"],
+    ]);
+    expect(projection.compactWindow?.id).toBe("monthly");
+  });
+
+  it("drops a Kimi window that has expired or that the backend left out", () => {
+    const projection = project(
+      "ok",
+      NOW - 1_000,
+      envelope(
+        kimi(window(40, 300, NOW + 1), window(90, 10_080, NOW - 1), null),
+        NOW - 1_000,
+      ),
+      false,
+    );
+    expect(projection.windows.map((entry) => entry.id)).toEqual(["five-hour"]);
+    expect(projection.compactWindow?.id).toBe("five-hour");
+  });
+});

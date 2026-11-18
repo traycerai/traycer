@@ -1,0 +1,492 @@
+import type { LegendListRef } from "@legendapp/list/react";
+import { useRouter, type RouterHistory } from "@tanstack/react-router";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type RefObject,
+  type Ref,
+} from "react";
+import {
+  CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE,
+  chatTurnMinimapItems,
+  type ChatTurnMinimapItem,
+  resolveChatTurnMinimapCurrentIndex,
+  resolveChatTurnMinimapHeightStyle,
+  resolveChatTurnMinimapHitStripWidth,
+  resolveChatTurnMinimapTopStyle,
+  shouldRunChatTurnMinimapRail,
+} from "@/components/chat/chat-turn-minimap-logic";
+import { paneActivationDeferProps } from "@/components/epic-canvas/pane-activation";
+import { useRegisterTileMinimap } from "@/components/epic-canvas/tile-minimap/tile-minimap-context";
+import { MinimapListCard } from "@/components/minimap/minimap-list-card";
+import { resolveMinimapRailMaskClassName } from "@/components/minimap/minimap-rail-mask";
+import { MinimapRailTick } from "@/components/minimap/minimap-rail-tick";
+import {
+  resolveMinimapVisibleItemCapacity,
+  resolveMinimapWindow,
+} from "@/components/minimap/minimap-track-geometry";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
+import { mergeRefs } from "@/lib/merge-refs";
+import { cn } from "@/lib/utils";
+import type { TranscriptListRow } from "@/stores/chats/transcript-list-rows";
+import type { TranscriptWindow } from "@/stores/chats/transcript-window";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import type { EdgeSide } from "@/lib/layout/layout-arrangement";
+
+export interface ChatTurnMinimapProps {
+  readonly ref?: Ref<HTMLDivElement>;
+  /** The array the list renders - the rail's `rowIndex` values feed
+   *  `positionAtIndex`, so they must live in LIST index space, which on the
+   *  windowed line includes placeholder rows. */
+  readonly rows: ReadonlyArray<TranscriptListRow>;
+  /**
+   * The window `rows` was merged from, or `null` on the legacy line. Read only
+   * as the derive's cache key - see `chatTurnMinimapItems`, which is what keeps
+   * the rail off the per-token path.
+   */
+  readonly transcriptWindow: TranscriptWindow | null;
+  /**
+   * Leads each item with its sender's name: a bot's channel and its threads,
+   * where several people post and the preview alone does not say who.
+   */
+  readonly senderFirst: boolean;
+  readonly listRef: RefObject<LegendListRef | null>;
+  /**
+   * Whether the timeline is at its end: the owner's mirror of its follow
+   * mode, which the jump-to-latest pill shows from. Read at each refresh, not
+   * captured at render, so a scroll's refresh sees the mode that scroll just
+   * set. The owner calls `inViewRefreshRef` when the mode flips without one.
+   */
+  readonly atEndRef: RefObject<boolean>;
+  readonly topOffsetAdjustmentRef: RefObject<number>;
+  readonly viewportRef: RefObject<HTMLElement | null>;
+  readonly bottomInset: number;
+  readonly inViewRefreshRef: RefObject<() => void>;
+  readonly onSelect: (messageId: string) => void;
+  /** False keeps the turn model published for the tile bar, rail and all. */
+  readonly shown: boolean;
+  readonly side: EdgeSide;
+}
+
+function clampIndex(index: number, itemCount: number): number {
+  return Math.max(0, Math.min(index, itemCount - 1));
+}
+
+// useRouter's declared return type is non-nullable even when a standalone
+// minimap has no router provider. Narrow that external value at this boundary.
+function hasRouterHistory(
+  value: unknown,
+): value is { readonly history: RouterHistory } {
+  if (typeof value !== "object" || value === null || !("history" in value))
+    return false;
+  const history = value.history;
+  if (typeof history !== "object" || history === null) return false;
+  if (!("subscribe" in history) || typeof history.subscribe !== "function")
+    return false;
+  if (
+    !("location" in history) ||
+    typeof history.location !== "object" ||
+    history.location === null
+  )
+    return false;
+  return (
+    "href" in history.location && typeof history.location.href === "string"
+  );
+}
+
+/** One compact window of turns. Hover or focus opens the full turn list. */
+export function ChatTurnMinimap(props: ChatTurnMinimapProps) {
+  const { ref } = props;
+  const {
+    atEndRef,
+    bottomInset,
+    inViewRefreshRef,
+    listRef,
+    rows,
+    onSelect,
+    senderFirst,
+    shown,
+    side,
+    topOffsetAdjustmentRef,
+    transcriptWindow,
+    viewportRef,
+  } = props;
+  // A streaming reply replaces `rows` per token, so this array is new per
+  // token even when the turns are not. What is keyed on its identity must
+  // survive that: the tile bar's notify compares the outline it publishes
+  // (`useRegisterTileMinimap`), and the rail's geometry effect below reads
+  // `refreshCurrent` through a ref instead of depending on it.
+  //
+  // Which is also why the whole-transcript scan is not keyed on `rows`.
+  // `chatTurnMinimapItems` owns that decision and re-derives only when the
+  // structure moved, returning the SAME array otherwise - so `items` is stable
+  // across a token even though `rows` is not, and everything keyed on its
+  // identity below (the `refreshCurrent` callback, the published outline) stops
+  // churning with it. The `useMemo` is left in place only to keep the lookup
+  // itself off the re-render path; the cache is what makes the result stable.
+  const items = useMemo(
+    () => chatTurnMinimapItems({ rows, window: transcriptWindow, senderFirst }),
+    [rows, transcriptWindow, senderFirst],
+  );
+  const uiFontSize = useSettingsStore((state) => state.uiFontSize);
+  const coarsePointer = useCoarsePointer();
+  const mobileViewport = useIsMobileViewport();
+  const railActive = shouldRunChatTurnMinimapRail({
+    coarsePointer,
+    mobileViewport,
+    shown,
+  });
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [cursorIndex, setCursorIndex] = useState(0);
+  const [hitStripWidth, setHitStripWidth] = useState<number | null>(null);
+  const [maxVisibleItems, setMaxVisibleItems] = useState(2);
+  const [open, setOpen] = useState(false);
+  const regionRef = useRef<HTMLDivElement | null>(null);
+  const measuredRef = useMemo(() => mergeRefs(regionRef, ref), [ref]);
+  const hitStripRef = useRef<HTMLButtonElement | null>(null);
+  const router: unknown = useRouter({ warn: false });
+
+  useEffect(() => {
+    if (!open || !hasRouterHistory(router)) return;
+    const origin = router.history.location.href;
+    const originKey = router.history.location.state.__TSR_key;
+    return router.history.subscribe(({ location }) => {
+      if (location.href !== origin || location.state.__TSR_key !== originKey)
+        setOpen(false);
+    });
+  }, [open, router]);
+
+  const refreshCurrent = useCallback((): void => {
+    const rawState = listRef.current?.getState();
+    if (rawState === undefined) return;
+    const next = resolveChatTurnMinimapCurrentIndex(
+      {
+        ...rawState,
+        scrollLength: Math.max(
+          0,
+          rawState.scrollLength - Math.max(0, bottomInset),
+        ),
+        topOffsetAdjustment: topOffsetAdjustmentRef.current,
+        atEnd: atEndRef.current,
+      },
+      items,
+    );
+    if (next !== null)
+      setCurrentIndex((current) => (current === next ? current : next));
+  }, [atEndRef, bottomInset, items, listRef, topOffsetAdjustmentRef]);
+
+  useEffect(() => {
+    inViewRefreshRef.current = refreshCurrent;
+    return () => {
+      if (inViewRefreshRef.current === refreshCurrent) {
+        inViewRefreshRef.current = () => undefined;
+      }
+    };
+  }, [inViewRefreshRef, refreshCurrent]);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(refreshCurrent);
+    return () => cancelAnimationFrame(frame);
+  }, [refreshCurrent]);
+
+  // Read through a ref so the observer below is not torn down and rebuilt
+  // whenever the callback's identity moves.
+  const refreshCurrentRef = useRef(refreshCurrent);
+  useLayoutEffect(() => {
+    refreshCurrentRef.current = refreshCurrent;
+  }, [refreshCurrent]);
+
+  // Only the rail consumes this geometry, so it runs only where the rail
+  // paints: `getBoundingClientRect` on the transcript container forces a
+  // layout of the virtualized rows inside it, and on a phone that buys
+  // nothing.
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!railActive || viewport === null) return;
+    const measure = (): void => {
+      const viewportRect = viewport.getBoundingClientRect();
+      const width = resolveChatTurnMinimapHitStripWidth({
+        rootFontSize: uiFontSize,
+        viewportWidth: viewportRect.width,
+      });
+      setHitStripWidth(width);
+      setMaxVisibleItems(
+        resolveMinimapVisibleItemCapacity(
+          Math.max(0, viewportRect.height - bottomInset),
+        ),
+      );
+      if (width === 0) {
+        setOpen(false);
+        hitStripRef.current?.blur();
+      }
+      refreshCurrentRef.current();
+    };
+    const frame = requestAnimationFrame(measure);
+    const observer = new ResizeObserver(measure);
+    observer.observe(viewport);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [bottomInset, railActive, uiFontSize, viewportRef]);
+
+  const visible = items.length > 0;
+  const isInert = hitStripWidth === null || hitStripWidth <= 0;
+  const resolvedCurrentIndex = clampIndex(currentIndex, items.length);
+  const resolvedCursorIndex = clampIndex(cursorIndex, items.length);
+
+  const selectByIndex = useCallback(
+    (index: number): void => {
+      if (index < 0 || index >= items.length) return;
+      onSelect(items[index].messageId);
+    },
+    [items, onSelect],
+  );
+
+  // Published even when the rail is hidden or inert: the phone tile bar's
+  // button is an explicit affordance and is the only way in on a touch device.
+  useRegisterTileMinimap({
+    title: "Messages",
+    items,
+    currentIndex: resolvedCurrentIndex,
+    onSelect: selectByIndex,
+  });
+
+  useEffect(() => {
+    const region = regionRef.current;
+    if (region === null || !visible) return;
+    const handleMouseEnter = (): void => {
+      if (isInert) return;
+      setCursorIndex(resolvedCurrentIndex);
+      setOpen(true);
+    };
+    const handleMouseLeave = (): void => setOpen(false);
+    const handleFocusOut = (event: FocusEvent): void => {
+      if (
+        event.relatedTarget instanceof Node &&
+        region.contains(event.relatedTarget)
+      ) {
+        return;
+      }
+      setOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      hitStripRef.current?.focus();
+      setOpen(false);
+    };
+    region.addEventListener("mouseenter", handleMouseEnter);
+    region.addEventListener("mouseleave", handleMouseLeave);
+    region.addEventListener("focusout", handleFocusOut);
+    region.addEventListener("keydown", handleKeyDown);
+    return () => {
+      region.removeEventListener("mouseenter", handleMouseEnter);
+      region.removeEventListener("mouseleave", handleMouseLeave);
+      region.removeEventListener("focusout", handleFocusOut);
+      region.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isInert, resolvedCurrentIndex, visible]);
+
+  const openAtCurrent = useCallback((): void => {
+    if (isInert) return;
+    setCursorIndex(resolvedCurrentIndex);
+    setOpen(true);
+  }, [isInert, resolvedCurrentIndex]);
+
+  const moveCursor = useCallback(
+    (index: number): void => {
+      setCursorIndex(clampIndex(index, items.length));
+      setOpen(true);
+    },
+    [items.length],
+  );
+
+  const handleHitStripKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
+      const navigationKey = listNavigationKey(event);
+      if (navigationKey === "ArrowDown") {
+        event.preventDefault();
+        moveCursor((open ? resolvedCursorIndex : resolvedCurrentIndex) + 1);
+      } else if (navigationKey === "ArrowUp") {
+        event.preventDefault();
+        moveCursor((open ? resolvedCursorIndex : resolvedCurrentIndex) - 1);
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        moveCursor(0);
+      } else if (event.key === "End") {
+        event.preventDefault();
+        moveCursor(items.length - 1);
+      } else if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        const index = open ? resolvedCursorIndex : resolvedCurrentIndex;
+        onSelect(items[index].messageId);
+        setOpen(true);
+      }
+    },
+    [
+      items,
+      moveCursor,
+      onSelect,
+      open,
+      resolvedCurrentIndex,
+      resolvedCursorIndex,
+    ],
+  );
+
+  if (!railActive || !visible || isInert) return null;
+
+  return (
+    <ChatTurnMinimapView
+      items={items}
+      currentIndex={resolvedCurrentIndex}
+      cursorIndex={resolvedCursorIndex}
+      maxVisibleItems={maxVisibleItems}
+      bottomInset={bottomInset}
+      hitStripWidth={hitStripWidth}
+      side={side}
+      open={open}
+      ref={measuredRef}
+      hitStripRef={hitStripRef}
+      onOpen={() => setOpen(true)}
+      onFocus={openAtCurrent}
+      onKeyDown={handleHitStripKeyDown}
+      onCursorIndexChange={setCursorIndex}
+      onSelect={(index) => onSelect(items[index].messageId)}
+    />
+  );
+}
+
+/** Drawing only: no transcript subscription, tile publication or keyboard slots. */
+export function ChatTurnMinimapView({
+  items,
+  currentIndex: resolvedCurrentIndex,
+  cursorIndex: resolvedCursorIndex,
+  maxVisibleItems,
+  bottomInset,
+  hitStripWidth,
+  side,
+  open,
+  ref: measuredRef,
+  hitStripRef,
+  onOpen,
+  onFocus: openAtCurrent,
+  onKeyDown: handleHitStripKeyDown,
+  onCursorIndexChange,
+  onSelect,
+}: {
+  readonly items: ReadonlyArray<ChatTurnMinimapItem>;
+  readonly currentIndex: number;
+  readonly cursorIndex: number;
+  readonly maxVisibleItems: number;
+  readonly bottomInset: number;
+  readonly hitStripWidth: number;
+  readonly side: "left" | "right";
+  readonly open: boolean;
+  readonly ref: Ref<HTMLDivElement>;
+  readonly hitStripRef: Ref<HTMLButtonElement>;
+  readonly onOpen: () => void;
+  readonly onFocus: () => void;
+  readonly onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => void;
+  readonly onCursorIndexChange: (index: number) => void;
+  readonly onSelect: (index: number) => void;
+}) {
+  const window = resolveMinimapWindow({
+    currentIndex: resolvedCurrentIndex,
+    itemCount: items.length,
+    maxItems: maxVisibleItems,
+  });
+  const railItems = items.slice(window.startIndex, window.endIndex);
+  const safeBottomInset = Math.max(0, Math.ceil(bottomInset));
+  const continuationMaskClassName = resolveMinimapRailMaskClassName(
+    window.hasBefore,
+    window.hasAfter,
+  );
+
+  return (
+    <div
+      className="pointer-events-none absolute inset-x-0 top-0 z-40 hidden [container-type:size] pointer-fine:block"
+      data-side={side}
+      data-testid="chat-turn-minimap"
+      style={{ bottom: safeBottomInset }}
+    >
+      <div
+        aria-label="Message minimap controls"
+        className={cn(
+          "pointer-events-auto absolute top-1/2 -translate-y-1/2 select-none",
+          side === "left" ? "left-3" : "right-3",
+        )}
+        {...paneActivationDeferProps}
+        ref={measuredRef}
+        role="group"
+        style={{ height: resolveChatTurnMinimapHeightStyle(railItems.length) }}
+      >
+        <button
+          aria-label="Message minimap"
+          aria-expanded={open}
+          className={cn(
+            "relative block h-full cursor-pointer bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
+            continuationMaskClassName,
+          )}
+          data-testid="chat-turn-minimap-hit-strip"
+          {...{ [CHAT_TURN_MINIMAP_KEYBOARD_OWNER_ATTRIBUTE]: "" }}
+          onClick={onOpen}
+          onFocus={openAtCurrent}
+          onKeyDown={handleHitStripKeyDown}
+          ref={hitStripRef}
+          style={{ width: hitStripWidth }}
+          type="button"
+        >
+          {railItems.map((item, localIndex) => {
+            const index = window.startIndex + localIndex;
+            const active = index === resolvedCurrentIndex;
+            return (
+              <MinimapRailTick
+                active={active}
+                availableWidth={hitStripWidth}
+                data-message-id={item.messageId}
+                data-testid="chat-turn-minimap-tick"
+                hierarchical={false}
+                key={item.key}
+                level={item.level}
+                open={open}
+                side={side}
+                top={resolveChatTurnMinimapTopStyle(
+                  localIndex,
+                  railItems.length,
+                )}
+              />
+            );
+          })}
+        </button>
+        {open ? (
+          <div
+            className={cn(
+              "absolute top-1/2 w-[min(20rem,calc(100cqw-1.5rem))] -translate-y-1/2",
+              side === "left" ? "left-0" : "right-0",
+            )}
+            data-testid="chat-turn-minimap-card"
+          >
+            <MinimapListCard
+              currentIndex={resolvedCurrentIndex}
+              cursorIndex={resolvedCursorIndex}
+              items={items}
+              onCursorIndexChange={onCursorIndexChange}
+              onSelect={onSelect}
+              side={side}
+              title="Messages"
+            />
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}

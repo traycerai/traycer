@@ -1,0 +1,115 @@
+import { v4 as uuidv4 } from "uuid";
+import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import type { CheckpointFileOperation } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { EPIC_NODE_LABELS } from "@/lib/artifacts/node-display";
+import {
+  useArtifactById,
+  useEpicFileArtifactViewer,
+  useOpenEpicId,
+} from "@/lib/epic-selectors";
+import type { ArtifactFileViewer } from "@/lib/files/artifact-file-viewer";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
+
+function nonEmpty(value: string | null | undefined): string | null {
+  return value !== null && value !== undefined && value.length > 0
+    ? value
+    : null;
+}
+
+export interface ArtifactRowDisplay {
+  readonly displayKind: EpicArtifactKind;
+  /** The viewer a file artifact opens in, for its glyph; null otherwise. */
+  readonly fileViewer: ArtifactFileViewer | null;
+  readonly title: string;
+  readonly isDeleted: boolean;
+  readonly canOpen: boolean;
+  readonly openArtifact: () => void;
+}
+
+/**
+ * Shared resolution for an artifact change row (per-turn group + accumulated
+ * panel): live title/kind from the open-epic projection by id, with the
+ * captured tag as fallback, plus an opener that adds the artifact tile to the
+ * canvas. A deleted artifact (or one whose id has not resolved) is not openable.
+ */
+export function useArtifactRowDisplay(input: {
+  readonly artifactId: string | null;
+  readonly artifactKind: EpicArtifactKind | null;
+  readonly fallbackTitle: string | null;
+  readonly operation: CheckpointFileOperation;
+}): ArtifactRowDisplay {
+  const live = useArtifactById(input.artifactId);
+  const fileViewer = useEpicFileArtifactViewer(input.artifactId);
+  const epicId = useOpenEpicId();
+  const activeHostId = useTabHostId();
+  const { openTile } = useEpicTileNavigation();
+
+  const { displayKind, title, isDeleted, canOpen } = rowDisplayFields(
+    live,
+    input,
+  );
+
+  const openArtifact = (): void => {
+    if (live === null || input.artifactId === null) {
+      return;
+    }
+    openTile(
+      tileIntent(
+        {
+          id: input.artifactId,
+          instanceId: uuidv4(),
+          type: displayKind,
+          name: title,
+          hostId: activeHostId,
+        },
+        { epicId },
+        "explicit",
+        "direct_ui",
+      ),
+      "user",
+    );
+  };
+
+  return { displayKind, fileViewer, title, isDeleted, canOpen, openArtifact };
+}
+
+/**
+ * The same row with no open epic behind it (the layout editor's sample
+ * workspace): the captured tag's kind and title, and nothing to open.
+ */
+export function sessionlessArtifactRowDisplay(input: {
+  readonly artifactKind: EpicArtifactKind | null;
+  readonly fallbackTitle: string | null;
+  readonly operation: CheckpointFileOperation;
+}): ArtifactRowDisplay {
+  return {
+    ...rowDisplayFields(null, input),
+    fileViewer: null,
+    openArtifact: () => undefined,
+  };
+}
+
+function rowDisplayFields(
+  live: { readonly kind: EpicArtifactKind; readonly title: string } | null,
+  input: {
+    readonly artifactKind: EpicArtifactKind | null;
+    readonly fallbackTitle: string | null;
+    readonly operation: CheckpointFileOperation;
+  },
+): Omit<ArtifactRowDisplay, "fileViewer" | "openArtifact"> {
+  const displayKind: EpicArtifactKind =
+    live?.kind ?? input.artifactKind ?? "spec";
+  const title =
+    nonEmpty(live?.title) ??
+    nonEmpty(input.fallbackTitle) ??
+    EPIC_NODE_LABELS[displayKind];
+  const isDeleted = input.operation === "delete";
+  return {
+    displayKind,
+    title,
+    isDeleted,
+    canOpen: live !== null && !isDeleted,
+  };
+}

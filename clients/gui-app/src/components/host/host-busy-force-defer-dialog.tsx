@@ -1,0 +1,173 @@
+import type { ReactNode } from "react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
+
+export interface HostBusyForceDeferDialogProps {
+  readonly children?: ReactNode;
+  /**
+   * What Force does here, exposed as `data-purpose` on the dialog: a page
+   * can mount one of each (the Overview's force-restart and force-update
+   * dialogs), and a pin on the shared test id alone cannot tell them apart.
+   */
+  readonly purpose: "restart" | "update";
+  readonly open: boolean;
+  /**
+   * The dialog's heading, and REQUIRED rather than defaulted.
+   *
+   * This used to hard-code "Host is busy", which was true of the two
+   * confirmations it was written for and false of the third. The bound
+   * activation offer opens on a host that has PARKED waiting for a restart,
+   * whose own `message` may well be counting zero blocking sessions — heading
+   * that with "Host is busy" contradicts the sentence directly underneath it.
+   * A default would have preserved that: every call site states its own.
+   */
+  readonly title: string;
+  readonly message: string;
+  /**
+   * A second consequence the force carries, rendered as its own paragraph
+   * under `message` - the store-format loss a staged downgrade's Force update
+   * also consents to. `null` for the ordinary busy/force/defer decision.
+   * Kept apart from `message` because the description is one paragraph: a
+   * newline inside it collapses, and a sentence that IS the consent must not
+   * land mid-paragraph after the busy blurb.
+   */
+  readonly detail: string | null;
+  readonly isForcing: boolean;
+  readonly forceLabel: string;
+  /**
+   * Whether Force is destructive-styled. True wherever it ENDS running work
+   * (Force restart, Force update), which is every caller but one: the
+   * Overview's bound activation offer, whose button is "Restart host" and
+   * stays an ordinary button, as Restart does everywhere else on that page.
+   * Required rather than defaulted, so each caller states which it is.
+   */
+  readonly forceDestructive: boolean;
+  readonly onForce: () => void;
+  readonly onDefer: () => void;
+  /**
+   * A third answer between Defer and Force: do what Force does once the work
+   * has finished ("Restart when idle"). `null` wherever nothing can wait for
+   * that, which is every caller but the update surfaces on an installed
+   * update that only needs its restart. Required rather than defaulted, as
+   * the other per-caller choices here are.
+   */
+  readonly idleAction: {
+    readonly label: string;
+    readonly isPending: boolean;
+    readonly onClick: () => void;
+  } | null;
+}
+
+/**
+ * Shown when a host update/activation intent settles `"busy"`: another
+ * Traycer surface (or the host's own boot) already holds the mutation lane.
+ * Defer just dismisses - the next launch's boot converge reconciles it, so
+ * there is nothing to abandon. `idleAction`, where a caller has one, is the
+ * answer in between. Force's target intent is the caller's choice
+ * (see each call site): a `continuation: "retry-with-force"` outcome
+ * re-submits the same pre-commit intent with `force`; a `continuation:
+ * "activate"` outcome (post-commit, packaged macOS) submits
+ * `activateInstalled{force}` instead, never re-running the already-consumed
+ * apply/pin.
+ *
+ * Closing during `isForcing` dismisses the offer without cancelling the
+ * caller's dispatched action. Keep Force and the idle action disabled to
+ * prevent a second dispatch.
+ *
+ * A pending idle action still locks dismissal until its verdict arrives.
+ */
+export function HostBusyForceDeferDialog(props: HostBusyForceDeferDialogProps) {
+  const idleAction = props.idleAction;
+  const acting = props.isForcing || idleAction?.isPending === true;
+  const closeLocked = idleAction?.isPending === true;
+  return (
+    <Dialog
+      open={props.open}
+      onOpenChange={
+        closeLocked
+          ? undefined
+          : (open) => {
+              if (!open) props.onDefer();
+            }
+      }
+    >
+      <DialogContent
+        layout="banded"
+        showCloseButton={false}
+        className="flex w-[min(92vw,28rem)] flex-col overflow-hidden sm:max-w-md"
+        data-testid="host-busy-force-defer-dialog"
+        data-purpose={props.purpose}
+      >
+        <div className="flex shrink-0 flex-col gap-1.5 p-5">
+          <DialogTitle>{props.title}</DialogTitle>
+          <DialogDescription>{props.message}</DialogDescription>
+        </div>
+        <div className="min-h-0 overflow-y-auto">
+          {props.detail === null ? null : (
+            <p
+              className="px-5 pb-4 text-ui-sm leading-relaxed text-foreground"
+              data-testid="host-busy-force-defer-detail"
+            >
+              {props.detail}
+            </p>
+          )}
+          {props.children}
+        </div>
+        <div className="flex shrink-0 justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={closeLocked}
+            onClick={props.onDefer}
+            data-testid="host-busy-defer"
+          >
+            {props.isForcing ? "Close" : "Defer"}
+          </Button>
+          {idleAction === null ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={acting}
+              onClick={idleAction.onClick}
+              data-testid="host-busy-when-idle"
+            >
+              {idleAction.isPending ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={undefined}
+                  variant={undefined}
+                />
+              ) : null}
+              {idleAction.label}
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant={props.forceDestructive ? "destructive" : "default"}
+            size="sm"
+            disabled={acting}
+            onClick={props.onForce}
+            data-testid="host-busy-force"
+          >
+            {props.isForcing ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId={undefined}
+                variant={undefined}
+              />
+            ) : null}
+            {props.forceLabel}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}

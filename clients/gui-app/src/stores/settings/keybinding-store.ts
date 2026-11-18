@@ -1,0 +1,190 @@
+/**
+ * Update the keybindings docs whenever the persisted shape or storage key changes.
+ */
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
+import {
+  ACTION_IDS,
+  ACTION_META,
+  canonicalBinding,
+  getDefaultBindings,
+  type ActionId,
+} from "@/lib/keybindings/actions";
+import type { ChordString } from "@/lib/keybindings/chord";
+import { isMac } from "@/lib/keybindings/platform";
+
+/**
+ * User-configured keyboard shortcuts. `bindings[id] === null` means the
+ * action is explicitly unbound and will not fire from any chord.
+ *
+ * Persisted to `localStorage` with `version: 1`. Hydration preserves custom
+ * user bindings, while `mergePersistedKeybindings` carries forward narrow
+ * default corrections that should apply to existing default users.
+ */
+export interface KeybindingState {
+  readonly bindings: Readonly<Record<ActionId, ChordString | null>>;
+  setBinding: (id: ActionId, chord: ChordString) => void;
+  clearBinding: (id: ActionId) => void;
+  resetAll: () => void;
+}
+
+const LEGACY_SPLIT_RIGHT_CHORD = "mod+shift+d";
+const LEGACY_SPLIT_DOWN_CHORD = "mod+d";
+const LEGACY_NAV_BACK_CHORD: ChordString = isMac()
+  ? "mod+arrowleft"
+  : "alt+arrowleft";
+const LEGACY_NAV_FORWARD_CHORD: ChordString = isMac()
+  ? "mod+arrowright"
+  : "alt+arrowright";
+const NAV_BACK_CHORD: ChordString = "mod+shift+,";
+const NAV_FORWARD_CHORD: ChordString = "mod+shift+.";
+
+const KEYBINDING_STORE_KEY = persistKey(STORE_KEYS.keybinding);
+
+export const useKeybindingStore = create<KeybindingState>()(
+  persist(
+    (set) => ({
+      bindings: getDefaultBindings(),
+      setBinding: (id, chord) => {
+        const canonical = canonicalBinding(ACTION_META[id], chord);
+        set((state) => {
+          if (state.bindings[id] === canonical) return state;
+          return { bindings: { ...state.bindings, [id]: canonical } };
+        });
+      },
+      clearBinding: (id) => {
+        set((state) => {
+          if (state.bindings[id] === null) return state;
+          return { bindings: { ...state.bindings, [id]: null } };
+        });
+      },
+      resetAll: () => {
+        set({ bindings: getDefaultBindings() });
+      },
+    }),
+    {
+      ...basePersistOptions(KEYBINDING_STORE_KEY),
+      merge: mergePersistedKeybindings,
+    },
+  ),
+);
+
+// Cross-window sync: zustand's `persist` middleware only writes on this
+// window's own changes and reads once at module load, so without this a
+// second window's rebind never reaches window A's in-memory `bindings` -
+// conflict checks there (both directions with the desktop global summon
+// shortcut) would keep validating against a stale snapshot. The browser
+// `storage` event only fires in OTHER same-origin windows, never the one
+// that wrote, so this can't loop with `setBinding`/`clearBinding`/`resetAll`.
+// `event.key === null` covers an explicit `localStorage.clear()`.
+window.addEventListener("storage", (event) => {
+  if (event.key === null || event.key === KEYBINDING_STORE_KEY) {
+    void useKeybindingStore.persist.rehydrate();
+  }
+});
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isPersistedBindingValue(value: unknown): value is ChordString | null {
+  return typeof value === "string" || value === null;
+}
+
+function readPersistedBindings(
+  persistedState: unknown,
+): Partial<Record<ActionId, ChordString | null>> | null {
+  if (!isRecord(persistedState)) return null;
+  const { bindings } = persistedState;
+  if (!isRecord(bindings)) return null;
+  const persistedBindings: Partial<Record<ActionId, ChordString | null>> = {};
+  for (const actionId of ACTION_IDS) {
+    const value = bindings[actionId];
+    if (isPersistedBindingValue(value)) {
+      persistedBindings[actionId] = canonicalPersisted(actionId, value);
+    }
+  }
+  // Renamed ids must be carried here, BEFORE the `ACTION_IDS` filter above
+  // drops every key that is no longer an action: a user who rebound the old
+  // id would otherwise silently fall back to the new id's default.
+  const legacyStash = bindings["composer.stash"];
+  if (
+    persistedBindings["composer.drafts"] === undefined &&
+    isPersistedBindingValue(legacyStash)
+  ) {
+    persistedBindings["composer.drafts"] = canonicalPersisted(
+      "composer.drafts",
+      legacyStash,
+    );
+  }
+  return persistedBindings;
+}
+
+/**
+ * A stored binding in the form the dispatcher compares (`canonicalChord`), so a
+ * value saved in another spelling, a shipped default's included, matches on
+ * read with no migration.
+ */
+function canonicalPersisted(
+  id: ActionId,
+  value: ChordString | null,
+): ChordString | null {
+  return value === null ? null : canonicalBinding(ACTION_META[id], value);
+}
+
+function normalizePersistedBindings(
+  bindings: Readonly<Partial<Record<ActionId, ChordString | null>>>,
+): Readonly<Record<ActionId, ChordString | null>> {
+  const merged = { ...getDefaultBindings(), ...bindings };
+  let normalized = merged;
+  if (
+    normalized["group.split.horizontal"] === LEGACY_SPLIT_RIGHT_CHORD &&
+    normalized["group.split.vertical"] === LEGACY_SPLIT_DOWN_CHORD
+  ) {
+    normalized = {
+      ...normalized,
+      "group.split.horizontal": "mod+d",
+      "group.split.vertical": "mod+shift+d",
+    };
+  }
+  const back = normalized["nav.back"];
+  const forward = normalized["nav.forward"];
+  const migrateBack = back === LEGACY_NAV_BACK_CHORD;
+  const migrateForward = forward === LEGACY_NAV_FORWARD_CHORD;
+  if (migrateBack || migrateForward) {
+    normalized = {
+      ...normalized,
+      ...(migrateBack ? { "nav.back": NAV_BACK_CHORD } : {}),
+      ...(migrateForward ? { "nav.forward": NAV_FORWARD_CHORD } : {}),
+    };
+  }
+  return normalized;
+}
+
+function mergePersistedKeybindings(
+  persistedState: unknown,
+  currentState: KeybindingState,
+): KeybindingState {
+  // `persistedState === undefined` means the storage key is genuinely
+  // missing (removed, `localStorage.clear()`'d, or first launch) - zustand's
+  // persist passes `undefined` rather than skipping `merge` in that case.
+  // Reset to defaults rather than keeping whatever is in memory, so a
+  // cross-window "clear local data"/reset doesn't leave this window on a
+  // stale custom map that a later edit could persist right back
+  // (distinct from malformed-but-present data, which still falls back to
+  // `currentState` below).
+  if (persistedState === undefined) {
+    return { ...currentState, bindings: getDefaultBindings() };
+  }
+  const bindings = readPersistedBindings(persistedState);
+  if (bindings === null) return currentState;
+  return {
+    ...currentState,
+    bindings: normalizePersistedBindings(bindings),
+  };
+}
+
+export function useBindingForAction(id: ActionId): ChordString | null {
+  return useKeybindingStore((s) => s.bindings[id]);
+}

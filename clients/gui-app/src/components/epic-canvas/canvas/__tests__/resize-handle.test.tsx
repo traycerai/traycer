@@ -1,0 +1,873 @@
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { SplitResizeHandle } from "@/components/epic-canvas/canvas/resize-handle";
+import { inFlowPointerDragHandleAxisClassName } from "@/components/epic-canvas/canvas/use-pointer-drag-commit";
+import { pointerEvent } from "./test-pointer-events";
+
+const GROUP_ID = "group-1";
+const CONTAINER_WIDTH = 1000;
+
+function renderHandle(
+  sizes: ReadonlyArray<number>,
+  onCommitSizes: (groupId: string, sizes: ReadonlyArray<number>) => void,
+) {
+  const rendered = render(
+    <div data-testid="split-container" className="flex">
+      <div
+        data-split-child
+        data-testid="child-left"
+        style={{ flexGrow: sizes[0] }}
+      />
+      <SplitResizeHandle
+        groupId={GROUP_ID}
+        index={0}
+        direction="horizontal"
+        sizes={sizes}
+        minChildPx={100}
+        className={undefined}
+        onCommitSizes={onCommitSizes}
+      />
+      <div
+        data-split-child
+        data-testid="child-right"
+        style={{ flexGrow: sizes[1] }}
+      />
+    </div>,
+  );
+  vi.spyOn(
+    screen.getByTestId("split-container"),
+    "getBoundingClientRect",
+  ).mockReturnValue(new DOMRect(0, 0, CONTAINER_WIDTH, 600));
+  return {
+    handle: screen.getByRole("slider", { name: "Resize pane" }),
+    left: screen.getByTestId("child-left"),
+    right: screen.getByTestId("child-right"),
+    unmount: rendered.unmount,
+  };
+}
+
+function renderTwoHandles(
+  onCommitSizes: (groupId: string, sizes: ReadonlyArray<number>) => void,
+) {
+  render(
+    <div>
+      <div data-testid="split-container-a" className="flex">
+        <div data-split-child style={{ flexGrow: 0.5 }} />
+        <SplitResizeHandle
+          groupId="group-a"
+          index={0}
+          direction="horizontal"
+          sizes={[0.5, 0.5]}
+          minChildPx={100}
+          className={undefined}
+          onCommitSizes={onCommitSizes}
+        />
+        <div data-split-child style={{ flexGrow: 0.5 }} />
+      </div>
+      <div data-testid="split-container-b" className="flex">
+        <div data-split-child style={{ flexGrow: 0.5 }} />
+        <SplitResizeHandle
+          groupId="group-b"
+          index={0}
+          direction="horizontal"
+          sizes={[0.5, 0.5]}
+          minChildPx={100}
+          className={undefined}
+          onCommitSizes={onCommitSizes}
+        />
+        <div data-split-child style={{ flexGrow: 0.5 }} />
+      </div>
+    </div>,
+  );
+  vi.spyOn(
+    screen.getByTestId("split-container-a"),
+    "getBoundingClientRect",
+  ).mockReturnValue(new DOMRect(0, 0, CONTAINER_WIDTH, 600));
+  vi.spyOn(
+    screen.getByTestId("split-container-b"),
+    "getBoundingClientRect",
+  ).mockReturnValue(new DOMRect(0, 0, CONTAINER_WIDTH, 600));
+  const handles = screen.getAllByRole("slider", { name: "Resize pane" });
+  expect(handles).toHaveLength(2);
+  return { first: handles[0], second: handles[1] };
+}
+
+function flexGrowOf(element: HTMLElement): number {
+  return Number.parseFloat(element.style.flexGrow);
+}
+
+describe("<SplitResizeHandle />", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("keeps a 1px separator inside an in-flow pointer region instead of extending over a pane scrollbar gutter", () => {
+    const { handle } = renderHandle([0.5, 0.5], vi.fn());
+
+    expect(handle.classList.contains("w-1")).toBe(true);
+    expect(handle.classList.contains("w-px")).toBe(false);
+    // Adjacent split children are intentionally not clipped. The canvas fill
+    // masks their overflow inside the safe in-flow footprint while the
+    // centered pseudo-element remains the only visible separator line.
+    expect(handle.classList.contains("bg-canvas")).toBe(true);
+    expect(handle.classList.contains("bg-border")).toBe(false);
+    expect(handle.className).toContain("before:w-px");
+    expect(handle.className).toContain("before:bg-border");
+    expect(handle.className).not.toContain("after:");
+  });
+
+  it("uses the same centered 1px visual for horizontal pane stacks", () => {
+    const className = inFlowPointerDragHandleAxisClassName("vertical");
+
+    expect(className).toContain("h-1");
+    expect(className).toContain("before:h-px");
+    expect(className).toContain("before:top-1/2");
+    // Without `absolute` the pseudo-element is an inline box: h-px/inset-x-0
+    // do not apply and the separator paints nothing at all.
+    expect(className).toContain("before:absolute");
+    expect(className).toContain("before:bg-border");
+    expect(className).not.toContain("after:");
+  });
+
+  it("mutates the adjacent pair's flexGrow per frame and commits once on release", () => {
+    const onCommitSizes =
+      vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+    const { handle, left, right } = renderHandle([0.5, 0.5], onCommitSizes);
+
+    fireEvent(
+      handle,
+      pointerEvent("pointerdown", {
+        pointerId: 5,
+        clientX: 500,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      handle,
+      pointerEvent("pointermove", {
+        pointerId: 5,
+        clientX: 600,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+
+    // Per-frame DOM mutation, zero commits while the pointer moves.
+    expect(flexGrowOf(left)).toBeCloseTo(0.6, 10);
+    expect(flexGrowOf(right)).toBeCloseTo(0.4, 10);
+    expect(onCommitSizes).not.toHaveBeenCalled();
+
+    fireEvent(
+      handle,
+      pointerEvent("pointerup", {
+        pointerId: 5,
+        clientX: 600,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(onCommitSizes).toHaveBeenCalledTimes(1);
+    const [groupId, committed] = onCommitSizes.mock.calls[0];
+    expect(groupId).toBe(GROUP_ID);
+    expect(committed[0]).toBeCloseTo(0.6, 10);
+    expect(committed[1]).toBeCloseTo(0.4, 10);
+  });
+
+  // A live divider drag under a
+  // stacked-plane layout showed `onDragStart` succeeding (capture engaged)
+  // while every subsequent move/up event silently failed to reach the
+  // handle's own listeners - jsdom cannot reproduce the browser's real hit-
+  // testing/pointer-capture behavior (both are stubbed to inert no-ops in
+  // this repo's test setup), so this pin instead proves the actual
+  // guarantee the fix provides: once a drag starts, move/up delivery no
+  // longer depends on the event's native target being the handle at all. A
+  // "decoy" element standing in for an occluding later-DOM sibling receives
+  // the move/up events directly; the drag must still progress and commit.
+  it("continues and commits a drag even when move/up events target an unrelated overlapping element, not the handle", () => {
+    const onCommitSizes =
+      vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+    const { handle, left, right } = renderHandle([0.5, 0.5], onCommitSizes);
+    const decoy = document.createElement("div");
+    decoy.setAttribute("data-testid", "decoy-overlay");
+    document.body.appendChild(decoy);
+    onTestFinished(() => decoy.remove());
+
+    fireEvent(
+      handle,
+      pointerEvent("pointerdown", {
+        pointerId: 5,
+        clientX: 500,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    // Simulates the browser routing this move to an occluding element
+    // instead of the handle: dispatched on `decoy`, not `handle`.
+    fireEvent(
+      decoy,
+      pointerEvent("pointermove", {
+        pointerId: 5,
+        clientX: 600,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(flexGrowOf(left)).toBeCloseTo(0.6, 10);
+    expect(flexGrowOf(right)).toBeCloseTo(0.4, 10);
+    expect(onCommitSizes).not.toHaveBeenCalled();
+
+    fireEvent(
+      decoy,
+      pointerEvent("pointerup", {
+        pointerId: 5,
+        clientX: 600,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(onCommitSizes).toHaveBeenCalledTimes(1);
+    const [groupId, committed] = onCommitSizes.mock.calls[0];
+    expect(groupId).toBe(GROUP_ID);
+    expect(committed[0]).toBeCloseTo(0.6, 10);
+    expect(committed[1]).toBeCloseTo(0.4, 10);
+  });
+
+  // Moving move/up/cancel to
+  // window listeners means blur must be a terminal event this hook owns
+  // directly - `beginPanelResizeInteraction`'s own blur cleanup only clears
+  // the shared interaction id for the CSS class, it has no idea `dragRef`
+  // exists. Without the hook's own blur listener, a later window move still
+  // mutates flexGrow even though the resize-freeze lifecycle already ended.
+  it("blur cancels the drag outright: no later frames apply, nothing commits, fractions restore, and a fresh drag starts cleanly", () => {
+    const onCommitSizes =
+      vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+    const { handle, left, right } = renderHandle([0.5, 0.5], onCommitSizes);
+
+    fireEvent(
+      handle,
+      pointerEvent("pointerdown", {
+        pointerId: 78,
+        clientX: 500,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      handle,
+      pointerEvent("pointermove", {
+        pointerId: 78,
+        clientX: 600,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(flexGrowOf(left)).toBeCloseTo(0.6, 10);
+    expect(
+      document.documentElement.classList.contains("traycer-panel-resizing"),
+    ).toBe(true);
+
+    fireEvent(window, new Event("blur"));
+
+    // Terminal: the class lifecycle ends immediately, and the pair is
+    // restored to the pre-drag committed fractions (the cancel semantic),
+    // not left frozen at the mid-drag value.
+    expect(
+      document.documentElement.classList.contains("traycer-panel-resizing"),
+    ).toBe(false);
+    expect(flexGrowOf(left)).toBeCloseTo(0.5, 10);
+    expect(flexGrowOf(right)).toBeCloseTo(0.5, 10);
+    expect(onCommitSizes).not.toHaveBeenCalled();
+
+    // A later window move for the SAME pointerId must apply ZERO frames -
+    // this is the exact regression: before the fix, this moved 0.6 to 0.7.
+    fireEvent(
+      window,
+      pointerEvent("pointermove", {
+        pointerId: 78,
+        clientX: 700,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(flexGrowOf(left)).toBeCloseTo(0.5, 10);
+    expect(flexGrowOf(right)).toBeCloseTo(0.5, 10);
+    expect(onCommitSizes).not.toHaveBeenCalled();
+
+    // Clean re-entry: the module-global interaction id was released by the
+    // blur-cancel, so a fresh drag on the SAME handle works normally.
+    fireEvent(
+      handle,
+      pointerEvent("pointerdown", {
+        pointerId: 79,
+        clientX: 500,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      handle,
+      pointerEvent("pointermove", {
+        pointerId: 79,
+        clientX: 550,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(flexGrowOf(left)).toBeCloseTo(0.55, 10);
+    fireEvent(
+      handle,
+      pointerEvent("pointerup", {
+        pointerId: 79,
+        clientX: 550,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(onCommitSizes).toHaveBeenCalledTimes(1);
+    expect(onCommitSizes.mock.calls[0][0]).toBe(GROUP_ID);
+  });
+
+  // The pre-fix React-prop
+  // design died with the element on unmount for free. Once move/up/cancel
+  // are imperative window listeners, an unmount mid-drag must be an
+  // explicit teardown path, or the dead component's closures keep
+  // listening and a later release commits through them.
+  it("unmounting mid-drag detaches the window listeners: a later release commits nothing", () => {
+    const onCommitSizes =
+      vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+    const { handle, unmount } = renderHandle([0.5, 0.5], onCommitSizes);
+
+    fireEvent(
+      handle,
+      pointerEvent("pointerdown", {
+        pointerId: 77,
+        clientX: 500,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      handle,
+      pointerEvent("pointermove", {
+        pointerId: 77,
+        clientX: 600,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+
+    unmount();
+
+    // The exact regression: before the fix, this later release committed
+    // ("group-1", [0.6, 0.4]) through the dead component's closures.
+    fireEvent(
+      window,
+      pointerEvent("pointerup", {
+        pointerId: 77,
+        clientX: 600,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(onCommitSizes).not.toHaveBeenCalled();
+
+    // No listener residue: a later move for the same (dead) pointerId is
+    // also a no-op - nothing throws, nothing commits.
+    fireEvent(
+      window,
+      pointerEvent("pointermove", {
+        pointerId: 77,
+        clientX: 900,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(onCommitSizes).not.toHaveBeenCalled();
+    expect(
+      document.documentElement.classList.contains("traycer-panel-resizing"),
+    ).toBe(false);
+
+    // The module-global interaction id was released, so a FRESH handle's
+    // drag is not blocked by the unmounted one's teardown.
+    const second = renderHandle([0.5, 0.5], onCommitSizes);
+    fireEvent(
+      second.handle,
+      pointerEvent("pointerdown", {
+        pointerId: 81,
+        clientX: 500,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      second.handle,
+      pointerEvent("pointermove", {
+        pointerId: 81,
+        clientX: 560,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(flexGrowOf(second.left)).toBeCloseTo(0.56, 10);
+    fireEvent(
+      second.handle,
+      pointerEvent("pointerup", {
+        pointerId: 81,
+        clientX: 560,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(onCommitSizes).toHaveBeenCalledTimes(1);
+    expect(onCommitSizes.mock.calls[0][0]).toBe(GROUP_ID);
+  });
+
+  it("finishes cancellation when the browser has already released pointer capture", () => {
+    const onCommitSizes =
+      vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+    const { handle, unmount } = renderHandle([0.5, 0.5], onCommitSizes);
+    vi.spyOn(handle, "hasPointerCapture").mockReturnValue(false);
+    const releasePointerCapture = vi
+      .spyOn(handle, "releasePointerCapture")
+      .mockImplementation(() => {
+        throw new DOMException(
+          "Pointer capture was already lost",
+          "NotFoundError",
+        );
+      });
+
+    fireEvent(
+      handle,
+      pointerEvent("pointerdown", {
+        pointerId: 82,
+        clientX: 500,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+
+    expect(() => unmount()).not.toThrow();
+    expect(releasePointerCapture).not.toHaveBeenCalled();
+    expect(onCommitSizes).not.toHaveBeenCalled();
+    expect(
+      document.documentElement.classList.contains("traycer-panel-resizing"),
+    ).toBe(false);
+
+    const second = renderHandle([0.5, 0.5], onCommitSizes);
+    fireEvent(
+      second.handle,
+      pointerEvent("pointerdown", {
+        pointerId: 83,
+        clientX: 500,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      second.handle,
+      pointerEvent("pointermove", {
+        pointerId: 83,
+        clientX: 550,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      second.handle,
+      pointerEvent("pointerup", {
+        pointerId: 83,
+        clientX: 550,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(onCommitSizes).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores instead of committing when the drag returns to the starting fractions", () => {
+    const onCommitSizes =
+      vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+    const { handle, left, right } = renderHandle([0.5, 0.5], onCommitSizes);
+
+    fireEvent(
+      handle,
+      pointerEvent("pointerdown", {
+        pointerId: 5,
+        clientX: 500,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      handle,
+      pointerEvent("pointermove", {
+        pointerId: 5,
+        clientX: 500,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      handle,
+      pointerEvent("pointerup", {
+        pointerId: 5,
+        clientX: 500,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+
+    expect(onCommitSizes).not.toHaveBeenCalled();
+    expect(flexGrowOf(left)).toBeCloseTo(0.5, 10);
+    expect(flexGrowOf(right)).toBeCloseTo(0.5, 10);
+  });
+
+  it("serializes concurrent pointer resizes so only one handle can commit", () => {
+    const onCommitSizes =
+      vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+    const { first, second } = renderTwoHandles(onCommitSizes);
+
+    fireEvent(
+      first,
+      pointerEvent("pointerdown", {
+        pointerId: 5,
+        clientX: 500,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      second,
+      pointerEvent("pointerdown", {
+        pointerId: 9,
+        clientX: 500,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      second,
+      pointerEvent("pointermove", {
+        pointerId: 9,
+        clientX: 650,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      second,
+      pointerEvent("pointerup", {
+        pointerId: 9,
+        clientX: 650,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+
+    expect(onCommitSizes).not.toHaveBeenCalled();
+
+    fireEvent(
+      first,
+      pointerEvent("pointermove", {
+        pointerId: 5,
+        clientX: 600,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      first,
+      pointerEvent("pointerup", {
+        pointerId: 5,
+        clientX: 600,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+
+    expect(onCommitSizes).toHaveBeenCalledTimes(1);
+    expect(onCommitSizes.mock.calls[0][0]).toBe("group-a");
+  });
+
+  it("clamps the drag at the px-floor-derived minimum fraction", () => {
+    const onCommitSizes =
+      vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+    const { handle, left, right } = renderHandle([0.5, 0.5], onCommitSizes);
+
+    fireEvent(
+      handle,
+      pointerEvent("pointerdown", {
+        pointerId: 5,
+        clientX: 500,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    // minChildPx 100 over a 1000px container -> 0.1 fraction floor; a drag
+    // far past the edge pins the pair at [0.9, 0.1] / [0.1, 0.9].
+    fireEvent(
+      handle,
+      pointerEvent("pointermove", {
+        pointerId: 5,
+        clientX: 5000,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(flexGrowOf(left)).toBeCloseTo(0.9, 10);
+    expect(flexGrowOf(right)).toBeCloseTo(0.1, 10);
+
+    fireEvent(
+      handle,
+      pointerEvent("pointermove", {
+        pointerId: 5,
+        clientX: -5000,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(flexGrowOf(left)).toBeCloseTo(0.1, 10);
+    expect(flexGrowOf(right)).toBeCloseTo(0.9, 10);
+    fireEvent(
+      handle,
+      pointerEvent("pointercancel", {
+        pointerId: 5,
+        clientX: -5000,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+  });
+
+  it("restores the committed fractions on pointer-cancel without committing", () => {
+    const onCommitSizes =
+      vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+    const { handle, left, right } = renderHandle([0.5, 0.5], onCommitSizes);
+
+    fireEvent(
+      handle,
+      pointerEvent("pointerdown", {
+        pointerId: 5,
+        clientX: 500,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      handle,
+      pointerEvent("pointermove", {
+        pointerId: 5,
+        clientX: 700,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(flexGrowOf(left)).toBeCloseTo(0.7, 10);
+
+    fireEvent(
+      handle,
+      pointerEvent("pointercancel", {
+        pointerId: 5,
+        clientX: 700,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(flexGrowOf(left)).toBeCloseTo(0.5, 10);
+    expect(flexGrowOf(right)).toBeCloseTo(0.5, 10);
+    expect(onCommitSizes).not.toHaveBeenCalled();
+  });
+
+  it("ignores pointer events whose pointerId does not match the captured drag", () => {
+    const onCommitSizes =
+      vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+    const { handle, left } = renderHandle([0.5, 0.5], onCommitSizes);
+
+    fireEvent(
+      handle,
+      pointerEvent("pointerdown", {
+        pointerId: 5,
+        clientX: 500,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    fireEvent(
+      handle,
+      pointerEvent("pointermove", {
+        pointerId: 9,
+        clientX: 900,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    // Foreign pointer: no frame applied.
+    expect(left.style.flexGrow).toBe("0.5");
+    fireEvent(
+      handle,
+      pointerEvent("pointerup", {
+        pointerId: 9,
+        clientX: 900,
+        clientY: 10,
+        button: 0,
+      }),
+    );
+    expect(onCommitSizes).not.toHaveBeenCalled();
+  });
+
+  it("commits an even split on double-click", () => {
+    const onCommitSizes =
+      vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+    const { handle } = renderHandle([0.7, 0.3], onCommitSizes);
+
+    fireEvent.doubleClick(handle);
+    expect(onCommitSizes).toHaveBeenCalledWith(GROUP_ID, [0.5, 0.5]);
+  });
+
+  it("commits a 5% nudge per arrow-key press", () => {
+    const onCommitSizes =
+      vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+    const { handle } = renderHandle([0.5, 0.5], onCommitSizes);
+
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    expect(onCommitSizes).toHaveBeenCalledTimes(1);
+    const [, grown] = onCommitSizes.mock.calls[0];
+    expect(grown[0]).toBeCloseTo(0.55, 10);
+    expect(grown[1]).toBeCloseTo(0.45, 10);
+
+    fireEvent.keyDown(handle, { key: "ArrowLeft" });
+    const [, shrunk] = onCommitSizes.mock.calls[1];
+    expect(shrunk[0]).toBeCloseTo(0.45, 10);
+    expect(shrunk[1]).toBeCloseTo(0.55, 10);
+
+    // Cross-axis keys are ignored for a horizontal handle.
+    fireEvent.keyDown(handle, { key: "ArrowUp" });
+    fireEvent.keyDown(handle, { key: "ArrowDown" });
+    expect(onCommitSizes).toHaveBeenCalledTimes(2);
+  });
+
+  it("exposes the slider ARIA contract", () => {
+    const onCommitSizes =
+      vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+    const { handle } = renderHandle([0.7, 0.3], onCommitSizes);
+
+    expect(handle.getAttribute("aria-orientation")).toBe("vertical");
+    expect(handle.getAttribute("aria-valuenow")).toBe("70");
+    expect(handle.getAttribute("aria-valuemin")).toBe("0");
+    expect(handle.getAttribute("aria-valuemax")).toBe("100");
+    expect(handle.tabIndex).toBe(0);
+  });
+
+  it("tags its group id on data-resize-group-id, never data-group-id", () => {
+    const onCommitSizes =
+      vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+    const { handle } = renderHandle([0.5, 0.5], onCommitSizes);
+
+    // The handle carries the split GROUP id, but NOT under `data-group-id` -
+    // that attribute marks tab-group panes and is collected by the canvas
+    // focus-navigation `readTileRects`. A handle on `data-group-id` would win
+    // the spatial neighbour search and break cross-split focus navigation.
+    expect(handle.getAttribute("data-resize-group-id")).toBe(GROUP_ID);
+    expect(handle.hasAttribute("data-group-id")).toBe(false);
+  });
+
+  // Escape must be a terminal event the hook owns directly, the same way
+  // blur already is - a window CAPTURE-phase listener
+  // so it is seen and stopped before any other Escape handler (a layout
+  // session, a dialog) acts on the same keypress while a handle is held.
+  describe("Escape during a drag (F9)", () => {
+    it("cancels the drag: restores fractions, commits nothing, and a later pointerup is a no-op", () => {
+      const onCommitSizes =
+        vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+      const { handle, left, right } = renderHandle([0.5, 0.5], onCommitSizes);
+
+      fireEvent(
+        handle,
+        pointerEvent("pointerdown", {
+          pointerId: 91,
+          clientX: 500,
+          clientY: 10,
+          button: 0,
+        }),
+      );
+      fireEvent(
+        handle,
+        pointerEvent("pointermove", {
+          pointerId: 91,
+          clientX: 600,
+          clientY: 10,
+          button: 0,
+        }),
+      );
+      expect(flexGrowOf(left)).toBeCloseTo(0.6, 10);
+      expect(
+        document.documentElement.classList.contains("traycer-panel-resizing"),
+      ).toBe(true);
+
+      fireEvent.keyDown(handle, { key: "Escape" });
+
+      expect(flexGrowOf(left)).toBeCloseTo(0.5, 10);
+      expect(flexGrowOf(right)).toBeCloseTo(0.5, 10);
+      expect(onCommitSizes).not.toHaveBeenCalled();
+      expect(
+        document.documentElement.classList.contains("traycer-panel-resizing"),
+      ).toBe(false);
+
+      // The drag already finished on Escape - a later release for the same
+      // pointerId commits nothing.
+      fireEvent(
+        window,
+        pointerEvent("pointerup", {
+          pointerId: 91,
+          clientX: 600,
+          clientY: 10,
+          button: 0,
+        }),
+      );
+      expect(onCommitSizes).not.toHaveBeenCalled();
+    });
+
+    it("stops Escape at capture, so no other listener on the page sees it", () => {
+      const onCommitSizes =
+        vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+      const { handle } = renderHandle([0.5, 0.5], onCommitSizes);
+      const outerEscape = vi.fn();
+      document.addEventListener("keydown", outerEscape);
+      onTestFinished(() =>
+        document.removeEventListener("keydown", outerEscape),
+      );
+
+      fireEvent(
+        handle,
+        pointerEvent("pointerdown", {
+          pointerId: 92,
+          clientX: 500,
+          clientY: 10,
+          button: 0,
+        }),
+      );
+
+      fireEvent.keyDown(handle, { key: "Escape" });
+
+      expect(outerEscape).not.toHaveBeenCalled();
+    });
+
+    it("leaves Escape untouched with no drag in progress", () => {
+      const onCommitSizes =
+        vi.fn<(groupId: string, sizes: ReadonlyArray<number>) => void>();
+      const { handle } = renderHandle([0.5, 0.5], onCommitSizes);
+      const outerEscape = vi.fn();
+      document.addEventListener("keydown", outerEscape);
+      onTestFinished(() =>
+        document.removeEventListener("keydown", outerEscape),
+      );
+
+      fireEvent.keyDown(handle, { key: "Escape" });
+
+      expect(outerEscape).toHaveBeenCalledTimes(1);
+      expect(onCommitSizes).not.toHaveBeenCalled();
+    });
+  });
+});

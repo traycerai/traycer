@@ -1,0 +1,234 @@
+import { useRef, type ReactNode } from "react";
+import { AlertTriangle } from "lucide-react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
+
+export interface ConfirmDestructiveDialogProps {
+  children?: ReactNode;
+  /** Let navigation closes retain destination focus instead of restoring the opener. */
+  onCloseAutoFocus?: (event: Event) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  /** Text, or text with an inline link; it reads as one paragraph. */
+  description: ReactNode;
+  /** Optional cascade summary inlined into the description. Omit when no descendants. */
+  cascadeSummary: string | null;
+  /**
+   * What the cascade sentence says the summary is nested under: one row is
+   * "nested under it", a selection of rows is "nested under them".
+   *
+   * Omitted means "it", which every caller deleting a single target is. Only a
+   * caller that can delete several at once passes the other, and it passes the
+   * word rather than a count because the word is all the sentence needs.
+   */
+  cascadeNestedUnder?: "it" | "them";
+  /** Label for the destructive action button (e.g. "Delete" or "Remove"). */
+  actionLabel: string;
+  isPending: boolean;
+  /**
+   * Keep Cancel, Escape and the overlay live while `isPending`, with Cancel
+   * relabelled "Close". Only the confirm button stays inert.
+   *
+   * Opt-in, and off by default, because the lock is load-bearing for many
+   * callers: their `onOpenChange(false)` clears the target the running
+   * mutation was armed against, or resets a retry key, and some do not
+   * disable their opener while pending. Turn it on only for a caller whose
+   * action runs to completion on its own once dispatched, whose close handler
+   * clears nothing the mutation still needs, and whose opener is disabled
+   * while pending - typically a long-running host call that would otherwise
+   * hold a modal over the app until it settles.
+   */
+  dismissableWhilePending?: boolean;
+  /**
+   * Why this action cannot be performed at all, or `null` when it can.
+   *
+   * Disables confirm and renders the reason. Deliberately not optional: a
+   * caller that can be blocked and a caller that never is must both say so,
+   * because the failure of the omitted case is an enabled destructive button.
+   *
+   * An EMPTY reason disables confirm without a sentence: a typed
+   * confirmation that has not been typed yet is not a refusal to explain.
+   *
+   * For a MULTI-target action the reason must name the blocking targets. A
+   * refusal that does not say which row to deselect turns a clean refusal into
+   * a dead end - the whole reason refusing beats partially succeeding is that
+   * the user can act on it.
+   */
+  blockedReason: string | null;
+  onConfirm: () => void;
+}
+
+export function ConfirmDestructiveDialog(props: ConfirmDestructiveDialogProps) {
+  const {
+    open,
+    onOpenChange,
+    title,
+    description,
+    cascadeSummary,
+    actionLabel,
+    isPending,
+    blockedReason,
+    onConfirm,
+  } = props;
+  const closeLocked = isPending && props.dismissableWhilePending !== true;
+
+  /**
+   * The control the dialog was opened FROM, so Escape and Cancel have somewhere
+   * to return the keyboard to.
+   *
+   * Every caller of this component opens it by setting `open`, from a button
+   * rendered outside the dialog's own root - none renders a `DialogTrigger`. So
+   * Radix's modal content, which composes its own close handler that calls
+   * `preventDefault()` and then focuses `triggerRef.current`, was focusing
+   * `null`; and because it had prevented the default, the FocusScope's generic
+   * "restore what was focused before" was skipped too. Escape and Cancel
+   * therefore dropped focus on `document.body` - a keyboard user was returned
+   * to the top of the page after dismissing a dialog they had opened
+   * deliberately, and a screen-reader user was told nothing.
+   *
+   * Captured in `onOpenAutoFocus` rather than in an effect because that is the
+   * one moment the opener is still the active element: Radix's FocusScope
+   * dispatches it after reading `document.activeElement` and before moving
+   * focus into the dialog, and a parent effect would run only after the child
+   * scope had already taken it.
+   */
+  const openerRef = useRef<HTMLElement | null>(null);
+
+  return (
+    <Dialog open={open} onOpenChange={closeLocked ? undefined : onOpenChange}>
+      <DialogContent
+        layout="banded"
+        showCloseButton={false}
+        className="flex w-[min(92vw,28rem)] flex-col sm:max-w-md"
+        data-testid="confirm-destructive-dialog"
+        onOpenAutoFocus={() => {
+          const active = document.activeElement;
+          // `document.body` is what "nothing was focused" looks like, not an
+          // opener. Capturing it would make the close handler preventDefault
+          // and focus an unfocusable element - the same place Radix ends up,
+          // but by overriding a path rather than by leaving it alone.
+          openerRef.current =
+            active instanceof HTMLElement && active !== document.body
+              ? active
+              : null;
+        }}
+        onCloseAutoFocus={(event) => {
+          const opener = openerRef.current;
+          openerRef.current = null;
+          props.onCloseAutoFocus?.(event);
+          if (event.defaultPrevented) return;
+          // `isConnected` is not defensiveness - it is what lets this compose
+          // with the callers that already handle their own post-confirm focus.
+          //
+          // Radix runs this handler from a `setTimeout(0)`, so it fires AFTER
+          // the commit in which the confirmed action re-rendered. A caller that
+          // focuses something itself on that render (`repo-branch-prefix-section`
+          // does, and so does `fallback-danger-zone`) would have it stolen back
+          // a tick later - except that the reason such a caller needs its own
+          // mechanism at all is that its confirmed action REPLACED the subtree
+          // holding the opener. So the opener is detached exactly when the
+          // caller has a better answer, and this defers to it.
+          //
+          // Falling through rather than focusing a detached node also costs
+          // nothing: `.focus()` on one is a silent no-op, so both paths reach
+          // `document.body`. What is returned here is the DECISION, not the
+          // outcome.
+          if (opener === null || !opener.isConnected) return;
+          // A caller that keeps this dialog dismissable while its action
+          // runs disables the opener for that window, and `.focus()` on a
+          // disabled control is a silent no-op that would drop the keyboard
+          // on `document.body`. Return it to the nearest enclosing focus
+          // surface instead (the Settings dialog's own content, which Radix
+          // gives `tabindex="-1"`), so Tab resumes from there rather than
+          // from the top of the document. With no such surface, fall through
+          // to the default, which lands on the body either way.
+          const target = opener.matches(":disabled")
+            ? (opener.parentElement?.closest<HTMLElement>("[tabindex]") ?? null)
+            : opener;
+          if (target === null) return;
+          // Radix's own handler runs only while the default is not prevented,
+          // so preventing it here is what stops the null-trigger focus from
+          // undoing this.
+          event.preventDefault();
+          target.focus();
+        }}
+      >
+        <div className="flex shrink-0 items-start gap-3 px-5 pt-5">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+            <AlertTriangle className="size-4" aria-hidden />
+          </div>
+          <DialogTitle className="min-w-0 wrap-anywhere">{title}</DialogTitle>
+        </div>
+        <div className="min-h-0 overflow-y-auto">
+          <div className="space-y-1.5 px-5 pt-1.5 pb-5">
+            <DialogDescription className="wrap-anywhere">
+              {description}
+            </DialogDescription>
+            {cascadeSummary !== null ? (
+              <p
+                className="text-ui-sm leading-relaxed text-muted-foreground"
+                data-testid="confirm-cascade-meta"
+              >
+                This will also delete{" "}
+                <span className="font-medium text-foreground">
+                  {cascadeSummary}
+                </span>{" "}
+                nested under {props.cascadeNestedUnder ?? "it"}.
+              </p>
+            ) : null}
+            {blockedReason !== null && blockedReason.length > 0 ? (
+              <p
+                className="text-ui-sm leading-relaxed font-medium text-destructive wrap-anywhere"
+                data-testid="confirm-blocked-reason"
+              >
+                {blockedReason}
+              </p>
+            ) : null}
+          </div>
+          {props.children}
+        </div>
+
+        <div className="flex shrink-0 justify-end gap-2 border-t border-border/60 bg-foreground/3 px-5 py-3">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={closeLocked}
+            onClick={() => {
+              onOpenChange(false);
+            }}
+            data-testid="confirm-cancel"
+          >
+            {/* Once dispatched there is nothing left to cancel: the action
+                runs regardless and this button only closes the dialog. */}
+            {isPending && !closeLocked ? "Close" : "Cancel"}
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            disabled={isPending || blockedReason !== null}
+            onClick={onConfirm}
+            data-testid="confirm-action"
+          >
+            {isPending ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId={undefined}
+                variant={undefined}
+              />
+            ) : null}
+            {actionLabel}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}

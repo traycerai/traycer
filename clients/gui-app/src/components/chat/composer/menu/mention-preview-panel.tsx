@@ -1,0 +1,336 @@
+import {
+  Fragment,
+  useLayoutEffect,
+  useState,
+  type ReactElement,
+  type RefObject,
+} from "react";
+import { createPortal } from "react-dom";
+import { Folder, TriangleAlertIcon } from "lucide-react";
+import {
+  autoUpdate,
+  computePosition,
+  flip,
+  offset,
+  shift,
+  size,
+} from "@floating-ui/dom";
+
+import { MaterialFileIcon } from "@/components/material-file-icon";
+import {
+  HOVER_PREVIEW_SCROLL_CLASS,
+  HOVER_PREVIEW_SURFACE_CLASS,
+} from "@/components/ui/hover-preview-surface";
+import type { MentionPreview } from "@/lib/composer/types";
+import { subscribeNativeKeyboardState } from "@/lib/native-keyboard";
+import type { MentionPathTree } from "@/lib/path";
+import { cn } from "@/lib/utils";
+
+import {
+  composerMenuViewportPadding,
+  readComposerMenuReservedEdges,
+} from "./composer-menu-middleware";
+import { panelFitFor } from "./mention-preview-panel-fit";
+import { ZERO_DOM_RECT } from "./zero-dom-rect";
+
+const PANEL_GUTTER_PX = 6;
+// The root row absorbs the full relative-path prefix as one string; past
+// this many characters it stops fitting the panel's fixed width on one
+// line, so it gets middle-elided instead of left to CSS tail-truncate.
+const ROOT_LABEL_CHAR_BUDGET = 42;
+// Tree rows never exceed 4 (root + up to 2 mid dirs + leaf) by construction
+// of `mentionPathTree`'s hierarchy algorithm.
+const TREE_ROW_INDENT_CLASSES = ["pl-0", "pl-4", "pl-8", "pl-12"] as const;
+
+export interface MentionPreviewPanelProps {
+  readonly panelRef: RefObject<HTMLDivElement | null>;
+  readonly listRef: RefObject<HTMLDivElement | null>;
+  readonly activeIndex: number;
+  readonly preview: MentionPreview | null;
+  /**
+   * Why the highlighted row cannot be committed, or null when it can be.
+   * Rendered above the preview body and separated from it, so the reason
+   * reads first rather than as a footnote to the description.
+   */
+  readonly disabledReason: string | null;
+}
+
+/**
+ * Info-only preview panel pinned beside the composer's @mention/slash menu.
+ * Anchored to the active row (via a floating-ui virtual reference reading
+ * its live rect), so it tracks the highlighted row vertically as selection
+ * changes. Placement prefers the right; `flip` falls back to the left;
+ * `shift` clamps it inside the viewport horizontally, which overlaps the list
+ * when neither side has room; the `size` gate caps it to the viewport and
+ * hides it when too little space is left (see `panelFitFor`). The usable
+ * viewport is the menu's own (`composerMenuViewportPadding`), so the panel
+ * never occupies the strip the software keyboard covers either.
+ */
+export function MentionPreviewPanel(props: MentionPreviewPanelProps) {
+  const { panelRef, listRef, activeIndex, preview, disabledReason } = props;
+  const [fits, setFits] = useState(false);
+
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    if (panel === null) return;
+
+    // Scroll the active row into view before measuring/positioning below.
+    // The menu's own scrollIntoView (composer-menu.tsx) runs in a *passive*
+    // effect that fires after paint, while this positioning effect runs
+    // before paint - on keyboard nav past the list's visible edge, that
+    // ordering would otherwise measure the pre-scroll rect and paint one
+    // frame at the stale spot before autoUpdate catches the scroll and
+    // jumps. Doing it here settles scroll and position in the same
+    // pre-paint pass. Keep the menu's own effect: it's still needed for
+    // rows with no preview, where this component returns null below before
+    // ever running. `block: "nearest"` no-ops once already visible, so the
+    // duplicate scroll for preview rows is harmless.
+    listRef.current
+      ?.querySelector<HTMLElement>('[data-active="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+
+    const activeRowRect = (): DOMRect => {
+      const list = listRef.current;
+      const active =
+        list?.querySelector<HTMLElement>('[data-active="true"]') ?? null;
+      return active?.getBoundingClientRect() ?? ZERO_DOM_RECT;
+    };
+    const virtualReference = {
+      getBoundingClientRect: activeRowRect,
+      contextElement: listRef.current ?? undefined,
+    };
+
+    const reposition = (): void => {
+      // A zero rect means there is no active row to anchor to (the row is
+      // not rendered yet, or the query missed). Anchoring to it would make
+      // floating-ui measure availability from the viewport ORIGIN - a point
+      // has a whole viewport of room beside it, so the fit gate passes and
+      // the panel paints over whatever occupies the corner. No anchor, no
+      // panel.
+      const anchorRect = activeRowRect();
+      if (anchorRect.width === 0 && anchorRect.height === 0) {
+        setFits(false);
+        return;
+      }
+      // The same usable area as the menu it sits beside, so it never occupies
+      // the strip the software keyboard covers either.
+      const padding = composerMenuViewportPadding(
+        readComposerMenuReservedEdges(),
+      );
+      void computePosition(virtualReference, panel, {
+        placement: "right-start",
+        middleware: [
+          offset(PANEL_GUTTER_PX),
+          flip({ fallbackPlacements: ["left-start"], padding }),
+          shift({ mainAxis: false, crossAxis: true, padding }),
+          size({
+            padding,
+            apply: ({ availableWidth, availableHeight, elements }) => {
+              const fit = panelFitFor(availableWidth, availableHeight);
+              setFits(fit.fits);
+              elements.floating.style.maxWidth = `${fit.maxWidthPx}px`;
+              elements.floating.style.maxHeight = `${fit.maxHeightPx}px`;
+            },
+          }),
+        ],
+      }).then(({ x, y }) => {
+        panel.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(
+          y,
+        )}px, 0)`;
+      });
+    };
+
+    reposition();
+    const stopAutoUpdate = autoUpdate(virtualReference, panel, reposition);
+    // A keyboard opening or closing moves nothing `autoUpdate` observes.
+    const unsubscribeKeyboard = subscribeNativeKeyboardState(reposition);
+    return () => {
+      stopAutoUpdate();
+      unsubscribeKeyboard();
+    };
+  }, [panelRef, listRef, activeIndex, preview]);
+
+  if (preview === null) return null;
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
+    <div
+      ref={panelRef}
+      data-slot="mention-preview-panel"
+      // Describes the editor popup's active row, so it is part of that popup:
+      // tapping it must not dismiss the soft keyboard (see
+      // `isWithinTextEntryPopup`).
+      data-text-entry-popup=""
+      role="presentation"
+      aria-hidden
+      className={cn(
+        "pointer-events-auto fixed top-0 left-0 z-50 flex w-[min(90vw,22rem)] flex-col",
+        HOVER_PREVIEW_SURFACE_CLASS,
+        !fits && "invisible",
+      )}
+    >
+      <div
+        data-slot="mention-preview-panel-scroll-area"
+        className={cn("max-h-[min(50vh,16rem)]", HOVER_PREVIEW_SCROLL_CLASS)}
+      >
+        {disabledReason === null ? null : (
+          <div
+            data-slot="mention-preview-panel-disabled"
+            className="mb-2 flex items-start gap-1.5 border-b border-border/60 pb-2 text-ui-xs text-foreground"
+          >
+            <TriangleAlertIcon
+              className="mt-px size-3.5 shrink-0 text-warning-foreground"
+              aria-hidden
+            />
+            <span className="min-w-0">
+              <span className="font-semibold">Disabled</span> - {disabledReason}
+            </span>
+          </div>
+        )}
+        <PreviewBody preview={preview} />
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function PreviewBody(props: {
+  readonly preview: MentionPreview;
+}): ReactElement {
+  const { preview } = props;
+  switch (preview.kind) {
+    case "text":
+      return (
+        <>
+          <div
+            className={cn(
+              "min-w-0 text-ui-sm text-foreground",
+              preview.mono && "font-mono wrap-anywhere",
+            )}
+          >
+            {preview.primary}
+          </div>
+          {preview.secondary !== null ? (
+            <div className="mt-1 min-w-0 text-ui-xs text-muted-foreground/70">
+              {preview.secondary}
+            </div>
+          ) : null}
+        </>
+      );
+    case "path":
+      return (
+        <>
+          <PathTreeRows tree={preview.tree} />
+          {preview.footer !== null ? (
+            <div
+              className={cn(
+                "mt-1.5 min-w-0 text-ui-xs text-muted-foreground/70",
+                preview.footer.mono && "font-mono wrap-anywhere",
+              )}
+            >
+              {preview.footer.text}
+            </div>
+          ) : null}
+        </>
+      );
+    case "card":
+      return (
+        <>
+          <div className="min-w-0 text-ui-sm text-foreground">
+            {preview.title}
+          </div>
+          <div className="mt-0.5 min-w-0 font-mono text-ui-xs wrap-anywhere text-muted-foreground/70">
+            {preview.subtitle}
+          </div>
+          {preview.facts.length === 0 ? null : (
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border-t border-border/60 pt-2">
+              {preview.facts.map((fact) => (
+                <Fragment key={fact.label}>
+                  <dt className="text-ui-xs text-muted-foreground/70">
+                    {fact.label}
+                  </dt>
+                  <dd className="min-w-0 text-ui-xs wrap-anywhere text-foreground">
+                    {fact.value}
+                  </dd>
+                </Fragment>
+              ))}
+            </dl>
+          )}
+        </>
+      );
+  }
+}
+
+interface PathTreeRow {
+  readonly key: string;
+  readonly label: string;
+  readonly depth: number;
+  readonly isLeaf: boolean;
+}
+
+function pathTreeRows(tree: MentionPathTree): ReadonlyArray<PathTreeRow> {
+  const dirLabels = [
+    middleElideRootLabel(tree.rootLabel),
+    ...tree.midDirs,
+  ].filter((label) => label.length > 0);
+  const dirRows = dirLabels.map((label, depth) => ({
+    key: `dir-${depth}`,
+    label,
+    depth,
+    isLeaf: false,
+  }));
+  return [
+    ...dirRows,
+    { key: "leaf", label: tree.leaf, depth: dirRows.length, isLeaf: true },
+  ];
+}
+
+function PathTreeRows(props: { readonly tree: MentionPathTree }): ReactElement {
+  const { tree } = props;
+  const rows = pathTreeRows(tree);
+  return (
+    <div className="min-w-0">
+      {rows.map((row) => (
+        <div
+          key={row.key}
+          className={cn(
+            "flex min-w-0 items-center gap-1.5 py-0.5",
+            TREE_ROW_INDENT_CLASSES[row.depth],
+          )}
+        >
+          {row.isLeaf && tree.leafIsFile ? (
+            <MaterialFileIcon
+              filename={row.label}
+              className="size-3.5 shrink-0"
+            />
+          ) : (
+            <Folder
+              className="size-3.5 shrink-0 text-muted-foreground"
+              aria-hidden
+            />
+          )}
+          <span className="min-w-0 truncate text-ui-sm text-foreground">
+            {row.label}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The root row absorbs the full relative prefix as one string, which can
+ * overflow the panel's fixed width for deep trees. Elide the middle instead
+ * of letting CSS truncate the tail, so the outermost root segment and the
+ * deepest (nearest-to-leaf) directory - the two ends a reader orients from -
+ * stay visible.
+ */
+function middleElideRootLabel(rootLabel: string): string {
+  if (rootLabel.length <= ROOT_LABEL_CHAR_BUDGET) return rootLabel;
+  const isAbsolute = rootLabel.startsWith("/");
+  const segments = (isAbsolute ? rootLabel.slice(1) : rootLabel).split("/");
+  if (segments.length <= 2) return rootLabel;
+  const first = segments[0];
+  const last = segments[segments.length - 1];
+  return `${isAbsolute ? "/" : ""}${first}/…/${last}`;
+}

@@ -1,0 +1,599 @@
+import type { RestartTargetHost } from "@traycer-clients/shared/host-lock/restart-target";
+import type { HostActivationState } from "./host-state";
+import type {
+  HostUpdateAttemptContinuation,
+  HostUpdateAttemptError,
+  HostUpdateAttemptPhase,
+} from "@traycer/protocol/config/host-update-attempt";
+
+// Type surface for `HostController` (Host Update Layer Redesign Tech Plan,
+// "Desktop main: HostController" > "State model" / "Canonical status").
+
+export type MutationKind =
+  | "ensure"
+  | "apply"
+  | "activate"
+  | "install"
+  | "register"
+  | "deregister"
+  | "respawn"
+  | "recoverIfDown"
+  | "freePortAndRestart"
+  | "uninstallHost"
+  | "removeTraycer"
+  | "stopHost"
+  | "refreshService";
+
+/**
+ * The lane jobs that can leave a local host running where none ran: every
+ * converge, apply, activation, install, service registration and restart.
+ * Each reaches the lane through `HostController.enqueueHostStart`, which
+ * refuses it while the host lifecycle suspends host starts.
+ */
+export type HostStartMutationKind = Extract<
+  MutationKind,
+  | "ensure"
+  | "apply"
+  | "activate"
+  | "install"
+  | "register"
+  | "respawn"
+  | "recoverIfDown"
+  | "freePortAndRestart"
+>;
+
+export interface MutationProgress {
+  readonly stage: string | null;
+  readonly percent: number | null;
+  readonly bytes: number | null;
+  readonly totalBytes: number | null;
+  readonly message: string | null;
+  /**
+   * Monotonic count of discrete units of work completed within this stage -
+   * the CLI's `ProgressInfo.workUnits`, forwarded unchanged.
+   *
+   * ⚠ Producers increment it only when a unit of work has COMPLETED, never on a
+   * timer. The renderer's staged wait reads it to tell an advancing stage from a
+   * stalled one, so a timer-driven producer would report a wedged install as
+   * healthy.
+   *
+   * `null` from any producer with no discrete unit to count, and from any CLI
+   * predating the field - `parseNdjsonEvent` normalises an absent numeric to
+   * `null`, so an older bundled CLI degrades to the pre-field behaviour.
+   */
+  readonly workUnits: number | null;
+}
+
+export interface MutationLaneStatus {
+  readonly kind: MutationKind;
+  readonly progress: MutationProgress | null;
+  readonly startedAt: string;
+}
+
+/**
+ * Why an admission-checked lifecycle write would not run alone right now.
+ * `mutation` is the FIFO lane's running intent; `login-item-refresh` is the
+ * pending-login-item revision cycle, which runs on its own tail (it cannot
+ * take FIFO exclusivity — see `pendingRevisionTail` in `host-controller.ts`)
+ * but restarts the host exactly like a lane job would.
+ */
+export type LifecycleAdmissionBlock =
+  | { readonly kind: "mutation"; readonly lane: MutationLaneStatus }
+  | { readonly kind: "login-item-refresh" };
+
+/**
+ * Who is asking the pending-login-item revision cycle to run. The cycle's
+ * reverse admission (defer while the mutation lane owns an intent) applies to
+ * an OUTSIDE caller only: `convergeReady` reaches the cycle from inside its
+ * own lane job, where the occupied lane IS the caller, not a competitor.
+ */
+export type PendingRevisionCaller = "outside-lane" | "within-lane-job";
+
+export interface DownloadProgress {
+  readonly percent: number | null;
+  readonly bytes: number | null;
+  readonly totalBytes: number | null;
+}
+
+export interface DownloadLaneStatus {
+  readonly version: string;
+  readonly progress: DownloadProgress | null;
+  readonly lastError: string | null;
+}
+
+/** Mirror of `@traycer-clients/shared`'s `LocalAttemptLiveness` - see there. */
+export type LocalAttemptLiveness = "live" | "interrupted" | "unknown";
+
+/**
+ * Mirror of `@traycer-clients/shared`'s `LocalAttemptFacts`.
+ *
+ * This file already re-declares `HostControllerStatus` structurally rather than
+ * importing it, and this rides that existing shape. The duplication is
+ * pre-existing and out of Ticket 07's scope; noting it so the next reader knows
+ * BOTH declarations must move together, and that the compile is what catches a
+ * one-sided edit.
+ */
+export interface LocalAttemptFacts {
+  readonly attemptId: string;
+  readonly generation: number;
+  readonly sequence: number;
+  readonly targetVersion: string;
+  readonly phase: HostUpdateAttemptPhase;
+  // `HostUpdateAttemptContinuation` already includes `null`.
+  readonly continuation: HostUpdateAttemptContinuation;
+  readonly updatedAt: string;
+  /** The record's terminal cause, `null` on every non-failed record. See the shared declaration. */
+  readonly error: HostUpdateAttemptError;
+  /** Probed, never inferred (D13). See the shared declaration. */
+  readonly liveness: LocalAttemptLiveness;
+  /** Desktop's clock at the probe; `null` when no probe ran. */
+  readonly livenessObservedAtMs: number | null;
+}
+
+// Two independent lanes, per the Tech Plan's canonical status shape.
+export interface HostControllerStatus {
+  /** Durable attempt facts for the host-down window (Ticket 07 §5.2.7). */
+  readonly localAttempt: LocalAttemptFacts | null;
+  readonly download: DownloadLaneStatus | null;
+  readonly mutation: MutationLaneStatus | null;
+  readonly installedVersion: string | null;
+  readonly latestVersion: string | null;
+  /**
+   * The staged (pre-downloaded) host version, if any. Whether the launch-time
+   * apply of that stage may proceed is NOT a status question: the version hold
+   * (CLI-owned `held-host-version.json`) is decided by the CLI under its own
+   * mutation lock - `host apply --respect-hold`, which the implicit launch
+   * apply always reaches - never from a desktop-side snapshot that a terminal
+   * downgrade could race. `updateReady` therefore keeps advertising the stage
+   * for a held host too, and an explicit apply still moves forward.
+   */
+  readonly stagedVersion: string | null;
+  readonly installedRuntimeVersion: string | null;
+  readonly runningRuntimeVersion: string | null;
+  readonly updateReady: boolean;
+  readonly activation: HostActivationState;
+  readonly reachable: boolean;
+  readonly removedByUser: boolean;
+  readonly checkedAt: string;
+  /** See the shared declaration: the last failed ensure, until one is `ok` or the host is reachable. */
+  readonly lastEnsureFailure: HostEnsureFailure | null;
+  /** See the shared declaration: why the ready update is waiting, or `null`. */
+  readonly updateDeferral: HostUpdateDeferral | null;
+}
+
+/** Mirror of `@traycer-clients/shared`'s `HostEnsureFailure` - see there. */
+export interface HostEnsureFailure {
+  readonly message: string;
+  readonly code: string | null;
+}
+
+/** Mirror of `@traycer-clients/shared`'s `HostUpdateDeferral` - see there. */
+export interface HostUpdateDeferral {
+  readonly message: string;
+  readonly code: string;
+}
+
+// The service-registration notices (a task that is not this account's -
+// another Windows user's, or one whose owner could not be confirmed; a task
+// its owner disabled): codes and this app's copy, shared with the renderer so
+// it can tell them from failures. See the shared module.
+export {
+  HOST_UPDATE_SERVICE_DISABLED_MESSAGE,
+  HOST_UPDATED_SERVICE_DISABLED_MESSAGE,
+  isServiceTaskNotOwnedMessage,
+  SERVICE_REGISTRATION_DISABLED_CODE,
+  SERVICE_TASK_LEFT_IN_PLACE_MESSAGE,
+  SERVICE_TASK_NOT_OWNED_CODE,
+  SERVICE_TASK_NOT_OWNED_MESSAGE,
+  SERVICE_TASK_OWNER_UNCONFIRMED_LEFT_IN_PLACE_MESSAGE,
+  SERVICE_TASK_OWNER_UNCONFIRMED_MESSAGE,
+  serviceTaskLeftInPlaceMessage,
+  serviceTaskNotOwnedMessage,
+  serviceTaskNotOwnedReason,
+} from "@traycer-clients/shared/platform/host-service-notices";
+
+// ---- Continuations ----------------------------------------------------
+//
+// Pre-commit busy (CLI-owned apply/pin refused before the stop):
+// `"retry-with-force"` - Force re-submits the same intent with `force`.
+// Post-commit busy (packaged macOS, bytes already committed):
+// `"activate"` - Force submits `activateInstalled{force}`, never a retry
+// of the consumed apply/pin.
+export type BusyContinuation = "retry-with-force" | "activate";
+
+// Emitted verbatim by every removed-by-user deferred outcome. The automatic
+// recovery classifier (`respawnIfDown`) matches on this exact message to
+// treat the deferral as terminal, so emit sites and the matcher must share
+// one definition rather than risk wording drift.
+export const HOST_REMOVED_BY_USER_MESSAGE = "Host was removed by the user.";
+
+// Emitted verbatim by a host start the host lifecycle suspended (see
+// `HostController.quiesce` / `holdAutomaticIntents`) - an automatic one, or a
+// person's Restart, Install or Update, which shows the text as it is. Two
+// messages because the automatic callers must tell the two apart and nothing
+// else crosses `IpcHostController`: a QUIESCED process committed `none` and
+// starts no local host again until it restarts, so a caller that retries
+// retires instead; a HELD one is inside a stop that may still be refused or
+// cancelled, so it retries on its own pacing. Neither is a failure to report.
+export const AUTOMATIC_INTENTS_QUIESCED_MESSAGE =
+  "This app no longer starts a local host. Restart Traycer to apply the host lifecycle setting.";
+export const AUTOMATIC_INTENTS_HELD_MESSAGE =
+  "Host starts are paused while the host is being stopped.";
+
+// Emitted verbatim by every lane job the CLI refused with
+// `E_HOST_NOT_SERVICE_RUN`: the running host is a person's `traycer host
+// start` in a terminal, and this app neither stops, restarts nor updates over
+// it (the CLI refuses those under desktop origin before touching anything).
+// A deferral, not a failure: nothing is wrong, and nothing here can change it -
+// `--force` is refused the same way, so no surface offers one. The health
+// monitor's recovery (`respawnIfDown`) matches on it to leave that run alone
+// until it is gone, and a surface shows it as it is.
+export const HOST_NOT_SERVICE_RUN_MESSAGE =
+  "A host you started in a terminal is running, and Traycer leaves it alone. Stop it there to continue.";
+
+// `host uninstall --all` kept the install because it could not confirm the
+// host stopped: the stop failed, the host is still running, or its pid record
+// or process could not be read. None of these shows the host is not
+// responding, so this says only what happened - including what already had:
+// the CLI turns off the host's automatic start before it asks the host to
+// stop, and that stands.
+export const HOST_UNINSTALL_HOST_RUNNING_MESSAGE =
+  "Traycer was not fully removed. Its automatic start was turned off, but the host could not be confirmed as stopped, so its files were kept. Try again in a moment.";
+
+// A force restart confirmed for one host process found, at the step that
+// would stop it, that another host had been published in its place
+// (`E_HOST_RESTART_TARGET_CHANGED`, or the packaged-macOS continuation's own
+// check), or that the confirmed host had answered again before the restart
+// left the lane head.
+export const HOST_RESTART_TARGET_CHANGED_MESSAGE =
+  "The host started responding again or was replaced, so it was not restarted.";
+
+// `host uninstall --all` refused to stop a host with work in progress, after
+// it had deregistered the service. No route offers a forced uninstall, so
+// this says what happened and when to try again, not a restart refusal.
+export const HOST_UNINSTALL_HOST_BUSY_MESSAGE =
+  "Traycer was not fully removed. Its automatic start was turned off, but the host has work in progress, so it was not stopped and its files were kept. Try again when it is idle.";
+
+// Put in front of any other refusal of an uninstall that had already turned
+// off the host's automatic start (the CLI deregisters the service before a
+// busy stop refuses; packaged macOS removes the login item before the CLI
+// runs), so the person is not told nothing changed.
+export const HOST_STARTUP_TURNED_OFF_NOTE =
+  "Traycer was not fully removed: its automatic start was turned off.";
+
+// Who asked for a local-host mutation. Three methods take it -
+// `convergeReady`, `registerService` and `freePortAndRestart` - and they use
+// DIFFERENT halves of it, which is the distinction the name has to carry:
+//
+//   - all three run `guard` at the head of the lane;
+//   - only the two REPROVISION methods also clear the removal sentinel.
+//     Free-port-and-restart is a restart, not a reprovision, so it keeps the
+//     removed-by-user deferral exactly as a plain restart does.
+//
+// `convergeReady` and `registerService` serve two callers with genuinely
+// different contracts, and conflating them is what let "Install host" report
+// success having installed nothing:
+//
+//   - `background` is the reconciler, launch convergence and selection
+//     ports. The removal sentinel MEANS something to them: a removed host
+//     must stay removed, so `convergeReady` short-circuits on it.
+//   - `user-repair` is a person clicking Install host or Register service in
+//     Doctor. That IS an explicit request to have the host back, so the
+//     sentinel must be cleared rather than obeyed - the same contract
+//     `installVersion` has always had, applied to its two siblings.
+//
+// `guard` runs at the HEAD of the lane, not at the call site. A repair can
+// wait minutes behind an install, and the host it was aimed at can be
+// replaced or re-enrolled in that window; a check performed before
+// enqueueing proves nothing about the host the job will actually mutate.
+// The IPC layer owns identity policy and supplies it as this closure, so the
+// controller decides only WHEN the question is asked.
+export type LocalHostMutationIntent =
+  | { readonly kind: "background" }
+  | {
+      readonly kind: "user-repair";
+      /**
+       * The host this repair was asked FOR. Part of the coalesce key, not
+       * decoration: two repairs are the same job only if they target the same
+       * host. Keyed on the intent KIND alone, a repair for replacement host B
+       * would join host A's in-flight promise, inherit A's guard, and be
+       * refused for the crime of being B - a correct request rejected by
+       * another request's identity check.
+       */
+      readonly targetHostId: string;
+      readonly guard: () => Promise<ReprovisionGuardVerdict>;
+    };
+
+export type ReprovisionGuardVerdict =
+  | { readonly kind: "proceed" }
+  /**
+   * Proceed, and stop only this host process. The guard confirmed the
+   * mutation for one process, and the lane head is not where the stop
+   * happens: the CLI's lifecycle lock wait and the packaged-macOS
+   * continuation sit between them, so `respawn` carries the process to the
+   * step that stops it, which re-checks it under its own lock.
+   */
+  | { readonly kind: "proceed-for-host"; readonly host: RestartTargetHost }
+  | { readonly kind: "abandon"; readonly message: string };
+
+// Per-intent result. Every mutation intent resolves ONE of these - the
+// lane itself never rejects ("wait-never-reject"); a busy/deferred/failed
+// outcome is a normal resolved value the calling surface renders.
+export type MutationOutcome<TOk> =
+  | { readonly kind: "ok"; readonly value: TOk }
+  | {
+      readonly kind: "busy";
+      readonly continuation: BusyContinuation;
+      readonly message: string;
+    }
+  // Lock-contention terminal contract (bounded CLI_LOCK_BUSY retry
+  // exhausted): manual intents resolve this "deferred - another Traycer
+  // process is managing the host" outcome, rendered by whichever surface
+  // invoked them.
+  | { readonly kind: "deferred"; readonly message: string }
+  | { readonly kind: "stage-fingerprint-mismatch"; readonly message: string }
+  // The install bytes committed, but Desktop could not establish the
+  // post-commit service/readiness invariant. This must not masquerade as an
+  // ordinary successful apply: callers surface recovery rather than an
+  // update-ready state.
+  | { readonly kind: "installed-not-converged"; readonly message: string }
+  | {
+      readonly kind: "failed";
+      readonly message: string;
+      readonly errorCode: string | null;
+    };
+
+// The lane-head identity guard refused a `user-repair` intent: the local host
+// is no longer the one the repair named, so the job mutated NOTHING.
+//
+// A distinct arm rather than `failed`, and a widening of the intent-taking
+// methods' return union rather than of `MutationOutcome` itself:
+//
+//   - Coalesced waiters share ONE settled outcome. When two windows submit
+//     the same repair for the same host, the second submission JOINS the
+//     first's promise and its own intent never runs - so any per-caller
+//     state (a closure the guard arms) is dead for the joiner, which would
+//     misread the shared `failed` as a genuine error and count it toward the
+//     Doctor console's recurrence lock. The classification has to travel IN
+//     the outcome every waiter receives.
+//   - No unguarded mutation can produce it, so putting it in
+//     `MutationOutcome` would force every switch over that union - including
+//     the renderer's - to handle an arm that cannot occur there. The IPC
+//     handlers that supply guards classify it into their own result shapes;
+//     it never crosses the wire.
+export interface AbandonedByGuard {
+  readonly kind: "abandoned";
+  readonly message: string;
+}
+
+/** What an intent-taking (guardable) mutation resolves. */
+export type GuardedMutationOutcome<TOk> =
+  | MutationOutcome<TOk>
+  | AbandonedByGuard;
+
+/**
+ * `host stop --if-idle` (the CLI refuses with `E_HOST_BUSY` and touches
+ * nothing when the host has work in progress) or `host stop --force`.
+ */
+export type StopHostMode = "if-idle" | "force";
+
+/**
+ * A respawn's service cycle: `host restart --if-idle` (the CLI refuses with
+ * `E_HOST_BUSY`, and stops nothing, while the host has work in progress) or
+ * `host restart --force`. Both replace the SUPERVISOR - a service cycle is
+ * the one restart an old supervisor cannot turn into a child respawn.
+ */
+export type HostRespawnMode = "if-idle" | "force";
+
+/**
+ * How the CLI child is spawned.
+ *
+ * - `attached` - piped stdio, like every other lane call. For a stop the app
+ *   outlives (a `→ none` mode change).
+ * - `detached` - its own process group with stdout/stderr going to files in
+ *   the host home, so a child admitted before a quit deadline finishes on its
+ *   own after the app exits instead of dying on a closed pipe.
+ */
+export type StopHostSpawn = "attached" | "detached";
+
+export interface StopHostRequest {
+  readonly mode: StopHostMode;
+  readonly spawn: StopHostSpawn;
+  /**
+   * Withdraws the request while it is still QUEUED: aborted before the lane
+   * reaches it, it spawns nothing and resolves `withdrawn`. Once the child is
+   * spawned this has no effect - an admitted stop runs to completion (the
+   * quit transaction's deadline rule). `null` when the caller never withdraws.
+   */
+  readonly withdrawal: AbortSignal | null;
+}
+
+/**
+ * What a stop request resolves. Like every lane intent it never rejects.
+ *
+ * - `stopped` - the CLI stopped the host (or found none running).
+ * - `host-busy` - `--if-idle` found work in progress (`E_HOST_BUSY`); nothing
+ *   was touched.
+ * - `lock-busy` - another lifecycle actor held the CLI lock past its bounded
+ *   wait (`E_CLI_LOCK_BUSY`); nothing ran.
+ * - `update-active` - a host update attempt is in flight
+ *   (`E_HOST_UPDATE_ATTEMPT_ACTIVE`); nothing ran.
+ * - `not-service-run` - the running host was started by `traycer host start`
+ *   in a terminal, not by the service (`E_HOST_NOT_SERVICE_RUN`), so the
+ *   service stop reached nothing and the host still runs. Never `stopped`,
+ *   and never a reason to escalate to `--force`: that host is the terminal's.
+ * - `withdrawn` - the request was withdrawn before the lane reached it.
+ * - `failed` - anything else, with the CLI's message.
+ */
+export type StopHostOutcome =
+  | { readonly kind: "stopped"; readonly forced: boolean }
+  | { readonly kind: "host-busy"; readonly message: string }
+  | { readonly kind: "lock-busy"; readonly message: string }
+  | { readonly kind: "update-active"; readonly message: string }
+  | { readonly kind: "not-service-run"; readonly message: string }
+  | { readonly kind: "withdrawn" }
+  | { readonly kind: "failed"; readonly message: string };
+
+/**
+ * Narrows a guarded outcome for a caller that submitted a `background`
+ * intent. A background intent carries no guard, so `abandoned` cannot occur
+ * on that path; mapping it to `failed` rather than asserting it away keeps
+ * the caller total if the invariant ever breaks.
+ */
+export function backgroundMutationOutcome<TOk>(
+  outcome: GuardedMutationOutcome<TOk>,
+): MutationOutcome<TOk> {
+  return outcome.kind === "abandoned"
+    ? { kind: "failed", message: outcome.message, errorCode: null }
+    : outcome;
+}
+
+/**
+ * Which host version a `convergeReady` may leave installed - the ONLY axis on
+ * which a liveness converge and a Doctor "Install host" repair differ, and
+ * part of the lane's coalesce key for that reason.
+ *
+ *   - `keep-installed` (`host ensure --keep-installed`, the CLI's `viability`
+ *     policy): bring a down host back up on WHATEVER non-yanked version is
+ *     installed and never move the version as a matter of client preference.
+ *     Every implicit converge - the reconciler, launch convergence, the
+ *     selection ports, and Doctor's `converge-ready` - is this, which is what
+ *     keeps a deliberately downgraded host from being reverted by liveness.
+ *     A missing or yanked install still gets the pinned host.
+ *   - `pinned-minimum` (`host ensure` with no flag, the CLI's default
+ *     satisfaction policy): additionally reinstall when the installed version
+ *     is BELOW this build's pinned host. Explicit and version-seeking by
+ *     design: it is Doctor's `converge-latest`, the repair behind the
+ *     "Install host" button on a host whose protocol is too old for this
+ *     client (`host-install-latest`), a missing binary, or an unreadable
+ *     record. A liveness converge would report that repair applied having
+ *     kept the very host that cannot serve the client.
+ */
+export type ConvergeReadyVersionPolicy = "keep-installed" | "pinned-minimum";
+
+export interface ConvergeReadyOk {
+  readonly running: boolean;
+  readonly version: string | null;
+}
+
+export interface ApplyStagedOk {
+  readonly appliedVersion: string;
+  readonly runningActivated: boolean;
+  /**
+   * `false` when the CLI apply was a NO-OP - nothing was staged by the time it
+   * ran, or (for the implicit launch trigger, `host apply --respect-hold`) the
+   * installed host is the deliberately-held install instance and still viable,
+   * so the CLI kept it. `appliedVersion` then names the version that stayed
+   * installed. Only a REACHABLE host reports it: a no-op against an
+   * unreachable host is an `installedNotConverged` failure instead (the
+   * controller's `noOpApplyOutcome`), which the launch reconcile's
+   * `recoverAfterFailedApply` turns into a keep-installed converge - so a held
+   * host that is DOWN is started that way. The `ok`/`applied: false` shape is
+   * what lets the reconcile fall through to its activation arm for a held host
+   * that is up but carries activation debt.
+   */
+  readonly applied: boolean;
+}
+
+export interface ActivateInstalledOk {
+  readonly activated: boolean;
+}
+
+export interface InstallVersionOk {
+  readonly installedVersion: string;
+  readonly runningActivated: boolean;
+}
+
+export interface ServiceRegistrationOk {
+  readonly registered: boolean;
+}
+
+/**
+ * What `host service refresh` found and did (`HostController
+ * .refreshServiceDefinition`). `appliesAt` is set only for `refreshed`:
+ * `next-login` is the macOS plist that predates the launcher file, whose
+ * rewrite launchd picks up at the next login rather than at a respawn.
+ */
+export interface ServiceDefinitionRefreshOk {
+  readonly result: "not-registered" | "current" | "refreshed";
+  readonly appliesAt: "next-start" | "next-login" | null;
+}
+
+/**
+ * Whether `HostController.spawnServiceDefinitionRefresh` got its detached
+ * child running. `spawned` promises nothing about the refresh itself: the
+ * child may finish after the app is gone.
+ */
+export type ServiceDefinitionRefreshSpawn = "spawned" | "failed";
+
+export interface UninstallOk {
+  readonly removedInstallDir: boolean;
+  /**
+   * The deregistration was PERFORMED and nothing contradicted it - not that
+   * the registration is provably gone.
+   *
+   * That weaker meaning is the only honest one available. No platform can
+   * verify absence: Windows maps every `schtasks /Query` failure (timeout,
+   * access denial) to `not-installed`, Linux re-reads the manifest the
+   * uninstall just deleted, and macOS's `launchctl print` probe tolerates
+   * non-zero while an unloaded SMAppService record is invisible to it. A field
+   * meaning "actually accomplished" would therefore be unsatisfiable, so the
+   * contract is stated rather than the value inverted.
+   *
+   * It IS false when the CLI's readback positively found the registration
+   * still present - a positive observation is real evidence and vetoes the
+   * claim. Read `serviceRegistrationRetained` for the underlying tri-state.
+   */
+  readonly deregisteredService: boolean;
+  /**
+   * What the CLI's post-teardown readback actually observed.
+   * `true` = definitely still registered, `null` = nothing could confirm
+   * either way, `false` = verified absent (no platform produces this today).
+   */
+  readonly serviceRegistrationRetained: boolean | null;
+  /** See the shared `HostUninstalled.serviceWarning`. */
+  readonly serviceWarning: string | null;
+}
+
+export interface RemoveTraycerOk {
+  readonly removedHost: boolean;
+  /** Same weaker meaning as `UninstallOk.deregisteredService` - see there. */
+  readonly deregisteredService: boolean;
+  /**
+   * Same tri-state as `UninstallOk.serviceRegistrationRetained`. Carried here
+   * too: discarding it left Remove Traycer publishing the weakened boolean as
+   * an accomplished fact with no way for a caller to see the uncertainty.
+   */
+  readonly serviceRegistrationRetained: boolean | null;
+  readonly removedLoginItem: boolean;
+  /** See the shared `TraycerRemoved.serviceWarning`. */
+  readonly serviceWarning: string | null;
+}
+
+export type ApplyStagedTrigger = "launch" | "manual";
+
+export type HostControllerIntent =
+  | { readonly type: "convergeReady"; readonly force: boolean }
+  | { readonly type: "stageLatest" }
+  | {
+      readonly type: "applyStaged";
+      readonly trigger: ApplyStagedTrigger;
+      readonly force: boolean;
+    }
+  | { readonly type: "activateInstalled"; readonly force: boolean }
+  | {
+      readonly type: "installVersion";
+      readonly pin: string;
+      readonly force: boolean;
+    }
+  | { readonly type: "registerService" }
+  | { readonly type: "deregisterService" }
+  | { readonly type: "respawn" }
+  | { readonly type: "recoverIfDown" }
+  | {
+      readonly type: "freePortAndRestart";
+      readonly pid: number | null;
+      readonly port: number | null;
+    }
+  | { readonly type: "uninstallHost"; readonly all: boolean }
+  | { readonly type: "removeTraycer" };

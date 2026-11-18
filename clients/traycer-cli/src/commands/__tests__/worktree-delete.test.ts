@@ -1,0 +1,985 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import type { OpenFrameBearerSource } from "../../../../shared/auth/bearer-source";
+import { buildWorktreeDeleteCommand } from "../worktree-delete";
+import {
+  CliError,
+  CLI_ERROR_CODES,
+  EXPECTED_CLI_ERROR_CODES,
+} from "../../runner/errors";
+import type { CommandContext, CommandResult } from "../../runner/runner";
+import { createOutput, type ProgressInfo } from "../../runner/output";
+import type { StreamCloseReason } from "../../../../shared/host-transport/i-stream-session";
+import type { StreamMethodSupport } from "../../../../shared/host-transport/ws-stream-client";
+import { resolveHostAuth } from "../../internal/host-auth";
+import { resolveEndpoint } from "../../internal/host-rpc";
+import { config } from "../../config";
+import { cliCredentialsPath } from "@traycer/protocol/config/paths";
+
+const loggerMock = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../../logger", () => ({
+  createCliLogger: () => loggerMock,
+  errorFromUnknown: (value: unknown) =>
+    value instanceof Error ? value : new Error(String(value)),
+  noopLogger: loggerMock,
+}));
+
+type FakeSession = {
+  readonly method: string;
+  readonly params: unknown;
+  statusHandler:
+    | ((status: string, reason: StreamCloseReason | null) => void)
+    | null;
+  frameHandler: ((envelope: unknown) => void) | null;
+  /** Set on `open`, which the local transport reports right after the send. */
+  openRequestSent: boolean;
+};
+
+type CapturedStreamOptions = {
+  readonly bearer: () => OpenFrameBearerSource | null;
+};
+
+// Shared, hoisted so the module mock factory can reference them.
+const hoisted = vi.hoisted(() => ({
+  subscribeMock: vi.fn(),
+  clientCloseMock: vi.fn(),
+  sessionCloseMock: vi.fn(),
+  state: {
+    sessions: [] as FakeSession[],
+    bearer: null as CapturedStreamOptions["bearer"] | null,
+    home: { path: null as string | null },
+    fetch: vi.fn(),
+    // What the transport's compatibility check would say about the batch
+    // method. Flipped per test to simulate an older host.
+    methodSupport: "supported" as StreamMethodSupport,
+  },
+}));
+
+vi.mock("../../../../shared/host-transport/ws-stream-client", () => ({
+  // A real function (not an arrow) so `new WsStreamClient(...)` constructs; a
+  // constructor returning an object yields that object.
+  WsStreamClient: vi.fn(function WsStreamClientMock(
+    options: CapturedStreamOptions,
+  ) {
+    hoisted.state.bearer = options.bearer;
+    return {
+      subscribe: hoisted.subscribeMock,
+      close: hoisted.clientCloseMock,
+      isClosed: () => false,
+      notifyBearerRotated: () => undefined,
+      reconnectAll: () => undefined,
+      isReady: () => true,
+      getMethodSupport: () => hoisted.state.methodSupport,
+    };
+  }),
+}));
+
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return {
+    ...actual,
+    homedir: () => hoisted.state.home.path ?? actual.homedir(),
+  };
+});
+
+vi.mock("../../internal/host-auth", () => ({
+  resolveHostAuth: vi.fn(),
+}));
+
+vi.mock("../../internal/host-rpc", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../internal/host-rpc")
+  >("../../internal/host-rpc");
+  return { ...actual, resolveEndpoint: vi.fn() };
+});
+
+const resolveHostAuthMock = vi.mocked(resolveHostAuth);
+const resolveEndpointMock = vi.mocked(resolveEndpoint);
+const pendingWorktreeCommands = new Set<Promise<void>>();
+
+const ctx = {} as CommandContext;
+
+/**
+ * A JSON-mode context, so relayed lifecycle/output lines land on the NDJSON
+ * `progress` channel where a test can read them instead of on stderr.
+ */
+function jsonCtx(recorded: ProgressInfo[]): CommandContext {
+  const noop = (): void => undefined;
+  return {
+    runtime: {
+      json: true,
+      quiet: false,
+      noProgress: false,
+      noBootstrap: true,
+      nonInteractive: true,
+      environment: "production",
+      logger: loggerMock,
+    },
+    output: {
+      progress: noop,
+      human: noop,
+      humanRequired: noop,
+      emitResult: noop,
+      emitError: noop,
+    },
+    progress: (info: ProgressInfo) => recorded.push(info),
+  };
+}
+
+/** The `start`-mode batch session, i.e. the first subscribe of a run. */
+function commandSession(): FakeSession {
+  const session = hoisted.state.sessions[0];
+  if (session === undefined) throw new Error("no command session opened");
+  return session;
+}
+
+function startWorktreeDelete(
+  worktreePath: string,
+  commandContext: CommandContext,
+): Promise<CommandResult> {
+  const pending = buildWorktreeDeleteCommand({ worktreePath })(commandContext);
+  const settled = pending.then(
+    () => undefined,
+    () => undefined,
+  );
+  pendingWorktreeCommands.add(settled);
+  void settled.then(() => pendingWorktreeCommands.delete(settled));
+  return pending;
+}
+
+async function waitForSessions(count: number): Promise<void> {
+  await vi.waitFor(
+    () => {
+      expect(hoisted.state.sessions.length).toBeGreaterThanOrEqual(count);
+    },
+    { timeout: 10_000 },
+  );
+}
+
+beforeEach(async () => {
+  vi.clearAllMocks();
+  hoisted.state.home.path = await mkdtemp(
+    join(tmpdir(), "traycer-cli-delete-"),
+  );
+  hoisted.state.bearer = null;
+  hoisted.state.fetch.mockReset();
+  hoisted.state.fetch.mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        session_grant: "delete-host-only-token",
+        session_grant_expires_in: 3600,
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    ),
+  );
+  vi.stubGlobal("fetch", hoisted.state.fetch);
+  hoisted.state.sessions = [];
+  hoisted.state.methodSupport = "supported";
+  resolveHostAuthMock.mockResolvedValue({
+    token: "token",
+    userId: "user",
+    authnBaseUrl: "https://authn.example",
+  });
+  resolveEndpointMock.mockResolvedValue({
+    hostId: "host-1",
+    websocketUrl: "ws://127.0.0.1:9999/rpc",
+  });
+  hoisted.subscribeMock.mockImplementation(
+    (method: string, params: unknown) => {
+      const session: FakeSession = {
+        method,
+        params,
+        statusHandler: null,
+        frameHandler: null,
+        openRequestSent: false,
+      };
+      hoisted.state.sessions.push(session);
+      return {
+        onServerFrame: (handler: (envelope: unknown) => void) => {
+          session.frameHandler = handler;
+        },
+        onStatusChange: (
+          handler: (status: string, reason: StreamCloseReason | null) => void,
+        ) => {
+          session.statusHandler = (status, reason) => {
+            if (status === "open") session.openRequestSent = true;
+            handler(status, reason);
+          };
+        },
+        hasSentOpenRequest: () => session.openRequestSent,
+        sendClientFrame: () => undefined,
+        close: hoisted.sessionCloseMock,
+      };
+    },
+  );
+});
+
+afterEach(async () => {
+  const cleanupStartedAt = performance.now();
+  const pendingAtCleanup = pendingWorktreeCommands.size;
+  const lockPath = `${cliCredentialsPath(config.environment)}.lock`;
+  const lockPresentAtCleanup = existsSync(lockPath);
+  if (pendingWorktreeCommands.size > 0) {
+    await vi.waitFor(
+      () => {
+        expect(
+          hoisted.state.sessions.length > 0 ||
+            pendingWorktreeCommands.size === 0,
+        ).toBe(true);
+      },
+      { timeout: 10_000 },
+    );
+    for (const session of hoisted.state.sessions) {
+      session.frameHandler?.({
+        kind: "command.complete",
+        requestedCount: 1,
+        deletedCount: 1,
+        failedCount: 0,
+        hasBinaryPayload: false,
+      });
+    }
+    await Promise.all([...pendingWorktreeCommands]);
+  }
+  if (existsSync(lockPath)) {
+    await vi.waitFor(() => expect(existsSync(lockPath)).toBe(false), {
+      timeout: 10_000,
+    });
+  }
+  console.info(
+    `[timing] worktree-delete cleanup-at=${performance.now().toFixed(1)} elapsed=${(performance.now() - cleanupStartedAt).toFixed(1)}ms pending-at-entry=${pendingAtCleanup} fetches=${hoisted.state.fetch.mock.calls.length} sessions=${hoisted.state.sessions.length} lock-at-entry=${lockPresentAtCleanup}`,
+  );
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  const home = hoisted.state.home.path;
+  hoisted.state.home.path = null;
+  if (home !== null) await rm(home, { recursive: true, force: true });
+});
+
+// The readonly-surface refusal moved out of this command: `worktree delete` is
+// now one entry in `READONLY_REFUSED_COMMANDS`, enforced for every gated
+// command in `withRunner` before the body runs. Its coverage lives with that
+// gate, in `__tests__/readonly-surface-gate.test.ts`.
+
+describe("buildWorktreeDeleteCommand input validation", () => {
+  it("rejects an empty --path before any network call", async () => {
+    await expect(
+      buildWorktreeDeleteCommand({
+        worktreePath: "   ",
+      })(ctx),
+    ).rejects.toBeInstanceOf(CliError);
+    await expect(
+      buildWorktreeDeleteCommand({
+        worktreePath: "",
+      })(ctx),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.INVALID_ARGUMENT });
+
+    expect(resolveHostAuthMock).not.toHaveBeenCalled();
+    expect(resolveEndpointMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a whitespace-only --path with the usage message and no host call", async () => {
+    await expect(
+      buildWorktreeDeleteCommand({ worktreePath: "   " })(ctx),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: "traycer: worktree delete requires --path <worktree path>.",
+    });
+    expect(hoisted.state.sessions).toHaveLength(0);
+    expect(resolveEndpointMock).not.toHaveBeenCalled();
+  });
+
+  // A folder name may end in whitespace, so a real value is sent as written.
+  it("sends a --path with a trailing space as written and reports it as is", async () => {
+    const startedAt = performance.now();
+    const pending = startWorktreeDelete("/wt/feature ", ctx);
+
+    await waitForSessions(1);
+    const session = commandSession();
+    expect(session.params).toMatchObject({
+      targets: [{ worktreePath: "/wt/feature ", scripts: null }],
+    });
+    expect(hoisted.state.bearer?.()?.getBearerToken()).toBe(
+      "delete-host-only-token",
+    );
+    session.frameHandler?.({
+      kind: "target.complete",
+      worktreePath: "/wt/feature ",
+      deleted: true,
+      hasBinaryPayload: false,
+    });
+
+    const result = await pending;
+    console.info(
+      `[timing] worktree-delete trailing-space session-and-command-at=${performance.now().toFixed(1)} elapsed=${(performance.now() - startedAt).toFixed(1)}ms`,
+    );
+    expect(result.data).toEqual({
+      worktreePath: "/wt/feature ",
+      deleted: true,
+    });
+  }, 15_000);
+});
+
+describe("buildWorktreeDeleteCommand command shape", () => {
+  it("opens ONE start-mode command carrying a uuid and the single target", async () => {
+    const pending = startWorktreeDelete("/wt/x", ctx);
+
+    await waitForSessions(1);
+    const session = commandSession();
+    expect(session.method).toBe("worktree.deleteBatchByPath");
+    expect(session.params).toMatchObject({
+      mode: "start",
+      source: "cli",
+      targets: [{ worktreePath: "/wt/x", scripts: null }],
+    });
+    // A validated UUID, minted once per invocation - the host rejects an open
+    // string, and a shared constant would collapse distinct commands onto one
+    // single-flight entry.
+    expect(
+      (session.params as { readonly commandId: string }).commandId,
+    ).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+
+    session.frameHandler?.({
+      kind: "target.complete",
+      worktreePath: "/wt/x",
+      deleted: true,
+      hasBinaryPayload: false,
+    });
+    await pending;
+  });
+
+  it("preserves the relayed phase and output lines", async () => {
+    const recorded: ProgressInfo[] = [];
+    const pending = startWorktreeDelete("/wt/x", jsonCtx(recorded));
+
+    await waitForSessions(1);
+    const session = commandSession();
+    session.frameHandler?.({
+      kind: "target.started",
+      worktreePath: "/wt/x",
+      hasTeardown: true,
+      hasBinaryPayload: false,
+    });
+    session.frameHandler?.({
+      kind: "target.phase",
+      worktreePath: "/wt/x",
+      phase: "teardown",
+      hasBinaryPayload: false,
+    });
+    session.frameHandler?.({
+      kind: "target.output",
+      worktreePath: "/wt/x",
+      channel: "stderr",
+      chunk: "tearing down\n",
+      hasBinaryPayload: false,
+    });
+    session.frameHandler?.({
+      kind: "target.complete",
+      worktreePath: "/wt/x",
+      deleted: true,
+      hasBinaryPayload: false,
+    });
+
+    await pending;
+    expect(recorded).toEqual([
+      {
+        stage: "worktree-delete",
+        message: "starting delete (running teardown script)",
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        workUnits: null,
+      },
+      {
+        stage: "worktree-delete",
+        message: "phase: teardown",
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        workUnits: null,
+      },
+      {
+        stage: "worktree-delete:stderr",
+        message: "tearing down\n",
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        workUnits: null,
+      },
+    ]);
+  });
+});
+
+describe("buildWorktreeDeleteCommand stream-drop safety", () => {
+  it("fails non-zero on a drop before a terminal frame, with no re-subscribe", async () => {
+    const pending = startWorktreeDelete("/wt/x", ctx);
+
+    await waitForSessions(1);
+    const session = commandSession();
+    // The local transport reports `open` right after it sends the subscribe.
+    session.statusHandler?.("open", null);
+    // A recoverable transport drop surfaces as `reconnecting`.
+    session.statusHandler?.("reconnecting", null);
+
+    await expect(pending).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      exitCode: 1,
+      message: expect.stringContaining("may or may not have been removed"),
+    });
+
+    // The drop tore the run down. The batch client swaps to `observe` inside
+    // the `reconnecting` transition, so if anything WAS re-sent it can only
+    // have been an observe - never a second authorization to delete.
+    expect(
+      hoisted.state.sessions.every(
+        (opened) =>
+          opened.method === "worktree.deleteBatchByPath" &&
+          ((opened.params as { readonly mode: string }).mode === "observe" ||
+            opened === session),
+      ),
+    ).toBe(true);
+    expect(
+      hoisted.state.sessions.filter(
+        (opened) =>
+          (opened.params as { readonly mode: string }).mode === "start",
+      ),
+    ).toHaveLength(1);
+    expect(hoisted.sessionCloseMock).toHaveBeenCalled();
+    expect(hoisted.clientCloseMock).toHaveBeenCalled();
+  });
+});
+
+describe("buildWorktreeDeleteCommand terminal outcomes", () => {
+  it("resolves deleted=true on a target.complete frame", async () => {
+    const pending = startWorktreeDelete("/wt/x", ctx);
+
+    await waitForSessions(1);
+    commandSession().frameHandler?.({
+      kind: "target.complete",
+      worktreePath: "/wt/x",
+      deleted: true,
+      hasBinaryPayload: false,
+    });
+
+    const result = await pending;
+    expect(result.data).toEqual({ worktreePath: "/wt/x", deleted: true });
+    expect(result.exitCode).toBe(0);
+    expect(hoisted.sessionCloseMock).toHaveBeenCalled();
+    expect(hoisted.clientCloseMock).toHaveBeenCalled();
+  });
+
+  it("resolves deleted=false with a non-zero exit when the host removed nothing", async () => {
+    const pending = startWorktreeDelete("/wt/x", ctx);
+
+    await waitForSessions(1);
+    commandSession().frameHandler?.({
+      kind: "target.complete",
+      worktreePath: "/wt/x",
+      deleted: false,
+      hasBinaryPayload: false,
+    });
+
+    const result = await pending;
+    expect(result.data).toEqual({ worktreePath: "/wt/x", deleted: false });
+    expect(result.exitCode).toBe(1);
+  });
+
+  it.each([
+    [
+      "not_managed",
+      "Traycer can't remove this folder because it isn't a worktree it manages, so it was left in place.",
+    ],
+    [
+      "teardown_failed",
+      "The teardown script didn't finish successfully, so the worktree was left in place - check the script and try again.",
+    ],
+    [
+      "removal_failed",
+      "The worktree couldn't be fully removed and part of it may still be on disk - refresh the list and try again, or check the folder.",
+    ],
+  ] as const)(
+    "says why a %s decline left the worktree in place",
+    async (declined, sentence) => {
+      const pending = startWorktreeDelete("/wt/x", ctx);
+
+      await waitForSessions(1);
+      commandSession().frameHandler?.({
+        kind: "target.complete",
+        worktreePath: "/wt/x",
+        deleted: false,
+        declined,
+        hasBinaryPayload: false,
+      });
+
+      const result = await pending;
+      expect(result.human).toBe(
+        `Host reported the worktree was not removed: /wt/x.\n${sentence}`,
+      );
+      expect(result.data).toEqual({
+        worktreePath: "/wt/x",
+        deleted: false,
+        declined,
+      });
+      expect(result.exitCode).toBe(1);
+    },
+  );
+
+  it("prints the generic line when the host named no decline kind", async () => {
+    const pending = startWorktreeDelete("/wt/x", ctx);
+
+    await waitForSessions(1);
+    commandSession().frameHandler?.({
+      kind: "target.complete",
+      worktreePath: "/wt/x",
+      deleted: false,
+      hasBinaryPayload: false,
+    });
+
+    const result = await pending;
+    expect(result.human).toBe(
+      "Host reported the worktree was not removed: /wt/x.\nCouldn't remove the worktree. It may still be in use - refresh and try again.",
+    );
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("keeps the success line and exit code for a deletion", async () => {
+    const pending = startWorktreeDelete("/wt/x", ctx);
+
+    await waitForSessions(1);
+    commandSession().frameHandler?.({
+      kind: "target.complete",
+      worktreePath: "/wt/x",
+      deleted: true,
+      hasBinaryPayload: false,
+    });
+
+    const result = await pending;
+    expect(result.human).toBe("Removed worktree /wt/x.");
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("maps a target.failed frame to a CliError carrying the host's reason", async () => {
+    const pending = startWorktreeDelete("/wt/x", ctx);
+
+    await waitForSessions(1);
+    commandSession().frameHandler?.({
+      kind: "target.failed",
+      worktreePath: "/wt/x",
+      reason: "worktree is busy",
+      hasBinaryPayload: false,
+    });
+
+    await expect(pending).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      exitCode: 1,
+      message: expect.stringContaining("worktree is busy"),
+    });
+  });
+
+  // The host answers a busy worktree with the typed `WORKTREE_BUSY` code beside
+  // the prose reason. That is the person's own worktree being in use, an
+  // outcome the runner must not report to Sentry; the code (not the prose,
+  // which carries the user's absolute path) is what classifies it.
+  it("maps a WORKTREE_BUSY target.failed frame to an expected code and keeps the host's reason", async () => {
+    const pending = startWorktreeDelete("/wt/x", ctx);
+
+    await waitForSessions(1);
+    commandSession().frameHandler?.({
+      kind: "target.failed",
+      worktreePath: "/wt/x",
+      reason:
+        "Worktree /wt/x is in use by an active chat session or background work it owns",
+      code: "WORKTREE_BUSY",
+      hasBinaryPayload: false,
+    });
+
+    const error: unknown = await pending.catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(CliError);
+    if (!(error instanceof CliError)) throw error;
+    expect(error.code).toBe("E_WORKTREE_BUSY");
+    expect(error.exitCode).toBe(1);
+    expect(error.message).toContain("Worktree /wt/x is in use");
+    expect(new Set<string>(EXPECTED_CLI_ERROR_CODES).has(error.code)).toBe(
+      true,
+    );
+  });
+
+  // The inventory rides the batch `target.failed` frame beside the code. The
+  // person reads it from the JSON envelope the runner writes on a failure:
+  // `error.details.holders` names the shell and the agent that still hold the
+  // worktree, and the message names them in words.
+  it("carries the host's holder inventory from a WORKTREE_BUSY target.failed frame into the JSON error envelope", async () => {
+    const holders = [
+      {
+        ownerRef: { epicId: "e1", ownerKind: "chat", ownerId: "c1" },
+        holdKind: "supervised-shell",
+        activity: "working",
+        label: "Shell: dev server",
+        holderId: "holder-shell-1",
+      },
+      {
+        ownerRef: { epicId: "e1", ownerKind: "chat", ownerId: "c1" },
+        holdKind: "chat-turn",
+        activity: "idle",
+        label: "Chat: fix flaky test",
+        holderId: "holder-chat-1",
+        chatTier: "background",
+      },
+    ];
+    const pending = buildWorktreeDeleteCommand({
+      worktreePath: "/wt/x",
+    })(ctx);
+
+    await waitForSessions(1);
+    const { frameHandler } = commandSession();
+    if (frameHandler === null) throw new Error("no frame handler subscribed");
+    frameHandler({
+      kind: "target.failed",
+      worktreePath: "/wt/x",
+      reason: "worktree is busy",
+      code: "WORKTREE_BUSY",
+      holders,
+      hasBinaryPayload: false,
+    });
+
+    const error: unknown = await pending.catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(CliError);
+    if (!(error instanceof CliError)) throw error;
+    const stdout = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(() => true);
+    try {
+      createOutput({
+        json: true,
+        quiet: false,
+        noProgress: false,
+        noBootstrap: true,
+        nonInteractive: true,
+        environment: "production",
+        logger: loggerMock,
+      }).emitError(error.code, error.message, error.details);
+      const written = stdout.mock.calls
+        .map((call) => String(call[0]))
+        .join("")
+        .split("\n")
+        .filter((line) => line.length > 0);
+      expect(written).toHaveLength(1);
+      expect(JSON.parse(written[0] ?? "{}")).toMatchObject({
+        type: "result",
+        status: "error",
+        error: {
+          code: "E_WORKTREE_BUSY",
+          message: expect.stringContaining(
+            "Held by Shell: dev server, Chat: fix flaky test.",
+          ),
+          details: { holders },
+        },
+      });
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it("keeps UNEXPECTED for a target.failed frame without a typed busy code", async () => {
+    const pending = startWorktreeDelete("/wt/x", ctx);
+
+    await waitForSessions(1);
+    commandSession().frameHandler?.({
+      kind: "target.failed",
+      worktreePath: "/wt/x",
+      reason: "git worktree remove failed",
+      hasBinaryPayload: false,
+    });
+
+    const error: unknown = await pending.catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(CliError);
+    if (!(error instanceof CliError)) throw error;
+    expect(error.code).toBe(CLI_ERROR_CODES.UNEXPECTED);
+    expect(new Set<string>(EXPECTED_CLI_ERROR_CODES).has(error.code)).toBe(
+      false,
+    );
+  });
+
+  it("maps a command.failed frame to a CliError carrying the host's reason", async () => {
+    const pending = startWorktreeDelete("/wt/x", ctx);
+
+    await waitForSessions(1);
+    commandSession().frameHandler?.({
+      kind: "command.failed",
+      reason: "Lost track of this delete when the connection dropped.",
+      hasBinaryPayload: false,
+    });
+
+    await expect(pending).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      exitCode: 1,
+      message: expect.stringContaining("Lost track of this delete"),
+    });
+  });
+
+  it("falls back to the command counts when only the command terminal arrives", async () => {
+    // What an observer that attached to an already-settled command sees: no
+    // per-target frames are replayed, so the counts are the whole answer.
+    const pending = startWorktreeDelete("/wt/x", ctx);
+
+    await waitForSessions(1);
+    commandSession().frameHandler?.({
+      kind: "command.complete",
+      requestedCount: 1,
+      deletedCount: 1,
+      failedCount: 0,
+      hasBinaryPayload: false,
+    });
+
+    const result = await pending;
+    expect(result.data).toEqual({ worktreePath: "/wt/x", deleted: true });
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("maps a retryable UNAUTHORIZED fatal close to the credential line", async () => {
+    const pending = startWorktreeDelete("/wt/x", ctx);
+
+    await waitForSessions(1);
+    commandSession().statusHandler?.("closed", {
+      kind: "fatalError",
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "bearer rejected",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: true,
+      },
+    });
+
+    await expect(pending).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.AUTH_REJECTED,
+      exitCode: 1,
+      message:
+        "traycer: host rejected the credential for worktree delete - run `traycer login` and retry.",
+    });
+  });
+
+  it("maps an INCOMPATIBLE fatal close to a host-incompatible CliError", async () => {
+    const pending = startWorktreeDelete("/wt/x", ctx);
+
+    await waitForSessions(1);
+    commandSession().statusHandler?.("closed", {
+      kind: "fatalError",
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "protocol version skew",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    await expect(pending).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.HOST_INCOMPATIBLE,
+      exitCode: 1,
+    });
+  });
+});
+
+describe("buildWorktreeDeleteCommand older-host fallback", () => {
+  it("runs the released single-target stream once the host proves it lacks the command method", async () => {
+    hoisted.state.methodSupport = "unsupported";
+    const pending = startWorktreeDelete("/wt/x", ctx);
+
+    await waitForSessions(1);
+    // The transport marks support on the openAck and then closes the session -
+    // BEFORE the subscribe frame, so the host was never asked to delete.
+    commandSession().statusHandler?.("closed", {
+      kind: "fatalError",
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "host does not offer worktree.deleteBatchByPath",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    await waitForSessions(2);
+    const legacy = hoisted.state.sessions[1]!;
+    expect(legacy.method).toBe("worktree.deleteByPath");
+    expect(legacy.params).toEqual({ worktreePath: "/wt/x", scripts: null });
+
+    legacy.frameHandler?.({
+      kind: "complete",
+      deleted: true,
+      hasBinaryPayload: false,
+    });
+
+    const result = await pending;
+    expect(result.data).toEqual({ worktreePath: "/wt/x", deleted: true });
+    expect(result.exitCode).toBe(0);
+    expect(hoisted.clientCloseMock).toHaveBeenCalled();
+  });
+
+  it("does not fall back after a fatal close that is not an unsupported method", async () => {
+    const pending = startWorktreeDelete("/wt/x", ctx);
+
+    await waitForSessions(1);
+    commandSession().statusHandler?.("closed", {
+      kind: "fatalError",
+      details: {
+        code: "INTERNAL",
+        reason: "host blew up",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    await expect(pending).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+    });
+    // Exactly one subscribe: a delete that may have half-happened is never
+    // re-issued on the older method.
+    expect(hoisted.state.sessions).toHaveLength(1);
+  });
+});
+
+/**
+ * Drives the command past the `worktree.deleteBatchByPath` compatibility
+ * check into the released `worktree.deleteByPath@1.1` fallback stream and
+ * returns that session, mirroring the "older-host fallback" setup above.
+ */
+async function startLegacyFallback(): Promise<{
+  readonly pending: Promise<CommandResult>;
+  readonly legacy: FakeSession;
+}> {
+  hoisted.state.methodSupport = "unsupported";
+  const pending = startWorktreeDelete("/wt/x", ctx);
+
+  await waitForSessions(1);
+  commandSession().statusHandler?.("closed", {
+    kind: "fatalError",
+    details: {
+      code: "INCOMPATIBLE",
+      reason: "host does not offer worktree.deleteBatchByPath",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+    },
+  });
+  await waitForSessions(2);
+  return { pending, legacy: hoisted.state.sessions[1]! };
+}
+
+describe("buildWorktreeDeleteCommand legacy stream v1.1 holders", () => {
+  // The v1.0 -> v1.1 diff on `worktree.deleteByPath` is an OPTIONAL `holders`
+  // field added to the `failed` arm - `worktreeBusyHoldersWireFieldSchema` is
+  // `.optional().catch(undefined)`, so a stale v1.0 decode does not fail, it
+  // silently drops the field. A busy refusal kept its prose `reason` and lost
+  // the only actionable part. Because the difference is optional-on-one-arm,
+  // a `ZodType<...>` compile-time constraint alone would NOT have caught a
+  // call site still naming the v1.0 schema - this is exactly the case the
+  // runtime canonical-identity backstop exists for (see
+  // `host-rpc.test.ts`'s "canonical stream frame pairing" suite).
+  it("surfaces holders from a v1.1 failed frame in details and the human message", async () => {
+    const { pending, legacy } = await startLegacyFallback();
+
+    legacy.frameHandler?.({
+      kind: "failed",
+      reason: "worktree is busy",
+      holders: [
+        {
+          ownerRef: { epicId: "e1", ownerKind: "chat", ownerId: "c1" },
+          holdKind: "chat-turn",
+          activity: "working",
+          label: "Chat: fix flaky test",
+        },
+        {
+          ownerRef: {
+            epicId: "e1",
+            ownerKind: "terminal-agent",
+            ownerId: "t1",
+          },
+          holdKind: "terminal-agent-pty",
+          activity: "idle",
+          label: "Terminal agent: refactor",
+        },
+      ],
+      hasBinaryPayload: false,
+    });
+
+    await expect(pending).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      exitCode: 1,
+      message: expect.stringContaining(
+        "Held by Chat: fix flaky test, Terminal agent: refactor.",
+      ),
+      details: {
+        holders: [
+          expect.objectContaining({ label: "Chat: fix flaky test" }),
+          expect.objectContaining({ label: "Terminal agent: refactor" }),
+        ],
+      },
+    });
+  });
+
+  it("keeps today's back-compat wording when an older host's failed frame omits holders", async () => {
+    const { pending, legacy } = await startLegacyFallback();
+
+    legacy.frameHandler?.({
+      kind: "failed",
+      reason: "worktree is busy",
+      hasBinaryPayload: false,
+    });
+
+    await expect(pending).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      exitCode: 1,
+      message: "traycer: worktree delete failed - worktree is busy",
+      details: null,
+    });
+  });
+
+  it("maps a v1.2 failed frame carrying WORKTREE_BUSY to the expected busy code", async () => {
+    const { pending, legacy } = await startLegacyFallback();
+
+    legacy.frameHandler?.({
+      kind: "failed",
+      reason: "worktree is busy",
+      code: "WORKTREE_BUSY",
+      hasBinaryPayload: false,
+    });
+
+    await expect(pending).rejects.toMatchObject({
+      code: "E_WORKTREE_BUSY",
+      exitCode: 1,
+      message: "traycer: worktree delete failed - worktree is busy",
+    });
+  });
+
+  it("settles a v1.2 failed frame whose code is unknown to this client", async () => {
+    const { pending, legacy } = await startLegacyFallback();
+
+    legacy.frameHandler?.({
+      kind: "failed",
+      reason: "worktree is busy",
+      code: "SOME_FUTURE_CODE",
+      holders: [
+        {
+          ownerRef: { epicId: "e1", ownerKind: "chat", ownerId: "c1" },
+          holdKind: "chat-turn",
+          activity: "working",
+          label: "Chat: fix flaky test",
+        },
+      ],
+      hasBinaryPayload: false,
+    });
+
+    await expect(pending).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      exitCode: 1,
+      message: expect.stringContaining("Held by Chat: fix flaky test."),
+    });
+  });
+});

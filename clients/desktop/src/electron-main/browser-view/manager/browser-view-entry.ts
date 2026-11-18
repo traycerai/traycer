@@ -1,0 +1,164 @@
+import type {
+  BrowserViewCertificateErrorChange,
+  BrowserViewNativeTabKey,
+  BrowserViewStatus,
+  BrowserViewTileKey,
+} from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserAnnotationSession } from "../annotation/browser-annotation-session";
+import type { BrowserSessionProfile } from "../browser-session";
+import type {
+  BrowserDebugLease,
+  BrowserDebugSession,
+} from "../debug/browser-debug-session";
+import type { BrowserViewEntryKey } from "./browser-view-entry-registry";
+import type {
+  BrowserViewDevToolsWindow,
+  BrowserViewWebContents,
+} from "../browser-view-port";
+import type { NativeBrowserViewLifecycle } from "./native-browser-view-lifecycle";
+import type { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
+
+/**
+ * The single renderer-notification seam every subsystem writes through
+ * (`RunnerIpcBridge.safeSendToWindow`); the boolean reports delivery.
+ */
+export type BrowserViewSend = (
+  windowId: string,
+  channel: (typeof RunnerHostEvent)[keyof typeof RunnerHostEvent],
+  payload: unknown,
+) => boolean;
+
+/**
+ * Every `webContents.on(...)` registration for one guest, keyed by event name.
+ * Attach and teardown both iterate this map, so the two cannot drift. The
+ * handler type is the emitter's own so both loops type-check against it.
+ */
+export type BrowserViewListenerMap = Readonly<
+  Record<string, Parameters<NodeJS.EventEmitter["on"]>[1]>
+>;
+
+export interface BrowserViewEntry {
+  surface: BrowserViewEntryKey | null;
+  surfaceBindingId: string | null;
+  readonly guestKey: string;
+  readonly identity: BrowserViewNativeIdentity;
+  /**
+   * The jar this guest was born into, kept on the entry because teardown is
+   * the only thing that can tell an isolated session's partition it may go:
+   * by then the host frame that named the profile is long gone.
+   */
+  readonly profile: BrowserSessionProfile;
+  /** The guest itself. Capability code talks only to this. */
+  readonly webContents: BrowserViewWebContents;
+  readonly listeners: BrowserViewListenerMap;
+  desiredVisible: boolean;
+  requestedUrl: string;
+  currentUrl: string;
+  currentTitle: string;
+  status: BrowserViewStatus;
+  statusReason: string | null;
+  /**
+   * Identity of the host-initiated navigation the current `loading` belongs
+   * to. Bumped by navigate / reload / back / forward, reported on every status
+   * change so the renderer can tell a new episode from a refresh of one.
+   */
+  navigationAttempt: number;
+  findState: BrowserViewEntryFindState;
+  certificateError: BrowserViewCertificateErrorChange | null;
+  debugSession: BrowserDebugSession | null;
+  /**
+   * Held while the storage seed script is installed - from provisioning until
+   * `navigateAccepted` removes it. A tab with nothing to seed never takes one,
+   * and so never attaches a debugger at birth. A tab that was provisioned but
+   * never accepted a navigation keeps this lease, and with it the attached
+   * debugger, until the entry closes - bounded by the entry's lifetime, since
+   * `destroyEntry` disposes the session and every lease with it.
+   */
+  seedLease: BrowserDebugLease | null;
+  /**
+   * Taken by the first agent CDP dispatch and held for the rest of this tab
+   * incarnation. Nothing on the wire says when an agent is done with a tab, and
+   * the frame routes a command sequence resolves must stay valid across it.
+   */
+  agentCdpLease: BrowserDebugLease | null;
+  annotationSession: BrowserAnnotationSession | null;
+  devToolsWindow: BrowserViewDevToolsWindow | null;
+  /**
+   * Set when the host window's own renderer starts a fresh main-frame
+   * navigation or crashes, before the new renderer has re-upserted this
+   * entry. Cleared when the surface is rebound.
+   */
+  rendererResetPending: boolean;
+  internalNavigation: boolean;
+  /**
+   * Set when this guest is being closed only to be re-born in another window
+   * at the same tab identity ("Show here"). Its close must then leave the
+   * session's storage alone: an isolated partition is released with the
+   * session's last guest, and at that moment the successor does not exist
+   * yet, so without this the replacement would be born into a partition the
+   * close had just cleared. Cleared again if the successor's birth fails, at
+   * which point the close's release runs after all.
+   */
+  succeededByReplacement: boolean;
+  /** One teardown shared by every close trigger for this guest. */
+  closePromise: Promise<void> | null;
+}
+
+/**
+ * Whether a tile is showing this guest: the reading behind `viewed` on
+ * `electronTabState` and the off-screen preview refusal, and the first half
+ * of the manager's on-screen reading (the file-chooser interception and the
+ * dangerous-download question also need the tile's window to be shown). A
+ * guest kept alive with no tile is a real, running tab that nobody is looking
+ * at.
+ */
+export function isEntryViewed(entry: BrowserViewEntry): boolean {
+  return entry.surface !== null && entry.desiredVisible;
+}
+
+export interface BrowserViewNativeIdentity {
+  readonly key: BrowserViewNativeTabKey;
+  /**
+   * The incarnation every host-side capability quotes. Fixed for the entry's
+   * life: a cross-window move REPLACES the entry (see
+   * `BrowserViewProvisioning.replaceNativeGuestForWindow`), so the new window's
+   * guest carries a freshly minted id and every call still quoting the old one
+   * finds no entry (`findExactNativeEntry` and `releaseTab`'s own check).
+   */
+  readonly registrationId: string;
+  /** Current renderer connection that owns this guest's lifecycle stream. */
+  lifecycleWindowId: string;
+  readonly lifecycle: NativeBrowserViewLifecycle;
+}
+
+export interface BrowserViewEntryFindState {
+  readonly appRequestId: number;
+  readonly query: string;
+  readonly matchCase: boolean;
+  readonly sessionsByElectronRequestId: Map<
+    number,
+    BrowserViewEntryFindSession
+  >;
+}
+
+export interface BrowserViewEntryFindSession {
+  readonly appRequestId: number;
+  readonly query: string;
+  readonly matchCase: boolean;
+}
+
+export function requireSurface(entry: BrowserViewEntry): BrowserViewEntryKey {
+  if (entry.surface === null) {
+    throw new Error(`Browser guest ${entry.guestKey} has no surface.`);
+  }
+  return entry.surface;
+}
+
+export function toTileKey(key: BrowserViewEntryKey): BrowserViewTileKey {
+  return {
+    viewTabId: key.viewTabId,
+    paneId: key.paneId,
+    tileInstanceId: key.tileInstanceId,
+    pageSessionId: key.pageSessionId,
+  };
+}

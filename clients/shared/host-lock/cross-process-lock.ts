@@ -1,0 +1,1171 @@
+import { randomUUID } from "node:crypto";
+import { constants } from "node:fs";
+import { lstat, open, rename, stat, unlink, writeFile } from "node:fs/promises";
+import type { Stats } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
+import { hostname as osHostname } from "node:os";
+import { dirname, join } from "node:path";
+import { windowsRenameRetryDelayMs } from "@traycer/protocol/config/credentials-fs";
+import {
+  isProcessStartIdentity,
+  type ProcessStartIdentity,
+} from "@traycer/protocol/host/lifecycle";
+import {
+  ownProcessStartIdentityAsync,
+  ownProcessStartTimeMsAsync,
+  verifyProcessIdentity,
+  verifyProcessIdentityAsync,
+  type ProcessIdentityVerdict,
+} from "./process-identity";
+
+// Cross-process file lock protocol (Host Update Layer Redesign Tech Plan,
+// "cli-lock" rule 3: "Electron main implements the identical lock protocol
+// [as the CLI] (same file, desktop PID + start-time identity)"). Both the
+// CLI (`traycer-cli/src/store/cli-lock.ts`) and desktop main
+// (`desktop/src/electron-main/host/desktop-cli-lock.ts`) are thin wrappers
+// around this module - it owns the on-disk lock-file format, holder
+// identity, positive-evidence breaking, and the `.break` arbitration
+// sub-lock, so the two processes can never silently drift apart on what
+// counts as "the lock is free." Path-based (no `Environment` dependency):
+// callers resolve their own environment-scoped lock path and pass it in.
+//
+// Mechanism: open the lock file with O_CREAT | O_EXCL (Node `wx` flag). On
+// EEXIST, parse the existing file's pid; if the pid is positively gone the
+// holder crashed and the lock is broken. The poll loop is small and the
+// lock file lives in the user's home / app-support dir so contention is
+// naturally limited.
+//
+// Never throws on contention - resolves a discriminated
+// `AcquireLockOutcome`/`WithLockOutcome` instead, so each side's thin
+// wrapper can apply its own error convention (the CLI throws a `CliError`;
+// desktop returns the outcome as-is for its own bounded-retry-then-
+// classify contract) without this module needing to know either one.
+
+export interface LockMetadata {
+  readonly pid: number;
+  readonly reason: string;
+  readonly startedAt: string;
+  readonly hostname: string | null;
+  // Per-acquisition nonce so `release()` can verify it still owns the file
+  // before unlinking (see `tryAcquireOnce`). `null` only for a lock written
+  // by a pre-token version - never written by this code.
+  readonly token: string | null;
+  // The holder process's OS start time (milliseconds since epoch,
+  // best-effort) - distinct from `startedAt` above, which is when the
+  // *lock* was acquired. Lets a contender positively confirm "still the
+  // same process" rather than "some process is alive at this pid" (the OS
+  // is free to recycle a pid onto an unrelated process). `null` when the
+  // platform probe failed at write time, or for a lock written by a
+  // pre-hardening version - never written by this code otherwise.
+  //
+  // NO LONGER READ when arbitrating: `processStartIdentity` replaced it,
+  // because two wall-clock-derived start times taken either side of a
+  // `CLOCK_REALTIME` step disagree and made a LIVE holder look like a
+  // recycled pid - i.e. breakable. Still written so an older reader of the
+  // same lock file keeps working exactly as it does today.
+  readonly processStartedAtMs: number | null;
+  // The holder's kernel creation stamp - the operand arbitration actually
+  // compares. `null` for a lock written before this field existed, which
+  // `verifyProcessIdentity` reports as "indeterminate" and therefore never
+  // breaks.
+  readonly processStartIdentity: ProcessStartIdentity | null;
+  /**
+   * Optional detached POSIX process group supervised by `pid`. A dead
+   * supervisor is not stale while this group still has a member: the group
+   * contains the actuator or a descendant that may still own an irreversible
+   * platform operation. It is deliberately advisory-to-safety: an
+   * indeterminate probe is busy, never breakable.
+   */
+  readonly supervisedProcessGroupId?: number;
+  /**
+   * A supervisor may be responsible for a Windows process tree whose
+   * membership Node cannot positively enumerate. If that supervisor dies
+   * before a protocol-confirmed handback, fail closed rather than guessing
+   * that taskkill completed. Normal completion rewrites this field away under
+   * the token-preserving arbitration lock.
+   */
+  readonly retainOnPublisherDeath?: boolean;
+}
+
+export interface LockHandle {
+  readonly path: string;
+  readonly metadata: LockMetadata;
+  release(): Promise<void>;
+}
+
+export interface AcquireLockOptions {
+  readonly lockPath: string;
+  // What this lock holder is doing - written into the lock file for
+  // observability ("install-host", "host-controller-activate", etc.).
+  readonly reason: string;
+  // Max time to wait for the lock to free up. 0 -> resolve `busy`
+  // immediately on contention. Defaults are *not* used here per project
+  // style; callers must decide.
+  readonly waitMs: number;
+  // Poll interval while waiting. The runtime clamps below to a sane min.
+  readonly pollIntervalMs: number;
+}
+
+export type AcquireLockOutcome =
+  | { readonly kind: "acquired"; readonly handle: LockHandle }
+  | { readonly kind: "busy"; readonly holder: LockMetadata | null };
+
+const MIN_POLL_MS = 25;
+
+// An empty or corrupt lock file means the holder created it with O_EXCL
+// but died before writing its metadata - UNLESS a live holder is still
+// mid-creation and simply hasn't written yet. Legitimate metadata writes
+// land within milliseconds of the open(), so any empty lock file older
+// than this grace window has no live owner and is safe to break.
+const EMPTY_LOCK_GRACE_MS = 5000;
+
+// Mirrors `EMPTY_LOCK_GRACE_MS` for the break-arbitration sub-lock itself
+// (see `acquireBreakLock`/`tryRecoverCrashedBreakLock` below): its own
+// metadata write lands within milliseconds of its `open()`, so a break-lock
+// file younger than this grace window might just be a breaker still
+// mid-creation, not a crashed one.
+const BREAK_LOCK_AGE_GRACE_MS = 2000;
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function hostnameSafe(): string | null {
+  try {
+    return osHostname();
+  } catch {
+    return null;
+  }
+}
+
+function isErrnoException(value: unknown): value is NodeJS.ErrnoException {
+  return value instanceof Error && "code" in value;
+}
+
+function errorCode(err: unknown): string | null {
+  if (isErrnoException(err)) {
+    return typeof err.code === "string" ? err.code : null;
+  }
+  return null;
+}
+
+// Node-on-Windows exposes neither O_NOFOLLOW nor O_NONBLOCK. That is a
+// capability distinction, not evidence that every existing lock is unsafe:
+// use a before/opened/after identity proof there. POSIX keeps the stronger
+// descriptor-only O_NOFOLLOW | O_NONBLOCK path, which cannot hang on a FIFO.
+interface LockReadPlatform {
+  readonly noFollow: number;
+  readonly nonBlock: number;
+}
+
+const defaultLockReadPlatform: LockReadPlatform = {
+  noFollow: typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0,
+  nonBlock: typeof constants.O_NONBLOCK === "number" ? constants.O_NONBLOCK : 0,
+};
+
+let lockReadPlatformForTest: LockReadPlatform | null = null;
+
+/** Test-only override for the missing-flag Node/Electron fallback. */
+export function __setLockReadPlatformForTest(
+  platform: LockReadPlatform | null,
+): void {
+  lockReadPlatformForTest = platform;
+}
+
+function lockReadPlatform(): LockReadPlatform {
+  return lockReadPlatformForTest ?? defaultLockReadPlatform;
+}
+
+// SUPPORTED-FILESYSTEM POLICY: this flagless-fallback identity proof only
+// runs where O_NOFOLLOW/O_NONBLOCK are unavailable (Node on Windows). There
+// the lock lives under the user's profile, and the filesystems that can host
+// it on supported Windows (NTFS/ReFS) report non-zero volume serials and
+// 64-bit file IDs through libuv's handle-based stat. A filesystem that
+// reports zero (FAT-family media, some network redirectors) is deliberately
+// REJECTED — every read degrades to `read-error`, which the break/release
+// machinery already treats as busy/indeterminate. That direction is safe
+// (locks cannot be stolen there, only not broken) and intentional: an
+// identity-less filesystem cannot carry the TOCTOU proof this fallback
+// exists to provide, and weakening it to a regular-file check would let a
+// swapped FIFO/symlink through on exactly the platforms that need the guard.
+function samePositiveFileIdentity(
+  a: Pick<Stats, "ino" | "dev">,
+  b: Pick<Stats, "ino" | "dev">,
+): boolean {
+  if (a.ino === 0 || a.dev === 0 || b.ino === 0 || b.dev === 0) return false;
+  return a.ino === b.ino && a.dev === b.dev;
+}
+
+// Result of a raw read of a lock-shaped file. Distinguishes "genuinely not
+// there" (`absent`, ENOENT) from "we don't know" (`read-error` - a
+// transient EIO/EACCES/etc.) from "successfully read N bytes" (`present`,
+// which may still fail to *parse* as valid metadata - that's a successful
+// read of empty/corrupt content, not a read failure).
+//
+// This distinction matters because only `present` can ever contribute
+// positive evidence toward breaking a lock: collapsing every read failure
+// to the same value a genuinely-absent file produces would feed a
+// transient read error straight into the empty/corrupt age-based break AND
+// the stale-claim equality check - a transient read error could earn the
+// same "safe to break" treatment as a holder that actually crashed
+// mid-write. `read-error` must be treated as busy/indeterminate everywhere
+// a break decision is made.
+type LockRead =
+  | { readonly kind: "present"; readonly raw: string }
+  | { readonly kind: "absent" }
+  | { readonly kind: "read-error" };
+
+// Split out from `parseLockMetadata` below so the poll loop can capture the
+// EXACT bytes a break decision was based on and later hand them to
+// `breakStaleLock` for its arbitrated equality check - re-reading at break
+// time would defeat the point, since the whole race this guards against is
+// content changing between read and break.
+//
+// It must also be total. `readFile(path)` opens a FIFO for blocking read, so
+// a corrupt lock entry could hang acquire(waitMs: 0), holder probes, release,
+// and the positive-evidence breaker. On POSIX we bind a nonblocking,
+// no-follow descriptor and verify it is regular before reading. On Node's
+// Windows flagless runtime we allow only an existing regular entry whose
+// positive identity agrees before, through, and after the open. Absent is
+// still useful (creation may proceed); anything ambiguous is read-error and
+// therefore never evidence for breaking.
+async function readLockRaw(path: string): Promise<LockRead> {
+  const platform = lockReadPlatform();
+  const hasSafeDescriptorOpen =
+    platform.noFollow !== 0 && platform.nonBlock !== 0;
+  let before: Stats | null = null;
+
+  if (!hasSafeDescriptorOpen) {
+    try {
+      const inspected = await lstat(path);
+      if (!inspected.isFile()) return { kind: "read-error" };
+      before = inspected;
+    } catch (err) {
+      return errorCode(err) === "ENOENT"
+        ? { kind: "absent" }
+        : { kind: "read-error" };
+    }
+  }
+
+  let handle: FileHandle;
+  try {
+    handle = await open(
+      path,
+      constants.O_RDONLY |
+        (hasSafeDescriptorOpen
+          ? platform.noFollow | platform.nonBlock
+          : platform.nonBlock),
+    );
+  } catch (err) {
+    return errorCode(err) === "ENOENT"
+      ? { kind: "absent" }
+      : { kind: "read-error" };
+  }
+
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile()) return { kind: "read-error" };
+    if (before !== null) {
+      let after: Stats;
+      try {
+        after = await lstat(path);
+      } catch {
+        return { kind: "read-error" };
+      }
+      if (
+        !after.isFile() ||
+        !samePositiveFileIdentity(before, opened) ||
+        !samePositiveFileIdentity(opened, after)
+      ) {
+        return { kind: "read-error" };
+      }
+    }
+    return { kind: "present", raw: await handle.readFile("utf8") };
+  } catch {
+    return { kind: "read-error" };
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
+function parseLockMetadata(raw: string): LockMetadata | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const obj = parsed as Record<string, unknown>;
+  if (
+    typeof obj.pid !== "number" ||
+    typeof obj.reason !== "string" ||
+    typeof obj.startedAt !== "string"
+  ) {
+    return null;
+  }
+  const metadata: LockMetadata = {
+    pid: obj.pid,
+    reason: obj.reason,
+    startedAt: obj.startedAt,
+    hostname: typeof obj.hostname === "string" ? obj.hostname : null,
+    // Deliberately not required above alongside pid/reason/startedAt: a
+    // lock written by a pre-token version (e.g. mid self-upgrade with mixed
+    // versions momentarily on disk) must still parse as a valid,
+    // live-checkable holder rather than be swept as "corrupt" on the
+    // 5-second empty-lock grace window.
+    token: typeof obj.token === "string" ? obj.token : null,
+    // Same tolerance as `token` above: a lock written by a pre-hardening
+    // version has no identity field at all - it must still parse as a
+    // live-checkable holder, just with an unverifiable identity (handled
+    // by `verifyProcessIdentity` returning "indeterminate", never treated
+    // as corrupt).
+    processStartedAtMs:
+      typeof obj.processStartedAtMs === "number"
+        ? obj.processStartedAtMs
+        : null,
+    processStartIdentity: isProcessStartIdentity(obj.processStartIdentity)
+      ? obj.processStartIdentity
+      : null,
+  };
+  // `> 1`, not `> 0`: probing group 1 runs `process.kill(-1, 0)`, which
+  // POSIX defines as "signal every process the caller may signal" — it
+  // answers "does anything at all run", never "is THIS group alive", so a
+  // recorded group of 1 would classify any machine's holder as live forever.
+  // No supervised actuator can legitimately lead process group 1 (init's).
+  const supervisedProcessGroupId =
+    typeof obj.supervisedProcessGroupId === "number" &&
+    Number.isSafeInteger(obj.supervisedProcessGroupId) &&
+    obj.supervisedProcessGroupId > 1
+      ? obj.supervisedProcessGroupId
+      : undefined;
+  return {
+    ...metadata,
+    ...(supervisedProcessGroupId === undefined
+      ? {}
+      : { supervisedProcessGroupId }),
+    ...(obj.retainOnPublisherDeath === true
+      ? { retainOnPublisherDeath: true }
+      : {}),
+  };
+}
+
+// Age of the lock file in milliseconds, or null if it can no longer be
+// stat'd (already swept by another process). Used only to decide whether
+// an empty/corrupt lock file is a crashed holder vs. one mid-creation.
+async function lockFileAgeMs(path: string): Promise<number | null> {
+  try {
+    const st = await stat(path);
+    return Date.now() - st.mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+// ---- Break-arbitration sub-lock --------------------------------------------
+//
+// Lock-breaking is serialized through a second, short-lived lock
+// (`<lockPath>.break`) rather than a direct unlink of the canonical lock.
+// A rename-to-claim protocol is unsound: a bare `rename` cannot be made
+// CONDITIONAL on the destination's content, so a contender delayed just
+// long enough after its own stale read could rename away a lock a
+// different, genuinely fresh holder had since written, and a
+// content-mismatch "restore" path could then clobber a THIRD holder that
+// had meanwhile written to the now-vacated path. Simultaneous holders
+// remained possible.
+//
+// Serializing the unlink itself behind an exclusively-held second lock
+// closes this: while the break-lock is held, no other contender can
+// unlink the canonical file, and a fresh holder can only ever appear
+// AFTER an unlink completes - so a raw-byte equality check taken under the
+// break-lock is conclusive proof the file is still the exact stale
+// content the break decision was made on. Empty/corrupt-lock breaking goes
+// through the identical arbitration - it has the identical unlink race.
+
+interface BreakLockPayload {
+  readonly pid: number;
+  readonly startedAt: string;
+  // Retained for older readers; arbitration reads `processStartIdentity`.
+  // See `LockMetadata` for why.
+  readonly processStartedAtMs: number | null;
+  readonly processStartIdentity: ProcessStartIdentity | null;
+  readonly token: string;
+}
+
+function breakLockPathFor(path: string): string {
+  return `${path}.break`;
+}
+
+function parseBreakLockPayload(raw: string): BreakLockPayload | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const obj = parsed as Record<string, unknown>;
+  if (
+    typeof obj.pid !== "number" ||
+    typeof obj.startedAt !== "string" ||
+    typeof obj.token !== "string"
+  ) {
+    return null;
+  }
+  return {
+    pid: obj.pid,
+    startedAt: obj.startedAt,
+    processStartedAtMs:
+      typeof obj.processStartedAtMs === "number"
+        ? obj.processStartedAtMs
+        : null,
+    processStartIdentity: isProcessStartIdentity(obj.processStartIdentity)
+      ? obj.processStartIdentity
+      : null,
+    token: obj.token,
+  };
+}
+
+async function createBreakLockFile(
+  breakLockPath: string,
+  payload: BreakLockPayload,
+): Promise<"created" | "exists"> {
+  let handle: FileHandle;
+  try {
+    handle = await open(breakLockPath, "wx", 0o600);
+  } catch (err) {
+    if (errorCode(err) === "EEXIST") return "exists";
+    throw err;
+  }
+  try {
+    await handle.writeFile(JSON.stringify(payload, null, 2));
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+  return "created";
+}
+
+// Best-effort recovery of a break-lock abandoned by a breaker that crashed
+// mid-critical-section. Uses the same only-positive-evidence identity
+// rules as the canonical lock, plus `BREAK_LOCK_AGE_GRACE_MS` so a breaker
+// that has only just called `open()` (file exists, payload not written
+// yet) is never mistaken for a crash. Returns whether the break-lock was
+// removed (safe for the caller to retry creating it).
+//
+// Accepted residual: the `unlink(breakLockPath)` call below is
+// UNCONDITIONAL - it verifies the crashed holder's identity and age from
+// the read a few lines up, but never re-verifies the file still holds
+// those exact bytes immediately before deleting it by path. TWO
+// recoverers already suffice to exploit this (no third contender or
+// completed unrelated cycle required); accepted the same way the CLI's
+// staged-store ticket accepted its own break-lock double-recovery
+// residual - it requires a breaker crash AND a second contender's own
+// recovery attempt to be descheduled between its validation and its
+// unlink at essentially the exact moment a first recoverer completes its
+// own unlink-then-create step underneath it.
+async function tryRecoverCrashedBreakLock(
+  breakLockPath: string,
+): Promise<boolean> {
+  const read = await readLockRaw(breakLockPath);
+  if (read.kind !== "present") return false;
+  const payload = parseBreakLockPayload(read.raw);
+  if (payload !== null) {
+    const identity = await verifyProcessIdentityAsync({
+      pid: payload.pid,
+      startedAtMs: payload.processStartedAtMs,
+      startIdentity: payload.processStartIdentity,
+    });
+    if (identity !== "dead" && identity !== "alive-different") return false;
+  }
+  const ageMs = await lockFileAgeMs(breakLockPath);
+  if (ageMs === null || ageMs < BREAK_LOCK_AGE_GRACE_MS) return false;
+  await unlink(breakLockPath).catch(() => undefined);
+  return true;
+}
+
+type AcquireBreakLockOutcome =
+  | { readonly kind: "acquired"; readonly token: string }
+  | { readonly kind: "busy" };
+
+async function acquireBreakLock(
+  path: string,
+): Promise<AcquireBreakLockOutcome> {
+  const breakLockPath = breakLockPathFor(path);
+  const token = randomUUID();
+  const payload: BreakLockPayload = {
+    pid: process.pid,
+    startedAt: nowIso(),
+    processStartedAtMs: await ownProcessStartTimeMsAsync(),
+    processStartIdentity: await ownProcessStartIdentityAsync(),
+    token,
+  };
+  if ((await createBreakLockFile(breakLockPath, payload)) === "created") {
+    return { kind: "acquired", token };
+  }
+  // EEXIST - another breaker may be genuinely active, or may have crashed
+  // mid-critical-section. Attempt recovery once; if that doesn't free the
+  // path, this contender simply falls back to the normal deadline/poll
+  // path rather than spinning on arbitration.
+  if (!(await tryRecoverCrashedBreakLock(breakLockPath))) {
+    return { kind: "busy" };
+  }
+  const retry = await createBreakLockFile(breakLockPath, payload);
+  return retry === "created" ? { kind: "acquired", token } : { kind: "busy" };
+}
+
+// Compare-and-delete release, mirroring the canonical lock's own
+// `release()` - only unlink the break-lock if it still carries the token
+// we wrote, so a recovery agent that (correctly) stole this break-lock out
+// from under a presumed-crashed breaker never has its ownership silently
+// clobbered by that breaker's own, now-late release.
+async function releaseBreakLock(path: string, token: string): Promise<void> {
+  const breakLockPath = breakLockPathFor(path);
+  const read = await readLockRaw(breakLockPath);
+  if (read.kind !== "present") return;
+  const payload = parseBreakLockPayload(read.raw);
+  if (payload !== null && payload.token !== token) return;
+  await unlink(breakLockPath).catch(() => undefined);
+}
+
+type BreakStaleLockOutcome =
+  // The canonical lock was confirmed still stale (under arbitration) and
+  // unlinked. Safe to retry acquisition immediately.
+  | "broke"
+  // Another contender is already breaking this lock (or recovering a
+  // crashed breaker). Not our job to act further this iteration.
+  | "arbitration-busy"
+  // We won the break-lock, but the canonical lock's content no longer
+  // matches the stale bytes the break decision was based on (a fresh
+  // holder wrote in the meantime) - or the canonical lock is simply gone
+  // already (released normally, or broken by a contender that raced us to
+  // the decision but not the arbitration). Nothing to restore either way;
+  // must not treat this as a break.
+  | "aborted"
+  // We won the break-lock and confirmed the content was still stale, but
+  // the unlink itself failed (e.g. a transient filesystem error).
+  | "unlink-failed";
+
+async function breakStaleLock(
+  path: string,
+  decisionRaw: string,
+): Promise<BreakStaleLockOutcome> {
+  const acquired = await acquireBreakLock(path);
+  if (acquired.kind === "busy") return "arbitration-busy";
+  try {
+    // A read error here is never evidence (the same rule as the outer
+    // break decision) - abort rather than risk unlinking a file we can't
+    // actually verify.
+    const read = await readLockRaw(path);
+    if (read.kind !== "present" || read.raw !== decisionRaw) {
+      return "aborted";
+    }
+    try {
+      await unlink(path);
+    } catch {
+      return "unlink-failed";
+    }
+    return "broke";
+  } finally {
+    await releaseBreakLock(path, acquired.token);
+  }
+}
+
+// ---- Test-only break-decision pause/observability seam ---------------------
+//
+// Gated on an env var, unset in production (a single lookup, near-zero
+// cost). Lets a genuine multiprocess break-arbitration regression test
+// deterministically interleave "this contender decided to break a stale
+// lock, but hasn't yet attempted it" with actions taken by a DIFFERENT OS
+// process, and records the eventual outcome so the test can assert the
+// arbitrated "aborted" path was actually exercised rather than inferring it
+// from timing. Never read or written by production code paths. Shared by
+// the CLI's and desktop's own genuine multiprocess lock tests.
+const BREAK_HOOK_DIR_ENV = "TRAYCER_CLI_LOCK_TEST_BREAK_HOOK_DIR";
+const BREAK_HOOK_POLL_MS = 20;
+const BREAK_HOOK_MAX_WAIT_MS = 15_000;
+
+async function pauseBeforeBreakForTest(): Promise<void> {
+  const dir = process.env[BREAK_HOOK_DIR_ENV];
+  if (dir === undefined) return;
+  await writeFile(join(dir, "ready"), "").catch(() => undefined);
+  const deadline = Date.now() + BREAK_HOOK_MAX_WAIT_MS;
+  while (Date.now() < deadline) {
+    const exists = await stat(join(dir, "go"))
+      .then(() => true)
+      .catch(() => false);
+    if (exists) return;
+    await sleep(BREAK_HOOK_POLL_MS);
+  }
+}
+
+async function recordBreakOutcomeForTest(
+  outcome: BreakStaleLockOutcome,
+): Promise<void> {
+  const dir = process.env[BREAK_HOOK_DIR_ENV];
+  if (dir === undefined) return;
+  await writeFile(join(dir, "outcome"), outcome).catch(() => undefined);
+}
+
+// ---- Read-only holder probe ------------------------------------------------
+//
+// What a READER (never a contender) can establish about a lock file, using
+// this module's own raw read and metadata parser rather than a second copy
+// of them. Added for the update-attempt layer's read-side interruption
+// derivation, which must distinguish "no holder, proven" from "cannot tell"
+// without ever attempting an acquisition - a status projection that acquired
+// the lock to find out who holds it would itself become a mutator.
+//
+// The arms mirror `LockRead`'s only-positive-evidence discipline exactly:
+// `absent` is the ONLY arm that proves nobody holds the lock. `unparseable`
+// is an empty/corrupt lock file, which a live holder still inside the
+// `open()`->`writeFile()` gap also produces, so it proves nothing either
+// way; `read-error` proves nothing by definition.
+export type LockHolderProbe =
+  | { readonly kind: "absent" }
+  | { readonly kind: "held"; readonly holder: LockMetadata }
+  | { readonly kind: "unparseable" }
+  | { readonly kind: "read-error" };
+
+export async function readLockHolder(path: string): Promise<LockHolderProbe> {
+  const read = await readLockRaw(path);
+  if (read.kind === "absent") return { kind: "absent" };
+  if (read.kind === "read-error") return { kind: "read-error" };
+  const holder = parseLockMetadata(read.raw);
+  return holder === null ? { kind: "unparseable" } : { kind: "held", holder };
+}
+
+/**
+ * The age of a lock file by its mtime, for a READER judging whether an
+ * empty or corrupt lock is still inside {@link EMPTY_LOCK_GRACE_MS} (a holder
+ * mid-creation) or past it (a crashed holder the next acquisition
+ * age-breaks). `null` when the file cannot be stat'd. Negative when the file
+ * is dated in the future - a backward wall-clock step - and such a file is
+ * not age-breakable until its mtime plus the grace window has passed.
+ */
+export async function probeLockFileAgeMs(path: string): Promise<number | null> {
+  return lockFileAgeMs(path);
+}
+
+export { EMPTY_LOCK_GRACE_MS };
+
+/**
+ * What a READER can establish about the break-arbitration sub-lock
+ * (`<lockPath>.break`) that every stale-lock break must first take. A
+ * canonical lock that is provably stale is only RECOVERABLE if that file is
+ * free or recoverable too; a breaker that is alive, or one whose identity
+ * cannot be verified, holds the arbitration and no contender will break the
+ * stale lock behind it (`acquireBreakLock` answers busy and the contender
+ * falls back to its bounded wait).
+ *
+ * `free` covers the absent file, a crashed breaker's file (dead or recycled
+ * pid) and an empty one: `tryRecoverCrashedBreakLock` unlinks those once
+ * past {@link BREAK_LOCK_AGE_GRACE_MS}, which a contender polling inside its
+ * wait reaches on its own. `held` names the breaker when there is one. A file
+ * dated in the future is `held` with no live breaker: it is not recoverable
+ * until its mtime plus the grace window.
+ */
+export type LockBreakArbitrationProbe =
+  | { readonly kind: "free" }
+  | {
+      readonly kind: "held";
+      readonly breaker: {
+        readonly pid: number;
+        readonly startedAt: string;
+      } | null;
+      readonly cause:
+        | "breaker-live"
+        | "breaker-unverifiable"
+        | "dated-in-the-future";
+    }
+  | { readonly kind: "read-error" };
+
+export async function probeLockBreakArbitration(
+  lockPath: string,
+): Promise<LockBreakArbitrationProbe> {
+  const breakLockPath = breakLockPathFor(lockPath);
+  const read = await readLockRaw(breakLockPath);
+  if (read.kind === "absent") return { kind: "free" };
+  if (read.kind === "read-error") return { kind: "read-error" };
+  const payload = parseBreakLockPayload(read.raw);
+  const breaker =
+    payload === null
+      ? null
+      : { pid: payload.pid, startedAt: payload.startedAt };
+  if (payload !== null) {
+    const identity = await verifyProcessIdentityAsync({
+      pid: payload.pid,
+      startedAtMs: payload.processStartedAtMs,
+      startIdentity: payload.processStartIdentity,
+    });
+    if (identity === "alive-same") {
+      return { kind: "held", breaker, cause: "breaker-live" };
+    }
+    if (identity === "indeterminate") {
+      return { kind: "held", breaker, cause: "breaker-unverifiable" };
+    }
+  }
+  const ageMs = await lockFileAgeMs(breakLockPath);
+  if (ageMs !== null && ageMs < -BREAK_LOCK_AGE_GRACE_MS) {
+    return { kind: "held", breaker, cause: "dated-in-the-future" };
+  }
+  return { kind: "free" };
+}
+
+/**
+ * Rewrite liveness metadata only while the canonical lock still carries the
+ * expected token. This shares the stale-break arbitration lock: a contender
+ * that observed a dead publisher cannot unlink/acquire between our ownership
+ * check and the rewrite, and we never restore an old token over a new holder.
+ *
+ * This is intentionally narrower than a public lock mutation API. The token
+ * and all semantic lock fields remain fixed; callers may use it only to
+ * republish a supervised live process identity.
+ */
+export async function rewriteLockLivenessIfToken(
+  path: string,
+  expectedToken: string,
+  next: LockMetadata,
+): Promise<boolean> {
+  const arbitration = await acquireBreakLock(path);
+  if (arbitration.kind === "busy") return false;
+  try {
+    const read = await readLockRaw(path);
+    if (read.kind !== "present") return false;
+    const current = parseLockMetadata(read.raw);
+    if (current === null || current.token !== expectedToken) return false;
+    // Keep the acquisition identity immutable. A liveness rebind must never
+    // become an accidental authority transfer to a different lock token.
+    if (
+      next.token !== expectedToken ||
+      next.reason !== current.reason ||
+      next.startedAt !== current.startedAt
+    ) {
+      return false;
+    }
+    // A crashed publisher must never leave a truncated canonical lock that a
+    // later contender can age-break while its supervised actuator still runs.
+    // The arbitration lock serializes us with stale breaking; a same-directory
+    // temp + rename makes publication itself atomic to every reader.
+    const temporaryPath = `${path}.${randomUUID()}.liveness`;
+    try {
+      const temporary = await open(temporaryPath, "wx", 0o600);
+      try {
+        await temporary.writeFile(JSON.stringify(next, null, 2), "utf8");
+        // The rename swaps directory entries atomically, but only a flushed
+        // temp guarantees the entry resolves to full content after a power
+        // loss — a zero-length canonical lock is exactly the empty record
+        // `acquireLockAtPath` age-breaks after its grace window, while the
+        // supervised actuator may still be running.
+        await temporary.sync();
+      } finally {
+        await temporary.close().catch(() => undefined);
+      }
+      // Retried on win32: any process reading the canonical lock at this
+      // instant (a contender's poll, a `readLockHolder`, the host's holder
+      // probe) holds a handle on it, and `MoveFileExW` will not replace a file
+      // with an open handle. One failed rebind at the hand-back leaves a
+      // retain-on-death record that `release` refuses to unlink - a lock no
+      // one can break. Ownership is re-proven before EVERY retry: the rename
+      // replaces whatever is at `path`, so a reader's EPERM and a genuine
+      // ownership change must never be confused - the first is retried, the
+      // second is the same refusal as a token mismatch above.
+      for (let retryIndex = 0; ; retryIndex += 1) {
+        try {
+          await rename(temporaryPath, path);
+          break;
+        } catch (err) {
+          const retryDelay = windowsRenameRetryDelayMs(err, retryIndex);
+          if (retryDelay === null) throw err;
+          await sleep(retryDelay);
+          const again = await readLockRaw(path);
+          if (again.kind !== "present") return false;
+          const owner = parseLockMetadata(again.raw);
+          if (owner === null || owner.token !== expectedToken) return false;
+        }
+      }
+      // The temp fsync above makes the CONTENT durable; the directory entry
+      // the rename swapped is separate metadata with its own flush. On a
+      // power loss before the directory flushes, the entry reverts to the
+      // pre-rewrite record — no `supervisedProcessGroupId`, no
+      // `retainOnPublisherDeath` — which is the same hazard the temp fsync
+      // closes, arriving through the directory instead of the file. Sync the
+      // directory too. Best-effort where directories cannot be opened
+      // (win32): rename durability there is bounded by the platform, and a
+      // failed dir sync must not turn a completed rename into a refusal.
+      try {
+        const dir = await open(dirname(path), "r");
+        try {
+          await dir.sync();
+        } finally {
+          await dir.close().catch(() => undefined);
+        }
+      } catch {
+        // Windows cannot open directories; elsewhere a failed dir sync
+        // leaves durability at the platform's rename guarantee.
+      }
+    } catch {
+      // A failed republication is a refusal, not an exception: every other
+      // denial in this function returns false, and callers treat a rebind as
+      // deniable rather than wrapping it in try/catch.
+      return false;
+    } finally {
+      await unlink(temporaryPath).catch(() => undefined);
+    }
+    return true;
+  } finally {
+    await releaseBreakLock(path, arbitration.token);
+  }
+}
+
+/**
+ * Conservative holder liveness used by read-side projections. A supervisor
+ * that died is not stale while a detached POSIX actuator group survives. On
+ * platforms where Node cannot prove the group gone, `retainOnPublisherDeath`
+ * fails closed rather than guessing.
+ *
+ * SYNCHRONOUS: on Windows the publisher read is a `tasklist` spawn plus a
+ * PowerShell one, blocking the calling thread for seconds on a loaded machine.
+ * Only for a one-shot command; anything that lives on - the host supervisor,
+ * Electron main, and acquisition itself, which runs in both - takes
+ * {@link verifyLockHolderLivenessAsync}.
+ */
+export function verifyLockHolderLiveness(
+  holder: LockMetadata,
+): ProcessIdentityVerdict {
+  return lockHolderLivenessGivenPublisher(
+    holder,
+    verifyProcessIdentity({
+      pid: holder.pid,
+      startedAtMs: holder.processStartedAtMs,
+      startIdentity: holder.processStartIdentity,
+    }),
+  );
+}
+
+/**
+ * {@link verifyLockHolderLiveness} without blocking the event loop: the same
+ * verdict, from the async publisher read. What acquisition uses: the lock is
+ * taken by long-lived processes too (the host supervisor's lifecycle
+ * teardown, Electron main), and a contended acquisition re-judges the holder
+ * on every poll.
+ */
+export async function verifyLockHolderLivenessAsync(
+  holder: LockMetadata,
+): Promise<ProcessIdentityVerdict> {
+  return lockHolderLivenessGivenPublisher(
+    holder,
+    await verifyProcessIdentityAsync({
+      pid: holder.pid,
+      startedAtMs: holder.processStartedAtMs,
+      startIdentity: holder.processStartIdentity,
+    }),
+  );
+}
+
+/**
+ * {@link verifyLockHolderLiveness} once the publisher's own verdict is known:
+ * the supplemental group and retain-on-death rules alone. Exported for a
+ * READER that already judged the publisher and needs to know whether this
+ * rule will ever let a contender break the record - `traycer host doctor`
+ * names a lock whose publisher is gone but which answers `indeterminate`
+ * here, because no acquisition will ever remove it.
+ */
+export function lockHolderLivenessGivenPublisher(
+  holder: LockMetadata,
+  publisher: ProcessIdentityVerdict,
+): ProcessIdentityVerdict {
+  if (publisher === "alive-same" || publisher === "indeterminate") {
+    return publisher;
+  }
+  if (holder.supervisedProcessGroupId !== undefined) {
+    const group = probeProcessGroupLiveness(holder.supervisedProcessGroupId);
+    if (group === "alive") return "alive-same";
+    if (group === "indeterminate") return "indeterminate";
+    return publisher;
+  }
+  return holder.retainOnPublisherDeath === true ? "indeterminate" : publisher;
+}
+
+function probeProcessGroupLiveness(
+  processGroupId: number,
+): "alive" | "dead" | "indeterminate" {
+  if (process.platform === "win32") return "indeterminate";
+  // Parse already refuses group ids ≤ 1, but this probe is the last line:
+  // `process.kill(-1, 0)` asks "can I signal ANY process", which is true on
+  // every running machine and would report an eternal holder.
+  if (processGroupId <= 1) return "indeterminate";
+  try {
+    // A negative PID probes the POSIX process group. Its leader may already
+    // have exited while a platform child continues the irreversible edge.
+    process.kill(-processGroupId, 0);
+    return "alive";
+  } catch (err) {
+    const code = errorCode(err);
+    if (code === "EPERM") return "alive";
+    if (code === "ESRCH") return "dead";
+    return "indeterminate";
+  }
+}
+
+async function tryAcquireOnce(
+  path: string,
+  meta: LockMetadata,
+): Promise<LockHandle | "held"> {
+  let handle: FileHandle;
+  try {
+    handle = await open(path, "wx", 0o600);
+  } catch (err) {
+    if (errorCode(err) === "EEXIST") return "held";
+    throw err;
+  }
+  try {
+    await handle.writeFile(JSON.stringify(meta, null, 2));
+  } catch (err) {
+    try {
+      await handle.close();
+    } catch {
+      // Best effort - we're already on the error path.
+    }
+    try {
+      await unlink(path);
+    } catch {
+      // Best effort.
+    }
+    throw err;
+  }
+  // Closed as soon as the record is written, never held for the lock's life.
+  // Nothing reads through this handle - it is write-only, and `release` and
+  // every break decision re-read the PATH - and on win32 an open handle is
+  // exactly what makes `rewriteLockLivenessIfToken`'s rename onto this path
+  // fail with EPERM: `MoveFileExW` will not replace a file that has an open
+  // handle, the caller's own included. Holding it excluded nothing there
+  // either. Measured on Windows Server 2022 / NTFS with Node 24 (libuv 1.52):
+  // another process can unlink the path and create a new file at it while the
+  // handle is open, just as on POSIX. So holding it bought only that failure.
+  try {
+    await handle.close();
+  } catch (err) {
+    try {
+      await unlink(path);
+    } catch {
+      // Best effort.
+    }
+    throw err;
+  }
+  let released = false;
+  return {
+    path,
+    metadata: meta,
+    release: async () => {
+      if (released) return;
+      released = true;
+      // Compare-and-delete: unlink ONLY on positive proof this handle
+      // still owns the file - a successful, parseable read whose token
+      // matches the one this handle wrote. Every lock this code writes
+      // carries a non-null `randomUUID()` token, so tokenless or
+      // unparseable present content (empty/corrupt bytes, or a fresh
+      // holder still mid-`writeFile()`) is by definition not ours - an
+      // inability to prove ownership must refuse to delete, not default
+      // to deleting.
+      //
+      // This is a raw read, not a read+fold-to-null shortcut: a transient
+      // read ERROR (EIO/EACCES) must never be treated the same as
+      // "absent" here either. Release sits downstream of the accepted
+      // break-arbitration residual documented above
+      // `tryRecoverCrashedBreakLock` - if a crashed breaker was double-
+      // recovered, this handle's canonical path may now belong to a fresh
+      // holder B. Folding a read error into "nothing to compare, unlink
+      // anyway" would let this release blow away B's live lock on nothing
+      // but a flaky read - the exact only-positive-evidence rule this
+      // module applies to every break decision must hold here too.
+      const read = await readLockRaw(path);
+      if (read.kind === "read-error") {
+        return;
+      }
+      if (read.kind === "absent") {
+        // Already gone - released normally already, or broken by another
+        // contender. Nothing to unlink.
+        return;
+      }
+      const current = parseLockMetadata(read.raw);
+      if (
+        current === null ||
+        current.token === null ||
+        current.token !== meta.token
+      ) {
+        return;
+      }
+      // A parent handle can publish a supervised child only for liveness;
+      // it must nevertheless never unlink that child's record on an error
+      // path. Normal protocol completion first atomically republishes the
+      // parent WITH AN EMPTY PUBLICATION, which is what clears these flags,
+      // and only then calls release. If the child died and its group/tree is
+      // not positively gone, retaining the lock is the fail-closed outcome.
+      //
+      // The condition is the outstanding publication ITSELF, deliberately not
+      // `current.pid !== meta.pid`. That comparison used to stand in for "the
+      // publication has not been handed back yet", which held only while a
+      // supervising parent never published its OWN pid mid-session. It does
+      // now - the maintenance lease publishes the executing process across an
+      // in-process action so the lock is attributed to whoever is actually
+      // doing the work - and a self-publication would otherwise FORGE the
+      // handback signal: a handback that fails before its rename (ENOSPC on
+      // the liveness temp, say) leaves the parent published with the group
+      // flags still set, and the failure paths that deliberately skip
+      // restoration (the win32 branch, and a POSIX reap error) rely on this
+      // guard to hold the lock. Keyed on the flags, retention survives that;
+      // keyed on the pid, release unlinked a lock whose actuator group was
+      // still alive and let the next contender in beside it.
+      if (
+        current.supervisedProcessGroupId !== undefined ||
+        current.retainOnPublisherDeath === true
+      ) {
+        return;
+      }
+      try {
+        await unlink(path);
+      } catch {
+        // If the file already vanished (e.g. swept by another tool), that's fine.
+      }
+    },
+  };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function acquireLockAtPath(
+  path: string,
+  meta: LockMetadata,
+  waitMs: number,
+  pollIntervalMs: number,
+): Promise<AcquireLockOutcome> {
+  const pollMs = Math.max(MIN_POLL_MS, pollIntervalMs);
+  const deadline = Date.now() + Math.max(0, waitMs);
+  while (true) {
+    const attempt = await tryAcquireOnce(path, meta);
+    if (attempt !== "held") return { kind: "acquired", handle: attempt };
+    const read = await readLockRaw(path);
+    if (read.kind === "absent") {
+      // Whatever was here a moment ago is already gone (released
+      // normally, or broken by another contender) - retry acquisition
+      // immediately rather than falling through to a break decision with
+      // nothing to break.
+      continue;
+    }
+    let holder: LockMetadata | null = null;
+    let shouldBreak = false;
+    if (read.kind === "present") {
+      holder = parseLockMetadata(read.raw);
+      if (holder !== null) {
+        // Only positive evidence permits breaking a lock with a parsed
+        // holder record: the holder's pid is positively dead, or a fresh
+        // start-time read positively mismatches the recorded identity (a
+        // recycled pid). Indeterminate cases - a liveness-probe failure,
+        // or a legacy lock with no recorded process-start-time - wait
+        // regardless of age; a wedge is strictly safer than concurrent
+        // mutation of the install/staged tree. There is deliberately no
+        // age ceiling here - a genuinely alive, genuinely
+        // identity-verified holder is never broken out from under itself
+        // no matter how long its operation takes.
+        const identity = await verifyLockHolderLivenessAsync(holder);
+        shouldBreak = identity === "dead" || identity === "alive-different";
+      } else {
+        // Empty or corrupt lock file - no PID to probe. A crashed holder
+        // that died between open() and writeFile() leaves exactly this,
+        // and it can never self-recover via the PID path above. Break it
+        // once it has aged past the grace window, so we don't steal a
+        // lock from a live holder still in the open()->writeFile() gap.
+        // `ageMs === null` (the file vanished between our read and this
+        // stat) is NOT positive evidence of anything - only a successful,
+        // aged-out stat counts.
+        const ageMs = await lockFileAgeMs(path);
+        shouldBreak = ageMs !== null && ageMs >= EMPTY_LOCK_GRACE_MS;
+      }
+    }
+    // `read.kind === "read-error"` falls through with `shouldBreak` still
+    // false - a read failure is never evidence, so this iteration behaves
+    // exactly like any other indeterminate case: no break attempt, just
+    // the deadline check + poll sleep below.
+    if (shouldBreak && read.kind === "present") {
+      // Test-only no-op in production (see `pauseBeforeBreakForTest`'s
+      // doc comment).
+      await pauseBeforeBreakForTest();
+      // `read.raw` is the exact bytes the break decision above was based
+      // on - `breakStaleLock` re-verifies (under its own arbitration lock)
+      // that the canonical lock still matches this before unlinking it,
+      // closing the race where a delayed contender could otherwise unlink
+      // a fresh, live holder that appeared between our read and our
+      // break.
+      const outcome = await breakStaleLock(path, read.raw);
+      await recordBreakOutcomeForTest(outcome);
+      if (outcome === "broke") continue;
+      // "arbitration-busy" (another contender is already breaking this
+      // lock), "aborted" (what we read wasn't - or is no longer - the
+      // stale holder we decided to break), or "unlink-failed": either way
+      // the break failed - fall through to the normal deadline check +
+      // poll sleep rather than spinning; the busy-wait contract must hold
+      // even when a break attempt doesn't pan out.
+    }
+    if (Date.now() >= deadline) {
+      return { kind: "busy", holder };
+    }
+    await sleep(pollMs);
+  }
+}
+
+async function newAcquisitionMetadata(reason: string): Promise<LockMetadata> {
+  // Cached own-process reads, so an acquisition costs no spawn once warm.
+  // Async, because the FIRST acquisition in a process fills that cache: a
+  // synchronous fill would block a long-lived caller's event loop on a `ps`
+  // (macOS) or PowerShell (Windows) spawn.
+  const processStartedAtMs = await ownProcessStartTimeMsAsync();
+  const processStartIdentity = await ownProcessStartIdentityAsync();
+  return {
+    pid: process.pid,
+    reason,
+    startedAt: nowIso(),
+    hostname: hostnameSafe(),
+    token: randomUUID(),
+    processStartedAtMs,
+    processStartIdentity,
+  };
+}
+
+export async function acquireLock(
+  opts: AcquireLockOptions,
+): Promise<AcquireLockOutcome> {
+  return acquireLockAtPath(
+    opts.lockPath,
+    await newAcquisitionMetadata(opts.reason),
+    opts.waitMs,
+    opts.pollIntervalMs,
+  );
+}
+
+export type WithLockOutcome<T> =
+  | { readonly kind: "acquired"; readonly result: T }
+  | { readonly kind: "busy"; readonly holder: LockMetadata | null };
+
+// Acquire, run `fn`, release in `finally`. Catches nothing on the inner
+// function; the lock is released either way.
+export async function withLock<T>(
+  opts: AcquireLockOptions,
+  fn: (handle: LockHandle) => Promise<T>,
+): Promise<WithLockOutcome<T>> {
+  const outcome = await acquireLock(opts);
+  if (outcome.kind === "busy") {
+    return { kind: "busy", holder: outcome.holder };
+  }
+  try {
+    const result = await fn(outcome.handle);
+    return { kind: "acquired", result };
+  } finally {
+    await outcome.handle.release();
+  }
+}

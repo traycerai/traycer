@@ -1,0 +1,283 @@
+import { registerPaneOpenerFocus } from "@/lib/canvas/focus-pane-opener";
+/**
+ * Inline opener rendered directly inside an empty tile pane (no modal). The
+ * empty pane IS the opener: it shows the search input + opener categories and
+ * drills into sub-pages in place. Each pane mounts its own instance with
+ * independent query + sub-page stack, so multiple empty panes are live at once.
+ *
+ * Builds a pane-scoped `CommandContext` (`targetGroupId = this pane's group`,
+ * `activeTabId`/`activeEpicId` = this pane's tab/epic), so leaves open into
+ * THIS pane via `openTileInPane`. Host-dependent hooks work directly -
+ * the pane renders within the app provider stack (unlike the app-root modal).
+ *
+ * Precedent for inline cmdk (Command outside a Dialog): worktree-picker.tsx,
+ * shell-program-combobox.tsx.
+ */
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
+import { ArrowLeftIcon } from "lucide-react";
+import { Command, CommandInput, CommandList } from "@/components/ui/command";
+import { InputGroupButton } from "@/components/ui/input-group";
+import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
+import { useCommandPaletteRouter } from "@/components/command-palette/command-palette-context";
+import {
+  OpenerDeepView,
+  OpenerRootView,
+  SubpageView,
+} from "@/components/command-palette/palette-cmdk";
+import {
+  paletteFilter,
+  handlePalettePageNavigation,
+  usePaletteController,
+  usePaletteScrollReset,
+} from "@/components/command-palette/palette-cmdk-controller";
+import { getOpenerItems } from "@/lib/commands/registry";
+import { deletedArtifactsOpenerItem } from "@/lib/commands/sources/open/deleted-artifacts-leaf";
+import { PaletteQueryProvider } from "@/lib/commands/palette-query-context";
+import { SearchRunView } from "@/components/epic-canvas/canvas/search-run-view";
+import { useDeletedArtifactsAvailable } from "@/hooks/epic/use-deleted-artifacts-available";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import {
+  isSearchRunSubpageId,
+  parseSearchRunSubpageId,
+} from "@/lib/commands/sources/open/search-target";
+import { isFilesResultSubpageId } from "@/lib/commands/sources/open/files-result-subpage";
+import type { CommandContext } from "@/lib/commands/types";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
+import {
+  pendingSendSurfaceKey,
+  usePendingSandboxSendStore,
+} from "@/stores/sandboxes/pending-sandbox-send-store";
+
+export interface PaneOpenerProps {
+  readonly epicId: string;
+  readonly tabId: string;
+  readonly groupId: string;
+  /**
+   * Whether this pane is the globally-active group. When it becomes active
+   * (e.g. a keyboard split makes the new empty pane active) the search input
+   * is focused so the user can type into the opener without a mouse click.
+   */
+  readonly active: boolean;
+}
+
+export function PaneOpener(props: PaneOpenerProps) {
+  const userId = useAuthStore((state) => state.profile?.userId ?? null);
+  const stages = useStagedSandboxStore((state) => state.bySurface);
+  const hasContent = useEpicCanvasStore((state) =>
+    Object.values(
+      state.canvasByTabId[props.tabId]?.tilesByInstanceId ?? {},
+    ).some((tile) => tile !== undefined && tile.type !== "blank"),
+  );
+  const hasPendingMessage = usePendingSandboxSendStore((state) =>
+    Object.values(state.sends).some((send) => {
+      if (
+        send.epicId !== props.epicId ||
+        send.userId !== userId ||
+        send.request.kind !== "chat" ||
+        send.delivery !== null ||
+        send.ended === true
+      )
+        return false;
+      const placement = send.request.placement;
+      if (placement === null ? hasContent : placement.paneId !== props.groupId)
+        return false;
+      // A held Stop or uncertain dispatch still owns the pending message.
+      if (
+        send.stopRequested === true ||
+        (send.dispatch !== undefined && send.dispatch !== null)
+      )
+        return true;
+      const failure =
+        (stages[pendingSendSurfaceKey(send.id)] ?? send.stopStage)?.failure ??
+        null;
+      return failure === null || failure.kind === "timed-out";
+    }),
+  );
+  // The pending message already occupies this empty pane. Keep the opener's
+  // input and focus registration unmounted until the send releases it.
+  if (hasPendingMessage) return null;
+  return <AvailablePaneOpener {...props} />;
+}
+
+function AvailablePaneOpener(props: PaneOpenerProps) {
+  const { epicId, tabId, groupId, active } = props;
+  const router = useCommandPaletteRouter();
+  const [query, setQuery] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const focusedActivation = useRef<string | null>(null);
+  const coarsePointer = useCoarsePointer();
+
+  useEffect(() => {
+    if (!active) {
+      focusedActivation.current = null;
+      return;
+    }
+    const activation = JSON.stringify([tabId, groupId, coarsePointer]);
+    // Effect replay must not repeat implicit autofocus after a cancelled
+    // explicit request. A real activation change gets a fresh autofocus.
+    const autofocus =
+      focusedActivation.current !== activation && !coarsePointer;
+    focusedActivation.current = activation;
+    return registerPaneOpenerFocus(
+      tabId,
+      groupId,
+      () => inputRef.current?.focus({ preventScroll: true }),
+      autofocus,
+    );
+  }, [active, coarsePointer, tabId, groupId]);
+
+  const ctx = useMemo<CommandContext>(
+    () => ({
+      pathname: router.getPathname(),
+      router,
+      activeTabId: tabId,
+      activeEpicId: epicId,
+      focusedComposerKind: null,
+      targetGroupId: groupId,
+    }),
+    [router, tabId, epicId, groupId],
+  );
+
+  const controller = usePaletteController({
+    ctx,
+    resetQuery: () => setQuery(""),
+    // The inline opener has no recents/pins and no dialog to close.
+    recordUse: () => undefined,
+    close: () => undefined,
+  });
+
+  const epicHostId = useEpicSessionHostId();
+  const deletedArtifactsAvailable = useDeletedArtifactsAvailable(epicHostId);
+  const openerItems = useMemo(() => {
+    const items = getOpenerItems(ctx);
+    return deletedArtifactsAvailable && epicHostId !== null
+      ? [...items, deletedArtifactsOpenerItem(ctx, epicHostId)]
+      : items;
+  }, [ctx, deletedArtifactsAvailable, epicHostId]);
+  const { activeSubpage, runItem, popSubpage } = controller;
+
+  // The text-search step-2 sub-page is rendered by a bespoke view (query +
+  // options + results) rather than the generic fuzzy list, and cmdk's own
+  // filtering is disabled for it: content search is literal/regex, so the
+  // pattern must never fuzzy-filter the result rows.
+  const searchRunTarget =
+    activeSubpage !== null && isSearchRunSubpageId(activeSubpage.id)
+      ? parseSearchRunSubpageId(activeSubpage.id)
+      : null;
+
+  // The Files step-2 result lists come pre-ranked from `workspace.searchPaths`
+  // (host Fuse, typo/transposition tolerant). cmdk's own filter must NOT
+  // re-score/re-order them or drop typo matches, and must not hide the typed
+  // notice/truncation rows under a non-matching query. Its filtering stays ON
+  // for the Files step-1 source picker and every other opener page.
+  const hostRankedResultSubpage =
+    activeSubpage !== null && isFilesResultSubpageId(activeSubpage.id);
+
+  const inputPlaceholder = (): string => {
+    if (searchRunTarget !== null) return "Text search…";
+    return activeSubpage !== null ? activeSubpage.title : "Open into pane…";
+  };
+
+  const renderListBody = () => {
+    if (searchRunTarget !== null) {
+      return (
+        <SearchRunView
+          key={activeSubpage?.id}
+          target={searchRunTarget}
+          ctx={ctx}
+        />
+      );
+    }
+    if (activeSubpage !== null) {
+      return (
+        <SubpageView
+          key={activeSubpage.id}
+          subpage={activeSubpage}
+          ctx={ctx}
+          onSelect={runItem}
+        />
+      );
+    }
+    return (
+      <>
+        <OpenerRootView items={openerItems} onSelect={runItem} />
+        {/* Deep search: while typing at the root, every sub-page leaf (n levels
+            down) is also searchable, labelled with its full path. */}
+        {query.trim() !== "" ? (
+          <OpenerDeepView items={openerItems} ctx={ctx} onSelect={runItem} />
+        ) : null}
+      </>
+    );
+  };
+
+  // Typing re-filters the list; `handleQueryChange` keeps the auto-selected
+  // first match in view by snapping the scroll container back to the top.
+  const { listRef, handleQueryChange } = usePaletteScrollReset(setQuery);
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    // Escape backs out of a sub-page; at the root it does nothing (the pane
+    // stays empty/open, still a drop target).
+    if (event.key === "Escape" && activeSubpage !== null) {
+      event.preventDefault();
+      event.stopPropagation();
+      popSubpage();
+      return;
+    }
+    handlePalettePageNavigation(event, listRef);
+  };
+
+  return (
+    <div
+      data-testid="pane-opener"
+      data-group-id={groupId}
+      className="flex h-full min-h-0 w-full flex-col"
+    >
+      {/* `label` is what actually names the search box: cmdk points the input's
+          `aria-labelledby` at its own hidden label element, so without this the
+          input's `aria-label` is overridden by an empty name. */}
+      <Command
+        filter={paletteFilter}
+        label="Open into pane"
+        loop
+        shouldFilter={searchRunTarget === null && !hostRankedResultSubpage}
+        onKeyDown={handleKeyDown}
+        variant="embedded"
+        className="h-full min-h-0"
+      >
+        <PaletteQueryProvider value={query}>
+          <CommandInput
+            ref={inputRef}
+            value={query}
+            onValueChange={handleQueryChange}
+            leading={
+              activeSubpage !== null ? (
+                <InputGroupButton
+                  size="icon-xs"
+                  aria-label="Back"
+                  onClick={popSubpage}
+                >
+                  <ArrowLeftIcon />
+                </InputGroupButton>
+              ) : undefined
+            }
+            placeholder={inputPlaceholder()}
+            aria-label="Open into pane"
+          />
+          {/* `max-h-none` overrides the primitive's `max-h-72` cap so the list
+              fills the full pane height instead of clipping mid-way. */}
+          <CommandList ref={listRef} className="max-h-none min-h-0 flex-1 p-1">
+            {renderListBody()}
+          </CommandList>
+        </PaletteQueryProvider>
+      </Command>
+    </div>
+  );
+}

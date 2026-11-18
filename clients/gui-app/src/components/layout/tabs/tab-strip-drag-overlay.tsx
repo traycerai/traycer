@@ -1,0 +1,70 @@
+import * as m from "motion/react-m";
+import {
+  useEpicDndStore,
+  type HeaderTabDragGhost,
+} from "@/components/epic-canvas/dnd/dnd-store";
+import { cn } from "@/lib/utils";
+import type { HeaderTab } from "@/stores/tabs/types";
+import { HeaderTabPreview } from "./header-tab-visual";
+import {
+  headerTabClassName,
+  useHeaderTabOverlayFadeTransition,
+} from "./tab-chrome-tokens";
+
+interface HeaderTabDragOverlayProps {
+  readonly tab: HeaderTab;
+  readonly isActive: boolean;
+  /**
+   * Render-ready enrichment (`appearance`, `indicatorState`)
+   * resolved ONCE at drag start from the strip item's own drag payload - see
+   * `HeaderTabDragGhost` in `dnd-store.ts` for why this exists and what it
+   * deliberately does not keep live. `null` only when no header-tab drag is
+   * active, or the payload came from a drag begun before a hot reload.
+   */
+  readonly ghost: HeaderTabDragGhost | null;
+  /** Source tab's measured width, so the dragged object is the tab itself. */
+  readonly width: number | null;
+}
+
+/** Captured appearance and notifications with live activity status. */
+export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
+  const tab = props.tab;
+  // While a split preview shows the overlay fades out: it covers the preview,
+  // which names the dragged task and says where it goes, and even ghosted its
+  // label drew over the target's own.
+  const mergeTargeted = useEpicDndStore(
+    (state) => state.topLevelStripPairPreview !== null,
+  );
+  // Faded out over a split preview, it does not join the sheet either: the
+  // bridge is drawn outside this overlay, so it would stay painted under the
+  // faded box with no tab above it.
+  const joined = props.isActive && !mergeTargeted;
+  const fade = useHeaderTabOverlayFadeTransition();
+  return (
+    <m.div
+      // Named so an instrument can find it by identity rather than by a
+      // heuristic. It was previously located as "the first `.cursor-grabbing`
+      // element under 500px wide, excluding the shield" - which happened to be
+      // correct and had no reason to stay so.
+      data-testid="header-tab-drag-overlay"
+      // No entry scale/offset: the dragged tab must be the SAME object that was
+      // under the pointer a frame ago, not a chip that animates into being.
+      initial={false}
+      animate={{ opacity: mergeTargeted ? 0 : 1 }}
+      transition={fade}
+      style={props.width === null ? undefined : { width: props.width }}
+      className={cn(
+        headerTabClassName("own", props.isActive),
+        "pointer-events-none cursor-grabbing select-none",
+      )}
+    >
+      <HeaderTabPreview
+        tab={tab}
+        ghost={props.ghost}
+        chrome="own"
+        isActive={props.isActive}
+        joined={joined}
+      />
+    </m.div>
+  );
+}

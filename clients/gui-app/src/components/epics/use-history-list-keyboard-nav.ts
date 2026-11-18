@@ -1,0 +1,119 @@
+import { useCallback, type KeyboardEvent, type RefObject } from "react";
+
+import { listNavigationKey } from "@/lib/keybindings/list-navigation-key";
+
+/**
+ * `data-history-row-target` marks a row's full-card activation control in
+ * `epics-list-panel.tsx` - the `<Link>` overlay in normal mode, the toggle
+ * `<button>` in selection mode. Both already sit at
+ * `absolute inset-0`, so focusing one IS "this row is focused" for every visual
+ * the row already keys off `group-focus-within/list-row` (pin, PR pills) plus
+ * the control's own focus ring. Roving real DOM focus rather than
+ * `aria-activedescendant`: the rows are rich (link, checkbox, pin, delete,
+ * context menu), not listbox options, so virtual focus would have to reimplement
+ * activation that Enter on the anchor already does natively.
+ */
+export const ROW_TARGET_SELECTOR = "[data-history-row-target]";
+
+/**
+ * The other kind of stop under the same scroll container: a chat-search result
+ * control, which marks itself with its own attribute
+ * (`chat-search-keyboard-nav.ts`, whose rows History's message-hit section
+ * reuses verbatim). Those rows are rendered by shared components that place
+ * their own marker, so History reads THEIR marker rather than asking them to
+ * carry a second one - and in exchange the hit's expand toggle and its "Show
+ * more" button become stops too, exactly as they are in the search dialog.
+ */
+const CHAT_SEARCH_NAV_SELECTOR = "[data-chat-search-nav]";
+
+const NAV_STOP_SELECTOR = `${ROW_TARGET_SELECTOR}, ${CHAT_SEARCH_NAV_SELECTOR}`;
+
+export interface HistoryListKeyboardNav {
+  /** Bind to the search box: ArrowDown drops into the first result. */
+  readonly onSearchKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
+  /**
+   * Bind to each row's activation control: ArrowUp/ArrowDown walk the rows.
+   * On the control rather than on the list container so the listener sits on an
+   * interactive element - a non-interactive `<ul>` carrying key handlers is
+   * exactly what `jsx-a11y/no-noninteractive-element-interactions` rejects, and
+   * the row overlays have no focusable children to intercept anything.
+   */
+  readonly onRowKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
+}
+
+/**
+ * Every stop under `scope`, in DOM order - task rows and message hits alike.
+ *
+ * Disabled controls are dropped: `HTMLElement.focus()` does nothing on one, so
+ * a disabled stop left in the sequence swallows the keystroke and parks the
+ * traversal. No history row target is ever disabled; a hit's "Show more"
+ * button is, while its page is in flight.
+ *
+ * `scope` is the scroll container rather than one `<ul>`, and that is the
+ * whole of what makes preserved-orphan rows reachable: they render in their
+ * own `<section>`/`<ul>` ABOVE the ordinary results, so a scope pinned to the
+ * ordinary list skipped them on the way down from search and answered `-1` to
+ * `indexOf` for a keystroke ON one - leaving the arrows dead on those rows,
+ * and the whole result set unreachable from search on a page that had only
+ * them. Any future section of rows joins the sequence by rendering inside the
+ * same container, which is the property a per-list ref cannot have.
+ */
+function rowTargets(scope: HTMLElement | null): ReadonlyArray<HTMLElement> {
+  if (scope === null) return [];
+  return Array.from(
+    scope.querySelectorAll<HTMLElement>(NAV_STOP_SELECTOR),
+  ).filter((element) => !element.hasAttribute("disabled"));
+}
+
+/**
+ * Arrow-key traversal from the history search box into its results.
+ *
+ * The DOM order of the rendered rows is the traversal order, read fresh on each
+ * keystroke - no index state to drift out of sync when the query refines the
+ * list mid-cycle, and "Show more" rows join the sequence the moment they mount.
+ */
+export function useHistoryListKeyboardNav(
+  searchInputRef: RefObject<HTMLInputElement | null>,
+  rowsScopeRef: RefObject<HTMLElement | null>,
+): HistoryListKeyboardNav {
+  const onSearchKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLInputElement>) => {
+      if (listNavigationKey(event) !== "ArrowDown") return;
+      const targets = rowTargets(rowsScopeRef.current);
+      if (targets.length === 0) return;
+      // Only claim the key once there is somewhere to go, so an empty result
+      // set leaves the caret's own ArrowDown behaviour intact.
+      event.preventDefault();
+      targets[0].focus();
+    },
+    [rowsScopeRef],
+  );
+
+  const onRowKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLElement>) => {
+      const navigationKey = listNavigationKey(event);
+      if (navigationKey !== "ArrowDown" && navigationKey !== "ArrowUp") return;
+      const targets = rowTargets(rowsScopeRef.current);
+      const index = targets.indexOf(event.currentTarget);
+      // The row unmounted from the list this keystroke resolves against (a
+      // refetch landed mid-cycle) - drop the key rather than jumping somewhere
+      // arbitrary.
+      if (index < 0) return;
+      event.preventDefault();
+      if (navigationKey === "ArrowDown") {
+        targets[Math.min(index + 1, targets.length - 1)].focus();
+        return;
+      }
+      if (index === 0) {
+        // Back out to the query rather than trapping at the top: refining a
+        // near-miss search is the common next move after cycling the matches.
+        searchInputRef.current?.focus();
+        return;
+      }
+      targets[index - 1].focus();
+    },
+    [rowsScopeRef, searchInputRef],
+  );
+
+  return { onSearchKeyDown, onRowKeyDown };
+}

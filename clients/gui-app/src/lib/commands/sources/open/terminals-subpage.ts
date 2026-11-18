@@ -1,0 +1,523 @@
+/**
+ * Opener "Terminals" sub-page: pinned "Create new terminal" (which drills into
+ * workspace selection without leaving cmdk), then existing terminals from
+ * `useTerminalList`.
+ *
+ * The task's selected/default host's workspaces are shown directly. Other
+ * available hosts are nested sub-pages backed by transient clients, so cross-host creation remains
+ * possible without changing the app-wide active host or opening a modal.
+ */
+import { useEffect, useMemo } from "react";
+import { v4 as uuidv4 } from "uuid";
+import { toast } from "sonner";
+import type { WorktreeBindingSelectorRowV12 } from "@traycer/protocol/host";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mintNewEpicTerminalTile } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
+import { useTabSurfaceKey } from "@/hooks/host/use-surface-host-pin";
+import { useActiveEpicSurfaceHostPin } from "@/lib/commands/sources/open/use-active-epic-surface-host-pin";
+import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useActiveEpicHostId } from "@/lib/commands/sources/open/use-active-epic-projection";
+import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
+import { useHostOptions } from "@/components/settings/host-scope/use-host-options";
+import {
+  AVAILABLE_HOST_ROW_SURFACE_STATE,
+  groupHostOptions,
+  isHostOptionSelectable,
+} from "@/components/settings/host-scope/host-option-model";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
+import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
+import { useRefreshHostDirectoryOnOpen } from "@/hooks/host/use-refresh-host-directory-on-open";
+import { dialableHostEndpoint } from "@/lib/host/transport-key";
+import { useTerminalList } from "@/hooks/terminal/use-terminal-list-query";
+import { useTerminalWorkspaceBindingsForClient } from "@/hooks/worktree/use-worktree-list-bindings-for-epic-query";
+import {
+  useHostBinding,
+  useHostClient,
+  type HostRpcRegistry,
+} from "@/lib/host";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import { openTileIntoTargetGroup } from "@/lib/commands/actions";
+import { makeListedEpicTerminalRef } from "@/lib/terminals/listed-epic-terminal-ref";
+import { isVisibleEpicTerminalSession } from "@/lib/terminals/terminal-session-filters";
+import { isWorkspaceResolvePending } from "@traycer-clients/shared/worktree/worktree-row-state";
+import { withoutResolvedMissingRows } from "@/lib/worktree/worktree-row-resolved-missing";
+import {
+  formatWorktreeFolderDisabledReason,
+  worktreeFolderRowBadge,
+  type WorktreeFolderRowBadge,
+} from "@/lib/worktree/worktree-folder-disabled-reason";
+import { isBrowsable } from "@/lib/worktree/worktree-row-browsable";
+import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
+import { useTaskHomeDirectory } from "@/hooks/terminal/use-task-home-directory";
+import {
+  openerActionLeaf,
+  openerExistingLeaf,
+  openerSubpageLeaf,
+} from "@/lib/commands/sources/open/open-leaf";
+import type {
+  CommandContext,
+  CommandItem,
+  CommandSubpage,
+} from "@/lib/commands/types";
+import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
+
+function terminalWorkspaceLeaf(props: {
+  readonly ctx: CommandContext;
+  readonly target: { readonly hostId: string; readonly cwd: string };
+  readonly label: string;
+  readonly hostClient: HostClient<HostRpcRegistry>;
+  readonly status: WorktreeFolderRowBadge | null;
+}): CommandItem {
+  const { ctx, target, label, hostClient, status } = props;
+  // Cmdk can invoke a selected row twice before its view rerenders. Keep this
+  // synchronous per-leaf latch so one workspace selection creates one terminal.
+  let hasLaunched = false;
+  const leaf = openerActionLeaf({
+    id: `open:terminals:new:${target.hostId}:${encodeURIComponent(target.cwd)}`,
+    label,
+    keywords: [target.cwd, "new", "terminal", "workspace"],
+    run: () => {
+      if (hasLaunched) return;
+      const liveEntry = hostClient.resolveHostById(target.hostId);
+      // Coarse, through the canonical rule: this is the launch gate for a
+      // terminal on a named host — a pure "can we dial it" with nothing to
+      // explain to anyone, and it must give the same answer the tile's own
+      // dial will give a moment later.
+      if (liveEntry === null || dialableHostEndpoint(liveEntry) === null) {
+        // Silent refusal used to look like a broken row - the palette entry
+        // that offered this launch a moment ago went stale between listing
+        // and selection (host dropped its lease, session died).
+        toast(
+          `Can't create a terminal on ${hostNameFromLabel(liveEntry?.label ?? null, target.hostId)} right now - it's not reachable.`,
+        );
+        return;
+      }
+      const epicId = ctx.activeEpicId;
+      if (epicId === null) return;
+      hasLaunched = true;
+      openTileIntoTargetGroup({
+        tabId: ctx.activeTabId,
+        groupId: ctx.targetGroupId,
+        ref: mintNewEpicTerminalTile({ ...target, epicId }),
+        dedupe: false,
+        navigateNestedFocus: ctx.router.navigateNestedFocus,
+      });
+    },
+  });
+  if (status === null) return leaf;
+  const statusBadge = `${status.label.charAt(0).toUpperCase()}${status.label.slice(1)}`;
+  return { ...leaf, statusBadge, description: status.detail };
+}
+
+function terminalWorkspaceCheckingHint(
+  row: WorktreeBindingSelectorRowV12,
+): CommandItem {
+  return {
+    id: `open:terminals:new:${row.hostId}:${encodeURIComponent(row.runningDir)}:checking`,
+    label: row.runningDir,
+    description: "Checking folder…",
+    statusBadge: "Checking folder…",
+    disabled: true,
+    keywords: [row.runningDir, "new", "terminal", "workspace", "checking"],
+    group: "open",
+    scope: "actions",
+    shortcut: null,
+    actionId: null,
+    subpage: null,
+    run: () => undefined,
+  };
+}
+
+function terminalWorkspaceDisabledHint(
+  row: WorktreeBindingSelectorRowV12,
+): CommandItem {
+  const reason = formatWorktreeFolderDisabledReason(row) ?? "unavailable";
+  return {
+    id: `open:terminals:new:${row.hostId}:${encodeURIComponent(row.runningDir)}:disabled`,
+    label: row.runningDir,
+    description: `Folder unavailable: ${reason}`,
+    statusBadge: `Unavailable: ${reason}`,
+    disabled: true,
+    keywords: [row.runningDir, "new", "terminal", "workspace", reason],
+    group: "open",
+    scope: "actions",
+    shortcut: null,
+    actionId: null,
+    subpage: null,
+    run: () => undefined,
+  };
+}
+
+function terminalWorkspaceFolderlessCwdErrorHint(hostId: string): CommandItem {
+  return {
+    id: `open:terminals:new:host:${hostId}:folderless-cwd-error`,
+    label: "Couldn't resolve terminal directory",
+    description: "This host doesn't support folderless terminal directories",
+    statusBadge: "Unavailable",
+    disabled: true,
+    keywords: ["workspace", "terminal", "directory", "error"],
+    group: "open",
+    scope: "actions",
+    shortcut: null,
+    actionId: null,
+    subpage: null,
+    run: () => undefined,
+  };
+}
+
+function terminalWorkspaceLeaves(
+  ctx: CommandContext,
+  hostId: string,
+  workspace: {
+    readonly rows: ReadonlyArray<WorktreeBindingSelectorRowV12>;
+    readonly folderlessCwd: string | null;
+  },
+  hostClient: HostClient<HostRpcRegistry>,
+): ReadonlyArray<CommandItem> {
+  const rowsWithoutResolvedMissing = withoutResolvedMissingRows(
+    workspace.rows,
+    null,
+  );
+  const visibleRows = rowsWithoutResolvedMissing.filter(
+    (row) => row.hostId === hostId,
+  );
+  const selectableRows = visibleRows.filter(isBrowsable);
+  const checkingRows = visibleRows.filter(
+    (row) => !isBrowsable(row) && isWorkspaceResolvePending(row),
+  );
+  const disabledRows = visibleRows.filter(
+    (row) => !isBrowsable(row) && !isWorkspaceResolvePending(row),
+  );
+  const leaves = selectableRows.map((row) =>
+    terminalWorkspaceLeaf({
+      ctx,
+      target: { hostId: row.hostId, cwd: row.runningDir },
+      label: row.runningDir,
+      hostClient,
+      status: worktreeFolderRowBadge(row),
+    }),
+  );
+  const checkingHints = checkingRows.map(terminalWorkspaceCheckingHint);
+  const disabledHints = disabledRows.map(terminalWorkspaceDisabledHint);
+  if (
+    leaves.length > 0 ||
+    checkingHints.length > 0 ||
+    disabledHints.length > 0
+  ) {
+    return [...leaves, ...checkingHints, ...disabledHints];
+  }
+  // Match the sidebar picker: the host-owned fallback cwd is valid only when
+  // the Epic truly has no live binding rows on any host. Disabled bindings do
+  // not silently degrade to an unrelated default directory.
+  if (
+    rowsWithoutResolvedMissing.length === 0 &&
+    workspace.folderlessCwd !== null
+  ) {
+    return [
+      terminalWorkspaceLeaf({
+        ctx,
+        target: { hostId, cwd: workspace.folderlessCwd },
+        label: workspace.folderlessCwd,
+        hostClient,
+        status: null,
+      }),
+    ];
+  }
+  if (rowsWithoutResolvedMissing.length === 0) {
+    return [terminalWorkspaceFolderlessCwdErrorHint(hostId)];
+  }
+  return [];
+}
+
+function terminalWorkspaceStatusHint(
+  hostId: string,
+  status: "loading" | "error",
+): CommandItem {
+  const isLoading = status === "loading";
+  return {
+    id: `open:terminals:new:host:${hostId}:${status}`,
+    label: isLoading ? "Loading folders…" : "Couldn't load folders",
+    description: isLoading
+      ? "Fetching folders for this host"
+      : "Retry the folder availability check",
+    statusBadge: isLoading ? "Loading" : "Unavailable",
+    disabled: true,
+    keywords: ["workspace", status],
+    group: "open",
+    scope: "actions",
+    shortcut: null,
+    actionId: null,
+    subpage: null,
+    run: () => undefined,
+  };
+}
+
+interface TerminalWorkspaceQueryState {
+  readonly rows: ReadonlyArray<WorktreeBindingSelectorRowV12> | undefined;
+  readonly folderlessCwd: string | null | undefined;
+  readonly isPending: boolean;
+  readonly isError: boolean;
+  readonly isFetching: boolean;
+  readonly retry: () => void;
+}
+
+function terminalWorkspaceQueryItems(
+  ctx: CommandContext,
+  hostId: string,
+  query: TerminalWorkspaceQueryState,
+  hostClient: HostClient<HostRpcRegistry>,
+): ReadonlyArray<CommandItem> {
+  if (query.isPending || (query.isFetching && !query.isError)) {
+    return [terminalWorkspaceStatusHint(hostId, "loading")];
+  }
+  const items = query.isError
+    ? [terminalWorkspaceStatusHint(hostId, "error")]
+    : terminalWorkspaceLeaves(
+        ctx,
+        hostId,
+        { rows: query.rows ?? [], folderlessCwd: query.folderlessCwd ?? null },
+        hostClient,
+      );
+  const hasUnverifiedRows = (query.rows ?? []).some(
+    (row) => !isBrowsable(row) && row.isGitResolvePending,
+  );
+  if (!query.isError && !hasUnverifiedRows) return items;
+  return [
+    ...items,
+    {
+      ...openerActionLeaf({
+        // Recovery is not a terminal-open command for analytics.
+        id: `workspace-check:terminal:${hostId}:retry`,
+        label: "Retry folder check",
+        keywords: ["workspace", "terminal", "retry"],
+        run: query.retry,
+      }),
+      keepOpen: true,
+      disabled: query.isFetching,
+    },
+  ];
+}
+
+function useHostTerminalWorkspaceItems(
+  ctx: CommandContext,
+  hostId: string,
+): ReadonlyArray<CommandItem> {
+  const hostClient = useHostClient();
+  const client = useHostClientForHostId(hostId);
+  const bindings = useTerminalWorkspaceBindingsForClient({
+    client,
+    epicId: ctx.activeEpicId ?? "",
+    enabled: ctx.activeEpicId !== null,
+  });
+  const retryBindings = bindings.refetch;
+  return useMemo(
+    () =>
+      terminalWorkspaceQueryItems(
+        ctx,
+        hostId,
+        {
+          rows: bindings.data?.rows,
+          folderlessCwd: bindings.data?.folderlessCwd,
+          isPending: bindings.isPending,
+          isError: bindings.isError,
+          isFetching: bindings.isFetching,
+          retry: () => {
+            void retryBindings({ cancelRefetch: false });
+          },
+        },
+        hostClient,
+      ),
+    [
+      bindings.data,
+      bindings.isError,
+      bindings.isFetching,
+      bindings.isPending,
+      retryBindings,
+      ctx,
+      hostClient,
+      hostId,
+    ],
+  );
+}
+
+/**
+ * Opening a host's sub-page is the pick, as in the new-terminal picker: a
+ * sleeping sandbox is woken, and its workspaces list once it answers.
+ */
+function useHostWorkspaceSubpageItems(
+  ctx: CommandContext,
+  host: HostScopeOption,
+): ReadonlyArray<CommandItem> {
+  useEffect(() => {
+    wakeSandboxOnPick(host, "open-terminal");
+  }, [host]);
+  return useHostTerminalWorkspaceItems(ctx, host.hostId);
+}
+
+function makeHostWorkspaceSubpage(host: HostScopeOption): CommandSubpage {
+  return {
+    id: `open:terminals:new:host:${host.hostId}`,
+    title: `Create terminal on ${host.name}`,
+    useItems: (ctx) => useHostWorkspaceSubpageItems(ctx, host),
+  };
+}
+
+function useNewTerminalWorkspaceItems(
+  ctx: CommandContext,
+): ReadonlyArray<CommandItem> {
+  const surfaceKey = useTabSurfaceKey("new-terminal", ctx.activeTabId ?? "");
+  const { resolvedHostId } = useActiveEpicSurfaceHostPin(
+    surfaceKey,
+    ctx.activeEpicId,
+  );
+  const client = useHostClientForHostId(resolvedHostId);
+  const hostClient = useHostClient();
+  const bindings = useTerminalWorkspaceBindingsForClient({
+    client,
+    epicId: ctx.activeEpicId ?? "",
+    enabled: ctx.activeEpicId !== null && resolvedHostId !== null,
+  });
+  const binding = useHostBinding();
+  // Command subpages mount only when selected, so this refresh gives the
+  // workspace chooser the same freshly-reachable host list as the old dialog.
+  useRefreshHostDirectoryOnOpen(true, binding?.directory ?? null);
+  const directory = useHostDirectoryList();
+  // Every picker's host rule (`hostOptionPickerGroup`): personal hosts, the
+  // user's sandboxes and each team's computers and sandboxes; never Automations, an agent's
+  // burst sandbox or a sandbox whose control-plane row has not answered.
+  const hostOptions = useHostOptions().hosts;
+  const offeredHosts = useMemo(() => {
+    const groups = groupHostOptions(hostOptions, false, null, null);
+    return new Map(
+      [
+        ...groups.personal,
+        ...groups.sandboxes,
+        ...groups.teams.flatMap((team) => [
+          ...team.computers,
+          ...team.sandboxes,
+        ]),
+      ].map((host) => [host.hostId, host]),
+    );
+  }, [hostOptions]);
+  const retryBindings = bindings.refetch;
+  return useMemo(() => {
+    const selectedHostLeaves =
+      resolvedHostId === null
+        ? []
+        : terminalWorkspaceQueryItems(
+            ctx,
+            resolvedHostId,
+            {
+              rows: bindings.data?.rows,
+              folderlessCwd: bindings.data?.folderlessCwd,
+              isPending: bindings.isPending,
+              isError: bindings.isError,
+              isFetching: bindings.isFetching,
+              retry: () => {
+                void retryBindings({ cancelRefetch: false });
+              },
+            },
+            hostClient,
+          );
+    // The new-terminal picker's own row rule, `isHostOptionSelectable`: a
+    // sleeping sandbox is offered and woken when its sub-page opens. Each
+    // workspace row's launch gate still dials before it opens a tile.
+    const otherHosts = (directory.data ?? []).flatMap((entry) => {
+      const host = offeredHosts.get(entry.hostId);
+      if (
+        entry.hostId === resolvedHostId ||
+        host === undefined ||
+        !isHostOptionSelectable(host, "pin", AVAILABLE_HOST_ROW_SURFACE_STATE)
+      ) {
+        return [];
+      }
+      return [
+        openerSubpageLeaf({
+          id: `open:terminals:new:host:${host.hostId}`,
+          label: host.name,
+          keywords: [host.hostId, host.name, "host", "computer", "machine"],
+          subpage: makeHostWorkspaceSubpage(host),
+        }),
+      ];
+    });
+    return [...selectedHostLeaves, ...otherHosts];
+  }, [
+    resolvedHostId,
+    bindings.data,
+    bindings.isError,
+    bindings.isFetching,
+    bindings.isPending,
+    retryBindings,
+    ctx,
+    directory.data,
+    hostClient,
+    offeredHosts,
+  ]);
+}
+
+const NEW_TERMINAL_WORKSPACE_SUBPAGE: CommandSubpage = {
+  id: "open:terminals:new:workspace",
+  title: "Create terminal in folder",
+  useItems: useNewTerminalWorkspaceItems,
+};
+
+export function useTerminalsOpenerItems(
+  ctx: CommandContext,
+): ReadonlyArray<CommandItem> {
+  // The epic's terminals are listed on, and their tiles bind to, the host
+  // serving the epic's projection - see `useActiveEpicHostId`. (Creating a
+  // NEW terminal below is a placement flow sharing the sidebar's host pin
+  // and task-agent default.)
+  const activeEpicHostId = useActiveEpicHostId(ctx.activeEpicId);
+  const defaultHostId = activeEpicHostId ?? UNKNOWN_HOST_PLACEHOLDER;
+  const hostClient = useHostClientForHostId(activeEpicHostId);
+  const scope = { kind: "epic" as const, epicId: ctx.activeEpicId ?? "" };
+  const terminals = useTerminalList(scope, hostClient);
+  const taskHome = useTaskHomeDirectory(ctx.activeEpicId, activeEpicHostId);
+  const sessionsData = terminals.data;
+
+  return useMemo<ReadonlyArray<CommandItem>>(() => {
+    // `terminal.list` also returns `terminal-agent` backing PTYs; those belong
+    // to the "TUI agents" category, so filter to raw terminals only (shared
+    // predicate with the sidebar) - otherwise an agent double-lists here as a
+    // plain terminal and, worse, opens as a raw terminal tile on its PTY.
+    const sessions = (sessionsData?.sessions ?? []).filter((session) =>
+      isVisibleEpicTerminalSession(session, scope.epicId),
+    );
+    const newTerminal = openerSubpageLeaf({
+      id: "open:terminals:new",
+      label: "Create new terminal",
+      keywords: ["new", "terminal", "shell"],
+      subpage: NEW_TERMINAL_WORKSPACE_SUBPAGE,
+    });
+    const existing = sessions.map((session) => {
+      const ref = makeListedEpicTerminalRef({
+        session,
+        hostId: defaultHostId,
+        instanceId: uuidv4(),
+        durable: false,
+        taskHome,
+      });
+      return openerExistingLeaf(
+        "terminals",
+        ctx,
+        {
+          ...ref,
+          name: terminalSessionTitle({
+            title: session.title,
+            activeProcessName: session.activeProcessName,
+            currentCwd: session.currentCwd,
+            taskHome,
+          }),
+        },
+        // `terminal.list` is issued against the epic's host client
+        // (`hostClient` above) - there is no cross-host terminal listing
+        // today, so every session here IS already on `defaultHostId`. A badge
+        // can never legitimately apply until that plumbing exists (flagged
+        // back as a scope limitation - inventing it is a separate, larger change).
+        null,
+      );
+    });
+    return [newTerminal, ...existing];
+  }, [ctx, defaultHostId, scope.epicId, sessionsData, taskHome]);
+}

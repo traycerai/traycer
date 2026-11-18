@@ -1,0 +1,1352 @@
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
+import type {
+  ProviderLoginProfileOutcome,
+  ProviderMutationCliStateV21,
+} from "@traycer/protocol/host/provider-schemas";
+import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/provider-schemas";
+import {
+  HostRequestAbortedError,
+  HostRpcError,
+  type RequestOfMethod,
+  type ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import type { AuthService } from "@/lib/auth/auth-service";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import {
+  ENVIRONMENT_NOT_FOUND_SIGN_IN_REQUEST_REPLY,
+  FORBIDDEN_SIGN_IN_REQUEST_REPLY,
+  installSignInRequestFetchHarness,
+  MOVE_ACCEPTANCE_CONFLICT_SIGN_IN_REQUEST_REPLY,
+  noAnswerReply,
+  RECORDED_SIGN_IN_REQUEST_REPLY,
+  SIGN_IN_REQUEST_FIXTURE,
+  UNAUTHORIZED_SIGN_IN_REQUEST_REPLY,
+  type SignInRequestFetchHarness,
+  type SignInRequestFetchReply,
+} from "@traycer-clients/shared/test-fixtures/provider-sign-in-request-test-support";
+import { hostQueryKeys } from "@/lib/query-keys";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
+
+const HOST_ID = "host-1";
+const OTHER_HOST_ID = "host-2";
+
+const mocks = vi.hoisted(() => ({
+  requestWithResponseTimeout: vi.fn(),
+  tabHostId: vi.fn<() => string | null>(),
+}));
+
+let authServiceForTest: AuthService | null = null;
+let activeSignInFetch: SignInRequestFetchHarness | null = null;
+
+function currentAuthService(): AuthService {
+  if (authServiceForTest === null) {
+    throw new Error("sign-in request AuthService was not set up");
+  }
+  return authServiceForTest;
+}
+
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => ({
+    requestWithResponseTimeout: mocks.requestWithResponseTimeout,
+  }),
+}));
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
+  useTabHostId: () => mocks.tabHostId(),
+}));
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return { ...actual, useAuthService: currentAuthService };
+});
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return { ...actual, useAuthService: currentAuthService };
+});
+
+// A spy, so a test can see whether a failed await raised the "Couldn't confirm
+// sign-in." toast. Everything else the module exports stays real.
+vi.mock("@/lib/host-error-toast", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/host-error-toast")>();
+  return { ...actual, toastFromHostError: vi.fn() };
+});
+
+import {
+  useProvidersAwaitLogin,
+  useProvidersAwaitLoginForClient,
+  type AwaitLoginAnswer,
+  type AwaitLoginVariables,
+} from "@/hooks/providers/use-providers-await-login-mutation";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { buildEnvironmentClient } from "@/lib/environment/__tests__/environment-test-support";
+import { toastFromHostError } from "@/lib/host-error-toast";
+import { signInRequestAuthService } from "@/lib/auth/__tests__/provider-sign-in-request-test-support";
+
+beforeEach(() => {
+  activeSignInFetch = installSignInRequestFetchHarness();
+  authServiceForTest = signInRequestAuthService(activeSignInFetch.client);
+});
+
+afterEach(() => {
+  activeSignInFetch?.restore();
+  activeSignInFetch = null;
+  authServiceForTest?.dispose();
+  authServiceForTest = null;
+});
+
+type ProvidersListResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "providers.list"
+>;
+type AwaitLoginResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "providers.awaitLogin"
+>;
+type ProviderListEntry = ProvidersListResponse["providers"][number];
+
+function unfinishedAwaitAnswer(): AwaitLoginResponse {
+  return {
+    state: null,
+    existingProfileId: null,
+    codeRejected: false,
+    refusal: null,
+    signInRequest: SIGN_IN_REQUEST_FIXTURE,
+  };
+}
+
+function ordinaryAwaitAnswer(): AwaitLoginResponse {
+  return {
+    state: null,
+    existingProfileId: null,
+    codeRejected: false,
+    refusal: null,
+  };
+}
+
+// The real @2.1 echo shape: `loginCapability` is PRESENT but frozen at v4.0,
+// which has no `terminalLogin` key at all - not `null`, genuinely absent.
+// `ProviderMutationCliStateV21` is that frozen wire type, so building the
+// fixture directly against it (rather than against the live
+// `ProviderCliState`) is what keeps this fixture honest without a cast.
+function v21Echo(
+  overrides: Partial<ProviderMutationCliStateV21>,
+): ProviderMutationCliStateV21 {
+  return {
+    providerId: "copilot",
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: {
+      oauthArgs: ["auth", "login"],
+      token: null,
+      // Deliberately NO `terminalLogin`, `remoteSafe` or `selfOpensBrowser`:
+      // this is the frozen @2.1 echo shape, which models none of them. Adding
+      // one here would make the fixture pass whether or not the overlay strips
+      // the capability.
+      codePaste: null,
+    },
+    availabilityPending: false,
+    profiles: [],
+    ...overrides,
+  };
+}
+
+function legacyV21Profile(): ProviderMutationCliStateV21["profiles"][number] {
+  return {
+    profileId: "managed-1",
+    kind: "managed",
+    authType: "oauth",
+    label: "Work",
+    auth: {
+      status: "authenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: {
+      email: "work@example.test",
+      tier: "Pro",
+      accountUuid: null,
+    },
+    usageUpdatedAt: null,
+    rateLimitStatus: "unknown",
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    ambientDriftNotice: null,
+    accentColor: null,
+  };
+}
+
+function seededProvidersList(): ProvidersListResponse {
+  return {
+    native: null,
+    providers: [
+      {
+        providerId: "copilot",
+        enabled: true,
+        disabledBy: null,
+        selected: { kind: "bundled" },
+        candidates: [],
+        auth: {
+          status: "unauthenticated",
+          badgeText: null,
+          label: null,
+          detail: null,
+        },
+        authPending: false,
+        checkedAt: null,
+        apiKey: { supported: false, configured: false, source: null },
+        terminalAgentArgs: "",
+        envOverrides: [],
+        loginCapability: {
+          oauthArgs: ["auth", "login"],
+          token: null,
+          codePaste: null,
+          terminalLogin: {},
+          remoteSafe: null,
+          selfOpensBrowser: null,
+        },
+        availabilityPending: false,
+        profiles: [],
+        nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+        managedInstallState: null,
+        versionVisibility: null,
+        advisory: null,
+      },
+    ],
+  };
+}
+
+function makeWrapper() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const wrapper = (props: { readonly children: ReactNode }) => (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+  return { queryClient, wrapper };
+}
+
+describe("useProvidersAwaitLogin overlay merge", () => {
+  beforeEach(() => {
+    mocks.tabHostId.mockReturnValue(HOST_ID);
+  });
+  afterEach(() => {
+    cleanup();
+    mocks.requestWithResponseTimeout.mockReset();
+    mocks.tabHostId.mockReset();
+  });
+
+  // Row 8 of the terminal-login contract table: the cached `terminalLogin`
+  // capability (set by `providers.list`) must survive a login echo whose own
+  // `loginCapability` is present but frozen-shaped (no `terminalLogin` key at
+  // all). Getting the fixture wrong - giving the echo an ABSENT or NULL
+  // `loginCapability` - would pass whether or not the merge strips it, since
+  // there would be nothing to overwrite with.
+  it("keeps the seeded terminalLogin capability after a login echo lands", async () => {
+    const { queryClient, wrapper } = makeWrapper();
+    // `{ native: null }`, not `{}` - the classic (non-native) poll is keyed
+    // that way and `commitAuthoritativeProvidersList` targets that exact
+    // entry. Seeding a different key would leave the overlay writing into a
+    // cache row this test never reads.
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      HOST_ID,
+      "providers.list",
+      { native: null },
+    );
+    const seeded = seededProvidersList();
+    queryClient.setQueryData(listKey, {
+      ...seeded,
+      providers: seeded.providers.map((provider) => ({
+        ...provider,
+        profiles: [
+          {
+            ...legacyV21Profile(),
+            enabled: false,
+            launchCommand: {
+              command: "copilot --profile work",
+              shell: "posix" as const,
+            },
+          },
+        ],
+      })),
+    });
+    mocks.requestWithResponseTimeout.mockResolvedValue({
+      state: v21Echo({ profiles: [legacyV21Profile()] }),
+      existingProfileId: null,
+      codeRejected: false,
+    });
+
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+    act(() => {
+      result.current.mutate({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const cached = queryClient.getQueryData<ProvidersListResponse>(listKey);
+    const copilot = cached?.providers.find(
+      (p: ProviderListEntry) => p.providerId === "copilot",
+    );
+    expect(copilot?.loginCapability?.terminalLogin).toEqual({});
+    expect(copilot?.profiles[0]?.enabled).toBe(false);
+    expect(copilot?.profiles[0]?.launchCommand).toEqual({
+      command: "copilot --profile work",
+      shell: "posix",
+    });
+    // The missing direction: `terminalLogin` staying `{}` is also what a
+    // no-op merge (one that dropped the WHOLE echo, not just its
+    // `loginCapability`) would produce, since the seeded cache already has
+    // it. Only a merge that actually overlays the echo's other fields would
+    // flip `auth.status` from the seeded "unauthenticated" to the echo's
+    // "authenticated" - proving the echo is authoritative for what it models,
+    // not merely inert here.
+    expect(copilot?.auth.status).toBe("authenticated");
+  });
+
+  // `macosRequirement` is list-only, like `advisory`: the frozen echo models
+  // none of them, so a login echo must keep the value the last list fetch set.
+  it("keeps the seeded macosRequirement after a login echo lands", async () => {
+    const { queryClient, wrapper } = makeWrapper();
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      HOST_ID,
+      "providers.list",
+      { native: null },
+    );
+    const macosRequirement = {
+      runningMacos: "13.6",
+      managed: { requiredMacos: "14.0" },
+      launch: { requiredMacos: "14.0" },
+      refusedVersions: [{ version: "2.0.0", requiredMacos: "15.0" }],
+    };
+    const seeded = seededProvidersList();
+    queryClient.setQueryData(listKey, {
+      ...seeded,
+      providers: seeded.providers.map((provider) => ({
+        ...provider,
+        macosRequirement,
+      })),
+    });
+    mocks.requestWithResponseTimeout.mockResolvedValue({
+      state: v21Echo({}),
+      existingProfileId: null,
+      codeRejected: false,
+    });
+
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+    act(() => {
+      result.current.mutate({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const cached = queryClient.getQueryData<ProvidersListResponse>(listKey);
+    const copilot = cached?.providers.find(
+      (p: ProviderListEntry) => p.providerId === "copilot",
+    );
+    expect(copilot?.macosRequirement).toEqual(macosRequirement);
+    // The echo still overlaid what it models.
+    expect(copilot?.auth.status).toBe("authenticated");
+  });
+
+  it("invalidates both harness catalogs for the awaiting host on a successful login - a sign-in can flip `available`", async () => {
+    const { queryClient, wrapper } = makeWrapper();
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      HOST_ID,
+      "providers.list",
+      { native: null },
+    );
+    queryClient.setQueryData(listKey, seededProvidersList());
+    const guiKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "agent.gui.listHarnesses"
+    >(HOST_ID, "agent.gui.listHarnesses", {});
+    const tuiKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "agent.tui.listHarnesses"
+    >(HOST_ID, "agent.tui.listHarnesses", {});
+    queryClient.setQueryData(guiKey, { harnesses: [] });
+    queryClient.setQueryData(tuiKey, { harnesses: [] });
+    mocks.requestWithResponseTimeout.mockResolvedValue({
+      state: v21Echo({}),
+      existingProfileId: null,
+      codeRejected: false,
+    });
+
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+    act(() => {
+      result.current.mutate({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(queryClient.getQueryState(guiKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(tuiKey)?.isInvalidated).toBe(true);
+  });
+});
+
+describe("useProvidersAwaitLogin sign-in request recording", () => {
+  beforeEach(() => {
+    mocks.tabHostId.mockReturnValue(HOST_ID);
+  });
+  afterEach(() => {
+    cleanup();
+    mocks.requestWithResponseTimeout.mockReset();
+    mocks.tabHostId.mockReset();
+  });
+
+  it("records a matching 200 receipt before awaiting again with its operation id", async () => {
+    mocks.requestWithResponseTimeout
+      .mockResolvedValueOnce(unfinishedAwaitAnswer())
+      .mockResolvedValueOnce(ordinaryAwaitAnswer());
+    const fetchHarness = activeSignInFetch;
+    if (fetchHarness === null)
+      throw new Error("sign-in request fetch harness is missing");
+    fetchHarness.enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+
+    let answer: AwaitLoginAnswer | undefined;
+    await act(async () => {
+      answer = await result.current.mutateAsync({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+
+    expect(mocks.requestWithResponseTimeout).toHaveBeenCalledTimes(2);
+    expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+    expect(answer).toEqual({
+      ...ordinaryAwaitAnswer(),
+      signInRecordingEnded: null,
+    });
+    expect(mocks.requestWithResponseTimeout).toHaveBeenNthCalledWith(
+      1,
+      "providers.awaitLogin",
+      { providerId: "copilot", profileId: null },
+      expect.any(Number),
+    );
+    expect(mocks.requestWithResponseTimeout).toHaveBeenNthCalledWith(
+      2,
+      "providers.awaitLogin",
+      {
+        providerId: "copilot",
+        profileId: null,
+        recordedOperationId: SIGN_IN_REQUEST_FIXTURE.operationId,
+      },
+      expect.any(Number),
+    );
+  });
+
+  const RECORDING_END_CASES = [
+    {
+      name: "a 403",
+      reply: FORBIDDEN_SIGN_IN_REQUEST_REPLY,
+      reason: "forbidden",
+    },
+    {
+      name: "a 404",
+      reply: ENVIRONMENT_NOT_FOUND_SIGN_IN_REQUEST_REPLY,
+      reason: "unavailable",
+    },
+    { name: "no answer", reply: noAnswerReply(), reason: "unavailable" },
+    {
+      name: "a 401",
+      reply: UNAUTHORIZED_SIGN_IN_REQUEST_REPLY,
+      reason: "session-ended",
+    },
+  ] satisfies ReadonlyArray<{
+    readonly name: string;
+    readonly reply: SignInRequestFetchReply;
+    readonly reason: "forbidden" | "unavailable" | "session-ended";
+  }>;
+
+  it.each(RECORDING_END_CASES)(
+    "returns the unfinished answer after $name",
+    async (testCase) => {
+      mocks.requestWithResponseTimeout.mockResolvedValueOnce(
+        unfinishedAwaitAnswer(),
+      );
+      const fetchHarness = activeSignInFetch;
+      if (fetchHarness === null)
+        throw new Error("sign-in request fetch harness is missing");
+      fetchHarness.enqueue(testCase.reply);
+      const { wrapper } = makeWrapper();
+      const { result } = renderHook(() => useProvidersAwaitLogin(), {
+        wrapper,
+      });
+
+      let answer: AwaitLoginAnswer | undefined;
+      await act(async () => {
+        answer = await result.current.mutateAsync({
+          request: { providerId: "copilot", profileId: null },
+          signal: undefined,
+          readsProfileOutcome: false,
+        });
+      });
+
+      expect(answer).toEqual({
+        ...unfinishedAwaitAnswer(),
+        signInRecordingEnded: testCase.reason,
+      });
+      expect(mocks.requestWithResponseTimeout).toHaveBeenCalledTimes(1);
+      expect(mocks.requestWithResponseTimeout).toHaveBeenCalledWith(
+        "providers.awaitLogin",
+        { providerId: "copilot", profileId: null },
+        expect.any(Number),
+      );
+      expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("ends on a duplicate id without sending another await", async () => {
+    mocks.requestWithResponseTimeout.mockResolvedValueOnce(
+      unfinishedAwaitAnswer(),
+    );
+    const fetchHarness = activeSignInFetch;
+    if (fetchHarness === null)
+      throw new Error("sign-in request fetch harness is missing");
+    fetchHarness.enqueue(MOVE_ACCEPTANCE_CONFLICT_SIGN_IN_REQUEST_REPLY);
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+
+    let answer: AwaitLoginAnswer | undefined;
+    await act(async () => {
+      answer = await result.current.mutateAsync({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+
+    expect(answer).toEqual({
+      ...unfinishedAwaitAnswer(),
+      signInRecordingEnded: "already-recorded",
+    });
+    expect(mocks.requestWithResponseTimeout).toHaveBeenCalledTimes(1);
+    expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ends when the computer asks again for the recorded id after a 200", async () => {
+    mocks.requestWithResponseTimeout
+      .mockResolvedValueOnce(unfinishedAwaitAnswer())
+      .mockResolvedValueOnce(unfinishedAwaitAnswer());
+    const fetchHarness = activeSignInFetch;
+    if (fetchHarness === null)
+      throw new Error("sign-in request fetch harness is missing");
+    fetchHarness.enqueue(RECORDED_SIGN_IN_REQUEST_REPLY);
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+
+    let answer: AwaitLoginAnswer | undefined;
+    await act(async () => {
+      answer = await result.current.mutateAsync({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+
+    expect(answer).toEqual({
+      ...unfinishedAwaitAnswer(),
+      signInRecordingEnded: "already-recorded",
+    });
+    expect(mocks.requestWithResponseTimeout).toHaveBeenCalledTimes(2);
+    expect(fetchHarness.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an older computer's await unchanged and makes no recording call", async () => {
+    mocks.requestWithResponseTimeout.mockResolvedValueOnce(
+      ordinaryAwaitAnswer(),
+    );
+    const fetchHarness = activeSignInFetch;
+    if (fetchHarness === null)
+      throw new Error("sign-in request fetch harness is missing");
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+
+    let answer: AwaitLoginAnswer | undefined;
+    await act(async () => {
+      answer = await result.current.mutateAsync({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+
+    expect(answer).toEqual({
+      ...ordinaryAwaitAnswer(),
+      signInRecordingEnded: null,
+    });
+    expect(mocks.requestWithResponseTimeout).toHaveBeenCalledTimes(1);
+    expect(mocks.requestWithResponseTimeout).toHaveBeenCalledWith(
+      "providers.awaitLogin",
+      { providerId: "copilot", profileId: null },
+      expect.any(Number),
+    );
+    expect(
+      mocks.requestWithResponseTimeout.mock.calls[0]?.[1],
+    ).not.toHaveProperty("recordedOperationId");
+    expect(fetchHarness.fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// The echo is pinned to `providerMutationCliStateSchemaV21`, whose field set
+// is the hand-frozen `providerCliStateBaseShapeV40` - strictly narrower than
+// the live `providers.list` row, and a login is exactly when the rest of that
+// row moves too (the profile list gains the new account, its ambient identity
+// resolves). So the overlay in the suite above cannot be the last word;
+// invalidating `providers.list` here is not belt-and-braces on top of it, it
+// is the only way those fields are ever refreshed after a login completes.
+describe("useProvidersAwaitLogin providers.list invalidation", () => {
+  beforeEach(() => {
+    mocks.tabHostId.mockReturnValue(HOST_ID);
+  });
+  afterEach(() => {
+    cleanup();
+    mocks.requestWithResponseTimeout.mockReset();
+    mocks.tabHostId.mockReset();
+  });
+
+  it("invalidates the awaiting host's providers.list entry after a successful login", async () => {
+    const { queryClient, wrapper } = makeWrapper();
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      HOST_ID,
+      "providers.list",
+      { native: null },
+    );
+    queryClient.setQueryData(listKey, seededProvidersList());
+    mocks.requestWithResponseTimeout.mockResolvedValue({
+      state: v21Echo({}),
+      existingProfileId: null,
+      codeRejected: false,
+    });
+
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+    act(() => {
+      result.current.mutate({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(true);
+  });
+
+  it("leaves a different host's providers.list entry untouched", async () => {
+    const { queryClient, wrapper } = makeWrapper();
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      HOST_ID,
+      "providers.list",
+      { native: null },
+    );
+    const otherListKey = hostQueryKeys.method<
+      HostRpcRegistry,
+      "providers.list"
+    >(OTHER_HOST_ID, "providers.list", { native: null });
+    queryClient.setQueryData(listKey, seededProvidersList());
+    queryClient.setQueryData(otherListKey, seededProvidersList());
+    mocks.requestWithResponseTimeout.mockResolvedValue({
+      state: v21Echo({}),
+      existingProfileId: null,
+      codeRejected: false,
+    });
+
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+    act(() => {
+      result.current.mutate({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(otherListKey)?.isInvalidated).toBe(false);
+  });
+
+  it("invalidates nothing when the echo carries a null state", async () => {
+    const { queryClient, wrapper } = makeWrapper();
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      HOST_ID,
+      "providers.list",
+      { native: null },
+    );
+    queryClient.setQueryData(listKey, seededProvidersList());
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    mocks.requestWithResponseTimeout.mockResolvedValue({
+      state: null,
+      existingProfileId: null,
+      codeRejected: false,
+    });
+
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+    act(() => {
+      result.current.mutate({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(false);
+    expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
+  it("writes and invalidates nothing when the cached host id is null", async () => {
+    mocks.tabHostId.mockReturnValue(null);
+    const { queryClient, wrapper } = makeWrapper();
+    const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+      HOST_ID,
+      "providers.list",
+      { native: null },
+    );
+    queryClient.setQueryData(listKey, seededProvidersList());
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const setQueryDataSpy = vi.spyOn(queryClient, "setQueryData");
+    mocks.requestWithResponseTimeout.mockResolvedValue({
+      state: v21Echo({}),
+      existingProfileId: null,
+      codeRejected: false,
+    });
+
+    const { result } = renderHook(() => useProvidersAwaitLogin(), { wrapper });
+    act(() => {
+      result.current.mutate({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(false);
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    expect(setQueryDataSpy).not.toHaveBeenCalled();
+  });
+});
+
+// `providers.awaitLogin` runs in `join` mode on the request coordinator: a
+// second wait with the same host, user, method and params attaches to the
+// first one's in-flight request and receives ITS answer. That is right for two
+// waiters on one login and wrong for an attempt that was abandoned - a Retry's
+// wait for the same `{ providerId, profileId }` must not inherit the answer of
+// the Cancel it replaced. The hook therefore takes an `AbortSignal` with each
+// wait: aborting it detaches that waiter, and once the last cancelable waiter
+// is gone the coordinator aborts the in-flight job and frees the slot.
+//
+// These tests drive a REAL `HostClient` (and so the real
+// `HostRequestCoordinator`, under the gui-app's own scheduling policy) over a
+// `MockHostMessenger`; a stubbed client would bypass the coordinator and prove
+// nothing about the join.
+describe("useProvidersAwaitLoginForClient - an aborted wait releases the coordinator's join slot", () => {
+  type AwaitLoginRequest = RequestOfMethod<
+    HostRpcRegistry,
+    "providers.awaitLogin"
+  >;
+  type AwaitLoginResponse = ResponseOfMethod<
+    HostRpcRegistry,
+    "providers.awaitLogin"
+  >;
+
+  interface Deferred<T> {
+    readonly resolve: (value: T) => void;
+    readonly promise: Promise<T>;
+  }
+  function deferred<T>(): Deferred<T> {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((res) => {
+      resolve = res;
+    });
+    return { resolve, promise };
+  }
+
+  const AWAIT_REQUEST: AwaitLoginRequest = {
+    providerId: "copilot",
+    profileId: null,
+  };
+
+  function awaitAnswer(existingProfileId: string): AwaitLoginResponse {
+    return {
+      state: null,
+      existingProfileId,
+      codeRejected: false,
+      refusal: null,
+    };
+  }
+
+  /**
+   * A real client over a messenger whose `providers.awaitLogin` handler stays
+   * pending until the test answers it, one `Deferred` per dispatch that
+   * actually reached the transport.
+   */
+  function realClientFixture(): {
+    readonly client: HostClient<HostRpcRegistry>;
+    readonly messenger: MockHostMessenger<HostRpcRegistry>;
+    readonly answers: Deferred<AwaitLoginResponse>[];
+    readonly waitForRequest: () => Promise<AwaitLoginRequest>;
+  } {
+    const answers: Deferred<AwaitLoginResponse>[] = [];
+    const arrivedRequests: AwaitLoginRequest[] = [];
+    const arrivalWaiters: Array<(request: AwaitLoginRequest) => void> = [];
+    let nextRequestId = 0;
+    const waitForRequest = (): Promise<AwaitLoginRequest> => {
+      const arrived = arrivedRequests.shift();
+      if (arrived !== undefined) return Promise.resolve(arrived);
+      return new Promise((resolve) => arrivalWaiters.push(resolve));
+    };
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => {
+        nextRequestId += 1;
+        return `req-${nextRequestId}`;
+      },
+      handlers: {
+        "providers.awaitLogin": (params) => {
+          const answer = deferred<AwaitLoginResponse>();
+          answers.push(answer);
+          const waiter = arrivalWaiters.shift();
+          if (waiter === undefined) arrivedRequests.push(params);
+          else waiter(params);
+          return answer.promise;
+        },
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => {} },
+      messenger,
+      schedulingPolicy: hostRpcSchedulingPolicy,
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    return {
+      client: spine.createRequester(mockLocalHostEntry),
+      messenger,
+      answers,
+      waitForRequest,
+    };
+  }
+
+  function awaitDispatches(
+    messenger: MockHostMessenger<HostRpcRegistry>,
+  ): Array<{ readonly requestId: string; readonly params: unknown }> {
+    return messenger.calls.filter(
+      (call) => call.method === "providers.awaitLogin",
+    );
+  }
+
+  /** What the transport reported for one dispatch, once it settled. */
+  function transportErrorOf(
+    messenger: MockHostMessenger<HostRpcRegistry>,
+    requestId: string,
+  ): HostRpcError | null {
+    for (const event of messenger.phases) {
+      if (event.kind === "response" && event.requestId === requestId) {
+        return event.error;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * `mutateAsync` inside `act`, returning the promise it started. The promise
+   * is marked handled here so a wait the test abandons without awaiting
+   * cannot surface as an unhandled rejection; the test still reads its
+   * outcome from the returned promise.
+   */
+  function startWait(
+    mutateAsync: (
+      variables: AwaitLoginVariables,
+    ) => Promise<AwaitLoginResponse>,
+    variables: AwaitLoginVariables,
+  ): Promise<AwaitLoginResponse> {
+    const started: Array<Promise<AwaitLoginResponse>> = [];
+    act(() => {
+      started.push(mutateAsync(variables));
+    });
+    const wait = started[0];
+    wait.catch(() => undefined);
+    return wait;
+  }
+
+  type WaitOutcome = "pending" | "resolved" | "rejected";
+
+  /**
+   * A reader for how a wait ended, so a test can bound its wait for the
+   * outcome (`waitFor`) instead of hanging on a promise that never settles
+   * when the behavior under test is missing.
+   */
+  function trackOutcome(wait: Promise<unknown>): () => WaitOutcome {
+    let outcome: WaitOutcome = "pending";
+    wait.then(
+      () => {
+        outcome = "resolved";
+      },
+      () => {
+        outcome = "rejected";
+      },
+    );
+    return () => outcome;
+  }
+
+  /** Lets every promise chain and TanStack's own macrotask scheduling finish. */
+  async function flushMacrotask(): Promise<void> {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  }
+
+  beforeEach(() => {
+    vi.mocked(toastFromHostError).mockClear();
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("dispatches a fresh request, and answers with it, for the same wait started after the first one's signal aborted", async () => {
+    const { client, messenger, answers } = realClientFixture();
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(
+      () =>
+        useProvidersAwaitLoginForClient({
+          client,
+          getCacheHostId: () => HOST_ID,
+        }),
+      { wrapper },
+    );
+
+    // Attempt one: the long-poll goes out and stays in flight.
+    const firstAttempt = new AbortController();
+    const first = startWait(result.current.mutateAsync, {
+      request: AWAIT_REQUEST,
+      signal: firstAttempt.signal,
+      readsProfileOutcome: false,
+    });
+    const firstOutcome = trackOutcome(first);
+    await waitFor(() => expect(awaitDispatches(messenger)).toHaveLength(1));
+
+    // The user cancels attempt one: its wait is detached, and with no
+    // cancelable waiter left the coordinator aborts the in-flight request
+    // rather than leaving it in the join slot.
+    firstAttempt.abort();
+    await waitFor(() => expect(firstOutcome()).toBe("rejected"));
+    // The hook's own mutation has settled; the coordinator's job teardown
+    // (the transport's abort, then the slot being freed) is a few promise
+    // hops further, so let it finish - the flow likewise only admits a Retry
+    // once `awaitLogin.isPending` has cleared.
+    await flushMacrotask();
+    const [firstDispatch] = awaitDispatches(messenger);
+    expect(transportErrorOf(messenger, firstDispatch.requestId)).toBeInstanceOf(
+      HostRequestAbortedError,
+    );
+
+    // Attempt two asks the very same question with a fresh signal.
+    const secondAttempt = new AbortController();
+    const second = startWait(result.current.mutateAsync, {
+      request: AWAIT_REQUEST,
+      signal: secondAttempt.signal,
+      readsProfileOutcome: false,
+    });
+    // Before the fix this attached to attempt one's in-flight request and no
+    // second dispatch ever reached the host.
+    await waitFor(() => expect(awaitDispatches(messenger)).toHaveLength(2));
+    expect(awaitDispatches(messenger)[1].params).toEqual(AWAIT_REQUEST);
+
+    // The second wait resolves with the second dispatch's answer, never the
+    // first's.
+    answers[1].resolve(awaitAnswer("answer-two"));
+    await expect(second).resolves.toMatchObject({
+      existingProfileId: "answer-two",
+    });
+    // The abandoned dispatch answering late changes nothing.
+    answers[0].resolve(awaitAnswer("answer-one"));
+    await flushMacrotask();
+    expect(result.current.data?.existingProfileId).toBe("answer-two");
+  });
+
+  it("dispatches separate waits when their last-seen reader counts differ", async () => {
+    const { client, messenger, answers, waitForRequest } = realClientFixture();
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(
+      () =>
+        useProvidersAwaitLoginForClient({
+          client,
+          getCacheHostId: () => HOST_ID,
+        }),
+      { wrapper },
+    );
+
+    const firstRequest: AwaitLoginRequest = {
+      providerId: "copilot",
+      profileId: null,
+      lastSeenReaderCount: 1,
+    };
+    const firstArrival = waitForRequest();
+    const first = startWait(result.current.mutateAsync, {
+      request: firstRequest,
+      signal: undefined,
+      readsProfileOutcome: false,
+    });
+    await expect(firstArrival).resolves.toEqual(firstRequest);
+
+    const secondRequest = { ...firstRequest, lastSeenReaderCount: 2 };
+    const secondArrival = waitForRequest();
+    const second = startWait(result.current.mutateAsync, {
+      request: secondRequest,
+      signal: undefined,
+      readsProfileOutcome: false,
+    });
+    await expect(secondArrival).resolves.toEqual(secondRequest);
+    expect(awaitDispatches(messenger)).toHaveLength(2);
+
+    answers[1].resolve(awaitAnswer("count-two"));
+    await expect(second).resolves.toMatchObject({
+      existingProfileId: "count-two",
+    });
+    answers[0].resolve(awaitAnswer("count-one"));
+    await expect(first).resolves.toMatchObject({
+      existingProfileId: "count-one",
+    });
+  });
+
+  it("raises no toast when the wait ended because its own signal was aborted", async () => {
+    const { client, messenger } = realClientFixture();
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(
+      () =>
+        useProvidersAwaitLoginForClient({
+          client,
+          getCacheHostId: () => HOST_ID,
+        }),
+      { wrapper },
+    );
+
+    const attempt = new AbortController();
+    const wait = startWait(result.current.mutateAsync, {
+      request: AWAIT_REQUEST,
+      signal: attempt.signal,
+      readsProfileOutcome: false,
+    });
+    const outcome = trackOutcome(wait);
+    await waitFor(() => expect(awaitDispatches(messenger)).toHaveLength(1));
+
+    attempt.abort();
+    // `mutateAsync` settles only after the mutation's own `onError` has run,
+    // so a toast the hook raised would already have been recorded.
+    await waitFor(() => expect(outcome()).toBe("rejected"));
+    await flushMacrotask();
+
+    expect(toastFromHostError).not.toHaveBeenCalled();
+  });
+
+  it("control: a wait that fails while its signal is still live does raise the toast", async () => {
+    const { client, messenger } = realClientFixture();
+    messenger.setHandlers({
+      "providers.awaitLogin": () => {
+        throw new Error("host failed");
+      },
+    });
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(
+      () =>
+        useProvidersAwaitLoginForClient({
+          client,
+          getCacheHostId: () => HOST_ID,
+        }),
+      { wrapper },
+    );
+
+    const liveAttempt = new AbortController();
+    const wait = startWait(result.current.mutateAsync, {
+      request: AWAIT_REQUEST,
+      signal: liveAttempt.signal,
+      readsProfileOutcome: false,
+    });
+    await expect(wait).rejects.toBeInstanceOf(HostRpcError);
+
+    // Without this the previous test could pass because the mock never fires,
+    // not because an aborted wait is silent.
+    expect(liveAttempt.signal.aborted).toBe(false);
+    expect(toastFromHostError).toHaveBeenCalledTimes(1);
+    expect(toastFromHostError).toHaveBeenCalledWith(
+      expect.any(HostRpcError),
+      "Couldn't confirm sign-in.",
+    );
+  });
+});
+
+// Invalidation does not fetch with no observer, so the list hook stays mounted.
+describe("useProvidersAwaitLoginForClient profileOutcome list reads", () => {
+  type AwaitLoginResponse = ResponseOfMethod<
+    HostRpcRegistry,
+    "providers.awaitLogin"
+  >;
+
+  function awaitBody(
+    outcome: ProviderLoginProfileOutcome | null,
+    state: ProviderMutationCliStateV21 | null,
+  ): AwaitLoginResponse {
+    return {
+      state,
+      existingProfileId: null,
+      codeRejected: false,
+      refusal: null,
+      installation: null,
+      profileOutcome: outcome,
+    };
+  }
+
+  function useListAndAwait(client: HostClient<HostRpcRegistry>) {
+    const list = useProvidersListForClient(client, {
+      enabled: true,
+      subscribed: true,
+    });
+    const awaitLogin = useProvidersAwaitLoginForClient({
+      client,
+      getCacheHostId: () => HOST_ID,
+    });
+    return { list, awaitLogin };
+  }
+
+  function readingClient(answer: AwaitLoginResponse): {
+    readonly client: HostClient<HostRpcRegistry>;
+    readonly reads: () => number;
+  } {
+    let reads = 0;
+    const { client } = buildEnvironmentClient({
+      hostId: HOST_ID,
+      handlers: {
+        "providers.list": () => {
+          reads += 1;
+          return seededProvidersList();
+        },
+        "providers.awaitLogin": () => answer,
+      },
+    });
+    return { client, reads: () => reads };
+  }
+
+  const listKey = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+    HOST_ID,
+    "providers.list",
+    { native: null },
+  );
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  async function settleMount(input: {
+    readonly outcome: ProviderLoginProfileOutcome | null;
+    readonly state: ProviderMutationCliStateV21 | null;
+  }) {
+    const { client, reads } = readingClient(
+      awaitBody(input.outcome, input.state),
+    );
+    const { queryClient, wrapper } = makeWrapper();
+    const { result } = renderHook(() => useListAndAwait(client), { wrapper });
+    await waitFor(() => expect(result.current.list.isSuccess).toBe(true));
+    const mountReads = reads();
+    expect(mountReads).toBe(1);
+    return { reads, mountReads, queryClient, result };
+  }
+
+  function recordCallerRead(input: {
+    readonly reads: () => number;
+    readonly queryClient: QueryClient;
+    readonly readsProfileOutcome: boolean;
+    readonly mutate: (
+      variables: AwaitLoginVariables,
+      options: { readonly onSuccess: () => void },
+    ) => void;
+  }): {
+    readonly readsWhenCallerRan: () => number;
+    readonly fetchStatus: () => string;
+  } {
+    let readsWhenCallerRan = 0;
+    let fetchStatusWhenCallerRan = "";
+    act(() => {
+      input.mutate(
+        {
+          request: { providerId: "copilot", profileId: null },
+          signal: undefined,
+          readsProfileOutcome: input.readsProfileOutcome,
+        },
+        {
+          onSuccess: () => {
+            readsWhenCallerRan = input.reads();
+            fetchStatusWhenCallerRan =
+              input.queryClient.getQueryState(listKey)?.fetchStatus ?? "absent";
+          },
+        },
+      );
+    });
+    return {
+      readsWhenCallerRan: () => readsWhenCallerRan,
+      fetchStatus: () => fetchStatusWhenCallerRan,
+    };
+  }
+
+  it("reads providers.list once when profileOutcome is null and state is present", async () => {
+    const { reads, mountReads, queryClient, result } = await settleMount({
+      outcome: null,
+      state: v21Echo({}),
+    });
+    const caller = recordCallerRead({
+      reads,
+      queryClient,
+      readsProfileOutcome: false,
+      mutate: (variables, options) => {
+        result.current.awaitLogin.mutate(variables, options);
+      },
+    });
+    await waitFor(() =>
+      expect(caller.readsWhenCallerRan()).toBe(mountReads + 1),
+    );
+    expect(caller.fetchStatus()).toBe("idle");
+    expect(reads()).toBe(mountReads + 1);
+  });
+
+  it("reads providers.list no further time when profileOutcome and state are both null", async () => {
+    const { reads, mountReads, queryClient, result } = await settleMount({
+      outcome: null,
+      state: null,
+    });
+    act(() => {
+      result.current.awaitLogin.mutate({
+        request: { providerId: "copilot", profileId: null },
+        signal: undefined,
+        readsProfileOutcome: false,
+      });
+    });
+    await waitFor(() => expect(result.current.awaitLogin.isSuccess).toBe(true));
+    expect(reads()).toBe(mountReads);
+    expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(false);
+  });
+
+  it.each(["signed-in", "already-signed-in"] as const)(
+    "reads providers.list once, finished before the caller, when state is null and the outcome is %s",
+    async (kind) => {
+      const { reads, mountReads, queryClient, result } = await settleMount({
+        outcome: { kind, profileId: "work" },
+        state: null,
+      });
+      const caller = recordCallerRead({
+        reads,
+        queryClient,
+        readsProfileOutcome: true,
+        mutate: (variables, options) => {
+          result.current.awaitLogin.mutate(variables, options);
+        },
+      });
+      await waitFor(() =>
+        expect(caller.readsWhenCallerRan()).toBe(mountReads + 1),
+      );
+      expect(caller.fetchStatus()).toBe("idle");
+      expect(reads()).toBe(mountReads + 1);
+    },
+  );
+
+  it.each(["signed-in", "already-signed-in"] as const)(
+    "reads providers.list once, not twice, when state is present and the outcome is %s",
+    async (kind) => {
+      const { reads, mountReads, queryClient, result } = await settleMount({
+        outcome: { kind, profileId: "work" },
+        state: v21Echo({}),
+      });
+      const caller = recordCallerRead({
+        reads,
+        queryClient,
+        readsProfileOutcome: true,
+        mutate: (variables, options) => {
+          result.current.awaitLogin.mutate(variables, options);
+        },
+      });
+      await waitFor(() =>
+        expect(caller.readsWhenCallerRan()).toBe(mountReads + 1),
+      );
+      expect(caller.fetchStatus()).toBe("idle");
+      expect(reads()).toBe(mountReads + 1);
+    },
+  );
+
+  it.each([
+    {
+      name: "waiting-for-profile",
+      outcome: { kind: "waiting-for-profile" },
+    },
+    { name: "account-mismatch", outcome: { kind: "account-mismatch" } },
+    { name: "account-unproven", outcome: { kind: "account-unproven" } },
+    {
+      name: "target-refused",
+      outcome: { kind: "target-refused", reason: "offer-refused" },
+    },
+    {
+      name: "staged-for-leave",
+      outcome: { kind: "staged-for-leave", profileId: "work" },
+    },
+  ] satisfies readonly {
+    readonly name: string;
+    readonly outcome: ProviderLoginProfileOutcome;
+  }[])(
+    "does not reread providers.list for the no-state $name outcome",
+    async ({ outcome }) => {
+      const { reads, mountReads, queryClient, result } = await settleMount({
+        outcome,
+        state: null,
+      });
+      const caller = recordCallerRead({
+        reads,
+        queryClient,
+        readsProfileOutcome: true,
+        mutate: (variables, options) => {
+          result.current.awaitLogin.mutate(variables, options);
+        },
+      });
+      await waitFor(() => {
+        expect(result.current.awaitLogin.isSuccess).toBe(true);
+        expect(caller.readsWhenCallerRan()).toBe(mountReads);
+      });
+      expect(caller.fetchStatus()).toBe("idle");
+      expect(reads()).toBe(1);
+    },
+  );
+});

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pierre tree zoom regression</title>
+    <style>
+      html,
+      body,
+      #root {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+
+      body {
+        background: white;
+        color: #171717;
+        font-family: Arial, sans-serif;
+      }
+
+      #fixtures {
+        display: flex;
+        gap: 24px;
+        padding: 24px;
+      }
+
+      [data-tree-case] {
+        height: 240px;
+        border: 1px solid #d4d4d4;
+      }
+
+      [data-tree-case="roomy"] {
+        width: 420px;
+      }
+
+      [data-tree-case="overflow"] {
+        width: 110px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./pierre-tree-zoom.tsx"></script>
+  </body>
+</html>

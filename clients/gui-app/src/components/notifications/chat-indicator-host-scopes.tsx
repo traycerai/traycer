@@ -1,0 +1,275 @@
+import { useContext, useMemo, type ReactNode } from "react";
+import {
+  ChatIndicatorAttestedContext,
+  ChatIndicatorFreshHostsContext,
+} from "@/components/notifications/chat-indicator-fresh-hosts-context";
+import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { useHostLease } from "@/hooks/host/use-host-lease";
+import { useHostNotificationIndicators } from "@/hooks/notifications/use-host-notification-indicators-query";
+import {
+  useNotificationFeedMode,
+  useNotificationFeedModeSettling,
+} from "@/lib/notifications/notification-feed-mode";
+import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
+import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
+import type { ChatIndicatorHostScope } from "@/lib/notifications/chat-indicator-scopes";
+import { useCloudNotificationsStore } from "@/stores/notifications/cloud-notifications-store";
+import {
+  EMPTY_INDICATOR_STATE_RESPONSE,
+  mergeLocalPartitionIntoCloudIndicators,
+  mergeIndicatorStateResponses,
+  selectCloudNotificationIndicatorProjection,
+  type NotificationIndicatorRecords,
+  type SurfaceNotificationIndicators,
+} from "@/stores/notifications/notification-indicator-state";
+
+/**
+ * Notification indicators for chat ids that do NOT all belong to one host.
+ *
+ * `useNotificationIndicators` is one hook call and therefore one host, which is
+ * correct for a surface whose ids are all owned by the same machine. A canvas
+ * tab strip is not that surface: tabs bind a `hostId` for life, a strip can hold
+ * a retained tab from host B beside a live one on host A, and
+ * `host.notifications.indicatorState` is computed over ONE host's SQLite rows.
+ * Asking the connected host about every tab's chat id gets both errors at once -
+ * host B's `pendingFork` never lights, and a host-minted id that A happens to
+ * share lights the wrong tab from an unrelated chat.
+ *
+ * The fan-out is a nest of providers rather than a loop, because one host is one
+ * hook call and the number of hosts is data. Each layer asks its own host about
+ * its own ids and folds the answer into what it inherited, so a consumer below
+ * still reads one merged, chatId-keyed map through the context it already used.
+ *
+ * The residual, stated rather than hidden: the merged map is keyed by `chatId`
+ * alone, so two DIFFERENT chats on two hosts that share an id still collapse
+ * into one entry (their flags OR together). Fixing that means keying the context
+ * and every consumer on `(hostId, chatId)`. What this does fix is the far more
+ * common pair - the cross-host tab that could never light, and the connected
+ * host answering about a chat it has never owned.
+ */
+
+const NO_EPIC_IDS: ReadonlyArray<string> = [];
+
+export function ChatIndicatorHostScopes(props: {
+  readonly freshnessMode: "base" | "activity";
+  readonly scopes: ReadonlyArray<ChatIndicatorHostScope>;
+  /**
+   * Owning epic per chat id, when the surface knows it. Chat ids do not
+   * encode durable home, so this is what lets each host layer ask for its
+   * exact `home: local` partition in mixed mode - the same exactness the
+   * single-host `useNotificationIndicators` path gets from its callers -
+   * instead of a whole-origin answer.
+   */
+  readonly chatEpicIds?: Readonly<Record<string, string>>;
+  readonly children: ReactNode;
+}): ReactNode {
+  const isCloud = useNotificationFeedMode() === "cloud";
+  const inherited = useContext(NotificationIndicatorsContext);
+  const allChatIds = useMemo(
+    () => props.scopes.flatMap((scope) => [...scope.chatIds]),
+    [props.scopes],
+  );
+  const cloudRows = useCloudNotificationsStore((state) => state.rows);
+  const cloudFresh = useCloudNotificationsStore(
+    (state) => state.hasSnapshot && state.connectionState === "connected",
+  );
+  // The cloud snapshot is the base every host layer folds into, and it is
+  // host-INDEPENDENT: a cloud row produced on any machine is already in this
+  // client's snapshot, which is the whole reason cloud mode exists. Only the
+  // host-local bits below have to be asked for per host.
+  const base = useMemo<SurfaceNotificationIndicators>(() => {
+    if (!isCloud) return inherited;
+    // This scope often sits beneath an Epic-indicator provider. Keep that
+    // outer answer, then add only the cloud chat rows this fan-out owns;
+    // replacing the base would erase every header Epic light as soon as a
+    // chat-host scope mounted.
+    //
+    // The per-origin buckets have to come along with the aggregate. A
+    // host-bound consumer (`useSurfaceNotificationIndicatorState` with the
+    // tab's `originHostId`) reads its host's BUCKET, never the aggregate, so a
+    // cloud row that only reached the aggregate lit nothing for the tab it
+    // was about - and the host layers below fold only the `home: local`
+    // partition into those buckets, which by construction excludes it.
+    const cloud = selectCloudNotificationIndicatorProjection(
+      cloudRows,
+      NO_EPIC_IDS,
+      allChatIds,
+    );
+    const byOriginHostId: Record<string, NotificationIndicatorRecords> = {
+      ...inherited.byOriginHostId,
+    };
+    for (const [originHostId, bucket] of Object.entries(cloud.byOriginHostId)) {
+      byOriginHostId[originHostId] = mergeIndicatorStateResponses(
+        byOriginHostId[originHostId] ?? EMPTY_INDICATOR_STATE_RESPONSE,
+        bucket,
+      );
+    }
+    return {
+      ...mergeIndicatorStateResponses(inherited, cloud.aggregate),
+      byOriginHostId,
+    };
+  }, [isCloud, inherited, cloudRows, allChatIds]);
+  const attestedCloud = useMemo(() => {
+    if (!isCloud || !cloudFresh) return EMPTY_INDICATOR_STATE_RESPONSE;
+    const projection = selectCloudNotificationIndicatorProjection(
+      cloudRows,
+      NO_EPIC_IDS,
+      allChatIds,
+    );
+    return {
+      ...projection.aggregate,
+      byOriginHostId: projection.byOriginHostId,
+    };
+  }, [isCloud, cloudFresh, cloudRows, allChatIds]);
+  return (
+    <ChatIndicatorAttestedContext.Provider value={attestedCloud}>
+      <NotificationIndicatorsProvider indicators={base}>
+        <ChatIndicatorHostLayers
+          scopes={props.scopes}
+          freshnessMode={props.freshnessMode}
+          chatEpicIds={props.chatEpicIds}
+          isCloud={isCloud}
+        >
+          {props.children}
+        </ChatIndicatorHostLayers>
+      </NotificationIndicatorsProvider>
+    </ChatIndicatorAttestedContext.Provider>
+  );
+}
+
+function ChatIndicatorHostLayers(props: {
+  readonly freshnessMode: "base" | "activity";
+  readonly scopes: ReadonlyArray<ChatIndicatorHostScope>;
+  readonly chatEpicIds: Readonly<Record<string, string>> | undefined;
+  readonly isCloud: boolean;
+  readonly children: ReactNode;
+}): ReactNode {
+  if (props.scopes.length === 0) return props.children;
+  const [head, ...rest] = props.scopes;
+  return (
+    <ChatIndicatorHostLayer
+      freshnessMode={props.freshnessMode}
+      hostId={head.hostId}
+      chatIds={head.chatIds}
+      chatEpicIds={props.chatEpicIds}
+      isCloud={props.isCloud}
+    >
+      <ChatIndicatorHostLayers
+        scopes={rest}
+        freshnessMode={props.freshnessMode}
+        chatEpicIds={props.chatEpicIds}
+        isCloud={props.isCloud}
+      >
+        {props.children}
+      </ChatIndicatorHostLayers>
+    </ChatIndicatorHostLayer>
+  );
+}
+
+/**
+ * One host's answer, folded into whatever the layers above already established.
+ *
+ * The two feed modes fold differently, and cloud mode's fold follows what was
+ * ASKED: the layer requests the host's `home: local` partition, whose flags OR
+ * into the cloud snapshot the base holds and whose counts stand for this
+ * host's chats only when it answers its whole origin - the reasoning
+ * `mergeLocalPartitionIntoCloudIndicators` documents. In local mode the host
+ * response IS the answer, so it merges whole.
+ */
+function ChatIndicatorHostLayer(props: {
+  readonly freshnessMode: "base" | "activity";
+  readonly hostId: string;
+  readonly chatIds: ReadonlyArray<string>;
+  readonly chatEpicIds: Readonly<Record<string, string>> | undefined;
+  readonly isCloud: boolean;
+  readonly children: ReactNode;
+}): ReactNode {
+  // Same wait as `useNotificationIndicators`: a held `cloud` mode whose host
+  // is re-negotiating must not ask for the `home: local` partition.
+  const feedModeSettling = useNotificationFeedModeSettling();
+  // A host the selection authority has confirmed DEAD is not asked. Its remote
+  // session is parked at the relay with no host leg, so every read is refused
+  // pre-send and the method's fixed 30s error lane re-asks forever - one
+  // warning per attempt, for as long as a chat bound to that host is on
+  // screen. The verdict is `dead` ONLY, the same rule `isSurfacePinDeposed`
+  // states: `restarting-expected` is a hold the authority keeps its effective
+  // host through, and a `null` lease is "nobody has spoken yet", not death.
+  // The query keeps its last answer while disabled and refetches the moment
+  // the lease recovers, so the dot goes stale rather than dark.
+  const hostDead = useHostLease(props.hostId)?.status === "dead";
+  const reachable = useHostReachability(props.hostId).status === "reachable";
+  const cloudFresh = useCloudNotificationsStore(
+    (state) => state.hasSnapshot && state.connectionState === "connected",
+  );
+  const host = useHostNotificationIndicators({
+    freshnessMode: props.freshnessMode,
+    hostId: props.hostId,
+    epicIds: NO_EPIC_IDS,
+    chatIds: props.chatIds,
+    chatEpicIds: props.chatEpicIds,
+    home: props.isCloud ? "local" : undefined,
+    enabled:
+      props.chatIds.length > 0 &&
+      !hostDead &&
+      !(props.isCloud && feedModeSettling),
+  });
+  const inherited = useContext(NotificationIndicatorsContext);
+  const inheritedFresh = useContext(ChatIndicatorFreshHostsContext);
+  const inheritedAttested = useContext(ChatIndicatorAttestedContext);
+  const hostFresh =
+    !hostDead &&
+    reachable &&
+    !feedModeSettling &&
+    host.hasAnswer &&
+    !host.isPending &&
+    host.error === null;
+  const fresh = hostFresh && (!props.isCloud || cloudFresh);
+  const merged: SurfaceNotificationIndicators = useMemo(
+    () =>
+      props.isCloud
+        ? mergeLocalPartitionIntoCloudIndicators(
+            inherited,
+            host.data,
+            props.hostId,
+            { epicIds: NO_EPIC_IDS, chatIds: props.chatIds },
+          )
+        : {
+            ...mergeIndicatorStateResponses(inherited, host.data),
+            // This layer read exactly one host, so its rows file under that
+            // host's origin - same rule the single-host hook applies.
+            byOriginHostId: {
+              ...inherited.byOriginHostId,
+              [props.hostId]: mergeIndicatorStateResponses(
+                inherited.byOriginHostId?.[props.hostId] ??
+                  EMPTY_INDICATOR_STATE_RESPONSE,
+                host.data,
+              ),
+            },
+          },
+    [props.isCloud, inherited, host.data, props.hostId, props.chatIds],
+  );
+  const attested = hostFresh
+    ? {
+        ...mergeIndicatorStateResponses(inheritedAttested, host.data),
+        byOriginHostId: {
+          ...inheritedAttested.byOriginHostId,
+          [props.hostId]: mergeIndicatorStateResponses(
+            inheritedAttested.byOriginHostId?.[props.hostId] ??
+              EMPTY_INDICATOR_STATE_RESPONSE,
+            host.data,
+          ),
+        },
+      }
+    : inheritedAttested;
+  return (
+    <ChatIndicatorFreshHostsContext.Provider
+      value={{ ...inheritedFresh, [props.hostId]: fresh }}
+    >
+      <ChatIndicatorAttestedContext.Provider value={attested}>
+        <NotificationIndicatorsProvider indicators={merged}>
+          {props.children}
+        </NotificationIndicatorsProvider>
+      </ChatIndicatorAttestedContext.Provider>
+    </ChatIndicatorFreshHostsContext.Provider>
+  );
+}

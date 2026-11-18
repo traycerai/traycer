@@ -1,0 +1,751 @@
+import { useMemo, useReducer } from "react";
+import {
+  useEpicBatchUpdateRoles,
+  useEpicGrantAccess,
+  useEpicRevokeCollaborator,
+} from "@/hooks/epic/use-epic-collaborator-mutations";
+import {
+  useEpicShareableTeams,
+  type EpicShareableTeam,
+} from "@/hooks/epic/use-epic-shareable-teams";
+import {
+  EPIC_COLLABORATORS_OPEN_REFRESH_MS,
+  useEpicCollaboratorsQuery,
+  type EpicCollaboratorView,
+  type EpicCollaboratorsView,
+  type EpicTeamCollaboratorView,
+} from "@/hooks/epics/use-epic-collaborators-query";
+import { useEpicSendQueuedInvites } from "@/hooks/epic/use-epic-send-queued-invites-mutation";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import type { InviteCardProps } from "./invite-card";
+import type { TeamsAccessProps, PeopleWithAccessProps } from "./access-lists";
+import type {
+  OwnerTeamRow,
+  TeamPendingState,
+  TeamRow,
+  RevokeDialogProps,
+  RevokeTarget,
+  SharingAccessLoadState,
+  SharingPendingAction,
+} from "./types";
+import {
+  DEFAULT_COLLABORATOR_ROLE,
+  type AssignableCollaboratorRole,
+} from "@/lib/epic-collaborator-roles";
+import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
+import { useEpicPermissionRole } from "@/lib/epic-selectors";
+import {
+  buildExistingInviteIndex,
+  formatInviteLabel,
+  inviteKey,
+  parseInviteIdentifier,
+  validateInviteInput,
+  type ParsedInviteIdentifier,
+  type QueuedInvite,
+} from "@/lib/epic-invites";
+import { toast } from "sonner";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+
+const EMPTY_DIRECT_USERS: ReadonlyArray<EpicCollaboratorView> = [];
+const EMPTY_TEAMS: ReadonlyArray<EpicTeamCollaboratorView> = [];
+
+/**
+ * The cloud verdict AS OF NOW, read imperatively at gesture time.
+ *
+ * The rendered affordances are already gated on the subscribed value, and for a
+ * button that is enough - a render moves it out of reach. This is for the gap
+ * that a render cannot close: the revoke dialog and the queued-invite send are
+ * both unbounded pauses with a human in them, and `unverified` arrives
+ * asynchronously (a wake, an authn outage, a refused refresh). The session that
+ * opened the confirmation is not necessarily the one that confirms it, and by
+ * then the handler is running off a closure the re-render never touched.
+ *
+ * `useAuthStore.getState()` rather than a subscription on purpose: subscribing
+ * would re-run these handlers' identity on every auth transition for a value
+ * only the gesture needs, and the point is precisely to read LATER than render.
+ */
+function readCloudAuthorizedNow(): boolean {
+  return authorizesCloudCapability(useAuthStore.getState().status);
+}
+
+interface SharingPanelState {
+  readonly inviteInput: string;
+  readonly queuedInvites: ReadonlyArray<QueuedInvite>;
+  readonly revokeTarget: RevokeTarget | null;
+  readonly pendingAction: SharingPendingAction | null;
+}
+
+type SharingPanelAction =
+  | { readonly type: "set-invite-input"; readonly value: string }
+  | { readonly type: "queue-invite"; readonly invite: ParsedInviteIdentifier }
+  | { readonly type: "remove-queued-invite"; readonly inviteKey: string }
+  | {
+      readonly type: "drop-succeeded-invites";
+      readonly succeededInviteKeys: ReadonlySet<string>;
+    }
+  | {
+      readonly type: "set-revoke-target";
+      readonly target: RevokeTarget | null;
+    }
+  | {
+      readonly type: "set-pending-action";
+      readonly pendingAction: SharingPendingAction | null;
+    };
+
+const INITIAL_SHARING_PANEL_STATE: SharingPanelState = {
+  inviteInput: "",
+  queuedInvites: [],
+  revokeTarget: null,
+  pendingAction: null,
+};
+
+export interface SharingRefreshProps {
+  /** Epoch ms of the last successful collaborator fetch, or null before the
+   * first load completes. */
+  readonly lastFetchedAt: number | null;
+  readonly isRefreshing: boolean;
+  readonly onRefresh: () => Promise<unknown>;
+}
+
+export interface SharingPanelController {
+  readonly canInvitePeople: boolean;
+  readonly showTeams: boolean;
+  readonly inviteCardProps: InviteCardProps;
+  readonly peopleHint: string;
+  readonly peopleProps: PeopleWithAccessProps;
+  readonly teamHint: string;
+  readonly teamsProps: TeamsAccessProps;
+  readonly revokeDialogProps: RevokeDialogProps;
+  readonly refreshProps: SharingRefreshProps;
+}
+
+export function useEpicSharingPanelController(
+  epicId: string,
+): SharingPanelController {
+  const currentRole = useEpicPermissionRole();
+  // Every affordance below is a CLOUD grant operation - `epic.grantAccess`,
+  // `epic.batchUpdateRoles`, `epic.revokeCollaborator`, `epic.sendInvites` all
+  // act on the account, not on this device. The role says what this user is
+  // entitled to do; the verdict says whether this session may act on that
+  // entitlement at all, and the panel needs BOTH. Role alone kept the whole
+  // panel live under `unverified`, which is the widened admission reaching a
+  // surface that was only ever gated on the first question.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const { isOwner, canInvitePeople } = buildSharingCapabilities({
+    currentRole,
+    cloudAuthorized,
+  });
+  const shareableTeams = useEpicShareableTeams();
+
+  // The Epic SESSION's client, and the mutations below moved with it: the
+  // list must agree with the host the grant/revoke/role writes land on, and
+  // both now name the host projecting this panel's Epic. This used to be the
+  // app-wide client, with a note that rebinding "would have to move the
+  // mutation hooks" - it did, and they are moved
+  // (`use-epic-collaborator-mutations.ts`, `use-epic-send-queued-invites`).
+  const collaboratorsHostClient = useEpicSessionHostClient();
+  const collaboratorsQuery = useEpicCollaboratorsQuery(epicId, {
+    client: collaboratorsHostClient,
+    enabled: cloudAuthorized,
+    poll: true,
+    staleTime: EPIC_COLLABORATORS_OPEN_REFRESH_MS,
+  });
+  const lastFetchedAt =
+    collaboratorsQuery.query.dataUpdatedAt > 0
+      ? collaboratorsQuery.query.dataUpdatedAt
+      : null;
+  // Re-read at gesture time, not from the render that mounted the panel. This
+  // panel is long-lived - it is a canvas tile, not a dialog - so the verdict
+  // can be withdrawn while it sits open, and `refetch()` on a disabled query
+  // still dispatches: TanStack treats an explicit refetch as a caller override
+  // of `enabled`, so the declarative gate above does NOT cover this button.
+  const handleRefresh = (): Promise<unknown> => {
+    if (!readCloudAuthorizedNow()) return Promise.resolve(undefined);
+    return collaboratorsQuery.query.refetch();
+  };
+
+  const batchUpdateRoles = useEpicBatchUpdateRoles();
+  const revokeCollaborator = useEpicRevokeCollaborator();
+  const grantAccess = useEpicGrantAccess();
+  const sendInvites = useEpicSendQueuedInvites();
+
+  const [state, dispatch] = useReducer(
+    sharingPanelReducer,
+    INITIAL_SHARING_PANEL_STATE,
+  );
+
+  const collaborators = collaboratorsQuery.data;
+  const directUsers = collaborators?.directUsers ?? EMPTY_DIRECT_USERS;
+  const { ownerTeam, teamRows, sharedTeamCount } = useTeamAccessRows(
+    collaborators,
+    shareableTeams,
+    isOwner,
+  );
+  const isLoading = computeIsLoading(collaboratorsQuery);
+  const loadState = buildSharingAccessLoadState(
+    isLoading,
+    collaboratorsQuery.isError,
+    cloudAuthorized,
+  );
+  const directOwnerCount = directUsers.reduce(
+    (count, collaborator) =>
+      collaborator.role === "owner" ? count + 1 : count,
+    0,
+  );
+  const isInvitePending = sendInvites.isPending;
+  const teamPending = buildTeamPendingState({
+    pendingAction: state.pendingAction,
+    anyMutation:
+      grantAccess.isPending ||
+      batchUpdateRoles.isPending ||
+      revokeCollaborator.isPending,
+  });
+  const trimmedInviteInput = state.inviteInput.trim();
+  const parsedInvite = parseInviteIdentifier(trimmedInviteInput);
+  const { inputError, canAddInvite } = validateInviteInput({
+    parsedInvite,
+    queuedInvites: state.queuedInvites,
+    isInvitePending: isInvitePending || !canInvitePeople,
+  });
+
+  const handleAddToQueue = () => {
+    if (!canInvitePeople || !canAddInvite || parsedInvite === null) return;
+    dispatch({ type: "queue-invite", invite: parsedInvite });
+  };
+
+  const handleSendInvites = async () => {
+    if (!canInvitePeople || state.queuedInvites.length === 0 || isInvitePending)
+      return;
+    if (!readCloudAuthorizedNow()) return;
+
+    let result;
+    try {
+      result = await sendInvites.mutateAsync({
+        epicId,
+        queuedInvites: state.queuedInvites,
+        existingByInviteKey: buildExistingInviteIndex(directUsers),
+      });
+    } catch {
+      return;
+    }
+
+    dispatch({
+      type: "drop-succeeded-invites",
+      succeededInviteKeys: result.succeededInviteKeys,
+    });
+
+    if (result.succeededNewInvites.length > 0) {
+      const invitedNoun =
+        result.succeededNewInvites.length === 1 ? "person" : "people";
+      toast.success(
+        `Invited ${result.succeededNewInvites.length} ${invitedNoun}`,
+      );
+    }
+
+    result.succeededReInvites.forEach((invite) => {
+      toast.success(`Role updated for ${formatInviteLabel(invite)}`);
+    });
+
+    if (result.failedInvites.length > 0) {
+      reportableErrorToast(
+        `Couldn't invite ${result.failedInvites.map(formatInviteLabel).join(", ")}`,
+        undefined,
+        {
+          title: "Could not invite collaborators",
+          message: null,
+          code: null,
+          source: "Epic sharing",
+        },
+      );
+    }
+  };
+
+  const handleUserRoleChange = (
+    collaborator: EpicCollaboratorView,
+    newRole: AssignableCollaboratorRole,
+  ) => {
+    if (!isOwner) return;
+    if (!readCloudAuthorizedNow()) return;
+    if (collaborator.userId === null) return;
+    dispatch({
+      type: "set-pending-action",
+      pendingAction: { kind: "role-user", userId: collaborator.userId },
+    });
+    batchUpdateRoles.mutate(
+      {
+        epicId,
+        input: { changes: [{ userId: collaborator.userId, newRole }] },
+      },
+      {
+        onSuccess: () => {
+          toast.success("Role updated");
+        },
+        onSettled: () => {
+          dispatch({ type: "set-pending-action", pendingAction: null });
+        },
+      },
+    );
+  };
+
+  const handleShareTeam = (team: TeamRow) => {
+    if (!isOwner) return;
+    if (!readCloudAuthorizedNow()) return;
+    if (team.kind !== "unshared") return;
+    dispatch({
+      type: "set-pending-action",
+      pendingAction: {
+        kind: "share-team",
+        teamId: team.teamId,
+      },
+    });
+    grantAccess.mutate(
+      {
+        epicId,
+        input: {
+          kind: "team",
+          teamId: team.teamId,
+          role: DEFAULT_COLLABORATOR_ROLE,
+        },
+      },
+      {
+        onSuccess: () => {
+          toast.success(`Shared with ${team.name}`);
+          Analytics.getInstance().track(AnalyticsEvent.TaskShared, null);
+        },
+        onSettled: () => {
+          dispatch({ type: "set-pending-action", pendingAction: null });
+        },
+      },
+    );
+  };
+
+  const handleRevokeConfirm = () => {
+    if (!isOwner) return;
+    // The dialog outlives the render that opened it; see `readCloudAuthorizedNow`.
+    if (!readCloudAuthorizedNow()) return;
+    const target = state.revokeTarget;
+    if (target === null) return;
+    if (target.kind === "user") {
+      const { collaborator } = target;
+      if (collaborator.userId === null) return;
+      dispatch({
+        type: "set-pending-action",
+        pendingAction: { kind: "revoke-user", userId: collaborator.userId },
+      });
+      revokeCollaborator.mutate(
+        { epicId, input: { kind: "users", userId: collaborator.userId } },
+        {
+          onSuccess: () => {
+            dispatch({ type: "set-revoke-target", target: null });
+            toast.success("Collaborator removed");
+          },
+          onSettled: () => {
+            dispatch({ type: "set-pending-action", pendingAction: null });
+          },
+        },
+      );
+      return;
+    }
+
+    dispatch({
+      type: "set-pending-action",
+      pendingAction: {
+        kind: "revoke-team",
+        teamId: target.team.teamId,
+      },
+    });
+    revokeCollaborator.mutate(
+      {
+        epicId,
+        input: {
+          kind: "team",
+          teamId: target.team.teamId,
+        },
+      },
+      {
+        onSuccess: () => {
+          dispatch({ type: "set-revoke-target", target: null });
+          toast.success("Team access removed");
+        },
+        onSettled: () => {
+          dispatch({ type: "set-pending-action", pendingAction: null });
+        },
+      },
+    );
+  };
+
+  return {
+    canInvitePeople,
+    // `loadState === "unauthorized"` belongs here beside the other two
+    // non-`ready` states, or the section that carries the "can't be checked"
+    // message is hidden by the very condition that produces it: `teamRows` is
+    // empty precisely because the grant list was never fetched, so a
+    // rows-only gate would silently drop the explanation.
+    showTeams:
+      isLoading ||
+      collaboratorsQuery.isError ||
+      loadState === "unauthorized" ||
+      teamRows.length > 0,
+    inviteCardProps: {
+      inviteInput: state.inviteInput,
+      inputError,
+      queuedInvites: state.queuedInvites,
+      isPending: isInvitePending,
+      canAddInvite,
+      onInputChange: (value) => {
+        dispatch({ type: "set-invite-input", value });
+      },
+      onAddToQueue: handleAddToQueue,
+      onRemoveFromQueue: (invite) => {
+        dispatch({
+          type: "remove-queued-invite",
+          inviteKey: inviteKey(invite),
+        });
+      },
+      onSendInvites: () => {
+        void handleSendInvites();
+      },
+    },
+    peopleHint: buildPeopleHint(
+      isLoading,
+      collaboratorsQuery.isError,
+      directUsers.length,
+      cloudAuthorized,
+    ),
+    peopleProps: {
+      loadState,
+      ownerTeam,
+      collaborators: directUsers,
+      accessPermission: isOwner ? "owner" : "read_only",
+      directOwnerCount,
+      batchUpdateRolesPending: batchUpdateRoles.isPending,
+      pendingRoleUserId: getPendingRoleUserId(state.pendingAction),
+      pendingRevokeUserId: getPendingRevokeUserId(state.pendingAction),
+      onRoleChange: handleUserRoleChange,
+      onRevokeRequest: (collaborator) => {
+        dispatch({
+          type: "set-revoke-target",
+          target: { kind: "user", collaborator },
+        });
+      },
+    },
+    teamHint: buildTeamHint({
+      isLoading,
+      isError: collaboratorsQuery.isError,
+      sharedCount: sharedTeamCount,
+      // The rows the Teams section offers: the unshared teams for an owner
+      // (never the owning team), none for anyone else.
+      availableCount: teamRows.length,
+      cloudAuthorized,
+    }),
+    teamsProps: {
+      loadState,
+      rows: teamRows,
+      accessPermission: isOwner ? "owner" : "read_only",
+      pending: teamPending,
+      onShareTeam: handleShareTeam,
+      onRevokeRequest: (team) => {
+        if (team.kind !== "shared") return;
+        dispatch({
+          type: "set-revoke-target",
+          target: {
+            kind: "team",
+            team: {
+              key: team.key,
+              teamId: team.teamId,
+              teamName: team.name,
+              role: team.role,
+              members: team.members,
+            },
+          },
+        });
+      },
+    },
+    revokeDialogProps: {
+      open: state.revokeTarget !== null,
+      onOpenChange: (open) => {
+        if (!open) dispatch({ type: "set-revoke-target", target: null });
+      },
+      title: buildRevokeTitle(state.revokeTarget),
+      description: buildRevokeDescription(state.revokeTarget),
+      isPending: revokeCollaborator.isPending,
+      onConfirm: handleRevokeConfirm,
+    },
+    refreshProps: {
+      lastFetchedAt,
+      isRefreshing: collaboratorsQuery.isFetching,
+      onRefresh: handleRefresh,
+    },
+  };
+}
+
+function sharingPanelReducer(
+  state: SharingPanelState,
+  action: SharingPanelAction,
+): SharingPanelState {
+  switch (action.type) {
+    case "set-invite-input":
+      return { ...state, inviteInput: action.value };
+    case "queue-invite":
+      return {
+        ...state,
+        inviteInput: "",
+        queuedInvites: [
+          ...state.queuedInvites,
+          { ...action.invite, role: DEFAULT_COLLABORATOR_ROLE },
+        ],
+      };
+    case "remove-queued-invite":
+      return {
+        ...state,
+        queuedInvites: state.queuedInvites.filter(
+          (invite) => inviteKey(invite) !== action.inviteKey,
+        ),
+      };
+    case "drop-succeeded-invites":
+      return {
+        ...state,
+        queuedInvites: state.queuedInvites.filter(
+          (invite) => !action.succeededInviteKeys.has(inviteKey(invite)),
+        ),
+      };
+    case "set-revoke-target":
+      return { ...state, revokeTarget: action.target };
+    case "set-pending-action":
+      return { ...state, pendingAction: action.pendingAction };
+  }
+}
+
+function useTeamAccessRows(
+  collaborators: EpicCollaboratorsView | undefined,
+  shareableTeams: ReadonlyArray<EpicShareableTeam>,
+  isOwner: boolean,
+): {
+  readonly ownerTeam: OwnerTeamRow | null;
+  readonly teamRows: ReadonlyArray<TeamRow>;
+  readonly sharedTeamCount: number;
+} {
+  const teams = collaborators?.teams ?? EMPTY_TEAMS;
+  const ownerTeamView = collaborators?.ownerTeam ?? null;
+  const ownerTeam = useMemo(
+    () => buildOwnerTeamRow(ownerTeamView, shareableTeams),
+    [ownerTeamView, shareableTeams],
+  );
+  const teamRows = useMemo(
+    () =>
+      buildTeamRows(
+        teams,
+        shareableTeams,
+        isOwner,
+        ownerTeamView?.teamId ?? null,
+      ),
+    [isOwner, ownerTeamView, teams, shareableTeams],
+  );
+  return { ownerTeam, teamRows, sharedTeamCount: teams.length };
+}
+
+function buildOwnerTeamRow(
+  team: EpicTeamCollaboratorView | null,
+  shareableTeams: ReadonlyArray<EpicShareableTeam>,
+): OwnerTeamRow | null {
+  if (team === null) return null;
+  const shareable = shareableTeams.find(
+    (candidate) => candidate.teamId === team.teamId,
+  );
+  return {
+    teamId: team.teamId,
+    name: team.teamName,
+    avatarUrl: shareable?.avatarUrl ?? null,
+    memberCount: team.members.length,
+  };
+}
+
+/**
+ * The "Teams" section's rows. The team that OWNS the task (`ownerTeamId`) is
+ * not among them: it is the Owner row of "People with access", and offering
+ * to share the task with its owner would be a control that cannot apply.
+ */
+function buildTeamRows(
+  teams: ReadonlyArray<EpicTeamCollaboratorView>,
+  shareableTeams: ReadonlyArray<EpicShareableTeam>,
+  includeUnsharedTeams: boolean,
+  ownerTeamId: string | null,
+): ReadonlyArray<TeamRow> {
+  const teamsById = new Map(shareableTeams.map((team) => [team.teamId, team]));
+  const sharedIds = new Set(teams.map((team) => team.teamId));
+  if (ownerTeamId !== null) sharedIds.add(ownerTeamId);
+  return [
+    ...teams.map((team): TeamRow => {
+      const shareable = teamsById.get(team.teamId);
+      return {
+        kind: "shared",
+        key: team.key,
+        teamId: team.teamId,
+        name: team.teamName,
+        avatarUrl: shareable?.avatarUrl ?? null,
+        role: team.role,
+        members: team.members,
+      };
+    }),
+    ...(includeUnsharedTeams
+      ? shareableTeams
+          .filter((team) => !sharedIds.has(team.teamId))
+          .map((team): TeamRow => ({
+            kind: "unshared",
+            key: `unshared-${team.teamId}`,
+            teamId: team.teamId,
+            name: team.slug,
+            avatarUrl: team.avatarUrl,
+          }))
+      : []),
+  ];
+}
+
+function buildPeopleHint(
+  isLoading: boolean,
+  isError: boolean,
+  count: number,
+  cloudAuthorized: boolean,
+): string {
+  if (isLoading) return "Loading collaborators...";
+  if (isError) return "Couldn't load collaborators.";
+  // Ahead of the count, because the count is the lie. An unauthorized session
+  // never dispatched the list, so `count` is 0 for every epic - including one
+  // shared with a dozen people - and "0 people have direct access." states that
+  // as fact.
+  if (!cloudAuthorized)
+    return "Sign-in couldn't be confirmed, so access can't be checked.";
+  const subject = count === 1 ? "person has" : "people have";
+  return `${count} ${subject} direct access.`;
+}
+
+interface SharingCapabilities {
+  /** Owner-only affordances: team sharing, role changes, revoke. */
+  readonly isOwner: boolean;
+  /** Owner AND editor may invite. */
+  readonly canInvitePeople: boolean;
+}
+
+/**
+ * Both capability answers, derived from BOTH questions at once.
+ *
+ * Kept together and out of the hook body because they are one decision made
+ * twice, not two: each is `role && verdict`, and a later affordance that
+ * consulted only the role is exactly the widened-admission defect this panel
+ * was gated for. Reading them from one helper makes the pairing the obvious
+ * thing to copy.
+ */
+function buildSharingCapabilities(input: {
+  readonly currentRole: PermissionRole | null;
+  readonly cloudAuthorized: boolean;
+}): SharingCapabilities {
+  const { currentRole, cloudAuthorized } = input;
+  return {
+    isOwner: currentRole === "owner" && cloudAuthorized,
+    canInvitePeople:
+      (currentRole === "owner" || currentRole === "editor") && cloudAuthorized,
+  };
+}
+
+/**
+ * Object-shaped rather than positional, like {@link buildTeamPendingState}:
+ * five same-typed arguments in a row (two booleans, two numbers, a boolean)
+ * are silently swappable at the call site, and swapping the two counts still
+ * type-checks while inverting which hint the user reads.
+ */
+function buildTeamHint(input: {
+  readonly isLoading: boolean;
+  readonly isError: boolean;
+  readonly sharedCount: number;
+  readonly availableCount: number;
+  readonly cloudAuthorized: boolean;
+}): string {
+  const { sharedCount, availableCount, cloudAuthorized } = input;
+  if (input.isLoading) return "Loading teams...";
+  if (input.isError) return "Couldn't load teams.";
+  // Same as the people hint: both counts below are zero for want of a request,
+  // and "No teams available." is the false statement that falls out of that.
+  if (!cloudAuthorized)
+    return "Sign-in couldn't be confirmed, so team access can't be checked.";
+  if (sharedCount > 0) {
+    const subject = sharedCount === 1 ? "team has" : "teams have";
+    return `${sharedCount} ${subject} access.`;
+  }
+  if (availableCount > 0) return "Share with one of your teams.";
+  return "No teams available.";
+}
+
+function buildRevokeTitle(target: RevokeTarget | null): string {
+  if (target === null) return "Remove access?";
+  if (target.kind === "user") {
+    return `Remove ${target.collaborator.displayName}?`;
+  }
+  return `Remove ${target.team.teamName}?`;
+}
+
+function buildRevokeDescription(target: RevokeTarget | null): string {
+  if (target?.kind === "team") {
+    return "Everyone relying on this team grant will immediately lose access to this epic.";
+  }
+  return "They will immediately lose access to this epic, and any open sessions they have will be closed.";
+}
+
+function computeIsLoading(query: {
+  readonly isLoading: boolean;
+  readonly isFetching: boolean;
+  readonly data: unknown;
+}): boolean {
+  if (query.isLoading) return true;
+  return query.isFetching && query.data === undefined;
+}
+
+function buildSharingAccessLoadState(
+  isLoading: boolean,
+  isError: boolean,
+  cloudAuthorized: boolean,
+): SharingAccessLoadState {
+  if (isLoading) return "loading";
+  if (isError) return "error";
+  // Last, not first: `loading` and `error` are both states this query can only
+  // reach by having RUN, so if either is set the verdict was held when it did
+  // and their copy is the more specific truth. Only a query that never
+  // dispatched falls through to here, and `ready` would announce its empty
+  // result as an answer.
+  if (!cloudAuthorized) return "unauthorized";
+  return "ready";
+}
+
+function buildTeamPendingState(input: {
+  readonly pendingAction: SharingPendingAction | null;
+  readonly anyMutation: boolean;
+}): TeamPendingState {
+  const { pendingAction } = input;
+  return {
+    anyMutation: input.anyMutation,
+    shareTeamId:
+      pendingAction?.kind === "share-team" ? pendingAction.teamId : null,
+    revokeTeamId:
+      pendingAction?.kind === "revoke-team" ? pendingAction.teamId : null,
+  };
+}
+
+function getPendingRoleUserId(
+  pendingAction: SharingPendingAction | null,
+): string | null {
+  if (pendingAction?.kind !== "role-user") return null;
+  return pendingAction.userId;
+}
+
+function getPendingRevokeUserId(
+  pendingAction: SharingPendingAction | null,
+): string | null {
+  if (pendingAction?.kind !== "revoke-user") return null;
+  return pendingAction.userId;
+}

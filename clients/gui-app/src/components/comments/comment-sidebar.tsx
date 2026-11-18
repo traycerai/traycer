@@ -1,0 +1,461 @@
+import { useCallback, useMemo, useState } from "react";
+import { MessageSquarePlus, MessageSquareWarning } from "lucide-react";
+import { type CommentArtifactKind } from "@/lib/comments/artifact-comment-kind";
+import { cn } from "@/lib/utils";
+import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
+import type { HostRpcRegistry } from "@/lib/host";
+import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-comment-threads";
+import type { EpicCommentRoomAvailability } from "@/lib/epic-selectors";
+import { resolveArtifactCommentThreads } from "@/hooks/comments/use-lane-comment-threads";
+import {
+  useActiveThreadId,
+  useCommentThreadsStore,
+} from "@/stores/comments/comment-threads-store";
+import {
+  filterThreadsByStatus,
+  sortThreadsByDocumentOrder,
+  type AnchorPositionMap,
+  type CommentThreadStatusFilter,
+  type SortedThread,
+} from "@/lib/comments/comment-filter-utils";
+import { CommentThreadCard } from "./comment-thread-card";
+
+export interface CommentSidebarProps {
+  readonly epicId: string;
+  /** The EPIC SESSION's client. The sidebar is a sibling of the canvas, so it
+   *  is outside every per-tile provider and must not read the app-wide host:
+   *  during a re-point that host already answers B while this Epic still
+   *  renders A's threads. Passed rather than read here so the same surface
+   *  stays mountable from a tile (D15). */
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+  readonly artifactType: CommentArtifactKind;
+  readonly artifactId: string;
+  /** The state lane's comment records for this artifact, or `null` when the
+   *  lane has said nothing about it - which is every artifact on a legacy
+   *  connection, permanently. Resolved by the owner
+   *  (`useEpicLaneCommentThreads`) rather than read here, for the same reason
+   *  {@link hostClient} is: this surface reads no ambient context. `null` here
+   *  is not "no threads" - it hands the question to the poll below. */
+  readonly laneThreads: readonly CommentThreadWire[] | null;
+  /**
+   * When the lane pushing {@link laneThreads} stopped, or `null` while it is
+   * up. A prop for the same reason the rows are: this component reads no
+   * ambient context.
+   */
+  readonly laneDroppedAt: number | null;
+  /**
+   * Whether this epic's comment room can be reached - see
+   * `useEpicCommentRoomAvailability`, which holds an unavailable answer across
+   * a stream reconnect. A prop for the same reason the rows are.
+   */
+  readonly commentRoomAvailability: EpicCommentRoomAvailability;
+  /** Threads-anchored-in-document positions, derived from the active tile's
+   *  Tiptap editor by the parent. Used both for sort order and orphan
+   *  detection (no entry → orphan). */
+  readonly anchorPositions: AnchorPositionMap;
+  /** Logged-in user id. Resolved upstream from the auth profile against the
+   *  collaborators query. `null` while resolving. */
+  readonly currentUserId: string | null;
+  /** True when caller may resolve / delete-thread regardless of authorship.
+   *  Editor + Owner = true; a caller with no attributed role = false. */
+  readonly canModerate: boolean;
+  /** Triggered when the user clicks a thread card so the parent can scroll
+   *  the originating tile to the anchor + flash. */
+  readonly onActivateThread: (threadId: string) => void;
+}
+
+/**
+ * Sidebar surface that swaps in for the artifact tree when the user opens
+ * the comments view. Owns the tab filter (Open/Resolved/All) and routes
+ * thread expansion through the Zustand `activeThreadId` so the editor
+ * decoration plugin paints the matching anchor.
+ */
+export function CommentSidebar(props: CommentSidebarProps) {
+  const {
+    epicId,
+    hostClient,
+    artifactType,
+    artifactId,
+    laneThreads,
+    laneDroppedAt,
+    commentRoomAvailability,
+    anchorPositions,
+    currentUserId,
+    canModerate,
+    onActivateThread,
+  } = props;
+
+  const [filter, setFilter] = useState<CommentThreadStatusFilter>("open");
+  const activeThreadId = useActiveThreadId(epicId);
+  const setActiveThread = useCommentThreadsStore((s) => s.setActiveThread);
+  const setDraft = useCommentThreadsStore((s) => s.setDraft);
+  // Covers promotion and preserved-orphan states - see
+  // `commentsHaveNoUsableCommentRoom`. Local rooms have their own durable
+  // thread provider.
+  const commentsUnavailable = commentRoomAvailability.kind !== "available";
+
+  // The poll is NOT disabled when the lane has rows. It is on the released
+  // floor, so it is the one source every host serves, and it is what keeps
+  // this surface readable if the lane goes quiet.
+  const query = useEpicCommentThreadsForClient({
+    client: hostClient,
+    epicId,
+    artifactType: artifactType,
+    artifactId: artifactId,
+    options: { enabled: !commentsUnavailable, laneDroppedAt },
+  });
+
+  const resolved = useMemo(
+    () =>
+      resolveArtifactCommentThreads({
+        laneThreads,
+        laneDroppedAt,
+        pollThreads: query.data === undefined ? null : query.data.threads,
+        // `0` is TanStack's "never resolved" sentinel, and it is also a real
+        // epoch instant - so it has to become `null` here or a cold cache
+        // would read as an answer from 1970 and lose every comparison.
+        pollUpdatedAt: query.dataUpdatedAt === 0 ? null : query.dataUpdatedAt,
+      }),
+    [laneDroppedAt, laneThreads, query.data, query.dataUpdatedAt],
+  );
+
+  const sorted = useMemo(() => {
+    if (resolved.threads === null) return [];
+    const filtered = filterThreadsByStatus(resolved.threads, filter);
+    return sortThreadsByDocumentOrder(filtered, anchorPositions);
+  }, [resolved.threads, filter, anchorPositions]);
+
+  // `resolved.threads === null` - not `sorted.length === 0` - separates "we do
+  // not know" from "there are none", and it now takes BOTH sources to reach
+  // unknown. An artifact the lane has said nothing about is not an artifact
+  // with no threads (on a legacy connection the lane says nothing about any of
+  // them), so a missing lane key alone may never render the empty state; it
+  // defers to the poll, and only their combined silence is unknown.
+  //
+  // TanStack keeps the last successful snapshot when a REFETCH fails, so a
+  // populated sidebar keeps rendering real threads through an outage; the read
+  // that renders nothing is the COLD one (opening comments, switching
+  // artifacts, after cache eviction) while the host's collab provider is null,
+  // which `epic.listCommentThreads` answers with an error for the whole
+  // duration of every reconnect. A cold query that is disabled because no host
+  // client is ready is unknown for the same reason: it has never produced a
+  // snapshot.
+  const isUnavailable =
+    commentsUnavailable ||
+    (resolved.threads === null && query.fetchStatus !== "fetching");
+
+  // Gated on having nothing to show: a lane-served list must not be replaced
+  // by a spinner while the poll runs its first load beside it.
+  const isLoading = resolved.threads === null && query.isLoading;
+
+  const handleExpandedChange = useCallback(
+    (threadId: string, next: boolean) => {
+      setActiveThread(epicId, next ? threadId : null);
+    },
+    [epicId, setActiveThread],
+  );
+
+  const handleStartDraft = useCallback(() => {
+    // Surface a hint when nothing is selected - selection capture lives in
+    // the toolbar / shortcut path, not here. We just clear any stale draft
+    // so the floating popover state is in a known shape if the user goes
+    // back and selects text.
+    setDraft(epicId, null);
+  }, [epicId, setDraft]);
+
+  return (
+    <div
+      data-slot="comment-sidebar"
+      className="flex h-full min-h-0 w-full flex-col bg-background"
+    >
+      <Tabs
+        value={filter}
+        onValueChange={(v) => setFilter(v as CommentThreadStatusFilter)}
+        className="px-3 pt-2"
+      >
+        <TabsList className="w-full">
+          <TabsTrigger value="open">Open</TabsTrigger>
+          <TabsTrigger value="resolved">Resolved</TabsTrigger>
+          <TabsTrigger value="all">All</TabsTrigger>
+        </TabsList>
+        {(["open", "resolved", "all"] as const).map((tab) => (
+          <TabsContent key={tab} value={tab} className="mt-0" />
+        ))}
+      </Tabs>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 pt-2 pb-3">
+        <SidebarBody
+          isLoading={isLoading}
+          isUnavailable={isUnavailable}
+          commentsUnavailable={commentsUnavailable}
+          commentRoomAvailability={commentRoomAvailability}
+          sorted={sorted}
+          filter={filter}
+          epicId={epicId}
+          hostClient={hostClient}
+          artifactType={artifactType}
+          artifactId={artifactId}
+          activeThreadId={activeThreadId}
+          currentUserId={currentUserId}
+          canModerate={canModerate}
+          onExpandedChange={handleExpandedChange}
+          onActivateThread={onActivateThread}
+          onPromptDraft={handleStartDraft}
+        />
+      </div>
+    </div>
+  );
+}
+
+interface SidebarBodyProps {
+  readonly isLoading: boolean;
+  /** The read failed with nothing cached to fall back on, so the thread list
+   *  is unknown rather than empty. See where it is derived in
+   *  {@link CommentSidebar}. */
+  readonly isUnavailable: boolean;
+  readonly commentsUnavailable: boolean;
+  readonly commentRoomAvailability: EpicCommentRoomAvailability;
+  readonly sorted: ReadonlyArray<SortedThread>;
+  readonly filter: CommentThreadStatusFilter;
+  readonly epicId: string;
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+  readonly artifactType: CommentArtifactKind;
+  readonly artifactId: string;
+  readonly activeThreadId: string | null;
+  readonly currentUserId: string | null;
+  readonly canModerate: boolean;
+  readonly onExpandedChange: (threadId: string, next: boolean) => void;
+  readonly onActivateThread: (threadId: string) => void;
+  readonly onPromptDraft: () => void;
+}
+
+interface SidebarLocationGroup {
+  readonly key: string;
+  readonly heading: string | null;
+  readonly threads: SortedThread[];
+}
+
+// Canvas threads read best by place: the board file an anchor lives in, the
+// pins dropped on the canvas itself, and the whole-canvas threads - in the
+// order the sorted list first visits them. Other artifact kinds keep the
+// flat list (`heading: null` renders no label).
+function groupThreadsByLocation(
+  sorted: ReadonlyArray<SortedThread>,
+  artifactType: CommentArtifactKind,
+): SidebarLocationGroup[] {
+  if (artifactType !== "canvas")
+    return [{ key: "all", heading: null, threads: [...sorted] }];
+  const groups = new Map<string, SidebarLocationGroup>();
+  for (const entry of sorted) {
+    const data = entry.thread.data;
+    let location: { key: string; heading: string };
+    if (data.anchorKind === "canvas-point")
+      location = { key: "points", heading: "Pinned on canvas" };
+    else if (data.artboard === undefined)
+      location = { key: "canvas", heading: "Whole canvas" };
+    else
+      location = {
+        key: `board:${data.artboard}`,
+        heading: data.artboard.split("/").at(-1) ?? data.artboard,
+      };
+    const group = groups.get(location.key);
+    if (group === undefined)
+      groups.set(location.key, { ...location, threads: [entry] });
+    else group.threads.push(entry);
+  }
+  return [...groups.values()];
+}
+
+function SidebarBody(props: SidebarBodyProps) {
+  if (props.isLoading) {
+    return (
+      <div
+        data-slot="comment-sidebar-loading"
+        className="flex items-center justify-center py-8"
+      >
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+      </div>
+    );
+  }
+  // Ordered ahead of the empty state on purpose: both render zero threads, and
+  // only one of them knows that to be true.
+  if (props.isUnavailable) {
+    return (
+      <UnavailableState
+        commentsUnavailable={props.commentsUnavailable}
+        commentRoomAvailability={props.commentRoomAvailability}
+      />
+    );
+  }
+  if (props.sorted.length === 0) {
+    return (
+      <EmptyState filter={props.filter} onPromptDraft={props.onPromptDraft} />
+    );
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      {groupThreadsByLocation(props.sorted, props.artifactType).map((group) => (
+        <section key={group.key} className="flex flex-col gap-1.5">
+          {group.heading === null ? null : (
+            <h3 className="truncate text-ui-xs font-medium text-muted-foreground">
+              {group.heading}
+            </h3>
+          )}
+          <ul className="flex flex-col gap-2">
+            {group.threads.map(({ thread, anchorPosition }) => (
+              <li key={thread.threadId}>
+                <CommentThreadCard
+                  epicId={props.epicId}
+                  hostClient={props.hostClient}
+                  artifactType={props.artifactType}
+                  artifactId={props.artifactId}
+                  thread={thread}
+                  currentUserId={props.currentUserId}
+                  canModerate={props.canModerate}
+                  isExpanded={props.activeThreadId === thread.threadId}
+                  hasAnchor={anchorPosition !== null}
+                  onExpandedChange={(next) =>
+                    props.onExpandedChange(thread.threadId, next)
+                  }
+                  onActivateAnchor={() =>
+                    props.onActivateThread(thread.threadId)
+                  }
+                />
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+interface EmptyStateProps {
+  readonly filter: CommentThreadStatusFilter;
+  readonly onPromptDraft: () => void;
+}
+
+function EmptyState({ filter, onPromptDraft }: EmptyStateProps) {
+  const message = emptyMessageFor(filter);
+  return (
+    <div
+      data-slot="comment-sidebar-empty"
+      className={cn(
+        "flex flex-col items-center justify-center gap-3 rounded-md border border-dashed border-border/60 bg-muted/20 px-4 py-8 text-center",
+      )}
+    >
+      <MessageSquarePlus className="size-6 text-muted-foreground" />
+      <p className="text-ui-sm text-muted-foreground">{message}</p>
+      <Button variant="ghost" size="sm" onClick={onPromptDraft}>
+        Got it
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Shown when the thread read failed and nothing is cached — the honest
+ * counterpart to {@link EmptyState}.
+ *
+ * Deliberately says the threads could not be *loaded*, never that there are
+ * none, and makes no claim about why or about when they come back. It borrows
+ * the empty state's quiet dashed frame rather than an alert treatment: this is
+ * a correction to what the sidebar was previously asserting, not a new alarm.
+ * The agent-facing path already degrades this way — `comments.listThreads`
+ * emits a `<warning>` for an unavailable artifact instead of an empty list
+ * (`protocol/src/comments/comments-xml-formatting.ts`).
+ */
+function UnavailableState(props: {
+  readonly commentsUnavailable: boolean;
+  readonly commentRoomAvailability: EpicCommentRoomAvailability;
+}) {
+  const copy =
+    props.commentRoomAvailability.kind === "available"
+      ? null
+      : commentRoomUnavailableCopy(props.commentRoomAvailability);
+  return (
+    <div
+      data-slot="comment-sidebar-unavailable"
+      // A status, not an alert: the same quiet register as the visual
+      // treatment. `polite` announces the correction once the reader finishes
+      // its current utterance, rather than interrupting to report a failed
+      // background read.
+      role="status"
+      aria-live="polite"
+      className="flex flex-col items-center justify-center gap-3 rounded-md border border-dashed border-border/60 bg-muted/20 px-4 py-8 text-center"
+    >
+      <MessageSquareWarning className="size-6 text-muted-foreground" />
+      <div className="flex flex-col gap-1">
+        <p className="text-ui-sm text-muted-foreground">
+          {props.commentsUnavailable
+            ? copy?.headline
+            : "Comments couldn't be loaded."}
+        </p>
+        <p className="text-ui-xs text-muted-foreground/80">
+          {props.commentsUnavailable
+            ? copy?.detail
+            : "This doesn't mean there are none."}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Closed mapping from the gate's availability reason to copy. This is an
+ * exhaustive union, so a newly gated status cannot silently inherit copy that
+ * makes a stronger recovery claim than its protocol state supports.
+ */
+function commentRoomUnavailableCopy(
+  availability: Exclude<
+    EpicCommentRoomAvailability,
+    { readonly kind: "available" }
+  >,
+): { readonly headline: string; readonly detail: string } {
+  switch (availability.kind) {
+    case "checking":
+      return {
+        headline: "Comments are unavailable.",
+        detail: "This epic's comment room is still being checked.",
+      };
+    case "promoting":
+      return {
+        headline: "Comments are temporarily unavailable.",
+        detail: "This epic is still uploading to the cloud.",
+      };
+    case "orphaned":
+      return {
+        headline: "Comments are unavailable.",
+        detail:
+          "This epic's cloud room was deleted. Export or recover the preserved local edits manually.",
+      };
+    case "unauthorized":
+      return {
+        headline: "Comments need a verified sign-in.",
+        detail:
+          "Traycer couldn't confirm your session with the account service. This epic's comments live in the cloud, so they stay hidden until you're signed in again.",
+      };
+  }
+}
+
+function emptyMessageFor(filter: CommentThreadStatusFilter): string {
+  if (filter === "open") {
+    const howTo =
+      "No open comments. Select text in the editor and click 💬 to start a thread";
+    return shortcutHintsVisible()
+      ? `${howTo} (${formatChordForDisplay("mod+alt+m")}).`
+      : `${howTo}.`;
+  }
+  if (filter === "resolved") return "No resolved comments yet.";
+  return "No comments on this artifact yet.";
+}

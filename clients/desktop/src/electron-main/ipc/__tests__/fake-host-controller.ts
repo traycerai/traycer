@@ -1,0 +1,170 @@
+/**
+ * Structural double for `IpcHostController`, shared by every IPC suite that
+ * needs a bridge but is not testing the controller itself (see
+ * `host-controller.test.ts` for that) - so each method just resolves a
+ * plausible "ok" outcome.
+ *
+ * It lives here rather than in each suite because `HostControllerStatus` and
+ * the mutation outcomes keep growing: a per-suite copy compiles until the day
+ * a field is added, and then only the copies whose authors are in the room get
+ * updated. One implementation means one compile error, in the file the person
+ * adding the field is already looking at.
+ */
+import type {
+  ActivateInstalledOk,
+  ApplyStagedOk,
+  ApplyStagedTrigger,
+  ConvergeReadyOk,
+  ConvergeReadyVersionPolicy,
+  GuardedMutationOutcome,
+  HostControllerStatus,
+  HostRespawnMode,
+  InstallVersionOk,
+  LifecycleAdmissionBlock,
+  LocalHostMutationIntent,
+  MutationOutcome,
+  MutationProgress,
+  RemoveTraycerOk,
+  ServiceDefinitionRefreshOk,
+  ServiceRegistrationOk,
+  UninstallOk,
+} from "../../host/host-controller-types";
+import type { IpcHostController } from "../runner-ipc-bridge";
+
+export const FAKE_HOST_CONTROLLER_STATUS: HostControllerStatus = {
+  download: null,
+  mutation: null,
+  installedVersion: "1.0.0",
+  latestVersion: "1.0.0",
+  stagedVersion: null,
+  installedRuntimeVersion: "1.0.0",
+  runningRuntimeVersion: "1.0.0",
+  updateReady: false,
+  activation: "activated",
+  reachable: true,
+  localAttempt: null,
+  removedByUser: false,
+  lastEnsureFailure: null,
+  updateDeferral: null,
+  checkedAt: "2026-01-01T00:00:00.000Z",
+};
+
+export class FakeHostController implements IpcHostController {
+  /** Lets the one suite that cares (`requestHostRespawn`) assert without a
+   * real controller instance. */
+  respawnCalls = 0;
+  /**
+   * Every `(intent, mode)` pair `respawn` was called with, in order - so a
+   * caller that mis-wires its mode (e.g. passes `"if-idle"` where the row
+   * requires `"force"`) is observable. `respawnCalls` above only counts
+   * invocations; it cannot tell `"force"` from `"if-idle"`.
+   */
+  readonly respawnCallArgs: Array<{
+    readonly intent: LocalHostMutationIntent;
+    readonly mode: HostRespawnMode;
+  }> = [];
+
+  readonly lifecycleAdmissionBlock: LifecycleAdmissionBlock | null = null;
+  async getStatus(): Promise<HostControllerStatus> {
+    return FAKE_HOST_CONTROLLER_STATUS;
+  }
+  async convergeReady(
+    _force: boolean,
+    _intent: LocalHostMutationIntent,
+    _versionPolicy: ConvergeReadyVersionPolicy,
+  ): Promise<MutationOutcome<ConvergeReadyOk>> {
+    return { kind: "ok", value: { running: true, version: "1.0.0" } };
+  }
+  async stageLatest(): Promise<void> {}
+  async applyStaged(
+    _trigger: ApplyStagedTrigger,
+    _force: boolean,
+  ): Promise<MutationOutcome<ApplyStagedOk>> {
+    return {
+      kind: "ok",
+      value: { appliedVersion: "1.0.0", runningActivated: true, applied: true },
+    };
+  }
+  async activateInstalled(
+    _force: boolean,
+  ): Promise<MutationOutcome<ActivateInstalledOk>> {
+    return { kind: "ok", value: { activated: true } };
+  }
+  async installVersion(
+    pin: string,
+    _force: boolean,
+  ): Promise<MutationOutcome<InstallVersionOk>> {
+    return {
+      kind: "ok",
+      value: { installedVersion: pin, runningActivated: true },
+    };
+  }
+  async registerService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
+    return { kind: "ok", value: { registered: true } };
+  }
+  async deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
+    return { kind: "ok", value: { registered: false } };
+  }
+  async respawn(
+    intent: LocalHostMutationIntent,
+    mode: HostRespawnMode,
+  ): Promise<GuardedMutationOutcome<ActivateInstalledOk>> {
+    this.respawnCalls += 1;
+    this.respawnCallArgs.push({ intent, mode });
+    return { kind: "ok", value: { activated: true } };
+  }
+  async recoverIfDown(): Promise<
+    MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" }
+  > {
+    return { kind: "suppressed" };
+  }
+  async freePortAndRestart(
+    _pid: number | null,
+    _port: number | null,
+  ): Promise<MutationOutcome<ActivateInstalledOk>> {
+    return { kind: "ok", value: { activated: true } };
+  }
+  async uninstallHost(_all: boolean): Promise<MutationOutcome<UninstallOk>> {
+    return {
+      kind: "ok",
+      value: {
+        removedInstallDir: true,
+        deregisteredService: true,
+        serviceRegistrationRetained: null,
+        serviceWarning: null,
+      },
+    };
+  }
+  async removeTraycer(): Promise<MutationOutcome<RemoveTraycerOk>> {
+    return {
+      kind: "ok",
+      value: {
+        removedHost: true,
+        deregisteredService: true,
+        serviceRegistrationRetained: null,
+        serviceWarning: null,
+        removedLoginItem: false,
+      },
+    };
+  }
+  isPendingRevisionRefreshQuarantined(): boolean {
+    return false;
+  }
+  /**
+   * `host service refresh` on the mutation lane. Defaults to an
+   * already-current, no-op outcome - the overwhelming common case for a
+   * suite that is not itself testing the refresh - so the one field that
+   * changed here (a new controller method) never has to be re-stubbed by
+   * every existing IPC double.
+   */
+  async refreshServiceDefinition(): Promise<
+    MutationOutcome<ServiceDefinitionRefreshOk>
+  > {
+    return { kind: "ok", value: { result: "current", appliesAt: null } };
+  }
+  onMutationProgress(
+    _listener: (progress: MutationProgress) => void,
+  ): () => void {
+    return () => undefined;
+  }
+}

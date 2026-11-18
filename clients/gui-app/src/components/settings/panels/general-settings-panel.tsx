@@ -1,0 +1,313 @@
+import { useState } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import { SettingsRow } from "@/components/settings/settings-row";
+import { SettingsGroup } from "@/components/settings/settings-group";
+import { VoiceSettingsSection } from "@/components/settings/voice-settings-section";
+import { PreventSleepSettingsSection } from "@/components/settings/prevent-sleep-settings-section";
+import { HostLifecycleSettingsRow } from "@/components/settings/host-lifecycle-settings-section";
+import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
+import { ChatAutoArchiveSettingsRow } from "@/components/settings/panels/chat-auto-archive-settings-row";
+import { useSettingsDensity } from "@/providers/settings-density-context";
+import { cn } from "@/lib/utils";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { Switch } from "@/components/ui/switch";
+import { runnerMutationKeys } from "@/lib/query-keys";
+import { clearAllPersistedStores } from "@/lib/persist/wipe";
+import { useWindowsBridge } from "@/providers/windows-bridge-context";
+import type {
+  DesktopJsonValue,
+  DesktopWindowsBridge,
+} from "@/lib/windows/types";
+import { toastFromRunnerError } from "@/lib/runner-error-toast";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
+import {
+  GENERAL,
+  MOD_ENTER_LABEL,
+} from "@/components/settings/panels/general-settings.definitions";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import { useRunnerFeatureSettingsQuery } from "@/hooks/runner/use-runner-feature-settings-query";
+import { useRunnerAgentFeedbackSet } from "@/hooks/runner/use-runner-agent-feedback-set-mutation";
+import { useRunnerAgentRolesSet } from "@/hooks/runner/use-runner-agent-roles-set-mutation";
+
+function trackGeneralSetting(setting: AnalyticsSetting): void {
+  trackSettingChanged("general", setting);
+}
+
+export function GeneralSettingsPanel() {
+  const quoteReplyEnabled = useSettingsStore((s) => s.quoteReplyEnabled);
+  const setQuoteReplyEnabled = useSettingsStore((s) => s.setQuoteReplyEnabled);
+  const steerOnModEnterEnabled = useSettingsStore(
+    (s) => s.steerOnModEnterEnabled,
+  );
+  const setSteerOnModEnterEnabled = useSettingsStore(
+    (s) => s.setSteerOnModEnterEnabled,
+  );
+  const showTracy = useSettingsStore((s) => s.showTracy);
+  const setShowTracy = useSettingsStore((s) => s.setShowTracy);
+  const compact = useSettingsDensity() === "compact";
+  const featureSettings = useRunnerFeatureSettingsQuery();
+  const setAgentRoles = useRunnerAgentRolesSet();
+  const setAgentFeedback = useRunnerAgentFeedbackSet();
+  const availability = useSettingsAvailabilityContext();
+  const agentRolesAvailable =
+    GENERAL.definitions.agentRoles.availableWhen(availability);
+
+  return (
+    <SettingsPanelShell
+      title="General"
+      description="App behavior, agent activity, and local data controls."
+      bodyClassName="overflow-visible rounded-none border-none bg-transparent"
+    >
+      <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
+        <SettingsGroup
+          group={GENERAL.definitions.chatComposer}
+          showTitle
+          tone="default"
+          dataTestId={undefined}
+          fill={false}
+        >
+          <VoiceSettingsSection />
+          <SettingsRow
+            row={GENERAL.definitions.quoteReply}
+            control={
+              <Switch
+                checked={quoteReplyEnabled}
+                onCheckedChange={(value) => {
+                  trackGeneralSetting("quoteReplyEnabled");
+                  setQuoteReplyEnabled(value);
+                }}
+                aria-label="Quote reply on text selection"
+              />
+            }
+          />
+          <SettingsRow
+            row={GENERAL.definitions.steerOnModEnter}
+            control={
+              <Switch
+                checked={steerOnModEnterEnabled}
+                onCheckedChange={(value) => {
+                  trackGeneralSetting("steerOnModEnterEnabled");
+                  setSteerOnModEnterEnabled(value);
+                }}
+                aria-label={`Steer with ${MOD_ENTER_LABEL}`}
+              />
+            }
+          />
+        </SettingsGroup>
+
+        {/* One group for everything about running agents. Each of the first
+          two rows is gated inside its own component (the phone has no power
+          bridge, and only the desktop has a host lifecycle bridge), and the
+          branch prefix is drawn in every shell, so the card is never empty. */}
+        <SettingsGroup
+          group={GENERAL.definitions.agents}
+          showTitle
+          tone="default"
+          dataTestId="settings-general-agents"
+          fill={false}
+        >
+          <PreventSleepSettingsSection />
+          <HostLifecycleSettingsRow />
+          <WorktreeBranchPrefixSection />
+          {agentRolesAvailable ? (
+            <SettingsRow
+              row={GENERAL.definitions.agentRoles}
+              status={
+                featureSettings.isError
+                  ? "Couldn't read feature settings. Repair Traycer's config.json, or back it up before resetting it, then reopen Settings."
+                  : undefined
+              }
+              control={
+                <Switch
+                  checked={featureSettings.data?.agentRoles === true}
+                  disabled={
+                    featureSettings.data === undefined ||
+                    setAgentRoles.isPending
+                  }
+                  onCheckedChange={(enabled) => {
+                    setAgentRoles.mutate(enabled);
+                  }}
+                  aria-label="Agent roles"
+                />
+              }
+            />
+          ) : null}
+          {agentRolesAvailable ? (
+            <SettingsRow
+              row={GENERAL.definitions.agentFeedback}
+              status={
+                featureSettings.isError
+                  ? "Couldn't read feature settings. Repair ~/.traycer/cli/config.json, or back it up before resetting it, then reopen Settings."
+                  : undefined
+              }
+              control={
+                <Switch
+                  checked={featureSettings.data?.agentFeedback === true}
+                  disabled={
+                    featureSettings.data === undefined ||
+                    setAgentFeedback.isPending
+                  }
+                  onCheckedChange={(enabled) => {
+                    setAgentFeedback.mutate(enabled);
+                  }}
+                  aria-label="Let agents draft feedback for you to review"
+                />
+              }
+            />
+          ) : null}
+          <ChatAutoArchiveSettingsRow />
+        </SettingsGroup>
+
+        <SettingsGroup
+          group={GENERAL.definitions.bots}
+          showTitle
+          tone="default"
+          dataTestId="settings-general-bots"
+          fill={false}
+        >
+          <SettingsRow
+            row={GENERAL.definitions.showTracy}
+            control={
+              <Switch
+                checked={showTracy}
+                onCheckedChange={(value) => {
+                  trackGeneralSetting("showTracy");
+                  setShowTracy(value);
+                }}
+                aria-label="Show Tracy"
+              />
+            }
+          />
+        </SettingsGroup>
+
+        <DangerZoneSection />
+      </div>
+    </SettingsPanelShell>
+  );
+}
+
+/**
+ * App-global destruction only.
+ *
+ * This box used to hold three rows at three different scopes: "File Edit
+ * Snapshots" (ONE MACHINE's data - and it carried its own host dropdown, so a
+ * red button took its target from a control shaped like a form field),
+ * "Remove Traycer" (THIS DEVICE's installation) and "Local app state" (THIS
+ * APP). Only the last is app-global, so only it stays. The other two moved to
+ * the machine's own page, where the page title already names the target.
+ */
+function DangerZoneSection() {
+  return (
+    <SettingsGroup
+      group={GENERAL.definitions.dangerZone}
+      showTitle
+      tone="danger"
+      dataTestId="settings-danger-zone"
+      fill={false}
+    >
+      <SettingsLocalAppStateSection />
+    </SettingsGroup>
+  );
+}
+
+// Resolve the host-side per-window clear for "Clear local app state":
+//   - desktop bridge with the `clear` RPC: use it directly (authoritative).
+//   - desktop bridge WITHOUT `clear` (older preload): degrade through the
+//     always-present `get` + `update` RPCs. Wiping browser storage alone leaves
+//     the host-owned per-window snapshot intact, so the tab strip / canvases /
+//     drafts would come back after reload. The fallback empties tabs + drafts
+//     and deletes every existing canvas entry by sending `null` for each key
+//     (the host `update` merge treats `canvasByTabId[key] = null` as deletion).
+//   - no bridge (true web mode): null, so the util stays storage-only.
+function resolvePerWindowHostClear(
+  bridge: DesktopWindowsBridge | null,
+): (() => Promise<void>) | null {
+  const perWindowState = bridge?.perWindowState ?? null;
+  if (perWindowState === null) return null;
+  if (typeof perWindowState.clear === "function") {
+    return perWindowState.clear.bind(perWindowState);
+  }
+  return async () => {
+    const snapshot = await perWindowState.get();
+    const canvasByTabId: Record<string, DesktopJsonValue> = Object.fromEntries(
+      Object.keys(snapshot.canvasByTabId).map(
+        (key): [string, DesktopJsonValue] => [key, null],
+      ),
+    );
+    await perWindowState.update({
+      epicTabs: [],
+      activeTabId: null,
+      canvasByTabId,
+      landingDrafts: [],
+      activeLandingDraftId: null,
+    });
+  };
+}
+
+function SettingsLocalAppStateSection() {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const bridge = useWindowsBridge();
+
+  // Routed through `useMutation` (mirrors the sibling `clearSnapshotsMutation`):
+  // `isPending` drives the UI and `onError` resets the dialog + toasts, so a
+  // failed host `clear` RPC can't leave the dialog stuck. The windows bridge is
+  // `IRunnerHost`, so this uses a bare mutation + `toastFromRunnerError`.
+  const clearLocalAppStateMutation = useMutation({
+    mutationKey: runnerMutationKeys.clearAllLocalData(),
+    mutationFn: () =>
+      clearAllPersistedStores({ hostClear: resolvePerWindowHostClear(bridge) }),
+    // On success the util reloads the page (its last step), so there is no
+    // onSuccess work to do. On failure, close the dialog and surface the error
+    // so the user isn't stuck on a spinning confirm.
+    onError: (error) => {
+      setConfirmOpen(false);
+      toastFromRunnerError(error, "Couldn't clear local app state.");
+    },
+  });
+
+  return (
+    <>
+      <SettingsRow
+        row={GENERAL.definitions.localAppState}
+        control={
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            disabled={clearLocalAppStateMutation.isPending}
+            data-testid="settings-clear-local-app-state"
+            onClick={() => {
+              setConfirmOpen(true);
+            }}
+          >
+            {clearLocalAppStateMutation.isPending ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId="settings-clear-local-app-state-spinner"
+                variant={undefined}
+              />
+            ) : null}
+            Clear local app state
+          </Button>
+        }
+      />
+      <ConfirmDestructiveDialog
+        blockedReason={null}
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Clear local app state?"
+        description="This resets app state on this device - open tabs, layout, drafts, settings, and view preferences - then reloads. It can't be undone. You'll stay signed in."
+        cascadeSummary={null}
+        actionLabel="Clear local app state"
+        isPending={clearLocalAppStateMutation.isPending}
+        onConfirm={() => {
+          clearLocalAppStateMutation.mutate();
+        }}
+      />
+    </>
+  );
+}

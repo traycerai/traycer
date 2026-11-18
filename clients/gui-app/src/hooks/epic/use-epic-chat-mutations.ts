@@ -1,0 +1,1268 @@
+import {
+  QueryClient,
+  useMutation,
+  useQueryClient,
+  type UseMutationOptions,
+  type UseMutationResult,
+} from "@tanstack/react-query";
+import type {
+  CreateChatRequestV15,
+  CreateChatResponse,
+  CreateChatResponseV12,
+  DeleteChatRequest,
+  DeleteChatResponse,
+  RenameChatRequest,
+  SetChatArchivedRequest,
+  SetChatArchivedResponse,
+  UpdateChatProfileRequest,
+  UpdateChatProfileResponse,
+  UpdateChatRunSettingsRequestV12,
+  UpdateChatRunSettingsResponse,
+} from "@traycer/protocol/host/epic/unary-schemas";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import {
+  HostRpcError,
+  toHostRpcError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { useHostMutation } from "@/hooks/host/use-host-query";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import {
+  enactedOwnerHostId,
+  useEpicRecordLifecycleMutationClient,
+  useEpicRecordMutationClient,
+  type EpicRecordMutationContext,
+} from "@/hooks/epic/use-epic-record-mutation-client";
+import { useHostBinding } from "@/lib/host";
+import {
+  recordOwnerHostLabel,
+  toastRequestedRecordWrite,
+} from "@/lib/epics/record-write-outcome-toast";
+import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import { epicMutationKeys } from "@/lib/query-keys";
+import {
+  toastFromHostError,
+  toastFromHostErrorWithDetail,
+} from "@/lib/host-error-toast";
+import {
+  toastFromOwnerHostBatchWriteFailuresWithUnconfirmed,
+  toastFromOwnerHostWriteError,
+  type OwnerHostBatchWriteCopy,
+  type OwnerHostBatchWriteOutcome,
+} from "@/lib/owner-host-write-error-toast";
+import { invalidateEpicChatRecords } from "@/hooks/chats/use-epic-chat-records";
+import { invalidateChatRunSettings } from "@/hooks/chats/use-chat-run-settings-query";
+import { invalidateEpicTuiAgentRecords } from "@/hooks/chats/use-epic-tui-agent-records";
+import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
+import {
+  beginPendingChatCreation,
+  clearPendingChatCreation,
+} from "@/lib/chats/pending-chat-creations";
+import { isRecoverableLatestForkRefusal } from "@/lib/chats/recoverable-fork-refusal";
+import { reportEpicCreateRefusal } from "@/lib/epics/report-epic-create-refusal";
+import { hashOnlyImageHashes } from "@/lib/composer/image-atoms";
+import {
+  currentDraftBlobOwnerId,
+  invalidateDraftBlobConfirmations,
+  putDraftBlobs,
+} from "@/lib/drafts/draft-blob-transport";
+import {
+  armEpicCreateSeedHoldTimer,
+  clearEpicCreateSeedPending,
+  invalidateBindingListingsExceptHeld,
+} from "@/lib/worktree/pending-epic-create-seeds";
+import { evictChatTabPersistenceForChat } from "@/stores/chats/chat-tab-persistence-eviction";
+import {
+  beginCloudChatDeletion,
+  confirmCloudChatDeletion,
+  settleCloudChatDeletion,
+} from "@/lib/chats/cloud-chat-deletions";
+import { cloudChatListQueryKey } from "@/lib/chats/cloud-chat-list-cache";
+import { readCachedChatPublicationId } from "@/hooks/chats/use-chat-publication-targets";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+
+/**
+ * Variables for `useEpicCreateChatForHostClient.mutate`/`mutateAsync`
+ * (and its `useEpicCreateChatForHost` tab-scoped wrapper).
+ *
+ * `hostId` is REQUIRED and named by the caller - it is not projected from
+ * whatever host happens to be active when `mutate` fires. A chat is bound to
+ * its host for life, so the host is part of what the caller is asking for
+ * ("create this agent on THAT machine"), and a hook-side projection let an
+ * active-host change between the click and the mutate silently redirect the
+ * create. Callers pass their tab's bound host, or the host they explicitly
+ * chose in a picker.
+ *
+ * The hooks below still own the CHECK: the request travels on a client that
+ * dials one specific host, so a named host that no longer matches that client
+ * is rejected through the mutation error channel instead of creating the chat
+ * on the wrong machine.
+ */
+export type CreateChatMutationInput = CreateChatRequestV15;
+interface CreateChatMutationContext {
+  readonly hostId: string | null;
+  /**
+   * The signed-in user the create was AUTHORIZED as, captured at mutate time.
+   *
+   * The retained stand-in is identity-bearing - `chatId` is not globally unique,
+   * so the registry keys every retirement decision by owner - and the request
+   * was made under whoever was signed in when it left. Reading the profile back
+   * in `onSuccess` would stamp a chat created by user A onto user B whenever the
+   * profile changed while the create was in flight: the store survives and
+   * reprojects across a user switch, so B would see and could navigate to A's
+   * chat, and A's real record could never retire a row filed under B.
+   *
+   * Same capture-at-mutate rule as `hostId`, for the same reason.
+   */
+  readonly ownerUserId: string | null;
+}
+
+interface ChatMutationTarget {
+  readonly chatId: string;
+  readonly hostId: string | null;
+}
+
+export type ArchiveChatMutationInput = SetChatArchivedRequest &
+  ChatMutationTarget;
+export type DeleteChatMutationInput = DeleteChatRequest & ChatMutationTarget;
+export type RenameChatMutationInput = RenameChatRequest & ChatMutationTarget;
+
+/**
+ * What a chat mutation has to remember to refresh the record list afterwards:
+ * the host it was actually sent to, captured at mutate time so a host swap in
+ * flight cannot redirect the invalidation at another machine's cache.
+ */
+interface ChatRecordMutationContext {
+  readonly hostId: string | null;
+  readonly viewerHostId: string | null;
+  readonly viewerUserId: string | null;
+  /** Where the call went: the owner, or a live host standing in for it. */
+  readonly servingHostId: string | null;
+}
+
+interface DeleteChatMutationContext extends ChatRecordMutationContext {
+  readonly cloudDeletionToken: string | null;
+  /**
+   * The deleted chat's OWNER, read off the viewer's row at mutate time, which
+   * keys the cloud suppression and the confirmed removal. Not always the
+   * viewer: a team host's environment-owned chat is owned by the environment.
+   * `null` exactly when `viewerUserId` is.
+   */
+  readonly ownerUserId: string | null;
+}
+
+export type DeleteChatMutationOptions = Omit<
+  UseMutationOptions<
+    DeleteChatResponse,
+    HostRpcError,
+    DeleteChatMutationInput,
+    DeleteChatMutationContext
+  >,
+  "mutationFn"
+>;
+
+/**
+ * Resolve viewer state independently of the mutation's fixed destination.
+ *
+ * The viewer's row must still be the record the write was about: the row the
+ * mutation was routed from (`ctx.hostId`), or the same chat as the host that
+ * enacted the write holds it (`enactedOwnerHostId`) once a refresh has shown
+ * the moved owner.
+ */
+function getChatMutationViewer(
+  epicId: string,
+  chatId: string,
+  ctx: ChatRecordMutationContext,
+  ownerHostId: string | null,
+): OpenEpicStoreHandle | null {
+  if (
+    ctx.viewerUserId === null ||
+    ctx.viewerUserId !== currentProfileUserId()
+  ) {
+    return null;
+  }
+  const handle = getOpenEpicRegistry().peek(epicId);
+  if (handle === null) return null;
+  const chats = handle.store.getState().chats.byId;
+  // A replacement session can mount before its first record list.
+  if (!Object.hasOwn(chats, chatId)) return handle;
+  const row = chats[chatId];
+  const rowHostId = row.hostId ?? handle.hostId;
+  if (
+    !row.ownedByViewer ||
+    (rowHostId !== ctx.hostId && rowHostId !== ownerHostId)
+  )
+    return null;
+  return handle;
+}
+
+/**
+ * Whether the caller is expected to render this refusal ITSELF, inline, instead
+ * of through the generic toast.
+ *
+ * `E_FORK_BOUNDARY_NOT_PUBLISHED` is the host saying "the message you picked
+ * hasn't finished backing up yet - try again shortly". It is retryable in the
+ * plainest sense: the identical request succeeds a moment later. A toast would
+ * be wrong in tone (nothing is broken) and wrong in place - the fork dialog
+ * stays OPEN on this refusal so the retry is one click, and a toast beside a
+ * dialog that is already explaining itself says the same thing twice.
+ *
+ * Reachable only from a request that named a precise fork boundary - the
+ * host mints this code for exactly one condition - which is what keeps this
+ * from becoming a general "quiet fork errors" bucket that would swallow a
+ * real failure for someone.
+ */
+function isInlineForkRefusal(error: HostRpcError): boolean {
+  return error.code === "E_FORK_BOUNDARY_NOT_PUBLISHED";
+}
+
+/**
+ * Tab-scoped wrapper over {@link useEpicCreateChatForHostClient}, sending the
+ * create on the tab's own bound host client.
+ */
+export function useEpicCreateChatForHost(): UseMutationResult<
+  CreateChatResponseV12,
+  HostRpcError,
+  CreateChatMutationInput,
+  CreateChatMutationContext
+> {
+  const client = useTabHostClient();
+  return useEpicCreateChatForHostClient(client);
+}
+
+/**
+ * Mutation hook for `epic.createChat`, host-parametric: the caller resolves
+ * an explicit `HostClient` (e.g. via `useHostClientFor` for a sidebar row's
+ * OWN host, or a composer placement's frozen submit client) and the request
+ * is sent on THAT client. `null` client (offline / directory unresolved)
+ * rejects through the mutation error channel so the caller can disable the
+ * affordance - `useHostMutation`'s own `client === null` guard covers that
+ * case; only the second-stage host check lives in `mapVariables` here (also
+ * normalized to `HostRpcError` by `useHostMutation`'s boundary).
+ *
+ * The caller names the host on the request (`CreateChatMutationInput.hostId`)
+ * and this hook verifies the resolved client actually dials it, so a client
+ * that lost (or changed) its host identity can never make the create land
+ * somewhere the caller did not ask for. `useEpicCreateChatForHost` is the
+ * tab-scoped wrapper over this; row child-create passes the row's host
+ * client.
+ *
+ * There is deliberately no client-less `useEpicCreateChat()` wrapper any
+ * more: the app-wide one that existed had zero callers, and a create is
+ * PLACEMENT - it must be sent on the client the placement resolved, never
+ * on a host read separately from the chip.
+ *
+ * RESOLVES `CreateChatResponseV12`, whose `refusal` key `@1.0`/`@1.1` do not
+ * have at all - so a refused create's body is `{ chatId, refusal }` and its
+ * `chatId` names a chat that was never made. A caller whose request carries an
+ * `initialMessage` with hash-only images MUST read `refusal` before treating
+ * the body as a created chat; the new-conversation modal is the only such
+ * caller, and it is the reason this type is the `@1.2` one. The fork dialog,
+ * the clone-on-host-switch flow and the tile's side-chat send no initial
+ * message, so the host has nothing to fail to resolve for them.
+ */
+export function useEpicCreateChatForHostClient(
+  client: HostClient<HostRpcRegistry> | null,
+): UseMutationResult<
+  CreateChatResponseV12,
+  HostRpcError,
+  CreateChatMutationInput,
+  CreateChatMutationContext
+> {
+  return useCreateChatForClient(client, null);
+}
+
+/**
+ * A durable sandbox dispatch can settle after sign-out. Its caller records the
+ * original account's receipt; these lifecycle effects belong only to that account.
+ */
+export function useEpicCreateChatForPendingSandbox(
+  client: HostClient<HostRpcRegistry> | null,
+  ownerUserId: string | null,
+) {
+  return useCreateChatForClient(client, { ownerUserId });
+}
+
+function useCreateChatForClient(
+  client: HostClient<HostRpcRegistry> | null,
+  ownerFence: { readonly ownerUserId: string | null } | null,
+) {
+  const queryClient = useQueryClient();
+  return useHostMutation<
+    HostRpcRegistry,
+    "epic.createChat",
+    CreateChatMutationContext,
+    CreateChatMutationInput
+  >({
+    client,
+    method: "epic.createChat",
+    mapVariables: (params) => {
+      if (
+        ownerFence !== null &&
+        ownerFence.ownerUserId !== currentProfileUserId()
+      ) {
+        throw new HostRpcError({
+          code: "RPC_ERROR",
+          message:
+            "The account that started this request is no longer signed in.",
+          requestId: "client-pre-flight",
+          method: "epic.createChat",
+          fatalDetails: null,
+        });
+      }
+      const clientHostId = client?.getActiveHostId() ?? null;
+      if (clientHostId !== params.hostId) {
+        throw new HostRpcError({
+          code: "RPC_ERROR",
+          message:
+            clientHostId === null
+              ? "Tab host identity unavailable - cannot create an agent on it."
+              : "This host client no longer addresses the requested host - the agent would be created on a different host.",
+          requestId: "client-pre-flight",
+          method: "epic.createChat",
+          fatalDetails: null,
+        });
+      }
+      return params;
+    },
+    // The `missing-attachment-bytes` retry, the twin of `epic.create`'s and in
+    // the same place for the same reason: below every arm that treats a body as
+    // a created chat, so only the final outcome reaches them.
+    //
+    // The transport mutation is unkeyed. Caller-owned chat IDs let a durable
+    // sandbox dispatch replay an uncertain request as the same agent; ordinary
+    // modal creates close on submit. This retry is different: the host already
+    // said it created nothing because attachment bytes were missing. Repair
+    // those bytes and send the identical request, with no new chat or message.
+    resolveResponse: async (response, variables, redispatch) => {
+      if (
+        ownerFence !== null &&
+        ownerFence.ownerUserId !== currentProfileUserId()
+      )
+        return response;
+      if (response.refusal?.kind !== "missing-attachment-bytes") {
+        return response;
+      }
+      const hostId = client?.getActiveHostId() ?? null;
+      if (client === null || hostId === null) return response;
+      const content = variables.initialMessage?.content ?? null;
+      if (content === null) return response;
+      const hashes = hashOnlyImageHashes(content);
+      if (hashes.length === 0) return response;
+      // Retracted before the re-upload, exactly as on `epic.create`'s twin:
+      // this refusal is the only evidence the client gets that its ack memo is
+      // wrong, and a hash whose re-upload fails here must not keep reading as
+      // confirmed to the next message that carries it.
+      invalidateDraftBlobConfirmations(hostId, hashes);
+      await putDraftBlobs(hostId, client, hashes, currentDraftBlobOwnerId());
+      if (
+        ownerFence !== null &&
+        ownerFence.ownerUserId !== currentProfileUserId()
+      )
+        return response;
+      return redispatch();
+    },
+    options: {
+      mutationKey: epicMutationKeys.createChat(),
+      onMutate: () => ({
+        hostId: client?.getActiveHostId() ?? null,
+        ownerUserId: currentProfileUserId(),
+      }),
+      onSuccess: (data, params, ctx) => {
+        if (
+          ownerFence !== null &&
+          ownerFence.ownerUserId !== currentProfileUserId()
+        )
+          return;
+        // A REFUSAL ARRIVES HERE, not in `onError`, and it has to be read
+        // BEFORE anything treats this body as a created chat. `@1.2` gave
+        // `epic.createChat` a `refusal` key it has never had, and the released
+        // lines have none at all - so a refused create's body is
+        // `{ chatId, refusal }`, whose `chatId` names a chat the host did not
+        // make. Retaining it would put a stand-in row in the registry that no
+        // projection can ever confirm, and the invalidations below would ask
+        // the host to re-list a chat that does not exist.
+        //
+        // Nothing else in this arm runs either: no seed-hold timer (no create
+        // to cover), no binding invalidation (no binding), no record refetch.
+        // The teardown of what the SUBMIT staged - the eager tab, the handoff -
+        // belongs to the caller, which is the only side that knows what it
+        // registered.
+        if (data.refusal !== undefined) {
+          reportEpicCreateRefusal(data.refusal, ctx.hostId);
+          clearEpicCreateSeedPending(params.epicId, params.chatId);
+          return;
+        }
+        retainCreatedChatUntilProjected(data, params, ctx.ownerUserId);
+        invalidateBindingsForEpic(queryClient, ctx.hostId);
+        // This surface's own backstop, armed at its own create's response and
+        // scoped to its own pair. A no-op for the three surfaces that register
+        // nothing (the fork dialog, the tile side-chat, clone-on-host-switch);
+        // it exists for the new-conversation modal's DEFERRED create, whose
+        // tile can be closed before the setup outcome the driver watches for.
+        //
+        // Per pair and NOT per epic: an epic-wide arm here would let any fork
+        // or side-chat into a held landing epic push that landing hold past its
+        // own ceiling.
+        armEpicCreateSeedHoldTimer(params.epicId, params.chatId);
+        // NOT optional here: this is the variant the in-Epic new-conversation
+        // modal and the fork dialog actually run. The created chat lands in
+        // the host's chat database and in nothing this renderer already
+        // listens to, so without
+        // this the record list is never re-read - and every create-then-open
+        // flow (`openCreatedChatWhenProjected`, the handoff's
+        // `projectedChatId`) waits on a projection that only a poll tick can
+        // deliver. Scoped to the host the request was actually SENT to, which
+        // is the one whose registry changed.
+        invalidateEpicChatRecords(queryClient, ctx.hostId);
+      },
+      onError: (error, variables) => {
+        if (
+          ownerFence !== null &&
+          ownerFence.ownerUserId !== currentProfileUserId()
+        )
+          return;
+        releaseCreatedChat(variables);
+        // Beside `releaseCreatedChat` and for the same reason: nothing else
+        // would ever remove a deferred modal create's marker entry. No tile
+        // mounts for a rejected create (the modal's own catch takes the
+        // eager-opened tab down), so the tile-level driver never runs; the only
+        // rejection that can have armed a timer is a lifecycle throw inside the
+        // `onSuccess` above, AFTER the arm, and this clear cancels it.
+        clearEpicCreateSeedPending(variables.epicId, variables.chatId);
+        if (isInlineForkRefusal(error)) return;
+        // A step inside an operation that recovers from it, not the end of
+        // one: the clone-on-host-switch flow narrates the history downgrade
+        // itself and retries without `forkSource`, so a toast here describes
+        // an ATTEMPT moments before the clone succeeds. Keyed on the request's
+        // `boundary: "latest"` as well as the code, so the manual fork
+        // dialog's precise-boundary refusal - genuinely terminal, nobody
+        // retrying - is still reported.
+        if (isRecoverableLatestForkRefusal(error, variables)) return;
+        // WITH DETAIL, unlike its sibling mutations. A create is refused for
+        // reasons that live entirely in the host's message and nowhere else:
+        // the worktree the user asked for could not be made (`git worktree
+        // add` failed - a branch name that already exists, a dirty source, a
+        // path that is not a repo). The host answers `RPC_ERROR` with that
+        // reason as free text and deliberately mints no wire code for it
+        // (`WORKTREE_CREATE_FAILED` is a chat-stream reject code only), so the
+        // bare fallback is the whole of what the user gets - "Couldn't create
+        // agent.", with the actual cause reachable only by opening host.log.
+        //
+        // `toastFromHostErrorWithDetail` appends the host text ONLY when no
+        // mapped copy claimed the error, so every branch above
+        // (`E_HOST_UNSUPPORTED`, `WORKTREE_BUSY`, the transport arm) keeps its
+        // written-for-a-person sentence and never gains a raw suffix.
+        toastFromHostErrorWithDetail(error, "Couldn't create agent.");
+      },
+    },
+  });
+}
+
+/**
+ * Make the created chat visible NOW, on every creation surface at once.
+ *
+ * The host writes the chat to its own database and to nothing this renderer
+ * projects, so without this the agent the user just made is invisible until its
+ * record completes the round trip - a ≤20s poll at best, and longer when the
+ * creating host is not the one this window's record stream is keyed to. See
+ * `stores/epics/open-epic/pending-chat-creations.ts`.
+ *
+ * Wired into the shared create hooks rather than into each caller for three
+ * reasons. It cannot be forgotten - a surface added later inherits it by using
+ * the hook, which is how the sibling surfaces came to share one silent
+ * `CHAT_PROJECTION_WAIT_MS` wait in the first place. It reads the REQUEST, so
+ * the retained row can never disagree with what was actually sent (the host it
+ * was dialled at, the parent, the title). And it is mutation-level rather than
+ * a per-`mutate` callback, which TanStack drops when the calling component
+ * unmounts - and every one of these surfaces closes itself the moment it
+ * submits.
+ *
+ * The OWNER, by contrast, is captured at mutate time and handed in - see
+ * {@link CreateChatMutationContext.ownerUserId}. Only the row's TIMING belongs
+ * on success; the identity it is filed under belongs to the request, and reading
+ * it back here would attribute the chat to whoever happens to be signed in when
+ * the answer lands.
+ *
+ * On SUCCESS, deliberately, not at mutate time: until the host answers, the
+ * chat exists nowhere, and a row for it would advance the initial-chat
+ * handoff's projection machine (and disarm its orphan deadline) for a chat that
+ * may never be created. The window this closes is the one the user actually
+ * waits through - between "created" and "visible" - not the one they spend
+ * watching a submit spinner.
+ *
+ * The id is read back from the RESPONSE: the resolver is idempotent on the
+ * client-minted id and echoes it, and it is the id the opener navigates to, so
+ * taking it from here keeps the retained row, the open intent and the eventual
+ * record on one identity.
+ */
+function retainCreatedChatUntilProjected(
+  response: CreateChatResponse,
+  request: CreateChatMutationInput,
+  ownerUserId: string | null,
+): void {
+  beginPendingChatCreation(request.epicId, {
+    chatId: response.chatId,
+    hostId: request.hostId,
+    parentChatId: request.parentId,
+    title: request.title,
+    ownerUserId,
+  });
+}
+
+/**
+ * The owner of the viewer's row for `chatId`, or `null` when the open epic
+ * holds no such row. The row's own `userId`, which for a team host's
+ * environment-owned chat is the environment id - the identity the host serves
+ * the row and its cloud copy under.
+ */
+function viewersChatOwnerUserId(epicId: string, chatId: string): string | null {
+  const handle = getOpenEpicRegistry().peek(epicId);
+  if (handle === null) return null;
+  const chats = handle.store.getState().chats.byId;
+  if (!Object.hasOwn(chats, chatId)) return null;
+  const row = chats[chatId];
+  return row.ownedByViewer ? row.userId : null;
+}
+
+/**
+ * The signed-in user, read at the moment of call.
+ *
+ * The same source the open-epic store reads for its own projection identity, so
+ * a captured value and a store-side read can never disagree about who "current"
+ * means - they only ever disagree about WHEN, which is the entire point of
+ * capturing it.
+ */
+function currentProfileUserId(): string | null {
+  return useAuthStore.getState().profile?.userId ?? null;
+}
+
+/**
+ * No record will ever arrive for this chat - the create failed. A no-op for the
+ * hooks' own flow (which retains only on success) and the reason the registry's
+ * failure arm exists at all: a surface that seeds a row BEFORE the answer, to
+ * cover a long create, has exactly one way to take it back down. Runs for EVERY
+ * failure, including the ones this hook deliberately does not toast (the clone
+ * flow's recoverable fork refusals, which retry under a fresh chat id).
+ */
+function releaseCreatedChat(request: CreateChatMutationInput): void {
+  clearPendingChatCreation(request.epicId, request.chatId);
+}
+
+/**
+ * Host-wide despite the name, and now through the shared helper: it refetches
+ * every epic's binding listing on this host at the response exactly as before,
+ * EXCEPT one a deferred landing create is still holding. That epic has no host
+ * binding row to answer with until its queued drain's `git worktree add` lands,
+ * so refetching it here would replace the landing seed with `{ rows: [] }` for
+ * the whole provisioning window.
+ *
+ * The cost, accepted and bounded by that window: a synchronous create from any
+ * of this hook's four surfaces into a held epic on the same host has its
+ * binding row on the HOST at the response but on SCREEN only at the hold's
+ * release - or at the first fetch by any observer on that shared key.
+ */
+function invalidateBindingsForEpic(
+  queryClient: QueryClient,
+  hostId: string | null,
+): void {
+  if (hostId === null) return;
+  invalidateBindingListingsExceptHeld(queryClient, hostId);
+}
+
+/**
+ * Mutation hook for `epic.updateChatRunSettings` (optional host capability).
+ *
+ * Persists a chat's run settings without sending a message, so the durable
+ * per-chat profile a headless turn (e.g. an incoming agent-to-agent message)
+ * runs on tracks the composer's selection immediately instead of at the next
+ * send. Tab-host scoped: chat settings belong to the chat's bound host.
+ *
+ * Intentionally has no `onError` toast: callers are fire-and-forget syncs or
+ * bulk switches that decide themselves how to surface failures. Against an
+ * old host the call fails with `E_HOST_UNSUPPORTED` (declared degrade), which
+ * callers treat as "legacy behavior: settings persist on next send".
+ */
+export function useEpicUpdateChatRunSettings(): UseMutationResult<
+  UpdateChatRunSettingsResponse,
+  HostRpcError,
+  UpdateChatRunSettingsRequestV12
+> {
+  const client = useTabHostClient();
+  const queryClient = useQueryClient();
+  return useHostMutation<
+    HostRpcRegistry,
+    "epic.updateChatRunSettings",
+    { hostId: string | null },
+    UpdateChatRunSettingsRequestV12
+  >({
+    client,
+    method: "epic.updateChatRunSettings",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: epicMutationKeys.updateChatRunSettings(),
+      // Captured at mutate time, per the host-swap convention above.
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      onSuccess: (_data, _variables, ctx) => {
+        // The write landed in the host store and NOWHERE the renderer projects
+        // from: a registry-only chat's record row summarises to a harness id,
+        // and a pre-pivot chat's doc entry is frozen. The hover card reads the
+        // tuple over `epic.getChatRunSettings`, so without this it keeps
+        // rendering the pre-change model/profile/permission mode.
+        invalidateChatRunSettings(queryClient, ctx.hostId);
+      },
+    },
+  });
+}
+
+/**
+ * Mutation hook for `epic.updateChatProfile` (optional host capability).
+ *
+ * Narrow profile-only settings update: moves a chat onto another logged-in
+ * profile of its current harness WITHOUT rebuilding the full tuple
+ * client-side - the host patches its own authoritative persisted record, so
+ * a possibly-stale projection can never be re-persisted just to move the
+ * profile. Tab-host scoped, like `useEpicUpdateChatRunSettings` above, and
+ * likewise fire-and-forget: against an old host the call fails with
+ * `E_HOST_UNSUPPORTED` and callers degrade to persist-on-next-send.
+ */
+export function useEpicUpdateChatProfile(): UseMutationResult<
+  UpdateChatProfileResponse,
+  HostRpcError,
+  UpdateChatProfileRequest
+> {
+  const client = useTabHostClient();
+  const queryClient = useQueryClient();
+  return useHostMutation<
+    HostRpcRegistry,
+    "epic.updateChatProfile",
+    { hostId: string | null },
+    UpdateChatProfileRequest
+  >({
+    client,
+    method: "epic.updateChatProfile",
+    mapVariables: (variables) => variables,
+    options: {
+      mutationKey: epicMutationKeys.updateChatProfile(),
+      // Same host-swap capture and the same reason as
+      // `useEpicUpdateChatRunSettings` above - a profile move is a settings
+      // write that reaches only the host's own record.
+      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      onSuccess: (_data, _variables, ctx) => {
+        invalidateChatRunSettings(queryClient, ctx.hostId);
+      },
+    },
+  });
+}
+
+/** Rename the authoritative record on its owning host. */
+export function useEpicRenameChat() {
+  const client = useEpicRecordMutationClient();
+  const sessionClient = useEpicSessionHostClient();
+  const queryClient = useQueryClient();
+  return useHostMutation<
+    HostRpcRegistry,
+    "epic.renameChat",
+    EpicRecordMutationContext,
+    RenameChatMutationInput
+  >({
+    client,
+    method: "epic.renameChat",
+    mapVariables: ({ epicId, chatId, title }) => ({ epicId, chatId, title }),
+    options: {
+      onMutate: ({ hostId }) => ({
+        hostId,
+        viewerHostId: sessionClient?.getActiveHostId() ?? null,
+      }),
+      onSuccess: (_data, variables, ctx) => {
+        // The visible session too: it may have been replaced while the
+        // rename travelled, and its list fetched before it landed.
+        for (const hostId of new Set([
+          ctx.hostId,
+          ctx.viewerHostId,
+          getOpenEpicRegistry().peek(variables.epicId)?.hostId ?? null,
+        ])) {
+          invalidateEpicChatRecords(queryClient, hostId);
+        }
+      },
+      onError: (error) => {
+        toastFromHostError(error, "Couldn't rename agent.");
+      },
+    },
+  });
+}
+
+/**
+ * Chats and terminal agents share the archive RPC. The caller names the
+ * record's owning host; the viewing epic may only hold a replica. When that
+ * host is down the call goes to a live host instead (see
+ * `useEpicRecordLifecycleMutationClient`), and an `outcome: "requested"`
+ * answer is told to the person: the owner finishes the archive when it is back.
+ * `updated: false` is an idempotent success, not a missing record.
+ */
+export function useEpicArchiveChat(): UseMutationResult<
+  SetChatArchivedResponse,
+  HostRpcError,
+  ArchiveChatMutationInput
+> {
+  return useEpicArchiveChatMutation("individual");
+}
+
+function useEpicArchiveChatMutation(
+  failurePresentation: "individual" | "aggregate",
+): UseMutationResult<
+  SetChatArchivedResponse,
+  HostRpcError,
+  ArchiveChatMutationInput
+> {
+  const route = useEpicRecordLifecycleMutationClient("epic.setChatArchived");
+  const sessionClient = useEpicSessionHostClient();
+  const binding = useHostBinding();
+  const queryClient = useQueryClient();
+  // An imperative post-write read: the viewer's cloud replica can lag the
+  // owner's response. Reuse the record revision instead of inventing an overlay.
+  const readOwnerRecords = useHostMutation<
+    HostRpcRegistry,
+    "epic.listChatRecords",
+    unknown,
+    ArchiveChatMutationInput
+  >({
+    client: route.client,
+    method: "epic.listChatRecords",
+    // `knownRevision: null` - this read holds no list stamp and wants the
+    // whole list, which is what a one-shot post-write read means. The host
+    // therefore always answers `snapshot`.
+    mapVariables: ({ epicId }) => ({
+      epicId,
+      hasDocReplica: false,
+      knownRevision: null,
+    }),
+    options: null,
+  });
+  return useHostMutation<
+    HostRpcRegistry,
+    "epic.setChatArchived",
+    ChatRecordMutationContext,
+    ArchiveChatMutationInput
+  >({
+    client: route.client,
+    method: "epic.setChatArchived",
+    mapVariables: ({ epicId, chatId, archived }) => ({
+      epicId,
+      chatId,
+      archived,
+    }),
+    requiredHostMethodVersion: route.requiredHostMethodVersion,
+    options: {
+      mutationKey: epicMutationKeys.setChatArchived(),
+      onMutate: (variables) => ({
+        hostId: variables.hostId,
+        viewerHostId: sessionClient?.getActiveHostId() ?? null,
+        viewerUserId: currentProfileUserId(),
+        servingHostId: route.servingHostId(variables),
+      }),
+      onSuccess: async (data, variables, ctx) => {
+        // Every follow-up below is keyed to the host whose record changed.
+        const ownerHostId = enactedOwnerHostId(data, ctx);
+        const handle = getOpenEpicRegistry().peek(variables.epicId);
+        // The visible session may have been replaced while the write travelled.
+        for (const hostId of new Set([
+          ctx.hostId,
+          ownerHostId,
+          ctx.viewerHostId,
+          ctx.servingHostId,
+          handle?.hostId ?? null,
+        ])) {
+          invalidateEpicChatRecords(queryClient, hostId);
+          invalidateEpicTuiAgentRecords(queryClient, hostId);
+        }
+        if (data.outcome === "requested") {
+          // The owner did not enact it: there is no owner record to read back,
+          // and viewers already see the cloud's value.
+          if (ownerHostId !== null) {
+            toastRequestedRecordWrite({
+              write: variables.archived ? "archive" : "unarchive",
+              ownerHostId,
+              hostLabel: recordOwnerHostLabel(binding, ownerHostId),
+            });
+          }
+          return;
+        }
+        if (
+          (ownerHostId === ctx.viewerHostId &&
+            handle?.hostId === ownerHostId) ||
+          getChatMutationViewer(
+            variables.epicId,
+            variables.chatId,
+            ctx,
+            ownerHostId,
+          ) === null
+        )
+          return;
+        try {
+          const answer = await readOwnerRecords.mutateAsync(variables);
+          // `unchanged` cannot arrive: the read above sends no stamp, so the
+          // host has nothing to match and every answer is a `snapshot`. The
+          // guard returns rather than assumes - there is no row to reconcile
+          // against in an answer that carries none.
+          if (answer.kind !== "snapshot") return;
+          const records = answer.chats;
+          const currentHandle = getChatMutationViewer(
+            variables.epicId,
+            variables.chatId,
+            ctx,
+            ownerHostId,
+          );
+          if (currentHandle === null) return;
+          invalidateEpicChatRecords(queryClient, currentHandle.hostId);
+          const record = records.find(
+            (row) =>
+              // No owner test: `own` is the owner host's word that this row is
+              // the viewer's, and a team host's environment-owned chat names
+              // an owner that is not the viewer.
+              row.chatId === variables.chatId &&
+              row.originHostId === ownerHostId &&
+              row.origin === "own",
+          );
+          if (record === undefined) return;
+          currentHandle.store.getState().applyConfirmedChatMutation({
+            kind: "upsert",
+            record:
+              currentHandle.hostId === ownerHostId
+                ? record
+                : {
+                    ...record,
+                    origin: "foreign",
+                    archivedAt: null,
+                    docResident: false,
+                  },
+          });
+        } catch (error) {
+          // The write succeeded; only its immediate display refresh failed.
+          toastFromHostError(
+            toHostRpcError(error, "epic.listChatRecords"),
+            "Agent updated, but couldn't refresh its status.",
+          );
+        }
+      },
+      onError: (error, variables, ctx) => {
+        // The host may have committed the write before its answer was lost,
+        // so refresh every list it could have changed - the routed owner's,
+        // the viewer's, the host the call went to and the visible session's -
+        // whichever way the failure is presented.
+        if (ctx !== undefined) {
+          const handle = getOpenEpicRegistry().peek(variables.epicId);
+          for (const hostId of new Set([
+            ctx.hostId,
+            ctx.viewerHostId,
+            ctx.servingHostId,
+            handle?.hostId ?? null,
+          ])) {
+            invalidateEpicChatRecords(queryClient, hostId);
+            invalidateEpicTuiAgentRecords(queryClient, hostId);
+          }
+        }
+        if (failurePresentation === "individual") {
+          toastFromOwnerHostWriteError(error, "Couldn't archive agent.");
+        }
+      },
+    },
+  });
+}
+
+/**
+ * One request of an archive batch, and how many SELECTED rows it stands for:
+ * archiving a record hides its subtree, so the sidebar sends only the topmost
+ * selected rows, each covering itself and its selected descendants. 1 for an
+ * independent target.
+ *
+ * `selectedRows` is fixed at the gesture. `coveredRows` is read when the batch
+ * settles: how many of those rows are still beneath the record then. A
+ * selected descendant moved out while the request was in flight was not
+ * archived with it, so it gets neither the request's applied nor its failed
+ * count - it is unconfirmed.
+ */
+export interface ArchiveChatsTarget extends ChatMutationTarget {
+  readonly selectedRows: number;
+  readonly coveredRows: () => number;
+}
+
+export interface ArchiveChatsMutationInput {
+  readonly epicId: string;
+  readonly chats: readonly ArchiveChatsTarget[];
+  readonly archived: boolean;
+}
+
+const ARCHIVE_BATCH_COPY: OwnerHostBatchWriteCopy = {
+  single: "Couldn't archive agent.",
+  partial: (applied, failed) =>
+    `Archived ${applied} of ${applied + failed} selected agents. ${failed} couldn't be archived.`,
+  none: (attempted) =>
+    `Couldn't archive any of the ${attempted} selected agents.`,
+  unconfirmed: (attempted) =>
+    `Couldn't confirm all ${attempted} selected agents were archived. Check them and archive any that weren't.`,
+};
+
+const UNARCHIVE_BATCH_COPY: OwnerHostBatchWriteCopy = {
+  single: "Couldn't unarchive agent.",
+  partial: (applied, failed) =>
+    `Unarchived ${applied} of ${applied + failed} selected agents. ${failed} couldn't be unarchived.`,
+  none: (attempted) =>
+    `Couldn't unarchive any of the ${attempted} selected agents.`,
+  unconfirmed: (attempted) =>
+    `Couldn't confirm all ${attempted} selected agents were unarchived. Check them and unarchive any that weren't.`,
+};
+
+export type ArchiveChatsMutationResult =
+  readonly PromiseSettledResult<SetChatArchivedResponse>[];
+
+/**
+ * Query-owned lifecycle for a user-initiated archive batch.
+ *
+ * Each record still travels through the archive host mutation, preserving the
+ * RPC gate. This aggregate mutation owns pending state and failure
+ * presentation, and returns every outcome so the caller can reconcile
+ * successful selections without discarding failures.
+ */
+export function useEpicArchiveChats(): UseMutationResult<
+  ArchiveChatsMutationResult,
+  Error,
+  ArchiveChatsMutationInput
+> {
+  const archiveChat = useEpicArchiveChatMutation("aggregate");
+  return useMutation<
+    ArchiveChatsMutationResult,
+    Error,
+    ArchiveChatsMutationInput
+  >({
+    mutationKey: epicMutationKeys.archiveChats(),
+    mutationFn: (variables) =>
+      Promise.allSettled(
+        variables.chats.map((chat) =>
+          archiveChat.mutateAsync({
+            epicId: variables.epicId,
+            chatId: chat.chatId,
+            hostId: chat.hostId,
+            archived: variables.archived,
+          }),
+        ),
+      ),
+    onSuccess: (results, variables) => {
+      // `updated: false` from the owner is an already-satisfied no-op, or a
+      // chat deleted while its write waited its turn on the host: neither
+      // applied nor failed as far as this batch can tell. Such rows stay in
+      // the selection's count, unconfirmed.
+      //
+      // A `requested` answer is accepted whatever `updated` says: a stand-in
+      // host wrote the cloud row for a gone owner, and `updated: false` there
+      // means the row already had that state. The per-record mutation reports
+      // it as accepted, so the batch counts it as applied.
+      let unconfirmedRows = 0;
+      const outcomes = results.flatMap(
+        (result, index): OwnerHostBatchWriteOutcome[] => {
+          const chat = variables.chats[index];
+          const selectedRows = chat.selectedRows;
+          if (
+            result.status === "fulfilled" &&
+            result.value.outcome !== "requested" &&
+            !result.value.updated
+          ) {
+            unconfirmedRows += selectedRows;
+            return [];
+          }
+          const coveredRows = Math.min(selectedRows, chat.coveredRows());
+          unconfirmedRows += selectedRows - coveredRows;
+          return [
+            {
+              kind: "agent",
+              hostId: chat.hostId,
+              selectedRows: coveredRows,
+              error:
+                result.status === "rejected"
+                  ? toHostRpcError(result.reason, "epic.setChatArchived")
+                  : null,
+            },
+          ];
+        },
+      );
+      toastFromOwnerHostBatchWriteFailuresWithUnconfirmed(
+        outcomes,
+        unconfirmedRows,
+        variables.archived ? ARCHIVE_BATCH_COPY : UNARCHIVE_BATCH_COPY,
+      );
+    },
+  });
+}
+
+/**
+ * Deletes on the owning host and retires the viewer's confirmed replica. When
+ * the owner is down the call goes to a live host, which deletes the cloud row
+ * (`outcome: "requested"`): the agent leaves every list at once and the files
+ * on the owner are untouched.
+ */
+export function useEpicDeleteChat(): UseMutationResult<
+  DeleteChatResponse,
+  HostRpcError,
+  DeleteChatMutationInput,
+  DeleteChatMutationContext
+> {
+  return useEpicDeleteChatMutation("individual");
+}
+
+/**
+ * `useEpicDeleteChat` for one delete among several in a batch: the caller
+ * reports the batch's failures once (`toastFromOwnerHostBatchWriteFailures`),
+ * so a failure here raises no notice of its own.
+ */
+export function useEpicDeleteChatInBatch(): UseMutationResult<
+  DeleteChatResponse,
+  HostRpcError,
+  DeleteChatMutationInput,
+  DeleteChatMutationContext
+> {
+  return useEpicDeleteChatMutation("aggregate");
+}
+
+/**
+ * Settle a chat delete's provisional cloud-row suppression from the fields
+ * the answer actually has. With a publication identity, confirm it under the
+ * enacted owner: the host's identity replaces an incorrect provisional
+ * mapping rather than confirming both rows. Without one, keep the
+ * provisional key only when the owner is the row's own host, which that key
+ * already names (a v1.0 peer, or a host without a composed publisher). When
+ * the owner is another host (authority moved, or a stand-in named another
+ * owner), the key names the row's host, whose same-id chat may survive, and
+ * it cannot be re-keyed without the identity: drop it.
+ */
+function settleChatDeletionSuppression(
+  data: Pick<DeleteChatResponse, "publicationChatId">,
+  ownerHostId: string | null,
+  ctx: Pick<
+    DeleteChatMutationContext,
+    "cloudDeletionToken" | "hostId" | "ownerUserId"
+  >,
+  epicId: string,
+): void {
+  if (
+    data.publicationChatId !== null &&
+    ownerHostId !== null &&
+    ctx.ownerUserId !== null
+  ) {
+    confirmCloudChatDeletion(ctx.cloudDeletionToken, {
+      taskId: epicId,
+      ownerUserId: ctx.ownerUserId,
+      ownerHostId,
+      chatId: data.publicationChatId,
+    });
+    return;
+  }
+  settleCloudChatDeletion(ctx.cloudDeletionToken, ownerHostId === ctx.hostId);
+}
+
+function useEpicDeleteChatMutation(
+  failurePresentation: "individual" | "aggregate",
+): UseMutationResult<
+  DeleteChatResponse,
+  HostRpcError,
+  DeleteChatMutationInput,
+  DeleteChatMutationContext
+> {
+  const route = useEpicRecordLifecycleMutationClient("epic.deleteChat");
+  const sessionClient = useEpicSessionHostClient();
+  const binding = useHostBinding();
+  const queryClient = useQueryClient();
+  return useHostMutation<
+    HostRpcRegistry,
+    "epic.deleteChat",
+    DeleteChatMutationContext,
+    DeleteChatMutationInput
+  >({
+    client: route.client,
+    method: "epic.deleteChat",
+    mapVariables: ({ epicId, chatId }) => ({ epicId, chatId }),
+    requiredHostMethodVersion: route.requiredHostMethodVersion,
+    options: {
+      // `epic.deleteChat` names no host on the wire - the host it is SENT to
+      // is the one that owns the chat being deleted - so the teardown below
+      // has to be told which host that was. Captured at mutate time (the
+      // repo's host-swap convention) rather than re-read in `onSuccess`, so a
+      // host swap while the delete is in flight cannot make us dispose a
+      // same-id chat session belonging to a different machine.
+      onMutate: (variables) => {
+        const { hostId, epicId, chatId } = variables;
+        const viewerHostId = sessionClient?.getActiveHostId() ?? null;
+        const viewerUserId = currentProfileUserId();
+        const ownerUserId =
+          viewerUserId === null
+            ? null
+            : (viewersChatOwnerUserId(epicId, chatId) ?? viewerUserId);
+        const cachedPublicationChatId =
+          readCachedChatPublicationId(queryClient, hostId, epicId, chatId) ??
+          readCachedChatPublicationId(
+            queryClient,
+            viewerHostId,
+            epicId,
+            chatId,
+          );
+        // Cache evidence is only for pending feedback and older hosts. The
+        // success response supplies the authoritative publication identity.
+        const publicationChatId = cachedPublicationChatId ?? chatId;
+        return {
+          hostId,
+          viewerHostId,
+          viewerUserId,
+          ownerUserId,
+          servingHostId: route.servingHostId(variables),
+          cloudDeletionToken:
+            hostId === null || ownerUserId === null
+              ? null
+              : beginCloudChatDeletion({
+                  taskId: epicId,
+                  ownerUserId,
+                  ownerHostId: hostId,
+                  chatId: publicationChatId,
+                }),
+        };
+      },
+      onSuccess: (data, variables, ctx) => {
+        // The host that owns the deleted chat, and the one key every follow-up
+        // below takes. An `applied` answer from a stand-in means the record
+        // was its own (authority moved after this row was read), so it is the
+        // stand-in's chat that is gone: its cloud row, session and tiles carry
+        // the stand-in's id, not the stale one. A `requested` answer names the
+        // owner it filed for, or, from a host that predates that field, the
+        // owner the row names. `onMutate`'s provisional suppression is keyed
+        // to the row (no answer exists yet); the confirm below re-keys it.
+        const ownerHostId = enactedOwnerHostId(data, ctx);
+        // Confirm BEFORE removing local records: otherwise their stale cloud
+        // copy becomes an unfolded row.
+        settleChatDeletionSuppression(data, ownerHostId, ctx, variables.epicId);
+        // No active host at mutate time means nothing could have acquired a
+        // session under this chat's identity either, so there is nothing to
+        // force-release - and guessing a host here is exactly the
+        // cross-host dispose this teardown must not perform.
+        if (ownerHostId !== null) {
+          getChatSessionRegistry().forceRelease(
+            variables.epicId,
+            variables.chatId,
+            ownerHostId,
+          );
+          // This mutation-level callback survives the optimistic sidebar row
+          // unmounting. Per-call callbacks owned by that row do not, which can
+          // otherwise leave a deleted chat tile visible indefinitely while the
+          // cloud record query is unresolved.
+          useEpicCanvasStore
+            .getState()
+            .closeConfirmedDeletedAgentTiles(
+              variables.epicId,
+              variables.chatId,
+              ownerHostId,
+              "chat",
+            );
+        }
+        // A deleted chat can never be reopened -
+        // drop its durable chat-key entries across all seven per-tab
+        // registries (the tab-key side, if this chat happened to be open,
+        // is already handled by the canvas store's close sweep when the
+        // caller closes the tile ahead of this mutation).
+        evictChatTabPersistenceForChat({
+          epicId: variables.epicId,
+          chatId: variables.chatId,
+        });
+        // A chat deleted before any real record retired its stand-in would
+        // otherwise stay on screen forever. Absence is precisely what
+        // `applyChatRecords` PRESERVES a pending creation through - that is the
+        // disappearance guard working as designed - so the refetch below cannot
+        // clear it: the correct snapshot omits the chat, and omission is the one
+        // signal the registry is built to ignore. Only an explicit retirement
+        // ends it, and a successful delete is exactly that.
+        //
+        // Most reproducible where no record was ever going to arrive on its own:
+        // a host without the optional `host.chatRecords.subscribe` stream, or a
+        // cross-host target whose stream this window does not mount.
+        clearPendingChatCreation(variables.epicId, variables.chatId);
+        // Retain the confirmed removal across stale replica polls while the
+        // owning host's cloud retraction is still travelling to the viewer.
+        const handle = getOpenEpicRegistry().peek(variables.epicId);
+        if (
+          handle !== null &&
+          ownerHostId !== null &&
+          ctx.ownerUserId !== null &&
+          ctx.viewerUserId === currentProfileUserId()
+        ) {
+          handle.store.getState().applyConfirmedChatMutation({
+            kind: "remove",
+            chatId: variables.chatId,
+            ownerUserId: ctx.ownerUserId,
+            originHostId: ownerHostId,
+          });
+        }
+        for (const hostId of new Set([
+          ctx.hostId,
+          ownerHostId,
+          ctx.viewerHostId,
+          ctx.servingHostId,
+          handle?.hostId ?? null,
+        ])) {
+          invalidateEpicChatRecords(queryClient, hostId);
+          if (hostId !== null && ctx.viewerUserId !== null) {
+            void queryClient.invalidateQueries({
+              queryKey: cloudChatListQueryKey({
+                hostId,
+                viewerUserId: ctx.viewerUserId,
+                taskId: variables.epicId,
+              }),
+            });
+          }
+        }
+        if (data.outcome === "requested" && ownerHostId !== null) {
+          toastRequestedRecordWrite({
+            write: "remove",
+            ownerHostId,
+            hostLabel: recordOwnerHostLabel(binding, ownerHostId),
+          });
+        }
+      },
+      onError: (error, variables, ctx) => {
+        settleCloudChatDeletion(ctx?.cloudDeletionToken ?? null, false);
+        // Cleanup can reject after the host committed the tombstone. Release
+        // the provisional hide for genuine refusals, but also refresh so a
+        // committed deletion does not leave the old cloud answer visible.
+        if (ctx !== undefined) {
+          const handle = getOpenEpicRegistry().peek(variables.epicId);
+          const viewerUserId = ctx.viewerUserId;
+          // The stand-in too: it may have committed the delete before the
+          // response or the cleanup failed, exactly as the owner may. The
+          // record lists and the cloud chat lists, as success refreshes both.
+          for (const hostId of new Set([
+            ctx.hostId,
+            ctx.viewerHostId,
+            ctx.servingHostId,
+            handle?.hostId ?? null,
+          ])) {
+            invalidateEpicChatRecords(queryClient, hostId);
+            if (hostId === null || viewerUserId === null) continue;
+            void queryClient.invalidateQueries({
+              queryKey: cloudChatListQueryKey({
+                hostId,
+                viewerUserId,
+                taskId: variables.epicId,
+              }),
+            });
+          }
+        }
+        // The optimistic sidebar row may already be unmounted, so its
+        // per-call error callback is not a reliable rollback owner either.
+        useEpicCanvasStore
+          .getState()
+          .unmarkArtifactSelfDeleted(variables.chatId);
+        if (failurePresentation === "individual") {
+          toastFromOwnerHostWriteError(error, "Couldn't delete agent.");
+        }
+      },
+    },
+  });
+}

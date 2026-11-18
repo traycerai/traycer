@@ -1,0 +1,331 @@
+/* The first-task coachmark: act 1 stepping out of the tour and into the real
+   app. It keeps the acts' typography, spotlight (`--diorama-ring`) and easing,
+   but NOT their glass - over the real app a translucent fill let the surface
+   underneath (a drafts list, a toolbar) read straight through the copy, so the
+   card sits on `PopoverContent`'s opaque plate instead. The easing tokens are
+   restated here with the shell's values as fallbacks, because this renders far
+   outside `.onboarding-shell` - the same shape `onboarding-diorama.css` uses. */
+
+.first-task-coachmark-floater,
+.first-task-coachmark-halo,
+.first-task-coachmark-dim {
+  --coachmark-ease: var(--onboarding-ease, cubic-bezier(0.23, 1, 0.32, 1));
+  --coachmark-ease-in-out: var(
+    --onboarding-ease-in-out,
+    cubic-bezier(0.77, 0, 0.175, 1)
+  );
+  /* One spotlight recipe, shared with the diorama's ringed regions. */
+  --coachmark-ring:
+    0 0 0 1px color-mix(in srgb, var(--primary) 60%, transparent),
+    0 0 0 5px color-mix(in srgb, var(--primary) 14%, transparent);
+  --coachmark-glide: 320ms;
+  /* Two stacking homes, not a dynamic value: above the app, or above an
+     overlay's own layer when the step's target lives inside one. */
+  --coachmark-z: 40;
+}
+.first-task-coachmark-floater[data-over-overlay="true"],
+.first-task-coachmark-halo[data-over-overlay="true"],
+.first-task-coachmark-dim[data-over-overlay="true"] {
+  --coachmark-z: 60;
+}
+
+/* ------------------------------------------------------------------ floater */
+
+/* The floater carries Floating UI's placement and nothing else. Its transform
+   is the position, so the card's own motion lives one level in. */
+.first-task-coachmark-floater {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: max-content;
+  z-index: var(--coachmark-z);
+}
+/* A target that scrolled out of sight takes its card and halo with it (see
+   `targetOccluded`). Opacity rather than unmounting: the row is one flick away
+   from coming back, and a remount would replay the entrance each time. */
+.first-task-coachmark-floater {
+  transition:
+    opacity 120ms var(--coachmark-ease),
+    visibility 0s;
+}
+.first-task-coachmark-floater[data-occluded="true"],
+.first-task-coachmark-halo[data-occluded="true"] {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 120ms var(--coachmark-ease),
+    visibility 0s 120ms;
+}
+/* Only a step change glides. `autoUpdate` fires on every scroll and resize
+   too, and a card that eased after a scrolling target would never catch it. */
+.first-task-coachmark-floater[data-glide="true"] {
+  transition:
+    transform var(--coachmark-glide) var(--coachmark-ease-in-out),
+    opacity 120ms var(--coachmark-ease);
+}
+
+/* Transitions rather than keyframes: a step change hands the card a new anchor
+   through one null frame, and a transition retargets where an animation would
+   replay its entrance mid-glide. */
+.first-task-coachmark-surface {
+  position: relative;
+  opacity: 1;
+  transform: translateY(0);
+  filter: blur(0);
+  transition:
+    opacity 260ms var(--coachmark-ease),
+    transform 260ms var(--coachmark-ease),
+    filter 260ms var(--coachmark-ease);
+}
+@starting-style {
+  .first-task-coachmark-surface {
+    opacity: 0;
+    transform: translateY(8px);
+    filter: blur(2px);
+  }
+}
+.first-task-coachmark-floater[data-state="exiting"]
+  .first-task-coachmark-surface {
+  opacity: 0;
+  transform: translateY(-8px);
+  filter: blur(2px);
+  transition-duration: 160ms;
+}
+/* Keyboard arrival is not a place to spend motion. */
+.first-task-coachmark-floater:has(
+    .first-task-coachmark[data-keyboard-navigation]
+  )
+  .first-task-coachmark-surface,
+.first-task-coachmark-floater:has(.first-task-coachmark:focus-visible)
+  .first-task-coachmark-surface {
+  transition: none;
+}
+
+/* --------------------------------------------------------------------- card */
+
+/* Surface, ring and shadow are `PopoverContent`'s own utilities on the element;
+   what is left here is the box.
+
+   The width is capped against the SURFACE the card is portalled into, not
+   against the viewport: measured, a 22rem card inside the 295pt mobile
+   navigation drawer overhung it by 145pt, because `100vw` is the screen and the
+   drawer is three quarters of it. `--coachmark-available` is that surface's
+   width, written on the floater every time the card is positioned
+   (`onboarding-coachmark.tsx`); the 2rem it leaves is the 16pt gutter on each
+   side that Floating UI's own `shift` padding then honours, so the two agree
+   instead of fighting over which edge to clear. The viewport fallback is for
+   the frame before the first placement. */
+.first-task-coachmark {
+  position: relative;
+  width: min(22rem, calc(var(--coachmark-available, 100vw) - 2rem));
+  padding: 1rem;
+  border-radius: 1rem;
+  outline: none;
+}
+
+/* Inside a drawer or sheet the card sits on a surface of its own colour, where
+   `shadow-md` disappears and the plate reads as part of the list under it. */
+.first-task-coachmark-floater[data-over-overlay="true"] .first-task-coachmark {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--foreground) 14%, transparent),
+    0 16px 40px -12px rgb(0 0 0 / 0.6);
+}
+
+.first-task-coachmark-eyebrow-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 1.25rem;
+}
+/* The step-progress row: a fixed-width strip of bar segments, no text. */
+.first-task-coachmark-progress {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: min(9rem, 40%);
+}
+.first-task-coachmark-progress-bar {
+  flex: 1 1 0;
+  height: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 18%, transparent);
+}
+.first-task-coachmark-progress-bar--filled {
+  background: var(--foreground);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .first-task-coachmark-progress-bar {
+    transition: background 200ms var(--coachmark-ease);
+  }
+}
+.first-task-coachmark-title {
+  margin-top: 0.375rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+  text-wrap: balance;
+}
+.first-task-coachmark-body {
+  margin-top: 0.25rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+  text-wrap: balance;
+}
+.first-task-coachmark-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  margin-top: 1rem;
+}
+
+/* The words cross over while the card travels: out over 120ms, in over 160ms
+   once the new copy has been swapped in. */
+.first-task-coachmark
+  :is(
+    .first-task-coachmark-title,
+    .first-task-coachmark-body,
+    .first-task-coachmark-action-label
+  ) {
+  transition: opacity 160ms var(--coachmark-ease);
+}
+.first-task-coachmark[data-text-state="out"]
+  :is(
+    .first-task-coachmark-title,
+    .first-task-coachmark-body,
+    .first-task-coachmark-action-label
+  ) {
+  opacity: 0;
+  transition-duration: 120ms;
+}
+
+/* ----------------------------------------------------------------- spotlight */
+
+.first-task-coachmark-halo {
+  position: fixed;
+  z-index: var(--coachmark-z);
+  pointer-events: none;
+  box-shadow: var(--coachmark-ring);
+  transition: opacity 260ms var(--coachmark-ease);
+}
+.first-task-coachmark-halo[data-state="exiting"] {
+  opacity: 0;
+  transition-duration: 160ms;
+}
+.first-task-coachmark-halo[data-glide="true"] {
+  transition:
+    opacity 260ms var(--coachmark-ease),
+    top var(--coachmark-glide) var(--coachmark-ease-in-out),
+    left var(--coachmark-glide) var(--coachmark-ease-in-out),
+    width var(--coachmark-glide) var(--coachmark-ease-in-out),
+    height var(--coachmark-glide) var(--coachmark-ease-in-out),
+    border-radius var(--coachmark-glide) var(--coachmark-ease-in-out);
+}
+/* One soft pulse on arrival, then still - it remounts with the step, which is
+   what restarts it. */
+.first-task-coachmark-pulse {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  animation: first-task-coachmark-pulse 900ms var(--coachmark-ease) both;
+}
+@keyframes first-task-coachmark-pulse {
+  from {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--primary) 14%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 14px color-mix(in srgb, var(--primary) 0%, transparent);
+  }
+}
+
+/* A dim that only dims: it never takes a pointer event, so every control it
+   covers stays live. Skipped entirely when the target is inside a picker,
+   which already owns attention. */
+.first-task-coachmark-dim {
+  position: fixed;
+  inset: 0;
+  /* One below the halo it sits behind. */
+  z-index: calc(var(--coachmark-z) - 1);
+  pointer-events: none;
+  transition: opacity 260ms var(--coachmark-ease);
+}
+.first-task-coachmark-dim[data-state="exiting"] {
+  opacity: 0;
+  transition-duration: 160ms;
+}
+.first-task-coachmark-dim-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* Mask luminance, not colour: white keeps the dim, black is the hole. */
+.first-task-coachmark-dim-sheet {
+  fill: white;
+}
+.first-task-coachmark-dim-cutout {
+  fill: black;
+}
+.first-task-coachmark-dim[data-glide="true"] .first-task-coachmark-dim-cutout {
+  transition:
+    x var(--coachmark-glide) var(--coachmark-ease-in-out),
+    y var(--coachmark-glide) var(--coachmark-ease-in-out),
+    width var(--coachmark-glide) var(--coachmark-ease-in-out),
+    height var(--coachmark-glide) var(--coachmark-ease-in-out),
+    rx var(--coachmark-glide) var(--coachmark-ease-in-out);
+}
+/* The app's own overlay colour (`bg-black/10` on dialogs, `/40` on drawers),
+   between the two. A mix of `--background` was invisible on every dark theme:
+   it is the colour of the page it was meant to dim. */
+.first-task-coachmark-dim-fill {
+  fill: rgb(0 0 0 / 0.32);
+}
+
+/* ----------------------------------------------------------------- phone */
+
+/* One step up the phone type scale for both lines: 15pt over 13pt is the
+   pointer card's density, and on a phone this card is the only thing on screen
+   the user is being asked to read. */
+@media (max-width: 767px) {
+  .first-task-coachmark-title {
+    font-size: 1.0625rem;
+    line-height: 1.3;
+  }
+  .first-task-coachmark-body {
+    font-size: 0.9375rem;
+    line-height: 1.45;
+  }
+}
+
+/* The dim stays - it is what makes the target findable, not decoration. What
+   goes is the travel and the pulse. */
+@media (prefers-reduced-motion: reduce) {
+  .first-task-coachmark-surface {
+    transform: none;
+    filter: none;
+    transition: opacity 200ms ease;
+  }
+  @starting-style {
+    .first-task-coachmark-surface {
+      transform: none;
+      filter: none;
+    }
+  }
+  .first-task-coachmark-floater[data-state="exiting"]
+    .first-task-coachmark-surface {
+    transform: none;
+    filter: none;
+  }
+  .first-task-coachmark-floater[data-glide="true"],
+  .first-task-coachmark-halo[data-glide="true"],
+  .first-task-coachmark-dim[data-glide="true"]
+    .first-task-coachmark-dim-cutout {
+    transition: none;
+  }
+  .first-task-coachmark-pulse {
+    animation: none;
+  }
+}

@@ -1,0 +1,2031 @@
+/**
+ * A bot's channel and threads draw their rows in Slack's layout (Tracy Bots,
+ * decision 41). `<ChatMessage>` hands a row to `ChatBotMessage` when a
+ * `ChatBotPresentationContext` is provided and draws the ordinary transcript
+ * row when it is not. The rows come from `useRenderedMessages`, which carries
+ * the persisted record's `announcement` and `conversationRequest` onto them.
+ */
+import { StrictMode, type ReactNode } from "react";
+import {
+  cleanup,
+  render,
+  renderHook,
+  screen,
+  within,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import {
+  BotIdentityContext,
+  type BotIdentity,
+} from "@/components/bots/bot-identity-context";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import type { JsonContent } from "@traycer/protocol/common/registry";
+import type {
+  BotAnnouncement,
+  BotAnnouncementKind,
+  ConversationRequest,
+} from "@traycer/protocol/persistence/epic/messages";
+import type {
+  AgentSender,
+  Message,
+} from "@traycer/protocol/persistence/epic/schemas";
+import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
+import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
+import { makeMessage } from "@/components/chat/__tests__/chat-message-fixtures";
+import {
+  ChatBotPresentationContext,
+  type ChatBotFailedRequest,
+  type ChatBotPresentation,
+  type ChatBotThreadLine,
+  type ChatBotTurnReceipt,
+} from "@/components/chat/chat-bot-presentation-context";
+import { ChatEmptyState } from "@/components/chat/chat-empty-state";
+import { ChatMessage } from "@/components/chat/chat-message";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  useRenderedMessages,
+  type RenderedMessagesDisplayContext,
+  type RenderedMessagesInput,
+} from "@/stores/chats/rendered-messages";
+import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+
+const mocks = vi.hoisted(
+  (): {
+    openLink: Mock<
+      (url: string, kind: string, event: unknown) => Promise<void>
+    >;
+  } => ({
+    openLink:
+      vi.fn<(url: string, kind: string, event: unknown) => Promise<void>>(),
+  }),
+);
+
+vi.mock("@/lib/links/open-link", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/links/open-link")>()),
+  useOpenLink: () => mocks.openLink,
+}));
+
+const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
+const POST_ID = "post-1";
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.openLink.mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  cleanup();
+});
+
+function channelPresentation(
+  threadLine: (postMessageId: string) => ChatBotThreadLine | null,
+  openThread: (postMessageId: string) => void,
+): ChatBotPresentation {
+  return {
+    botTitle: "Release Bot",
+    threadLine,
+    openThread,
+    openAnnouncementThread: null,
+    threadAnchorKinds: [],
+    chooseOption: null,
+    reply: null,
+    questions: null,
+    failedRequest: null,
+    failedRecovery: null,
+    replyReceipt: null,
+    requestReceipt: null,
+  };
+}
+
+/** The bot the channel's surface draws, as `bot-tab-surface` provides it. */
+const SURFACE_BOT: BotIdentity = {
+  botId: "bot_0YVZD4PHYFAZS1MCR0D9GABAGV",
+  title: "Release bot",
+  owner: null,
+};
+
+function renderRow(
+  message: ChatMessageModel,
+  presentation: ChatBotPresentation | null,
+): void {
+  renderRowAs(message, presentation, null);
+}
+
+/** A row under a bot's surface, whose name opens the bot's popover. */
+function renderRowInBotSurface(
+  message: ChatMessageModel,
+  presentation: ChatBotPresentation | null,
+): void {
+  renderRowAs(message, presentation, SURFACE_BOT);
+}
+
+function renderRowAs(
+  message: ChatMessageModel,
+  presentation: ChatBotPresentation | null,
+  identity: BotIdentity | null,
+): void {
+  function Providers(props: { readonly children: ReactNode }) {
+    return (
+      <StrictMode>
+        <TooltipProvider>
+          <ChatExpansionTestProviders tileInstanceId="tile-1">
+            <BotIdentityContext.Provider value={identity}>
+              <ChatBotPresentationContext.Provider value={presentation}>
+                {props.children}
+              </ChatBotPresentationContext.Provider>
+            </BotIdentityContext.Provider>
+          </ChatExpansionTestProviders>
+        </TooltipProvider>
+      </StrictMode>
+    );
+  }
+  render(
+    <ChatMessage
+      message={message}
+      actions={null}
+      backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+      nextStepActions={null}
+    />,
+    { wrapper: Providers },
+  );
+}
+
+function memberPost(
+  conversationRequest: ConversationRequest | undefined,
+): ChatMessageModel {
+  const base: ChatMessageModel = {
+    ...makeMessage(0, "user"),
+    persistentMessageId: POST_ID,
+    senderLabel: "Tess Teammate",
+    content: "Please review the release",
+    segments: [
+      {
+        id: "message-0:text",
+        kind: "text",
+        markdown: "Please review the release",
+        isStreaming: false,
+      },
+    ],
+  };
+  return conversationRequest === undefined
+    ? base
+    : { ...base, conversationRequest };
+}
+
+function botRow(announcement: BotAnnouncement | undefined): ChatMessageModel {
+  const base: ChatMessageModel = {
+    ...makeMessage(1, "assistant"),
+    segments: [
+      {
+        id: "message-1:text",
+        kind: "text",
+        markdown: "The bot says hello",
+        isStreaming: false,
+      },
+    ],
+  };
+  return announcement === undefined ? base : { ...base, announcement };
+}
+
+const NO_THREAD_LINE = (): ChatBotThreadLine | null => null;
+
+describe("<ChatMessage /> in a bot channel", () => {
+  it("draws a member's post with the sender, a round picture and the text, no badge for its resolved request, and no jump to a reply", () => {
+    renderRow(
+      memberPost({
+        requestId: "req-1",
+        resolvedAt: 5_000,
+        resolvedByMessageId: "reply-9",
+      }),
+      channelPresentation(NO_THREAD_LINE, vi.fn()),
+    );
+
+    const row = screen.getByTestId("bot-member-row");
+    expect(within(row).getByText("Tess Teammate")).toBeTruthy();
+    expect(within(row).getByText("Please review the release")).toBeTruthy();
+    expect(avatarShape(within(row).getByTestId("person-avatar"))).toBe(
+      "circle",
+    );
+    expect(screen.queryByTestId("conversation-request")).toBeNull();
+    expect(within(row).queryByText("Resolved")).toBeNull();
+  });
+
+  it("draws no badge on a post whose request is unresolved", () => {
+    renderRow(
+      memberPost({
+        requestId: "req-2",
+        resolvedAt: null,
+        resolvedByMessageId: null,
+      }),
+      channelPresentation(NO_THREAD_LINE, vi.fn()),
+    );
+
+    const row = screen.getByTestId("bot-member-row");
+    expect(screen.queryByTestId("conversation-request")).toBeNull();
+    expect(within(row).queryByText("Open")).toBeNull();
+  });
+
+  it("opens the post's thread from the thread line, with the replies and the last reply named", async () => {
+    const user = userEvent.setup();
+    const openThread = vi.fn<(postMessageId: string) => void>();
+    renderRow(
+      memberPost(undefined),
+      channelPresentation(
+        () => ({
+          participants: [],
+          replyCount: 3,
+          lastReplyAt: Date.now() - 5 * 60_000,
+          unread: false,
+          unreadCount: 0,
+          replying: false,
+          followedUnwritten: false,
+          newReplies: false,
+        }),
+        openThread,
+      ),
+    );
+
+    const line = screen.getByTestId("bot-thread-line");
+    expect(within(line).getByText("3 replies")).toBeTruthy();
+    expect(within(line).getByText(/Last reply/)).toBeTruthy();
+    expect(openThread).not.toHaveBeenCalled();
+
+    await user.click(line);
+
+    expect(openThread).toHaveBeenCalledTimes(1);
+    expect(openThread).toHaveBeenCalledWith(POST_ID);
+  });
+
+  it.each([
+    [true, 1],
+    [false, 0],
+  ])(
+    "marks the thread line as followed when followedUnwritten is %s",
+    (followedUnwritten, count) => {
+      renderRow(
+        memberPost(undefined),
+        channelPresentation(
+          () => ({
+            participants: [],
+            replyCount: 2,
+            lastReplyAt: Date.now() - 5 * 60_000,
+            unread: false,
+            unreadCount: 0,
+            replying: false,
+            followedUnwritten,
+            newReplies: false,
+          }),
+          vi.fn(),
+        ),
+      );
+
+      const line = screen.getByTestId("bot-thread-line");
+      expect(
+        within(line).queryAllByTestId("bot-thread-following-mark"),
+      ).toHaveLength(count);
+      if (count === 1) {
+        expect(
+          within(line).getByTestId("bot-thread-following-mark").textContent,
+        ).toBe("following");
+      }
+    },
+  );
+
+  it.each([
+    [true, 1, "true"],
+    [false, 0, "false"],
+  ])(
+    "says new replies on the thread line when newReplies is %s",
+    (newReplies, count, attribute) => {
+      renderRow(
+        memberPost(undefined),
+        channelPresentation(
+          () => ({
+            participants: [],
+            replyCount: 2,
+            lastReplyAt: Date.now() - 5 * 60_000,
+            unread: false,
+            unreadCount: 0,
+            replying: false,
+            followedUnwritten: false,
+            newReplies,
+          }),
+          vi.fn(),
+        ),
+      );
+
+      const line = screen.getByTestId("bot-thread-line");
+      expect(line.getAttribute("data-new-replies")).toBe(attribute);
+      expect(
+        within(line).queryAllByTestId("bot-thread-new-replies"),
+      ).toHaveLength(count);
+    },
+  );
+
+  it.each([
+    { label: "a caught-up line", unread: true, newReplies: false, bold: false },
+    {
+      label: "an unread line where the host keeps no cursor",
+      unread: true,
+      newReplies: null,
+      bold: true,
+    },
+    {
+      label: "a line with new replies",
+      unread: false,
+      newReplies: true,
+      bold: true,
+    },
+    {
+      label: "a read line where the host keeps no cursor",
+      unread: false,
+      newReplies: null,
+      bold: false,
+    },
+  ])(
+    "draws the reply count of $label bold: $bold",
+    ({ unread, newReplies, bold }) => {
+      renderRow(
+        memberPost(undefined),
+        channelPresentation(
+          () => ({
+            participants: [],
+            replyCount: 2,
+            lastReplyAt: Date.now() - 5 * 60_000,
+            unread,
+            unreadCount: unread ? 1 : 0,
+            replying: false,
+            followedUnwritten: false,
+            newReplies,
+          }),
+          vi.fn(),
+        ),
+      );
+
+      const count = within(screen.getByTestId("bot-thread-line")).getByText(
+        "2 replies",
+      );
+      expect(count.className.includes("font-bold")).toBe(bold);
+    },
+  );
+
+  it("offers a member post's thread among its hover actions, as Create thread until it is listed and Open thread after, with no thread line until the thread has a reply", async () => {
+    const user = userEvent.setup();
+    const openThread = vi.fn<(postMessageId: string) => void>();
+    renderRow(
+      memberPost(undefined),
+      channelPresentation(
+        () => ({
+          participants: [],
+          replyCount: 0,
+          lastReplyAt: null,
+          unread: false,
+          unreadCount: 0,
+          replying: false,
+          followedUnwritten: false,
+          newReplies: false,
+        }),
+        openThread,
+      ),
+    );
+    expect(screen.queryByTestId("bot-thread-line")).toBeNull();
+    expect(screen.queryByText("Open thread", { selector: "span" })).toBeNull();
+    const actions = screen.getByTestId("bot-message-actions");
+    expect(openThread).not.toHaveBeenCalled();
+
+    await user.click(
+      within(actions).getByRole("button", { name: "Open thread" }),
+    );
+
+    expect(openThread).toHaveBeenCalledTimes(1);
+    expect(openThread).toHaveBeenCalledWith(POST_ID);
+    cleanup();
+
+    renderRow(
+      memberPost(undefined),
+      channelPresentation(NO_THREAD_LINE, openThread),
+    );
+    expect(screen.queryByTestId("bot-thread-line")).toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "Create thread" })
+        .getAttribute("data-testid"),
+    ).toBe("bot-message-thread");
+  });
+
+  it("shows the thread line while the bot answers in a thread that has no reply yet", () => {
+    renderRow(
+      memberPost(undefined),
+      channelPresentation(
+        () => ({
+          participants: [],
+          replyCount: 0,
+          lastReplyAt: null,
+          unread: false,
+          unreadCount: 0,
+          replying: true,
+          followedUnwritten: false,
+          newReplies: false,
+        }),
+        vi.fn(),
+      ),
+    );
+
+    expect(screen.getByTestId("bot-thread-line")).toBeTruthy();
+  });
+
+  it("stacks who is in the thread: the post's writer as a circle, the bot as a squircle", () => {
+    renderRowInBotSurface(
+      memberPost(undefined),
+      channelPresentation(
+        () => ({
+          participants: [
+            {
+              kind: "person",
+              userId: "user-teammate",
+              name: "Tess Teammate",
+              avatarUrl: null,
+            },
+            { kind: "bot" },
+          ],
+          replyCount: 2,
+          lastReplyAt: 1_000,
+          unread: false,
+          unreadCount: 0,
+          replying: false,
+          followedUnwritten: false,
+          newReplies: false,
+        }),
+        vi.fn(),
+      ),
+    );
+
+    const stack = within(screen.getByTestId("bot-thread-line")).getByTestId(
+      "bot-thread-participants",
+    );
+    expect(
+      Array.from(
+        stack.querySelectorAll<HTMLElement>('[data-slot="avatar"]'),
+        avatarShape,
+      ),
+    ).toEqual(["circle", "squircle"]);
+    expect(
+      within(stack).queryByTestId("bot-thread-participants-more"),
+    ).toBeNull();
+  });
+
+  it("draws the post's writer in one colour in its row and in its thread's stack", () => {
+    renderRow(
+      { ...memberPost(undefined), senderUserId: "user-teammate" },
+      channelPresentation(
+        () => ({
+          participants: [
+            {
+              kind: "person",
+              userId: "user-teammate",
+              name: "Tess Teammate",
+              avatarUrl: null,
+            },
+          ],
+          replyCount: 1,
+          lastReplyAt: 1_000,
+          unread: false,
+          unreadCount: 0,
+          replying: false,
+          followedUnwritten: false,
+          newReplies: false,
+        }),
+        vi.fn(),
+      ),
+    );
+
+    const fillIn = (scope: HTMLElement): string | undefined =>
+      scope
+        .querySelector<HTMLElement>('[data-slot="avatar-fallback"]')
+        ?.style.getPropertyValue("--avatar-fill");
+    const row = screen.getByTestId("bot-member-row");
+    const stack = within(row).getByTestId("bot-thread-participants");
+    const rowAvatar = within(row)
+      .getAllByTestId("person-avatar")
+      .find((avatar) => !stack.contains(avatar));
+    expect(rowAvatar).toBeDefined();
+    if (rowAvatar === undefined) return;
+    expect(fillIn(rowAvatar)).toBeTruthy();
+    expect(fillIn(rowAvatar)).toBe(fillIn(stack));
+  });
+
+  it("marks a thread line unread with a dot where the host does not count, and a read one with none", () => {
+    renderRow(
+      memberPost(undefined),
+      channelPresentation(
+        () => ({
+          participants: [],
+          replyCount: 2,
+          lastReplyAt: 1_000,
+          unread: true,
+          unreadCount: null,
+          replying: false,
+          followedUnwritten: false,
+          newReplies: null,
+        }),
+        vi.fn(),
+      ),
+    );
+    expect(
+      screen.getByTestId("bot-thread-line").getAttribute("data-unread"),
+    ).toBe("true");
+    expect(screen.getByTestId("bot-thread-unread")).toBeTruthy();
+    cleanup();
+
+    renderRow(
+      memberPost(undefined),
+      channelPresentation(
+        () => ({
+          participants: [],
+          replyCount: 2,
+          lastReplyAt: 1_000,
+          unread: false,
+          unreadCount: null,
+          replying: false,
+          followedUnwritten: false,
+          newReplies: false,
+        }),
+        vi.fn(),
+      ),
+    );
+    expect(
+      screen.getByTestId("bot-thread-line").getAttribute("data-unread"),
+    ).toBe("false");
+    expect(screen.queryByTestId("bot-thread-unread")).toBeNull();
+  });
+
+  it("counts a thread line's unread replies in a badge in place of the dot, and draws nothing at zero", () => {
+    renderRow(
+      memberPost(undefined),
+      channelPresentation(
+        () => ({
+          participants: [],
+          replyCount: 5,
+          lastReplyAt: 1_000,
+          unread: true,
+          unreadCount: 2,
+          replying: false,
+          followedUnwritten: false,
+          newReplies: null,
+        }),
+        vi.fn(),
+      ),
+    );
+    const line = screen.getByTestId("bot-thread-line");
+    expect(line.getAttribute("data-unread")).toBe("true");
+    expect(
+      within(within(line).getByTestId("bot-thread-unread-count")).getByText(
+        "2",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("bot-thread-unread")).toBeNull();
+    cleanup();
+
+    renderRow(
+      memberPost(undefined),
+      channelPresentation(
+        () => ({
+          participants: [],
+          replyCount: 5,
+          lastReplyAt: 1_000,
+          unread: false,
+          unreadCount: 0,
+          replying: false,
+          followedUnwritten: false,
+          newReplies: false,
+        }),
+        vi.fn(),
+      ),
+    );
+    expect(screen.getByTestId("bot-thread-line")).toBeTruthy();
+    expect(screen.queryByTestId("bot-thread-unread-count")).toBeNull();
+    expect(screen.queryByTestId("bot-thread-unread")).toBeNull();
+  });
+});
+
+describe("<ChatMessage /> in a bot thread", () => {
+  it("draws no thread line under a resolved request", () => {
+    renderRow(
+      memberPost({
+        requestId: "req-3",
+        resolvedAt: 5_000,
+        resolvedByMessageId: "reply-9",
+      }),
+      {
+        botTitle: "Release Bot",
+        threadLine: null,
+        openThread: null,
+        openAnnouncementThread: null,
+        threadAnchorKinds: [],
+        chooseOption: null,
+        reply: null,
+        questions: null,
+        failedRequest: null,
+        failedRecovery: null,
+        replyReceipt: null,
+        requestReceipt: null,
+      },
+    );
+
+    expect(screen.queryByTestId("bot-thread-line")).toBeNull();
+    expect(screen.queryByTestId("bot-message-actions")).toBeNull();
+  });
+});
+
+describe("<ChatMessage /> a message the bot failed to answer", () => {
+  const OPEN_REQUEST: ConversationRequest = {
+    requestId: "req-failed",
+    resolvedAt: null,
+    resolvedByMessageId: null,
+  };
+
+  function failing(
+    retry: (text: string) => void,
+    retrying: boolean,
+    edit: ((text: string) => void) | null,
+  ): ChatBotPresentation {
+    return failingWith({
+      state: "failed",
+      summary: "Your Grok CLI version (1.0.5) is outdated.",
+      signIn: null,
+      update: null,
+      updating: false,
+      updateFailure: null,
+      retry,
+      retrying,
+      edit,
+    });
+  }
+
+  function failingWith(failed: ChatBotFailedRequest): ChatBotPresentation {
+    return {
+      ...channelPresentation(NO_THREAD_LINE, vi.fn()),
+      failedRequest: (requestId) =>
+        requestId === OPEN_REQUEST.requestId ? failed : null,
+    };
+  }
+
+  it("says under the message's text that it was not answered and why, with Retry and Edit as text", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn<(text: string) => void>();
+    const edit = vi.fn<(text: string) => void>();
+    renderRow(memberPost(OPEN_REQUEST), failing(retry, false, edit));
+
+    const row = screen.getByTestId("bot-member-row");
+    const line = within(row).getByTestId("bot-message-unanswered");
+    expect(line.textContent).toBe(
+      "Not answered: Your Grok CLI version (1.0.5) is outdated. · Retry · Edit",
+    );
+    expect(line.getAttribute("data-state")).toBe("failed");
+    expect(line.className).toContain("text-destructive");
+    expect(line.getAttribute("role")).toBeNull();
+    // The line follows the message's own text.
+    const text = within(row).getByText("Please review the release");
+    expect(
+      text.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    await user.click(within(line).getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledWith("Please review the release");
+    await user.click(within(line).getByRole("button", { name: "Edit" }));
+    expect(edit).toHaveBeenCalledWith("Please review the release");
+    expect(within(line).queryByRole("button", { name: "Sign in" })).toBeNull();
+  });
+
+  it("adds Sign in to the line when signing in is the fix", async () => {
+    const user = userEvent.setup();
+    const signIn = vi.fn<() => void>();
+    renderRow(
+      memberPost(OPEN_REQUEST),
+      failingWith({
+        state: "failed",
+        summary: "Claude is signed out.",
+        signIn,
+        update: null,
+        updating: false,
+        updateFailure: null,
+        retry: vi.fn(),
+        retrying: false,
+        edit: null,
+      }),
+    );
+
+    const line = screen.getByTestId("bot-message-unanswered");
+    expect(line.textContent).toBe(
+      "Not answered: Claude is signed out. · Retry · Sign in",
+    );
+    await user.click(within(line).getByRole("button", { name: "Sign in" }));
+    expect(signIn).toHaveBeenCalledTimes(1);
+  });
+
+  function outdated(
+    update: () => void,
+    updating: boolean,
+    updateFailure: string | null,
+  ): ChatBotPresentation {
+    return failingWith({
+      state: "failed",
+      summary: "Grok's command-line tool is out of date.",
+      signIn: null,
+      update,
+      updating,
+      updateFailure,
+      retry: vi.fn(),
+      retrying: false,
+      edit: null,
+    });
+  }
+
+  it("adds Update to the line when an out-of-date command-line tool is the fix", async () => {
+    const user = userEvent.setup();
+    const update = vi.fn<() => void>();
+    renderRow(memberPost(OPEN_REQUEST), outdated(update, false, null));
+
+    const line = screen.getByTestId("bot-message-unanswered");
+    expect(line.textContent).toBe(
+      "Not answered: Grok's command-line tool is out of date. · Retry · Update",
+    );
+    await user.click(within(line).getByRole("button", { name: "Update" }));
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds the line's Update while the update runs, keeping its label with dots after it", () => {
+    renderRow(memberPost(OPEN_REQUEST), outdated(vi.fn(), true, null));
+
+    const update = within(
+      screen.getByTestId("bot-message-unanswered"),
+    ).getByRole("button", { name: "Update" });
+    expect(update.hasAttribute("disabled")).toBe(true);
+    expect(
+      within(update).getByTestId("bot-message-unanswered-update-pending"),
+    ).toBeTruthy();
+  });
+
+  it("says under the line why the update did not take, and keeps Update to try again", () => {
+    renderRow(
+      memberPost(OPEN_REQUEST),
+      outdated(vi.fn(), false, "Grok is disabled on this host."),
+    );
+
+    // Announced where it appears: focus stays on the line's buttons.
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Grok is disabled on this host.",
+    );
+    expect(
+      within(screen.getByTestId("bot-message-unanswered"))
+        .getByRole("button", { name: "Update" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("says why with no Retry or Edit, on the line or on hover, where the message cannot be sent again", () => {
+    renderRow(
+      memberPost(OPEN_REQUEST),
+      failingWith({
+        state: "failed",
+        summary: "Claude is signed out.",
+        signIn: vi.fn(),
+        update: null,
+        updating: false,
+        updateFailure: null,
+        retry: null,
+        retrying: false,
+        edit: null,
+      }),
+    );
+
+    expect(screen.getByTestId("bot-message-unanswered").textContent).toBe(
+      "Not answered: Claude is signed out. · Sign in",
+    );
+    const actions = within(screen.getByTestId("bot-message-actions"));
+    expect(
+      actions
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Create thread"]);
+  });
+
+  it("says a held answer in the warning colour, with Retry alone on the line and on hover", () => {
+    renderRow(
+      memberPost(OPEN_REQUEST),
+      failingWith({
+        state: "parked",
+        summary: "The queue is paused.",
+        signIn: vi.fn(),
+        update: null,
+        updating: false,
+        updateFailure: null,
+        retry: vi.fn(),
+        retrying: false,
+        edit: vi.fn(),
+      }),
+    );
+
+    const line = screen.getByTestId("bot-message-unanswered");
+    expect(line.textContent).toBe("Not answered: The queue is paused. · Retry");
+    expect(line.getAttribute("data-state")).toBe("parked");
+    expect(line.className).toContain("text-warning-foreground");
+    expect(line.className).not.toContain("text-destructive");
+    const actions = within(screen.getByTestId("bot-message-actions"));
+    expect(
+      actions
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Retry", "Create thread"]);
+  });
+
+  it("says only that it was not answered when the host gave no reason, and holds the line's Retry while one is sent", () => {
+    renderRow(
+      memberPost(OPEN_REQUEST),
+      failingWith({
+        state: "failed",
+        summary: null,
+        signIn: null,
+        update: null,
+        updating: false,
+        updateFailure: null,
+        retry: vi.fn(),
+        retrying: true,
+        edit: null,
+      }),
+    );
+
+    const line = screen.getByTestId("bot-message-unanswered");
+    expect(line.textContent).toBe("Not answered · Retry");
+    expect(
+      within(line)
+        .getByRole("button", { name: "Retry" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("offers Retry and Edit beside Create thread, each handing the message's own text back", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn<(text: string) => void>();
+    const edit = vi.fn<(text: string) => void>();
+    renderRow(memberPost(OPEN_REQUEST), failing(retry, false, edit));
+
+    const actions = within(screen.getByTestId("bot-message-actions"));
+    expect(
+      actions
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Retry", "Edit", "Create thread"]);
+
+    await user.click(actions.getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledWith("Please review the release");
+    expect(edit).not.toHaveBeenCalled();
+
+    await user.click(actions.getByRole("button", { name: "Edit" }));
+    expect(edit).toHaveBeenCalledWith("Please review the release");
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Retry alone on a message whose Edit the presentation withholds", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn<(text: string) => void>();
+    renderRow(memberPost(OPEN_REQUEST), failing(retry, false, null));
+
+    const actions = within(screen.getByTestId("bot-message-actions"));
+    expect(
+      actions
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Retry", "Create thread"]);
+    expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+
+    await user.click(actions.getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledWith("Please review the release");
+  });
+
+  it("offers Retry and no Edit on a failed message that carries images, on the line and on hover", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn<(text: string) => void>();
+    const edit = vi.fn<(text: string) => void>();
+    renderRow(
+      {
+        ...memberPost(OPEN_REQUEST),
+        attachments: [
+          {
+            kind: "image",
+            hash: "a".repeat(64),
+            mediaType: "image/png",
+            dataUrl: null,
+            name: "shot.png",
+            size: 128,
+          },
+        ],
+      },
+      failing(retry, false, edit),
+    );
+
+    const line = within(screen.getByTestId("bot-message-unanswered"));
+    expect(line.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(line.queryByRole("button", { name: "Edit" })).toBeNull();
+    const actions = within(screen.getByTestId("bot-message-actions"));
+    expect(
+      actions
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Retry", "Create thread"]);
+
+    await user.click(actions.getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalledWith("Please review the release");
+    expect(edit).not.toHaveBeenCalled();
+  });
+
+  it("offers neither on a message the session did not fail on, and none on the bot's own row", () => {
+    renderRow(
+      memberPost({ ...OPEN_REQUEST, requestId: "req-answered" }),
+      failing(vi.fn(), false, vi.fn()),
+    );
+    expect(screen.queryByTestId("bot-message-retry")).toBeNull();
+    expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+    expect(screen.queryByTestId("bot-message-unanswered")).toBeNull();
+    expect(screen.getByTestId("bot-message-thread")).toBeTruthy();
+    cleanup();
+
+    renderRow(botRow(undefined), failing(vi.fn(), false, vi.fn()));
+    expect(screen.queryByTestId("bot-message-retry")).toBeNull();
+    expect(screen.queryByTestId("bot-message-edit")).toBeNull();
+    expect(screen.queryByTestId("bot-message-unanswered")).toBeNull();
+  });
+});
+
+describe("<ChatMessage /> bot rows", () => {
+  const presentation: ChatBotPresentation = {
+    botTitle: "Release Bot",
+    threadLine: null,
+    openThread: null,
+    openAnnouncementThread: null,
+    threadAnchorKinds: [],
+    chooseOption: null,
+    reply: null,
+    questions: null,
+    failedRequest: null,
+    failedRecovery: null,
+    replyReceipt: null,
+    requestReceipt: null,
+  };
+
+  it("labels a bot's reply with the bot's current title and no tag", () => {
+    renderRow(botRow(undefined), presentation);
+
+    const row = screen.getByTestId("bot-reply-row");
+    expect(within(row).getByText("Release Bot")).toBeTruthy();
+    expect(within(row).queryByText("APP")).toBeNull();
+    expect(within(row).getByText("The bot says hello")).toBeTruthy();
+    expect(screen.queryByTestId("bot-announcement")).toBeNull();
+    expect(screen.queryByTestId("bot-reply-options")).toBeNull();
+  });
+
+  it("draws a bot's picture one size under a person's, inside the same 40px box", () => {
+    renderRowInBotSurface(botRow(undefined), presentation);
+    renderRow(memberPost(undefined), presentation);
+
+    const botAvatar = within(screen.getByTestId("bot-reply-row")).getByTestId(
+      "bot-avatar",
+    );
+    expect(botAvatar.getAttribute("data-size")).toBe("default");
+    expect(
+      botAvatar
+        .querySelector('[data-slot="bot-mascot"]')
+        ?.getAttribute("viewBox"),
+    ).toBe("0 0 32 32");
+    expect(botAvatar.parentElement?.classList.contains("size-10")).toBe(true);
+    expect(
+      within(screen.getByTestId("bot-member-row"))
+        .getByTestId("person-avatar")
+        .getAttribute("data-size"),
+    ).toBe("lg");
+  });
+
+  // Every kind the schema accepts, with its label and bar colour. `question`
+  // is a row a released host wrote before announcements stopped asking; no
+  // current host writes one, but a stored one must still draw.
+  const KIND_PRESENTATIONS: ReadonlyArray<
+    readonly [BotAnnouncementKind, string, string]
+  > = [
+    ["proposal", "New proposal", "border-l-info"],
+    ["automation", "Automation created", "border-l-success"],
+    ["bot-created", "New bot", "border-l-primary"],
+    ["policy", "Policy change", "border-l-warning"],
+    ["question", "Question", "border-l-chart-2"],
+  ];
+
+  it.each(KIND_PRESENTATIONS)(
+    "draws a %s announcement under the label %s with the bar %s",
+    (kind, label, bar) => {
+      renderRow(botRow({ kind, link: null }), presentation);
+
+      const row = screen.getByTestId("bot-announcement");
+      expect(screen.queryByTestId("bot-reply-row")).toBeNull();
+      expect(within(row).getByText(label)).toBeTruthy();
+      expect(within(row).getByText("The bot says hello")).toBeTruthy();
+      const body = row.querySelector("[data-announcement-kind]");
+      expect(body?.getAttribute("data-announcement-kind")).toBe(kind);
+      expect(body?.classList.contains(bar)).toBe(true);
+      expect(screen.queryByTestId("bot-announcement-link")).toBeNull();
+    },
+  );
+
+  it("opens an announcement's web link through the link opener", async () => {
+    const user = userEvent.setup();
+    renderRow(
+      botRow({ kind: "proposal", link: "https://example.com/proposal/7" }),
+      presentation,
+    );
+
+    const link = screen.getByTestId("bot-announcement-link");
+    expect(link.textContent).toBe("https://example.com/proposal/7");
+    expect(
+      within(screen.getByTestId("bot-announcement")).getByText("New proposal"),
+    ).toBeTruthy();
+    expect(mocks.openLink).not.toHaveBeenCalled();
+
+    await user.click(link);
+
+    expect(mocks.openLink).toHaveBeenCalledTimes(1);
+    expect(mocks.openLink.mock.calls[0]?.[0]).toBe(
+      "https://example.com/proposal/7",
+    );
+  });
+
+  it("draws a retrospective sheet link's record as its label and text, with no Review and no link row", () => {
+    renderRow(
+      botRow({
+        kind: "proposal",
+        link: `environment/retrospective?host=${encodeURIComponent("host/a b")}`,
+      }),
+      presentation,
+    );
+
+    const row = screen.getByTestId("bot-announcement");
+    expect(within(row).getByText("Shared by an earlier version")).toBeTruthy();
+    expect(within(row).getByText("The bot says hello")).toBeTruthy();
+    expect(within(row).queryByText("New proposal")).toBeNull();
+    expect(within(row).queryByText(/environment\/retrospective/)).toBeNull();
+    expect(within(row).queryByText("Review")).toBeNull();
+    expect(screen.queryByTestId("bot-announcement-link")).toBeNull();
+    expect(within(row).queryByRole("button")).toBeNull();
+  });
+
+  it("shows an epic-relative path as the path it is, not as a link", () => {
+    renderRow(
+      botRow({ kind: "proposal", link: "artifacts/plan/index.md" }),
+      presentation,
+    );
+
+    expect(screen.getByText("artifacts/plan/index.md")).toBeTruthy();
+    expect(screen.queryByTestId("bot-announcement-link")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+});
+
+describe("<ChatMessage /> bot row choices and announcement threads", () => {
+  const ANNOUNCEMENT_ID = "announcement-1";
+  const OPTIONS = ["Ship it", "Hold"];
+
+  function announcementRow(kind: BotAnnouncementKind): ChatMessageModel {
+    return {
+      ...botRow({ kind, link: null }),
+      persistentMessageId: ANNOUNCEMENT_ID,
+    };
+  }
+
+  function withActions(input: {
+    readonly threadLine:
+      | ((postMessageId: string) => ChatBotThreadLine | null)
+      | null;
+    readonly openAnnouncementThread:
+      | ((announcementId: string, anchorKind: string | null) => void)
+      | null;
+    readonly chooseOption:
+      | ((messageId: string | null, choice: string) => void)
+      | null;
+  }): ChatBotPresentation {
+    return {
+      botTitle: "Release Bot",
+      threadLine: input.threadLine,
+      openThread: null,
+      openAnnouncementThread: input.openAnnouncementThread,
+      threadAnchorKinds: [],
+      chooseOption: input.chooseOption,
+      reply: null,
+      questions: null,
+      failedRequest: null,
+      failedRecovery: null,
+      replyReceipt: null,
+      requestReceipt: null,
+    };
+  }
+
+  it("draws the receipt the presentation names under a proposal, asked by the announcement's id", () => {
+    const replyReceipt = vi.fn<
+      (messageIds: ReadonlyArray<string>) => ChatBotTurnReceipt | null
+    >(() => ({
+      summary: "Read 1 file",
+      startedAt: 0,
+      endedAt: 80_000,
+      open: vi.fn(),
+    }));
+    renderRow(announcementRow("proposal"), {
+      ...withActions({
+        threadLine: NO_THREAD_LINE,
+        openAnnouncementThread: null,
+        chooseOption: null,
+      }),
+      replyReceipt,
+    });
+
+    expect(replyReceipt).toHaveBeenCalledWith([ANNOUNCEMENT_ID]);
+    expect(
+      within(screen.getByTestId("bot-announcement")).getByTestId(
+        "bot-turn-receipt",
+      ).textContent,
+    ).toBe("Read 1 file · 1m 20s");
+  });
+
+  it("asks for a reply's turn by its own message id and every record its row carries", () => {
+    const replyReceipt = vi.fn<
+      (messageIds: ReadonlyArray<string>) => ChatBotTurnReceipt | null
+    >(() => null);
+    renderRow(
+      {
+        ...botRow(undefined),
+        persistentMessageId: "record-3",
+        turnMessageIds: ["record-1", "record-2"],
+      },
+      {
+        ...withActions({
+          threadLine: null,
+          openAnnouncementThread: null,
+          chooseOption: null,
+        }),
+        replyReceipt,
+      },
+    );
+
+    expect(replyReceipt).toHaveBeenCalledWith([
+      "record-3",
+      "record-1",
+      "record-2",
+    ]);
+  });
+
+  it("draws a reply's options as buttons and posts the clicked choice, naming the reply that offered it", async () => {
+    const user = userEvent.setup();
+    const chooseOption =
+      vi.fn<(messageId: string | null, choice: string) => void>();
+    renderRow(
+      {
+        ...botRow(undefined),
+        persistentMessageId: "reply-row-1",
+        options: OPTIONS,
+      },
+      withActions({
+        threadLine: null,
+        openAnnouncementThread: null,
+        chooseOption,
+      }),
+    );
+
+    const group = screen.getByRole("group", { name: "Choices" });
+    const buttons = within(group).getAllByRole("button");
+    expect(buttons.map((button) => button.textContent)).toEqual(OPTIONS);
+    expect(chooseOption).not.toHaveBeenCalled();
+
+    await user.click(within(group).getByRole("button", { name: "Hold" }));
+
+    expect(chooseOption).toHaveBeenCalledTimes(1);
+    expect(chooseOption).toHaveBeenCalledWith("reply-row-1", "Hold");
+  });
+
+  it("shows a reply's options disabled where nothing can post them", () => {
+    renderRow(
+      { ...botRow(undefined), options: OPTIONS },
+      withActions({
+        threadLine: NO_THREAD_LINE,
+        openAnnouncementThread: null,
+        chooseOption: null,
+      }),
+    );
+
+    const buttons = within(
+      screen.getByTestId("bot-reply-options"),
+    ).getAllByRole("button");
+    expect(buttons).toHaveLength(OPTIONS.length);
+    expect(buttons.every((button) => button.hasAttribute("disabled"))).toBe(
+      true,
+    );
+  });
+
+  it("opens the thread under a proposal from its thread line, by the row's persisted message id", async () => {
+    const user = userEvent.setup();
+    const threadLine = vi.fn<
+      (postMessageId: string) => ChatBotThreadLine | null
+    >(() => ({
+      participants: [],
+      replyCount: 2,
+      lastReplyAt: 1_000,
+      unread: false,
+      unreadCount: 0,
+      replying: false,
+      followedUnwritten: false,
+      newReplies: false,
+    }));
+    const openAnnouncementThread = vi.fn<(announcementId: string) => void>();
+    renderRow(
+      announcementRow("proposal"),
+      withActions({ threadLine, openAnnouncementThread, chooseOption: null }),
+    );
+
+    const line = screen.getByTestId("bot-thread-line");
+    expect(within(line).getByText("2 replies")).toBeTruthy();
+    expect(threadLine).toHaveBeenCalledWith(ANNOUNCEMENT_ID);
+    expect(openAnnouncementThread).not.toHaveBeenCalled();
+
+    await user.click(line);
+
+    expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
+    expect(openAnnouncementThread).toHaveBeenCalledWith(ANNOUNCEMENT_ID, null);
+  });
+
+  it("opens a proposal's own thread from its hover action while its thread is not listed yet, with no thread line", async () => {
+    const user = userEvent.setup();
+    const openAnnouncementThread = vi.fn<(announcementId: string) => void>();
+    renderRow(
+      announcementRow("proposal"),
+      withActions({
+        threadLine: NO_THREAD_LINE,
+        openAnnouncementThread,
+        chooseOption: null,
+      }),
+    );
+
+    expect(screen.queryByTestId("bot-thread-line")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
+
+    expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
+    expect(openAnnouncementThread).toHaveBeenCalledWith(ANNOUNCEMENT_ID, null);
+  });
+
+  it.each<BotAnnouncementKind>(["automation", "bot-created", "policy"])(
+    "opens a %s announcement's own thread from its hover action and its thread line, where the bot's host roots threads on any row of the bot",
+    async (kind) => {
+      const user = userEvent.setup();
+      const openAnnouncementThread =
+        vi.fn<(announcementId: string, anchorKind: string | null) => void>();
+      const threadLine = vi.fn<
+        (postMessageId: string) => ChatBotThreadLine | null
+      >(() => ({
+        participants: [],
+        replyCount: 1,
+        lastReplyAt: 1_000,
+        unread: false,
+        unreadCount: 0,
+        replying: false,
+        followedUnwritten: false,
+        newReplies: false,
+      }));
+      renderRow(announcementRow(kind), {
+        ...withActions({
+          threadLine,
+          openAnnouncementThread,
+          chooseOption: null,
+        }),
+        threadAnchorKinds: ["answer", "message"],
+      });
+
+      expect(threadLine).toHaveBeenCalledWith(ANNOUNCEMENT_ID);
+      await user.click(screen.getByRole("button", { name: "Open thread" }));
+      await user.click(screen.getByTestId("bot-thread-line"));
+
+      expect(openAnnouncementThread.mock.calls).toEqual([
+        [ANNOUNCEMENT_ID, "message"],
+        [ANNOUNCEMENT_ID, "message"],
+      ]);
+    },
+  );
+
+  it.each<BotAnnouncementKind>(["automation", "bot-created", "policy"])(
+    "draws no thread line and no hover actions on a %s announcement where the bot's host names only the rows an older host roots threads on",
+    (kind) => {
+      renderRow(announcementRow(kind), {
+        ...withActions({
+          threadLine: NO_THREAD_LINE,
+          openAnnouncementThread: vi.fn(),
+          chooseOption: null,
+        }),
+        threadAnchorKinds: ["answer"],
+      });
+
+      expect(screen.getByTestId("bot-announcement")).toBeTruthy();
+      expect(screen.queryByTestId("bot-thread-line")).toBeNull();
+      expect(screen.queryByTestId("bot-message-actions")).toBeNull();
+    },
+  );
+
+  it("draws no thread line under a proposal that cannot open a thread, or has no persisted id", () => {
+    renderRow(
+      announcementRow("proposal"),
+      withActions({
+        threadLine: null,
+        openAnnouncementThread: null,
+        chooseOption: vi.fn(),
+      }),
+    );
+    expect(screen.queryByTestId("bot-thread-line")).toBeNull();
+    expect(screen.queryByTestId("bot-message-actions")).toBeNull();
+    cleanup();
+
+    renderRow(
+      { ...announcementRow("proposal"), persistentMessageId: null },
+      withActions({
+        threadLine: NO_THREAD_LINE,
+        openAnnouncementThread: vi.fn(),
+        chooseOption: null,
+      }),
+    );
+    expect(screen.queryByTestId("bot-thread-line")).toBeNull();
+    expect(screen.queryByTestId("bot-message-actions")).toBeNull();
+  });
+});
+
+describe("<ChatMessage /> direct replies in a bot channel", () => {
+  const REPLY_ID = "reply-9";
+  const CHANNEL: ChatBotPresentation = {
+    botTitle: "Release Bot",
+    threadLine: NO_THREAD_LINE,
+    openThread: null,
+    openAnnouncementThread: null,
+    threadAnchorKinds: [],
+    chooseOption: null,
+    reply: null,
+    questions: null,
+    failedRequest: null,
+    failedRecovery: null,
+    replyReceipt: null,
+    requestReceipt: null,
+  };
+
+  function resolvedDirectPost(): ChatMessageModel {
+    return memberPost({
+      requestId: "req-d",
+      resolvedAt: 5_000,
+      resolvedByMessageId: REPLY_ID,
+      direct: true,
+    });
+  }
+
+  it("opens the thread box under a direct post, not a post thread", async () => {
+    const user = userEvent.setup();
+    const openThread = vi.fn<(postMessageId: string) => void>();
+    const openAnnouncementThread = vi.fn<(announcementId: string) => void>();
+    renderRow(
+      memberPost({
+        requestId: "req-d",
+        resolvedAt: null,
+        resolvedByMessageId: null,
+        direct: true,
+      }),
+      { ...CHANNEL, openThread, openAnnouncementThread },
+    );
+
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
+
+    expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
+    expect(openAnnouncementThread).toHaveBeenCalledWith(POST_ID, null);
+    expect(openThread).not.toHaveBeenCalled();
+  });
+
+  it("still opens the post's own thread from a post that is not direct", async () => {
+    const user = userEvent.setup();
+    const openThread = vi.fn<(postMessageId: string) => void>();
+    const openAnnouncementThread = vi.fn<(announcementId: string) => void>();
+    renderRow(
+      memberPost({
+        requestId: "req-t",
+        resolvedAt: null,
+        resolvedByMessageId: null,
+      }),
+      { ...CHANNEL, openThread, openAnnouncementThread },
+    );
+
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
+
+    expect(openThread).toHaveBeenCalledTimes(1);
+    expect(openThread).toHaveBeenCalledWith(POST_ID);
+    expect(openAnnouncementThread).not.toHaveBeenCalled();
+  });
+
+  it("draws no link to the reply under a resolved direct post", () => {
+    renderRow(resolvedDirectPost(), CHANNEL);
+
+    expect(screen.getByText("Please review the release")).toBeTruthy();
+    expect(screen.queryByText("See reply")).toBeNull();
+  });
+
+  it("opens a direct reply's own thread from its hover action, by the reply's id and not the post's, where the bot's host takes replies under one", async () => {
+    const user = userEvent.setup();
+    const openThread = vi.fn<(postMessageId: string) => void>();
+    const openAnnouncementThread = vi.fn<(announcementId: string) => void>();
+    renderRow(
+      {
+        ...botRow(undefined),
+        persistentMessageId: "reply-row-1",
+        repliesTo: POST_ID,
+      },
+      {
+        ...CHANNEL,
+        openThread,
+        openAnnouncementThread,
+        threadAnchorKinds: ["answer"],
+      },
+    );
+
+    expect(screen.queryByTestId("bot-thread-line")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
+
+    expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
+    expect(openAnnouncementThread).toHaveBeenCalledWith(
+      "reply-row-1",
+      "answer",
+    );
+    expect(openThread).not.toHaveBeenCalled();
+  });
+
+  it("opens the thread under the post a direct reply answers, and draws no line on the reply, where the bot's host does not say it takes replies under one", async () => {
+    const user = userEvent.setup();
+    const openAnnouncementThread = vi.fn<(announcementId: string) => void>();
+    const threadLine = vi.fn<
+      (postMessageId: string) => ChatBotThreadLine | null
+    >(() => ({
+      participants: [],
+      replyCount: 2,
+      lastReplyAt: Date.now() - 5 * 60_000,
+      unread: false,
+      unreadCount: 0,
+      replying: false,
+      followedUnwritten: false,
+      newReplies: false,
+    }));
+    renderRow(
+      {
+        ...botRow(undefined),
+        persistentMessageId: "reply-row-1",
+        repliesTo: POST_ID,
+      },
+      { ...CHANNEL, threadLine, openAnnouncementThread, threadAnchorKinds: [] },
+    );
+
+    expect(screen.queryByTestId("bot-thread-line")).toBeNull();
+    // The action reads the thread it opens, the post's, never the reply's own.
+    expect(threadLine).not.toHaveBeenCalledWith("reply-row-1");
+    await user.click(screen.getByRole("button", { name: "Open thread" }));
+
+    expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
+    expect(openAnnouncementThread).toHaveBeenCalledWith(POST_ID, null);
+  });
+
+  it("draws a direct reply's own thread line once its thread has replies, and opens that thread from it", async () => {
+    const user = userEvent.setup();
+    const openAnnouncementThread = vi.fn<(announcementId: string) => void>();
+    const threadLine = vi.fn<
+      (postMessageId: string) => ChatBotThreadLine | null
+    >((anchorId) =>
+      anchorId === "reply-row-1"
+        ? {
+            participants: [],
+            replyCount: 2,
+            lastReplyAt: Date.now() - 5 * 60_000,
+            unread: false,
+            unreadCount: 0,
+            replying: false,
+            followedUnwritten: false,
+            newReplies: false,
+          }
+        : null,
+    );
+    renderRow(
+      {
+        ...botRow(undefined),
+        persistentMessageId: "reply-row-1",
+        repliesTo: POST_ID,
+      },
+      {
+        ...CHANNEL,
+        threadLine,
+        openAnnouncementThread,
+        threadAnchorKinds: ["answer"],
+      },
+    );
+
+    const line = screen.getByTestId("bot-thread-line");
+    expect(within(line).getByText("2 replies")).toBeTruthy();
+    expect(threadLine).not.toHaveBeenCalledWith(POST_ID);
+
+    await user.click(line);
+
+    expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
+    expect(openAnnouncementThread).toHaveBeenCalledWith(
+      "reply-row-1",
+      "answer",
+    );
+  });
+
+  it("offers no hover actions on a bot reply that answers no post, where the bot's host does not root threads on it", () => {
+    renderRow(botRow(undefined), {
+      ...CHANNEL,
+      openThread: vi.fn(),
+      openAnnouncementThread: vi.fn(),
+      threadAnchorKinds: ["answer"],
+    });
+
+    expect(screen.queryByTestId("bot-message-actions")).toBeNull();
+  });
+
+  it("opens a bot reply that answers no post's own thread, where the bot's host roots threads on any row of the bot", async () => {
+    const user = userEvent.setup();
+    const openAnnouncementThread =
+      vi.fn<(announcementId: string, anchorKind: string | null) => void>();
+    renderRow(
+      { ...botRow(undefined), persistentMessageId: "reply-row-2" },
+      {
+        ...CHANNEL,
+        openAnnouncementThread,
+        threadAnchorKinds: ["answer", "message"],
+      },
+    );
+
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
+
+    expect(openAnnouncementThread).toHaveBeenCalledWith(
+      "reply-row-2",
+      "message",
+    );
+  });
+
+  it("posts the clicked option of a direct reply not stored yet as a new post naming no message", async () => {
+    const user = userEvent.setup();
+    const chooseOption =
+      vi.fn<(messageId: string | null, choice: string) => void>();
+    renderRow(
+      {
+        ...botRow(undefined),
+        repliesTo: POST_ID,
+        options: ["Ship it", "Hold"],
+      },
+      { ...CHANNEL, chooseOption },
+    );
+
+    await user.click(screen.getByRole("button", { name: "Hold" }));
+
+    expect(chooseOption).toHaveBeenCalledTimes(1);
+    expect(chooseOption).toHaveBeenCalledWith(null, "Hold");
+  });
+
+  it("disables a direct reply's options while a pick is being sent", () => {
+    renderRow(
+      {
+        ...botRow(undefined),
+        repliesTo: POST_ID,
+        options: ["Ship it", "Hold"],
+      },
+      CHANNEL,
+    );
+
+    const buttons = within(
+      screen.getByTestId("bot-reply-options"),
+    ).getAllByRole("button");
+    expect(buttons.every((button) => button.hasAttribute("disabled"))).toBe(
+      true,
+    );
+  });
+});
+
+describe("<ChatMessage /> Reply on a row", () => {
+  type BotReply = NonNullable<ChatBotPresentation["reply"]>;
+
+  function replying(reply: ChatBotPresentation["reply"]): ChatBotPresentation {
+    return { ...channelPresentation(NO_THREAD_LINE, vi.fn()), reply };
+  }
+
+  /** A presentation of a thread's rows: no thread opens from them. */
+  function inThread(reply: ChatBotPresentation["reply"]): ChatBotPresentation {
+    return { ...replying(reply), threadLine: null, openThread: null };
+  }
+
+  function storedBotRow(): ChatMessageModel {
+    return {
+      ...botRow(undefined),
+      persistentMessageId: "reply-row-1",
+      content: "The bot says hello\nand a second line",
+    };
+  }
+
+  it("offers Reply and Create thread as icon buttons among a stored row's hover actions, naming Reply in a tooltip", async () => {
+    const user = userEvent.setup();
+    renderRow(memberPost(undefined), replying(vi.fn()));
+
+    const actions = within(screen.getByTestId("bot-message-actions"));
+    const buttons = actions.getAllByRole("button");
+    expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Reply",
+      "Create thread",
+    ]);
+    expect(buttons.map((button) => button.textContent)).toEqual(["", ""]);
+    expect(buttons.map((button) => button.getAttribute("data-testid"))).toEqual(
+      ["bot-message-reply", "bot-message-thread"],
+    );
+
+    await user.hover(buttons[0]);
+    expect(
+      await screen.findByRole("tooltip", { name: "Reply" }, { timeout: 3000 }),
+    ).toBeTruthy();
+  });
+
+  it("offers no Reply on a row where the presentation carries none", () => {
+    renderRow(memberPost(undefined), replying(null));
+
+    expect(screen.queryByTestId("bot-message-reply")).toBeNull();
+    expect(screen.getByTestId("bot-message-thread")).toBeTruthy();
+  });
+
+  it("offers no hover actions on a member's row that is not stored yet", () => {
+    renderRow(
+      { ...memberPost(undefined), persistentMessageId: null },
+      replying(vi.fn()),
+    );
+
+    expect(screen.queryByTestId("bot-message-actions")).toBeNull();
+  });
+
+  it.each<readonly [string, ChatMessageModel]>([
+    ["a member's row", memberPost(undefined)],
+    [
+      "a bot's row",
+      { ...botRow(undefined), persistentMessageId: "reply-row-1" },
+    ],
+  ])(
+    "offers Reply alone on %s in a thread, which opens no thread of its own",
+    (_row, message) => {
+      renderRow(message, inThread(vi.fn()));
+
+      const actions = within(screen.getByTestId("bot-message-actions"));
+      expect(
+        actions
+          .getAllByRole("button")
+          .map((button) => button.getAttribute("aria-label")),
+      ).toEqual(["Reply"]);
+    },
+  );
+
+  it("names a member's message in the box when Reply is chosen, by its id, the writer's name and its first line", async () => {
+    const user = userEvent.setup();
+    const reply = vi.fn<BotReply>();
+    const openThread = vi.fn<(postMessageId: string) => void>();
+    renderRow(
+      {
+        ...memberPost(undefined),
+        content: "Please review the release\nand the notes",
+      },
+      { ...replying(reply), openThread },
+    );
+
+    await user.click(screen.getByRole("button", { name: "Reply" }));
+
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith({
+      messageId: POST_ID,
+      author: "Tess Teammate",
+      line: "Please review the release",
+    });
+    expect(openThread).not.toHaveBeenCalled();
+  });
+
+  it("names a bot's message in the box when Reply is chosen, by the bot's title", async () => {
+    const user = userEvent.setup();
+    const reply = vi.fn<BotReply>();
+    renderRow(storedBotRow(), replying(reply));
+
+    await user.click(screen.getByRole("button", { name: "Reply" }));
+
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith({
+      messageId: "reply-row-1",
+      author: "Release Bot",
+      line: "The bot says hello",
+    });
+  });
+});
+
+describe("<ChatMessage /> with no bot presentation", () => {
+  it("draws a user row as the ordinary transcript row", () => {
+    renderRow(
+      memberPost({
+        requestId: "req-4",
+        resolvedAt: null,
+        resolvedByMessageId: null,
+      }),
+      null,
+    );
+
+    expect(screen.getByText("Please review the release")).toBeTruthy();
+    expect(screen.queryByTestId("bot-member-row")).toBeNull();
+    expect(screen.queryByTestId("conversation-request")).toBeNull();
+    expect(screen.queryByTestId("bot-thread-line")).toBeNull();
+  });
+});
+
+describe("useRenderedMessages bot rows", () => {
+  const CONTENT: JsonContent = {
+    type: "doc",
+    content: [
+      { type: "paragraph", content: [{ type: "text", text: "Please review" }] },
+    ],
+  };
+  const BOT_SENDER: AgentSender = {
+    type: "agent",
+    harnessId: "claude",
+    agentId: "claude-sonnet-4",
+    displayName: "Claude Sonnet 4",
+    reply: { expectsReply: false },
+    inReplyTo: null,
+  };
+  const displayContext: RenderedMessagesDisplayContext = {
+    resolveUserSenderLabel: () => "You",
+    resolveUserSenderAvatarUrl: () => null,
+    resolveAgentSenderDisplay: () => ({
+      senderLabel: "Claude",
+      providerLabel: "Claude Code",
+      modelLabel: null,
+    }),
+    resolveAgentReasoningLabel: () => null,
+    resolveAgentServiceTierLabel: () => null,
+    contentBlocksPreview: () => "",
+  };
+
+  function assistantRecord(
+    messageId: string,
+    announcement: BotAnnouncement | undefined,
+  ): Extract<Message, { role: "assistant" }> {
+    const base: Extract<Message, { role: "assistant" }> = {
+      role: "assistant",
+      messageId,
+      sender: BOT_SENDER,
+      blocks: [
+        {
+          type: "text",
+          blockId: `${messageId}:text`,
+          status: "completed",
+          timestamp: 2_000,
+          text: "Heads up",
+          providerNotice: null,
+        },
+      ],
+      startedAt: 2_000,
+      timestamp: 2_000,
+      turnId: null,
+      usage: null,
+      reasoningEffort: null,
+      serviceTier: null,
+      envCredentialVar: null,
+      imageResolutions: [],
+    };
+    return announcement === undefined ? base : { ...base, announcement };
+  }
+
+  function withOptions(
+    record: Extract<Message, { role: "assistant" }>,
+    options: ReadonlyArray<string>,
+  ): Extract<Message, { role: "assistant" }> {
+    return { ...record, options: [...options] };
+  }
+
+  function userRecord(
+    messageId: string,
+    conversationRequest: ConversationRequest,
+  ): Extract<Message, { role: "user" }> {
+    return {
+      role: "user",
+      messageId,
+      sender: { type: "user", userId: "owner-1" },
+      message: { kind: "user", content: CONTENT, browserAnnotations: [] },
+      timestamp: 1_000,
+      sessionAnchor: null,
+      conversationRequest,
+    };
+  }
+
+  function renderRows(messages: ReadonlyArray<Message>) {
+    const input: RenderedMessagesInput = {
+      epicId: "epic-1",
+      ownerId: "owner-1",
+      ownerKind: "chat",
+      viewTabId: "tab-1",
+      messages,
+      events: [],
+      rowContext: {},
+      setupCardWindows: [],
+      pendingUserMessages: [],
+      withdrawnMessageId: null,
+      liveAssistantMessage: null,
+      activeTurn: null,
+      runStatus: "idle",
+    };
+    return renderHook(() => useRenderedMessages(input, displayContext));
+  }
+
+  it("carries a persisted assistant record's announcement onto its rendered row", () => {
+    const announcement: BotAnnouncement = {
+      kind: "automation",
+      link: "https://example.com/a/1",
+    };
+    const { result } = renderRows([assistantRecord("m-a", announcement)]);
+
+    const row = result.current.find(
+      (candidate) => candidate.role === "assistant",
+    );
+    expect(row?.announcement).toEqual(announcement);
+  });
+
+  it("keeps an announcement made mid-turn when the turn's records merge into one row", () => {
+    const announcement: BotAnnouncement = { kind: "policy", link: null };
+    const inTurn = (
+      record: Extract<Message, { role: "assistant" }>,
+    ): Extract<Message, { role: "assistant" }> => ({
+      ...record,
+      turnId: "turn-1",
+    });
+    const { result } = renderRows([
+      inTurn(assistantRecord("m-1", undefined)),
+      inTurn(assistantRecord("m-2", announcement)),
+      inTurn(assistantRecord("m-3", undefined)),
+    ]);
+
+    const rows = result.current.filter(
+      (candidate) => candidate.role === "assistant",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].announcement).toEqual(announcement);
+  });
+
+  it("leaves the key absent on an assistant row that announces nothing", () => {
+    const { result } = renderRows([assistantRecord("m-plain", undefined)]);
+
+    const row = result.current.find(
+      (candidate) => candidate.role === "assistant",
+    );
+    expect(row).toBeDefined();
+    expect(row !== undefined && "announcement" in row).toBe(false);
+  });
+
+  it("carries a persisted assistant record's options onto its rendered row", () => {
+    const { result } = renderRows([
+      withOptions(assistantRecord("m-o", undefined), ["Ship it", "Hold"]),
+    ]);
+
+    const row = result.current.find(
+      (candidate) => candidate.role === "assistant",
+    );
+    expect(row?.options).toEqual(["Ship it", "Hold"]);
+  });
+
+  it("keeps options offered mid-turn when the turn's records merge into one row", () => {
+    const inTurn = (
+      record: Extract<Message, { role: "assistant" }>,
+    ): Extract<Message, { role: "assistant" }> => ({
+      ...record,
+      turnId: "turn-1",
+    });
+    const { result } = renderRows([
+      inTurn(assistantRecord("m-1", undefined)),
+      inTurn(withOptions(assistantRecord("m-2", undefined), ["Yes", "No"])),
+      inTurn(assistantRecord("m-3", undefined)),
+    ]);
+
+    const rows = result.current.filter(
+      (candidate) => candidate.role === "assistant",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].options).toEqual(["Yes", "No"]);
+  });
+
+  it("leaves the options key absent on an assistant row that offers none", () => {
+    const { result } = renderRows([assistantRecord("m-plain", undefined)]);
+
+    const row = result.current.find(
+      (candidate) => candidate.role === "assistant",
+    );
+    expect(row).toBeDefined();
+    expect(row !== undefined && "options" in row).toBe(false);
+  });
+
+  it("carries a persisted assistant record's repliesTo onto its rendered row", () => {
+    const { result } = renderRows([
+      { ...assistantRecord("m-r", undefined), repliesTo: "post-7" },
+    ]);
+
+    const row = result.current.find(
+      (candidate) => candidate.role === "assistant",
+    );
+    expect(row?.repliesTo).toBe("post-7");
+  });
+
+  it("keeps the post a mid-turn record answers when the turn's records merge into one row", () => {
+    const inTurn = (
+      record: Extract<Message, { role: "assistant" }>,
+    ): Extract<Message, { role: "assistant" }> => ({
+      ...record,
+      turnId: "turn-1",
+    });
+    const { result } = renderRows([
+      inTurn(assistantRecord("m-1", undefined)),
+      inTurn({ ...assistantRecord("m-2", undefined), repliesTo: "post-7" }),
+      inTurn(assistantRecord("m-3", undefined)),
+    ]);
+
+    const rows = result.current.filter(
+      (candidate) => candidate.role === "assistant",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].repliesTo).toBe("post-7");
+  });
+
+  it("leaves the repliesTo key absent on an assistant row that answers no post", () => {
+    const { result } = renderRows([assistantRecord("m-plain", undefined)]);
+
+    const row = result.current.find(
+      (candidate) => candidate.role === "assistant",
+    );
+    expect(row).toBeDefined();
+    expect(row !== undefined && "repliesTo" in row).toBe(false);
+  });
+
+  it("carries a user record's conversation request onto its rendered row", () => {
+    const request: ConversationRequest = {
+      requestId: "req-1",
+      resolvedAt: 7_000,
+      resolvedByMessageId: "reply-1",
+    };
+    const { result } = renderRows([userRecord("m-open", request)]);
+
+    const row = result.current.find((candidate) => candidate.id === "m-open");
+    expect(row?.role).toBe("user");
+    expect(row?.conversationRequest).toEqual(request);
+  });
+});
+
+describe("<ChatEmptyState /> in a bot channel", () => {
+  function renderEmpty(presentation: ChatBotPresentation | null): void {
+    render(
+      <ChatBotPresentationContext.Provider value={presentation}>
+        <ChatEmptyState />
+      </ChatBotPresentationContext.Provider>,
+    );
+  }
+
+  it("opens an empty channel with its name and no hash", () => {
+    renderEmpty(channelPresentation(NO_THREAD_LINE, vi.fn()));
+
+    const intro = screen.getByTestId("bot-channel-intro").textContent;
+    expect(intro).toContain("Release Bot");
+    expect(intro).not.toContain("#");
+
+    expect(screen.queryByText("Start the conversation")).toBeNull();
+  });
+
+  it("draws nothing for an empty thread, so its box follows the post it opens on", () => {
+    renderEmpty({
+      botTitle: "Release Bot",
+      threadLine: null,
+      openThread: null,
+      openAnnouncementThread: null,
+      threadAnchorKinds: [],
+      chooseOption: null,
+      reply: null,
+      questions: null,
+      failedRequest: null,
+      failedRecovery: null,
+      replyReceipt: null,
+      requestReceipt: null,
+    });
+
+    expect(document.body.textContent).toBe("");
+    expect(screen.queryByTestId("bot-channel-intro")).toBeNull();
+  });
+});

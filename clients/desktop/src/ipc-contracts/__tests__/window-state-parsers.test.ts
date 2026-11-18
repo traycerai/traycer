@@ -1,0 +1,284 @@
+import { describe, expect, it } from "vitest";
+import { rawTerminalLandingProjection } from "../../../../gui-app/src/stores/home/__tests__/raw-terminal-landing-projection";
+import {
+  parseJsonValue,
+  parseLandingDraft,
+  parseLandingDrafts,
+} from "../window-state-parsers";
+
+describe("parseJsonValue", () => {
+  it("repairs hostile nesting without throwing or overflowing the stack", () => {
+    let nested: unknown = "leaf";
+    for (let index = 0; index < 20_000; index += 1) {
+      nested = [nested];
+    }
+
+    expect(() => parseJsonValue(nested)).not.toThrow();
+    expect(parseJsonValue(nested)).toBeUndefined();
+  });
+
+  it("fails the whole value when a nested object exceeds the depth limit", () => {
+    // The failure has to reach the top: a caller stores `null` on `undefined`,
+    // which is recoverable, but a truncated layout would be acknowledged and
+    // persisted as though it were the layout the renderer actually sent.
+    let nested: unknown = "leaf";
+    for (let index = 0; index < 20_000; index += 1) {
+      nested = { child: nested };
+    }
+
+    expect(parseJsonValue({ version: 2, deep: nested })).toBeUndefined();
+  });
+
+  it("drops only the unrepresentable keys of an otherwise valid object", () => {
+    // `JSON.stringify` omits these three, so dropping the key (rather than
+    // failing the record, which is reserved for depth exhaustion) keeps a
+    // round-trip equal to what the sender meant.
+    expect(
+      parseJsonValue({
+        keep: "yes",
+        gone: undefined,
+        alsoGone: () => "fn",
+        notFinite: Number.NaN,
+      }),
+    ).toEqual({ keep: "yes" });
+  });
+});
+
+describe("parseLandingDraft", () => {
+  it("rejects a legacy prompt-only entry (no `content`)", () => {
+    // T6 dropped the `prompt` bridge: a draft that carries only the old
+    // text `prompt` has no `content` object and must fail the new parser.
+    // No back-compat — this is a dev feature, so the stale entry is dropped.
+    expect(
+      parseLandingDraft({
+        id: "draft-a",
+        prompt: "Continue the plan",
+        settings: null,
+        composerMode: null,
+        workspace: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("accepts an entry with doc-shaped `content`, carrying selection + lastTouchedAt", () => {
+    const content = {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "hi" }] }],
+    };
+    expect(
+      parseLandingDraft({
+        id: "draft-a",
+        content,
+        selection: { from: 1, to: 3 },
+        lastTouchedAt: 1234,
+        settings: { harnessId: "codex" },
+        composerMode: "chat",
+        workspace: null,
+      }),
+    ).toEqual({
+      id: "draft-a",
+      content,
+      selection: { from: 1, to: 3 },
+      lastTouchedAt: 1234,
+      settings: { harnessId: "codex" },
+      composerMode: "chat",
+      workspace: null,
+      closed: null,
+    });
+  });
+
+  it("keeps a given-back message's sandbox, so it survives a reload", () => {
+    const returnedSandbox = {
+      target: { kind: "existing", hostId: "host-s", sandboxId: "sbx-1" },
+      clientRequestId: null,
+    };
+    expect(
+      parseLandingDraft({
+        id: "draft-returned",
+        content: { type: "doc" },
+        selection: null,
+        lastTouchedAt: 1,
+        settings: null,
+        composerMode: null,
+        workspace: null,
+        returnedSandbox,
+      })?.returnedSandbox,
+    ).toEqual(returnedSandbox);
+  });
+
+  it("preserves closed:true and defaults a missing closed to null", () => {
+    const content = { type: "doc" };
+    expect(
+      parseLandingDraft({
+        id: "draft-closed",
+        content,
+        selection: null,
+        lastTouchedAt: 1,
+        settings: null,
+        composerMode: null,
+        workspace: null,
+        closed: true,
+      })?.closed,
+    ).toBe(true);
+    expect(
+      parseLandingDraft({
+        id: "draft-open",
+        content,
+        selection: null,
+        lastTouchedAt: 1,
+        settings: null,
+        composerMode: null,
+        workspace: null,
+      })?.closed,
+    ).toBeNull();
+  });
+
+  it("preserves a hash-only image node in `content` round-trip", () => {
+    const content = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "imageAttachment",
+              attrs: {
+                id: "img-1",
+                hash: "abc123",
+                fileName: "shot.png",
+                mimeType: "image/png",
+                size: 4096,
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const parsed = parseLandingDraft({
+      id: "draft-img",
+      content,
+      selection: null,
+      lastTouchedAt: 7,
+      settings: null,
+      composerMode: null,
+      workspace: null,
+    });
+    expect(parsed?.content).toEqual(content);
+  });
+
+  it("keeps accountFollowsDefault only when it is true", () => {
+    const content = { type: "doc" };
+    const base = {
+      content,
+      selection: null,
+      lastTouchedAt: 1,
+      settings: null,
+      composerMode: null,
+      workspace: null,
+    };
+    const kept = parseLandingDraft({
+      ...base,
+      id: "draft-follows",
+      accountFollowsDefault: true,
+    });
+    if (kept === null) {
+      throw new Error(
+        "parser dropped a draft that follows the default account",
+      );
+    }
+    expect(kept.accountFollowsDefault).toBe(true);
+
+    const absent = parseLandingDraft({ ...base, id: "draft-absent" });
+    if (absent === null) throw new Error("parser dropped a draft");
+    expect(Object.hasOwn(absent, "accountFollowsDefault")).toBe(false);
+
+    const explicitFalse = parseLandingDraft({
+      ...base,
+      id: "draft-chosen",
+      accountFollowsDefault: false,
+    });
+    if (explicitFalse === null) throw new Error("parser dropped a draft");
+    expect(Object.hasOwn(explicitFalse, "accountFollowsDefault")).toBe(false);
+  });
+
+  it("keeps the bit on the writer's raw Terminal snapshot and omits it where that snapshot left it off", () => {
+    const entries = rawTerminalLandingProjection({
+      followsTouchedAt: 10,
+      chosenTouchedAt: 20,
+    });
+    expect(parseLandingDrafts(entries)).toEqual(entries);
+  });
+
+  it("keeps the host a draft was opened for, and reads a missing one as none", () => {
+    const base = {
+      id: "draft-named",
+      content: { type: "doc", content: [{ type: "paragraph" }] },
+      selection: null,
+      lastTouchedAt: 1,
+      settings: null,
+      composerMode: null,
+      workspace: null,
+    };
+    expect(
+      parseLandingDraft({ ...base, namedHostId: "host-a" })?.namedHostId,
+    ).toBe("host-a");
+    expect(parseLandingDraft(base)?.namedHostId).toBeUndefined();
+  });
+
+  it("defaults a missing/non-finite `lastTouchedAt` to 0 and a missing `selection` to null", () => {
+    expect(
+      parseLandingDraft({
+        id: "draft-a",
+        content: { type: "doc" },
+        settings: null,
+        composerMode: null,
+        workspace: null,
+      }),
+    ).toEqual({
+      id: "draft-a",
+      content: { type: "doc" },
+      selection: null,
+      lastTouchedAt: 0,
+      settings: null,
+      composerMode: null,
+      workspace: null,
+      closed: null,
+    });
+  });
+
+  it("rejects content that is not a record (primitive or array)", () => {
+    expect(
+      parseLandingDraft({ id: "draft-a", content: "not-a-doc" }),
+    ).toBeNull();
+    expect(
+      parseLandingDraft({ id: "draft-a", content: [{ type: "doc" }] }),
+    ).toBeNull();
+    expect(parseLandingDraft({ id: "draft-a", content: null })).toBeNull();
+  });
+
+  it("rejects a missing or non-string id", () => {
+    expect(parseLandingDraft({ content: { type: "doc" } })).toBeNull();
+    expect(parseLandingDraft({ id: 7, content: { type: "doc" } })).toBeNull();
+  });
+});
+
+describe("parseLandingDrafts", () => {
+  it("drops legacy prompt-only entries while keeping content entries", () => {
+    const drafts = parseLandingDrafts([
+      { id: "legacy", prompt: "old text" },
+      { id: "fresh", content: { type: "doc" } },
+    ]);
+    expect(drafts).toEqual([
+      {
+        id: "fresh",
+        content: { type: "doc" },
+        selection: null,
+        lastTouchedAt: 0,
+        settings: null,
+        composerMode: null,
+        workspace: null,
+        closed: null,
+      },
+    ]);
+  });
+});

@@ -1,0 +1,837 @@
+import {
+  MINIMUM_HOST_VERSION,
+  hostDirectoryEntryNeedsUpdate,
+} from "@traycer-clients/shared/host-client/minimum-host-version";
+import { useHostCredentialStatusStore } from "@/stores/host/host-credential-status-store";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { v4 as uuidv4 } from "uuid";
+import { WsStreamClient } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import { DEFAULT_DIAL_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/transport-config";
+import { createWhatwgStreamWebSocketFactory } from "@traycer-clients/shared/host-transport/whatwg-stream-ws-factory";
+import {
+  isPoolHostDirectoryEntry,
+  type HostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
+import {
+  terminalFatalCodeOf,
+  useFrozenSandboxRebuildPark,
+} from "@/lib/host/frozen-sandbox-rebuild-park";
+import { sandboxFreezeOf } from "@/lib/host/host-messenger";
+import {
+  isRemoteHostDirectoryEntry,
+  type RemoteHostDirectoryEntry,
+  type RemoteHostSandboxFacts,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
+import {
+  createPoolHostTransport,
+  createRemoteHostTransport,
+} from "@traycer-clients/shared/host-transport/remote/index";
+import type {
+  HostStatusDTO,
+  HostOwnerPrincipal,
+} from "@traycer/protocol/host/host-status";
+import {
+  hostRpcRegistry,
+  hostStreamRpcRegistry,
+  type HostStreamRpcRegistry,
+} from "@traycer/protocol/host/registry";
+import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
+import type { BearerSourceProvider } from "@traycer-clients/shared/auth/bearer-source";
+import {
+  hostTokenBearer,
+  hostTokenSessionAuth,
+} from "@traycer-clients/shared/auth/host-token-lease";
+import type { HostTokenSource } from "@traycer-clients/shared/auth/host-token-source";
+import {
+  appHostDoorObserver,
+  noteHostTokenRefusal,
+} from "@/lib/host/host-door-observer";
+import { localDoorHostTokens } from "@/lib/host/local-door-host-tokens";
+import type { HostEndpointProvider } from "@traycer-clients/shared/host-transport/ws-rpc-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import {
+  appHostCredentialMintFlow,
+  noteHostCredentialState,
+} from "@/lib/auth/host-credential-provisioning";
+import { acquireHostStreamClient } from "@/lib/host/host-stream-client-cache";
+import { useCloudCapabilityRestored } from "@/hooks/host/use-cloud-capability-restored";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+import { useHostBinding } from "@/lib/host/runtime";
+import { useRequestContextUserId } from "@/hooks/host/use-request-context-user-id";
+import { onHostDoorRetry } from "@/lib/host/host-door-retry";
+import { processReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
+import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
+import { appServerClock } from "@/lib/clock/app-server-clock";
+import { getGuiClientIdentity } from "@/lib/host/client-identity";
+import { appLogger } from "@/lib/logger";
+import { useRunnerHost } from "@/providers/use-runner-host";
+import {
+  hostTransportKey,
+  remoteAwareOwnerIdentity,
+} from "@/lib/host/transport-key";
+import {
+  DEFAULT_INITIAL_BACKOFF_MS,
+  DEFAULT_MAX_BACKOFF_MS,
+  DEFAULT_OPEN_ACK_TIMEOUT_MS,
+  DEFAULT_PING_INTERVAL_MS,
+  DEFAULT_PONG_TIMEOUT_MS,
+} from "@traycer-clients/shared/host-transport/transport-config";
+
+const TRANSPORT_KEY_SEPARATOR = "\u0000";
+
+const browserStreamWebSocketFactory = createWhatwgStreamWebSocketFactory();
+
+/**
+ * Inert placeholder satisfying `RemoteHostDirectoryEntry.remoteStatus`'s shape
+ * requirement where a caller only has the primitive transport identity
+ * (hostId/websocketUrl/publicKey) on hand, not a live status DTO. Never read
+ * by `buildHostStreamClient` - only `isRemoteHostDirectoryEntry`'s structural
+ * check needs it to be present.
+ */
+const PLACEHOLDER_REMOTE_STATUS: HostStatusDTO = {
+  // `unknown`, not `offline`: this value is never rendered, but if it ever
+  // leaked to a status surface it must not assert something we did not learn.
+  // We are here precisely because the caller had no status DTO to hand.
+  connectivity: "unknown",
+  viewerReachability: "unknown",
+  clientCloud: "ok",
+  updateState: "current",
+  appVersion: null,
+  lastSeenAt: null,
+};
+
+/**
+ * Inert placeholder for a fabricated sandbox entry, for the same reason as
+ * {@link PLACEHOLDER_REMOTE_STATUS}: transport construction reads only whether
+ * the entry HAS sandbox facts (it decides what `OPEN` presents), never them.
+ */
+const PLACEHOLDER_SANDBOX_FACTS: RemoteHostSandboxFacts = {
+  state: null,
+  frozen: false,
+  profile: null,
+  ownerTeamName: null,
+  ownerTeamId: null,
+};
+
+interface RemoteEndpointIdentity {
+  readonly publicKey: string | null;
+  readonly ownerKind: HostOwnerPrincipal["kind"] | null;
+  readonly ownerId: string | null;
+  readonly ownerName: string | null;
+  readonly hasSandbox: boolean;
+}
+
+/** Primitive identity keeps equivalent directory publications on one client. */
+function remoteEndpointIdentity(
+  target: HostDirectoryEntry | null,
+): RemoteEndpointIdentity {
+  const remote =
+    target !== null && isRemoteHostDirectoryEntry(target) ? target : null;
+  const owner = remote?.owner ?? null;
+  return {
+    publicKey: remote?.publicKey ?? null,
+    ownerKind: owner?.kind ?? null,
+    ownerId: owner?.id ?? null,
+    ownerName: owner?.kind === "team" ? owner.name : null,
+    hasSandbox: remote !== null && remote.sandbox !== null,
+  };
+}
+
+function ownerFromEndpointIdentity(
+  kind: HostOwnerPrincipal["kind"] | null,
+  id: string | null,
+  name: string | null,
+): HostOwnerPrincipal | null {
+  if (id === null) return null;
+  if (kind === "user") return { kind, id };
+  return kind === "team" && name !== null ? { kind, id, name } : null;
+}
+
+export interface HostStreamClientBinding {
+  readonly client: IHostStreamClient<HostStreamRpcRegistry>;
+  /**
+   * The remote-aware owner identity (`remoteAwareOwnerIdentity`, R-1) this
+   * binding's `client` was built for - hostId + userId, plus, for a remote
+   * host, its public key + relay attach URL. NOT the dialability-only
+   * `hostTransportKey` - a caller comparing this across renders to decide
+   * "is this still the same owned session" must see a remote public-key
+   * rotation as a distinct value, or it would silently misuse a stale
+   * session.
+   */
+  readonly transportKey: string;
+  /**
+   * Opt-in transport lease (image-preview coalescing).
+   *
+   * A caller that hands `client` to a consumer outliving this hook instance -
+   * a stream a sibling instance also reads from - must `pin()` it first and
+   * `unpin()` exactly when that consumer's OWN need for it ends. **A pinned
+   * transport must outlive every shared subscription opened through it; the
+   * underlying close defers until the reference count reaches zero**, whether
+   * that happens before or after this hook instance's own unmount.
+   *
+   * These are `retain`/`release` on the shared cache entry backing `client`
+   * (`host-stream-client-cache.ts`), NOT a private count beside it, so the
+   * sentence above holds ACROSS surfaces rather than within one instance.
+   * `client` is no longer transient-per-instance either: a second surface
+   * naming the same host holds this same object.
+   *
+   * A caller that never pins is unaffected. This hook holds exactly one
+   * reference of its own, so its unmount still closes the client immediately -
+   * unless another surface on the same host is holding it, which is the case
+   * that used to open a duplicate transport instead.
+   */
+  readonly pin: () => void;
+  readonly unpin: () => void;
+}
+
+/**
+ * The lease as a `StreamRuntimeBinding.retain`: pin now, hand back a release
+ * that is safe to call more than once.
+ *
+ * The idempotence is the whole point of the wrapper. `unpin` is a decrement,
+ * so a consumer whose teardown can run twice - a React cleanup replayed under
+ * StrictMode, a run that errors and is then unmounted - would return a
+ * reference it never took and close a transport its siblings are still
+ * reading from.
+ */
+export function streamTransportRetain(
+  binding: HostStreamClientBinding,
+): () => () => void {
+  return () => {
+    binding.pin();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      binding.unpin();
+    };
+  };
+}
+
+export function hostStreamTransportKeyFor(
+  target: HostDirectoryEntry | null,
+  userId: string | null,
+): string | null {
+  // Reuse the canonical transport identity so this per-tab key stays in
+  // lockstep with the app-wide `HostStreamProvider` key and cannot drift.
+  // A same-content directory re-emit yields the same `transport`, so the memo
+  // below keeps the same `WsStreamClient` and the active chat socket survives
+  // benign `onLocalHostChange` churn. The `userId` scope rebuilds the client
+  // when the signed-in identity changes; token rotation is handled live by the
+  // `bearer` closure and intentionally does NOT key the client.
+  const transport = hostTransportKey(target);
+  if (transport === null || userId === null) {
+    return null;
+  }
+  return ["host-stream", userId, transport].join(TRANSPORT_KEY_SEPARATOR);
+}
+
+/**
+ * Constructs a per-host stream client with the standard dial/heartbeat
+ * timings - the single place those timings live, shared by the app-wide
+ * `HostStreamProvider`, the transient per-tab binding hook below, and the
+ * session-owned durable transport (`openDurableStreamTransport`). Non-hook so
+ * it can be called wherever a stream transport must be OWNED for a non-React
+ * lifetime.
+ *
+ * Selects the transport by `target.kind` (T14, mirrors `useHostClientFor`'s
+ * `buildMessenger`):
+ *  - `local`: a `WsStreamClient` dialing `endpoint` (read live on each
+ *    (re)dial, so a host respawn on a new url is followed without a client
+ *    rebuild); `auth` wires UNAUTHORIZED recovery (null = terminal, for
+ *    one-shot streams).
+ *  - `remote`: a persistent `RemoteSession` (Noise-NK + mux) behind a
+ *    `RemoteStreamClient`, built the SAME way `useHostClientFor` builds its
+ *    RPC messenger for the same host - an independent session, not a shared
+ *    one (a true single mux session per host across the RPC/stream/app-wide
+ *    consumers is a further optimization, not required for this transport
+ *    selection). Returns `null` when the host's public key does not decode
+ *    (a malformed registry row degrades to "unconnectable").
+ *
+ * `bearer` is read live on each (re)dial for both branches so a credential
+ * rotation is reflected.
+ */
+export function buildHostStreamClient(params: {
+  readonly target: HostDirectoryEntry;
+  readonly endpoint: HostEndpointProvider;
+  readonly bearer: BearerSourceProvider;
+  /**
+   * The session's cloud verdict, read live. It gates the remote session's
+   * attach-grant mint (see `CreateRemoteTransportOptions.cloudAuthorized`) and
+   * is asserted to the host on every branch's open frame. A parameter rather
+   * than an ambient store read for the same reason as the messenger builder's:
+   * this is the seam tests construct through.
+   */
+  readonly cloudAuthorized: () => boolean;
+  readonly authnBaseUrl: string;
+  /**
+   * Reached only when authn refuses the sign-in token on a mint; a host's refusal never starts it.
+   */
+  readonly auth: StreamAuthRevalidator | null;
+  readonly hostTokens: HostTokenSource;
+  /**
+   * The signed-in user this transport is built for: part of the shared
+   * `(hostId, userId)` remote-session cache key (S1) on the remote and pool
+   * branches, and the user the local client answers for
+   * (`WsStreamClientOptions.userId`).
+   */
+  readonly userId: string;
+  /**
+   * Whether the process-wide wake sweep may proactively poke or force-drop
+   * the shared session behind this client (remote and pool branches only). The caller's
+   * statement that a reconnect's subscribe replay is safe for the streams it
+   * will open: durable/warm transports pass `true`; the one-shot
+   * side-effecting transport passes `false`, because a forced replay would
+   * re-run its operation. See `RemoteSessionAcquirePolicy`.
+   */
+  readonly proactiveWakeEligible: boolean;
+  // Whether to eagerly `start()` the remote session (warm-connect). Owned-
+  // lifetime callers (`openDurableStreamTransport`, one-shot) pass `true`.
+  // Render-path callers (`useHostStreamClientBindingFor`, `HostStreamProvider`)
+  // pass `false` and instead build inside a `useEffect` (not a `useMemo` - see
+  // those hooks' doc comments: under S1's shared `(hostId, userId)` session
+  // cache, a `useMemo` factory that React invokes more than once per commit
+  // would leave a discarded run's acquired reference on the shared session
+  // permanently un-released, since only an effect's cleanup is guaranteed to
+  // pair with exactly the committed acquire). `start()` is idempotent and
+  // `subscribe()` lazily starts, so a caller that never eager-starts still
+  // connects on first use.
+  readonly autoStart: boolean;
+}): IHostStreamClient<HostStreamRpcRegistry> | null {
+  if (hostDirectoryEntryNeedsUpdate(params.target, MINIMUM_HOST_VERSION))
+    return null;
+  if (isPoolHostDirectoryEntry(params.target)) {
+    // The server pool: the remote session on a direct leg, never the plain
+    // per-socket client below. Its credentials are fixed by the entry's kind.
+    const poolTransport = createPoolHostTransport<
+      HostRpcRegistry,
+      HostStreamRpcRegistry
+    >({
+      entry: params.target,
+      userId: params.userId,
+      bearer: params.bearer,
+      cloudAuthorized: params.cloudAuthorized,
+      auth: params.auth,
+      clock: appServerClock,
+      rpcRegistry: hostRpcRegistry,
+      streamRegistry: hostStreamRpcRegistry,
+      webSocketFactory: browserStreamWebSocketFactory,
+      requestId: uuidv4,
+      clientIdentity: getGuiClientIdentity(),
+      proactiveWakeEligible: params.proactiveWakeEligible,
+    });
+    if (poolTransport === null) return null;
+    if (params.autoStart) {
+      poolTransport.session.start();
+    }
+    return poolTransport.streamClient;
+  }
+  if (params.target.kind === "remote") {
+    // Fail closed: an incomplete remote row (no public key / no relay url)
+    // must never fall through to the plain-WS branch below - that would dial
+    // a relay attach URL without the Noise-NK transport.
+    if (
+      !isRemoteHostDirectoryEntry(params.target) ||
+      params.target.websocketUrl === null
+    ) {
+      return null;
+    }
+
+    const remoteTransport = createRemoteHostTransport<
+      HostRpcRegistry,
+      HostStreamRpcRegistry
+    >({
+      hostId: params.target.hostId,
+      userId: params.userId,
+      relayAttachUrl: params.target.websocketUrl,
+      authnBaseUrl: params.authnBaseUrl,
+      hostPublicKey: params.target.publicKey,
+      bearer: params.bearer,
+      hostTokens: params.hostTokens,
+      door: appHostDoorObserver(params.target.hostId),
+      onState: noteHostTokenRefusal,
+      cloudAuthorized: params.cloudAuthorized,
+      auth: params.auth,
+      // The same app-wide verdict the local branch passes below. A wrong wall
+      // clock wedges a remote session identically - it is the machine's clock,
+      // not the host's - and a user connected across a relay is the one least
+      // placed to guess why nothing works.
+      clock: appServerClock,
+      rpcRegistry: hostRpcRegistry,
+      streamRegistry: hostStreamRpcRegistry,
+      webSocketFactory: browserStreamWebSocketFactory,
+      requestId: uuidv4,
+      evidence: transportEvidenceRelay,
+      clientIdentity: getGuiClientIdentity(),
+      proactiveWakeEligible: params.proactiveWakeEligible,
+    });
+    if (remoteTransport === null) return null;
+    if (params.autoStart) {
+      remoteTransport.session.start();
+    }
+    return remoteTransport.streamClient;
+  }
+  // An allowlist, not a fall-through: the plain per-socket client presents
+  // the host-only token to its named endpoint. Only local socket kinds reach
+  // it.
+  if (params.target.kind !== "local" && params.target.kind !== "mock") {
+    return null;
+  }
+
+  const hostId = params.target.hostId;
+  const localTokens = localDoorHostTokens(params.hostTokens);
+  return new WsStreamClient<HostStreamRpcRegistry>({
+    registry: hostStreamRpcRegistry,
+    // THE SAME READ THE REMOTE BRANCH ABOVE IS GIVEN, now honoured on the local
+    // leg too. It was previously consulted only for the remote attach-grant
+    // mint, which made "local, and therefore indifferent to cloud
+    // authorization" true of the transport and false of the host behind it: the
+    // host registers this connection's context as live, and its background
+    // workers spend on that context for work no client asked for. So the local
+    // socket asserts the verdict on its open frame and pushes changes through
+    // `cloudVerdictUpdate`, exactly as the remote session does.
+    cloudAuthorized: params.cloudAuthorized,
+    // Named, so this client can seed its stream-method support from what an
+    // earlier handshake with the SAME host already computed instead of probing
+    // for it again. The Epic's client is minted per session, so before this the
+    // answer was re-derived - and paid for with a serial lane probe - on every
+    // Epic open. See `stream-method-support-registry.ts`.
+    hostId,
+    endpoint: params.endpoint,
+    bearer: hostTokenBearer(
+      localTokens,
+      params.bearer,
+      hostId,
+      noteHostTokenRefusal,
+    ),
+    // The user every owner builds this client for: the tile cache key, the
+    // app-wide stream's effect dependency, the transport key at open.
+    userId: params.userId,
+    // A refused open ran nothing, so a one-shot recovers too; `params.auth === null`
+    // keeps it from starting the sign-in's recovery.
+    ...hostTokenSessionAuth(
+      {
+        tokens: localTokens,
+        currentUserId: () => params.bearer()?.identity.userId ?? null,
+        hostId,
+        signInRecovery: params.auth,
+        onState: noteHostTokenRefusal,
+        now: Date.now,
+      },
+      appHostDoorObserver(hostId),
+    ),
+    // App-wide for the same reason the mint flow below is: the wall clock is a
+    // property of the machine, so every stream in the renderer parks and
+    // resumes on ONE verdict. Without it, a bearer that reads "expired" only
+    // because the clock is hours off walks this session to `goTerminal` with a
+    // diagnosis that blames the credential.
+    clock: appServerClock,
+    // Always the app-wide flow, never a per-caller one: the renderer holds
+    // several clients against one host, and the shared module is what keeps
+    // that from becoming several concurrent mints revoking each other. It
+    // resolves `unavailable` until the provisioning provider is mounted, so
+    // dev shells and tests are unaffected.
+    hostCredentialMint: appHostCredentialMintFlow,
+    // Status informs Overview only. A report has no credential provenance,
+    // so the app-wide adoption claim still expires only on its TTL.
+    onHostCredentialState: (hostId, state) => {
+      noteHostCredentialState(hostId, state);
+      useHostCredentialStatusStore.getState().report(hostId, state);
+    },
+    // The LOCAL host's long-lived connection, so this is the leg that hears a
+    // restart tombstone from a local host restarted by somebody other than
+    // this app - a `traycer host restart` on the box, an update install. The
+    // remote branch above reports through the same relay via its mux session.
+    evidence: transportEvidenceRelay,
+    webSocketFactory: browserStreamWebSocketFactory,
+    dialTimeoutMs: DEFAULT_DIAL_TIMEOUT_MS,
+    openAckTimeoutMs: DEFAULT_OPEN_ACK_TIMEOUT_MS,
+    pingIntervalMs: DEFAULT_PING_INTERVAL_MS,
+    pongTimeoutMs: DEFAULT_PONG_TIMEOUT_MS,
+    initialBackoffMs: DEFAULT_INITIAL_BACKOFF_MS,
+    maxBackoffMs: DEFAULT_MAX_BACKOFF_MS,
+    clientIdentity: getGuiClientIdentity(),
+  });
+}
+
+/**
+ * Builds a `WsStreamClient` that opens streams against a CHOSEN host (the
+ * per-tab host binding) WITHOUT touching the app-wide active-host stream
+ * transport (`HostStreamProvider`). Powers the durable per-tab chat and
+ * terminal streams as well as the transient Settings ▸ Worktrees
+ * `worktree.deleteByPath` stream.
+ *
+ * `auth` is the stream-side recovery that durable consumers MUST pass (via
+ * `useStreamAuthRevalidator`): on an `UNAUTHORIZED` open-frame rejection the
+ * client revalidates the credential and reconnects instead of going terminal -
+ * the same recovery the app-wide epic stream uses. Pass `null` ONLY for
+ * genuinely short-lived one-shot streams (worktree delete), where a terminal
+ * auth rejection is the desired outcome. Callers must pass a referentially
+ * stable `auth` (the hook returns one) so it does not churn the client memo.
+ *
+ * The bearer reads live from the binding's client's `RequestContext` (auth is
+ * per-user, valid across hosts) so a credential-lease rotation is reflected.
+ * The BINDING's client, not `useHostClient()`, deliberately: everything this
+ * hook needs is the transport identity (request context, user id, bearer
+ * rotation), which every requester binds to the same underlying client - and
+ * `useHostClient()` returns a requester re-minted whenever the effective host
+ * moves. With that object in the build effect's dependencies, each Activate or
+ * failover tore down and re-dialed every stream client this hook owns,
+ * including ones bound to hosts the move never touched; the notifications
+ * provider read the local host's fresh instance as a respawn and wiped its
+ * replica. Same source the app-wide `HostStreamProvider` uses for its bearer.
+ * Returns `null` when there is no target, no authenticated request context, or
+ * no bound user - including transiently on first mount and right after a
+ * dependency change, until the acquire effect below commits (see that
+ * effect's doc comment for why the build lives there, not in a memo).
+ * Callers should treat the authenticated transport identity (+ auth
+ * revalidator) as what identifies "the same stream", not the `target` object
+ * identity, so a directory refresh that allocates a fresh but equivalent
+ * entry does not tear down an active stream session.
+ */
+export function useHostStreamClientBindingFor(
+  target: HostDirectoryEntry | null,
+  auth: StreamAuthRevalidator | null,
+): HostStreamClientBinding | null {
+  const runtimeBinding = useHostBinding();
+  if (runtimeBinding === null) {
+    throw new Error(
+      "useHostStreamClientBindingFor requires a HostRuntimeProvider",
+    );
+  }
+  const globalClient = runtimeBinding.hostClient;
+  const { authnBaseUrl, hostTokens } = useRunnerHost();
+  // `null` when signed out or the credential lease was released - the
+  // "no bound user" / "no auth" gate.
+  const userId = useRequestContextUserId(globalClient);
+  const transportKey = hostStreamTransportKeyFor(target, userId);
+  const endpointHostId = target?.hostId ?? null;
+  const endpointWebsocketUrl = target?.websocketUrl ?? null;
+  const endpointKind = target?.kind ?? null;
+  const {
+    publicKey: endpointPublicKey,
+    ownerKind: endpointOwnerKind,
+    ownerId: endpointOwnerId,
+    ownerName: endpointOwnerName,
+    hasSandbox: endpointHasSandbox,
+  } = remoteEndpointIdentity(target);
+
+  const [binding, setBinding] = useState<HostStreamClientBinding | null>(null);
+  const [rebuildNonce, setRebuildNonce] = useState(0);
+  // A frozen sandbox refuses every fresh session's grant, so its close parks
+  // the rebuild until the list shows the sandbox thawed or gone.
+  const { parkIfFrozen, releases: frozenParkReleases } =
+    useFrozenSandboxRebuildPark(sandboxFreezeOf(target));
+  const teardownInProgressRef = useRef(false);
+  // Same rebuild pacing the app-wide `HostStreamProvider` runs, and needed here
+  // MORE than there: that provider follows the active host, while this hook
+  // dials whichever machine its caller names - a per-tab binding, or a host
+  // somebody picked out of a list and whose selection PERSISTS. An older host
+  // or an incompatible protocol closes every fresh dial the
+  // same way, and without backoff that is a mint/dial/handshake loop running
+  // for as long as the selection stands, with nothing on screen to explain it.
+  // Same engine, same reason as the app-wide provider: the policy is the
+  // registry's, the pacer is this hook instance's (its client retargets
+  // whenever its caller names another host, and `markBuilt` clears the streak
+  // on that identity change).
+  const [rebuildBackoff] = useState(() =>
+    processReconnectEngine().createRebuildPacer(),
+  );
+
+  // Builds AND owns the client's lifecycle inside this ONE effect, rather
+  // than a `useMemo` (as this hook did before S1's session cache) - see
+  // `useHostClientFor`'s identically-shaped effect (`use-host-client-for.ts`)
+  // for the full "why": a discarded `useMemo` invocation (StrictMode dev
+  // double-invoke, or a discarded concurrent render in prod) used to be
+  // harmless (each built its own independent, unstarted client that GC
+  // reclaimed); under the shared `(hostId, userId)` session cache
+  // (S1) a discarded acquire instead holds a live,
+  // never-released reference on the ONE shared session, so the session's
+  // refCount would never return to zero. This effect's cleanup is guaranteed
+  // to run for exactly the committed acquire, so it supersedes both the old
+  // `useMemo` AND `useCloseWsStreamClientOnReplace` (which only protected
+  // against closing a STABLE memoized client too eagerly - moot now that the
+  // client is built and closed by this same effect).
+  useEffect(() => {
+    if (
+      transportKey === null ||
+      endpointHostId === null ||
+      endpointWebsocketUrl === null ||
+      endpointKind === null ||
+      userId === null
+    ) {
+      setBinding(null);
+      return;
+    }
+    const endpoint = {
+      hostId: endpointHostId,
+      websocketUrl: endpointWebsocketUrl,
+    };
+    // Rebuilt from the primitive dependency values (not the live `target`
+    // object identity) so a same-content directory re-emit does not rebuild
+    // the client - see the dependency array below. `remoteStatus` plays no
+    // role in transport construction (`buildHostStreamClient` only reads
+    // `hostId`/`websocketUrl`/`publicKey`); it is a placeholder purely to
+    // satisfy `isRemoteHostDirectoryEntry`'s shape check.
+    //
+    // `transportDialability` is written coarsely here for the same reason: this
+    // is a FABRICATED entry describing an endpoint this effect has already
+    // decided to dial, not a directory row carrying a verdict about a machine.
+    // The gate that decides whether to dial at all ran above this, against the
+    // real entry.
+    const owner = ownerFromEndpointIdentity(
+      endpointOwnerKind,
+      endpointOwnerId,
+      endpointOwnerName,
+    );
+    const memoizedTarget =
+      endpointKind === "remote" && endpointPublicKey !== null
+        ? ({
+            hostId: endpointHostId,
+            label: endpointHostId,
+            kind: "remote",
+            websocketUrl: endpointWebsocketUrl,
+            version: null,
+            transportDialability: "dialable",
+            publicKey: endpointPublicKey,
+            remoteStatus: PLACEHOLDER_REMOTE_STATUS,
+            // Fabricated endpoint, not a directory verdict: never in fuse grace.
+            relayFuseGrace: false,
+            owner,
+            // Ownership and sandbox presence are independent. A physical team
+            // computer must never acquire fabricated sandbox facts.
+            sandbox: endpointHasSandbox ? PLACEHOLDER_SANDBOX_FACTS : null,
+          } satisfies RemoteHostDirectoryEntry)
+        : ({
+            hostId: endpointHostId,
+            label: endpointHostId,
+            kind: endpointKind,
+            websocketUrl: endpointWebsocketUrl,
+            version: null,
+            transportDialability: "dialable",
+          } satisfies HostDirectoryEntry);
+
+    // ONE reference on the SHARED client for this hook instance, taken here
+    // and returned in the cleanup below. `buildHostStreamClient` runs only on
+    // a cache miss: a second surface naming the same host adopts this exact
+    // object, and that shared object identity is what makes the two share a
+    // `git.subscribeStatus` instead of opening one each (the subscription
+    // registries key on `client.instanceId`). See `host-stream-client-cache.ts`
+    // for the identity, the eviction policy and how `pin`/`unpin` compose with
+    // the reference count.
+    const lease = acquireHostStreamClient(
+      {
+        kind: endpointKind,
+        hostId: endpointHostId,
+        userId,
+        websocketUrl: endpointWebsocketUrl,
+        publicKey: endpointPublicKey ?? "",
+        authnBaseUrl,
+        authRecovery: auth === null ? "terminal" : "revalidate",
+      },
+      () =>
+        buildHostStreamClient({
+          target: memoizedTarget,
+          endpoint: () => endpoint,
+          bearer: () => globalClient.getRequestContext()?.credentials ?? null,
+          // Read at mint time, not captured: a session outlives the verdict it
+          // was built under, in both directions.
+          cloudAuthorized: () =>
+            authorizesCloudCapability(useAuthStore.getState().status),
+          authnBaseUrl,
+          auth,
+          hostTokens,
+          userId,
+          // A render-path durable client (chat/terminal/epic tiles): its
+          // streams are snapshot-shaped, so a swept reconnect only
+          // re-snapshots.
+          proactiveWakeEligible: true,
+          // Never eager-start: this acquire is guaranteed exactly one matching
+          // release (unlike the old memo-based build), but the connect-on-first-
+          // subscribe laziness is an independent, unchanged behavior. `start()`
+          // is idempotent and `subscribe()` lazily starts.
+          autoStart: false,
+        }),
+    );
+    if (lease === null) {
+      setBinding(null);
+      return;
+    }
+    const client = lease.client;
+    // The SAME identity the binding is filed under, so the streak follows the
+    // transport rather than this hook instance: a caller that retargets is
+    // dialing a different machine, and the previous one's failures are not
+    // evidence about it.
+    const builtTransportKey = remoteAwareOwnerIdentity(memoizedTarget, userId);
+    rebuildBackoff.markBuilt(Date.now(), builtTransportKey);
+    setBinding({
+      transportKey: builtTransportKey,
+      client,
+      // `pin`/`unpin` ARE this lease's retain/release. Deliberately not a
+      // second count beside the cache's: two lifecycles over one object is
+      // how the same code yields premature disposal in one race and a leak in
+      // another.
+      pin: lease.retain,
+      unpin: lease.release,
+    });
+
+    return () => {
+      teardownInProgressRef.current = true;
+      // Returns THIS hook instance's own reference. The client is closed here
+      // only if nothing else still holds one - neither a sibling surface on
+      // the same host nor an outstanding `pin()`. A pinned transport
+      // therefore still outlives this unmount and closes at the `unpin()`
+      // that brings the count to zero, exactly as before.
+      lease.release();
+      teardownInProgressRef.current = false;
+    };
+  }, [
+    auth,
+    authnBaseUrl,
+    endpointHostId,
+    endpointKind,
+    endpointOwnerKind,
+    endpointOwnerId,
+    endpointOwnerName,
+    endpointHasSandbox,
+    endpointPublicKey,
+    endpointWebsocketUrl,
+    globalClient,
+    hostTokens,
+    rebuildBackoff,
+    rebuildNonce,
+    frozenParkReleases,
+    transportKey,
+    userId,
+  ]);
+
+  // Push the rotated bearer onto this client's open sessions whenever a token
+  // refresh rotates the credential lease in place, so the host updates each
+  // connection's credential without a reconnect (`credentialUpdate`). Same-user
+  // rotation is silent on `onChange`, so we subscribe to the dedicated
+  // `onBearerRotated` signal.
+  const client = binding?.client ?? null;
+  useEffect(() => {
+    if (client === null) {
+      return;
+    }
+    return globalClient.onBearerRotated(() => {
+      client.notifyBearerRotated();
+    });
+  }, [client, globalClient]);
+
+  // The same push for an in-place CLOUD-VERDICT change, on its own signal. A
+  // per-surface client is exactly where the gap shows: a demotion neither
+  // rebuilds it (the transport key does not move - same user, same host, same
+  // endpoint) nor rotates anything the host reads as a verdict, so without this
+  // its open sessions keep the authorization they handshook with.
+  useEffect(() => {
+    if (client === null) {
+      return;
+    }
+    return globalClient.onCloudVerdictChanged(() => {
+      client.notifyCloudVerdictChanged();
+    });
+  }, [client, globalClient]);
+
+  useEffect(() => {
+    if (client === null) return;
+    let backoffTimer: number | null = null;
+    const clearBackoffTimer = (): void => {
+      if (backoffTimer === null) return;
+      window.clearTimeout(backoffTimer);
+      backoffTimer = null;
+    };
+    const rebuild = (): void => {
+      if (teardownInProgressRef.current) return;
+      if (parkIfFrozen(terminalFatalCodeOf(client))) {
+        appLogger.info(
+          "[stream] host stream client closed on a frozen sandbox - rebuild held until it thaws",
+          { client: client.instanceId },
+        );
+        return;
+      }
+      const delayMs = rebuildBackoff.nextRebuildDelayMs(Date.now());
+      appLogger.warn(
+        "[stream] transient host stream client closed underneath its binding - rebuilding",
+        {
+          client: client.instanceId,
+          closedReason: client.getClosedReason(),
+          rebuildDelayMs: delayMs,
+        },
+      );
+      if (delayMs === 0) {
+        setRebuildNonce((nonce) => nonce + 1);
+        return;
+      }
+      backoffTimer = window.setTimeout(() => {
+        backoffTimer = null;
+        setRebuildNonce((nonce) => nonce + 1);
+      }, delayMs);
+    };
+    // The streak a rebuild earned stays, so one refused again waits as long as it would have.
+    const stopRetry =
+      endpointHostId === null
+        ? () => undefined
+        : onHostDoorRetry(endpointHostId, () => {
+            if (backoffTimer === null) return;
+            clearBackoffTimer();
+            setRebuildNonce((nonce) => nonce + 1);
+          });
+    if (client.isClosed()) {
+      rebuild();
+      return () => {
+        stopRetry();
+        clearBackoffTimer();
+      };
+    }
+    const unsubscribe = client.onClosed(rebuild);
+    return () => {
+      unsubscribe();
+      stopRetry();
+      clearBackoffTimer();
+    };
+  }, [client, endpointHostId, rebuildBackoff, parkIfFrozen]);
+
+  // Wake a binding whose backoff was earned entirely under a cloud capability
+  // that has since come back. Both halves are needed and neither is sufficient:
+  // `clearStreak()` alone leaves nothing to trigger a re-acquire (the transport
+  // key never moved, so the build effect above has no changed dependency), and
+  // the nonce bump alone would be paced by a streak of up to 30s that the
+  // restored capability has already invalidated.
+  //
+  // Not gated on `client.isClosed()`: a remote binding whose client is
+  // healthy has an empty streak and rebuilds instantly, so the bump costs one
+  // re-acquire of an already-cached session; gating on the closed flag would
+  // instead miss the case this is for, where the demotion's rebuild is still
+  // sitting in its `setTimeout` and no client is published to ask.
+  //
+  // REMOTE bindings only. Cloud authorization is consulted by the remote
+  // attach-grant path alone, so a local binding's backoff was never earned
+  // under the capability - and its healthy client would only be released by
+  // the effect cleanup, which for the sole holder closes the local
+  // `WsStreamClient` and reconnects every epic, chat and terminal stream on
+  // it, for a verdict the local plane never asked about.
+  useCloudCapabilityRestored(
+    useCallback(() => {
+      if (endpointKind !== "remote") return;
+      rebuildBackoff.clearStreak();
+      setRebuildNonce((nonce) => nonce + 1);
+    }, [endpointKind, rebuildBackoff]),
+  );
+
+  return transportKey === null || binding?.client.isClosed() === true
+    ? null
+    : binding;
+}
+
+export function useHostStreamClientFor(
+  target: HostDirectoryEntry | null,
+  auth: StreamAuthRevalidator | null,
+): IHostStreamClient<HostStreamRpcRegistry> | null {
+  return useHostStreamClientBindingFor(target, auth)?.client ?? null;
+}

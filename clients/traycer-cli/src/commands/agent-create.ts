@@ -1,0 +1,234 @@
+import path from "node:path";
+import {
+  createAgentRequestSchemaV32,
+  createAgentResponseSchema,
+  canReceiveA2AMessages,
+  type CreateAgentWorkspace,
+  guiHarnessIdSchema,
+  tuiHarnessIdSchema,
+} from "@traycer/protocol/host/agent/shared";
+import { AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION } from "@traycer/protocol/host/registry";
+import {
+  callAgentHostRpc,
+  callAgentHostRpcWithDispatch,
+  PLAIN_DISPATCH,
+  parseCanonicalHostResponse,
+  parseUserInput,
+  toAgentCliError,
+} from "../internal/host-rpc";
+import { resolveEpicId, resolveSenderAgentId } from "../internal/agent-context";
+import { parseCreateProfileSelection } from "../internal/profile-selection";
+import {
+  agentWorktreeCreateOffered,
+  readAgentWorktreeCreatePolicy,
+} from "../agent-worktree-create";
+import { CLI_ERROR_CODES, cliError } from "../runner/errors";
+import { readonlyEnv } from "../runner/runtime";
+import type { CommandFn } from "../runner/runner";
+
+/**
+ * `traycer agent create` - mint a child agent (`agent.create`). The new
+ * agent's `parentId` is the sender.
+ *
+ * Surface selection:
+ *   - `--surface gui|tui` (+ `--harness`, optional `--model` for gui)
+ *     pins the child's surface + harness explicitly.
+ *   - `--harness` without `--surface`: the host infers the surface from
+ *     the sender and requested harness.
+ *   - neither: the child inherits the sender's surface + harness.
+ *
+ * Profile selection (`--profile`, see `internal/profile-selection.ts`):
+ * omission and `ambient` select the destination environment's ambient account; anything
+ * else sends that managed profile. Against a host too old to speak
+ * `agent.create@2.0`, an `ambient` selection has no
+ * representable v1.0 wire value and the transport's downgrade fails the call
+ * with upgrade guidance rather than silently falling back to the sender's
+ * profile.
+ *
+ * GUI permission selection (`--permission-mode`) defaults to `full_access`.
+ * Callers pass a more restrictive mode only when the user's agent selection
+ * guide explicitly directs them to do so. The choice is carried by
+ * `agent.create@3.0`; transport downgrade to released v1/v2 hosts fails with
+ * upgrade guidance rather than discarding it.
+ *
+ * `--service-tier` names a tier advertised for the selected profile/model and
+ * takes precedence over `--fast`; requests naming it require `3.2`.
+ */
+export function buildAgentCreateCommand(opts: {
+  readonly epicId: string | null;
+  readonly senderAgentId: string | null;
+  readonly name: string | null;
+  readonly surface: string | null;
+  readonly harness: string | null;
+  readonly model: string | null;
+  readonly reasoningEffort: string | null;
+  readonly fast: boolean;
+  readonly serviceTier: string | null;
+  readonly permissionMode: string | null;
+  readonly profile: string | null;
+  readonly cwd: string | null;
+  readonly workspacePaths: readonly string[];
+  readonly workspaceEntries: readonly string[];
+}): CommandFn {
+  return async () => {
+    const epicId = resolveEpicId(opts.epicId);
+    const senderAgentId = resolveSenderAgentId(opts.senderAgentId);
+
+    // Validate the full request locally so a bad --surface / --harness
+    // fails fast with a clear E_INVALID_ARGUMENT (listing the allowed harness
+    // values) instead of round-tripping or leaking a raw ZodError stack.
+    const request = parseUserInput(createAgentRequestSchemaV32, {
+      senderAgentId,
+      epicId,
+      name: opts.name,
+      surface: opts.surface,
+      harnessId: opts.harness,
+      model: opts.model,
+      // Epic Mode was removed from the product; the protocol still carries the
+      // field, so every create states the one remaining mode.
+      agentMode: "regular",
+      reasoningEffort: opts.reasoningEffort,
+      fastMode: opts.fast ? true : null,
+      serviceTier: opts.serviceTier ?? undefined,
+      permissionMode: opts.permissionMode ?? "full_access",
+      workspace: parseAgentCreateWorkspace({
+        cwd: opts.cwd,
+        workspacePaths: opts.workspacePaths,
+        workspaceEntries: opts.workspaceEntries,
+      }),
+      profileSelection: parseCreateProfileSelection(opts.profile),
+      // The CLI has no routing flag: the agent follows the device's routing.
+      routing: null,
+    });
+    assertSurfaceHarnessPair(request.surface, request.harnessId);
+    const result = await toAgentCliError(
+      request.serviceTier === undefined
+        ? callAgentHostRpc("agent.create", request)
+        : callAgentHostRpcWithDispatch("agent.create", request, {
+            ...PLAIN_DISPATCH,
+            requiredHostMethodVersion:
+              AGENT_CREATE_SERVICE_TIER_REQUIRED_HOST_VERSION,
+          }),
+    );
+    const { agentId, warnings } = parseCanonicalHostResponse(
+      "agent.create",
+      createAgentResponseSchema,
+      result,
+    );
+    const human =
+      warnings.length === 0
+        ? agentId
+        : `${agentId}\nWarnings:\n${warnings.map((warning) => `- ${warning}`).join("\n")}`;
+    return { data: { agentId, warnings }, human, exitCode: 0 };
+  };
+}
+
+// The host refuses these requests with an untyped error, which a caller sees
+// (and Sentry records) as an unexpected failure. They are a mistake in the
+// flags, so they fail here with the allowed values instead. The terminal set
+// is the host's own admission rule: a terminal child must be able to receive
+// agent messages, which leaves the other ids in `tuiHarnessIdSchema` (kept for
+// persisted records) unusable here.
+function assertSurfaceHarnessPair(
+  surface: "gui" | "tui" | null,
+  harnessId: string | null,
+): void {
+  if (surface === null) return;
+  const supported: readonly string[] =
+    surface === "gui"
+      ? guiHarnessIdSchema.options
+      : tuiHarnessIdSchema.options.filter((id) =>
+          canReceiveA2AMessages({ surface: "tui", harnessId: id }),
+        );
+  if (harnessId === null) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: `traycer: --surface ${surface} requires --harness (one of: ${supported.join(", ")}).`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+  if (!supported.includes(harnessId)) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: `traycer: harness '${harnessId}' does not support the ${surface} surface (one of: ${supported.join(", ")}).`,
+      details: null,
+      exitCode: 1,
+    });
+  }
+}
+
+export function parseAgentCreateWorkspace(input: {
+  readonly cwd: string | null;
+  readonly workspacePaths: readonly string[];
+  readonly workspaceEntries: readonly string[];
+}): CreateAgentWorkspace {
+  const entries = [
+    ...pathOnlyEntries(input.cwd === null ? [] : [input.cwd]),
+    ...pathOnlyEntries(input.workspacePaths),
+    ...structuredEntries(input.workspaceEntries),
+  ];
+  if (entries.length === 0) return null;
+  const seenPaths = new Set<string>();
+  const deduped = entries.filter((entry) => {
+    if (seenPaths.has(entry.path)) return false;
+    seenPaths.add(entry.path);
+    return true;
+  });
+  // The host derives mode / repoIdentifier from the paths and treats the
+  // first entry as primary, so the CLI only forwards `path` (+ source
+  // `workspacePath` for an exact binding).
+  return { entries: deduped };
+}
+
+function pathOnlyEntries(
+  paths: readonly string[],
+): CreateAgentWorkspaceEntry[] {
+  return paths.map((rawPath) => {
+    const resolvedPath = requireAbsolutePath(rawPath, "--cwd/--workspace-path");
+    return { path: resolvedPath, workspacePath: null };
+  });
+}
+
+function structuredEntries(
+  entries: readonly string[],
+): CreateAgentWorkspaceEntry[] {
+  return entries.map((rawEntry) => {
+    const separator = rawEntry.indexOf("=");
+    if (separator === -1) {
+      const resolvedPath = requireAbsolutePath(rawEntry, "--workspace-entry");
+      return { path: resolvedPath, workspacePath: null };
+    }
+    const workspacePath = requireAbsolutePath(
+      rawEntry.slice(0, separator),
+      "--workspace-entry source path",
+    );
+    const runPath = requireAbsolutePath(
+      rawEntry.slice(separator + 1),
+      "--workspace-entry run path",
+    );
+    return { path: runPath, workspacePath };
+  });
+}
+
+type CreateAgentWorkspaceEntry =
+  NonNullable<CreateAgentWorkspace>["entries"][number];
+
+// Not trimmed: a folder name may end in whitespace, and a blank or space-led
+// value is simply not absolute. Resolved here because `agent create` always
+// runs on this machine's host, so the path means a folder on this machine.
+function requireAbsolutePath(rawPath: string, label: string): string {
+  if (!path.isAbsolute(rawPath)) {
+    throw cliError({
+      code: CLI_ERROR_CODES.INVALID_ARGUMENT,
+      message: `agent create: ${label} must be an absolute path. ${
+        agentWorktreeCreateOffered(readonlyEnv(), readAgentWorktreeCreatePolicy)
+          ? "Use --cwd <worktree-path> for a path returned by traycer worktree create"
+          : "Use --cwd <path> for a folder that already exists"
+      }, or --workspace-entry <source-path>=<run-path> for an exact binding.`,
+      details: { value: rawPath },
+      exitCode: 1,
+    });
+  }
+  return path.resolve(rawPath);
+}

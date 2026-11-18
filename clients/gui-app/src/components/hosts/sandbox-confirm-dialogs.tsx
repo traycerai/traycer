@@ -1,0 +1,1050 @@
+import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
+import { toast } from "sonner";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import { KnownHostSessionsList } from "@/components/host/host-restart-sessions";
+import {
+  HostReportedSessionsList,
+  SandboxSessionPillBadge,
+} from "@/components/hosts/sandbox-reported-sessions";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
+import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  sandboxConfigurationOf,
+  useSandboxConfigurations,
+  useSandboxWakeString,
+} from "@/hooks/sandboxes/use-sandbox-configurations";
+import {
+  useSandboxDestroyBatch,
+  type SandboxBatchResult,
+  type SandboxBatchTarget,
+} from "@/hooks/sandboxes/use-sandbox-destroy-batch-mutation";
+import { useSandboxDestroy } from "@/hooks/sandboxes/use-sandbox-destroy-mutation";
+import { useSandboxKeep } from "@/hooks/sandboxes/use-sandbox-keep-mutation";
+import { useSandboxPatch } from "@/hooks/sandboxes/use-sandbox-patch-mutation";
+import { useSandboxSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
+import { useSandboxVerb } from "@/hooks/sandboxes/use-sandbox-verb-mutation";
+import { useSandboxOperation } from "@/hooks/sandboxes/use-sandbox-operation";
+import {
+  SANDBOX_SESSIONS_CAPTION,
+  sandboxDestroySessionsSentence,
+  sandboxRestingPreview,
+  sandboxStopDestroySentence,
+  sandboxTypedNameReason,
+  toastSandboxVerbOutcome,
+} from "@/components/hosts/sandbox-confirm-model";
+import { useSampledNow } from "@/lib/relative-time";
+import {
+  SANDBOX_DEFAULT_IDLE_MINUTES,
+  SANDBOX_DEFAULT_RESTING_MINUTES,
+  configurationCopy,
+  formatSandboxDate,
+  sandboxIdleRefusal,
+  sandboxPeriodDraft,
+  sandboxPeriodMinutes,
+  sandboxRestingRefusal,
+  sandboxRetentionIsWithdrawn,
+  sandboxSessionPills,
+  sandboxSessionsLine,
+  type SandboxPageConfiguration,
+  type SandboxPeriodDraft,
+  type SandboxPeriodUnit,
+  type SandboxSessionReport,
+} from "@/lib/sandboxes/sandbox-row-lines";
+import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
+import {
+  KEEP_THIS_SANDBOX,
+  alreadyDestroyedLine,
+  configurationLabel,
+  keepPreviewLine,
+  KEEP_PREVIEW_WITHDRAWN,
+  keptByLine,
+  paidByLine,
+  startedByLine,
+  teamPossessive,
+} from "@/lib/sandboxes/sandbox-strings";
+import { useAuthStore } from "@/stores/auth/auth-store";
+
+/**
+ * The confirmations Settings › Sandboxes asks before an action that
+ * interrupts or ends work: Suspend, Stop, Destroy (typed name) and
+ * Keep, each with the host's running-sessions count and its own outcome
+ * sentences; and the two small editors over the patch, Rename and Idle
+ * settings. Each dialog is self-contained: it reads what it says and runs its
+ * own mutation, so a row, the hover card and the sandbox card open the same
+ * one by setting `open`.
+ */
+
+interface SandboxDialogProps {
+  readonly sandbox: SandboxSummary;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+}
+
+/**
+ * `null` while ownership is unknown: the dialog then says nothing about whose credits.
+ */
+function useDialogConfiguration(
+  sandbox: SandboxSummary,
+): SandboxPageConfiguration | null {
+  return sandboxConfigurationOf(sandbox, useSandboxConfigurations());
+}
+
+function useViewerUserId(): string | null {
+  return useAuthStore((s) => s.contextMetadata?.userId ?? null);
+}
+
+/**
+ * The host's running-sessions count, read only while the dialog is open on
+ * an awake sandbox: a resting one has no sessions, and a read never wakes it.
+ */
+function useDialogSessions(
+  sandbox: SandboxSummary,
+  open: boolean,
+): SandboxSessionReport {
+  return useSandboxSessionReport(
+    sandbox.hostId,
+    open && sandbox.state === "awake",
+  ).report;
+}
+
+/** `your credits` / `Acme's credits`: a team's sandbox is on the team's. */
+function storageCredits(
+  configuration: SandboxPageConfiguration | null,
+): string | null {
+  if (configuration === null) return null;
+  return configuration.kind === "personal"
+    ? "your credits"
+    : `${teamPossessive(configuration.teamName)} credits`;
+}
+
+/**
+ * The sessions count line with its pills, the named sessions (the host's
+ * own list while live, else the ones this window knows of), and the action's
+ * caption. Destroy says the count in its sentence (`countLine: false`). A
+ * named session's link closes the dialog it opens from.
+ */
+export function SandboxSessionsBlock(props: {
+  readonly report: SandboxSessionReport;
+  readonly countLine: boolean;
+  readonly caption: string;
+  readonly hostId: string;
+  readonly onNavigate: () => void;
+}): ReactNode {
+  const now = useSampledNow();
+  return (
+    <div
+      className="flex flex-col gap-1 border-t border-border/60 px-5 py-3"
+      data-testid="sandbox-confirm-sessions"
+    >
+      {props.countLine ? (
+        <p
+          className="flex flex-wrap items-center gap-1.5 text-ui-sm font-medium"
+          data-testid="sandbox-confirm-sessions-line"
+        >
+          {sandboxSessionsLine(props.report, now)}
+          {sandboxSessionPills(props.report).map((pill) => (
+            <SandboxSessionPillBadge
+              key={pill.key}
+              pill={pill}
+              testId="sandbox-confirm-session-pill"
+            />
+          ))}
+        </p>
+      ) : null}
+      {props.report.kind === "live" ? (
+        <HostReportedSessionsList
+          hostId={props.hostId}
+          sessions={props.report.sessions}
+          onNavigate={props.onNavigate}
+        />
+      ) : (
+        <KnownHostSessionsList
+          hostId={props.hostId}
+          disabled={false}
+          onNavigate={props.onNavigate}
+        />
+      )}
+      <p className="text-ui-xs text-muted-foreground">{props.caption}</p>
+    </div>
+  );
+}
+
+// ── Suspend and Stop ────────────────────────────────────────────────────────
+
+function VerbConfirmDialog(
+  props: SandboxDialogProps & {
+    readonly verb: "suspend" | "stop";
+    readonly title: string;
+    readonly outcome: string;
+    readonly actionLabel: string;
+  },
+): ReactNode {
+  const verb = useSandboxVerb(props.sandbox.id);
+  const operation = useSandboxOperation(props.sandbox.id);
+  const pending = operation?.kind === "pending";
+  const report = useDialogSessions(props.sandbox, props.open);
+  return (
+    <Dialog
+      open={props.open}
+      onOpenChange={pending ? undefined : props.onOpenChange}
+    >
+      <DialogContent
+        layout="banded"
+        className="w-full min-w-0"
+        style={{ maxWidth: "min(92vw, 30rem)" }}
+        showCloseButton={false}
+        data-testid={`sandbox-confirm-${props.verb}`}
+      >
+        <DialogHeader>
+          <DialogTitle className="wrap-anywhere">{props.title}</DialogTitle>
+          <DialogDescription className="wrap-anywhere">
+            {props.outcome}
+          </DialogDescription>
+        </DialogHeader>
+        <SandboxSessionsBlock
+          report={report}
+          caption="Known running agents and Task terminals. Other sessions may also keep this sandbox awake."
+          countLine
+          hostId={props.sandbox.hostId}
+          onNavigate={() => props.onOpenChange(false)}
+        />
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={pending}
+            onClick={() => props.onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            disabled={pending}
+            data-testid={`sandbox-confirm-${props.verb}-action`}
+            onClick={() => {
+              props.onOpenChange(false);
+              verb.mutate(props.verb, {
+                onSuccess: (outcome) => {
+                  toastSandboxVerbOutcome(
+                    props.verb,
+                    outcome,
+                    props.sandbox.displayName,
+                  );
+                },
+              });
+            }}
+          >
+            {pending ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId={undefined}
+                variant={undefined}
+              />
+            ) : null}
+            {props.actionLabel}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function SandboxSuspendDialog(props: SandboxDialogProps): ReactNode {
+  const configuration = useDialogConfiguration(props.sandbox);
+  const wake = useSandboxWakeString(props.sandbox);
+  const storage = storageCredits(configuration);
+  const outcome = [
+    wake === null ? null : `${wake}.`,
+    "Finish or stop running agent turns and shells before suspending.",
+    storage === null ? null : `Storage uses ${storage}.`,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" ");
+  return (
+    <VerbConfirmDialog
+      {...props}
+      verb="suspend"
+      title={`Suspend ${props.sandbox.displayName}?`}
+      outcome={outcome}
+      actionLabel="Suspend"
+    />
+  );
+}
+
+export function SandboxStopDialog(props: SandboxDialogProps): ReactNode {
+  const configuration = useDialogConfiguration(props.sandbox);
+  const now = useSampledNow();
+  const storage = storageCredits(configuration);
+  // A withdrawn row gets no destroy date: the resting pass will not destroy
+  // it, so naming the date its period would have fallen on promises something
+  // that is not going to happen. The sentence is already nullable for a row
+  // that rests forever, so the dialog draws fine without it.
+  const destroyed = sandboxRetentionIsWithdrawn(props.sandbox)
+    ? null
+    : sandboxStopDestroySentence(props.sandbox.destroyAfterRestingMinutes, now);
+  return (
+    <VerbConfirmDialog
+      {...props}
+      verb="stop"
+      title={`Stop ${props.sandbox.displayName}?`}
+      outcome={[
+        "Finish or stop running agent turns and shells before stopping. Start boots the sandbox again.",
+        storage === null
+          ? "The disk is kept at the lower storage rate."
+          : `The disk is kept at the lower storage rate on ${storage}.`,
+        destroyed,
+      ]
+        .filter((part): part is string => part !== null)
+        .join(" ")}
+      actionLabel="Stop"
+    />
+  );
+}
+
+// ── Destroy ─────────────────────────────────────────────────────────────────
+
+export function SandboxDestroyDialog(
+  props: SandboxDialogProps & {
+    /** Called once the sandbox is gone, for a surface the row leaves. */
+    readonly onDestroyed: (() => void) | null;
+  },
+): ReactNode {
+  const [typed, setTyped] = useState("");
+  // Every close clears the typed name, a close the surface makes on its own
+  // included, so a reopen always asks for it again.
+  const [wasOpen, setWasOpen] = useState(props.open);
+  if (wasOpen !== props.open) {
+    setWasOpen(props.open);
+    if (!props.open) setTyped("");
+  }
+  const destroy = useSandboxDestroy(props.sandbox);
+  const operation = useSandboxOperation(props.sandbox.id);
+  const report = useDialogSessions(props.sandbox, props.open);
+  const name = props.sandbox.displayName;
+  const reason = sandboxTypedNameReason(typed, name);
+  // A stopped or failed sandbox has no process left to end; one mid-destroy
+  // keeps the sentence it opened with.
+  const runsNothing =
+    props.sandbox.state === "stopped" || props.sandbox.state === "failed";
+  return (
+    <ConfirmDestructiveDialog
+      blockedReason={reason}
+      open={props.open}
+      onOpenChange={props.onOpenChange}
+      title={`Destroy ${name}?`}
+      description={`${sandboxDestroySessionsSentence(report, runsNothing)} The disk is not recoverable; files on it were never synced anywhere. Published chats stay readable.`}
+      cascadeSummary={null}
+      actionLabel="Destroy"
+      isPending={operation?.kind === "pending" && operation.verb === "destroy"}
+      onConfirm={() => {
+        if (reason !== null) return;
+        props.onOpenChange(false);
+        destroy.mutate(undefined, {
+          onSuccess: (gone) => {
+            if (gone) {
+              toast.success(`Destroyed ${name}`);
+              props.onDestroyed?.();
+            } else {
+              toast.info(`Destroying ${name}…`);
+            }
+          },
+        });
+      }}
+    >
+      {runsNothing ? null : (
+        <SandboxSessionsBlock
+          report={report}
+          caption={SANDBOX_SESSIONS_CAPTION}
+          countLine={false}
+          hostId={props.sandbox.hostId}
+          onNavigate={() => props.onOpenChange(false)}
+        />
+      )}
+      <SandboxDestroyNameField name={name} typed={typed} onChange={setTyped} />
+    </ConfirmDestructiveDialog>
+  );
+}
+
+// ── Keep ────────────────────────────────────────────────────────────────────
+
+const MS_PER_MINUTE = 60_000;
+
+/**
+ * Keep this sandbox: adopts an agent sandbox. Previews the result first (the
+ * expiry it acquires and the payer it keeps), then keeps it; a keep that
+ * loses the race with its own idle destroy says it was already destroyed.
+ */
+export function SandboxKeepDialog(props: SandboxDialogProps): ReactNode {
+  const keep = useSandboxKeep(props.sandbox.id);
+  const [lost, setLost] = useState(false);
+  const configuration = useDialogConfiguration(props.sandbox);
+  const wake = useSandboxWakeString(props.sandbox);
+  const now = useSampledNow();
+  const name = props.sandbox.displayName;
+  const restingDays = SANDBOX_DEFAULT_RESTING_MINUTES / (24 * 60);
+  const restsUntil = now + SANDBOX_DEFAULT_RESTING_MINUTES * MS_PER_MINUTE;
+  // A team's sandbox is paid by the team whoever keeps it.
+  let payer: string | null = null;
+  if (configuration !== null) {
+    payer = configuration.kind === "personal" ? "you" : configuration.teamName;
+  }
+  const who = [startedByLine("an agent"), keptByLine("you")].join(" · ");
+  const idle = [`Suspends after ${SANDBOX_DEFAULT_IDLE_MINUTES} idle min`, wake]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
+  return (
+    <Dialog
+      open={props.open}
+      onOpenChange={(next) => {
+        if (keep.isPending) return;
+        if (!next) setLost(false);
+        props.onOpenChange(next);
+      }}
+    >
+      <DialogContent
+        layout="banded"
+        className="w-full min-w-0"
+        style={{ maxWidth: "min(92vw, 30rem)" }}
+        showCloseButton={false}
+        data-testid="sandbox-confirm-keep"
+      >
+        <DialogHeader>
+          <DialogTitle className="wrap-anywhere">{`Keep ${name}?`}</DialogTitle>
+          <DialogDescription className="wrap-anywhere">
+            {sandboxRetentionIsWithdrawn(props.sandbox)
+              ? KEEP_PREVIEW_WITHDRAWN
+              : keepPreviewLine(
+                  restingDays,
+                  formatSandboxDate(restsUntil, true),
+                )}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-1 px-5 py-3 text-ui-sm">
+          <p className="text-ui-xs font-medium text-muted-foreground">
+            After Keep
+          </p>
+          <p className="wrap-anywhere" data-testid="sandbox-confirm-keep-who">
+            {who}
+          </p>
+          {payer === null ? null : (
+            <p className="wrap-anywhere">{`${paidByLine(payer)} while awake.`}</p>
+          )}
+          <p>{idle}</p>
+          <p>Listed under Sandboxes you started</p>
+          {configuration === null ? null : (
+            <p className="text-ui-xs text-muted-foreground">
+              {`${configurationLabel(configurationCopy(configuration))}'s defaults; change them on the row afterwards.`}
+            </p>
+          )}
+          {lost ? (
+            <p
+              className="font-medium text-destructive"
+              data-testid="sandbox-confirm-keep-lost"
+            >
+              {alreadyDestroyedLine(name)}
+            </p>
+          ) : null}
+        </div>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={keep.isPending}
+            onClick={() => {
+              setLost(false);
+              props.onOpenChange(false);
+            }}
+          >
+            {lost ? "Close" : "Cancel"}
+          </Button>
+          {lost ? null : (
+            <Button
+              type="button"
+              size="sm"
+              disabled={keep.isPending}
+              data-testid="sandbox-confirm-keep-action"
+              onClick={() => {
+                keep.mutate(undefined, {
+                  onSuccess: (outcome) => {
+                    if (outcome === "gone") {
+                      setLost(true);
+                      return;
+                    }
+                    props.onOpenChange(false);
+                    toast.success(`Kept ${name}`);
+                  },
+                });
+              }}
+            >
+              {keep.isPending ? (
+                <AgentSpinningDots
+                  className={undefined}
+                  testId={undefined}
+                  variant={undefined}
+                />
+              ) : null}
+              {KEEP_THIS_SANDBOX}
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Rename and Idle settings ────────────────────────────────────────────────
+
+/**
+ * The frame of the two patch editors. Its form lives inside the dialog's
+ * content, which unmounts on close, so each open starts from the row's
+ * current values.
+ */
+function PatchDialogFrame(
+  props: SandboxDialogProps & {
+    readonly title: string;
+    readonly testId: string;
+    readonly pending: boolean;
+    readonly children: ReactNode;
+  },
+): ReactNode {
+  return (
+    <Dialog
+      open={props.open}
+      onOpenChange={props.pending ? undefined : props.onOpenChange}
+    >
+      <DialogContent
+        layout="banded"
+        className="w-full min-w-0"
+        style={{ maxWidth: "min(92vw, 28rem)" }}
+        showCloseButton={false}
+        aria-describedby={undefined}
+        data-testid={props.testId}
+      >
+        <DialogHeader>
+          <DialogTitle className="wrap-anywhere">{props.title}</DialogTitle>
+        </DialogHeader>
+        {props.children}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function PatchForm(props: {
+  readonly testId: string;
+  readonly pending: boolean;
+  readonly saveDisabled: boolean;
+  readonly onCancel: () => void;
+  readonly onSave: () => void;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <form
+      className="flex flex-col"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!props.saveDisabled && !props.pending) props.onSave();
+      }}
+    >
+      <div className="flex flex-col gap-3 px-5 py-4">{props.children}</div>
+      <DialogFooter>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={props.pending}
+          onClick={props.onCancel}
+        >
+          Cancel
+        </Button>
+        <Button
+          type="submit"
+          size="sm"
+          disabled={props.pending || props.saveDisabled}
+          data-testid={`${props.testId}-save`}
+        >
+          {props.pending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+          Save
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
+/** Says the row went before the patch landed. */
+function toastPatchOutcome(outcome: "saved" | "gone", name: string): void {
+  if (outcome === "gone") {
+    toast.info(alreadyDestroyedLine(name));
+  }
+}
+
+export function SandboxRenameDialog(props: SandboxDialogProps): ReactNode {
+  const patch = useSandboxPatch(props.sandbox.id);
+  return (
+    <PatchDialogFrame
+      {...props}
+      title={`Rename ${props.sandbox.displayName}`}
+      testId="sandbox-rename"
+      pending={patch.isPending}
+    >
+      <RenameForm
+        sandbox={props.sandbox}
+        pending={patch.isPending}
+        onCancel={() => props.onOpenChange(false)}
+        onSave={(displayName) => {
+          patch.mutate(
+            {
+              displayName,
+              idleMinutes: null,
+              destroyAfterRestingMinutes: null,
+            },
+            {
+              onSuccess: (outcome) => {
+                props.onOpenChange(false);
+                toastPatchOutcome(outcome, props.sandbox.displayName);
+              },
+            },
+          );
+        }}
+      />
+    </PatchDialogFrame>
+  );
+}
+
+function RenameForm(props: {
+  readonly sandbox: SandboxSummary;
+  readonly pending: boolean;
+  readonly onCancel: () => void;
+  readonly onSave: (displayName: string) => void;
+}): ReactNode {
+  const [name, setName] = useState(props.sandbox.displayName);
+  const inputId = useId();
+  const trimmed = name.trim();
+  const invalid = trimmed.length === 0 || trimmed.length > 191;
+  return (
+    <PatchForm
+      testId="sandbox-rename"
+      pending={props.pending}
+      saveDisabled={invalid || trimmed === props.sandbox.displayName}
+      onCancel={props.onCancel}
+      onSave={() => props.onSave(trimmed)}
+    >
+      <Label htmlFor={inputId}>Name</Label>
+      <Input
+        id={inputId}
+        value={name}
+        autoComplete="off"
+        maxLength={191}
+        data-testid="sandbox-rename-input"
+        onChange={(event) => setName(event.target.value)}
+      />
+    </PatchForm>
+  );
+}
+
+const UNIT_LABEL: Record<SandboxPeriodUnit, string> = {
+  minutes: "minutes",
+  hours: "hours",
+  days: "days",
+};
+
+/** A number and a unit, the way every period on these pages is entered. */
+export function SandboxPeriodField(props: {
+  readonly label: string;
+  readonly draft: SandboxPeriodDraft;
+  readonly placeholder: string;
+  readonly disabled: boolean;
+  readonly refusal: string | null;
+  readonly testId: string;
+  readonly onChange: (draft: SandboxPeriodDraft) => void;
+}): ReactNode {
+  const inputId = useId();
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={inputId}>{props.label}</Label>
+      <div className="flex min-w-0 gap-2">
+        <Input
+          id={inputId}
+          inputMode="numeric"
+          value={props.draft.value}
+          placeholder={props.placeholder}
+          disabled={props.disabled}
+          aria-invalid={props.refusal !== null}
+          data-testid={`${props.testId}-value`}
+          onChange={(event) =>
+            props.onChange({ ...props.draft, value: event.target.value })
+          }
+        />
+        <Select
+          value={props.draft.unit}
+          disabled={props.disabled}
+          onValueChange={(unit) => {
+            if (unit === "minutes" || unit === "hours" || unit === "days") {
+              props.onChange({ ...props.draft, unit });
+            }
+          }}
+        >
+          <SelectTrigger
+            className="w-32 shrink-0"
+            aria-label={`${props.label} unit`}
+            data-testid={`${props.testId}-unit`}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {(Object.keys(UNIT_LABEL) as SandboxPeriodUnit[]).map((unit) => (
+              <SelectItem key={unit} value={unit}>
+                {UNIT_LABEL[unit]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      {props.refusal === null ? null : (
+        <p
+          className="text-ui-xs text-destructive"
+          data-testid={`${props.testId}-refusal`}
+        >
+          {props.refusal}
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function SandboxIdleSettingsDialog(
+  props: SandboxDialogProps,
+): ReactNode {
+  const patch = useSandboxPatch(props.sandbox.id);
+  return (
+    <PatchDialogFrame
+      {...props}
+      title={`Idle settings for ${props.sandbox.displayName}`}
+      testId="sandbox-idle-settings"
+      pending={patch.isPending}
+    >
+      <IdleSettingsForm
+        sandbox={props.sandbox}
+        pending={patch.isPending}
+        onCancel={() => props.onOpenChange(false)}
+        onSave={(request) => {
+          patch.mutate(
+            { displayName: null, ...request },
+            {
+              onSuccess: (outcome) => {
+                props.onOpenChange(false);
+                toastPatchOutcome(outcome, props.sandbox.displayName);
+              },
+            },
+          );
+        }}
+      />
+    </PatchDialogFrame>
+  );
+}
+
+function IdleSettingsForm(props: {
+  readonly sandbox: SandboxSummary;
+  readonly pending: boolean;
+  readonly onCancel: () => void;
+  readonly onSave: (request: {
+    readonly idleMinutes: number;
+    readonly destroyAfterRestingMinutes: number | null;
+  }) => void;
+}): ReactNode {
+  const now = useSampledNow();
+  const [idle, setIdle] = useState(() =>
+    sandboxPeriodDraft(
+      props.sandbox.idleMinutes ?? SANDBOX_DEFAULT_IDLE_MINUTES,
+    ),
+  );
+  const [resting, setResting] = useState(() =>
+    sandboxPeriodDraft(props.sandbox.destroyAfterRestingMinutes),
+  );
+  const idleMinutes = sandboxPeriodMinutes(idle);
+  const restingMinutes = sandboxPeriodMinutes(resting);
+  const idleRefusal = sandboxIdleRefusal(idleMinutes);
+  const restingRefusal = sandboxRestingRefusal(restingMinutes);
+  const restingChanged =
+    restingMinutes !== props.sandbox.destroyAfterRestingMinutes;
+  return (
+    <PatchForm
+      testId="sandbox-idle-settings"
+      pending={props.pending}
+      saveDisabled={idleRefusal !== null || restingRefusal !== null}
+      onCancel={props.onCancel}
+      onSave={() => {
+        if (idleMinutes === null || Number.isNaN(idleMinutes)) return;
+        props.onSave({
+          idleMinutes,
+          // `0` is never; `null` leaves the period (and its clock) as it is.
+          destroyAfterRestingMinutes: restingChanged
+            ? (restingMinutes ?? 0)
+            : null,
+        });
+      }}
+    >
+      <SandboxPeriodField
+        label="Suspend when idle for (at least 2 minutes)"
+        draft={idle}
+        placeholder="30"
+        disabled={props.pending}
+        refusal={idleRefusal}
+        testId="sandbox-idle-settings-idle"
+        onChange={setIdle}
+      />
+      <p className="text-ui-xs text-muted-foreground">
+        Idle means no agent turn in progress, no running shell and no browser
+        tab on screen.
+      </p>
+      <SandboxPeriodField
+        label="Destroy after suspended or stopped for (empty: never)"
+        draft={resting}
+        placeholder="never"
+        disabled={props.pending}
+        refusal={restingRefusal}
+        testId="sandbox-idle-settings-resting"
+        onChange={setResting}
+      />
+      {/* No preview for a withdrawn row: every reading of it names a resting
+          outcome the withdrawal has suspended, `Kept until you destroy it`
+          most wrongly of all. The setting still saves; what it cannot do is
+          promise this row's lifetime. */}
+      {restingChanged && !sandboxRetentionIsWithdrawn(props.sandbox) ? (
+        <p
+          className="text-ui-xs text-muted-foreground"
+          data-testid="sandbox-idle-settings-preview"
+        >
+          {sandboxRestingPreview(restingMinutes, now)}
+        </p>
+      ) : null}
+    </PatchForm>
+  );
+}
+
+// ── Destroy all idle ────────────────────────────────────────────────────────
+
+function SandboxDestroyNameField(props: {
+  readonly name: string;
+  readonly typed: string;
+  readonly onChange: (typed: string) => void;
+}): ReactNode {
+  const inputId = useId();
+  return (
+    <div className="flex flex-col gap-1.5 px-5 pb-4">
+      <Label htmlFor={inputId}>Type the name to confirm</Label>
+      <Input
+        id={inputId}
+        value={props.typed}
+        autoComplete="off"
+        placeholder={props.name}
+        data-testid="sandbox-confirm-destroy-typed"
+        onChange={(event) => props.onChange(event.target.value)}
+      />
+    </div>
+  );
+}
+
+function batchOutcomeLine(result: SandboxBatchResult): string {
+  switch (result.outcome.kind) {
+    case "destroyed":
+      return `${result.name} · destroyed`;
+    case "destroying":
+      return `${result.name} · Destroying · pending`;
+    case "skipped":
+      return `${result.name} · ${result.outcome.message}`;
+    case "failed":
+      return `${result.name} · couldn't be destroyed: ${result.outcome.message}`;
+  }
+}
+
+/** Each open owns a snapshot. Closing resets only the confirmation's form. */
+export function SandboxDestroyAllIdleDialog(props: {
+  readonly targets: readonly SandboxSummary[];
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+}): ReactNode {
+  return props.open ? (
+    <SandboxDestroyAllIdleConfirmation
+      targets={props.targets}
+      onOpenChange={props.onOpenChange}
+    />
+  ) : null;
+}
+
+/** The enumerated set and its per-target outcomes stay fixed across retries. */
+function SandboxDestroyAllIdleConfirmation(props: {
+  readonly targets: readonly SandboxSummary[];
+  readonly onOpenChange: (open: boolean) => void;
+}): ReactNode {
+  const [targets] = useState(() =>
+    props.targets.filter((target) => target.kind !== "automation"),
+  );
+  const [results, setResults] = useState<readonly SandboxBatchResult[] | null>(
+    null,
+  );
+  const [ready, setReady] = useState<ReadonlySet<string>>(() => new Set());
+  const batch = useSandboxDestroyBatch();
+  const [startedBy] = useState(signedInUserId);
+  const viewerUserId = useViewerUserId();
+  const count = targets.length;
+  const pendingTargets: readonly SandboxBatchTarget[] = targets
+    .filter(
+      (target) =>
+        results === null ||
+        results.some(
+          (result) =>
+            result.sandboxId === target.id && result.outcome.kind === "failed",
+        ),
+    )
+    .map((target) => ({
+      sandboxId: target.id,
+      hostId: target.hostId,
+      name: target.displayName,
+    }));
+  const onReady = useCallback((id: string, valid: boolean): void => {
+    setReady((previous) => {
+      if (previous.has(id) === valid) return previous;
+      const next = new Set(previous);
+      if (valid) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+  const blocked =
+    viewerUserId !== startedBy ||
+    pendingTargets.length === 0 ||
+    pendingTargets.some((target) => !ready.has(target.sandboxId));
+  return (
+    <ConfirmDestructiveDialog
+      blockedReason={blocked ? "" : null}
+      open
+      onOpenChange={props.onOpenChange}
+      title={`Destroy ${count} idle ${count === 1 ? "sandbox" : "sandboxes"}?`}
+      description={
+        <>
+          <span
+            data-testid="sandbox-destroy-all-idle-targets"
+            className="flex flex-col"
+          >
+            {targets.map((target) => (
+              <span key={target.id}>{target.displayName}</span>
+            ))}
+          </span>
+          Files on these sandboxes cannot be recovered; published chats stay
+          readable.
+        </>
+      }
+      cascadeSummary={null}
+      actionLabel={results === null ? `Destroy ${count}` : "Retry"}
+      isPending={batch.isPending}
+      onConfirm={() => {
+        if (blocked) return;
+        batch.mutate(
+          { targets: pendingTargets, startedBy },
+          {
+            onSuccess: (next) => {
+              setResults((previous) => {
+                const outcomes = new Map(
+                  (previous ?? []).map((result) => [result.sandboxId, result]),
+                );
+                for (const result of next)
+                  outcomes.set(result.sandboxId, result);
+                return targets.flatMap((target) => {
+                  const result = outcomes.get(target.id);
+                  return result === undefined ? [] : [result];
+                });
+              });
+            },
+          },
+        );
+      }}
+    >
+      {targets.map((target) => (
+        <SandboxBatchDestroyConfirmationTarget
+          key={target.id}
+          sandbox={target}
+          onReady={onReady}
+          onNavigate={() => props.onOpenChange(false)}
+        />
+      ))}
+      {results === null ? null : (
+        <ul
+          className="mx-5 mb-4 list-none space-y-1 p-0 text-ui-sm"
+          aria-label="Destroy outcomes"
+        >
+          {results.map((result) => (
+            <li key={result.sandboxId} className="wrap-anywhere">
+              {batchOutcomeLine(result)}
+            </li>
+          ))}
+        </ul>
+      )}
+    </ConfirmDestructiveDialog>
+  );
+}
+
+function SandboxBatchDestroyConfirmationTarget(props: {
+  readonly sandbox: SandboxSummary;
+  readonly onReady: (id: string, valid: boolean) => void;
+  readonly onNavigate: () => void;
+}): ReactNode {
+  const { sandbox, onReady } = props;
+  const [typed, setTyped] = useState("");
+  // Reading a resting host's cached report never wakes it. A known session
+  // still needs the same name confirmation as single-row Destroy.
+  const report = useDialogSessions(sandbox, true);
+  const hasSessions = report.kind !== "unknown" && report.count > 0;
+  const reason = sandboxTypedNameReason(typed, sandbox.displayName);
+  const valid = !hasSessions || reason === null;
+  useEffect(() => {
+    onReady(sandbox.id, valid);
+  }, [onReady, sandbox.id, valid]);
+  if (!hasSessions) return null;
+  return (
+    <>
+      <p className="px-5 pb-2 text-ui-sm font-medium">{sandbox.displayName}</p>
+      <SandboxSessionsBlock
+        report={report}
+        caption={SANDBOX_SESSIONS_CAPTION}
+        countLine
+        hostId={sandbox.hostId}
+        onNavigate={props.onNavigate}
+      />
+      <SandboxDestroyNameField
+        name={sandbox.displayName}
+        typed={typed}
+        onChange={setTyped}
+      />
+      {reason === null || reason.length === 0 ? null : (
+        <p className="px-5 pb-4 text-ui-sm text-destructive">{reason}</p>
+      )}
+    </>
+  );
+}

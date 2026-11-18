@@ -1,0 +1,344 @@
+import { mkdtempSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+
+// `statusService` (`windows.ts:~520-535`) runs
+// `runCommand("schtasks", ["/Query","/TN",task], {tolerateNonZeroExit: false})`
+// and treats ANY `ProcessRunError` (its base class, so `ProcessSpawnError`
+// and `ProcessTimeoutError` both qualify via `instanceof`) as "the task is
+// not registered". An access-denied query or a timeout is read exactly like
+// a genuinely missing task, so `host status` (and everything that trusts it,
+// like `ensure`'s re-registration decision - see `ensure.test.ts`'s status-probe-failure tests) silently reports
+// "not-installed" for a service that is very much still there.
+//
+// HOME isolation: hoisted `vi.mock("node:os")` mkdtemps `homedir()` before
+// any import runs - defensive, since every row here either throws before
+// `statusService` reaches `readHostPidMetadata` or resolves through the
+// early `statusNotInstalled()` return, neither of which touches
+// `~/.traycer`, but the row shapes are exactly the kind other suites in this
+// epic got wrong by relying on a partial `store/paths` mock alone. Also
+// mocks `../../../host/pid-metadata` (unreached by every row below, but
+// mocked the same way `windows.test.ts` does it, in case a future row here
+// ever reaches the `registered: true` branch).
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const { mkdtempSync: mkdtempSyncForHome } = await import("node:fs");
+  const { join: joinForHome } = await import("node:path");
+  if (osHome.current === "") {
+    osHome.current = mkdtempSyncForHome(
+      joinForHome(actual.tmpdir(), "traycer-windows-status-query-os-home-"),
+    );
+  }
+  return { ...actual, homedir: () => osHome.current };
+});
+
+vi.mock("../../../host/pid-metadata", () => ({
+  readHostPidMetadata: vi.fn(async () => null),
+  removeHostPidMetadata: vi.fn(async () => undefined),
+  readHostPidMetadataEvidence: async () => ({ kind: "absent" as const }),
+}));
+
+const runCommandMock = vi.hoisted(() => ({
+  impl: null as
+    | ((
+        command: string,
+        args: readonly string[],
+        options: RunOptions,
+      ) => Promise<unknown>)
+    | null,
+}));
+vi.mock("../../process-runner", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../process-runner")>();
+  return {
+    ...actual,
+    runCommand: async (
+      command: string,
+      args: readonly string[],
+      options: RunOptions,
+    ) => {
+      if (runCommandMock.impl === null) {
+        throw new Error("runCommand called without a configured mock impl");
+      }
+      return runCommandMock.impl(command, args, options);
+    },
+  };
+});
+
+afterAll(async () => {
+  if (osHome.current !== "") {
+    await rm(osHome.current, { recursive: true, force: true });
+  }
+});
+
+import {
+  createWindowsController,
+  setWindowsTaskHiddenProbeForTests,
+} from "../windows";
+import {
+  ProcessRunError,
+  ProcessTimeoutError,
+  type RunOptions,
+} from "../../process-runner";
+import { serviceLabelFor, windowsTaskName } from "../../label";
+
+const label = serviceLabelFor("production");
+
+// Pinned so no row opens a real path under `%SystemRoot%\System32\Tasks`.
+beforeEach(() => {
+  setWindowsTaskHiddenProbeForTests(async () => false);
+});
+
+afterEach(() => {
+  setWindowsTaskHiddenProbeForTests(null);
+});
+
+describe("statusService disambiguates schtasks /Query failures", () => {
+  it("(i) access denied: status(label) rejects rather than reading as not-installed", async () => {
+    runCommandMock.impl = async () => {
+      throw new ProcessRunError(
+        "schtasks /Query /TN ai.traycer.host exited with code 1: ERROR: Access is denied.",
+        "schtasks",
+        ["/Query", "/TN", "ai.traycer.host"],
+        1,
+        "",
+        "ERROR: Access is denied.\r\n",
+      );
+    };
+    const controller = createWindowsController(null, { now: () => 0 });
+
+    await expect(controller.status(label)).rejects.toThrow();
+  });
+
+  it("(ii) a timeout (ProcessTimeoutError): status(label) rejects rather than reading as not-installed", async () => {
+    runCommandMock.impl = async () => {
+      throw new ProcessTimeoutError(
+        "schtasks /Query /TN ai.traycer.host timed out after 15000ms (killed via SIGTERM)",
+        "schtasks",
+        ["/Query", "/TN", "ai.traycer.host"],
+        -1,
+        "",
+        "",
+        15_000,
+      );
+    };
+    const controller = createWindowsController(null, { now: () => 0 });
+
+    await expect(controller.status(label)).rejects.toThrow();
+  });
+
+  it("(iii) control: 'cannot find the file specified' resolves {state:'not-installed', ...} - green on head", async () => {
+    runCommandMock.impl = async () => {
+      throw new ProcessRunError(
+        "schtasks /Query /TN ai.traycer.host exited with code 1: ERROR: The system cannot find the file specified.",
+        "schtasks",
+        ["/Query", "/TN", "ai.traycer.host"],
+        1,
+        "",
+        "ERROR: The system cannot find the file specified.\r\n",
+      );
+    };
+    const controller = createWindowsController(null, { now: () => 0 });
+
+    await expect(controller.status(label)).resolves.toEqual({
+      state: "not-installed",
+      version: null,
+      listenUrl: null,
+      pid: null,
+    });
+  });
+
+  it("(iv) corrupt task image: resolves 'not-installed' on head, but for the WRONG reason (any failure reads that way, not specifically a corrupt-image diagnosis)", async () => {
+    runCommandMock.impl = async () => {
+      throw new ProcessRunError(
+        "schtasks /Query /TN ai.traycer.host exited with code 1: ERROR: The task image is corrupt or has been tampered with.",
+        "schtasks",
+        ["/Query", "/TN", "ai.traycer.host"],
+        1,
+        "",
+        "ERROR: The task image is corrupt or has been tampered with.\r\n",
+      );
+    };
+    const controller = createWindowsController(null, { now: () => 0 });
+
+    // Green on head - but only because `statusService` treats this
+    // ProcessRunError exactly like every other one (access denied, a
+    // timeout, a genuinely missing task), not because it recognises the
+    // corrupt-image text. The new contract must reach the same outcome for
+    // the RIGHT reason: recognising this specific wording, the same way
+    // access-denied/timeout must now be told apart and thrown instead.
+    await expect(controller.status(label)).resolves.toEqual({
+      state: "not-installed",
+      version: null,
+      listenUrl: null,
+      pid: null,
+    });
+  });
+
+  describe("when Task Scheduler hides another user's task from this account", () => {
+    const PATH_STDERR = "ERROR: The system cannot find the path specified.\r\n";
+
+    // Answers the schtasks query with the hidden-path failure and records
+    // every PowerShell spawn (the absence probe).
+    function answerPathFailure(): { readonly powershellCalls: string[] } {
+      const powershellCalls: string[] = [];
+      runCommandMock.impl = async (command) => {
+        if (command === "powershell") {
+          powershellCalls.push(command);
+          return { exitCode: 4, stdout: "", stderr: "" };
+        }
+        throw new ProcessRunError(
+          "schtasks /Query /TN ai.traycer.host exited with code 1: ERROR: The system cannot find the path specified.",
+          "schtasks",
+          ["/Query", "/TN", "ai.traycer.host"],
+          1,
+          "",
+          PATH_STDERR,
+        );
+      };
+      return { powershellCalls };
+    }
+
+    it("(x) a failed query for a task the hidden probe names resolves 'not-installed' without the absence probe", async () => {
+      const { powershellCalls } = answerPathFailure();
+      const asked: string[] = [];
+      setWindowsTaskHiddenProbeForTests(async (taskName) => {
+        asked.push(taskName);
+        return true;
+      });
+      const controller = createWindowsController(null, { now: () => 0 });
+
+      await expect(controller.status(label)).resolves.toEqual({
+        state: "not-installed",
+        version: null,
+        listenUrl: null,
+        pid: null,
+      });
+      expect(asked).toEqual([windowsTaskName(label)]);
+      expect(powershellCalls).toEqual([]);
+    });
+
+    it("(xi) the same failure with the task not hidden still rejects", async () => {
+      answerPathFailure();
+      const controller = createWindowsController(null, { now: () => 0 });
+
+      await expect(controller.status(label)).rejects.toBeInstanceOf(
+        ProcessRunError,
+      );
+    });
+  });
+
+  describe("on a non-English Windows, where schtasks words a missing task in the system's language", () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(
+      process,
+      "platform",
+    );
+    const SPANISH_STDERR =
+      "ERROR: El sistema no puede encontrar el archivo especificado.\r\n";
+
+    beforeEach(() => {
+      // The task-scheduler probe is Windows-only.
+      Object.defineProperty(process, "platform", { value: "win32" });
+    });
+
+    afterEach(() => {
+      if (originalPlatform !== undefined) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    });
+
+    function localizedQueryError(stderr: string): ProcessRunError {
+      return new ProcessRunError(
+        `schtasks /Query /TN ai.traycer.host exited with code 1: ${stderr.trim()}`,
+        "schtasks",
+        ["/Query", "/TN", "ai.traycer.host"],
+        1,
+        "",
+        stderr,
+      );
+    }
+
+    // Answers the schtasks query with `stderr` and the PowerShell absence probe
+    // with `probe`; records every PowerShell spawn.
+    function answer(
+      stderr: string,
+      probe: { exitCode: number } | { throws: Error },
+    ): { readonly probeEnvs: NodeJS.ProcessEnv[] } {
+      const probeEnvs: NodeJS.ProcessEnv[] = [];
+      runCommandMock.impl = async (command, _args, options) => {
+        if (command === "powershell") {
+          probeEnvs.push({ ...options.env });
+          if ("throws" in probe) throw probe.throws;
+          return { exitCode: probe.exitCode, stdout: "", stderr: "" };
+        }
+        throw localizedQueryError(stderr);
+      };
+      return { probeEnvs };
+    }
+
+    it("(v) Task Scheduler proving the task absent resolves 'not-installed' instead of throwing", async () => {
+      const { probeEnvs } = answer(SPANISH_STDERR, { exitCode: 2 });
+      const controller = createWindowsController(null, { now: () => 0 });
+
+      await expect(controller.status(label)).resolves.toEqual({
+        state: "not-installed",
+        version: null,
+        listenUrl: null,
+        pid: null,
+      });
+      // The probe is told which task to look for, by the same name the query
+      // used.
+      expect(probeEnvs).toHaveLength(1);
+      expect(probeEnvs[0]?.TRAYCER_TASK_NAME).toBe(windowsTaskName(label));
+    });
+
+    it("(vi) a probe that cannot prove absence still rejects, so a failed query is never read as not-installed", async () => {
+      answer(SPANISH_STDERR, { exitCode: 4 });
+      const controller = createWindowsController(null, { now: () => 0 });
+
+      await expect(controller.status(label)).rejects.toThrow();
+    });
+
+    it("(vii) a probe that finds the task (exit 0) rejects: the query failed for another reason", async () => {
+      answer(SPANISH_STDERR, { exitCode: 0 });
+      const controller = createWindowsController(null, { now: () => 0 });
+
+      await expect(controller.status(label)).rejects.toThrow();
+    });
+
+    it("(viii) a probe that cannot be spawned rejects with the query's own failure", async () => {
+      answer(SPANISH_STDERR, { throws: new Error("spawn powershell ENOENT") });
+      const controller = createWindowsController(null, { now: () => 0 });
+
+      await expect(controller.status(label)).rejects.toBeInstanceOf(
+        ProcessRunError,
+      );
+    });
+
+    it("(ix) English text naming the missing task is answered without spawning the probe", async () => {
+      const { probeEnvs } = answer(
+        "ERROR: The system cannot find the file specified.\r\n",
+        { exitCode: 4 },
+      );
+      const controller = createWindowsController(null, { now: () => 0 });
+
+      await expect(controller.status(label)).resolves.toEqual({
+        state: "not-installed",
+        version: null,
+        listenUrl: null,
+        pid: null,
+      });
+      expect(probeEnvs).toHaveLength(0);
+    });
+  });
+});

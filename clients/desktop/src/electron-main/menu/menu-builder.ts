@@ -1,0 +1,442 @@
+import {
+  Menu,
+  type BaseWindow,
+  type MenuItemConstructorOptions,
+} from "electron";
+import {
+  desktopTopLevelMenuItemId,
+  type MenuCommandId,
+} from "../../ipc-contracts/window-types";
+import {
+  TRAYCER_DOCUMENTATION_URL,
+  TRAYCER_RELEASE_NOTES_URL,
+} from "../app/support-links";
+import type { MenuState } from "./menu-state";
+import { reloadFocusedPage } from "./reload-focused-page";
+
+export interface MenuBuildActions {
+  command(command: MenuCommandId, senderWindow: BaseWindow | null): void;
+  toggleAppDevTools(senderWindow: BaseWindow | undefined): void;
+  focusWindow(windowId: string): void;
+  openExternal(url: string): void;
+}
+
+export function buildApplicationMenu(
+  state: MenuState,
+  actions: MenuBuildActions,
+): Electron.Menu {
+  return Menu.buildFromTemplate(
+    [
+      ...buildAppMenu(state, actions),
+      buildFileMenu(state, actions),
+      buildEditMenu(state, actions),
+      buildViewMenu(state, actions),
+      buildWindowMenu(state, actions),
+      buildHelpMenu(state, actions),
+    ].filter(isMenuItem),
+  );
+}
+
+function buildAppMenu(
+  state: MenuState,
+  actions: MenuBuildActions,
+): readonly MenuItemConstructorOptions[] {
+  if (state.platform !== "darwin") {
+    return [];
+  }
+  return [
+    {
+      label: state.appName,
+      submenu: [
+        {
+          label: `About ${state.appName}`,
+          click: (_item, browserWindow) =>
+            actions.command("app.aboutDetails", browserWindow ?? null),
+        },
+        { type: "separator" },
+        settingsItem(state.platform, actions),
+        authItem(state, actions),
+        { type: "separator" },
+        ...hostUpdateItems(state, actions),
+        ...restartHostItems(state, actions),
+        checkForUpdatesItem(state, actions),
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    },
+  ];
+}
+
+function buildFileMenu(
+  state: MenuState,
+  actions: MenuBuildActions,
+): MenuItemConstructorOptions {
+  const nonMacAccountItems =
+    state.platform === "darwin"
+      ? []
+      : [
+          settingsItem(state.platform, actions),
+          authItem(state, actions),
+          { type: "separator" } satisfies MenuItemConstructorOptions,
+        ];
+  return {
+    id: desktopTopLevelMenuItemId("file"),
+    label: "File",
+    submenu: [
+      {
+        label: "New Window",
+        accelerator: "CmdOrCtrl+Shift+N",
+        click: (_item, browserWindow) =>
+          actions.command("epic.newWindow", browserWindow ?? null),
+      },
+      {
+        label: "Open Epic in New Window...",
+        accelerator: "CmdOrCtrl+Shift+O",
+        enabled: state.windows.length > 0,
+        click: (_item, browserWindow) =>
+          actions.command("epic.openInNewWindow", browserWindow ?? null),
+      },
+      {
+        label: "Close Tab",
+        // The renderer's `epic.close` chord. ⌘W is `tab.close` there (the
+        // tile), so a menu equivalent on ⌘W would close the task tab from any
+        // focus sink the renderer does not cancel the key in.
+        accelerator: "CmdOrCtrl+Shift+W",
+        registerAccelerator: registerTerminalConflictingAccelerator(
+          state.platform,
+        ),
+        enabled: state.canCloseTab,
+        click: (_item, browserWindow) =>
+          actions.command("epic.closeTab", browserWindow ?? null),
+      },
+      ...nonMacAccountItems,
+      ...(state.platform === "darwin"
+        ? []
+        : [terminalConflictingRole("quit", state.platform)]),
+    ],
+  };
+}
+
+function buildEditMenu(
+  state: MenuState,
+  actions: MenuBuildActions,
+): MenuItemConstructorOptions {
+  return {
+    id: desktopTopLevelMenuItemId("edit"),
+    label: "Edit",
+    submenu: [
+      rendererOwnedHistoryRole("undo", state.platform),
+      rendererOwnedHistoryRole("redo", state.platform),
+      { type: "separator" },
+      { role: "cut" },
+      { role: "copy" },
+      { role: "paste" },
+      terminalConflictingRole("selectAll", state.platform),
+      { type: "separator" },
+      {
+        label: "Find",
+        accelerator: "CommandOrControl+F",
+        registerAccelerator: registerTerminalConflictingAccelerator(
+          state.platform,
+        ),
+        click: (_menuItem, browserWindow) =>
+          actions.command("view.findInPage", browserWindow ?? null),
+      },
+      {
+        label: "Find Next",
+        accelerator: "CommandOrControl+G",
+        registerAccelerator: registerTerminalConflictingAccelerator(
+          state.platform,
+        ),
+        click: (_menuItem, browserWindow) =>
+          actions.command("view.findNext", browserWindow ?? null),
+      },
+      {
+        label: "Find Previous",
+        accelerator: "Shift+CommandOrControl+G",
+        click: (_menuItem, browserWindow) =>
+          actions.command("view.findPrevious", browserWindow ?? null),
+      },
+    ],
+  };
+}
+
+/**
+ * Electron's native undo/redo roles consume their accelerators and call
+ * `webContents.undo()` / `webContents.redo()`. That bypasses editors with a
+ * JavaScript-owned history, including @pierre/diffs. Keep the roles for menu
+ * clicks, but leave the keyboard event with the renderer so the focused editor
+ * can run its own unmodified Cmd/Ctrl-Z and Shift-Cmd/Ctrl-Z commands.
+ *
+ * `registerAccelerator` releases the chord on Windows/Linux. Electron ignores
+ * that flag on macOS, so an explicit empty accelerator is required there to
+ * override the role's built-in keyboard equivalent.
+ */
+function rendererOwnedHistoryRole(
+  role: "undo" | "redo",
+  platform: NodeJS.Platform,
+): MenuItemConstructorOptions {
+  return platform === "darwin"
+    ? { role, accelerator: "" }
+    : { role, registerAccelerator: false };
+}
+
+function buildViewMenu(
+  state: MenuState,
+  actions: MenuBuildActions,
+): MenuItemConstructorOptions {
+  const fullscreenSection =
+    state.platform === "darwin"
+      ? []
+      : [
+          { type: "separator" } satisfies MenuItemConstructorOptions,
+          { role: "togglefullscreen" } satisfies MenuItemConstructorOptions,
+        ];
+  const submenu: MenuItemConstructorOptions[] = [
+    {
+      label: "Reload",
+      accelerator: "CmdOrCtrl+R",
+      registerAccelerator: registerTerminalConflictingAccelerator(
+        state.platform,
+      ),
+      click: (_item, window) => reloadFocusedPage(window, false),
+    },
+    {
+      label: "Force Reload",
+      accelerator: "Shift+CmdOrCtrl+R",
+      click: (_item, window) => reloadFocusedPage(window, true),
+    },
+    { type: "separator" },
+    {
+      label: "Actual Size",
+      click: (_item, browserWindow) =>
+        actions.command("view.resetZoom", browserWindow ?? null),
+    },
+    {
+      label: "Zoom In",
+      click: (_item, browserWindow) =>
+        actions.command("view.zoomIn", browserWindow ?? null),
+    },
+    {
+      label: "Zoom Out",
+      click: (_item, browserWindow) =>
+        actions.command("view.zoomOut", browserWindow ?? null),
+    },
+    // macOS injects a native full screen item into the View menu; adding the
+    // Electron role here creates duplicate "Toggle Full Screen" rows.
+    ...fullscreenSection,
+  ];
+  return {
+    id: desktopTopLevelMenuItemId("view"),
+    label: "View",
+    submenu,
+  };
+}
+
+function buildWindowMenu(
+  state: MenuState,
+  actions: MenuBuildActions,
+): MenuItemConstructorOptions {
+  const windowItems = state.windows.map((entry) => ({
+    label: entry.title,
+    type: "checkbox" as const,
+    checked: entry.windowId === state.focusedWindowId,
+    click: () => actions.focusWindow(entry.windowId),
+  }));
+  return {
+    id: desktopTopLevelMenuItemId("window"),
+    label: "Window",
+    submenu: [
+      {
+        label: "Minimize",
+        accelerator: "CmdOrCtrl+M",
+        registerAccelerator: registerTerminalConflictingAccelerator(
+          state.platform,
+        ),
+        enabled: state.windows.length > 0,
+        click: (_item, browserWindow) =>
+          actions.command("window.minimizeWindow", browserWindow ?? null),
+      },
+      ...(state.platform === "darwin"
+        ? [
+            {
+              label: "Zoom",
+              enabled: state.windows.length > 0,
+              click: (_item, browserWindow) =>
+                actions.command("window.zoomWindow", browserWindow ?? null),
+            } satisfies MenuItemConstructorOptions,
+          ]
+        : []),
+      { type: "separator" },
+      ...windowItems,
+      { type: "separator" },
+      state.platform === "darwin"
+        ? {
+            label: "Close Window",
+            enabled: state.windows.length > 0,
+            click: (_item, browserWindow) =>
+              actions.command("window.closeWindow", browserWindow ?? null),
+          }
+        : terminalConflictingRole("close", state.platform),
+    ],
+  };
+}
+
+function buildHelpMenu(
+  state: MenuState,
+  actions: MenuBuildActions,
+): MenuItemConstructorOptions {
+  return {
+    id: desktopTopLevelMenuItemId("help"),
+    label: "Help",
+    role: "help",
+    submenu: [
+      {
+        label: "Documentation",
+        click: () => actions.openExternal(TRAYCER_DOCUMENTATION_URL),
+      },
+      {
+        label: "Release Notes",
+        click: () => actions.openExternal(TRAYCER_RELEASE_NOTES_URL),
+      },
+      {
+        label: "Report Issue",
+        click: (_item, browserWindow) =>
+          actions.command("app.reportIssue", browserWindow ?? null),
+      },
+      { type: "separator" },
+      // This command inspects Traycer. The browser tile has its own DevTools
+      // action; Electron's role would select a guest through global focus.
+      ...(state.canOpenDevTools
+        ? [
+            {
+              label: "Toggle Developer Tools",
+              accelerator:
+                state.platform === "darwin" ? "Alt+Command+I" : "Ctrl+Shift+I",
+              click: (_item, window) => actions.toggleAppDevTools(window),
+            } satisfies MenuItemConstructorOptions,
+          ]
+        : []),
+      {
+        label: "Open Logs",
+        click: (_item, browserWindow) =>
+          actions.command("app.openLogs", browserWindow ?? null),
+      },
+      ...restartHostItems(state, actions),
+      checkForUpdatesItem(state, actions),
+      { type: "separator" },
+      {
+        label: "About Traycer",
+        click: (_item, browserWindow) =>
+          actions.command("app.aboutDetails", browserWindow ?? null),
+      },
+    ],
+  };
+}
+
+function settingsItem(
+  platform: NodeJS.Platform,
+  actions: MenuBuildActions,
+): MenuItemConstructorOptions {
+  return {
+    label: "Settings...",
+    accelerator: "CmdOrCtrl+,",
+    registerAccelerator: registerTerminalConflictingAccelerator(platform),
+    click: (_item, browserWindow) =>
+      actions.command("app.openSettings", browserWindow ?? null),
+  };
+}
+
+function registerTerminalConflictingAccelerator(
+  platform: NodeJS.Platform,
+): boolean {
+  return platform === "darwin";
+}
+
+/**
+ * Electron's role defaults register these Ctrl accelerators before the
+ * renderer can apply its focused-terminal policy. Keep the native menu action,
+ * but release its accelerator on Windows/Linux so the renderer or xterm owns
+ * the key event. macOS keeps its native menu key equivalents.
+ */
+function terminalConflictingRole(
+  role: "close" | "quit" | "selectAll",
+  platform: NodeJS.Platform,
+): MenuItemConstructorOptions {
+  return {
+    role,
+    registerAccelerator: registerTerminalConflictingAccelerator(platform),
+  };
+}
+
+function authItem(
+  state: MenuState,
+  actions: MenuBuildActions,
+): MenuItemConstructorOptions {
+  if (state.authSession.status === "signed-in") {
+    return {
+      label: "Sign Out",
+      click: (_item, browserWindow) =>
+        actions.command("app.signOut", browserWindow ?? null),
+    };
+  }
+  return {
+    label: "Sign In",
+    enabled: state.authSession.status !== "signing-in",
+    click: (_item, browserWindow) =>
+      actions.command("app.signIn", browserWindow ?? null),
+  };
+}
+
+/** Empty when this instance runs no local host (`MenuState.offerRestartHost`). */
+function restartHostItems(
+  state: MenuState,
+  actions: MenuBuildActions,
+): readonly MenuItemConstructorOptions[] {
+  if (!state.offerRestartHost) return [];
+  return [
+    {
+      label: "Restart Host",
+      click: (_item, browserWindow) =>
+        actions.command("host.restart", browserWindow ?? null),
+    },
+  ];
+}
+
+function hostUpdateItems(
+  state: MenuState,
+  actions: MenuBuildActions,
+): readonly MenuItemConstructorOptions[] {
+  if (state.hostUpdateAvailableVersion === null) return [];
+  return [
+    {
+      label: `Update to ${state.hostUpdateAvailableVersion}`,
+      click: (_item, browserWindow) =>
+        actions.command("host.installUpdate", browserWindow ?? null),
+    },
+  ];
+}
+
+function checkForUpdatesItem(
+  state: MenuState,
+  actions: MenuBuildActions,
+): MenuItemConstructorOptions {
+  return {
+    label: "Check for Updates",
+    enabled: state.canCheckForUpdates,
+    click: (_item, browserWindow) =>
+      actions.command("app.checkForUpdates", browserWindow ?? null),
+  };
+}
+
+function isMenuItem(
+  item: MenuItemConstructorOptions | false,
+): item is MenuItemConstructorOptions {
+  return item !== false;
+}

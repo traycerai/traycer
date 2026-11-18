@@ -1,0 +1,2790 @@
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Mock, MockInstance } from "vitest";
+import { useState, type ReactNode } from "react";
+import {
+  drawsRobotGlyph,
+  mascotPathsAt,
+  renderedMascotPaths,
+} from "@/components/bots/__tests__/mascot-drawing";
+import type { JsonContent } from "@traycer/protocol/common/registry";
+import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
+import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
+import type { AgentMessagePeer } from "@traycer/protocol/host/agent/message-peer";
+import { ChatContainerContext } from "@/components/chat/chat-container-context";
+import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
+import {
+  EMPTY_DIRECTORY_STATE,
+  ONE_TEAM_MAIN_BOT_DIRECTORY,
+  TEAM_MAIN_BOT_ID,
+  TWO_MAIN_BOTS_DIRECTORY,
+} from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
+import type { StandaloneBotsDirectory } from "@/lib/home-bots/standalone-bot-name";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
+import { UserMessageBody } from "@/components/chat/chat-message-user-body";
+import {
+  useComposerDropScope,
+  useComposerDropScopeTarget,
+} from "@/components/chat/composer/composer-drop-scope";
+import { CHAT_TIMELINE_SCROLLER_MOVED_EVENT } from "@/components/chat/chat-timeline-follow-latch";
+import type { SetupWorkspaceState } from "@/components/chat/segments/setup-card-segment";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
+import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import {
+  buildComposerClipboardHtml,
+  composerClipboardPlainText,
+  parseComposerClipboardHtml,
+} from "@/lib/composer/composer-clipboard";
+import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import {
+  ChatMessage,
+  type ChatMessageDeliveryPhase,
+  type ChatMessageUserActions,
+} from "@/components/chat/chat-message";
+import { deliveringUserMessageActionsFor } from "@/components/epic-canvas/renderers/use-chat-message-actions";
+import {
+  transcriptShowsSetupCard,
+  transcriptShowsWorkingRow,
+} from "@/stores/chats/rendered-messages";
+import { useSetA2AReceivedOpen } from "@/stores/chats/a2a-open-store-context";
+import {
+  chatTranscriptJumpKey,
+  useChatTranscriptJumpStore,
+} from "@/stores/chats/chat-transcript-jump-store";
+import {
+  useChatCollapsibleTileInstanceId,
+  useSetChatFindForcedOpen,
+} from "@/stores/chats/chat-find-force-store-context";
+import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import { bytesToBase64 } from "@/lib/composer/image-base64";
+import { getImageBytes } from "@/lib/composer/landing-image-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
+import { resetLandingImageBudgetReservationsForTesting } from "@/lib/composer/landing-image-budget";
+import { formatFullTimestamp, formatMessageTime } from "@/lib/relative-time";
+import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
+
+// The inline edit composer now runs `reingestPendingImages` on mount and
+// a real file paste through `putImage` - both write to the window's image
+// partition (IndexedDB), which this environment has none of by default.
+// Every test in this file that touches the edit composer needs one, the same
+// way the landing paste suites already do. The budget reservation ledger is
+// ALSO a module-level singleton with no per-test reset of its own - without
+// clearing it, an outstanding reservation from an earlier image-paste test in
+// this file can make a later paste's `reserveLandingImageBudget` refuse and
+// leave that test's ingest stuck pending.
+beforeEach(() => {
+  installFreshIndexedDb();
+  resetLandingImageBudgetReservationsForTesting();
+  localHost.id = null;
+  fileDropMocks.resolveDroppedFilePaths.mockReset();
+  fileDropMocks.resolveDroppedFilePaths.mockResolvedValue([]);
+});
+
+const attachmentMocks = vi.hoisted(() => {
+  const fetch = vi.fn((_hash: string, _signal: AbortSignal) =>
+    Promise.resolve({ bytes: new Uint8Array([1, 2, 3]), mediaType: null }),
+  );
+  return {
+    fetch,
+    // Built ONCE, not per call. These stand in for hooks that memoize, and
+    // the blob-url effect takes the fetcher as a dependency - a factory
+    // returning a fresh object each render re-runs that effect forever.
+    epicFetcher: { scopeKey: "test-epic-scope", fetch },
+    chatFetcher: { scopeKey: "test-chat-scope", fetch },
+    hasBytes: vi.fn(() => true),
+    readChatBytes: vi.fn(
+      (_hash: string): Promise<Uint8Array<ArrayBuffer> | null> =>
+        Promise.resolve(new Uint8Array([1, 2, 3])),
+    ),
+  };
+});
+const composerPickerMocks = vi.hoisted(() => ({
+  useComposerPickerItems: vi.fn(),
+}));
+const reportableErrorToastMock = vi.hoisted(() => vi.fn());
+const fileDropMocks = vi.hoisted(() => ({
+  resolveDroppedFilePaths:
+    vi.fn<(files: ReadonlyArray<File>) => Promise<string[]>>(),
+}));
+/** This renderer's own host id: `null` is the real answer with no host runtime. */
+const localHost = vi.hoisted(() => ({ id: null as string | null }));
+const openEpicHandleMocks = vi.hoisted(() => {
+  const hasAttachmentBytes = vi.fn((_hash: string) => false);
+  const readAttachmentBytes = vi.fn(
+    (_hash: string, _signal: AbortSignal): Promise<Uint8Array | null> =>
+      Promise.resolve(null),
+  );
+  return {
+    hasAttachmentBytes,
+    readAttachmentBytes,
+    handle: null as {
+      store: {
+        getState: () => {
+          hasAttachmentBytes: (hash: string) => boolean;
+          readAttachmentBytes: (
+            hash: string,
+            signal: AbortSignal,
+          ) => Promise<Uint8Array | null>;
+        };
+      };
+    } | null,
+  };
+});
+
+vi.mock("@/lib/reportable-error-toast", () => ({
+  reportableErrorToast: reportableErrorToastMock,
+}));
+
+vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHost: () => ({
+    fileDrops: {
+      resolveDroppedFilePaths: fileDropMocks.resolveDroppedFilePaths,
+      copyDroppedFilePaths: (paths: readonly string[]) =>
+        Promise.resolve(paths),
+      readNativeClipboardFilePaths: () => Promise.resolve([]),
+    },
+  }),
+}));
+
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => localHost.id,
+}));
+
+vi.mock("@/providers/use-open-epic-handle", () => ({
+  useMaybeOpenEpicHandle: () => openEpicHandleMocks.handle,
+  useOpenEpicHandle: () => {
+    if (openEpicHandleMocks.handle === null) {
+      throw new Error("useOpenEpicHandle requires a handle in this test");
+    }
+    return openEpicHandleMocks.handle;
+  },
+}));
+
+const TAB_HOST_ID = "host-1";
+
+function render(ui: ReactNode) {
+  return rtlRender(
+    <ChatExpansionTestProviders tileInstanceId="user-body-test-tile">
+      <TabHostProvider hostId={TAB_HOST_ID}>{ui}</TabHostProvider>
+    </ChatExpansionTestProviders>,
+  );
+}
+
+// Cross-task opens go through the top-level task navigation seam
+// (`activateTabIntent`), not the current task's tile navigation.
+const navigationMocks = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  activateTabIntent:
+    vi.fn<
+      (
+        navigate: unknown,
+        intent: TabNavigationIntent,
+        extra: unknown,
+      ) => boolean
+    >(),
+  navigateToTabIntent:
+    vi.fn<(navigate: unknown, intent: unknown, options: unknown) => void>(),
+}));
+
+vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
+  useConnectableHostIds: () => ({ hostIds: [], resolved: false }),
+}));
+
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@tanstack/react-router")>();
+  return { ...actual, useNavigate: () => navigationMocks.navigate };
+});
+
+vi.mock("@/lib/tab-navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/tab-navigation")>();
+  return {
+    ...actual,
+    activateTabIntent: navigationMocks.activateTabIntent,
+    navigateToTabIntent: navigationMocks.navigateToTabIntent,
+  };
+});
+
+function expectCrossTaskActivation(node: {
+  readonly id: string;
+  readonly type: "chat" | "terminal-agent";
+  readonly hostId: string;
+}): void {
+  expect(navigationMocks.activateTabIntent).toHaveBeenCalledTimes(1);
+  const call = navigationMocks.activateTabIntent.mock.calls.at(0);
+  if (call === undefined) throw new Error("activateTabIntent was not called");
+  const [navigate, intent] = call;
+  expect(navigate).toBe(navigationMocks.navigate);
+  expect(intent).toMatchObject({
+    kind: "open-epic",
+    epicId: "epic-2",
+    includeNestedFocus: true,
+    preparation: { kind: "open-tile", gesture: "explicit", node },
+  });
+  // No double open through the current task's tile navigation.
+  expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+}
+
+// The one host read the real `useA2AMessagePeer` makes for a cross-task sender.
+const peerRpc = vi.hoisted(() => ({
+  peer: null as AgentMessagePeer | null,
+}));
+
+vi.mock("@/hooks/host/use-host-query", () => ({
+  useHostQuery: (input: {
+    readonly method: string;
+    readonly options: { readonly enabled: boolean };
+  }) => ({
+    data:
+      input.method === "agent.resolveMessagePeer" &&
+      input.options.enabled &&
+      peerRpc.peer !== null
+        ? { peer: peerRpc.peer }
+        : undefined,
+  }),
+}));
+
+vi.mock("@/lib/epic-selectors", () => ({
+  useRegisteredEpicLiveAgents: () => [],
+  useEpicAgentReference: (artifactId: string | null) => {
+    if (artifactId === "agent-sender-1") {
+      return {
+        id: "agent-sender-1",
+        parentId: null,
+        title: "Review Agent",
+        hostId: "host-1",
+      };
+    }
+    // A terminal-agent (TUI) sender: distinguished from a chat/artifact node
+    // by carrying `harnessId` - see `AgentMessageDisplayView`'s `openTarget`
+    // resolution in chat-message-user-body.tsx.
+    if (artifactId === "agent-sender-terminal") {
+      return {
+        id: "agent-sender-terminal",
+        harnessId: "claude",
+        hostId: "host-2",
+        title: "Terminal Agent",
+      };
+    }
+    return null;
+  },
+  useMaybeOpenEpicId: () => "epic-1",
+}));
+
+const tileNavigationMocks = vi.hoisted(() => ({
+  openTile: vi.fn(() => null),
+}));
+
+// Cross-task senders come from the shared `useA2AMessagePeer` hook. An id with
+// no entry falls through to the real hook so same-task tests are unchanged.
+const peerMocks = vi.hoisted(() => ({
+  /** Every (agentId, origin) the card asked the hook about. */
+  origins: [] as { agentId: string; origin: unknown }[],
+  byId: {} as Record<
+    string,
+    {
+      epicId: string;
+      agentId: string;
+      hostId: string;
+      title: string | null;
+      surface: "gui" | "tui";
+      bot: { botId: string; title: string } | null;
+    } | null
+  >,
+}));
+
+vi.mock(
+  import("@/hooks/agent/use-a2a-message-peer"),
+  async (importOriginal) => {
+    const actual = await importOriginal();
+    return {
+      ...actual,
+      useA2AMessagePeer: (
+        agentId: string,
+        origin: Parameters<typeof actual.useA2AMessagePeer>[1],
+      ) => {
+        peerMocks.origins.push({ agentId, origin });
+        return agentId in peerMocks.byId
+          ? peerMocks.byId[agentId]
+          : actual.useA2AMessagePeer(agentId, origin);
+      },
+    };
+  },
+);
+
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({ openTile: tileNavigationMocks.openTile }),
+}));
+
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+  useMaybeTabHostClient: () => null,
+}));
+
+vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
+  useComposerPickerItems: composerPickerMocks.useComposerPickerItems,
+}));
+
+vi.mock(
+  import("@/lib/attachments/use-attachment-blob-src"),
+  async (importOriginal) => {
+    const actual = await importOriginal();
+    return {
+      ...actual,
+      useEpicImageFetcher: () => attachmentMocks.epicFetcher,
+      useEpicAttachmentBytesPresence: () => attachmentMocks.hasBytes,
+    };
+  },
+);
+
+vi.mock(
+  import("@/lib/attachments/use-chat-image-fetcher"),
+  async (importOriginal) => {
+    const actual = await importOriginal();
+    return {
+      ...actual,
+      useChatImageFetcher: () => attachmentMocks.chatFetcher,
+      useChatAttachmentByteReader: () => attachmentMocks.readChatBytes,
+    };
+  },
+);
+
+interface OpenReceivedA2AButtonProps {
+  readonly label: string;
+  readonly messageId: string;
+}
+
+function OpenReceivedA2AButton(props: OpenReceivedA2AButtonProps) {
+  const setOpen = useSetA2AReceivedOpen();
+  return (
+    <button type="button" onClick={() => setOpen(props.messageId, true)}>
+      {props.label}
+    </button>
+  );
+}
+
+interface ForceReceivedA2AButtonProps {
+  readonly label: string;
+  readonly messageId: string;
+}
+
+function ForceReceivedA2AButton(props: ForceReceivedA2AButtonProps) {
+  const tileInstanceId = useChatCollapsibleTileInstanceId();
+  const setFindForcedOpen = useSetChatFindForcedOpen();
+  const key = deriveA2AReceivedCollapsibleKey(tileInstanceId, props.messageId);
+  return (
+    <button type="button" onClick={() => setFindForcedOpen(key, true)}>
+      {props.label}
+    </button>
+  );
+}
+
+const AGENT_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [{ type: "text", text: "Investigate this failure." }],
+    },
+  ],
+};
+
+const STRUCTURED_USER_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [
+        { type: "slashCommand", attrs: { commandName: "implement" } },
+        { type: "text", text: " preserve " },
+        {
+          type: "mention",
+          attrs: {
+            contextType: "file",
+            path: "src/app.tsx",
+            relPath: "src/app.tsx",
+            pathKind: "file",
+          },
+        },
+      ],
+    },
+    {
+      type: "bulletList",
+      content: [
+        {
+          type: "listItem",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "bullet one" }],
+            },
+          ],
+        },
+        {
+          type: "listItem",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "bullet two" }],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+const STRUCTURED_IMAGE_USER_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [
+        { type: "slashCommand", attrs: { commandName: "plan" } },
+        { type: "text", text: " can you see this " },
+        imageNode("img-1", "first.png"),
+        { type: "text", text: " and this " },
+        imageNode("img-2", "second.png"),
+      ],
+    },
+  ],
+};
+
+const STRUCTURED_SKILL_TRIGGER_USER_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [
+        {
+          type: "slashCommand",
+          attrs: { commandName: "traycer-implement", trigger: "$" },
+        },
+        { type: "text", text: " Implement the runtime ticket." },
+      ],
+    },
+  ],
+};
+
+describe("<UserMessageBody /> agent messages", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    attachmentMocks.fetch.mockReset();
+    attachmentMocks.fetch.mockImplementation((_hash, _signal) =>
+      Promise.resolve({ bytes: new Uint8Array([1, 2, 3]), mediaType: null }),
+    );
+    attachmentMocks.hasBytes.mockReset();
+    attachmentMocks.hasBytes.mockReturnValue(true);
+    attachmentMocks.readChatBytes.mockReset();
+    attachmentMocks.readChatBytes.mockImplementation((_hash) =>
+      Promise.resolve(new Uint8Array([1, 2, 3])),
+    );
+
+    composerPickerMocks.useComposerPickerItems.mockClear();
+    useWorkspaceFoldersStore.setState({ byHost: {} });
+    tileNavigationMocks.openTile.mockClear();
+    useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
+  });
+
+  it("reveals the action chip for keyboard focus", () => {
+    render(
+      <UserMessageBody
+        actions={null}
+        message={plainUserMessage("Investigate this failure.")}
+      />,
+    );
+
+    const actionChip = screen.getByLabelText("Copy message").parentElement;
+    // The group-scoped focus reveal is fine-pointer-only (the coarse-pointer
+    // "…" menu trigger lives inside the same group and must not summon the
+    // chip when Radix restores focus to it); the chip's own focus-within
+    // reveal stays unscoped for hardware-keyboard access on any device.
+    expect(actionChip?.className).toContain(
+      "pointer-fine:group-focus-within/user-message:opacity-100",
+    );
+    expect(actionChip?.className).toContain("focus-within:opacity-100");
+  });
+
+  it("mounts the touch actions menu trigger gated to coarse pointers", () => {
+    render(
+      <UserMessageBody
+        actions={displayUserActions({
+          onEdit: () => undefined,
+          onDeleteRequest: () => undefined,
+        })}
+        message={plainUserMessage("Investigate this failure.")}
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Message actions" });
+    // Rest state wears the same bg-muted surface as the ghost open state, so
+    // the trigger reads as a button before it is tapped.
+    expect(trigger.className).toContain("bg-muted");
+    const wrapper = trigger.parentElement;
+    expect(wrapper?.className).toContain("hidden");
+    expect(wrapper?.className).toContain("pointer-coarse:flex");
+    // Resting state: the menu itself mounts nothing until opened.
+    expect(screen.queryByRole("menuitem")).toBeNull();
+  });
+
+  it("routes touch menu Edit and Delete to the chip's own handlers", () => {
+    const onEdit = vi.fn();
+    const onDeleteRequest = vi.fn();
+    render(
+      <UserMessageBody
+        actions={displayUserActions({ onEdit, onDeleteRequest })}
+        message={plainUserMessage("Investigate this failure.")}
+      />,
+    );
+
+    // Radix's DropdownMenuTrigger opens on pointerdown, not the click event.
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Message actions" }),
+      { button: 0 },
+    );
+
+    screen.getByRole("menuitem", { name: "Copy" });
+    const deleteItem = screen.getByRole("menuitem", { name: "Delete" });
+    expect(deleteItem.getAttribute("data-variant")).toBe("destructive");
+    fireEvent.keyDown(screen.getByRole("menuitem", { name: "Edit" }), {
+      key: "Enter",
+    });
+    expect(onEdit).toHaveBeenCalledTimes(1);
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Message actions" }),
+      { button: 0 },
+    );
+    fireEvent.keyDown(screen.getByRole("menuitem", { name: "Delete" }), {
+      key: "Enter",
+    });
+    expect(onDeleteRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps only Copy in the touch menu while message actions are gated off", () => {
+    render(
+      <UserMessageBody
+        actions={null}
+        message={plainUserMessage("Investigate this failure.")}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Message actions" }),
+      { button: 0 },
+    );
+
+    screen.getByRole("menuitem", { name: "Copy" });
+    expect(screen.queryByRole("menuitem", { name: "Edit" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+  });
+
+  it("keeps only Copy in the touch menu while the row's delivery is unresolved", () => {
+    render(
+      <UserMessageBody
+        actions={deliveryUserActions("pending")}
+        message={plainUserMessage("Investigate this failure.")}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Message actions" }),
+      { button: 0 },
+    );
+    screen.getByRole("menuitem", { name: "Copy" });
+    expect(screen.queryByRole("menuitem", { name: "Edit" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+  });
+
+  it("returns Edit and Delete to the touch menu once the row has started", () => {
+    render(
+      <UserMessageBody
+        actions={displayUserActions({
+          onEdit: () => undefined,
+          onDeleteRequest: () => undefined,
+        })}
+        message={plainUserMessage("Investigate this failure.")}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Message actions" }),
+      { button: 0 },
+    );
+    screen.getByRole("menuitem", { name: "Copy" });
+    screen.getByRole("menuitem", { name: "Edit" });
+    screen.getByRole("menuitem", { name: "Delete" });
+  });
+
+  it("hands the corner to the delete confirm chip while it is open", () => {
+    render(
+      <UserMessageBody
+        actions={{
+          ...displayUserActions({
+            onEdit: () => undefined,
+            onDeleteRequest: () => undefined,
+          }),
+          confirmingDelete: true,
+        }}
+        message={plainUserMessage("Investigate this failure.")}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Message actions" }),
+    ).toBeNull();
+    screen.getByRole("button", { name: "Confirm delete" });
+    screen.getByRole("button", { name: "Cancel delete" });
+  });
+
+  it("copies the same rich clipboard payload from the touch menu Copy item", async () => {
+    const clipboard = installRichClipboardMock();
+    try {
+      render(
+        <TooltipProvider>
+          <UserMessageBody
+            actions={null}
+            message={{
+              ...plainUserMessage("merged fallback"),
+              structuredContent: STRUCTURED_USER_CONTENT,
+            }}
+          />
+        </TooltipProvider>,
+      );
+
+      fireEvent.pointerDown(
+        screen.getByRole("button", { name: "Message actions" }),
+        { button: 0 },
+      );
+      fireEvent.keyDown(screen.getByRole("menuitem", { name: "Copy" }), {
+        key: "Enter",
+      });
+
+      await waitFor(() => {
+        expect(clipboard.write).toHaveBeenCalledTimes(1);
+      });
+      const payload = clipboard.payloads[0];
+      expect(payload).toBeDefined();
+      const html = await payload["text/html"].text();
+      expect(parseComposerClipboardHtml(html)).toEqual(STRUCTURED_USER_CONTENT);
+      expect(clipboard.writeText).not.toHaveBeenCalled();
+    } finally {
+      clipboard.restore();
+    }
+  });
+
+  it("toggles a Show more affordance only when the prompt overflows", () => {
+    const scrollHeight = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "scrollHeight",
+    );
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get: () => 600,
+    });
+
+    try {
+      render(
+        <UserMessageBody
+          actions={null}
+          message={plainUserMessage("A very tall prompt.")}
+        />,
+      );
+
+      const toggle = screen.getByRole("button", { name: "Show more" });
+      expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+      fireEvent.click(toggle);
+
+      const collapse = screen.getByRole("button", { name: "Show less" });
+      expect(collapse.getAttribute("aria-expanded")).toBe("true");
+    } finally {
+      if (scrollHeight === undefined) {
+        Reflect.deleteProperty(HTMLElement.prototype, "scrollHeight");
+      } else {
+        Object.defineProperty(
+          HTMLElement.prototype,
+          "scrollHeight",
+          scrollHeight,
+        );
+      }
+    }
+  });
+
+  it("omits the Show more affordance for short prompts", () => {
+    const { container } = render(
+      <UserMessageBody
+        actions={null}
+        message={plainUserMessage("A short prompt.")}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+    expect(container.querySelector("[data-quotable]")).toBeNull();
+  });
+
+  it("renders compact image attachment thumbnails that still open", () => {
+    render(
+      <UserMessageBody
+        actions={null}
+        message={{
+          ...plainUserMessage("Inspect this screenshot."),
+          attachments: [
+            {
+              kind: "image",
+              hash: null,
+              mediaType: "image/png",
+              dataUrl: "data:image/png;base64,aW1hZ2U=",
+              name: "screenshot.png",
+              size: 128,
+            },
+          ],
+        }}
+      />,
+    );
+
+    const trigger = screen.getByRole("button", {
+      name: "Open Image#1: screenshot.png",
+    });
+    expect(trigger.className).toContain("size-12");
+    expect(trigger.className).not.toContain("size-24");
+    expect(
+      trigger.querySelector('[data-user-message-image-badge="1"]'),
+    ).not.toBeNull();
+  });
+
+  it("renders submitted image references inline with matching thumbnail order", () => {
+    render(
+      <UserMessageBody
+        actions={null}
+        message={{
+          ...plainUserMessage("fallback text"),
+          structuredContent: STRUCTURED_IMAGE_USER_CONTENT,
+          attachments: [
+            imageAttachment("first.png"),
+            imageAttachment("second.png"),
+          ],
+        }}
+      />,
+    );
+
+    // No `trigger` on the node, so the chip falls back to the canonical `/`.
+    expect(screen.getByText("/plan")).not.toBeNull();
+    expect(screen.getByText("Image#1")).not.toBeNull();
+    expect(screen.getByText("Image#2")).not.toBeNull();
+    expect(screen.getByLabelText("Attached Image#1: first.png")).not.toBeNull();
+    expect(
+      screen.getByLabelText("Attached Image#2: second.png"),
+    ).not.toBeNull();
+    expect(screen.getByLabelText("Open Image#1: first.png")).not.toBeNull();
+    expect(screen.getByLabelText("Open Image#2: second.png")).not.toBeNull();
+    const display = screen
+      .getByLabelText("Attached Image#2: second.png")
+      .closest("[data-user-message-display]");
+    // No hardcoded cap of its own: it inherits the ancestor row's reading
+    // width, exactly like its sibling `InlineUserMessageEditor` (which is
+    // plain `w-full`) - a regression guard against either the old fixed
+    // 48rem cap or the even older 85% one reappearing.
+    expect(display?.className).toContain("w-full");
+    expect(display?.className).not.toContain("max-w-[min(100%,48rem)]");
+    expect(display?.className).not.toContain("max-w-[85%]");
+  });
+
+  // The sent message is the only place the user sees the chip after submitting,
+  // so it reads back as what was written - matching the live composer's node
+  // view. The node still serializes to `/name` for the host either way.
+  it("renders a $-triggered chip as $name in a sent message", () => {
+    render(
+      <UserMessageBody
+        actions={null}
+        message={{
+          ...plainUserMessage("fallback text"),
+          structuredContent: STRUCTURED_SKILL_TRIGGER_USER_CONTENT,
+        }}
+      />,
+    );
+
+    expect(screen.getByText("$traycer-implement")).not.toBeNull();
+    expect(screen.queryByText("/traycer-implement")).toBeNull();
+  });
+
+  it("keeps image reference labels coherent when a user message enters edit mode", async () => {
+    const message = {
+      ...plainUserMessage("fallback text"),
+      structuredContent: STRUCTURED_IMAGE_USER_CONTENT,
+      attachments: [
+        imageAttachment("first.png"),
+        imageAttachment("second.png"),
+      ],
+    };
+    const actions = editingUserActions(STRUCTURED_IMAGE_USER_CONTENT);
+    const view = render(<UserMessageBody actions={null} message={message} />);
+
+    expect(screen.getByLabelText("Attached Image#1: first.png")).not.toBeNull();
+
+    view.rerender(
+      <ChatExpansionTestProviders tileInstanceId="user-body-test-tile">
+        <TabHostProvider hostId={TAB_HOST_ID}>
+          <TooltipProvider>
+            <UserMessageBody actions={actions} message={message} />
+          </TooltipProvider>
+        </TabHostProvider>
+      </ChatExpansionTestProviders>,
+    );
+
+    await screen.findByLabelText("Attached Image#1: first.png");
+    expect(
+      screen.getByLabelText("Attached Image#2: second.png"),
+    ).not.toBeNull();
+    expect(screen.getByLabelText("Open Image#1: first.png")).not.toBeNull();
+    expect(screen.getByLabelText("Open Image#2: second.png")).not.toBeNull();
+  });
+
+  it("uses inherited workspace roots for the inline edit skill picker", async () => {
+    useWorkspaceFoldersStore.setState({
+      byHost: {
+        [TAB_HOST_ID]: {
+          folders: ["/workspace/project"],
+          folderInfoByPath: {},
+          primaryPath: null,
+        },
+      },
+    });
+    render(
+      <TooltipProvider>
+        <UserMessageBody
+          actions={editingUserActions(INLINE_EDIT_INITIAL_CONTENT)}
+          message={{
+            ...plainUserMessage("Edit this message"),
+            structuredContent: INLINE_EDIT_INITIAL_CONTENT,
+          }}
+        />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(composerPickerMocks.useComposerPickerItems).toHaveBeenCalledWith(
+        expect.objectContaining({
+          harnessId: "claude",
+          mentionRoots: ["/workspace/project"],
+          isActive: true,
+        }),
+      );
+    });
+  });
+
+  it("keeps a file dropped on the edit card out of the message box of the pane around it", () => {
+    const received = vi.fn();
+    function PaneBox() {
+      useComposerDropScopeTarget({
+        onDragEnter: received,
+        onDragLeave: received,
+        onDragOver: received,
+        onDrop: received,
+        overlayVariant: null,
+      });
+      return null;
+    }
+    function Pane() {
+      const scope = useComposerDropScope();
+      return (
+        <div {...scope.zoneProps}>
+          <UserMessageBody
+            actions={editingUserActions(INLINE_EDIT_INITIAL_CONTENT)}
+            message={{
+              ...plainUserMessage("Edit this message"),
+              structuredContent: INLINE_EDIT_INITIAL_CONTENT,
+            }}
+          />
+          {scope.provide(<PaneBox />)}
+          {scope.overlay}
+        </div>
+      );
+    }
+    render(
+      <TooltipProvider>
+        <Pane />
+      </TooltipProvider>,
+    );
+    const send = screen.getByRole("button", { name: "Send edit" });
+    const file = new File(["x"], "notes.txt", { type: "text/plain" });
+    const transfer = {
+      files: [file],
+      types: ["Files"],
+      items: [{ kind: "file", type: file.type, getAsFile: () => file }],
+      getData: () => "",
+    };
+
+    expect(fireEvent.dragEnter(send, { dataTransfer: transfer })).toBe(true);
+    expect(fireEvent.drop(send, { dataTransfer: transfer })).toBe(false);
+    expect(received).not.toHaveBeenCalled();
+  });
+
+  it("ignores populated workspace roots for the inline edit skill picker when global fallback is disabled", async () => {
+    useWorkspaceFoldersStore.setState({
+      byHost: {
+        [TAB_HOST_ID]: {
+          folders: ["/workspace/project"],
+          folderInfoByPath: {},
+          primaryPath: null,
+        },
+      },
+    });
+    const actions = editingUserActions(INLINE_EDIT_INITIAL_CONTENT);
+    const baseEditing = actions.editing;
+    if (baseEditing === null) throw new Error("expected editing actions");
+    render(
+      <TooltipProvider>
+        <UserMessageBody
+          actions={{
+            ...actions,
+            editing: { ...baseEditing, fallbackToGlobalMentionRoots: false },
+          }}
+          message={{
+            ...plainUserMessage("Edit this message"),
+            structuredContent: INLINE_EDIT_INITIAL_CONTENT,
+          }}
+        />
+      </TooltipProvider>,
+    );
+
+    await waitFor(() => {
+      expect(composerPickerMocks.useComposerPickerItems).toHaveBeenCalledWith(
+        expect.objectContaining({
+          harnessId: "claude",
+          mentionRoots: [],
+          isActive: true,
+        }),
+      );
+    });
+  });
+
+  it("reveals an edited row that overflows its scroller with an absolute scroll target", async () => {
+    // The page's frames are driven by the test: mount focus restoration and
+    // the reveal's visibility check both run when the test drains them.
+    const frames = new Map<number, FrameRequestCallback>();
+    let nextFrameId = 1;
+    const rafSpy = vi
+      .spyOn(globalThis, "requestAnimationFrame")
+      .mockImplementation((callback) => {
+        const id = nextFrameId;
+        nextFrameId += 1;
+        frames.set(id, callback);
+        return id;
+      });
+    const cancelSpy = vi
+      .spyOn(globalThis, "cancelAnimationFrame")
+      .mockImplementation((id) => {
+        frames.delete(id);
+      });
+    const drainFrames = (): void => {
+      while (frames.size > 0) {
+        for (const [id, callback] of [...frames]) {
+          if (!frames.has(id)) continue;
+          frames.delete(id);
+          callback(0);
+        }
+      }
+    };
+    let rectSpy: MockInstance<Element["getBoundingClientRect"]> | null = null;
+    try {
+      render(
+        <div data-testid="scroller" style={{ overflowY: "auto" }}>
+          <InlineEditAttachmentHarness onSubmit={vi.fn()} />
+        </div>,
+      );
+      const scroller = screen.getByTestId("scroller");
+      const scrollTo = vi.fn();
+      scroller.scrollTo = scrollTo;
+      const moves: unknown[] = [];
+      // The edited row sits inside the viewport until the reveal is asked
+      // for, so only the focus restores write the scroller before it.
+      let rowBottomPx = 480;
+      rectSpy = vi
+        .spyOn(Element.prototype, "getBoundingClientRect")
+        .mockImplementation(function (this: Element) {
+          const bottom = this === scroller ? 500 : rowBottomPx;
+          const height = this === scroller ? 100 : 60;
+          return {
+            x: 0,
+            y: bottom - height,
+            width: 400,
+            height,
+            top: bottom - height,
+            right: 400,
+            bottom,
+            left: 0,
+            toJSON: () => ({}),
+          };
+        });
+      scroller.addEventListener(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, (event) => {
+        if (event instanceof CustomEvent) moves.push(event.detail);
+      });
+      const editor = await screen.findByRole("textbox", {
+        name: "Edit message",
+      });
+      // Mount focus restores the scroller's mount-time offset on every frame
+      // it asks for; run them all before the offset is replaced so a late
+      // restore neither throws nor overwrites it.
+      drainFrames();
+      // Each restore is the app's write to the transcript's scroller, and is
+      // announced as the list announces its own.
+      expect(moves).not.toHaveLength(0);
+      moves.length = 0;
+      Object.defineProperty(scroller, "scrollTop", {
+        configurable: true,
+        writable: true,
+        value: 300,
+      });
+      // A real scroller lands on the offset it is asked for, so the announced
+      // move's end is the write's own target.
+      scrollTo.mockImplementation((options: ScrollToOptions) => {
+        if (options.top !== undefined) scroller.scrollTop = options.top;
+      });
+      // The scroller's viewport ends at 500; the edited row will end 120px
+      // below it. iOS WebKit lands a relative `scrollBy` twice, so the reveal
+      // must write the absolute target: the current offset plus the overflow
+      // and padding.
+      rowBottomPx = 620;
+      fireEvent.paste(editor, {
+        clipboardData: {
+          files: [],
+          items: [],
+          types: ["text/plain"],
+          getData: (type: string) => (type === "text/plain" ? " more" : ""),
+        },
+      });
+      await waitFor(() => {
+        drainFrames();
+        expect(scrollTo).toHaveBeenCalledWith({ top: 436, behavior: "auto" });
+      });
+      // The fixture lays out no scroll range, so the target clamps to it. The
+      // reveal writes the offset, so it announces `cause: "offset"`.
+      expect(moves).toEqual([
+        { from: 300, fromEnd: 0, to: 436, intended: 0, cause: "offset" },
+      ]);
+      expect(scrollTo).not.toHaveBeenCalledWith(
+        expect.objectContaining({ top: 620 - 500 + 16 }),
+      );
+    } finally {
+      try {
+        cleanup();
+      } finally {
+        frames.clear();
+        rectSpy?.mockRestore();
+        cancelSpy.mockRestore();
+        rafSpy.mockRestore();
+      }
+    }
+  });
+
+  // A pasted image file is stored by content hash, so the submitted node is
+  // hash-only with its bytes in the local store, never inline base64.
+  it("adds multiple pasted images to the edit strip and submits hash-only nodes", async () => {
+    const onSubmit = vi.fn<(content: JsonContent) => void>();
+    render(<InlineEditAttachmentHarness onSubmit={onSubmit} />);
+    const editor = await screen.findByRole("textbox", { name: "Edit message" });
+    const first = imageFile("first-paste.png", [1, 2, 3]);
+    const second = imageFile("second-paste.png", [4, 5, 6]);
+
+    fireEvent.paste(editor, {
+      clipboardData: clipboardWithFiles([first, second]),
+    });
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Open Image#1: first-paste.png",
+      }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("button", {
+        name: "Open Image#2: second-paste.png",
+      }),
+    ).not.toBeNull();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Remove Image#2: second-paste.png",
+      }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", {
+          name: "Open Image#2: second-paste.png",
+        }),
+      ).toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Send edit" }));
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const submitted = onSubmit.mock.calls[0][0];
+    const images = collectImageAtoms(submitted);
+    expect(images.map((image) => image.fileName)).toEqual(["first-paste.png"]);
+    expect(images.every((image) => image.hash !== null)).toBe(true);
+    expect(images.every((image) => image.b64content === null)).toBe(true);
+    // The bytes are actually IN the store under that hash, not just a node
+    // shaped like one.
+    const hash = images[0]?.hash;
+    expect(hash).not.toBeNull();
+    if (hash === null) return;
+    expect(Array.from((await getImageBytes(hash)) ?? [])).toEqual([1, 2, 3]);
+  });
+
+  // Format fallback: a declared MIME type outside the host's storable set
+  // (PNG/JPEG/GIF/WebP/SVG) is never hashed - it takes the inline path for that
+  // file alone, and still arrives as `b64content` with a null `hash`.
+  //
+  // The MECHANISM under that contract changed and this test moved with it:
+  // every paste now reads `file.arrayBuffer()`, and the inline-vs-hash verdict
+  // is made AFTER the read by `prepareComposerImageBytesOrRefuse` - a format it
+  // cannot model (BMP is named in its own docblock) lands in the catch and is
+  // the only producer of `byHashEligible: false`. `FileReader.readAsDataURL`
+  // has no production call site left anywhere in the app, so injecting the
+  // delay there pinned a path that no longer exists: the read never started,
+  // and the test failed at its own harness rather than at an assertion. What is
+  // asserted below - inline bytes, no hash - is unchanged.
+  it("keeps a declared-BMP paste inline on the edit composer (format fallback)", async () => {
+    const delayedRead = installDelayedArrayBufferRead();
+    const onSubmit = vi.fn<(content: JsonContent) => void>();
+    render(<InlineEditAttachmentHarness onSubmit={onSubmit} />);
+    const editor = await screen.findByRole("textbox", { name: "Edit message" });
+    const bmp = new File([new Uint8Array([1, 2, 3])], "legacy.bmp", {
+      type: "image/bmp",
+    });
+
+    fireEvent.paste(editor, { clipboardData: clipboardWithFiles([bmp]) });
+    delayedRead.resolveNext(new Uint8Array([1, 2, 3]));
+    await screen.findByRole("button", { name: "Open Image#1: legacy.bmp" });
+    // Wait for the GATE, not the chip - the same two-state-updates gap the
+    // storable-PNG sibling below documents. The fallback path takes it too:
+    // `runImageIngest`'s `finally` decrements the pending count after the node
+    // is inserted, so a synchronous click here raced the re-enable and the
+    // click landed on a disabled button.
+    const send = await screen.findByRole("button", { name: "Send edit" });
+    await waitFor(() => {
+      expect(send.getAttribute("disabled")).toBeNull();
+    });
+    fireEvent.click(send);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const atoms = collectImageAtoms(onSubmit.mock.calls[0][0]);
+    expect(atoms).toEqual([
+      expect.objectContaining({
+        fileName: "legacy.bmp",
+        b64content: "AQID",
+        hash: null,
+      }),
+    ]);
+  });
+
+  // A storable PNG paste reads `file.arrayBuffer()` and `putImage`s the
+  // bytes; `FileReader` is not involved on any paste path any more. The
+  // "blocked until it finishes" contract still holds; only the mechanism under
+  // it changed, so the delay is injected at `arrayBuffer()`.
+  it("blocks edit submission until a pasted image finishes reading", async () => {
+    const delayedRead = installDelayedArrayBufferRead();
+    const onSubmit = vi.fn<(content: JsonContent) => void>();
+    render(<InlineEditAttachmentHarness onSubmit={onSubmit} />);
+    const editor = await screen.findByRole("textbox", { name: "Edit message" });
+
+    fireEvent.paste(editor, {
+      clipboardData: clipboardWithFiles([
+        imageFile("delayed.png", [16, 17, 18]),
+      ]),
+    });
+
+    const send = screen.getByRole("button", { name: "Send edit" });
+    expect(send.getAttribute("disabled")).not.toBeNull();
+    fireEvent.click(send);
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    delayedRead.resolveNext(new Uint8Array([16, 17, 18]));
+    await screen.findByRole("button", {
+      name: "Open Image#1: delayed.png",
+    });
+    // Wait for the GATE, not for the chip. The node is inserted before
+    // `runImageIngest`'s `finally` decrements the pending count, so the chip
+    // appearing and the send button re-enabling are two different state
+    // updates - and asserting the second synchronously after awaiting the
+    // first raced the gap. That gap is real and correct: the button must stay
+    // disabled until ingest has genuinely settled, which includes the
+    // `putImage` write, not just the byte read.
+    const readySend = await screen.findByRole("button", { name: "Send edit" });
+    await waitFor(() => {
+      expect(readySend.getAttribute("disabled")).toBeNull();
+    });
+    fireEvent.click(readySend);
+
+    const submitted = onSubmit.mock.calls[0][0];
+    const atoms = collectImageAtoms(submitted);
+    expect(atoms).toEqual([
+      expect.objectContaining({
+        fileName: "delayed.png",
+        b64content: null,
+      }),
+    ]);
+    const hash = atoms[0]?.hash;
+    expect(hash).not.toBeNull();
+    if (hash === null) return;
+    expect(Array.from((await getImageBytes(hash)) ?? [])).toEqual([16, 17, 18]);
+  });
+
+  it("submits a synchronously validated rich paste immediately", async () => {
+    const onSubmit = vi.fn<(content: JsonContent) => void>();
+    render(<InlineEditAttachmentHarness onSubmit={onSubmit} />);
+    const editor = await screen.findByRole("textbox", { name: "Edit message" });
+    const content = hashOnlyInlineEditContent();
+    const html = buildComposerClipboardHtml(
+      content,
+      composerClipboardPlainText(content),
+    );
+
+    fireEvent.paste(editor, {
+      clipboardData: {
+        files: [],
+        items: [],
+        types: ["text/html"],
+        getData: (type: string) => (type === "text/html" ? html : ""),
+      },
+    });
+
+    expect(attachmentMocks.hasBytes).toHaveBeenCalledWith("same-epic-hash");
+    const readySend = screen.getByRole("button", { name: "Send edit" });
+    expect(readySend.getAttribute("disabled")).toBeNull();
+    fireEvent.click(readySend);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(collectImageAtoms(onSubmit.mock.calls[0][0])).toEqual([
+      expect.objectContaining({
+        id: "rich-paste",
+        hash: "same-epic-hash",
+        b64content: null,
+      }),
+    ]);
+  });
+
+  it.each([
+    ["pending", "pending", true],
+    ["stored", null, false],
+  ] as const)(
+    "holds Send edit while an edited message's file is %s",
+    async (_label, uploadState, held) => {
+      const actions = editingUserActions(INLINE_EDIT_INITIAL_CONTENT);
+      const baseEditing = actions.editing;
+      if (baseEditing === null) throw new Error("expected editing actions");
+      const withFile: JsonContent = {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "fileAttachment",
+                attrs: {
+                  id: "file-1",
+                  hash: "a".repeat(64),
+                  fileName: "report.pdf",
+                  mediaType: "application/pdf",
+                  size: 10,
+                  uploadState,
+                },
+              },
+            ],
+          },
+        ],
+      };
+      render(
+        <TooltipProvider>
+          <UserMessageBody
+            message={{
+              ...plainUserMessage("Edit this message"),
+              structuredContent: INLINE_EDIT_INITIAL_CONTENT,
+            }}
+            actions={{
+              ...actions,
+              editing: {
+                ...baseEditing,
+                currentContent: withFile,
+                canSubmit: true,
+              },
+            }}
+          />
+        </TooltipProvider>,
+      );
+
+      const send = await screen.findByRole("button", { name: "Send edit" });
+      await waitFor(() => {
+        expect(send.getAttribute("disabled") !== null).toBe(held);
+      });
+    },
+  );
+
+  it("adds a dropped image to the inline edit attachment strip", async () => {
+    render(<InlineEditAttachmentHarness onSubmit={() => undefined} />);
+    const editor = await screen.findByRole("textbox", { name: "Edit message" });
+    const dropped = imageFile("dropped.png", [7, 8, 9]);
+
+    fireEvent.drop(editor, {
+      dataTransfer: dataTransferWithFiles([dropped]),
+    });
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Open Image#1: dropped.png",
+      }),
+    ).not.toBeNull();
+  });
+
+  it("opens the image picker and attaches its selected file", async () => {
+    const inputClick = vi
+      .spyOn(HTMLInputElement.prototype, "click")
+      .mockImplementation(() => undefined);
+    const view = render(
+      <InlineEditAttachmentHarness onSubmit={() => undefined} />,
+    );
+    await screen.findByRole("textbox", { name: "Edit message" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Attach image" }));
+    expect(inputClick).toHaveBeenCalledTimes(1);
+
+    const input =
+      view.container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error("expected inline edit image input");
+    fireEvent.change(input, {
+      target: { files: [imageFile("picked.png", [10, 11, 12])] },
+    });
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Open Image#1: picked.png",
+      }),
+    ).not.toBeNull();
+  });
+
+  it("discards an image read that resolves after edit cancellation", async () => {
+    const delayedRead = installDelayedArrayBufferRead();
+    render(<InlineEditAttachmentHarness onSubmit={() => undefined} />);
+    const editor = await screen.findByRole("textbox", { name: "Edit message" });
+
+    fireEvent.paste(editor, {
+      clipboardData: clipboardWithFiles([
+        imageFile("discarded.png", [13, 14, 15]),
+      ]),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel edit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reopen edit" }));
+    await screen.findByRole("textbox", { name: "Edit message" });
+
+    delayedRead.resolveNext(new Uint8Array([13, 14, 15]));
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+
+    expect(screen.queryByRole("button", { name: /Open Image#/ })).toBeNull();
+  });
+
+  it("renders received agent messages as an expandable A2A card", () => {
+    const { container } = render(
+      <UserMessageBody
+        actions={null}
+        message={agentMessage("Investigate this failure.")}
+      />,
+    );
+
+    // No hardcoded cap of its own (it used to carry
+    // `max-w-[min(100%,48rem)]`) - it inherits the ancestor row's reading
+    // width instead, matching the sent A2A card (`A2ASendToolSegment`),
+    // which has no width wrapper at all. `attachments: []` on this fixture
+    // leaves this wrapper as the render's only element.
+    expect(container.firstElementChild?.className).toBe("w-full");
+
+    // The direction label is for assistive tech only: the icon plus "from"
+    // already say it, and the visible words were crowding the sender name out
+    // of narrow headers.
+    expect(screen.getByText("Received message").className).toContain("sr-only");
+    expect(screen.getByText("from")).toBeTruthy();
+    expect(screen.queryByText("from agent")).toBeNull();
+    expect(screen.getByText("Review Agent")).toBeTruthy();
+    expect(screen.getByText(/Investigate this failure/)).toBeTruthy();
+    expect(screen.queryByText("Message")).toBeNull();
+    // The arrival stamp trails the header - the one place a timeline is
+    // hardest to reconstruct otherwise, since these rows have no human send
+    // above them.
+    expect(screen.getAllByTestId("chat-message-timestamp")).toHaveLength(1);
+    // Reply-expected is a compact icon in the always-visible header; the
+    // spelled-out line only appears once the card is expanded.
+    expect(screen.getByRole("img", { name: "Reply expected" })).toBeTruthy();
+    expect(screen.queryByText("Reply expected")).toBeNull();
+    expect(screen.queryByText("reply expected")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Received message/ }));
+
+    expect(screen.getByRole("button", { name: "Review Agent" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Reply expected" })).toBeTruthy();
+    expect(screen.getByText("Reply expected")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
+    expect(screen.queryByText("Message")).toBeNull();
+    expect(
+      screen
+        .getByText("Investigate this failure.")
+        .closest(".md-prose")
+        ?.hasAttribute("data-quotable"),
+    ).toBe(false);
+  });
+
+  // `AgentMessageDisplayView` is wired to `message.sentAt ?? message.createdAt`
+  // rather than `createdAt` alone: a nested steer row's `createdAt` gets
+  // re-anchored to its turn's start so it sorts contiguously with the turn
+  // (a SORT position, not a send time), and `sentAt` is where the real
+  // instant survives that re-anchor. `createdAt` and `sentAt` are set far
+  // enough apart here that using the wrong one is not just wrong but
+  // detectably wrong under `formatMessageTime`'s minute precision.
+  it("stamps the received card with sentAt, not createdAt, when the two diverge", () => {
+    const sentAt = Date.now() - 5 * 60_000;
+    const createdAt = Date.now() - 20 * 60_000;
+    render(
+      <UserMessageBody
+        actions={null}
+        message={{
+          ...agentMessage("Investigate this failure."),
+          createdAt,
+          sentAt,
+        }}
+      />,
+    );
+
+    const now = Date.now();
+    const expected = formatMessageTime(sentAt, now);
+    const wrongIfUsingCreatedAt = formatMessageTime(createdAt, now);
+    expect(expected).not.toBe(wrongIfUsingCreatedAt);
+    expect(screen.getByTestId("chat-message-timestamp").textContent).toBe(
+      expected,
+    );
+  });
+
+  it("parks a receipt jump for the sender's chat tile when the sender name is clicked", () => {
+    const message = agentMessage("Investigate this failure.");
+    render(<UserMessageBody actions={null} message={message} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Review Agent" }));
+
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledTimes(1);
+    const state = useChatTranscriptJumpStore.getState();
+    const key = chatTranscriptJumpKey("host-1", "agent-sender-1");
+    expect(state.requestsByChatId[key]?.target).toEqual({
+      kind: "receipt",
+      messageId: message.id,
+    });
+  });
+
+  it("opens the tile but parks no jump when the sender resolves to a terminal agent", () => {
+    const message: ChatMessageModel = {
+      ...agentMessage("Investigate this failure."),
+      agentSenderInfo: {
+        agentId: "agent-sender-terminal",
+        senderTitle: "Terminal Agent",
+        expectReply: true,
+        responseId: "response-1",
+      },
+      agentMessage: {
+        kind: "agent",
+        content: AGENT_CONTENT,
+        fromAgentId: "agent-sender-terminal",
+        senderTitle: "Terminal Agent",
+        senderHarnessId: "claude",
+        reply: { expectsReply: true, responseId: "response-1" },
+      },
+    };
+    render(<UserMessageBody actions={null} message={message} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Terminal Agent" }));
+
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledTimes(1);
+    expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual({});
+  });
+
+  describe("cross-task senders", () => {
+    const CROSS_ID = "agent-sender-cross";
+
+    beforeEach(() => {
+      // The controller acknowledges a Tracy intent and commits its channel.
+      navigationMocks.activateTabIntent.mockImplementation((_nav, intent) => {
+        if (intent.kind === "tracy") {
+          useTracySurfaceStore.getState().selectChannel(intent.botId);
+        }
+        return true;
+      });
+      useSelectionAuthorityStore.setState({ effectiveHostId: TAB_HOST_ID });
+    });
+
+    afterEach(() => {
+      navigationMocks.activateTabIntent.mockReset();
+      navigationMocks.navigateToTabIntent.mockClear();
+      useTracySurfaceStore.setState({
+        open: false,
+        hostId: null,
+        botId: null,
+        visitedBotIds: [],
+      });
+      useBotTabLandingStore.setState({ byBotId: {} });
+      peerMocks.byId = {};
+      peerMocks.origins = [];
+    });
+
+    function crossMessage(fromTitle: string | null): ChatMessageModel {
+      const base = agentMessage("Reply from the other task.");
+      return {
+        ...base,
+        agentSenderInfo: {
+          agentId: CROSS_ID,
+          senderTitle: fromTitle,
+          expectReply: true,
+          responseId: "response-1",
+        },
+        agentMessage: {
+          kind: "agent",
+          content: AGENT_CONTENT,
+          fromAgentId: CROSS_ID,
+          senderTitle: fromTitle,
+          senderHarnessId: "codex",
+          reply: { expectsReply: true, responseId: "response-1" },
+        },
+      };
+    }
+
+    it("shows the resolved title and opens the OTHER task on its host, parking a receipt jump", () => {
+      peerMocks.byId[CROSS_ID] = {
+        epicId: "epic-2",
+        agentId: CROSS_ID,
+        hostId: "host-2",
+        title: "Cross Task Sender",
+        surface: "gui",
+        bot: null,
+      };
+      const message = crossMessage(null);
+      render(<UserMessageBody actions={null} message={message} />);
+
+      // The received card anchors a fork lookup to its own message id.
+      expect(peerMocks.origins).toContainEqual({
+        agentId: CROSS_ID,
+        origin: { direction: "received", messageId: message.id },
+      });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Cross Task Sender" }),
+      );
+
+      expectCrossTaskActivation({
+        id: CROSS_ID,
+        type: "chat",
+        hostId: "host-2",
+      });
+      const key = chatTranscriptJumpKey("host-2", CROSS_ID);
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[key]?.target,
+      ).toEqual({ kind: "receipt", messageId: message.id });
+    });
+
+    describe("a bot sender resolved by the host", () => {
+      afterEach(() => {
+        peerRpc.peer = null;
+        useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
+      });
+
+      function renderTeamBotSender(directory: StandaloneBotsDirectory): void {
+        peerRpc.peer = {
+          epicId: TEAM_MAIN_BOT_ID,
+          agentId: CROSS_ID,
+          hostId: "host-2",
+          title: "Tracy",
+          surface: "gui",
+          bot: { botId: TEAM_MAIN_BOT_ID, title: "Tracy" },
+        };
+        useStandaloneBotsStore.setState({ directory, settled: true });
+        render(
+          <ChatContainerContext value="epic-1">
+            <ChatTranscriptProvider
+              value={{
+                chatId: "chat-1",
+                hostId: "host-1",
+                payerHostId: "host-1",
+              }}
+            >
+              <UserMessageBody actions={null} message={crossMessage(null)} />
+            </ChatTranscriptProvider>
+          </ChatContainerContext>,
+        );
+      }
+
+      it("places a team's bot by its environment when two main bots are visible", () => {
+        renderTeamBotSender(TWO_MAIN_BOTS_DIRECTORY);
+
+        expect(
+          screen.getByRole("button", { name: "Tracy · traycerai" }),
+        ).toBeTruthy();
+      });
+
+      it("keeps a team's bot to its name when it is the only main bot", () => {
+        renderTeamBotSender(ONE_TEAM_MAIN_BOT_DIRECTORY);
+
+        expect(screen.getByRole("button", { name: "Tracy" })).toBeTruthy();
+      });
+    });
+
+    describe("the sender's picture in the card's header", () => {
+      function senderHeader(): HTMLElement {
+        const header = screen.getByText("Received message").parentElement;
+        if (header === null) throw new Error("the card has no header");
+        return header;
+      }
+
+      function resolveSender(bot: { botId: string; title: string } | null) {
+        peerMocks.byId[CROSS_ID] = {
+          epicId: "epic-2",
+          agentId: CROSS_ID,
+          hostId: "host-2",
+          title: "Cross Task Sender",
+          surface: "gui",
+          bot,
+        };
+        render(<UserMessageBody actions={null} message={crossMessage(null)} />);
+      }
+
+      it("is the robot glyph for an agent sender", () => {
+        resolveSender(null);
+
+        const picture = within(senderHeader()).getByTestId("a2a-peer-picture");
+        expect(picture.getAttribute("data-peer")).toBe("agent");
+        expect(picture.querySelector("svg.lucide-bot")).not.toBeNull();
+        expect(renderedMascotPaths(picture)).toEqual([]);
+      });
+
+      it("is the bot's own 16px mascot for a bot sender, not the robot glyph", () => {
+        resolveSender({ botId: "bot-1", title: "Release bot" });
+
+        const picture = within(senderHeader()).getByTestId("a2a-peer-picture");
+        expect(picture.getAttribute("data-peer")).toBe("bot");
+        expect(renderedMascotPaths(picture)).toEqual(
+          mascotPathsAt("bot-1", false, 16),
+        );
+        expect(drawsRobotGlyph(picture)).toBe(false);
+      });
+
+      it("replaces the inbox icon the header carried", () => {
+        resolveSender(null);
+
+        expect(senderHeader().querySelector("svg.lucide-inbox")).toBeNull();
+      });
+    });
+
+    it("opens a cross-task terminal sender without parking a jump", () => {
+      peerMocks.byId[CROSS_ID] = {
+        epicId: "epic-2",
+        agentId: CROSS_ID,
+        hostId: "host-2",
+        title: "Cross Terminal",
+        surface: "tui",
+        bot: null,
+      };
+      render(<UserMessageBody actions={null} message={crossMessage(null)} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Cross Terminal" }));
+
+      expectCrossTaskActivation({
+        id: CROSS_ID,
+        type: "terminal-agent",
+        hostId: "host-2",
+      });
+      expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual(
+        {},
+      );
+    });
+
+    it("opens a bot sender's channel on the window host, landing on the session, and parks no transcript jump", () => {
+      peerMocks.byId[CROSS_ID] = {
+        epicId: "bot-1",
+        agentId: CROSS_ID,
+        hostId: "host-2",
+        title: "Release bot",
+        surface: "gui",
+        bot: { botId: "bot-1", title: "Release bot" },
+      };
+      render(<UserMessageBody actions={null} message={crossMessage(null)} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Release bot" }));
+
+      expect(useTracySurfaceStore.getState()).toMatchObject({
+        open: true,
+        hostId: TAB_HOST_ID,
+        botId: "bot-1",
+      });
+      expect(navigationMocks.activateTabIntent).toHaveBeenCalledTimes(1);
+      expect(navigationMocks.activateTabIntent).toHaveBeenCalledWith(
+        navigationMocks.navigate,
+        { kind: "tracy", botId: "bot-1" },
+        expect.anything(),
+      );
+      expect(navigationMocks.navigateToTabIntent).not.toHaveBeenCalled();
+      expect(useBotTabLandingStore.getState().byBotId["bot-1"]).toEqual({
+        kind: "sender",
+        chatId: CROSS_ID,
+      });
+      expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual(
+        {},
+      );
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+    });
+
+    it("renders the stamped title as plain text when the peer cannot be resolved", () => {
+      peerMocks.byId[CROSS_ID] = null;
+      render(
+        <UserMessageBody
+          actions={null}
+          message={crossMessage("Stamped Title")}
+        />,
+      );
+
+      expect(screen.getByText("Stamped Title")).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: "Stamped Title" }),
+      ).toBeNull();
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+      expect(navigationMocks.activateTabIntent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("opens received A2A cards through the provider store", () => {
+    const message = agentMessage("Investigate this externally opened card.");
+    render(
+      <>
+        <OpenReceivedA2AButton
+          label="Open received A2A"
+          messageId={message.id}
+        />
+        <UserMessageBody actions={null} message={message} />
+      </>,
+    );
+
+    expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open received A2A" }));
+
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
+  });
+
+  it("opens received A2A cards through find-force and releases on manual collapse", () => {
+    const message = agentMessage("Investigate this find-forced card.");
+    render(
+      <>
+        <ForceReceivedA2AButton
+          label="Force received A2A"
+          messageId={message.id}
+        />
+        <UserMessageBody actions={null} message={message} />
+      </>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Force received A2A" }));
+
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Received message/ }));
+
+    expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
+  });
+
+  it("copies structured user messages as rich composer clipboard content", async () => {
+    const clipboard = installRichClipboardMock();
+    try {
+      render(
+        <TooltipProvider>
+          <UserMessageBody
+            actions={null}
+            message={{
+              ...plainUserMessage("merged fallback"),
+              structuredContent: STRUCTURED_USER_CONTENT,
+            }}
+          />
+        </TooltipProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+
+      await waitFor(() => {
+        expect(clipboard.write).toHaveBeenCalledTimes(1);
+      });
+      const payload = clipboard.payloads[0];
+      expect(payload).toBeDefined();
+      const html = await payload["text/html"].text();
+      const plainText = await payload["text/plain"].text();
+      expect(parseComposerClipboardHtml(html)).toEqual(STRUCTURED_USER_CONTENT);
+      expect(plainText).toBe(
+        [
+          "/implement preserve @src/app.tsx",
+          "",
+          "- bullet one",
+          "- bullet two",
+        ].join("\n"),
+      );
+      expect(clipboard.writeText).not.toHaveBeenCalled();
+    } finally {
+      clipboard.restore();
+    }
+  });
+
+  // The copy path resolves bytes through the CHAT attachment reader
+  // (`useChatAttachmentByteReader`), not through a synchronous doc-map presence
+  // pre-check: chat image bytes live on the chat plane now, so presence is not
+  // answerable without a round trip and the reader's own timeout is what keeps
+  // a Cmd+C from hanging. These two tests pin that mechanism.
+  it("re-inlines hash-only image bytes as b64content on copy when the chat reader resolves them", async () => {
+    const imageBytes = new Uint8Array([10, 20, 30]);
+    const imageHash = "resolved-image-hash";
+    attachmentMocks.readChatBytes.mockImplementation((hash: string) =>
+      Promise.resolve(hash === imageHash ? imageBytes : null),
+    );
+    const clipboard = installRichClipboardMock();
+    try {
+      render(
+        <TooltipProvider>
+          <UserMessageBody
+            actions={null}
+            message={{
+              ...plainUserMessage("with image"),
+              structuredContent: hashOnlyImageMessageContent(imageHash),
+            }}
+          />
+        </TooltipProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+
+      await waitFor(() => {
+        expect(clipboard.write).toHaveBeenCalledTimes(1);
+      });
+      expect(attachmentMocks.readChatBytes).toHaveBeenCalledWith(imageHash);
+      const payload = clipboard.payloads[0];
+      expect(payload).toBeDefined();
+      const copied = parseComposerClipboardHtml(
+        await payload["text/html"].text(),
+      );
+      expect(copied).toEqual({
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "imageAttachment",
+                attrs: {
+                  id: "copied-image",
+                  fileName: "shot.png",
+                  b64content: bytesToBase64(imageBytes),
+                  mimeType: "image/png",
+                  size: 3,
+                },
+              },
+              { type: "text", text: " look" },
+            ],
+          },
+        ],
+      });
+    } finally {
+      clipboard.restore();
+    }
+  });
+
+  it("leaves a dangling hash-only image as hash-only when the chat reader misses", async () => {
+    const imageHash = "dangling-image-hash";
+    // A miss - the host answered `missing` and the doc replica had nothing
+    // either, which the reader collapses to `null`.
+    attachmentMocks.readChatBytes.mockResolvedValue(null);
+    const clipboard = installRichClipboardMock();
+    try {
+      render(
+        <TooltipProvider>
+          <UserMessageBody
+            actions={null}
+            message={{
+              ...plainUserMessage("dangling image"),
+              structuredContent: hashOnlyImageMessageContent(imageHash),
+            }}
+          />
+        </TooltipProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+
+      await waitFor(() => {
+        expect(clipboard.write).toHaveBeenCalledTimes(1);
+      });
+      expect(attachmentMocks.readChatBytes).toHaveBeenCalledWith(imageHash);
+      const payload = clipboard.payloads[0];
+      expect(payload).toBeDefined();
+      const copied = parseComposerClipboardHtml(
+        await payload["text/html"].text(),
+      );
+      // Bytes unresolvable → hash-only payload stays hash-only (no b64content).
+      expect(copied).toEqual(hashOnlyImageMessageContent(imageHash));
+    } finally {
+      clipboard.restore();
+    }
+  });
+
+  it("toasts Images weren't copied when rich clipboard write fails on an image-bearing message", async () => {
+    reportableErrorToastMock.mockClear();
+    const clipboard = installRichClipboardMock();
+    clipboard.write.mockRejectedValue(new Error("clipboard write denied"));
+    try {
+      render(
+        <TooltipProvider>
+          <UserMessageBody
+            actions={null}
+            message={{
+              ...plainUserMessage("with image"),
+              structuredContent: {
+                type: "doc",
+                content: [
+                  {
+                    type: "paragraph",
+                    content: [
+                      imageNode("img-copy", "shot.png"),
+                      { type: "text", text: " caption" },
+                    ],
+                  },
+                ],
+              },
+            }}
+          />
+        </TooltipProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+
+      await waitFor(() => {
+        expect(clipboard.writeText).toHaveBeenCalled();
+      });
+      expect(reportableErrorToastMock).toHaveBeenCalledWith(
+        "Images weren't copied",
+        {
+          description:
+            "The text was copied, but this device couldn't place the images on the clipboard.",
+        },
+        {
+          title: "Images were not copied",
+          message: null,
+          code: null,
+          source: "Chat message",
+        },
+      );
+    } finally {
+      clipboard.restore();
+    }
+  });
+
+  it("does not toast Images weren't copied when rich clipboard write fails on text-only content", async () => {
+    reportableErrorToastMock.mockClear();
+    const clipboard = installRichClipboardMock();
+    clipboard.write.mockRejectedValue(new Error("clipboard write denied"));
+    try {
+      render(
+        <TooltipProvider>
+          <UserMessageBody
+            actions={null}
+            message={{
+              ...plainUserMessage("text only"),
+              structuredContent: STRUCTURED_USER_CONTENT,
+            }}
+          />
+        </TooltipProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+
+      await waitFor(() => {
+        expect(clipboard.writeText).toHaveBeenCalled();
+      });
+      expect(reportableErrorToastMock).not.toHaveBeenCalledWith(
+        "Images weren't copied",
+        expect.anything(),
+        expect.anything(),
+      );
+    } finally {
+      clipboard.restore();
+    }
+  });
+});
+
+function agentMessage(content: string): ChatMessageModel {
+  return {
+    id: "message-1",
+    role: "user",
+    content,
+    segments: [],
+    structuredContent: AGENT_CONTENT,
+    attachments: [],
+    settings: null,
+    createdAt: 1,
+    completedAt: null,
+    stopped: null,
+    persistentMessageId: "message-1",
+    senderLabel: "Review Agent",
+    assistantMeta: null,
+    statusLabel: null,
+    agentSenderInfo: {
+      agentId: "agent-sender-1",
+      senderTitle: "Review Agent",
+      expectReply: true,
+      responseId: "response-1",
+    },
+    agentMessage: {
+      kind: "agent",
+      content: AGENT_CONTENT,
+      fromAgentId: "agent-sender-1",
+      senderTitle: "Review Agent",
+      senderHarnessId: "codex",
+      reply: { expectsReply: true, responseId: "response-1" },
+    },
+    runState: null,
+    sessionAnchor: null,
+    steerBadge: null,
+  };
+}
+
+function plainUserMessage(content: string): ChatMessageModel {
+  return {
+    ...agentMessage(content),
+    senderLabel: "You",
+    agentSenderInfo: null,
+    agentMessage: null,
+  };
+}
+
+function imageNode(id: string, fileName: string): JsonContent {
+  // A REAL base64 payload, not the bare id: `reingestPendingImages` now
+  // runs on every editor mount and decodes any surviving `b64content` node
+  // through `decodeValidatedPastedImage`, which rejects a non-base64 string
+  // (the bare id used to contain a `-`, which is not in the standard
+  // alphabet) as corrupted and REMOVES the node - which is a real behaviour
+  // this fixture would otherwise be triggering by accident, not testing.
+  return {
+    type: "imageAttachment",
+    attrs: {
+      id,
+      fileName,
+      b64content: btoa(id),
+      mimeType: "image/png",
+      size: id.length,
+    },
+  };
+}
+
+function imageAttachment(name: string) {
+  return {
+    kind: "image" as const,
+    hash: null,
+    mediaType: "image/png",
+    dataUrl: "data:image/png;base64,aW1hZ2U=",
+    name,
+    size: 128,
+  };
+}
+
+function displayUserActions(handlers: {
+  readonly onEdit: () => void;
+  readonly onDeleteRequest: () => void;
+}): ChatMessageUserActions {
+  return {
+    type: "user",
+    deliveryPhase: null,
+    enabled: true,
+    confirmingDelete: false,
+    editing: null,
+    onEdit: handlers.onEdit,
+    onDeleteRequest: handlers.onDeleteRequest,
+    onDeleteConfirm: () => undefined,
+    onDeleteCancel: () => undefined,
+  };
+}
+
+function editingUserActions(content: JsonContent): ChatMessageUserActions {
+  return {
+    type: "user",
+    deliveryPhase: null,
+    enabled: true,
+    confirmingDelete: false,
+    editing: {
+      initialContent: content,
+      currentContent: content,
+      pending: false,
+      canSubmit: false,
+      slashProviderId: "claude",
+      slashProfileId: null,
+      mentionRoots: [],
+      fallbackToGlobalMentionRoots: true,
+      currentEpicId: "epic-1",
+      onSnapshot: () => undefined,
+      onSubmit: () => undefined,
+      onCancel: () => undefined,
+    },
+    onEdit: () => undefined,
+    onDeleteRequest: () => undefined,
+    onDeleteConfirm: () => undefined,
+    onDeleteCancel: () => undefined,
+  };
+}
+
+const INLINE_EDIT_INITIAL_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [{ type: "text", text: "Edit this message" }],
+    },
+  ],
+};
+
+function hashOnlyInlineEditContent(): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "imageAttachment",
+            attrs: {
+              id: "rich-paste",
+              fileName: "rich-paste.png",
+              b64content: null,
+              hash: "same-epic-hash",
+              mimeType: "image/png",
+              size: 3,
+            },
+          },
+          { type: "text", text: " pasted" },
+        ],
+      },
+    ],
+  };
+}
+
+function hashOnlyImageMessageContent(hash: string): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "imageAttachment",
+            attrs: {
+              id: "copied-image",
+              fileName: "shot.png",
+              b64content: null,
+              hash,
+              mimeType: "image/png",
+              size: 3,
+            },
+          },
+          { type: "text", text: " look" },
+        ],
+      },
+    ],
+  };
+}
+
+function InlineEditAttachmentHarness(props: {
+  readonly onSubmit: (content: JsonContent) => void;
+}): ReactNode {
+  const [editing, setEditing] = useState(true);
+  const [content, setContent] = useState(INLINE_EDIT_INITIAL_CONTENT);
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setContent(INLINE_EDIT_INITIAL_CONTENT);
+          setEditing(true);
+        }}
+      >
+        Reopen edit
+      </button>
+    );
+  }
+  const actions = editingUserActions(INLINE_EDIT_INITIAL_CONTENT);
+  const baseEditing = actions.editing;
+  if (baseEditing === null) throw new Error("expected editing actions");
+  return (
+    <TooltipProvider>
+      <UserMessageBody
+        message={{
+          ...plainUserMessage("Edit this message"),
+          structuredContent: INLINE_EDIT_INITIAL_CONTENT,
+        }}
+        actions={{
+          ...actions,
+          editing: {
+            ...baseEditing,
+            initialContent: INLINE_EDIT_INITIAL_CONTENT,
+            currentContent: content,
+            canSubmit: true,
+            onSnapshot: (nextContent) => setContent(nextContent),
+            onSubmit: () => props.onSubmit(content),
+            onCancel: () => {
+              setContent(INLINE_EDIT_INITIAL_CONTENT);
+              setEditing(false);
+            },
+          },
+        }}
+      />
+    </TooltipProvider>
+  );
+}
+
+function imageFile(name: string, bytes: ReadonlyArray<number>): File {
+  return new File([new Uint8Array(bytes)], name, { type: "image/png" });
+}
+
+function clipboardWithFiles(files: ReadonlyArray<File>) {
+  return {
+    files,
+    items: files.map((file) => ({
+      kind: "file",
+      type: file.type,
+      getAsFile: () => file,
+    })),
+    types: ["Files"],
+    getData: () => "",
+  };
+}
+
+function dataTransferWithFiles(files: ReadonlyArray<File>) {
+  return {
+    files,
+    items: [],
+    types: ["Files"],
+    dropEffect: "none",
+    getData: () => "",
+  };
+}
+
+interface DelayedArrayBufferReadControl {
+  readonly resolveNext: (bytes: Uint8Array) => void;
+}
+
+/**
+ * Hold a paste's byte read open so the gate it arms can be observed.
+ *
+ * This is now the ONLY read seam in the composer: every paste reads
+ * `file.arrayBuffer()`, whatever its declared type, and the hash-vs-inline
+ * verdict is taken afterwards from what the preparer could actually encode.
+ * Its former twin injected at `FileReader.readAsDataURL` for the format
+ * fallback; that was retired with the last production call site of
+ * `FileReader`, so the fallback test drives this seam too.
+ */
+function installDelayedArrayBufferRead(): DelayedArrayBufferReadControl {
+  const pending: Array<(value: ArrayBuffer) => void> = [];
+  vi.spyOn(File.prototype, "arrayBuffer").mockImplementation(
+    function (this: File) {
+      return new Promise<ArrayBuffer>((resolve) => {
+        pending.push(resolve);
+      });
+    },
+  );
+  return {
+    resolveNext: (bytes) => {
+      const resolve = pending.shift();
+      if (resolve === undefined) {
+        throw new Error("expected pending arrayBuffer read");
+      }
+      resolve(bytes.buffer as ArrayBuffer);
+    },
+  };
+}
+
+interface RichClipboardMock {
+  readonly payloads: Record<string, Blob>[];
+  readonly write: Mock<(items: ClipboardItem[]) => Promise<void>>;
+  readonly writeText: Mock<(value: string) => Promise<void>>;
+  readonly restore: () => void;
+}
+
+function installRichClipboardMock(): RichClipboardMock {
+  const clipboardDescriptor = Object.getOwnPropertyDescriptor(
+    navigator,
+    "clipboard",
+  );
+  const clipboardItemDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "ClipboardItem",
+  );
+  const payloads: Record<string, Blob>[] = [];
+  class MockClipboardItem {
+    constructor(items: Record<string, Blob>) {
+      payloads.push(items);
+    }
+  }
+  const write = vi.fn((_items: ClipboardItem[]) => Promise.resolve());
+  const writeText = vi.fn((_value: string) => Promise.resolve());
+  Object.defineProperty(globalThis, "ClipboardItem", {
+    configurable: true,
+    writable: true,
+    value: MockClipboardItem,
+  });
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    writable: true,
+    value: { write, writeText },
+  });
+
+  return {
+    payloads,
+    write,
+    writeText,
+    restore: () => {
+      restoreProperty(globalThis, "ClipboardItem", clipboardItemDescriptor);
+      restoreProperty(navigator, "clipboard", clipboardDescriptor);
+    },
+  };
+}
+
+function restoreProperty(
+  target: object,
+  key: string,
+  descriptor: PropertyDescriptor | undefined,
+): void {
+  if (descriptor === undefined) {
+    Reflect.deleteProperty(target, key);
+    return;
+  }
+  Object.defineProperty(target, key, descriptor);
+}
+
+function deliveryUserActions(
+  phase: ChatMessageDeliveryPhase,
+): ChatMessageUserActions {
+  return {
+    type: "user",
+    deliveryPhase: phase,
+    enabled: false,
+    confirmingDelete: false,
+    editing: null,
+    onEdit: () => undefined,
+    onDeleteRequest: () => undefined,
+    onDeleteConfirm: () => undefined,
+    onDeleteCancel: () => undefined,
+  };
+}
+
+describe("<UserMessageBody /> message delivery footer", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("pending: shows a 'Sending' status with a spinner", () => {
+    render(
+      <UserMessageBody
+        actions={deliveryUserActions("pending")}
+        message={plainUserMessage("Fix the copy button")}
+      />,
+    );
+    expect(screen.getByRole("status").textContent).toContain("Sending");
+  });
+
+  it("preparing: shows a 'Setting up' status with a spinner", () => {
+    render(
+      <UserMessageBody
+        actions={deliveryUserActions("preparing")}
+        message={plainUserMessage("Fix the copy button")}
+      />,
+    );
+    expect(screen.getByRole("status").textContent).toContain("Setting up");
+  });
+
+  it("renders no footer once the row has started (an ordinary, resolved actions object)", () => {
+    render(
+      <UserMessageBody
+        actions={displayUserActions({
+          onEdit: () => undefined,
+          onDeleteRequest: () => undefined,
+        })}
+        message={plainUserMessage("Fix the copy button")}
+      />,
+    );
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("renders no footer for a row with no delivery view at all (actions: null)", () => {
+    render(
+      <UserMessageBody
+        actions={null}
+        message={plainUserMessage("Fix the copy button")}
+      />,
+    );
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("a delivering row hides Edit/Delete but keeps Copy available", () => {
+    render(
+      <UserMessageBody
+        actions={deliveryUserActions("pending")}
+        message={plainUserMessage("Fix the copy button")}
+      />,
+    );
+    expect(screen.queryByLabelText("Edit message")).toBeNull();
+    expect(screen.queryByLabelText("Delete message")).toBeNull();
+    screen.getByLabelText("Copy message");
+  });
+
+  it("Edit and Delete return once the row has started", () => {
+    render(
+      <UserMessageBody
+        actions={displayUserActions({
+          onEdit: () => undefined,
+          onDeleteRequest: () => undefined,
+        })}
+        message={plainUserMessage("Fix the copy button")}
+      />,
+    );
+    screen.getByLabelText("Edit message");
+    screen.getByLabelText("Delete message");
+    screen.getByLabelText("Copy message");
+  });
+});
+
+describe("<UserMessageBody /> delivery footer beside the worktree setup card", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  const openingPrompt = plainUserMessage("Fix the copy button");
+
+  function setupCardRow(state: SetupWorkspaceState): ChatMessageModel {
+    return {
+      ...plainUserMessage(""),
+      id: "setup-card:owner-1:0:1500",
+      role: "system",
+      segments: [
+        {
+          id: "setup-card:owner-1:0:1500:card",
+          kind: "setup-card",
+          model: {
+            aggregate: {
+              epicId: "epic-1",
+              ownerId: "owner-1",
+              ownerKind: "chat",
+              state,
+            },
+            workspaces: [],
+            createdAt: 1500,
+            isActive: true,
+          },
+          viewTabId: "tab-1",
+          anchorMessageId: null,
+          isGenesisPin: true,
+        },
+      ],
+      senderLabel: null,
+    };
+  }
+
+  function workingRow(): ChatMessageModel {
+    return {
+      ...plainUserMessage(""),
+      id: "working-row",
+      role: "assistant",
+      runState: "running",
+      senderLabel: null,
+    };
+  }
+
+  function renderOpeningPrompt(
+    phase: ChatMessageDeliveryPhase,
+    transcript: ReadonlyArray<ChatMessageModel>,
+  ): void {
+    render(
+      <UserMessageBody
+        actions={deliveringUserMessageActionsFor(
+          phase,
+          transcriptShowsSetupCard(transcript),
+          transcriptShowsWorkingRow(transcript),
+        )}
+        message={openingPrompt}
+      />,
+    );
+  }
+
+  it("preparing with the setup card showing: no 'Setting up' status, Copy only", () => {
+    renderOpeningPrompt("preparing", [
+      setupCardRow("setting-up"),
+      openingPrompt,
+    ]);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText("Setting up")).toBeNull();
+    expect(screen.queryByLabelText("Edit message")).toBeNull();
+    expect(screen.queryByLabelText("Delete message")).toBeNull();
+    screen.getByLabelText("Copy message");
+  });
+
+  it("pending with the setup card showing: still reads 'Sending'", () => {
+    renderOpeningPrompt("pending", [setupCardRow("setting-up"), openingPrompt]);
+    expect(screen.getByRole("status").textContent).toContain("Sending");
+  });
+
+  // A ready card no longer spins. The pre-turn "Working…" row shows the wait
+  // from then on (`useRenderedMessages`'s setup gating), so this row still adds
+  // no status of its own.
+  it("preparing beside a ready setup card: still no 'Setting up' status", () => {
+    renderOpeningPrompt("preparing", [setupCardRow("ready"), openingPrompt]);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("preparing with no setup card: keeps its 'Setting up' status", () => {
+    renderOpeningPrompt("preparing", [openingPrompt]);
+    expect(screen.getByRole("status").textContent).toContain("Setting up");
+  });
+
+  // No card at all, only the send's own pre-turn "Working…" row under the
+  // prompt: that row already shows the wait.
+  it("preparing with the working row showing: no 'Setting up' status, Copy only", () => {
+    renderOpeningPrompt("preparing", [openingPrompt, workingRow()]);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText("Setting up")).toBeNull();
+    expect(screen.queryByLabelText("Edit message")).toBeNull();
+    screen.getByLabelText("Copy message");
+  });
+
+  it("pending with the working row showing: still reads 'Sending'", () => {
+    renderOpeningPrompt("pending", [openingPrompt, workingRow()]);
+    expect(screen.getByRole("status").textContent).toContain("Sending");
+  });
+});
+
+describe("<ChatMessage /> sender overline timestamp", () => {
+  const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
+
+  afterEach(() => {
+    cleanup();
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  });
+
+  it("renders exactly one timestamp on a sent YOU row", () => {
+    render(
+      <ChatMessage
+        message={plainUserMessage("Status?")}
+        actions={null}
+        backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+        nextStepActions={null}
+      />,
+    );
+
+    screen.getByText("You");
+    expect(screen.getAllByTestId("chat-message-timestamp")).toHaveLength(1);
+  });
+
+  // Paired with the test above: same fixture, only `statusLabel` flipped to
+  // "Pending" - the one status label a user row ever carries
+  // (`statusLabel === null` is the exact queued gate in chat-message.tsx). A
+  // queued row has not been sent yet, so it leads with the status instead of
+  // a send time it does not have.
+  it("renders no timestamp on a queued (Pending) YOU row", () => {
+    render(
+      <ChatMessage
+        message={{ ...plainUserMessage("Status?"), statusLabel: "Pending" }}
+        actions={null}
+        backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+        nextStepActions={null}
+      />,
+    );
+
+    screen.getByText("You - Pending");
+    expect(screen.queryByTestId("chat-message-timestamp")).toBeNull();
+  });
+
+  // Same `sentAt`-over-`createdAt` contract as the agent-sender received
+  // card, on the plain "YOU" overline: `chat-message.tsx` reads
+  // `message.sentAt ?? message.createdAt`, so a nested steer row (whose
+  // `createdAt` is re-anchored to its turn's start) still stamps the moment
+  // it was actually sent.
+  it("stamps the overline with sentAt, not createdAt, when the two diverge", () => {
+    const sentAt = Date.now() - 5 * 60_000;
+    const createdAt = Date.now() - 20 * 60_000;
+    render(
+      <ChatMessage
+        message={{ ...plainUserMessage("Status?"), createdAt, sentAt }}
+        actions={null}
+        backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+        nextStepActions={null}
+      />,
+    );
+
+    const now = Date.now();
+    const expected = formatMessageTime(sentAt, now);
+    const wrongIfUsingCreatedAt = formatMessageTime(createdAt, now);
+    expect(expected).not.toBe(wrongIfUsingCreatedAt);
+    expect(screen.getByTestId("chat-message-timestamp").textContent).toBe(
+      expected,
+    );
+  });
+
+  it("shows the unabridged timestamp on hover, restoring the weekday/year/seconds the row label drops", async () => {
+    const user = userEvent.setup();
+    const sentAt = new Date(2026, 3, 23, 15, 45, 12).getTime();
+    render(
+      <ChatMessage
+        message={{ ...plainUserMessage("Status?"), createdAt: sentAt }}
+        actions={null}
+        backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+        nextStepActions={null}
+      />,
+    );
+
+    const stamp = screen.getByTestId("chat-message-timestamp");
+    await user.hover(stamp);
+
+    const expected = formatFullTimestamp(sentAt);
+    await waitFor(() => {
+      expect(screen.getAllByText(expected).length).toBeGreaterThan(0);
+    });
+  });
+
+  // Paired with "renders exactly one timestamp on a sent YOU row" above: same
+  // fixture, `createdAt` flipped to an instant `Date` itself rejects.
+  // `ChatMessageTimestamp` renders nothing rather than crash the row on
+  // `toISOString()`, which throws instead of producing "Invalid Date".
+  //
+  // Both input classes are covered because they fail differently on the way
+  // in: `NaN` is never a time, while 8.64e15 + 1 is a perfectly finite number
+  // that a `Date` still cannot represent - so a guard written as
+  // `Number.isFinite` would let the second one through to the throw.
+  it.each([
+    ["NaN", Number.NaN],
+    ["one millisecond past the maximum representable instant", 8.64e15 + 1],
+  ])(
+    "renders no timestamp element, and no orphaned separator, for %s",
+    (_label, createdAt) => {
+      render(
+        <ChatMessage
+          message={{ ...plainUserMessage("Status?"), createdAt }}
+          actions={null}
+          backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+          nextStepActions={null}
+        />,
+      );
+
+      expect(screen.queryByTestId("chat-message-timestamp")).toBeNull();
+      // The separator is drawn by `chat-message.tsx`, NOT by the stamp, so a
+      // component that renders `null` leaves the dot stranded unless the call
+      // site drops it too. Asserting only the label's own text would miss
+      // that - it lives in a sibling span - so read the whole overline: it
+      // must be "You", never "You · ".
+      const overline = screen.getByText("You").parentElement;
+      expect(overline?.textContent).toBe("You");
+    },
+  );
+
+  // Layout > Chat > Timestamps: the stamp and the " · " that
+  // joins it to the sender label are one region, and hiding it must not
+  // strand the separator any more than an unrepresentable instant does above.
+  it("renders the stamp and its ' · ' separator when Timestamps is shown, neither when hidden", () => {
+    render(
+      <ChatMessage
+        message={plainUserMessage("Status?")}
+        actions={null}
+        backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+        nextStepActions={null}
+      />,
+    );
+    expect(screen.getByTestId("chat-message-timestamp")).not.toBeNull();
+    expect(screen.getByText("You").parentElement?.textContent).toContain(" · ");
+    cleanup();
+
+    useLayoutStore.getState().setRegionValues("timestamps", {
+      shown: "hidden",
+    });
+    render(
+      <ChatMessage
+        message={plainUserMessage("Status?")}
+        actions={null}
+        backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+        nextStepActions={null}
+      />,
+    );
+
+    expect(screen.queryByTestId("chat-message-timestamp")).toBeNull();
+    expect(screen.getByText("You").parentElement?.textContent).toBe("You");
+  });
+});
+
+describe("<UserMessageBody /> inline edit, a file dropped from the desktop", () => {
+  const REPORT_PATH = "/Users/me/report.pdf";
+
+  afterEach(() => {
+    cleanup();
+    reportableErrorToastMock.mockClear();
+  });
+
+  function pdfFile(): File {
+    return new File(["report"], "report.pdf", { type: "application/pdf" });
+  }
+
+  it("on another machine shows the inline-edit toast and types no path", async () => {
+    localHost.id = "host-elsewhere";
+    fileDropMocks.resolveDroppedFilePaths.mockResolvedValue([REPORT_PATH]);
+    render(<InlineEditAttachmentHarness onSubmit={() => undefined} />);
+    const editor = await screen.findByRole("textbox", { name: "Edit message" });
+
+    fireEvent.drop(editor, {
+      dataTransfer: dataTransferWithFiles([pdfFile()]),
+    });
+
+    await waitFor(() => {
+      expect(reportableErrorToastMock).toHaveBeenCalledTimes(1);
+    });
+    expect(reportableErrorToastMock).toHaveBeenCalledWith(
+      "Couldn't attach report.pdf.",
+      {
+        description:
+          "Files can't be added while editing. Send them in a new message.",
+      },
+      expect.objectContaining({ source: "Chat composer" }),
+    );
+    expect(editor.textContent).not.toContain(REPORT_PATH);
+  });
+
+  it("on this machine types the path and shows no toast", async () => {
+    localHost.id = TAB_HOST_ID;
+    fileDropMocks.resolveDroppedFilePaths.mockResolvedValue([REPORT_PATH]);
+    render(<InlineEditAttachmentHarness onSubmit={() => undefined} />);
+    const editor = await screen.findByRole("textbox", { name: "Edit message" });
+
+    fireEvent.drop(editor, {
+      dataTransfer: dataTransferWithFiles([pdfFile()]),
+    });
+
+    await waitFor(() => {
+      expect(editor.textContent).toContain(REPORT_PATH);
+    });
+    expect(reportableErrorToastMock).not.toHaveBeenCalled();
+  });
+});

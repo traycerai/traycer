@@ -1,0 +1,213 @@
+import "../../../../../__tests__/test-browser-apis";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { settleProcessHostRpcTierPlan } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import type { EnvironmentMembersResponseV12 } from "@traycer/protocol/host/environment/contracts";
+import { PageChip } from "@/components/settings/personal/page-chip";
+import { TeamPermissions } from "@/components/settings/environment/team-permissions";
+import { TeamVariablesAndShells } from "@/components/settings/environment/team-variables-and-shells";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import {
+  configurationItem,
+  hostIdsOf,
+  mountTeamPageOnPoolBuild,
+  poolSource,
+  requireTeamEnvironmentAuthnBinding,
+  requireTeamHostClient,
+  resetTeamPageHarness,
+  teamHostBoundary,
+} from "./team-configuration-test-support";
+
+// A team page reads its hosts from the host list; this window's own host
+// scope has no hosts here.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  const scope = hostScopeFixture({ host: null });
+  const useHostScope = () => scope;
+  return {
+    useHostScope,
+    useHostScopeFor: useHostScope,
+    usePersonalHostScope: useHostScope,
+    WINDOW_HOST_SELECTION: {
+      scopedHostId: null,
+      setScopedHostId: () => undefined,
+    },
+  };
+});
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
+}));
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-me",
+}));
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === null ? null : requireTeamHostClient(),
+}));
+
+// The tier plan is frozen per process from the build; this file's build has a pool.
+beforeAll(() => {
+  settleProcessHostRpcTierPlan(poolEntry);
+});
+
+afterEach(() => {
+  cleanup();
+  resetTeamPageHarness();
+  useSelectionAuthorityStore.getState().reset();
+});
+
+const environmentList = {
+  environments: [
+    {
+      environmentId: "env-a",
+      ownerKind: "organization" as const,
+      ownerId: "team-a",
+      roomId: "room-a",
+      label: "Acme",
+      effectiveRole: "admin" as const,
+      kind: "team" as const,
+      hostCount: 1,
+      providerHandle: "handle-a",
+    },
+  ],
+};
+
+const members: EnvironmentMembersResponseV12 = {
+  members: [
+    {
+      userId: "u-1",
+      displayName: "Ada",
+      email: "ada@acme.test",
+      avatarUrl: null,
+      effectiveRole: "admin",
+      linkedPlan: false,
+      inviteState: "accepted",
+      invitedAddress: null,
+    },
+  ],
+  nextCursor: null,
+  legacyRoleNoticeSeenAt: null,
+  legacyMembers: [],
+};
+
+function removeSurfaceHost(): void {
+  useSelectionAuthorityStore.getState().reset();
+  teamHostBoundary.client =
+    requireTeamHostClient().createRequesterForHostId(null);
+  expect(useSelectionAuthorityStore.getState().effectiveHostId).toBeNull();
+  expect(requireTeamHostClient().getActiveHostId()).toBeNull();
+}
+
+describe("team pages on a build with a server pool", () => {
+  it("reads items through authn and team membership from the pool without a surface host", async () => {
+    const harness = mountTeamPageOnPoolBuild(poolSource("viewer"), {
+      "environment.configuration.items": () => ({
+        items: [
+          configurationItem({
+            kind: "auto_policy",
+            key: "policy",
+            value: { body: "Allow reads" },
+          }),
+        ],
+      }),
+      "environment.members": () => members,
+      "environment.list": () => environmentList,
+    });
+    removeSurfaceHost();
+    render(<TeamPermissions>{null}</TeamPermissions>, {
+      wrapper: harness.Wrapper,
+    });
+
+    expect(await screen.findByText("Ada can change this.")).toBeTruthy();
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.list")).not.toHaveLength(0);
+    });
+    expect(harness.paramsOf("environment.configuration.items")).toEqual(
+      expect.arrayContaining([{ environmentId: "env-a" }]),
+    );
+    expect(hostIdsOf(harness, "environment.configuration.items")).toEqual([]);
+    for (const method of ["environment.members", "environment.list"]) {
+      expect(harness.paramsOf(method)).not.toHaveLength(0);
+      expect(hostIdsOf(harness, method)).toEqual([]);
+    }
+  });
+
+  it("reads the host reports from the pool", async () => {
+    const harness = mountTeamPageOnPoolBuild(poolSource("editor"), {
+      "environment.host.list": () => ({ hosts: [] }),
+    });
+    render(
+      <PageChip
+        section="shell"
+        pick={{ kind: "team", environmentId: "env-a" }}
+      />,
+      { wrapper: harness.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.host.list")).not.toHaveLength(0);
+    });
+    expect(hostIdsOf(harness, "environment.host.list")).toEqual([]);
+  });
+
+  it("rereads pool environment membership after a forbidden authn item save without a surface host", async () => {
+    const harness = mountTeamPageOnPoolBuild(poolSource("editor"), {
+      "environment.configuration.items": () => ({
+        items: [
+          configurationItem({
+            kind: "variable",
+            key: "NODE_ENV",
+            os: "any",
+            value: { value: "production" },
+          }),
+        ],
+      }),
+      "environment.configuration.items.put": () => ({
+        outcome: "forbidden",
+      }),
+      "environment.host.list": () => ({ hosts: [] }),
+      "environment.list": () => environmentList,
+    });
+    removeSurfaceHost();
+    render(<TeamVariablesAndShells />, { wrapper: harness.Wrapper });
+
+    const value = await screen.findByLabelText("Value for NODE_ENV");
+    const listReadsBefore = harness.paramsOf("environment.list").length;
+    await userEvent.clear(value);
+    await userEvent.type(value, "staging");
+    fireEvent.blur(value);
+
+    await waitFor(() => {
+      expect(harness.paramsOf("environment.configuration.items.put")).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            environmentId: "env-a",
+            kind: "variable",
+            key: "NODE_ENV",
+          }),
+        ]),
+      );
+      expect(hostIdsOf(harness, "environment.configuration.items.put")).toEqual(
+        [],
+      );
+      expect(harness.paramsOf("environment.list").length).toBeGreaterThan(
+        listReadsBefore,
+      );
+    });
+    expect(hostIdsOf(harness, "environment.list")).toEqual([]);
+  });
+});

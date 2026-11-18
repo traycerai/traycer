@@ -1,0 +1,259 @@
+import {
+  CircleDot,
+  File,
+  Folder,
+  FolderGit2,
+  GitBranch,
+  GitPullRequest,
+  Globe2,
+  Layers,
+} from "lucide-react";
+import { memo, type ReactElement, type ReactNode } from "react";
+import { MaterialFileIcon } from "@/components/material-file-icon";
+import { NamedBotAvatar } from "@/components/bots/bot-avatars";
+import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import {
+  createLegacyMentionAttachment,
+  inferPathKind,
+} from "@/lib/composer/mentions";
+import { splitPromptIntoComposerSegments } from "@/lib/composer/segments";
+import type {
+  Attachment,
+  EntityMentionAttachment,
+  MentionAttachment,
+} from "@/lib/composer/types";
+import { basenameOfPath } from "@/lib/path";
+import { cn } from "@/lib/utils";
+import {
+  EpicArtifactIcon,
+  StaticEpicNodeIcon,
+} from "@/components/epic-canvas/epic-node-tab-icon";
+
+const MENTION_ICON_CLASS = "size-3.5 shrink-0 text-muted-foreground";
+// muted-fill-ok: transcript chip on bg-background, bordered besides
+const SENT_CHIP_CLASS =
+  "mx-px inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/60 px-1.5 py-0.5 align-baseline text-ui-sm font-medium text-foreground/90";
+const NODE_MENTION_ICON_CLASS = "size-3.5 shrink-0";
+
+function isGithubMentionContextType(
+  contextType: MentionAttachment["contextType"],
+): boolean {
+  return (
+    contextType === "github_pull_request" || contextType === "github_issue"
+  );
+}
+
+interface ChatUserMessageContentProps {
+  readonly content: string;
+  readonly attachments: ReadonlyArray<Attachment>;
+}
+
+/**
+ * Renders user-message text with composer-style mention chips. Memoized
+ * so the minimap overlay's per-row instance and the bubble's instance
+ * skip the segment-split + Map rebuild when their `(content, attachments)`
+ * pair is reference-equal across renders.
+ */
+export const ChatUserMessageContent = memo(ChatUserMessageContentImpl);
+
+function ChatUserMessageContentImpl({
+  content,
+  attachments,
+}: ChatUserMessageContentProps): ReactNode {
+  const segments = splitPromptIntoComposerSegments(content);
+  if (segments.length === 0) return content;
+  const mentionsByPath = new Map(
+    attachments
+      .filter(
+        (attachment): attachment is MentionAttachment =>
+          attachment.kind === "mention",
+      )
+      .map((mention) => [mention.path, mention]),
+  );
+  let offset = 0;
+  return segments.map((segment) => {
+    const start = offset;
+    if (segment.type === "mention") {
+      offset += segment.path.length + 1;
+      return (
+        <ChatUserMessageMentionChip
+          key={`m-${start}-${segment.path}`}
+          mention={
+            mentionsByPath.get(segment.path) ??
+            createLegacyMentionAttachment(segment.path)
+          }
+        />
+      );
+    }
+    offset += segment.text.length;
+    return <span key={`t-${start}`}>{segment.text}</span>;
+  });
+}
+
+interface ChatUserMessageMentionChipProps {
+  readonly mention: MentionAttachment;
+}
+
+interface MentionChipIconProps {
+  readonly mention: MentionAttachment;
+  readonly pathKind: "file" | "folder";
+  readonly filename: string;
+}
+
+const ChatUserMessageMentionChip = memo(ChatUserMessageMentionChipImpl);
+
+function ChatUserMessageMentionChipImpl({
+  mention,
+}: ChatUserMessageMentionChipProps): ReactNode {
+  if (mention.contextType === "bot") {
+    return <BotMentionChip mention={mention} />;
+  }
+  const pathKind = mention.pathKind ?? inferPathKind(mention.path);
+  // A GitHub mention's `path` is a synthetic token (`github-pr:org/repo#12`),
+  // not a filesystem path: taking its basename would read `repo#12`, and
+  // showing it as the tooltip would put the raw token in front of the user.
+  // Both facts it needs are already on the attachment - the `#12` / `repo#12`
+  // label the composer chip used, and the `org/repo#12 · title` description.
+  const isGithub = isGithubMentionContextType(mention.contextType);
+  const isBrowserTab = mention.contextType === "browser-tab";
+  const usesLabel =
+    isGithub ||
+    isBrowserTab ||
+    mention.contextType === "git" ||
+    mention.contextType === "worktree" ||
+    "epicId" in mention;
+  const label = usesLabel
+    ? mention.label
+    : basenameOfPath(mention.path) || mention.path;
+  const filename = basenameOfPath(mention.path) || mention.path;
+  const tooltip =
+    isGithub ||
+    isBrowserTab ||
+    mention.contextType === "git" ||
+    "epicId" in mention
+      ? mention.description
+      : (mention.absolutePath ?? mention.path);
+  return (
+    <TooltipWrapper
+      label={tooltip}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <span className={SENT_CHIP_CLASS} data-composer-chip="mention">
+        <MentionChipIcon
+          mention={mention}
+          pathKind={pathKind}
+          filename={filename}
+        />
+        <span className="truncate">{label}</span>
+      </span>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * A bot the message named: its picture and name, and a click opens its
+ * channel, the one Tracy surface (`openBotChannel`).
+ */
+function BotMentionChip({
+  mention,
+}: {
+  readonly mention: EntityMentionAttachment;
+}): ReactElement {
+  const openBotChannel = useOpenBotChannel();
+  const botId = mention.botId ?? mention.epicId;
+  return (
+    <TooltipWrapper
+      label={mention.description}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <button
+        type="button"
+        className={cn(SENT_CHIP_CLASS, "cursor-pointer hover:bg-foreground/8")}
+        data-composer-chip="mention"
+        onClick={() => openBotChannel(botId, null)}
+      >
+        <NamedBotAvatar botId={botId} size="xs" />
+        <span className="truncate">{mention.label}</span>
+      </button>
+    </TooltipWrapper>
+  );
+}
+
+function MentionChipIcon({
+  mention,
+  pathKind,
+  filename,
+}: MentionChipIconProps): ReactElement {
+  if (mention.contextType === "file") {
+    return (
+      <MaterialFileIcon filename={filename} className="size-3.5 shrink-0" />
+    );
+  }
+  if (mention.contextType === "git") {
+    return <GitBranch className={MENTION_ICON_CLASS} aria-hidden />;
+  }
+  if (mention.contextType === "worktree") {
+    return <FolderGit2 className={MENTION_ICON_CLASS} aria-hidden />;
+  }
+  if (mention.contextType === "epic") {
+    return <Layers className={MENTION_ICON_CLASS} aria-hidden />;
+  }
+  // Untinted, unlike the composer row's state-coloured icon: a sent message is
+  // a record of what was referenced, and a PR that has merged since would have
+  // this chip asserting a state that went stale on the reader.
+  if (mention.contextType === "github_pull_request") {
+    return <GitPullRequest className={MENTION_ICON_CLASS} aria-hidden />;
+  }
+  if (mention.contextType === "github_issue") {
+    return <CircleDot className={MENTION_ICON_CLASS} aria-hidden />;
+  }
+  if (mention.contextType === "browser-tab") {
+    return <Globe2 className={MENTION_ICON_CLASS} aria-hidden />;
+  }
+  // A node is drawn the way the sidebar draws it, tinted by kind: the kind,
+  // unlike a PR's state above, does not go stale on the reader.
+  if (
+    mention.contextType === "chat" ||
+    mention.contextType === "terminal-agent" ||
+    mention.contextType === "terminal"
+  ) {
+    return (
+      <StaticEpicNodeIcon
+        type={mention.contextType}
+        className={NODE_MENTION_ICON_CLASS}
+      />
+    );
+  }
+  if ("artifactType" in mention && mention.artifactType !== null) {
+    return (
+      <EpicArtifactIcon
+        epicId={mention.epicId}
+        artifactId={mention.artifactId}
+        kind={mention.artifactType}
+        className={NODE_MENTION_ICON_CLASS}
+      />
+    );
+  }
+  if (pathKind === "folder") {
+    return <Folder className={MENTION_ICON_CLASS} aria-hidden />;
+  }
+  return <File className={MENTION_ICON_CLASS} aria-hidden />;
+}
+
+/** The message bubble shared by live turns and passive sample scenes. */
+export function UserMessageBubble({
+  children,
+}: {
+  readonly children: ReactNode;
+}) {
+  return (
+    <div className="rounded-lg border border-border/50 bg-muted/30 px-4 py-3 text-ui leading-7 text-foreground [overflow-wrap:anywhere]">
+      {children}
+    </div>
+  );
+}

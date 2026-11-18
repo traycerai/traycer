@@ -1,0 +1,149 @@
+import { createElement, lazy } from "react";
+import { Settings } from "lucide-react";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { settingsTabIntent } from "@/lib/tab-navigation/intents";
+import type { SystemTab, TabKindModule } from "@/stores/tabs/types";
+import {
+  SETTINGS_SECTIONS,
+  type SettingsSectionId,
+} from "@/lib/settings-sections";
+import { TAB_KIND_SPLIT_ELIGIBILITY } from "@/stores/tabs/tab-kind-policy";
+
+const SETTINGS_TAB_LABEL = "Settings";
+const SETTINGS_PATH_PREFIX = "/settings";
+const SETTINGS_DEFAULT_PATH = "/settings/general";
+const LEGACY_SERVICE_PATH = "/settings/service";
+
+const settingsSurface = lazy(() =>
+  import("@/components/settings/settings-surface").then((module) => ({
+    default: module.SettingsSurface,
+  })),
+);
+
+// Exported for the mobile settings gate in `use-system-tab-modal.ts`: on
+// phones there is no two-pane modal, so opening a section navigates straight
+// to its route.
+export function settingsRouteOptions(section: SettingsSectionId) {
+  // Every section id has a `src/routes/settings.<id>.tsx` route, so the path
+  // IS the id — a per-section `case` was sixteen lines restating that. The
+  // template literal keeps the union of literal route strings TanStack needs,
+  // and an id added without its route file fails to type-check here.
+  return { to: `${SETTINGS_PATH_PREFIX}/${section}` } as const;
+}
+
+/**
+ * Module for `kind: "settings"` tabs. Singleton; no duplication.
+ * Route defaults to the last remembered sub-path, or the general
+ * section fallback.
+ */
+export const settingsTabModule: TabKindModule<"settings", SystemTab> = {
+  kind: "settings",
+  build: (source) => {
+    // Canonicalize against the known section list so stale/renamed paths
+    // (e.g. `/settings/old-section` from an earlier build) cannot leak into
+    // the tab's `route` or `lastPath`. `settingsSectionFromPath` falls back
+    // to `general` for unknown ids and remaps legacy aliases.
+    const canonicalPath =
+      source.lastPath === null
+        ? null
+        : settingsSectionPath(settingsSectionFromPath(source.lastPath));
+    return {
+      kind: "settings",
+      id: "settings",
+      route: canonicalPath ?? SETTINGS_DEFAULT_PATH,
+      name: source.name.length > 0 ? source.name : SETTINGS_TAB_LABEL,
+      icon: Settings,
+      appearance: null,
+      canDuplicate: false,
+      canOpenInNewWindow: true,
+      lastPath: canonicalPath,
+    };
+  },
+  descriptor: {
+    kind: "settings",
+    surface: {
+      render: (tab) =>
+        createElement(settingsSurface, { lastPath: tab.lastPath }),
+      canonicalRoute: (tab) => tab.route,
+      splitEligibility: TAB_KIND_SPLIT_ELIGIBILITY.settings,
+      duplication: "forbidden",
+      singleton: "per-window",
+      newWindow: "copy",
+      readinessScope: "none",
+      durableState: { owner: "tabs-store", eviction: "reconstruct" },
+    },
+    duplicate: () => null,
+    resolveIntent: (tab) =>
+      settingsTabIntent(
+        settingsSectionFromPath(normalizeSettingsPath(tab.lastPath)),
+      ),
+    routeOptions: (intent) => settingsRouteOptions(intent.section),
+    activate: () => {
+      useLandingDraftStore.getState().clearActiveDraft();
+    },
+    requestClose: (_tab, close) => {
+      close({ kind: "settings", id: "settings" });
+    },
+    requiresCloseConfirm: () => false,
+    openInNewWindow: (tab, deps) => {
+      void deps.bridge.requestNew(tab.route);
+    },
+    matchesPath: (_tab, pathname) => isSettingsPath(pathname),
+  },
+};
+
+/** Backwards-compat export so existing imports of `settingsTabDescriptor` keep working. */
+export const settingsTabDescriptor = settingsTabModule.descriptor;
+
+export function defaultSettingsTabName(): string {
+  return SETTINGS_TAB_LABEL;
+}
+
+export function settingsDefaultPath(): string {
+  return SETTINGS_DEFAULT_PATH;
+}
+
+export function settingsSectionPath(section: SettingsSectionId): string {
+  return `${SETTINGS_PATH_PREFIX}/${section}`;
+}
+
+/**
+ * Whether `pathname` is a Settings route, which is what makes a Settings
+ * surface showing it the OWNER of the route: it then draws that route's
+ * section in preference to its remembered path (`SettingsSurface`).
+ *
+ * The surface that reads the rule and the mover that has to respect it share
+ * this one spelling of it. Two spellings is how they came apart: a mover that
+ * only remembered the path moved every presentation except the one owning the
+ * route, which is the one it was most likely to be moving.
+ */
+export function settingsOwnsPath(pathname: string): boolean {
+  return pathname.startsWith(SETTINGS_PATH_PREFIX);
+}
+
+export function settingsSectionFromPath(
+  pathname: string | null,
+): SettingsSectionId {
+  if (pathname === null) return "general";
+  // Legacy `/settings/service` resolves to the Host section so a
+  // remembered tab path from before the rename still lands on the
+  // current native-packaging surface (the route itself redirects).
+  if (pathname === LEGACY_SERVICE_PATH) return "host";
+  const match = SETTINGS_SECTIONS.find(
+    (section) => settingsSectionPath(section.id) === pathname,
+  );
+  return match === undefined ? "general" : match.id;
+}
+
+export function isSettingsPath(pathname: string): boolean {
+  return (
+    pathname === SETTINGS_PATH_PREFIX ||
+    pathname === `${SETTINGS_PATH_PREFIX}/` ||
+    pathname.startsWith(`${SETTINGS_PATH_PREFIX}/`)
+  );
+}
+
+export function normalizeSettingsPath(pathname: string | null): string | null {
+  if (pathname === null) return null;
+  return isSettingsPath(pathname) ? pathname : null;
+}

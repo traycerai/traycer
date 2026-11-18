@@ -1,0 +1,378 @@
+import { describe, expect, it } from "vitest";
+import type { BrowserTabInfo } from "@traycer/protocol/host/browser/contracts";
+import { browserSearchUrl } from "@/lib/browser-view/browser-search";
+import {
+  browserTabFaviconUrl,
+  browserTabHostname,
+  disambiguateSecondaryLabels,
+  nextSettledTabIdentity,
+  normalizeBrowserAddressInput,
+  resolveTabTitle,
+} from "@/lib/browser-view/browser-tab-display";
+
+function tab(
+  overrides: Partial<BrowserTabInfo> & Pick<BrowserTabInfo, "tabId" | "url">,
+): BrowserTabInfo {
+  return {
+    originTier: "dev",
+    status: "ready",
+    title: null,
+    viewed: false,
+    drivenBy: [],
+    boundWindowId: null,
+    ...overrides,
+  };
+}
+
+describe("browser-tab-display", () => {
+  it("resolves a title, then hostname, then Browser", () => {
+    expect(
+      resolveTabTitle(
+        tab({ tabId: "tab-title", url: "https://app.example", title: "Inbox" }),
+      ),
+    ).toBe("Inbox");
+    expect(
+      resolveTabTitle(
+        tab({
+          tabId: "tab-host",
+          url: "https://app.example/path",
+          title: "  ",
+        }),
+      ),
+    ).toBe("app.example");
+    expect(
+      resolveTabTitle(tab({ tabId: "tab-unknown", url: "not a URL" })),
+    ).toBe("Browser");
+  });
+
+  it("extracts hostnames only from parseable urls", () => {
+    expect(browserTabHostname("https://app.example/path")).toBe("app.example");
+    expect(browserTabHostname("")).toBeNull();
+    expect(browserTabHostname("not a URL")).toBeNull();
+  });
+
+  it("builds origin favicons only for http and https urls", () => {
+    expect(browserTabFaviconUrl("http://app.example:8080/path")).toBe(
+      "http://app.example:8080/favicon.ico",
+    );
+    expect(browserTabFaviconUrl("https://app.example/path")).toBe(
+      "https://app.example/favicon.ico",
+    );
+    expect(browserTabFaviconUrl("about:blank")).toBeNull();
+    expect(browserTabFaviconUrl("not a URL")).toBeNull();
+  });
+
+  it("holds settled identity through transient navigation and same-origin title gaps", () => {
+    const first = nextSettledTabIdentity(
+      null,
+      tab({
+        tabId: "grille",
+        url: "https://thecapitalgrille.com",
+        title: "The Capital Grille",
+        status: "ready",
+      }),
+    );
+    expect(first.title).toBe("The Capital Grille");
+    expect(first.url).toBe("https://thecapitalgrille.com");
+    expect(first.faviconUrl).toBe("https://thecapitalgrille.com/favicon.ico");
+
+    const navigating = nextSettledTabIdentity(
+      first,
+      tab({
+        tabId: "grille",
+        url: "https://thecapitalgrille.com/menu",
+        title: "thecapitalgrille.com",
+        status: "navigating",
+      }),
+    );
+    expect(navigating.title).toBe("The Capital Grille");
+    expect(navigating.url).toBe("https://thecapitalgrille.com");
+
+    const provisioning = nextSettledTabIdentity(
+      first,
+      tab({
+        tabId: "grille",
+        url: "https://thecapitalgrille.com/reservations",
+        title: "Loading",
+        status: "provisioning",
+      }),
+    );
+    expect(provisioning.title).toBe("The Capital Grille");
+    expect(provisioning.url).toBe("https://thecapitalgrille.com");
+
+    const originChange = nextSettledTabIdentity(
+      first,
+      tab({
+        tabId: "grille",
+        url: "https://thepier5.com",
+        title: "Waterfront",
+        status: "navigating",
+      }),
+    );
+    expect(originChange).toEqual(first);
+
+    const cancelled = nextSettledTabIdentity(
+      originChange,
+      tab({
+        tabId: "grille",
+        url: "https://thecapitalgrille.com",
+        title: null,
+        status: "ready",
+      }),
+    );
+    expect(cancelled).toEqual(first);
+    expect(cancelled.faviconUrl).toBe(
+      "https://thecapitalgrille.com/favicon.ico",
+    );
+
+    const settledEmpty = nextSettledTabIdentity(
+      navigating,
+      tab({
+        tabId: "grille",
+        url: "https://thecapitalgrille.com/menu",
+        title: null,
+        status: "ready",
+      }),
+    );
+    expect(settledEmpty.title).toBe("The Capital Grille");
+    expect(settledEmpty.hasDocumentTitle).toBe(true);
+
+    const crossOriginHostname = nextSettledTabIdentity(
+      first,
+      tab({
+        tabId: "grille",
+        url: "https://www.thecapitalgrille.com/menu",
+        title: "thecapitalgrille.com",
+        status: "ready",
+      }),
+    );
+    expect(crossOriginHostname).toMatchObject({
+      title: "www.thecapitalgrille.com",
+      url: "https://www.thecapitalgrille.com/menu",
+      faviconUrl: "https://www.thecapitalgrille.com/favicon.ico",
+      hasDocumentTitle: false,
+    });
+
+    const sameTitleOnNewOrigin = nextSettledTabIdentity(
+      first,
+      tab({
+        tabId: "grille",
+        url: "https://thepier5.com",
+        title: "The Capital Grille",
+        status: "ready",
+      }),
+    );
+    expect(sameTitleOnNewOrigin).toMatchObject({
+      title: "The Capital Grille",
+      url: "https://thepier5.com",
+      faviconUrl: "https://thepier5.com/favicon.ico",
+    });
+  });
+
+  it("commits hostname identity when a newly-ready tab never had a document title", () => {
+    const pending = nextSettledTabIdentity(
+      null,
+      tab({
+        tabId: "new",
+        url: "https://www.thecapitalgrille.com",
+        title: null,
+        status: "navigating",
+      }),
+    );
+    const settled = nextSettledTabIdentity(
+      pending,
+      tab({
+        tabId: "new",
+        url: "https://www.thecapitalgrille.com",
+        title: "thecapitalgrille.com",
+        status: "ready",
+      }),
+    );
+    expect(settled).toMatchObject({
+      title: "www.thecapitalgrille.com",
+      url: "https://www.thecapitalgrille.com",
+      hasDocumentTitle: false,
+    });
+  });
+
+  it("keeps a generic identity until a new tab's first navigation settles", () => {
+    const pending = nextSettledTabIdentity(
+      null,
+      tab({
+        tabId: "new",
+        url: "https://www.thecapitalgrille.com",
+        title: null,
+        status: "navigating",
+      }),
+    );
+    expect(pending).toMatchObject({
+      title: "Browser",
+      url: "https://www.thecapitalgrille.com",
+      faviconUrl: null,
+      hasDocumentTitle: false,
+    });
+
+    const pendingProvision = nextSettledTabIdentity(
+      null,
+      tab({
+        tabId: "new-provision",
+        url: "https://www.thecapitalgrille.com",
+        title: "thecapitalgrille.com",
+        status: "provisioning",
+      }),
+    );
+    expect(pendingProvision).toMatchObject({
+      title: "Browser",
+      url: "https://www.thecapitalgrille.com",
+      faviconUrl: null,
+      hasDocumentTitle: false,
+    });
+  });
+
+  it("labels every row with its hostname", () => {
+    const labels = disambiguateSecondaryLabels([
+      {
+        key: "live",
+        tabId: "tab-live",
+        title: "JioHotstar",
+        url: "https://www.hotstar.com/live",
+      },
+      {
+        key: "docs",
+        tabId: "tab-docs",
+        title: "Docs",
+        url: "https://example.com/docs",
+      },
+    ]);
+    expect(labels.get("live")).toBe("www.hotstar.com");
+    expect(labels.get("docs")).toBe("example.com");
+  });
+
+  it("appends the tab-id tail when title and hostname collide", () => {
+    const labels = disambiguateSecondaryLabels([
+      {
+        key: "a",
+        tabId: "aaaaaaaa-1111-4aaa-aaaa-aaaabbbbcccc",
+        title: "JioHotstar",
+        url: "https://www.hotstar.com/live",
+      },
+      {
+        key: "b",
+        tabId: "bbbbbbbb-2222-4bbb-bbbb-bbbbddddffff",
+        title: "JioHotstar",
+        url: "https://www.hotstar.com/sports",
+      },
+    ]);
+    expect(labels.get("a")).toBe("www.hotstar.com (cccc)");
+    expect(labels.get("b")).toBe("www.hotstar.com (ffff)");
+  });
+
+  it("does not disambiguate matching hosts when titles already differ", () => {
+    const labels = disambiguateSecondaryLabels([
+      {
+        key: "a",
+        tabId: "tab-a",
+        title: "News",
+        url: "https://example.com/news",
+      },
+      {
+        key: "b",
+        tabId: "tab-b",
+        title: "Weather",
+        url: "https://example.com/weather",
+      },
+    ]);
+    expect(labels.get("a")).toBe("example.com");
+    expect(labels.get("b")).toBe("example.com");
+  });
+});
+
+describe("browser address helpers", () => {
+  it("normalizes address bar input conservatively", () => {
+    expect(normalizeBrowserAddressInput("example.test/docs", "google")).toBe(
+      "https://example.test/docs",
+    );
+    expect(normalizeBrowserAddressInput("localhost:5173", "google")).toBe(
+      "http://localhost:5173",
+    );
+    expect(normalizeBrowserAddressInput("about:blank", "google")).toBe(
+      "about:blank",
+    );
+    expect(normalizeBrowserAddressInput("   ", "google")).toBe("about:blank");
+  });
+
+  it("leaves an explicit scheme alone, local host names included (C7)", () => {
+    // The scheme test runs BEFORE the local-address heuristic; the other order
+    // prefixed a second scheme onto these.
+    expect(
+      normalizeBrowserAddressInput("https://app.localhost:3000", "google"),
+    ).toBe("https://app.localhost:3000");
+    expect(
+      normalizeBrowserAddressInput("http://127.0.0.1:8080/api", "google"),
+    ).toBe("http://127.0.0.1:8080/api");
+    // A colon followed by digits is a PORT, not a scheme, so these still get
+    // one.
+    // A path does not make it remote: guessing https here would fail against
+    // a plain HTTP dev server.
+    expect(normalizeBrowserAddressInput("app.localhost/path", "google")).toBe(
+      "http://app.localhost/path",
+    );
+    expect(normalizeBrowserAddressInput("app.localhost:3000", "google")).toBe(
+      "http://app.localhost:3000",
+    );
+  });
+
+  it("accepts a query string on a local address", () => {
+    expect(normalizeBrowserAddressInput("localhost?query", "google")).toBe(
+      "http://localhost?query",
+    );
+  });
+
+  it("recognizes an explicit port even though the URL normalizes away the https default (443)", () => {
+    expect(normalizeBrowserAddressInput("example.com:443", "google")).toBe(
+      "https://example.com:443",
+    );
+  });
+
+  it("recognizes a dotted domain, an IPv4 literal, and a bracketed IPv6 literal as navigation, not search", () => {
+    expect(normalizeBrowserAddressInput("example.com", "google")).toBe(
+      "https://example.com",
+    );
+    expect(normalizeBrowserAddressInput("192.168.1.1", "google")).toBe(
+      "https://192.168.1.1",
+    );
+    expect(normalizeBrowserAddressInput("[2001:db8::1]", "google")).toBe(
+      "https://[2001:db8::1]",
+    );
+  });
+
+  it("sends a bare numeric string to search, even though the URL parser would canonicalize it as an IPv4 address", () => {
+    expect(normalizeBrowserAddressInput("2026", "duckduckgo")).toBe(
+      browserSearchUrl("2026", "duckduckgo"),
+    );
+  });
+
+  it("routes a search operator through the search engine before the scheme check, for every engine", () => {
+    expect(
+      normalizeBrowserAddressInput("site:github.com traycer", "bing"),
+    ).toBe(browserSearchUrl("site:github.com traycer", "bing"));
+    expect(normalizeBrowserAddressInput("filetype:pdf report", "kagi")).toBe(
+      browserSearchUrl("filetype:pdf report", "kagi"),
+    );
+  });
+
+  it("leaves a javascript: URI unchanged - sanitizing it is the navigation guard's job, not normalization's", () => {
+    expect(normalizeBrowserAddressInput("javascript:alert(1)", "google")).toBe(
+      "javascript:alert(1)",
+    );
+  });
+
+  it("URL-encodes a plain-text query for whichever engine is selected", () => {
+    expect(normalizeBrowserAddressInput("hello world", "google")).toBe(
+      "https://www.google.com/search?q=hello+world",
+    );
+    expect(normalizeBrowserAddressInput("hello world", "bing")).toBe(
+      "https://www.bing.com/search?q=hello+world",
+    );
+  });
+});

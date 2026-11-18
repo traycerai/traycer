@@ -1,0 +1,250 @@
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { MermaidBlockToolbar } from "@/editor-core/nodes/mermaid/mermaid-block-toolbar";
+import { MermaidExpandButton } from "@/editor-core/nodes/mermaid/mermaid-expand-button";
+import { MermaidFullscreenDialog } from "@/editor-core/nodes/mermaid/mermaid-fullscreen-dialog";
+import {
+  deriveMermaidAriaLabel,
+  deriveMermaidErrorMessage,
+  ensureMermaidReady,
+  parseMermaid,
+  renderMermaidSvg,
+} from "@/editor-core/nodes/mermaid/mermaid-service";
+import { useMermaidPngDownload } from "@/editor-core/nodes/mermaid/use-mermaid-png-download";
+import { useMermaidThemeKey } from "@/editor-core/nodes/mermaid/use-mermaid-theme-key";
+import { useDebouncedValue } from "@/hooks/ui/use-debounced-value";
+import {
+  FIND_BLOCK_ATTR,
+  FIND_VISIBLE_ATTR,
+} from "@/lib/find-engine/find-blocks";
+import { trustedMarkupToReactNodes } from "@/lib/trusted-markup";
+import { FindMirror } from "./find-mirror";
+import { createReportIssueContext } from "@/lib/report-issue-context";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
+
+const RENDER_DEBOUNCE_MS = 500;
+
+interface MermaidBlockProps {
+  "data-code"?: string;
+  [key: string]: unknown;
+}
+
+interface RenderState {
+  status: "pending" | "ready" | "error";
+  svg: string;
+  error: string;
+}
+
+const INITIAL_RENDER: RenderState = {
+  status: "pending",
+  svg: "",
+  error: "",
+};
+
+function decodeMermaidCode(encoded: string): string {
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return "";
+  }
+}
+
+export function MermaidBlock(props: MermaidBlockProps) {
+  const code = decodeMermaidCode(props["data-code"] ?? "");
+  if (code.length === 0) {
+    return (
+      <div className="tc-node-mermaid" data-find-skip="">
+        <div className="tc-node-block__empty">Empty mermaid block</div>
+      </div>
+    );
+  }
+  return <MermaidRenderer code={code} />;
+}
+
+function MermaidRenderer({ code }: { code: string }) {
+  const debouncedCode = useDebouncedValue(code, RENDER_DEBOUNCE_MS);
+  const themeKey = useMermaidThemeKey();
+  const [fullscreenOpen, setFullscreenOpen] = useState(false);
+
+  return (
+    <MermaidRenderSession
+      key={debouncedCode}
+      renderCode={debouncedCode}
+      sourceCode={code}
+      themeKey={themeKey}
+      fullscreenOpen={fullscreenOpen}
+      onFullscreenOpenChange={setFullscreenOpen}
+    />
+  );
+}
+
+function MermaidRenderSession(props: {
+  readonly renderCode: string;
+  readonly sourceCode: string;
+  readonly themeKey: number;
+  readonly fullscreenOpen: boolean;
+  readonly onFullscreenOpenChange: (open: boolean) => void;
+}) {
+  const {
+    renderCode,
+    sourceCode,
+    themeKey,
+    fullscreenOpen,
+    onFullscreenOpenChange,
+  } = props;
+  const [render, setRender] = useState<RenderState>(INITIAL_RENDER);
+
+  // Prime the mermaid bundle on mount; idempotent across instances.
+  useEffect(() => {
+    void ensureMermaidReady();
+  }, []);
+
+  /*
+   * Async parse + render. `AbortController` invalidates in-flight work on
+   * dependency change or unmount so a stale resolve can't race past a
+   * newer one and overwrite state. Standard async-effect cancellation
+   * idiom; integrates with `fetch` and `addEventListener` if those land
+   * here later.
+   */
+  useEffect(() => {
+    const ctrl = new AbortController();
+    const isAborted = (): boolean => ctrl.signal.aborted;
+    void (async (): Promise<void> => {
+      try {
+        await parseMermaid(renderCode);
+        if (isAborted()) return;
+        const { svg } = await renderMermaidSvg(renderCode);
+        if (isAborted()) return;
+        setRender({ status: "ready", svg, error: "" });
+      } catch (err: unknown) {
+        if (isAborted()) return;
+        setRender({
+          status: "error",
+          svg: "",
+          error: deriveMermaidErrorMessage(err),
+        });
+      }
+    })();
+    return () => {
+      ctrl.abort();
+    };
+  }, [renderCode, themeKey]);
+
+  const ariaLabel = useMemo(
+    () => deriveMermaidAriaLabel(sourceCode),
+    [sourceCode],
+  );
+
+  const handleCopy = useCallback(() => {
+    if (typeof navigator === "undefined") return;
+    void navigator.clipboard.writeText(sourceCode).then(() => {
+      toast.success("Mermaid source copied");
+    });
+  }, [sourceCode]);
+
+  const { downloadMermaidPng, shareMermaidPng, isDownloading } =
+    useMermaidPngDownload({
+      svg: render.svg,
+      enabled: render.status === "ready",
+    });
+
+  const downloadDisabled = render.status !== "ready" || isDownloading;
+  const renderedSvg = useMemo(
+    () =>
+      render.status === "ready"
+        ? trustedMarkupToReactNodes(render.svg, "svg")
+        : null,
+    [render.status, render.svg],
+  );
+
+  return (
+    // Excluded from quote selection: the toolbar and rendered SVG are
+    // non-prose UI inside quotable markdown - a drag across the diagram would
+    // otherwise leak SVG label/error text into the quoted blockquote.
+    <div
+      className="tc-node-mermaid"
+      data-quote-exclude=""
+      {...{ [FIND_BLOCK_ATTR]: "mermaid" }}
+    >
+      <MermaidBlockToolbar
+        editing={false}
+        editable={false}
+        onToggleEdit={noop}
+        onCopyCode={handleCopy}
+        onDownloadPng={downloadMermaidPng}
+        onSharePng={shareMermaidPng}
+        downloadDisabled={downloadDisabled}
+      />
+      {/* Chat find counts the diagram on its source; the drawing's labels are
+          what the painter can colour for a hit in that source. */}
+      <FindMirror text={sourceCode} />
+
+      <figure
+        className="tc-node-mermaid__preview m-0"
+        role={render.status === "pending" ? "img" : undefined}
+        aria-label={render.status === "pending" ? ariaLabel : undefined}
+        // Only a diagram drawn from the mirrored source has words the painter
+        // may colour: the error body quotes the failing source, and while a
+        // streaming fence waits out the render debounce the drawing still
+        // shows the previous source. The block mark stands in meanwhile.
+        {...(render.status === "ready" && renderCode === sourceCode
+          ? { [FIND_VISIBLE_ATTR]: "" }
+          : {})}
+      >
+        {render.status === "pending" ? (
+          <div className="tc-node-block__skeleton" aria-hidden="true">
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          </div>
+        ) : null}
+        {render.status === "ready" ? (
+          <MermaidExpandButton
+            ariaLabel={ariaLabel}
+            onExpand={() => onFullscreenOpenChange(true)}
+          >
+            {renderedSvg}
+          </MermaidExpandButton>
+        ) : null}
+        {render.status === "error" ? (
+          // Chat find counts the fence on its source, which the mirror already
+          // carries, so the error text must stay out of the find walk or the
+          // counter and the painter drift apart.
+          <div className="tc-node-block__error" role="alert" data-find-skip="">
+            <div className="tc-node-block__error-title">
+              Mermaid parse error
+            </div>
+            <div className="tc-node-block__error-detail">{render.error}</div>
+            <ReportIssueAction
+              context={createReportIssueContext({
+                title: "Mermaid parse error",
+                message: null,
+                code: null,
+                source: "Chat diagram",
+              })}
+              presentation="icon"
+              className={undefined}
+            />
+          </div>
+        ) : null}
+      </figure>
+
+      <MermaidFullscreenDialog
+        open={fullscreenOpen}
+        onOpenChange={onFullscreenOpenChange}
+        svg={render.svg}
+        code={sourceCode}
+        title={ariaLabel}
+        onCopyCode={handleCopy}
+        onDownloadPng={downloadMermaidPng}
+        onSharePng={shareMermaidPng}
+        downloadDisabled={downloadDisabled}
+      />
+    </div>
+  );
+}
+
+function noop(): void {}

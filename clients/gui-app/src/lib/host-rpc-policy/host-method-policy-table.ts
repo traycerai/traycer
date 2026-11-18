@@ -1,0 +1,3133 @@
+import type {
+  RequestOfMethod,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  RpcSchedulingMode,
+  RpcSchedulingPolicy,
+} from "@traycer-clients/shared/host-client/rpc-scheduling-policy";
+import {
+  HOST_UNARY_RPC_ROUTES,
+  type ClientHostUnaryRpcMethod,
+} from "@traycer-clients/shared/host-client/host-rpc-routing";
+import type { HostRpcRegistry } from "@traycer/protocol/host";
+import type {
+  ProviderManagedInstallState,
+  ProviderManagedVersions,
+} from "@traycer/protocol/host/provider-schemas";
+import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-definitive";
+import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
+import { moveIsRunning } from "@/lib/environment/move-in-progress";
+import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
+import { CHAT_FILE_READ_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/chat-file-read-response-timeout";
+import { PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS } from "@/lib/host-rpc-policy/provider-pack-discovery-check-timeout";
+import { SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/simulator-open-response-timeout";
+import { RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS } from "@/lib/rate-limits/rate-limit-timing";
+import { USAGE_SUMMARY_RESPONSE_TIMEOUT_MS } from "@/lib/usage-analytics/usage-summary-timing";
+
+const SECOND_MS = 1_000;
+const MINUTE_MS = 60 * SECOND_MS;
+
+// Configuration reads keep their cadence only while the window is attended.
+const CONFIGURATION_READ_POLL = {
+  kind: "fixed",
+  intervalMs: 5 * SECOND_MS,
+  requiresWindowAttention: true,
+} as const;
+
+export type ConditionPollLane = {
+  readonly id: string;
+  readonly initialDelayMs: number;
+  readonly maxDelayMs: number;
+};
+
+export type ErasedConditionPollPolicy<
+  Method extends keyof HostRpcRegistry & string,
+> = {
+  readonly kind: "condition";
+  readonly method: Method;
+  classify(data: unknown): ConditionPollLane | false;
+  readonly initialErrorLane: ConditionPollLane;
+  readonly staleDataErrorLane: ConditionPollLane;
+  readonly resetLaneIds: ReadonlySet<string>;
+};
+
+type HostMethodPollPolicy<Method extends keyof HostRpcRegistry & string> =
+  | null
+  | {
+      readonly kind: "fixed";
+      readonly intervalMs: number;
+      readonly requiresWindowAttention?: true;
+    }
+  | ErasedConditionPollPolicy<Method>;
+
+type HostMethodScheduling<Method extends keyof HostRpcRegistry & string> = {
+  readonly mode:
+    | RpcSchedulingMode
+    | ((params: RequestOfMethod<HostRpcRegistry, Method>) => RpcSchedulingMode);
+  readonly joinResponseTimeoutMs: number | null;
+  readonly latestScope?: (
+    params: RequestOfMethod<HostRpcRegistry, Method>,
+  ) => ReadonlyArray<unknown>;
+  readonly poll: HostMethodPollPolicy<Method>;
+};
+
+type HostMethodPolicyTable = {
+  readonly [
+    Method in keyof HostRpcRegistry & string
+  ]: HostMethodScheduling<Method>;
+};
+
+type ConditionPolicyDefinition<Method extends keyof HostRpcRegistry & string> =
+  {
+    readonly classify: (
+      data: ResponseOfMethod<HostRpcRegistry, Method> | undefined,
+    ) => ConditionPollLane | false;
+    readonly initialErrorLane: ConditionPollLane;
+    readonly staleDataErrorLane: ConditionPollLane;
+    readonly resetLaneIds: ReadonlySet<string>;
+  };
+
+export function defineConditionPolicy<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  method: Method,
+  entry: ConditionPolicyDefinition<Method>,
+): ErasedConditionPollPolicy<Method> {
+  return {
+    kind: "condition",
+    method,
+    classify: entry.classify,
+    initialErrorLane: entry.initialErrorLane,
+    staleDataErrorLane: entry.staleDataErrorLane,
+    resetLaneIds: entry.resetLaneIds,
+  };
+}
+
+export function environmentStatusMoveRunning(
+  data: ResponseOfMethod<HostRpcRegistry, "environment.status">,
+): boolean {
+  return moveIsRunning(data) || data.move?.state === "running";
+}
+
+const ARTIFACT_OBJECT_DOWNLOADING_POLL_LANE: ConditionPollLane = {
+  id: "epic.readArtifactObject.downloading",
+  initialDelayMs: 500,
+  maxDelayMs: 2 * SECOND_MS,
+};
+const ARTIFACT_OBJECT_ERROR_POLL_LANE: ConditionPollLane = {
+  id: "epic.readArtifactObject.error",
+  initialDelayMs: 15 * SECOND_MS,
+  maxDelayMs: MINUTE_MS,
+};
+
+export const PROVIDERS_PENDING_POLL_LANE: ConditionPollLane = {
+  id: "providers.pending",
+  initialDelayMs: 800,
+  maxDelayMs: 30 * SECOND_MS,
+};
+/**
+ * A managed provider pack is actively downloading. Mirrors the speech model's
+ * download lane below (1.5s → 5s), for the same reason: `providers.list` is
+ * the ONLY source of install progress, so its cadence IS the progress bar's
+ * frame rate.
+ *
+ * A tighter cap than `providers.pending` on purpose. A shell probe that has
+ * not settled after half a minute is genuinely worth backing off from; a
+ * download is not - the wire sits at `downloading` with a full fraction
+ * through the entire extract-and-verify phase, so a 30s (let alone 15min)
+ * cadence leaves a finished-looking bar frozen on screen for the exact stretch
+ * where the user is most likely to conclude the install is hung.
+ */
+export const PROVIDERS_INSTALLING_POLL_LANE: ConditionPollLane = {
+  id: "providers.installing",
+  initialDelayMs: 1_500,
+  maxDelayMs: 5 * SECOND_MS,
+};
+/**
+ * A managed pack failed and the host has scheduled another attempt.
+ *
+ * Without this lane an `error` cell falls straight to `providers.steady`, so a
+ * wifi blip that the host recovers from in a minute keeps "Setup failed" on
+ * screen for up to fifteen. That is the wrong direction for a transient
+ * failure: the steady lane's cadence is chosen for state that is not expected
+ * to change, and a cell carrying `retryAtMs` is state that is.
+ *
+ * Deliberately looser than the installing lane. Nothing here has to animate -
+ * this lane exists to notice ONE transition (error → downloading, or error
+ * with a fresh `retryAtMs`) shortly after it happens, and 30s of staleness on
+ * a failure notice is not the same cost as 30s of frozen progress bar.
+ */
+export const PROVIDERS_RETRY_SCHEDULED_POLL_LANE: ConditionPollLane = {
+  id: "providers.retry-scheduled",
+  initialDelayMs: 5 * SECOND_MS,
+  maxDelayMs: 30 * SECOND_MS,
+};
+
+/**
+ * How long after `retryAtMs` the lane keeps watching.
+ *
+ * A window is needed rather than a bare `retryAtMs > now` because nothing on
+ * the host fires AT `retryAtMs`. The field is the manager's backoff memo -
+ * "this cell becomes eligible again at T" - and the attempt itself rides on
+ * the next kick: a turn resolving the provider, an explicit `ensurePack`, or
+ * the reconvergence tick. So the transition this lane exists to see lands
+ * shortly AFTER `retryAtMs`, never before it, and dropping to the steady lane
+ * the instant eligibility arrives would miss precisely the moment it was
+ * added for.
+ *
+ * It is also what bounds the lane. Past the window the cell is not "about to
+ * heal", it is waiting for a kick nobody has scheduled - and the kick's own
+ * arrival (a turn) already refreshes the list through
+ * `useRefreshProvidersListOnTurn`. Polling a quiescent failure every 30
+ * seconds forever would buy nothing and cost it on every wedged host.
+ */
+export const PROVIDERS_RETRY_OBSERVATION_GRACE_MS = 60 * SECOND_MS;
+
+function isRetryWorthWatching(
+  state: ProviderManagedInstallState | null | undefined,
+  nowMs: number,
+): boolean {
+  if (state === null || state === undefined) return false;
+  if (state.status !== "error") return false;
+  // `retryAtMs: null` is the terminal case - `unrepairable`, or a failure the
+  // manager deliberately declined to memo. Nothing is coming, so watching is
+  // not cheaper than the steady lane, it is only more expensive.
+  if (state.retryAtMs === null) return false;
+  return nowMs < state.retryAtMs + PROVIDERS_RETRY_OBSERVATION_GRACE_MS;
+}
+
+/**
+ * True when any managed-pack transfer is in flight for this provider row —
+ * automatic lane (`managedInstallState`) or user-lane version-manager rows
+ * (`managedVersions.available[].installState`).
+ *
+ * User-lane downloads are independent of the automatic target: after
+ * `providers.installPackVersion` returns non-blocking, only the version row
+ * sits at `downloading` while the automatic slot may remain `installed` /
+ * `absent`. The installing poll lane must still fire, or progress freezes on
+ * the 15-minute steady cadence.
+ *
+ * There is no `queued` status on either wire install-state union today, so
+ * this predicate only inspects `downloading` (including `percent: null`).
+ */
+function providerHasManagedInstallInFlight(provider: {
+  readonly managedInstallState?: ProviderManagedInstallState | null;
+  // The protocol type, not a structural stand-in. The row shape used to be
+  // spelled out with `status: string`, which widened the wire union to any
+  // string: rename `downloading` upstream and the comparison below silently
+  // returns false, dropping every user-lane download onto the 15-minute steady
+  // lane with no compile error to notice it.
+  readonly managedVersions?: Pick<ProviderManagedVersions, "available"> | null;
+}): boolean {
+  if (provider.managedInstallState?.status === "downloading") return true;
+  const managedVersions = provider.managedVersions;
+  if (managedVersions === null || managedVersions === undefined) return false;
+  return managedVersions.available.some(
+    (row) => row.installState.status === "downloading",
+  );
+}
+export const PROVIDERS_LIMITED_POLL_LANE: ConditionPollLane = {
+  id: "providers.limited",
+  initialDelayMs: 30 * SECOND_MS,
+  maxDelayMs: 30 * SECOND_MS,
+};
+export const PROVIDERS_STEADY_POLL_LANE: ConditionPollLane = {
+  id: "providers.steady",
+  initialDelayMs: 15 * MINUTE_MS,
+  maxDelayMs: 15 * MINUTE_MS,
+};
+
+export const HARNESS_PENDING_POLL_LANE: ConditionPollLane = {
+  id: "harnesses.pending",
+  initialDelayMs: 800,
+  maxDelayMs: 5 * SECOND_MS,
+};
+export const HARNESS_INITIAL_ERROR_POLL_LANE: ConditionPollLane = {
+  ...HARNESS_PENDING_POLL_LANE,
+  id: "harnesses.initial-error",
+};
+export const HARNESS_STALE_ERROR_POLL_LANE: ConditionPollLane = {
+  ...HARNESS_PENDING_POLL_LANE,
+  id: "harnesses.stale-error",
+};
+export const HARNESS_UNAVAILABLE_POLL_LANE: ConditionPollLane = {
+  id: "harnesses.unavailable",
+  initialDelayMs: 30 * SECOND_MS,
+  maxDelayMs: 5 * MINUTE_MS,
+};
+export const HARNESS_ALL_AVAILABLE_POLL_LANE: ConditionPollLane = {
+  id: "harnesses.all-available",
+  initialDelayMs: 15 * MINUTE_MS,
+  maxDelayMs: 15 * MINUTE_MS,
+};
+
+export const ONBOARDING_DRAFT_PROVIDERS_UNSETTLED_POLL_LANE: ConditionPollLane =
+  {
+    id: "onboarding-draft.providers-unsettled",
+    initialDelayMs: 750,
+    maxDelayMs: 3 * SECOND_MS,
+  };
+export const ONBOARDING_DRAFT_INITIAL_ERROR_POLL_LANE: ConditionPollLane = {
+  ...ONBOARDING_DRAFT_PROVIDERS_UNSETTLED_POLL_LANE,
+  id: "onboarding-draft.initial-error",
+};
+export const ONBOARDING_DRAFT_STALE_ERROR_POLL_LANE: ConditionPollLane = {
+  ...ONBOARDING_DRAFT_PROVIDERS_UNSETTLED_POLL_LANE,
+  id: "onboarding-draft.stale-error",
+};
+export const SPEECH_MODEL_DOWNLOADING_POLL_LANE: ConditionPollLane = {
+  id: "speech-model.downloading",
+  initialDelayMs: 1_500,
+  maxDelayMs: 5 * SECOND_MS,
+};
+export const SPEECH_MODEL_INITIAL_ERROR_POLL_LANE: ConditionPollLane = {
+  ...SPEECH_MODEL_DOWNLOADING_POLL_LANE,
+  id: "speech-model.initial-error",
+};
+export const SPEECH_MODEL_STALE_ERROR_POLL_LANE: ConditionPollLane = {
+  ...SPEECH_MODEL_DOWNLOADING_POLL_LANE,
+  id: "speech-model.stale-error",
+};
+/**
+ * The simulator tools are downloading. `simulator.status` is Settings' only
+ * source of that progress, so its cadence is the progress bar's frame rate,
+ * as with the speech model above.
+ */
+const SIMULATOR_PACK_INSTALLING_POLL_LANE: ConditionPollLane = {
+  id: "simulator-pack.installing",
+  initialDelayMs: 1_500,
+  maxDelayMs: 5 * SECOND_MS,
+};
+const SIMULATOR_PACK_INITIAL_ERROR_POLL_LANE: ConditionPollLane = {
+  ...SIMULATOR_PACK_INSTALLING_POLL_LANE,
+  id: "simulator-pack.initial-error",
+};
+const SIMULATOR_PACK_STALE_ERROR_POLL_LANE: ConditionPollLane = {
+  ...SIMULATOR_PACK_INSTALLING_POLL_LANE,
+  id: "simulator-pack.stale-error",
+};
+export const WORKTREE_SETUP_IN_FLIGHT_POLL_LANE: ConditionPollLane = {
+  id: "worktree-binding.setup-in-flight",
+  initialDelayMs: 2 * SECOND_MS,
+  maxDelayMs: 5 * SECOND_MS,
+};
+export const WORKTREE_SETUP_INITIAL_ERROR_POLL_LANE: ConditionPollLane = {
+  ...WORKTREE_SETUP_IN_FLIGHT_POLL_LANE,
+  id: "worktree-binding.initial-error",
+};
+export const WORKTREE_SETUP_STALE_ERROR_POLL_LANE: ConditionPollLane = {
+  ...WORKTREE_SETUP_IN_FLIGHT_POLL_LANE,
+  id: "worktree-binding.stale-error",
+};
+export const GIT_DIRTY_SUBMODULE_POLL_LANE: ConditionPollLane = {
+  id: "git.dirty-submodule",
+  initialDelayMs: 5 * SECOND_MS,
+  maxDelayMs: 10 * SECOND_MS,
+};
+export const GIT_INITIAL_ERROR_POLL_LANE: ConditionPollLane = {
+  ...GIT_DIRTY_SUBMODULE_POLL_LANE,
+  id: "git.initial-error",
+};
+export const GIT_STALE_ERROR_POLL_LANE: ConditionPollLane = {
+  ...GIT_DIRTY_SUBMODULE_POLL_LANE,
+  id: "git.stale-error",
+};
+export const NOTIFICATION_INDICATOR_ERROR_POLL_LANE: ConditionPollLane = {
+  id: "notification-indicator.error",
+  initialDelayMs: 30 * SECOND_MS,
+  maxDelayMs: 30 * SECOND_MS,
+};
+/**
+ * A fork boundary waiting on the publisher: the chat has not been backed up
+ * yet, or the chosen turn is not covered by the last receipt.
+ *
+ * Backs off because the thing being waited on is a publish sweep rather than a
+ * transport fault - it lands when it lands, and the dialog is a foreground
+ * surface someone is looking at, so the first few asks are the ones worth
+ * making promptly.
+ *
+ * Entered ONLY while the answer can still move. A publication the host has
+ * called `definitive` never reaches this lane: it has no attempt cap, so a lane
+ * entered on a frozen answer is an unbounded poll of a fact, under copy that
+ * tells the user the wait is enough.
+ */
+export const CHAT_PUBLICATION_WAIT_POLL_LANE: ConditionPollLane = {
+  id: "epic-chat-publication-state.waiting",
+  initialDelayMs: 5 * SECOND_MS,
+  maxDelayMs: 30 * SECOND_MS,
+};
+/**
+ * `host.update.check` answered `cli-unavailable`. That answer retires the
+ * whole update region and the retired region hides Check now, so with no
+ * focus/reconnect refetch in production nothing would ever notice the Traycer
+ * CLI being reinstalled — the region stayed retired until the user left the
+ * host scope and came back. The probe fails fast on the host while the CLI is
+ * genuinely absent, and the first ok answer revives the region and ends the
+ * lane.
+ */
+export const UPDATE_CHECK_CLI_RECOVERY_POLL_LANE: ConditionPollLane = {
+  id: "host-update-check.cli-recovery",
+  initialDelayMs: 5 * SECOND_MS,
+  maxDelayMs: 60 * SECOND_MS,
+};
+/**
+ * The check itself failed — a transport fault, not an answer. Same recovery
+ * reasoning as the lane above ("Couldn't ask …" has no retry button either),
+ * on a quieter cadence: reachability is the scope's problem first, this query
+ * only needs to catch up once the host is back.
+ */
+export const UPDATE_CHECK_ERROR_POLL_LANE: ConditionPollLane = {
+  id: "host-update-check.error",
+  initialDelayMs: 30 * SECOND_MS,
+  maxDelayMs: 5 * 60 * SECOND_MS,
+};
+
+const NO_RESET_LANES: ReadonlySet<string> = new Set();
+export const PROVIDERS_INITIAL_ERROR_POLL_LANE: ConditionPollLane = {
+  ...PROVIDERS_PENDING_POLL_LANE,
+  id: "providers.initial-error",
+};
+export const PROVIDERS_STALE_ERROR_POLL_LANE: ConditionPollLane = {
+  ...PROVIDERS_PENDING_POLL_LANE,
+  id: "providers.stale-error",
+};
+const PROVIDERS_RESET_LANES: ReadonlySet<string> = new Set([
+  PROVIDERS_STEADY_POLL_LANE.id,
+]);
+
+const HARNESS_RESET_LANES: ReadonlySet<string> = new Set([
+  HARNESS_ALL_AVAILABLE_POLL_LANE.id,
+]);
+
+const A2A_PEER_PENDING_POLL_LANE: ConditionPollLane = {
+  id: "a2a-peer-pending",
+  initialDelayMs: 2 * SECOND_MS,
+  maxDelayMs: 5 * MINUTE_MS,
+};
+
+/**
+ * This computer's move into Personal, while it can still progress, and a
+ * started move or give while `move` answers `running`.
+ *
+ * `environment.status` is the ONLY source of the move's own state, so this
+ * read's cadence IS the frame rate of the line a person is watching - the
+ * Local row's note and the Overview's settings card both read `Moving this
+ * computer's settings to Personal · <n> of <m> items applied` from it. Same
+ * reasoning as `providers.list`'s installing lane below, and the same shape.
+ *
+ * The steady lane cannot resolve this at all: a move of a handful of items
+ * finishes in a couple of seconds, so the whole moving window falls between
+ * two of its ticks and the pre-move note stands through it.
+ */
+const ENVIRONMENT_MOVE_RUNNING_POLL_LANE: ConditionPollLane = {
+  id: "environment.status.move-running",
+  initialDelayMs: 500,
+  maxDelayMs: 2 * SECOND_MS,
+};
+/**
+ * Every other answer, at the cadence every environments surface has read the
+ * status at: an edit goes from `applying` to `applied` in seconds and nothing
+ * else tells the page it did. Pinned rather than backing off, and reset on
+ * each settlement, so a second move still starts at the lane above's first
+ * delay instead of inheriting the first move's.
+ */
+const ENVIRONMENT_STATUS_STEADY_POLL_LANE: ConditionPollLane = {
+  id: "environment.status.steady",
+  initialDelayMs: 5 * SECOND_MS,
+  maxDelayMs: 5 * SECOND_MS,
+};
+/**
+ * The read itself failed. Pinned at the steady cadence, deliberately: this
+ * method was a fixed 5 s poll before the lanes above, and a fixed interval
+ * keeps firing in the error state, so a reader whose host drops a read has
+ * always re-asked 5 s later. Backing off here would have slowed every
+ * existing reader's recovery - `useSandboxSettingsStatus` is the readiness
+ * gate a send to a just-woken sandbox waits on, where a dropped dial is
+ * ordinary - and the branded poller takes no ordinary retry under it.
+ */
+const ENVIRONMENT_STATUS_ERROR_POLL_LANE: ConditionPollLane = {
+  id: "environment.status.error",
+  initialDelayMs: 5 * SECOND_MS,
+  maxDelayMs: 5 * SECOND_MS,
+};
+const ENVIRONMENT_STATUS_RESET_LANES: ReadonlySet<string> = new Set([
+  ENVIRONMENT_STATUS_STEADY_POLL_LANE.id,
+]);
+
+const LATEST_SCHEDULING = {
+  mode: "latest",
+  joinResponseTimeoutMs: null,
+} as const;
+
+/**
+ * The fixed cadence a surface opts into with `poll: true` while it is on
+ * screen: `host.status`'s, shared so a second opt-in read does not mint a
+ * number of its own.
+ */
+const ON_SCREEN_FIXED_POLL = {
+  kind: "fixed",
+  intervalMs: 10 * SECOND_MS,
+} as const;
+
+export const HOST_METHOD_POLL_TABLE = {
+  "organization.read": {
+    mode: "latest",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "organization.refresh": {
+    mode: "latest",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "organization.history": {
+    mode: "latest",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "organization.command": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The visible browser pane refreshes its discovery index every 30 seconds.
+  "browser.catalog.read": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 30 * SECOND_MS },
+  },
+  // Settings > Browser's saved-logins list. A bounded read that can coalesce,
+  // and no cadence: the list changes only when the person on this screen
+  // clears a row or a site writes a cookie, and the group refetches on the
+  // former. Polling it would keep a settings page waking the host store.
+  "browser.savedLoginSites": { ...LATEST_SCHEDULING, poll: null },
+  // Opt-in polling (`poll: true`), for two callers sharing one cache entry:
+  // the side strip's host indicator, which shows a host whose cross-host
+  // messages are paused (`crossHostMessaging`, @1.8) as degraded, and the
+  // Overview's drain affordance. Its `busySessionCount` / `busyBreakdown` is what "Apply now
+  // — ends 2 agents and 1 terminal" (or "ends N sessions" on a @1.1 host)
+  // promises and then destroys, so the question is not whether the
+  // cached value may be reused but whether it is still TRUE. Going stale does
+  // not refetch on its own, so without a cadence a focused Overview served the
+  // count it read on mount indefinitely.
+  //
+  // Under the query's `staleTime` (30s), deliberately: this interval keeps a
+  // healthy read fresh while `isStale` demotes an unhealthy one to `null`. The
+  // two numbers are one mechanism and must move together.
+  "host.status": {
+    ...LATEST_SCHEDULING,
+    poll: ON_SCREEN_FIXED_POLL,
+  },
+  // Restart commits host admission state before its deferred teardown.
+  "host.restart": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // The host's own name: a bounded read that can coalesce. It has no poll —
+  // the host watches `host-name.json`, so a rename made anywhere else lands on
+  // the next read (or the next explicit invalidation) rather than needing one.
+  "host.identity.get": { ...LATEST_SCHEDULING, poll: null },
+  // Renaming persists a file the heartbeat then publishes; rapid edits must
+  // land in the order the user made them, so this is never coalesced.
+  "host.identity.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.doctor": { ...LATEST_SCHEDULING, poll: null },
+  "host.update.check": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("host.update.check", {
+      classify: (data) => {
+        if (data === undefined) return false;
+        // ONLY the CLI's absence. The other repair this method is re-asked
+        // for - a CLI-floor refusal the Overview is showing a remedy for -
+        // is NOT a lane here: whether a floored catalog row is the row the
+        // Overview offers depends on the installed version and its release
+        // line, which the response does not carry, and a classifier over
+        // the response alone kept polling on floored rows no remedy named.
+        // The Overview owns that recheck (`useHostOverviewUpdates`), keyed
+        // on the remedy it renders.
+        return data.outcome === "cli-unavailable"
+          ? UPDATE_CHECK_CLI_RECOVERY_POLL_LANE
+          : false;
+      },
+      initialErrorLane: UPDATE_CHECK_ERROR_POLL_LANE,
+      staleDataErrorLane: UPDATE_CHECK_ERROR_POLL_LANE,
+      resetLaneIds: NO_RESET_LANES,
+    }),
+  },
+  "host.update.install": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The two bound dispatches, FIFO for exactly `host.update.install`'s reason:
+  // they mutate the host's own lifecycle, so two in flight must never collapse
+  // to "the latest". Unpolled — each is a one-shot command, and the progress
+  // it starts is read from `host.status.updateOperation`, never by re-asking
+  // the method what happened.
+  "host.update.activate": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.update.continue": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Polled, at the `host.status` cadence, for one consumer: the Overview
+  // derives "installed, restart to finish" and "staged, waiting for work"
+  // from the install and staged records beside the live status. Those
+  // records change UNDER a mounted page - a detached `traycer host update`
+  // commits or parks, the desktop's launch converge swaps bytes - and a read
+  // that only goes stale never observes them, so the card that should offer
+  // the restart never appeared until the page was remounted. One host RPC
+  // over an open connection, only while the Overview is mounted (it is the
+  // only surface that opts into `poll: true` on this method).
+  "host.getInstallationInfo": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 10_000 },
+  },
+  "host.service.status": { ...LATEST_SCHEDULING, poll: null },
+  // FIFO, like `host.update.install` and for the same reason: these mutate the
+  // host's own lifecycle, so two in flight must never collapse to "the latest".
+  // Unpolled — a service registration changes only when someone changes it, and
+  // the status read above is what refreshes after a write.
+  "host.service.register": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.service.deregister": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.getRuntimeCapabilities": { ...LATEST_SCHEDULING, poll: null },
+  // Explicit, state-changing local-store repair. Unusually for this table the
+  // cross-queue caveat does not apply: the request is
+  // `{ confirmOldHostStopped: true }` and nothing else (`local-store/schemas.ts`),
+  // so every confirmation click on one host shares all four key components and
+  // they really are one queue. `fifo` is what that queue needs — under `latest`
+  // a second click arriving while the first is still QUEUED folds into it, and
+  // two deliberate confirmations of a destructive repair reach the host as one.
+  "host.rebindLocalStore": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The provider-pull branch spawns a CLI subprocess on the host whose probe
+  // can legitimately outlast the transport's 30s default frame timeout (a
+  // Claude refresh-safe probe alone is budgeted 90s). `fetchProviderRateLimits`
+  // requests with this extended response budget so a slow-but-successful probe
+  // is not discarded client-side while the host finishes it; the value is
+  // declared once in `rate-limit-timing.ts` and must match exactly.
+  "host.getRateLimitUsage": {
+    ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
+    poll: { kind: "fixed", intervalMs: 15 * MINUTE_MS },
+  },
+  // Consuming a reset credit changes the provider's persisted quota state.
+  "providers.consumeRateLimitResetCredit": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // An explicit human maintenance action may probe one disabled profile.
+  // It can spawn the same long-running CLI usage probe as the ordinary read,
+  // but is never polled or coalesced with another profile's action.
+  "providers.refreshProfileStatus": {
+    mode: "fifo",
+    joinResponseTimeoutMs: RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
+  // A cold answer waits on the same refresh-safe CLI handshake as a usage read.
+  "providers.readModelRoutes": {
+    ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: RATE_LIMIT_USAGE_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
+  "host.notifications.list": { ...LATEST_SCHEDULING, poll: null },
+  "host.notificationHooks.status": { ...LATEST_SCHEDULING, poll: null },
+  // Testing a hook sends a real notification.
+  "host.notificationHooks.test": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Saving a hook changes its persisted delivery configuration.
+  "host.notificationHooks.save": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.accountSettings.refresh": { ...LATEST_SCHEDULING, poll: null },
+  "host.notifications.getConfig": { ...LATEST_SCHEDULING, poll: null },
+  // Setting notification configuration persists user intent.
+  "host.notifications.setConfig": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Marking one notification read persists its acknowledgement.
+  "host.notifications.markRead": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Retained for compatible occurrence-scoped workflow resolution callers.
+  "host.notifications.resolve": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Marking all notifications read persists acknowledgements.
+  "host.notifications.markAllRead": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Clearing notifications destructively changes the notification store.
+  "host.notifications.clearAll": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Cloud-feed dispositions persist in the replicated feed and must retain
+  // their invocation order at the host boundary.
+  "host.notifications.cloudFeed.markRead": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.notifications.cloudFeed.markAllRead": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.notifications.cloudFeed.resolve": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.notifications.cloudFeed.clear": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.notifications.cloudFeed.clearAll": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.notifications.indicatorState": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("host.notifications.indicatorState", {
+      classify: () => false,
+      initialErrorLane: NOTIFICATION_INDICATOR_ERROR_POLL_LANE,
+      staleDataErrorLane: NOTIFICATION_INDICATOR_ERROR_POLL_LANE,
+      resetLaneIds: NO_RESET_LANES,
+    }),
+  },
+  "comments.listThreads": { ...LATEST_SCHEDULING, poll: null },
+  // Updating a thread's status persists collaboration state.
+  "comments.setThreadStatus": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The on-demand body behind a windowed chat's accumulated-change summary.
+  // Latest-wins is safe because a newer click for the same summary supersedes
+  // an older one, and it is deliberately never polled: the live
+  // `chat.subscribe` snapshot pushes summary freshness while the UI fetches
+  // bodies only for the file the person opens.
+  "chat.readAccumulatedFileChange": { ...LATEST_SCHEDULING, poll: null },
+  // Where a cross-tile jump target sits, asked once when the target row is
+  // cold. Latest-wins for the same reason as the read above - a newer jump
+  // supersedes an older one - and never polled: the answer is a position in a
+  // transcript the live subscription is already reporting changes to.
+  "chat.locateRow": { ...LATEST_SCHEDULING, poll: null },
+  // Search as you type: a newer query supersedes an older one, and never
+  // polled - the caller asks again when the query changes.
+  "chat.search": { ...LATEST_SCHEDULING, poll: null },
+  // Settings are successive intents for one chat's runtime. Keep one active
+  // request and replace its waiting tail with the newest complete payload.
+  "chat.prestartRuntime": {
+    ...LATEST_SCHEDULING,
+    latestScope: (params) => [params.epicId, params.chatId],
+    poll: null,
+  },
+  // The external fallback actions. All `fifo`, and none polled.
+  //
+  // `fifo` because each carries the traversal revision it expects, so two rapid
+  // sends are not the same request twice - the second names a revision the
+  // first is about to invalidate. Coalescing them would drop the one the user
+  // actually meant and answer with the other one's outcome; dropping the LATER
+  // one is worse still, since that is the one carrying the newer intent.
+  //
+  // Never polled, and that is not merely "these are mutations". A poll would
+  // re-send an action against a revision the host has moved past and get a
+  // `traversal_advanced` for its trouble, which the menu renders as "this chat
+  // already resumed" - a poll would manufacture that message out of nothing.
+  //
+  // FIFO keeps full request identity; the latest-only scope above does not
+  // apply here. It does not order these four against ONE ANOTHER, nor two
+  // sends of one verb naming different revisions. `HostRequestCoordinator`
+  // keys its queues by `[hostId, userId, method, params]`, so each of those is
+  // a separate queue and they race. Nothing here needs them not to - every
+  // verb names the revision (or the attempt) it expects and the HOST
+  // adjudicates, answering the loser with a refusal inside a successful
+  // response, which is the concurrency control. A client-side ordering would
+  // only decide WHICH concurrent press wins, and the argument above says the
+  // later one carries the newer intent. A surface that does need arrival order
+  // has to ask for it where the ordering primitive lives - a shared
+  // `MutationScope` on the hooks in `use-fallback-actions.ts`.
+  "chat.fallback.cancel": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "chat.fallback.chooseTarget": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "chat.fallback.runManualRung": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The switch-back banner's answer, on the same terms as the other three: it
+  // names the revision it expects, so two rapid answers are two different
+  // requests rather than one sent twice.
+  "chat.fallback.returnToPreferred": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The countdown card's "Switch now" (the verb runs whatever step the host
+  // planned), on the same terms as `cancel`: it names the revision it expects,
+  // so two rapid presses are two requests.
+  "chat.fallback.proceed": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The destination menu's candidate list, and the ONE fallback method that is
+  // not `fifo`. The other five mutate and name the revision they expect, so two
+  // rapid answers must stay two ordered requests. This one is read-only - no
+  // probe, no gauge write, no record write - so a later read supersedes an
+  // earlier one and `LATEST_SCHEDULING` is the honest scheduling: a user who
+  // reopens or refreshes the menu wants the newest answer, not a queue of stale
+  // ones delivered in order.
+  "chat.fallback.listTargets": { ...LATEST_SCHEDULING, poll: null },
+  "snapshots.getLocalStorageSize": { ...LATEST_SCHEDULING, poll: null },
+  "snapshots.readSnapshotDiff": { ...LATEST_SCHEDULING, poll: null },
+  // Clearing snapshots destructively removes locally retained data.
+  "snapshots.clearLocalSnapshots": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Killing a process tree from the resource monitor is a destructive command.
+  "resources.kill": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "resources.listLocalServers": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 3 * SECOND_MS },
+  },
+  // Shell lifecycle from the Shells list and the output window header. `fifo`
+  // is what buys these three the guarantees the
+  // coordinator reserves for commands: `selectJob` refuses to coalesce a fifo
+  // job, `snapshotHostTransition` refuses to abort one, and `cancelActiveRead`
+  // refuses to cancel one. A delete destroys the command's entire output
+  // history, so it must never be collapsed into another in-flight request or
+  // silently dropped on a host swap - the human pressed it once and it either
+  // happens or reports why.
+  //
+  // (Not for cross-method ordering: the coordinator keys queues by
+  // [hostId, userId, method, params], so a start and a stop never share a
+  // queue and fifo cannot sequence one against the other.)
+  "managedCommand.start": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "managedCommand.stop": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "managedCommand.delete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A toggle: two quick presses are on-then-off, and the second must not
+  // coalesce into the first or the human ends up with the opposite of what
+  // the switch shows. `fifo` keeps two IDENTICAL presses distinct; it cannot
+  // order an on against an off, because the value is part of the params and
+  // so of the queue key - those are two queues. The per-command ordering
+  // lives one layer up, in `useManagedCommandConfigure`'s mutation scope.
+  "managedCommand.configure": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Deliver takes `fifo` for a reason the other three do not have, and NOT the
+  // one about distinct params. The coordinator keys queues by
+  // [hostId, userId, method, params], so two Delivers naming different subsets
+  // are already distinct jobs - but the common press names no subset at all
+  // (`commandIds: null`), and two of THOSE are byte-identical params, one
+  // queue, and would coalesce under `latest`. Coalescing them is precisely what
+  // must not happen: releasing a hold advances a DURABLE delivery cursor, so a
+  // second press collapsed into the first, or a request aborted on a host swap,
+  // leaves the human looking at a list that may or may not still be held with
+  // no way to tell which.
+  // Never poll it - it is a mutation, and the held set it would poll for
+  // arrives unprompted on `chat.subscribe`.
+  "managedCommand.deliverHeld": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "managedCommand.create": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "managedCommand.list": { ...LATEST_SCHEDULING, poll: null },
+  "managedCommand.view": { ...LATEST_SCHEDULING, poll: null },
+  // The agent's configure, not the human switch above. Same `fifo` reasoning:
+  // two presses that differ in value are different params and so different
+  // queues, and two identical ones must stay distinct rather than coalesce.
+  "managedCommand.configureAgentShell": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "managedCommand.restart": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "agent.gui.listHarnesses": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("agent.gui.listHarnesses", {
+      classify: (data) => {
+        if (data === undefined) return false;
+        if (data.harnesses.some((harness) => harness.availabilityPending)) {
+          return HARNESS_PENDING_POLL_LANE;
+        }
+        if (data.harnesses.some((harness) => !harness.available)) {
+          return HARNESS_UNAVAILABLE_POLL_LANE;
+        }
+        return HARNESS_ALL_AVAILABLE_POLL_LANE;
+      },
+      initialErrorLane: HARNESS_INITIAL_ERROR_POLL_LANE,
+      staleDataErrorLane: HARNESS_STALE_ERROR_POLL_LANE,
+      resetLaneIds: HARNESS_RESET_LANES,
+    }),
+  },
+  // A catalog read waits on the host's own probe bound, which the user's
+  // Model list timeout can raise past the ordinary unary deadline; see
+  // `CATALOG_LIST_RESPONSE_TIMEOUT_MS`. Every caller passes it.
+  "agent.gui.listModels": {
+    ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
+  "agent.gui.listCommands": {
+    ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: CATALOG_LIST_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
+  "agent.gui.getPlan": { ...LATEST_SCHEDULING, poll: null },
+  "agent.tui.listHarnesses": { ...LATEST_SCHEDULING, poll: null },
+  // Preparing a launch creates or updates host-side harness launch state.
+  "agent.tui.prepareLaunch": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Read-only cross-profile fork-admission preflight; no host-side state
+  // changes, but each call answers a specific candidate profile so requests
+  // are not superseded by one another.
+  "agent.tui.validateForkProfile": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Generating a title writes the result to the terminal-agent record.
+  "agent.tui.generateTitle": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A turn-ended hook updates broker activity and notifications.
+  "agent.tui.turnEnded": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Activity hooks update the host's terminal-agent activity oracle.
+  "agent.tui.recordActivity": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Optional replacement for the recordActivity start edge: records the
+  // activity edge and pulls the role-registry digest cursor forward when
+  // behind (roles-snapshot-delivery). Same scheduling as its sibling hooks.
+  "agent.tui.promptSubmitted": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Creating an agent persists a new collaboration record.
+  "agent.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "agent.selectionGuide": { ...LATEST_SCHEDULING, poll: null },
+  "agent.selectionGuide.getGlobal": { ...LATEST_SCHEDULING, poll: null },
+  "agent.selectionGuide.getGlobalOnboardingDraft": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy(
+      "agent.selectionGuide.getGlobalOnboardingDraft",
+      {
+        classify: (data) =>
+          data?.content === null && !data.providersSettled
+            ? ONBOARDING_DRAFT_PROVIDERS_UNSETTLED_POLL_LANE
+            : false,
+        initialErrorLane: ONBOARDING_DRAFT_INITIAL_ERROR_POLL_LANE,
+        staleDataErrorLane: ONBOARDING_DRAFT_STALE_ERROR_POLL_LANE,
+        resetLaneIds: NO_RESET_LANES,
+      },
+    ),
+  },
+  // Saving the global guide changes shared onboarding configuration.
+  "agent.selectionGuide.setGlobal": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Resetting the global guide overwrites persisted configuration.
+  "agent.selectionGuide.resetGlobalToDefault": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "agent.listHarnessModels": { ...LATEST_SCHEDULING, poll: null },
+  "agent.list": { ...LATEST_SCHEDULING, poll: null },
+  "agent.resolveMessagePeer": {
+    ...LATEST_SCHEDULING,
+    // Once titled, live projection/remount refresh owns titles. A newly
+    // created peer may still be awaiting automatic title generation.
+    poll: defineConditionPolicy("agent.resolveMessagePeer", {
+      classify: (data) =>
+        data === undefined || data.peer === null || data.peer.title === null
+          ? A2A_PEER_PENDING_POLL_LANE
+          : false,
+      initialErrorLane: A2A_PEER_PENDING_POLL_LANE,
+      staleDataErrorLane: A2A_PEER_PENDING_POLL_LANE,
+      resetLaneIds: NO_RESET_LANES,
+    }),
+  },
+  // Sending a message enqueues it in the recipient's inbox.
+  "agent.sendMessage": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "agent.getTranscript": { ...LATEST_SCHEDULING, poll: null },
+  "agent.inbox.read": { ...LATEST_SCHEDULING, poll: null },
+  "agent.inbox.ack": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Claiming a role persists responsibility and broadcasts awareness.
+  "agent.roles.claim": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "agent.roles.list": { ...LATEST_SCHEDULING, poll: null },
+  // Relinquishing a role removes persisted responsibility and broadcasts awareness.
+  "agent.roles.relinquish": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Stopping an agent terminates its active execution.
+  "agent.stop": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Forking an agent persists a new collaboration record, like agent.create.
+  "agent.fork": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Continuing a chat here moves its authority to this host; fifo so a press
+  // is never coalesced into another chat's.
+  "chat.continueHere": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Archiving retires the agent record; fifo so a tap is not coalesced away.
+  "agent.archive": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "host.resolveRepoPaths": { ...LATEST_SCHEDULING, poll: null },
+  "host.fileCopy.start": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileCopy.status": { ...LATEST_SCHEDULING, poll: null },
+  "host.fileCopy.cancel": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileTransfer.enumerate": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileTransfer.open": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileTransfer.readChunk": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.fileTransfer.close": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.oneOffShell.run": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Guest repair (1.0) and combined settings retry (1.1) mutate the sandbox;
+  // preserve separate presses in order, never coalesce unrelated attempts.
+  "host.sandbox.repairGuestConfiguration": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Dial-only lease verbs: one host calls these on another, never the
+  // renderer. Here because this table is exhaustive over the registry. `fifo`
+  // because each acquires, releases or ends a lease and must never coalesce.
+  "host.portForward.acquireLease": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.portForward.releaseLease": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.portForward.leaseEnded": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The host-level forwards listing: only the newest answer means anything.
+  //
+  // Opt-in polling (`poll: true`), for one caller: Settings ▸ Overview ▸ Ports,
+  // whose tab trigger carries a count of these rows. The host has no change
+  // signal for port forwards - nothing is pushed when a forward stops, binds or
+  // is cut from another machine - so with no cadence the count kept whatever
+  // the page read on open. Every 15 seconds while the page is open and the
+  // window is visible (never in the background) was the user's call.
+  "portForward.listForHost": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 15 * SECOND_MS },
+  },
+  // Stopping a forward and cutting a lease both tear down live sockets.
+  "portForward.stop": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "portForward.cutLease": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Dial-only, like `host.agent.createFromRemoteSender` below: the agent's
+  // host calls these on the machine its browser realm lives on, never the
+  // renderer. They are here because this table is exhaustive over the
+  // registry. `fifo` for both - a cell is a side-effecting script and a
+  // release retires a realm, so neither may be coalesced with another call.
+  "browser.repl.runCell": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "browser.repl.releaseRealm": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "browser.repl.stopCell": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Dial-only in the other direction: the machine running a browser realm
+  // asks the agent's host for a person's decision. Never the renderer; here
+  // for exhaustiveness. `fifo` - each question is its own card and must
+  // never be coalesced with another.
+  "browser.repl.requestApproval": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Dial-only: one host calls this on another, never the renderer. It is here
+  // because this table is exhaustive over the registry, not because the GUI
+  // has a caller. `fifo` matches `agent.create`, whose effect it shares -
+  // persisting a new collaboration record, which must never be coalesced.
+  "host.agent.createFromRemoteSender": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Migrating a phase changes the epic's persisted workflow state.
+  "phase.migrateToEpic": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A pure read of whether an import run is in flight. `latest` because only
+  // the newest answer means anything to the surface that shows it, and no
+  // fixed poll: the wizard subscribes to `sessionImport.run` while it is open,
+  // so the only reader of this is the Settings entry, which asks on mount.
+  "sessionImport.status": { ...LATEST_SCHEDULING, poll: null },
+  "epic.listTasks": { ...LATEST_SCHEDULING, poll: null },
+  "epic.localHistory.read": { ...LATEST_SCHEDULING, poll: null },
+  // Recording a view updates the user's central task ordering preference.
+  "epic.recordViewed": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Pinning changes a task's persisted ordering preference.
+  "epic.setPinned": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "epic.getTaskContexts": { ...LATEST_SCHEDULING, poll: null },
+  // Creating an epic persists a new collaboration root.
+  "epic.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Batch deletion permanently removes the selected epics.
+  "epic.batchDelete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Preparing folders persists their repo-to-workspace mappings.
+  "workspace.prepareFolders": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "workspace.listFileTree": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.listDirectory": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.browseFolders": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.readFile": { ...LATEST_SCHEDULING, poll: null },
+  // Saving a file writes to disk and each attempt carries the revision
+  // acknowledged by the previous save, so writes must not be coalesced.
+  "workspace.writeFile": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "workspace.mentionFiles": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.mentionFolders": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.mentionWorktrees": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.mentionGitRoot": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.mentionGitBranches": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.mentionGitCommits": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.searchPaths": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.searchText": { ...LATEST_SCHEDULING, poll: null },
+  "workspace.resolvePathsByRepoIdentifiers": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
+  // Removing a repository changes the epic's workspace binding.
+  "epic.removeRepo": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "epic.mentionEpics": { ...LATEST_SCHEDULING, poll: null },
+  "epic.mentionSpecs": { ...LATEST_SCHEDULING, poll: null },
+  "epic.mentionTickets": { ...LATEST_SCHEDULING, poll: null },
+  "epic.mentionStories": { ...LATEST_SCHEDULING, poll: null },
+  "epic.mentionReviews": { ...LATEST_SCHEDULING, poll: null },
+  "epic.mentionArtifacts": { ...LATEST_SCHEDULING, poll: null },
+  "epic.listCollaborators": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 5 * MINUTE_MS },
+  },
+  // Creating an artifact persists a new document node.
+  "epic.createArtifact": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.artifactVersions.list": { ...LATEST_SCHEDULING, poll: null },
+  "epic.artifactVersions.getBlob": { ...LATEST_SCHEDULING, poll: null },
+  // An on-demand object copy can outlast the host's read deadline.
+  "epic.editArtboard": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.listHtmlArtifactVersions": { ...LATEST_SCHEDULING, poll: null },
+  "epic.readArtifactObject": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("epic.readArtifactObject", {
+      classify: (data) =>
+        data?.kind === "downloading"
+          ? ARTIFACT_OBJECT_DOWNLOADING_POLL_LANE
+          : false,
+      initialErrorLane: ARTIFACT_OBJECT_ERROR_POLL_LANE,
+      staleDataErrorLane: ARTIFACT_OBJECT_ERROR_POLL_LANE,
+      resetLaneIds: new Set(),
+    }),
+  },
+  "epic.artifactVersions.restore": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.deletedArtifacts.list": { ...LATEST_SCHEDULING, poll: null },
+  "epic.deletedArtifacts.revive": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.artifactVersionSettings.get": { ...LATEST_SCHEDULING, poll: null },
+  "epic.artifactVersionSettings.setEnabled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.artifactVersionSettings.setRetentionPolicy": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.artifactVersionSettings.clearHistory": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Deleting an artifact permanently removes its document node.
+  "epic.deleteArtifact": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Updating artifact status persists workflow state.
+  "epic.updateArtifactStatus": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Renaming an artifact persists its title.
+  "epic.renameArtifact": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Reparenting an artifact changes document hierarchy.
+  "epic.reparentArtifact": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Creating a chat persists a new collaboration record.
+  "epic.createChat": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "epic.continueSubagent": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Renaming a chat persists its title.
+  "epic.renameChat": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Updating chat run settings changes persisted execution configuration.
+  "epic.updateChatRunSettings": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Updating a chat's profile persists its selected agent/model (optional host capability).
+  "epic.updateChatProfile": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Deleting a chat permanently removes its collaboration record.
+  "epic.deleteChat": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Reparenting a chat changes document hierarchy.
+  "epic.reparentChat": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Optional host capability, read-only: does the source chat's publication
+  // cover a chosen fork boundary? Asked when the fork dialog OPENS, and only
+  // when the account has a host other than the source, so a single-host user
+  // never pays for it.
+  "epic.chatPublicationState": {
+    // A pure read with no ordering requirement, like every other read here.
+    ...LATEST_SCHEDULING,
+    // Polled only while the answer is one the FORK DIALOG'S COPY promises will
+    // resolve on its own - "It backs up automatically - try again shortly" and
+    // the boundary-syncing sentence. `staleTime` alone only marks the cache
+    // stale and issues nothing for a mounted, idle observer, so an open dialog
+    // sitting on either answer would wait forever on a sentence that told the
+    // user waiting was enough.
+    //
+    // `false` for a covered chat: that is terminal for this boundary, and a
+    // host too old to answer at all never gets here (the read is gated on
+    // `useHostSupportsMethod`).
+    //
+    // This lane has no attempt cap and no terminal lane of its own, which is
+    // exactly why `definitive` has to be read BEFORE the other two fields. A
+    // permanently halted publication reports `published: false` - byte for byte
+    // what a chat mid-first-sweep reports - so without that read the wait lane
+    // is entered forever on a state nothing will ever move, under copy that
+    // promises it will.
+    poll: defineConditionPolicy("epic.chatPublicationState", {
+      classify: (data) => {
+        if (data === undefined) return false;
+        // Terminal, and it outranks both readings below: `definitive` names a
+        // reason waiting cannot clear, so re-asking cannot clear it either. Any
+        // reason counts, including one this build does not recognise; the
+        // shared reader is also what keeps a host that predates the field
+        // (`undefined`, not `null`) in the wait lane where it belongs.
+        if (chatPublicationDefinitiveReason(data.definitive) !== null) {
+          return false;
+        }
+        if (!data.published) return CHAT_PUBLICATION_WAIT_POLL_LANE;
+        return data.boundaryCovered === false
+          ? CHAT_PUBLICATION_WAIT_POLL_LANE
+          : false;
+      },
+      initialErrorLane: CHAT_PUBLICATION_WAIT_POLL_LANE,
+      staleDataErrorLane: CHAT_PUBLICATION_WAIT_POLL_LANE,
+      resetLaneIds: NO_RESET_LANES,
+    }),
+  },
+  // Archiving a chat or terminal-agent record persists its archived flag
+  // (optional host capability).
+  "epic.setChatArchived": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Visibility mutations. Optional host capability. The coordinator's queue
+  // identity is method + full params, so these two methods never share a
+  // queue and two per-chat flips of different chats do not either. fifo
+  // only serializes identical retries of the SAME call. Cross-surface
+  // ordering (master toggle vs per-chat) is a client-side one-in-flight
+  // gate per (task, viewer) — subsequent requests are refused, not queued.
+  "epic.setCloudChatVisibility": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.setChatSharingDefault": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.prepareArtifactImage": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "epic.finishArtifactImage": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Creating a TUI agent persists its terminal-agent record.
+  "epic.createTuiAgent": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Deleting a TUI agent permanently removes its record.
+  "epic.deleteTuiAgent": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Renaming a TUI agent persists its title.
+  "epic.renameTuiAgent": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Updating the epic title persists user intent.
+  "epic.updateTitle": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Re-running an interrupted major migration. `fifo`, not `latest`, because it
+  // is an ACTION with host-side effects and not a read: under `latest` a press
+  // arriving while an earlier one is still queued folds into it, so two
+  // user-initiated recovery attempts reach the host as one. (It could not drop
+  // the in-flight attempt - `latest` only ever reuses a QUEUED job, never the
+  // active one.) Never polled - the modal's Retry button is the only
+  // caller. Replaces the client frame the monolith carried; no GUI caller
+  // exists yet (the read cutover wires it), and this entry is here because the
+  // table must exactly match the registry.
+  "epic.retryMigration": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Granting access changes the epic's collaborator set.
+  "epic.grantAccess": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "epic.attachEnvironment": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Updating roles changes collaborator permissions.
+  "epic.batchUpdateRoles": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Revoking access changes the epic's collaborator set.
+  "epic.revokeCollaborator": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Creating a comment persists a new collaboration annotation.
+  "epic.createCommentThread": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Replying to a comment persists a new collaboration annotation.
+  "epic.replyToCommentThread": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Editing a comment persists its new content.
+  "epic.editComment": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Deleting a comment permanently removes collaboration content.
+  "epic.deleteComment": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Resolving a thread persists its workflow state.
+  "epic.setCommentThreadResolved": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Deleting a thread permanently removes collaboration content.
+  "epic.deleteCommentThread": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A FIXED cadence the caller gates, not an always-on one. Comment threads
+  // normally arrive pushed on the records lane, and while that lane is up this
+  // poll must stay quiet - the lane is fresher by construction and a cadence
+  // beside it would be pure waste. But the lane's rows are RETAINED when it
+  // drops, and `resolveArtifactCommentThreads` only hands precedence back once
+  // the poll has answered SINCE that drop - so with no cadence at all, a
+  // permanently dead lane on a focused window froze the surface on retained
+  // rows indefinitely, hiding remote additions, deletions and status changes.
+  // `useEpicCommentThreadsForClient` therefore passes `poll` = "the lane is
+  // down" (`commentThreadsShouldPoll`).
+  //
+  // A condition policy would be the wrong shape: `classify` reads the
+  // RESPONSE, and the lane's liveness is not in it.
+  //
+  // 15s matches that hook's `staleTime`, deliberately - inside the stale
+  // window a read is served from cache anyway, so a tighter interval would
+  // spend requests to learn nothing.
+  "epic.listCommentThreads": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 15 * SECOND_MS },
+  },
+  "epic.resolveArtifactByPath": { ...LATEST_SCHEDULING, poll: null },
+  "epic.searchArtifacts": { ...LATEST_SCHEDULING, poll: null },
+  // The workspace context the decomposed lanes fetch at tab open. A read, so
+  // `latest`; `poll: null` because it is refetched on EVENTS - a reconnect, or
+  // a control-lane migration/permission signal - never on a cadence. No GUI
+  // caller exists yet (the read cutover wires it); this entry is here because
+  // the table must exactly match the registry, and the method landed there with
+  // the protocol lane contracts.
+  "epic.getWorkspaceContext": { ...LATEST_SCHEDULING, poll: null },
+  // The cloud-chat READ surface. All five are reads, so `latest` - and the
+  // property that follows from the coordinator keying on PARAMS is what this
+  // fan-out wants: a read of part A never supersedes a concurrent read of part
+  // B, because different params are different queues. That is equally why
+  // `fifo` would NOT serialize a p99 chat's ~165 parts behind each other; they
+  // never share a queue either. What the mode picks is what happens WITHIN one
+  // part's queue, and there `latest` folds a redundant repeat onto the one
+  // already waiting instead of spending another request. Not onto the ACTIVE
+  // read - `latest` only ever reuses a QUEUED job - so two simultaneous reads
+  // of the same digest are still two requests; any dedupe tighter than that is
+  // Query's, above this layer.
+  //
+  // No polling. A published head changes only when its owning host publishes
+  // again, and the reader HAS a signal for that: the chat record row carries
+  // the cloud head stamp (`epic.listChatRecords@1.2` /
+  // `host.chatRecords.subscribe@1.3`), pushed by the record stream and
+  // repaired by that list's own 20s poll. The published-copy read keys on the
+  // record head's digest (`cloudChatQueryKeys.read`), so a new publication is
+  // a new key and re-resolves on its own; an interval here would spend
+  // requests re-learning an answer the record plane already delivered. A
+  // reader whose record row carries no head (an older owner host) is back to
+  // one read per open, picked up by reopening.
+  "epic.listCloudChats": { ...LATEST_SCHEDULING, poll: null },
+  "epic.resolveCloudChatHead": { ...LATEST_SCHEDULING, poll: null },
+  "epic.getChatTitle": { ...LATEST_SCHEDULING, poll: null },
+  // A sandbox's permanent end remains here after it leaves the live list.
+  // A mounted task refreshes that fact even when no host can notify it.
+  "epic.listTaskHosts": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 30 * SECOND_MS },
+  },
+  "epic.readCloudChatPart": { ...LATEST_SCHEDULING, poll: null },
+  "epic.listCloudChatPayloads": { ...LATEST_SCHEDULING, poll: null },
+  "epic.readCloudChatPayload": { ...LATEST_SCHEDULING, poll: null },
+  // One chat image attachment's bytes. Not polled, and it must not be: the
+  // answer is content-addressed, so a hash that resolved once resolves to the
+  // same bytes forever and a hash that missed is re-driven by the image blob
+  // cache's own retry ladder (`use-image-blob-url.ts`), not by a cadence. An
+  // interval here would re-fetch megabytes to re-learn a constant.
+  "epic.readChatAttachment": { ...LATEST_SCHEDULING, poll: null },
+  // A file attachment's bytes, fetched when its chip is opened. Content-addressed
+  // like the image read, so nothing polls it. Up to 16 MiB in one response, so
+  // it declares the same two-minute budget `drafts.putBlob` does.
+  "epic.readChatFile": {
+    ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: CHAT_FILE_READ_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
+  // Like the chat attachment read, artifact attachment bytes are addressed by
+  // their content hash and the image cache owns retry after a transient miss.
+  // Polling this unary method would only re-fetch immutable bytes.
+  "epic.fetchArtifactAttachment": { ...LATEST_SCHEDULING, poll: null },
+  // An MCP App's reads answer from the harness's live server, on demand; the
+  // app asks again when it wants a fresher answer, so nothing polls.
+  "chat.mcpApp.describeTool": { ...LATEST_SCHEDULING, poll: null },
+  "chat.mcpApp.readResource": { ...LATEST_SCHEDULING, poll: null },
+  // A tool call and a model-context update change something: each one runs,
+  // in order.
+  "chat.mcpApp.callTool": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "chat.mcpApp.updateModelContext": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A feedback draft's preview is read when the user opens "View"; the
+  // decision is a click that may send, so each one runs, in order.
+  "chat.feedbackDraft.preview": { ...LATEST_SCHEDULING, poll: null },
+  "chat.feedbackDraft.decide": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Not polled, and this is a deliberate freshness choice rather than a copy of
+  // the row above it. The answer is "which cloud row does this local chat
+  // publish into", which changes exactly once in a chat's life - when a fork
+  // sends its lineage into a clone row - and never again. A cadence would spend
+  // a request per interval per open sidebar to re-learn a constant.
+  //
+  // What it costs: between a fork's auto-resolution and the next refetch, one
+  // sidebar row can be stale - the chat's OLD publication row briefly shows as
+  // a separate entry. That is a duplicate-looking row for a moment, not wrong
+  // content: the transcript a locked row renders comes from the head read, not
+  // from this mapping, so nothing a user is reading goes stale with it. The
+  // fork's own notification is the signal that something changed, and a
+  // reopened task picks the new mapping up.
+  "epic.listChatPublicationTargets": { ...LATEST_SCHEDULING, poll: null },
+  // One-shot read: the doc content of an unreachable owner's chat cannot
+  // change while its owner is away.
+  "epic.chatReplicaRead": { ...LATEST_SCHEDULING, poll: null },
+  // A write the person's send waits on: each call runs, in order, and a
+  // second one for a chat already back answers `not-evicted` at once.
+  "epic.hydrateChat": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The store-backed chat RECORD channel.
+  //
+  // POLLED, at a cadence, and the reason is that there is no invalidation edge
+  // to ride. The facts this serves - a chat was created, renamed, re-parented,
+  // archived, deleted - are committed to the chat DATABASE and, since the
+  // single-write pivot, are written NOWHERE the renderer already listens: not
+  // into the epic Y.Doc (whose update stream is the only per-epic push channel
+  // a client has), and not into any per-epic frame on `epic.subscribe`. The
+  // host's registry does emit a change stream internally, but it has no wire
+  // surface, and giving it one is a new STREAM method - handshake-fatal against
+  // a released peer on a surface whose whole point here is to degrade quietly.
+  //
+  // A condition policy was the alternative and does not fit: `defineConditionPolicy`
+  // classifies from THIS method's own response, and nothing in a list of chat
+  // rows says whether another one is about to appear. The honest classification
+  // is "always maybe", which is a fixed interval wearing a lane's clothes.
+  //
+  // 20s: a local in-memory registry read, one per open epic. It bounds how long
+  // a chat created on ANOTHER device (or by an agent, or by the CLI) stays
+  // missing from this renderer's tree - the same staleness the sidebar's own
+  // cloud list already tolerates at 30s - and the client's own mutations do not
+  // wait for it, since they invalidate this key on success.
+  "epic.listChatRecords": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 20 * SECOND_MS },
+  },
+  // UNPOLLED, unlike the list above, and for the opposite reason: the list has
+  // to notice a chat that appeared elsewhere, while this answers a question
+  // whose subject cannot change without a user action. Run settings move when
+  // somebody moves them, and the surfaces that move them invalidate this key.
+  // Its caller unmounts on close, so a re-open is a fresh read once the entry
+  // goes stale - a cadence would only re-ask the host about a card nobody is
+  // looking at.
+  "epic.getChatRunSettings": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
+  "epic.getChatRunSettingsBatch": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
+  // The terminal-agent RECORD read (TUI eviction), the sibling of
+  // `epic.listChatRecords` above and polled at its exact cadence for its
+  // exact reasons: the facts it serves are committed to the host's registry
+  // and written nowhere the renderer already listens per-epic, there is no
+  // response field a condition policy could classify "about to change" from,
+  // and the client's own mutations invalidate the key on success so nothing
+  // user-initiated waits on the interval.
+  "epic.listTuiAgents": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 20 * SECOND_MS },
+  },
+  // The publisher's own convergence sweep is 30s, so a 45s local read is
+  // responsive without asking faster than the underlying state can change.
+  "epic.chatBackupStatus": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 45_000 },
+  },
+  // Drafts live-sync rides `drafts.subscribe`. These unaries are the snapshot
+  // + mutation surface; an older host degrades them as unsupported and the
+  // client keeps device-local drafts. No poll: subscribe is the freshness
+  // channel, and a host missing the stream also misses these methods.
+  "drafts.list": { ...LATEST_SCHEDULING, poll: null },
+  // `fifo` here does NOT order two writes of the same draft: the coordinator
+  // keys its queue by the full params, so two revisions of one draft carry
+  // different params and get different queues. Per-draft ordering is owned by
+  // `DraftMirrorSession` (`sendUpsert`), which chains sends per `draftId` and
+  // drops a body an equal-or-newer generation already covers - the host
+  // applies an upsert as a whole-document LWW, so an older body arriving last
+  // would win.
+  "drafts.upsert": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "drafts.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "drafts.retract": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // `bot.*` (Tracy Bots): cloud-backed reads and writes. The reads take the
+  // latest caller like every other cloud list. `fifo` on the mutations only
+  // stops two identical calls (same method, same params) from coalescing into
+  // one; it orders nothing across different params, as the drafts note above
+  // says - the cloud's own row versioning (`host_epoch`, owner-bound updates)
+  // decides between two mutations of one bot. No polling: `bot.subscribe`
+  // carries changes, and the list query is refetched by the mutation hooks
+  // that change it.
+  "bot.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "bot.list": { ...LATEST_SCHEDULING, poll: null },
+  "bot.read": { ...LATEST_SCHEDULING, poll: null },
+  "bot.notificationLevel.read": { ...LATEST_SCHEDULING, poll: null },
+  "bot.notificationLevel.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "bot.threadFollow.read": { ...LATEST_SCHEDULING, poll: null },
+  "bot.threadFollow.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A bot's read cursors and newest rows drive the sidebar's bold, so a read
+  // on another device clears it here within one interval while the window is
+  // visible.
+  "bot.readCursor.read": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 30 * SECOND_MS },
+  },
+  "bot.readCursor.advance": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "bot.updateTitle": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "bot.updateRunSettings": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "bot.updateDirective": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "bot.updateReplyMode": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "bot.updateAppearance": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "bot.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "bot.claimAuthority": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Opening a bot may claim it onto this host: `fifo`, like the claim
+  // itself, so two opens are never coalesced into one answer that was decided
+  // before the other's claim.
+  "bot.open": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // The conversation list is a cloud list like `bot.list`. A send is a
+  // mutation that mints a request: `fifo` keeps two identical sends from
+  // coalescing into one message - a post, or a reply whose `threadId` names
+  // the thread; the same text into two threads is two params, never joined.
+  "bot.conversation.list": { ...LATEST_SCHEDULING, poll: null },
+  // A search box's read: only the newest query's answer is shown.
+  "bot.conversation.search": { ...LATEST_SCHEDULING, poll: null },
+  "bot.conversation.send": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A member's answer or decision from a surface card: each action is the
+  // person's own, sent in order and never joined with another.
+  "bot.surface.act": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A read of the bound host's thread records, never polled: the bot's
+  // `bot.subscribe` snapshot moves `conversationsRevision` on every row
+  // written there, and the subscription reads the listing again then.
+  "bot.thread.list": { ...LATEST_SCHEDULING, poll: null },
+  // A bot's turns behind the replies, posts and check-ins a view shows
+  // (T86): read when those rows change, and again when the bot's activity
+  // says a turn settled.
+  "bot.turn.locate": { ...LATEST_SCHEDULING, poll: null },
+  // A member's actions on the bot's automations and notification watches
+  // from the Activity page (T92): each writes the bound host's records, so
+  // they queue.
+  "bot.task.runNow": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "bot.task.setPaused": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "bot.task.stop": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "bot.notifications.stop": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A team's onboarding (T48): the read is refetched when its card mounts or
+  // a choice or completion lands; the two writes persist, so they queue.
+  // Opt-in polling (`poll: true`) from a team's setup channel only, while it
+  // is on screen and the setup still needs a host: a bot created under
+  // the team host's own context rings no other host's bot list, so this is
+  // how a member watching the setup sees it go live.
+  "bot.onboarding.read": { ...LATEST_SCHEDULING, poll: ON_SCREEN_FIXED_POLL },
+  "bot.onboarding.choose": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "bot.onboarding.complete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Unary byte channel, same posture as `epic.readChatAttachment` - but the
+  // only one of the drafts methods whose BODY is megabytes rather than KB, so
+  // it is also the only one that declares a budget. The value is declared once
+  // in `draft-blob-transport-budget.ts` and must match exactly: `putDraftBlobs`
+  // names it on every dispatch, and the host client refuses a budget this table
+  // does not declare for the method.
+  "drafts.putBlob": {
+    mode: "fifo",
+    joinResponseTimeoutMs: DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
+  "drafts.readBlob": { ...LATEST_SCHEDULING, poll: null },
+  // Polled: no host-pushed invalidation channel exists for this event today
+  // (see the implementation report), so without a cadence a fork detected
+  // after this query first cached would never surface. 45s sits between the
+  // publisher's own ~30s detection sweep and "expensive enough to matter" -
+  // the point of a fork prompt is time-to-resolution, not zero-latency, and
+  // this is a single small unary call.
+  "host.chatFork.get": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 45_000 },
+  },
+  // Opening paths changes state in the user's editor.
+  "editor.openPaths": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "git.listChangedFiles": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("git.listChangedFiles", {
+      classify: (data) => {
+        if (data === undefined) return false;
+        const hasDirtySubmodule = data.submodules.some((submodule) => {
+          if (submodule.availability.state === "unavailable") return true;
+          if (submodule.files.length > 0) return true;
+          if (submodule.pointer.kind === "conflicted") return true;
+          return (
+            submodule.pointer.commitChanged ||
+            submodule.pointer.modifiedContent ||
+            submodule.pointer.untrackedContent
+          );
+        });
+        return hasDirtySubmodule ? GIT_DIRTY_SUBMODULE_POLL_LANE : false;
+      },
+      initialErrorLane: GIT_INITIAL_ERROR_POLL_LANE,
+      staleDataErrorLane: GIT_STALE_ERROR_POLL_LANE,
+      resetLaneIds: NO_RESET_LANES,
+    }),
+  },
+  "git.getFileDiff": { ...LATEST_SCHEDULING, poll: null },
+  "git.getFileDiffs": { ...LATEST_SCHEDULING, poll: null },
+  "git.getFileContents": { ...LATEST_SCHEDULING, poll: null },
+  "git.getCapabilities": { ...LATEST_SCHEDULING, poll: null },
+  // A read of the local checkout, requested when the PR Files tab opens.
+  // No poll: the PR detail stream is what notices a new push, and a re-render
+  // off a changed `headRefOid` re-keys the query on its own.
+  "pr.getLocalDiff": { ...LATEST_SCHEDULING, poll: null },
+  // The split form of the same read: one metadata frame when the tile opens,
+  // then one small patch per visible row. Same no-poll reasoning - the detail
+  // stream notices pushes, and the per-file queries are keyed by immutable
+  // OIDs, so there is nothing a cadence could learn.
+  "pr.getLocalDiffSummary": { ...LATEST_SCHEDULING, poll: null },
+  "pr.getLocalFileDiff": { ...LATEST_SCHEDULING, poll: null },
+  // The composer's PR/issue mention sections. Both are latest-wins with no
+  // poll: the menu is open for seconds at a time and drives every fetch
+  // explicitly (open, refresh click, filter change), so there is no cadence
+  // to keep - and a superseded read has nothing worth waiting for.
+  "mention.githubCatalog": { ...LATEST_SCHEDULING, poll: null },
+  // A read, so `latest`. That is NOT what discards a query the user has typed
+  // past: `query` is in the request params and so in the queue key, so an old
+  // query and a new one sit in different queues and this mode never compares
+  // them - Query owns which result is current. What `latest` does here is fold
+  // a repeat of the SAME query onto the one already waiting.
+  "mention.githubSearch": { ...LATEST_SCHEDULING, poll: null },
+  // Creating a terminal allocates a host PTY session.
+  "terminal.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Killing a terminal terminates a host PTY session.
+  "terminal.kill": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "terminal.list": { ...LATEST_SCHEDULING, poll: null },
+  // A read that materializes the terminal's output to a file on the host.
+  // Latest-wins with no poll: it is issued on demand, and a superseded read
+  // has nothing worth waiting for - the next one rewrites the same file.
+  "terminal.readOutput": { ...LATEST_SCHEDULING, poll: null },
+  // Renaming a terminal persists its display name.
+  "terminal.rename": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Durable plain-terminal authority. The list is snapshot seeding only; the
+  // stream owns subsequent convergence. Every write is FIFO so an identical
+  // repeat is delivered on its own - `selectJob` refuses to coalesce a fifo
+  // job. Not so that writes reach the host in a global order, which this layer
+  // does not give: queues are keyed by [hostId, userId, method, params], so two
+  // renames carrying different titles do not share one, nor does a rename share
+  // one with a close. What holds the client cache together across
+  // independently delayed stream frames is the revision guards, not this mode.
+  "terminal.plain.create": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "terminal.plain.list": { ...LATEST_SCHEDULING, poll: null },
+  "terminal.plain.rename": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "terminal.plain.ensureRunning": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "terminal.plain.close": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "terminal.plain.importLegacy": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "worktree.listByWorkspacePaths": { ...LATEST_SCHEDULING, poll: null },
+  "worktree.listBranches": { ...LATEST_SCHEDULING, poll: null },
+  // Creating a worktree starts a host-side setup operation.
+  "worktree.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Creating worktree paths starts host-side setup operations.
+  "worktree.createPaths": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Importing a worktree persists a new binding.
+  "worktree.import": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Changing an entry mode mutates its worktree binding.
+  "worktree.setEntryMode": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Removing an entry mutates the workspace binding.
+  "workspaceBinding.removeEntry": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Retrying setup starts a new host-side setup operation.
+  "worktree.retrySetup": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Deleting a worktree removes a host-side binding and directory.
+  "worktree.delete": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "worktree.listAllForHost": { ...LATEST_SCHEDULING, poll: null },
+  // Setting repo scripts persists worktree execution configuration.
+  "worktree.setRepoScripts": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Setting the repo branch-prefix override persists worktree naming config.
+  "worktree.setRepoBranchPrefix": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Automatic-cleanup policy + history. The two reads are plain latest-wins
+  // panel reads. Writing the policy is `fifo`: it persists a setting whose
+  // revision is the token queued deletions are validated against, so two
+  // in-flight writes must not be reordered - and the host refuses a stale
+  // `expectedRevision` outright rather than letting the later write win.
+  //
+  // No polling on any of them. A cleanup pass runs about once a day and emits
+  // a notification when it finds anything, so a background poll would spend a
+  // request every interval to learn nothing - the panel refetches on mount and
+  // after a policy write, which is when the answer can actually differ.
+  "worktree.getAutoCleanupPolicy": { ...LATEST_SCHEDULING, poll: null },
+  "worktree.setAutoCleanupPolicy": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "worktree.listAutoCleanupRuns": { ...LATEST_SCHEDULING, poll: null },
+  "worktree.getAutoCleanupRun": { ...LATEST_SCHEDULING, poll: null },
+  "worktree.getBinding": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("worktree.getBinding", {
+      classify: (data) =>
+        data?.binding?.entries.some(
+          (entry) =>
+            entry.mode === "worktree" &&
+            (entry.setupState === "pending" || entry.setupState === "running"),
+        )
+          ? WORKTREE_SETUP_IN_FLIGHT_POLL_LANE
+          : false,
+      initialErrorLane: WORKTREE_SETUP_INITIAL_ERROR_POLL_LANE,
+      staleDataErrorLane: WORKTREE_SETUP_STALE_ERROR_POLL_LANE,
+      resetLaneIds: NO_RESET_LANES,
+    }),
+  },
+  // Forced auth refresh mutates provider auth state; ordinary listing is read-only.
+  "providers.list": {
+    mode: (params) => (params.forceAuthRefresh === true ? "fifo" : "latest"),
+    joinResponseTimeoutMs: null,
+    poll: defineConditionPolicy("providers.list", {
+      classify: (data) => {
+        if (data === undefined) return false;
+        // `providers.list` is also the carrier for the native (MCP/plugins/
+        // skills) queries, which cache a MAPPED shape under their own
+        // `cacheKeyIdentity` rather than the raw response. Those entries have
+        // no `providers` array; they opt out of table-owned polling
+        // (`poll: false`) and must never drive the classic lanes. This guard
+        // has to precede every `data.providers` read below.
+        if (!Array.isArray(data.providers)) return false;
+        // Ahead of the probe lane deliberately. Both can be true at once on a
+        // first boot, and `providers.pending` decays to 30s while an install
+        // needs a bounded 5s - taking the faster, tighter-capped lane while
+        // bytes are moving is the only ordering that keeps progress readable.
+        //
+        // Both lanes: automatic (`managedInstallState`) AND user-lane version
+        // manager rows (`managedVersions.available[].installState`). A
+        // non-blocking installPackVersion leaves only the user-lane row as
+        // `downloading` while the automatic lane stays settled — missing that
+        // would drop progress onto the 15-minute steady lane.
+        // `percent: null` still counts: a sibling-owned transfer needs the
+        // fast lane to notice completion.
+        const hasInstallInFlight = data.providers.some((provider) =>
+          providerHasManagedInstallInFlight(provider),
+        );
+        if (hasInstallInFlight) return PROVIDERS_INSTALLING_POLL_LANE;
+        const hasPendingProbe = data.providers.some(
+          (provider) =>
+            provider.enabled &&
+            (provider.authPending ||
+              provider.availabilityPending ||
+              provider.candidates.some(
+                (candidate) => candidate.versionPending,
+              )),
+        );
+        if (hasPendingProbe) return PROVIDERS_PENDING_POLL_LANE;
+        // After the probe lane, which is faster off the mark and caps at the
+        // same 30s, and before the rate-limit lane, which starts there.
+        const nowMs = Date.now();
+        const hasScheduledRetry = data.providers.some((provider) =>
+          isRetryWorthWatching(provider.managedInstallState, nowMs),
+        );
+        if (hasScheduledRetry) return PROVIDERS_RETRY_SCHEDULED_POLL_LANE;
+        const hasLimitedProfile = data.providers.some((provider) =>
+          provider.profiles.some(
+            (profile) =>
+              profile.rateLimitStatus === "near_limit" ||
+              profile.rateLimitStatus === "hard_limit",
+          ),
+        );
+        if (hasLimitedProfile) return PROVIDERS_LIMITED_POLL_LANE;
+        return PROVIDERS_STEADY_POLL_LANE;
+      },
+      initialErrorLane: PROVIDERS_INITIAL_ERROR_POLL_LANE,
+      staleDataErrorLane: PROVIDERS_STALE_ERROR_POLL_LANE,
+      resetLaneIds: PROVIDERS_RESET_LANES,
+    }),
+  },
+  // Selecting a provider changes persisted provider preference.
+  "providers.setSelection": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Adding a custom path changes persisted provider discovery configuration.
+  "providers.addCustomPath": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Removing a custom path changes persisted provider discovery configuration.
+  "providers.removeCustomPath": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.detectVersion": { ...LATEST_SCHEDULING, poll: null },
+  // Starting login spawns a provider-authentication process.
+  "providers.startLogin": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Compatible waiters share one provider-login result for its fixed long-poll budget.
+  "providers.awaitLogin": {
+    mode: "join",
+    joinResponseTimeoutMs: 16 * MINUTE_MS,
+    poll: null,
+  },
+  // Cancelling login terminates the provider-authentication process.
+  "providers.cancelLogin": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Submitting a code advances the provider-authentication process.
+  "providers.submitLoginCode": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Touching login extends the active provider-authentication deadline.
+  "providers.touchLogin": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Opening a sign-in terminal kills the previous one and spawns a PTY, so
+  // ordering is load-bearing: a "latest wins" policy could drop the call that
+  // actually left a terminal behind. Concurrent clicks are collapsed
+  // host-side, which is where that decision belongs.
+  "providers.startTerminalLogin": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Each begin captures its own choice; each settle must consume its own token.
+  "providers.beginApiKeyChange": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.settleApiKeyChange": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Setting an API key changes persisted credentials.
+  "providers.setApiKey": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Clearing an API key removes persisted credentials.
+  "providers.clearApiKey": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The per-profile pair. `fifo` for the same reason as the provider-wide pair
+  // above: these mutate persisted credentials, so an identical repeat has to
+  // be delivered on its own - `selectJob` refuses to coalesce a fifo job.
+  //
+  // (Not for ordering, in either direction. The coordinator keys queues by
+  // [hostId, userId, method, params], so a set and a clear never share one -
+  // nor do two sets carrying different keys. The set-against-clear ordering
+  // this pair does need lives one layer up, in the TanStack mutation scope
+  // `PROFILE_API_KEY_MUTATION_SCOPE` (`hooks/providers/invalidations.ts`),
+  // whose note records what that reaches and what it cannot.)
+  "providers.setProfileApiKey": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.clearProfileApiKey": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Updating terminal args changes persisted provider configuration.
+  "providers.setTerminalAgentArgs": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Choosing a provider's auto-mode judge changes persisted provider
+  // configuration - it lands in `provider-overrides.json` beside
+  // `terminalAgentArgs`, so it takes that neighbour's policy exactly.
+  //
+  // `fifo` buys LANDING and not order here either: two picks on the same row
+  // carry different `autoJudge` values, so they are two queue keys and race,
+  // and the loser is the HOST's stored choice rather than a cache (this write
+  // invalidates `providers.list` instead of folding its response in, so the UI
+  // then faithfully reports the older selection). The ordering comes from
+  // `providerAutoJudgeWriteScope`, keyed by host AND harness, on
+  // `useProvidersSetAutoJudge`.
+  "providers.setAutoJudge": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Same shape and same ordering story as `providers.setAutoJudge`; the order
+  // comes from `providerNativeSubagentsWriteScope` on the hook.
+  "providers.setNativeSubagents": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The native-memory switch, the same shape and ordering story as its
+  // neighbour: a per-provider write whose order matters, scoped by
+  // `providerNativeMemoryWriteScope` on the hook.
+  "providers.setNativeMemory": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Hiding one OpenCode model provider: a per-provider write whose order
+  // matters, scoped by `providerModelProviderVisibilityWriteScope` on the hook.
+  "providers.setModelProviderHidden": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Whether the provider settings document is unusable as a whole: a plain
+  // read, latest wins.
+  "providers.settingsFile.status": { ...LATEST_SCHEDULING, poll: null },
+  // Sets that document aside and starts a fresh one. Persisted and not
+  // idempotent across a later corruption, so it is queued, never merged.
+  "providers.settingsFile.reset": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Copies that document aside, then drops one provider's unreadable row.
+  // Persisted and not idempotent, so it is queued, never merged.
+  "providers.settingsFile.resetProvider": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Setting an environment override changes persisted provider configuration.
+  "providers.setEnvOverride": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Deleting an environment override changes persisted provider configuration.
+  "providers.deleteEnvOverride": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Enabling a provider changes persisted provider configuration.
+  "providers.setEnabled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Signing out revokes credentials; an identical repeat must not coalesce.
+  "providers.signOutProfile": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A name answer writes the account's label everywhere; an identical repeat
+  // must not coalesce.
+  "providers.answerProfileName": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A preview is a read of who may move. Identical in-flight calls coalesce.
+  "providers.previewProfileMove": { ...LATEST_SCHEDULING, poll: null },
+  // A commit records an operation. An identical repeat must not coalesce,
+  // so a retry still receives the recorded results.
+  "providers.commitProfileMove": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Profile eligibility is persisted provider configuration.
+  "providers.setProfileEnabled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Reading the host-global fallback policy - a pure read, so `latest`.
+  //
+  // Opt-in polling (`poll: true`), for one caller: the settings panel's
+  // "N in progress right now" (`useFallbackInFlightCountQuery`), which reads
+  // this method under its OWN cache entry so the count stays true while the
+  // page is open. The policy read itself (`useFallbackPolicyQuery`) must not
+  // opt in: its entry is where `set` and `restoreTierGroups` write their
+  // responses, and a poll landing after one of those writes would put the
+  // pre-save policy back for the next mount to seed from.
+  "providers.fallbackPolicy.get": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 5 * SECOND_MS },
+  },
+  // Saving the fallback policy is a persisted settings write - `fifo` for the
+  // same reason as the classic provider mutations above: two rapid saves must
+  // both LAND, not be coalesced into one.
+  //
+  // Landing is all `fifo` gives them, and this comment used to add "in order",
+  // which it does not: the queue key carries the params, so two saves carrying
+  // two different policies sit in two queues and race. That matters more here
+  // than for most writes, because `useFallbackPolicySetMutation` folds each
+  // response into the `…fallbackPolicy.get` cache with `setQueriesData` - so
+  // the cached policy is whichever response lands LAST, not whichever save was
+  // pressed last. Ordering has to come from a shared `MutationScope` on that
+  // hook, or from a host-side revision check; FIFO does not opt into the
+  // latest-only resource scope.
+  "providers.fallbackPolicy.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Restoring the seeded model groups and resetting the whole policy are both
+  // persisted settings writes, so `fifo` for the same reason as `.set`: they
+  // race with it (all three write the same row) and each must land, never be
+  // coalesced. Not "in the order the user pressed them", which this comment
+  // used to claim: three methods are three queue keys, so `fifo` sequences
+  // each against itself and nothing against the other two - see the note on
+  // `.set` above, and the same limit stated on `providers.nativeMutate` below.
+  "providers.fallbackPolicy.restoreTierGroups": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.fallbackPolicy.reset": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A pure read re-issued on every edit, so `latest` - the same argument as
+  // `chat.fallback.listTargets`. Coalescing onto the NEWEST request is what
+  // makes the rendered verdicts match the draft on screen: under a burst of
+  // edits the superseded requests describe groups the user has already changed,
+  // and running them in order would render each stale answer on the way past
+  // while spending a catalog walk per candidate on every one of them. `fifo`
+  // belongs to the writes, which name a revision and must all land.
+  // `poll: null`: it is re-asked when the draft changes, and nothing else can
+  // change its answer.
+  "providers.fallbackPolicy.previewTierGroups": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
+  // Native MCP/plugins/skills mutations write provider config files, so they
+  // are `fifo` for the same reason as the classic provider mutations above: an
+  // identical repeat must be delivered on its own, not coalesced. It does not
+  // order an enable against a disable - `action` and `enabled` are request
+  // params and so part of the queue key, which puts them in separate queues.
+  "providers.nativeMutate": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // MCP auth actions (login/submitCode/logout/clearAuth/forceReauth) mutate
+  // stored credentials and must not be coalesced.
+  "providers.mcpAuth": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Bounded status poll for an in-flight MCP auth - a pure read, so `latest`
+  // (a superseded poll carries no information the newer one lacks).
+  "providers.awaitMcpAuth": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
+  // Cancelling an in-flight MCP auth tears down host-side pending state.
+  "providers.cancelMcpAuth": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Reading the upstream LLM provider catalog for a provider - a pure read, so
+  // `latest`. `poll: null`: the catalog only changes as a result of an auth
+  // mutation on this same surface, which invalidates the query directly.
+  "providers.listModelProviders": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
+  // Upstream credential writes (connect / start OAuth / submit code /
+  // disconnect) - `fifo` for the same reason as `providers.mcpAuth`: an
+  // identical repeat must be delivered on its own, not coalesced. Those four
+  // are `action` values in the request params, so they are four separate
+  // queues and this mode never orders one of them against another.
+  "providers.modelProviderAuth": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Bounded status poll for an in-flight OAuth attempt - a pure read, so
+  // `latest` (a superseded poll carries no information the newer one lacks).
+  "providers.awaitModelProviderAuth": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
+  // Cancelling an in-flight OAuth attempt tears down host-side pending state.
+  "providers.cancelModelProviderAuth": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A user-initiated "get this provider's managed pack ready" kick. `fifo`
+  // because it mutates host-side scheduling state (clears the cell's backoff,
+  // promotes it to the front of the install queue) and two rapid retry taps
+  // must not be coalesced into one. `poll: null` because the method is a kick,
+  // not a status source - progress is read from `providers.list`, which
+  // already carries `managedInstallState`.
+  "providers.ensurePack": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The four per-pack version-manager methods. All `fifo` for the reason
+  // `providers.ensurePack` above is: each mutates durable host state (bytes on
+  // disk, the shared pin/policy record), so coalescing two rapid taps into one
+  // would drop a user action - and unlike a read, replaying the survivor is not
+  // equivalent. `poll: null` on all four: none is a status source. Progress and
+  // the resulting version list are read from `providers.list`, which carries
+  // `managedVersions`; polling the mutation would re-run it.
+  //
+  // These entries exist because this table is EXHAUSTIVE over the registry's
+  // method names - adding a method to `@traycer/protocol` without adding a row
+  // here is a gui-app compile error, which is the intended tripwire.
+  "providers.installPackVersion": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.removePackVersion": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.usePackVersion": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.setPackPolicy": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The on-demand "Check for updates" in the same popover. `fifo` for a
+  // different reason than the four above - it writes no durable state - but the
+  // same consequence: each press is answered with its own outcome, so two rapid
+  // taps must not coalesce into one answer. `poll: null` because this method IS
+  // the poll; a cadence here would be a second discovery ticker living in the
+  // client.
+  //
+  // `joinResponseTimeoutMs` here is a PERMISSION, not a budget. It buys nothing
+  // on its own: the host client rejects a `requestWithResponseTimeout` whose
+  // value is not exactly this number, and the extended budget only ever applies
+  // because `useProvidersRefreshPackDiscovery` passes the same constant through
+  // `useHostMutationWithResponseTimeout`. Under a plain `useHostMutation` the
+  // call would run on the transport default and this line would be inert - the
+  // gap `providers.refreshProfileStatus` above still has.
+  "providers.refreshPackDiscovery": {
+    mode: "fifo",
+    joinResponseTimeoutMs: PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS,
+    poll: null,
+  },
+  "worktree.listBindingsForEpic": { ...LATEST_SCHEDULING, poll: null },
+  // Pure holder read for teardown disclosures - fetched at gesture time by
+  // the delete/rebind confirm flows, never on a cadence.
+  "worktree.listHolders": { ...LATEST_SCHEDULING, poll: null },
+  "speech.getModelStatus": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("speech.getModelStatus", {
+      classify: (data) =>
+        data?.downloadState === "downloading"
+          ? SPEECH_MODEL_DOWNLOADING_POLL_LANE
+          : false,
+      initialErrorLane: SPEECH_MODEL_INITIAL_ERROR_POLL_LANE,
+      staleDataErrorLane: SPEECH_MODEL_STALE_ERROR_POLL_LANE,
+      resetLaneIds: NO_RESET_LANES,
+    }),
+  },
+  // Ensuring a model starts or advances a host-side model download.
+  "speech.ensureModel": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "agent.listProviderProfiles": { ...LATEST_SCHEDULING, poll: null },
+  "agent.getProviderProfileRateLimits": { ...LATEST_SCHEDULING, poll: null },
+  // Configuring an agent persists its execution settings.
+  "agent.configure": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // Shutdown claim, commit, and release change admission state and must be
+  // ordered against one another.
+  "lifecycle.claimShutdown": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "lifecycle.commitShutdown": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "lifecycle.releaseShutdown": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Config reads and bounded diagnostics reads can coalesce safely. Config
+  // writes are `fifo` so an identical repeat is persisted rather than coalesced
+  // onto the one already waiting - not to sequence DIFFERENT writes, which this
+  // layer does not do: `set` and `reset` are different methods, and two sets
+  // naming different shells are different params, so none share a queue.
+  "config.shell.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.shell.set": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "config.shell.reset": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.shell.add": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "config.shell.remove": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.shell.revertArgs": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.shell.listDetected": { ...LATEST_SCHEDULING, poll: null },
+  "config.shell.probe": { ...LATEST_SCHEDULING, poll: null },
+  // The environment methods: reads take the latest answer; writes, Verify and
+  // the link steps are ordered and never joined.
+  "environment.localOverrides": { ...LATEST_SCHEDULING, poll: null },
+  "environment.proposals": { ...LATEST_SCHEDULING, poll: null },
+  "environment.secrets.list": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
+  "environment.secrets.versions": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
+  // A replaced value's status moves within seconds of the replacement; the
+  // Secrets page re-reads it only while it is still moving.
+  "environment.secrets.rotation": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 3_000 },
+  },
+  "environment.agentDefinitions.list": { ...LATEST_SCHEDULING, poll: null },
+  "environment.setup.get": { ...LATEST_SCHEDULING, poll: null },
+  // The support report's reach section: read with the rest of the environment
+  // section, never polled on its own.
+  "environment.reachDiagnostics": { ...LATEST_SCHEDULING, poll: null },
+  // Machine setup re-reads it while open: a run started by a save, a retry or
+  // a restart ends on its own, and nothing else tells the page it did.
+  "environment.setup.attempts": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 5_000 },
+  },
+  // A Personal page re-reads it while open: an edit goes from "applying" to
+  // "applied" in seconds and nothing else tells the page it did. While this
+  // computer's move into Personal runs, the same read is the move's progress
+  // bar, which the steady lane cannot resolve - see the lanes above.
+  "environment.status": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("environment.status", {
+      classify: (data) => {
+        if (data === undefined) return ENVIRONMENT_STATUS_STEADY_POLL_LANE;
+        return environmentStatusMoveRunning(data)
+          ? ENVIRONMENT_MOVE_RUNNING_POLL_LANE
+          : ENVIRONMENT_STATUS_STEADY_POLL_LANE;
+      },
+      initialErrorLane: ENVIRONMENT_STATUS_ERROR_POLL_LANE,
+      staleDataErrorLane: ENVIRONMENT_STATUS_ERROR_POLL_LANE,
+      resetLaneIds: ENVIRONMENT_STATUS_RESET_LANES,
+    }),
+  },
+  "environment.notices": { ...LATEST_SCHEDULING, poll: null },
+  "environment.review": { ...LATEST_SCHEDULING, poll: null },
+  "config.env.localOverride.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.env.localOverride.clear": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.secrets.create": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.secrets.verify": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.secrets.replaceValue": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.secrets.undo": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.secrets.destroy": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.secrets.consent": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.agentDefinitions.put": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.agentDefinitions.delete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.setup.put": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.setup.retry": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.undo": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.remoteAccess.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "host.status.refresh": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The environments redesign: the move, a configuration through the server
+  // pool, members and the retrospective sheet. Reads take the latest answer;
+  // every write is ordered and never joined.
+  "environment.move.plan": { ...LATEST_SCHEDULING, poll: null },
+  "environment.move.outcome": { ...LATEST_SCHEDULING, poll: null },
+  "environment.move.stopPreview": { ...LATEST_SCHEDULING, poll: null },
+  "environment.configuration.revision": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
+  "environment.configuration.items": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
+  "environment.history": { ...LATEST_SCHEDULING, poll: null },
+  "environment.members.removePreview": { ...LATEST_SCHEDULING, poll: null },
+  "environment.previewLocalFacts": { ...LATEST_SCHEDULING, poll: null },
+  "environment.members.seats": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
+  "environment.invitations.list": { ...LATEST_SCHEDULING, poll: null },
+  "environment.invitations.accept": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.plans.list": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
+  "environment.plans.unlinkPreview": { ...LATEST_SCHEDULING, poll: null },
+  "environment.configuration.guide.get": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
+  "environment.configuration.mcpServers.list": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
+  "environment.configuration.skills.list": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
+  // Read beside the list it overlays, on the same cadence, so another
+  // editor's update or restore reaches this page's versions and Restore.
+  "environment.configuration.skills.state": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
+  "environment.configuration.skills.search": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
+  "environment.move.accept": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.move.stage": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.move.start": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.move.stop": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.items.put": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.items.delete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.mcpServers.put": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.upload": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.mcpServers.delete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.mcpServers.setEnabled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.remove": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.setProviders": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.setPolicy": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.update": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.restoreBundled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.import": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.policy.put": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.members.invite": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.members.setRole": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.members.remove": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.members.noticeSeen": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.review.heldApply": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.review.record": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.plans.unlink": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.guide.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.guide.reset": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.env.list": { ...LATEST_SCHEDULING, poll: null },
+  "config.env.set": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "config.env.delete": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.logLevels.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.logLevels.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.browser.get": { ...LATEST_SCHEDULING, poll: null },
+  // The Settings write observer owns its bounded, single-flight refresh loop.
+  "config.agentMemories.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.agentMemories.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.browser.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.visualization.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.visualization.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.sessionNames.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.sessionNames.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.simulator.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.simulator.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The simulator verbs: reads coalesce to the latest ask, every mutation is
+  // ordered. `open` waits on a boot, so its row below carries a longer
+  // response budget.
+  "simulator.list": { ...LATEST_SCHEDULING, poll: null },
+  // Settings' machine-wide read; polled only while the tools download.
+  "simulator.status": {
+    ...LATEST_SCHEDULING,
+    poll: defineConditionPolicy("simulator.status", {
+      classify: (data) =>
+        data?.packState.kind === "installing"
+          ? SIMULATOR_PACK_INSTALLING_POLL_LANE
+          : false,
+      initialErrorLane: SIMULATOR_PACK_INITIAL_ERROR_POLL_LANE,
+      staleDataErrorLane: SIMULATOR_PACK_STALE_ERROR_POLL_LANE,
+      resetLaneIds: NO_RESET_LANES,
+    }),
+  },
+  // Settings' Remove: a mutation on the host's store, ordered like the rest.
+  "simulator.removeTools": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The budget is a PERMISSION (see `providers.refreshPackDiscovery`): a cold
+  // open answers after the boot, which the host bounds at three minutes, and
+  // only `useSimulatorOpenMutation` passing this same constant makes it apply.
+  "simulator.open": {
+    mode: "fifo",
+    joinResponseTimeoutMs: SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS,
+    poll: null,
+  },
+  "simulator.close": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  "simulator.shutdown": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "simulator.screenshot": { ...LATEST_SCHEDULING, poll: null },
+  // The settings drawer: a read coalesces to the latest ask; actions are
+  // ordered so two toggles land in the order the person made them.
+  "simulator.detail": { ...LATEST_SCHEDULING, poll: null },
+  "simulator.action": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
+  // The host-wide instance verbs: the read coalesces, the two writes are
+  // ordered like the session verbs above. The read polls only where a caller
+  // opts in (Host ▸ Overview, the open + picker): an instance's idle
+  // countdown and its holders move with no push to the person's screen.
+  "simulator.instances": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 10 * SECOND_MS },
+  },
+  "simulator.powerOff": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "simulator.setKeepRunning": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The task's simulator catalog, refreshed like `browser.catalog.read`.
+  "simulator.catalog.read": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 30 * SECOND_MS },
+  },
+  "config.catalog.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.catalog.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "config.worktrees.get": { ...LATEST_SCHEDULING, poll: null },
+  "config.worktrees.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // Auto mode's two host-scoped settings. Both are get/set pairs over a host
+  // config file, so they take the `config.logLevels.*` shape above: a bounded
+  // read that may coalesce, and a write that may not.
+  //
+  // Neither read polls. `autoJudge.get` answers from a file only this GUI
+  // writes, and `autoPolicy.get` proxies an account record whose staleness the
+  // panel handles with the `updatedAt` it returns rather than by refetching on
+  // a timer - a cadence here would have every open settings tab waking the
+  // host, and through it the cloud, for a record that changes when a person
+  // edits it.
+  "autoJudge.get": { ...LATEST_SCHEDULING, poll: null },
+  // The write may not coalesce, and it also may not RACE: `useAutoJudgeSetMutation`
+  // folds each response into the `autoJudge.get` cache with `setQueriesData`, so
+  // an unordered pair leaves the cache holding whichever response landed last.
+  // `fifo` cannot supply that ordering - the queue key carries the params, so
+  // two clicks naming two different judges are two queues. The latest-only
+  // scope cannot coalesce these writes. `autoJudgeWriteScope` is
+  // where the order comes from, exactly as for `providers.fallbackPolicy.set`.
+  "autoJudge.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // A bounded read of the host's recent-decisions log (Permissions ▸ Activity).
+  // The tab refetches on mount and on its own refresh; a cadence here would
+  // wake the host for a log that grows only while an Auto mode turn runs.
+  "autoJudge.listRecent": { ...LATEST_SCHEDULING, poll: null },
+  "autoPolicy.get": { ...LATEST_SCHEDULING, poll: null },
+  // Last-write-wins on the server, so ordering is the client's job: rapid
+  // saves must reach the host in the order the user made them. `fifo` is not
+  // what delivers that (see `autoJudge.set` above - two bodies are two queue
+  // keys); `autoPolicyWriteScope` on `useAutoPolicySetMutation` is.
+  "autoPolicy.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The account-wide chat auto-archive setting. Read on Settings mount, never
+  // polled: another device's save reaches this host's cache on its own
+  // 5-minute refresh, and a timer here would only wake the host for it.
+  "chatAutoArchive.get": { ...LATEST_SCHEDULING, poll: null },
+  // Last-write-wins on the server, ordered on the client by
+  // `chatAutoArchiveWriteScope` on `useChatAutoArchiveSetMutation`, exactly as
+  // `autoPolicy.set` above.
+  "chatAutoArchive.set": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  // The user's team environments, cached by the host for the signed-in
+  // session; no GUI reads them yet.
+  "environment.list": { ...LATEST_SCHEDULING, poll: null },
+  "environment.host.read": { ...LATEST_SCHEDULING, poll: null },
+  "environment.binding.read": { ...LATEST_SCHEDULING, poll: null },
+  "environment.host.bind": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.host.list": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
+  "environment.members": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
+  "environment.setMainBot": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "diagnostics.logs.list": { ...LATEST_SCHEDULING, poll: null },
+  "diagnostics.logs.tail": { ...LATEST_SCHEDULING, poll: null },
+  // A bounded read over settled facts (Usage page + epic cost badge). The
+  // Settings panel controls its own refetch (window/metric change, manual
+  // retry) and opts out of polling; the ambient epic cost badge opts in
+  // (matching `host.getRateLimitUsage`'s cadence below) so it self-heals
+  // within a bounded time from a silently-reverted fetch instead of staying
+  // stuck pending forever with no other trigger.
+  "host.usage.summary": {
+    ...LATEST_SCHEDULING,
+    joinResponseTimeoutMs: USAGE_SUMMARY_RESPONSE_TIMEOUT_MS,
+    poll: { kind: "fixed", intervalMs: 15 * MINUTE_MS },
+  },
+} satisfies Pick<HostMethodPolicyTable, ClientHostUnaryRpcMethod>;
+
+const hostMethodPolicyTable: Partial<HostMethodPolicyTable> =
+  HOST_METHOD_POLL_TABLE;
+
+export const hostRpcSchedulingPolicy: RpcSchedulingPolicy<HostRpcRegistry> = {
+  modeFor(method, params) {
+    const mode = hostMethodPolicyTable[method]?.mode ?? LATEST_SCHEDULING.mode;
+    return typeof mode === "function" ? mode(params) : mode;
+  },
+  latestScopeFor(method, params) {
+    return hostMethodPolicyTable[method]?.latestScope?.(params);
+  },
+  joinResponseTimeoutMs(method) {
+    return hostMethodPolicyTable[method]?.joinResponseTimeoutMs ?? null;
+  },
+};
+
+type HostRpcMethodMeta<Method extends keyof HostRpcRegistry & string> = {
+  readonly hostRpcMethod: Method;
+};
+
+export function stampHostRpcMethod<
+  Method extends keyof HostRpcRegistry & string,
+>(
+  meta: Record<string, unknown> | undefined,
+  method: Method,
+): Record<string, unknown> & HostRpcMethodMeta<Method> {
+  return { ...meta, hostRpcMethod: method };
+}
+
+export function assertExactHostMethodPollTableKeys(
+  table: Pick<HostMethodPolicyTable, ClientHostUnaryRpcMethod>,
+): void {
+  const registryKeys = Object.keys(HOST_UNARY_RPC_ROUTES).sort();
+  const tableKeys = Object.keys(table).sort();
+  const hasExactKeys =
+    registryKeys.length === tableKeys.length &&
+    registryKeys.every((key, index) => key === tableKeys[index]);
+
+  if (!hasExactKeys) {
+    throw new Error(
+      `Host method poll table must exactly match client-routable host methods. Registry: ${registryKeys.join(", ")}. Table: ${tableKeys.join(", ")}.`,
+    );
+  }
+}
+
+assertExactHostMethodPollTableKeys(HOST_METHOD_POLL_TABLE);

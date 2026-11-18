@@ -1,0 +1,293 @@
+import { useDraggable } from "@dnd-kit/core";
+import {
+  useCallback,
+  useId,
+  useMemo,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
+import { v4 as uuidv4 } from "uuid";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { StatusGlyph } from "@/components/notifications/status-glyph";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { AgentStopButton } from "@/components/chat/agent-stop-button";
+import {
+  CHAT_DOCK_PANEL_LIST,
+  CHAT_DOCK_PANEL_ROW,
+  CHAT_DOCK_PANEL_ROW_BUTTON,
+  CHAT_DOCK_PANEL_ROW_TEXT,
+} from "@/components/chat/chat-dock-panel-row";
+import {
+  ACTIVE_AGENT_DND_TYPE,
+  getActiveAgentDragId,
+  type EpicCanvasActiveAgentDragData,
+} from "@/components/epic-canvas/dnd/dnd";
+import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
+import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
+import { useMaybeEpicTuiAgentHarnessId } from "@/lib/epic-selectors";
+import { cn } from "@/lib/utils";
+
+/**
+ * A row's `surface` is UI copy ("gui"/"tui"); opening a tile needs the
+ * record-backed node kind. The two map 1:1 (the inverse of `surfaceOf` in
+ * `use-agent-stop-controls`).
+ */
+function nodeKindForSurface(surface: "gui" | "tui"): "chat" | "terminal-agent" {
+  return surface === "gui" ? "chat" : "terminal-agent";
+}
+
+function ActivityDot(props: {
+  readonly activity: AgentRow["activity"];
+  readonly agentId: string;
+}) {
+  if (props.activity === "turn") {
+    return (
+      <AgentSpinningDots
+        className="shrink-0"
+        testId={undefined}
+        variant={undefined}
+        tone="muted"
+      />
+    );
+  }
+  if (props.activity === "background") {
+    return (
+      <StatusGlyph
+        status="background"
+        className="size-3.5"
+        testId={`active-agent-background-activity-${props.agentId}`}
+        label={null}
+      />
+    );
+  }
+  return (
+    <span
+      aria-hidden
+      className="size-1.5 shrink-0 rounded-full bg-muted-foreground/40"
+    />
+  );
+}
+
+/**
+ * On-hover reveal wrapper for a row's stop button, mirroring the per-file Undo
+ * affordance in the accumulated-changes panel: the button stays mounted (so
+ * keyboard focus still reaches it) but is invisible until the row is hovered or
+ * a descendant gains focus. When `revealOnHover` is false the button renders
+ * inline and always visible (the TUI popover surface).
+ */
+function StopAffordance(props: {
+  readonly revealOnHover: boolean;
+  readonly children: ReactNode;
+}) {
+  if (!props.revealOnHover) return <>{props.children}</>;
+  return (
+    <span className="inline-flex opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
+      {props.children}
+    </span>
+  );
+}
+
+/**
+ * One openable active-agent row. Its self-describing payload keeps the same
+ * pane, empty-canvas, and header-tab behavior as the navigator while preserving
+ * the agent's tab-bound host instead of consulting the app's active device.
+ *
+ * The drag id is occurrence-scoped because this is another rendering of a node
+ * that is usually mounted in the sidebar at the same time. The trailing stop
+ * action stays outside the drag/open button so stopping never starts a drag or
+ * opens the tile.
+ */
+function AgentStopRow(props: {
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly agent: AgentRow;
+  readonly self: boolean;
+  readonly compact: boolean;
+  readonly onOpen: (
+    agent: AgentRow,
+    event: MouseEvent<HTMLButtonElement>,
+  ) => void;
+}) {
+  const { epicId, viewTabId, agent, self, compact, onOpen } = props;
+  const occurrenceId = useId();
+  const harnessId = useMaybeEpicTuiAgentHarnessId(agent.id);
+  const dragData = useMemo<EpicCanvasActiveAgentDragData>(
+    () => ({
+      kind: ACTIVE_AGENT_DND_TYPE,
+      epicId,
+      viewTabId,
+      agent: {
+        id: agent.id,
+        type: nodeKindForSurface(agent.surface),
+        name: agent.title,
+        hostId: agent.hostId,
+        harnessId,
+      },
+    }),
+    [
+      agent.hostId,
+      agent.id,
+      agent.surface,
+      agent.title,
+      epicId,
+      harnessId,
+      viewTabId,
+    ],
+  );
+  const dragDisabled = useDragSourceDisabled();
+  const {
+    attributes,
+    listeners,
+    setNodeRef: dragRef,
+    isDragging,
+  } = useDraggable({
+    id: getActiveAgentDragId(occurrenceId),
+    disabled: dragDisabled,
+    data: dragData,
+  });
+  const openAgent = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => onOpen(agent, event),
+    [agent, onOpen],
+  );
+  // No grab affordance where the gesture is gone: the row is a plain button.
+  const grabCursor = isDragging ? "cursor-grabbing" : "cursor-grab";
+  const cursorClass = dragDisabled ? null : grabCursor;
+
+  return (
+    <li
+      className={cn(
+        "group",
+        CHAT_DOCK_PANEL_ROW,
+        self ? "bg-foreground/8" : "pl-5 hover:bg-foreground/5",
+        isDragging && "opacity-60",
+      )}
+    >
+      <TooltipWrapper
+        label={`Open ${agent.title}`}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <button
+          ref={dragRef}
+          {...attributes}
+          {...listeners}
+          type="button"
+          aria-label={`Open ${agent.title}`}
+          onClick={openAgent}
+          className={cn(CHAT_DOCK_PANEL_ROW_BUTTON, cursorClass)}
+        >
+          <ActivityDot activity={agent.activity} agentId={agent.id} />
+          <span
+            className={cn(
+              "block min-w-0 flex-1 truncate text-foreground/85",
+              CHAT_DOCK_PANEL_ROW_TEXT,
+              self && "font-medium",
+            )}
+          >
+            {agent.title}
+          </span>
+        </button>
+      </TooltipWrapper>
+      {self ? (
+        // The current agent's "Stop all" stays visible - it is the primary
+        // action and keeps the parent row from looking stop-less.
+        <AgentStopButton
+          epicId={epicId}
+          agentId={agent.id}
+          hostId={agent.hostId}
+          label="Stop all"
+          iconOnly={compact}
+          testId="agent-stop-all"
+        />
+      ) : (
+        <StopAffordance revealOnHover={compact}>
+          <AgentStopButton
+            epicId={epicId}
+            agentId={agent.id}
+            hostId={agent.hostId}
+            label="Stop"
+            iconOnly={compact}
+            testId={undefined}
+          />
+        </StopAffordance>
+      )}
+    </li>
+  );
+}
+
+/**
+ * Shared row list for both agent-stop surfaces. The current agent is the
+ * topmost row; its active descendants follow, indented, each individually
+ * stoppable. Keeping this in one place is what guarantees the two surfaces stay
+ * consistent.
+ *
+ * Every row carries a trailing stop control occupying the same slot, so the
+ * titles truncate at the same column regardless of which stops are visible.
+ * A row shows no GUI/TUI badge: the surface decides which tile opens, and
+ * which one that is does not help the reader choose what to stop. The single
+ * `surface` prop drives the only presentation difference:
+ *   - `composer-panel` uses compact icon-only stops; the current agent's
+ *     "Stop all" stays visible (so the parent row never looks stop-less) while
+ *     each descendant's stop reveals on hover (matching the accumulated-changes
+ *     per-file Undo).
+ *   - `tui-popover` uses labelled, always-visible stops on every row.
+ */
+export function AgentStopList(props: {
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly self: AgentRow;
+  readonly descendants: ReadonlyArray<AgentRow>;
+  readonly surface: "composer-panel" | "tui-popover";
+}) {
+  const compact = props.surface === "composer-panel";
+  const { openTile } = useEpicTileNavigation();
+  const openAgent = useCallback(
+    (agent: AgentRow, event: MouseEvent<HTMLButtonElement>) => {
+      openTile(
+        {
+          node: {
+            id: agent.id,
+            instanceId: uuidv4(),
+            type: nodeKindForSurface(agent.surface),
+            name: agent.title,
+            hostId: agent.hostId,
+          },
+          target: { tabId: props.viewTabId },
+          gesture: "explicit",
+          modifiers: modifiersFromMouseEvent(event),
+          placement: null,
+          dedupe: true,
+          source: "direct_ui",
+        },
+        "user",
+      );
+    },
+    [props.viewTabId, openTile],
+  );
+  return (
+    <ul className={cn("m-0 list-none", CHAT_DOCK_PANEL_LIST)}>
+      <AgentStopRow
+        epicId={props.epicId}
+        viewTabId={props.viewTabId}
+        agent={props.self}
+        self
+        compact={compact}
+        onOpen={openAgent}
+      />
+      {props.descendants.map((agent) => (
+        <AgentStopRow
+          key={agent.id}
+          epicId={props.epicId}
+          viewTabId={props.viewTabId}
+          agent={agent}
+          self={false}
+          compact={compact}
+          onOpen={openAgent}
+        />
+      ))}
+    </ul>
+  );
+}

@@ -1,0 +1,375 @@
+import { useMutation, type UseMutationResult } from "@tanstack/react-query";
+import type {
+  HostRpcError,
+  RequestOfMethod,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { useQueryClient } from "@tanstack/react-query";
+import type { ProviderLoginSignInRequest } from "@traycer/protocol/host/provider-schemas";
+import {
+  providerProfileSchema,
+  PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
+  type ProviderProfile,
+} from "@traycer/protocol/host/provider-schemas";
+import { type HostRpcRegistry } from "@/lib/host";
+import { useHostClient } from "@/lib/host";
+import {
+  hostClientUnavailableError,
+  withHostMutationLifecycleBoundary,
+} from "@/hooks/host/use-host-query";
+import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import {
+  useProviderSignInRecording,
+  type SignInRequestRecorder,
+} from "@/hooks/providers/use-provider-sign-in-recording";
+import type { SignInRecording } from "@traycer-clients/shared/host-client/provider-sign-in-request";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
+import { toastFromHostError } from "@/lib/host-error-toast";
+import { commitAuthoritativeProvidersList } from "@/hooks/providers/commit-authoritative-providers-list";
+
+type AwaitLoginRequest = RequestOfMethod<
+  HostRpcRegistry,
+  "providers.awaitLogin"
+>;
+type AwaitLoginResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "providers.awaitLogin"
+>;
+type AwaitLoginContext = { readonly hostId: string | null };
+
+export type SignInRecordingEnd = Extract<
+  SignInRecording,
+  { readonly kind: "ended" }
+>["reason"];
+
+/** Never on the wire. `signInRecordingEnded` is null when nothing was recorded or the recording went through. */
+export type AwaitLoginAnswer = AwaitLoginResponse & {
+  readonly signInRecordingEnded: SignInRecordingEnd | null;
+};
+
+/**
+ * One wait for a login: the wire request, and the caller's way to stop
+ * waiting for it.
+ *
+ * The request names a provider and a profile and nothing else, and the client
+ * shares one in-flight `providers.awaitLogin` between identical requests
+ * (`host-method-policy-table.ts`, mode `join`). That is right while both
+ * waiters wait on the same login, and wrong once one of them has let its
+ * login go: its request stays in flight for the seconds the host spends
+ * re-probing auth after the child exits, and a sign-in started again inside
+ * that window would take that request's "not signed in" for its own answer.
+ * Aborting `signal` detaches this wait, so the next one is asked afresh.
+ * `undefined` for a caller that only ever waits to the end.
+ *
+ * `readsProfileOutcome` is true only for a caller that reads the answer's
+ * `profileOutcome`: it alone has the list read again for an answer with no
+ * state that names a profile.
+ */
+export type AwaitLoginVariables = {
+  readonly request: AwaitLoginRequest;
+  readonly signal: AbortSignal | undefined;
+  readonly readsProfileOutcome: boolean;
+};
+
+// The provider state a login echo carries. Named rather than inlined so the
+// capability-stripping helper below states its own contract.
+type AwaitLoginProviderState = NonNullable<AwaitLoginResponse["state"]>;
+
+/**
+ * Drops `loginCapability` from a mutation state echo so an overlay cannot
+ * narrow the cached capability. See the call site for why this one field is
+ * different from every other field on the echo.
+ *
+ * The echo's rows are the frozen profile shape, so a cached row keeps every
+ * field the echo does not carry (the list's own projection fields, and any
+ * a later list answer adds) and takes the echo's value for every field it
+ * does, except `enabled` and `launchCommand`, which only the list decides.
+ */
+function withoutLoginCapability(
+  state: AwaitLoginProviderState,
+  cachedProfiles: readonly ProviderProfile[],
+) {
+  const { loginCapability: _dropped, ...rest } = state;
+  return {
+    ...rest,
+    profiles: rest.profiles.map((profile) => {
+      const parsed = providerProfileSchema.parse(profile);
+      const cached = cachedProfiles.find(
+        (candidate) => candidate.profileId === parsed.profileId,
+      );
+      return cached === undefined
+        ? parsed
+        : {
+            ...cached,
+            ...parsed,
+            enabled: cached.enabled,
+            launchCommand: cached.launchCommand,
+          };
+    }),
+  };
+}
+
+/** A final `profileOutcome` is the answer whatever else it carries. */
+function signInRequestToRecord(
+  data: AwaitLoginResponse,
+): ProviderLoginSignInRequest | null {
+  if ((data.profileOutcome ?? null) !== null) return null;
+  return data.signInRequest ?? null;
+}
+
+async function awaitWithRecording(
+  client: HostClient<HostRpcRegistry>,
+  variables: AwaitLoginVariables,
+  recordSignInRequest: SignInRequestRecorder,
+  targeted: boolean,
+): Promise<AwaitLoginAnswer> {
+  const ask = (request: AwaitLoginRequest): Promise<AwaitLoginResponse> =>
+    variables.signal === undefined && !targeted
+      ? client.requestWithResponseTimeout(
+          "providers.awaitLogin",
+          request,
+          PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
+        )
+      : client.requestWithOptions("providers.awaitLogin", request, {
+          responseTimeoutMs: PROVIDERS_AWAIT_LOGIN_RESPONSE_BUDGET_MS,
+          idempotencyKey: null,
+          requiredHostMethodVersion: targeted
+            ? {
+                method: "providers.awaitLogin",
+                version: { major: 2, minor: 4 },
+              }
+            : null,
+          signal: variables.signal,
+        });
+  const answer = await ask(variables.request);
+  const signInRequest = signInRequestToRecord(answer);
+  if (signInRequest === null) return { ...answer, signInRecordingEnded: null };
+  const recording = await recordSignInRequest(
+    signInRequest,
+    variables.signal ?? new AbortController().signal,
+  );
+  if (recording.kind === "ended") {
+    return { ...answer, signInRecordingEnded: recording.reason };
+  }
+  const next = await ask({
+    ...variables.request,
+    recordedOperationId: recording.recordedOperationId,
+  });
+  // Asked again for the id just recorded: the computer ignored it, so the
+  // step ends here rather than recording or asking once more.
+  const askedAgain =
+    signInRequestToRecord(next)?.operationId === recording.recordedOperationId;
+  return {
+    ...next,
+    signInRecordingEnded: askedAgain ? "already-recorded" : null,
+  };
+}
+
+function awaitAnswerNamesProfile(data: AwaitLoginResponse): boolean {
+  const kind = data.profileOutcome?.kind;
+  return kind === "signed-in" || kind === "already-signed-in";
+}
+
+/**
+ * Awaits the honest login-completion edge for a provider on the CURRENT tab's
+ * host: the host blocks the response until the `<cli> auth login` child
+ * closes, then re-probes and returns that provider's fresh state. This replaces
+ * the old 2s `forceAuthRefresh` poll - one request, resolving exactly when the
+ * browser flow finishes, so there is no flaky-probe flicker mid-sign-in.
+ *
+ * On success the returned state is merged into the tab host's `providers.list`
+ * cache, so the re-auth gate flips (and unmounts the banner) without a second
+ * probe. A `null` state means nothing about the provider changed - nothing was
+ * in flight to await, or the host could not install an approved sign-in - and
+ * leaves the cache untouched, except that for a caller that reads outcomes
+ * (`readsProfileOutcome`) an answer whose `profileOutcome` names a profile has
+ * the list read again.
+ */
+export function useProvidersAwaitLogin(): UseMutationResult<
+  AwaitLoginAnswer,
+  HostRpcError,
+  AwaitLoginVariables,
+  AwaitLoginContext
+> {
+  const client = useTabHostClient();
+  const tabHostId = useTabHostId();
+  return useProvidersAwaitLoginForClient({
+    client,
+    getCacheHostId: () => tabHostId,
+  });
+}
+
+/**
+ * Settings-panel variant. It follows the selected host via
+ * `HostRuntimeContext`, not a tab-bound host.
+ */
+export function useHostScopedProvidersAwaitLogin(): UseMutationResult<
+  AwaitLoginAnswer,
+  HostRpcError,
+  AwaitLoginVariables,
+  AwaitLoginContext
+> {
+  const client = useHostClient();
+  return useProvidersAwaitLoginForClient({
+    client,
+    getCacheHostId: () => client.getActiveHostId(),
+  });
+}
+
+/** Client-scoped variant, keyed by a caller-supplied cache host id - lets a
+ *  caller outside `HostRuntimeContext` (e.g. the picker's tab-scoped
+ *  "Add a profile" flow) target an explicit host instead of the
+ *  app-wide default. `getCacheHostId` is a separate parameter (not derived
+ *  from `client.getActiveHostId()`) so the cache write lands under the
+ *  caller's KNOWN host id even while `client` itself is still resolving
+ *  (mirrors `useProvidersAwaitLogin`'s tab-scoped `getCacheHostId`). */
+export function useProvidersAwaitLoginForClient(args: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly getCacheHostId: () => string | null;
+}): UseMutationResult<
+  AwaitLoginAnswer,
+  HostRpcError,
+  AwaitLoginVariables,
+  AwaitLoginContext
+> {
+  return useProvidersDestinationAwaitLoginForClient(args, false);
+}
+
+export function useProvidersDestinationAwaitLoginForClient(
+  args: {
+    readonly client: HostClient<HostRpcRegistry> | null;
+    readonly getCacheHostId: () => string | null;
+  },
+  targeted: boolean,
+): UseMutationResult<
+  AwaitLoginAnswer,
+  HostRpcError,
+  AwaitLoginVariables,
+  AwaitLoginContext
+> {
+  const queryClient = useQueryClient();
+  const recordSignInRequest = useProviderSignInRecording();
+  const client = args.client;
+  return useMutation<
+    AwaitLoginAnswer,
+    HostRpcError,
+    AwaitLoginVariables,
+    AwaitLoginContext
+  >({
+    // Long-poll: the host holds the response until the OAuth child
+    // terminates (bounded by its own 3-minute login timeout). The default
+    // ~30 s frame timeout would abandon a healthy sign-in as soon as the
+    // user takes longer than that in the browser.
+    mutationFn: (variables) =>
+      withHostQueryErrorBoundary("providers.awaitLogin", async () => {
+        if (client === null) {
+          return Promise.reject<AwaitLoginAnswer>(
+            hostClientUnavailableError("providers.awaitLogin"),
+          );
+        }
+        return awaitWithRecording(
+          client,
+          variables,
+          recordSignInRequest,
+          targeted,
+        );
+      }),
+    ...withHostMutationLifecycleBoundary<
+      AwaitLoginAnswer,
+      AwaitLoginVariables,
+      AwaitLoginContext
+    >("providers.awaitLogin", {
+      mutationKey: providersMutationKeys.awaitLogin(),
+      onMutate: () => ({ hostId: args.getCacheHostId() }),
+      onSuccess: async (data: AwaitLoginAnswer, variables, context) => {
+        if (targeted || context.hostId === null) return;
+        const next = data.state;
+        if (next === null) {
+          // This re-read is the one the caller's lookup uses, and it finishes before the caller's handler.
+          if (!variables.readsProfileOutcome || !awaitAnswerNamesProfile(data))
+            return;
+          await queryClient.invalidateQueries({
+            queryKey: hostQueryKeys.methodScope(
+              context.hostId,
+              "providers.list",
+            ),
+          });
+          return;
+        }
+        await commitAuthoritativeProvidersList({
+          queryClient,
+          hostId: context.hostId,
+          update: (prev) => {
+            if (prev === undefined) return prev;
+            // Every envelope key the echo does not replace is kept as cached.
+            return {
+              ...prev,
+              providers: prev.providers.map((p) =>
+                p.providerId === next.providerId
+                  ? // Overlay the echo onto the cached entry rather than
+                    // replacing it. The echo is pinned to the frozen
+                    // `providerMutationCliStateSchemaV21`, so it does not
+                    // carry the provider-pack-registry fields
+                    // (`managedInstallState`, `versionVisibility`,
+                    // `advisory`) - only `providers.list@5.0` does. A
+                    // straight replace would blank whatever the last list
+                    // fetch established, since a login cannot change what is
+                    // installed. The echo stays authoritative for every
+                    // field it does model.
+                    //
+                    // `loginCapability` is the one field it must NOT be
+                    // authoritative for. It is PRESENT on the echo but frozen
+                    // at the v4.0 shape, so it lacks `terminalLogin` - and a
+                    // present-but-narrower object overwrites wholesale. That
+                    // would silently retract the terminal sign-in affordance
+                    // the moment any login echo landed, which is exactly when
+                    // the user is looking at it. Capability is a property of
+                    // the installed CLI, not of a login attempt; only
+                    // `providers.list` may set it.
+                    {
+                      ...p,
+                      ...withoutLoginCapability(next, p.profiles),
+                    }
+                  : p,
+              ),
+              native: prev.native,
+            };
+          },
+        });
+        // The overlay above is optimistic-only, and deliberately cannot be
+        // the last word. The echo is pinned to
+        // `providerMutationCliStateSchemaV21`, whose field set is the
+        // hand-frozen `providerCliStateBaseShapeV40` - strictly narrower than
+        // the live `providers.list` row, and a login is exactly the moment the
+        // rest of that row moves too (the profile list gains the new account,
+        // its ambient identity resolves). Left at the overlay, the screens the
+        // user is looking at would keep rendering pre-login values for every
+        // field the echo does not model.
+        //
+        // `commitAuthoritativeProvidersList` invalidates every
+        // `PROVIDER_INVALIDATIONS` entry EXCEPT `providers.list` (the one it
+        // just wrote), which is right for the force-refresh callers - their
+        // payload IS a full list response. It is wrong here, so this path adds
+        // the one invalidation the helper withholds: without it the stale
+        // fields stand for a full `staleTime` (15 minutes).
+        //
+        // Note what the refetch will NOT do: enable the provider. Signing in
+        // never changes enablement - the row comes back with the same sticky
+        // `enabled` it had. Onboarding, the one screen where a sign-in is
+        // meant to enable, sends that toggle itself.
+        await queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(context.hostId, "providers.list"),
+        });
+      },
+      onError: (error, variables) => {
+        // A wait the caller itself dropped is not a failure to confirm
+        // anything: the caller already knows how its attempt ended.
+        if (variables.signal?.aborted === true) return;
+        toastFromHostError(error, "Couldn't confirm sign-in.");
+      },
+    }),
+  });
+}

@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "ignoreDeprecations": "6.0",
+    "noEmit": false,
+    "noEmitOnError": true,
+    "outDir": "dist",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "rootDir": "../..",
+    "declaration": false,
+    "sourceMap": true,
+    "jsx": "preserve",
+    "allowImportingTsExtensions": false
+  },
+  "include": [
+    "src/electron-main/**/*.ts",
+    "src/electron-preload/**/*.ts",
+    "src/ipc-contracts/**/*.ts",
+    "../shared/**/*.ts"
+  ],
+  "exclude": ["**/__tests__/**", "**/*.test.ts", "../shared/**/__tests__/**"]
+}

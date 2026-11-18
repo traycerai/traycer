@@ -1,0 +1,2986 @@
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import type { HostUpdateAttemptVerification } from "../record";
+import {
+  __resetHeldInProcessForTest,
+  isUpdateAttemptLockHeldInProcess,
+} from "../lock";
+import { updateAttemptLockPath, updateAttemptRecordPath } from "../paths";
+import { TERMINAL_ATTEMPT_RETENTION_MS } from "../record";
+import { advanceAttempt } from "../transition";
+import { attemptIdentityOf } from "@traycer/protocol/config/host-update-attempt";
+import type {
+  HostUpdateAttemptClaimBaseline,
+  HostUpdateAttemptRecord,
+} from "../record";
+import {
+  __setBeforeRecordRenameHookForTest,
+  readUpdateAttemptRecord,
+} from "../store";
+import {
+  commitExecutorAttemptMutation,
+  commitExecutorRecoveryMutation,
+  parkedActivationMatchesInstall,
+  verifyUpdateMutationCapability,
+  withSupervisorRelaunchContender,
+  withUpdateContender,
+  withUpdateExecutorCompletionSegment,
+  type ExecutorCompletionSession,
+  type SupervisorRelaunchInstalledIdentity,
+  type UpdateContenderAdmission,
+  type UpdateContenderExecutionContext,
+  type UpdateContenderOutcome,
+  type UpdateMutationCapability,
+} from "../contender";
+import type { AttemptClaimRequest } from "../transition";
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+async function waitUntil(
+  predicate: () => boolean,
+  maxWaitMs: number,
+): Promise<void> {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("waitUntil: condition never became true");
+}
+
+const roots: string[] = [];
+const children: ChildProcessWithoutNullStreams[] = [];
+const supervisedPids: number[] = [];
+
+async function freshHome(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "host-update-contender-test-"));
+  roots.push(root);
+  return join(root, "first-run", "host-home");
+}
+
+function options(hostHomeDir: string, admission: UpdateContenderAdmission) {
+  return {
+    hostHomeDir,
+    reason: "contender-test",
+    waitMs: 0,
+    pollIntervalMs: 10,
+    admission,
+  } as const;
+}
+
+function record(
+  overrides: Partial<HostUpdateAttemptRecord>,
+): HostUpdateAttemptRecord {
+  return {
+    schemaVersion: 2,
+    attemptId: "attempt-1",
+    generation: 1,
+    sequence: 1,
+    trigger: "manual",
+    targetVersion: "1.2.3",
+    phase: "downloading",
+    execution: "active",
+    continuation: null,
+    progress: null,
+    startedAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    completedAt: null,
+    error: null,
+    ...overrides,
+  };
+}
+
+function baseCreateRequest(
+  overrides: Partial<AttemptClaimRequest>,
+): AttemptClaimRequest {
+  const { initialPhase, initialContinuation, ...rest } = {
+    targetVersion: "1.2.3",
+    trigger: "manual",
+    action: "start",
+    expected: null,
+    newAttemptId: "attempt-1",
+    initialPhase: "downloading",
+    initialContinuation: null,
+    claim: null,
+    nowIso: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  } as const;
+  // The dependent union, honoured rather than routed around: a fixture must
+  // not be able to build a pair production cannot. `Partial<AttemptClaimRequest>`
+  // distributes over the union, so a spread alone would re-admit
+  // `downloading` + `activate`.
+  if (initialContinuation === "activate") {
+    if (initialPhase !== "preparing") {
+      throw new Error("fixture: `activate` may be born only at `preparing`");
+    }
+    return { ...rest, initialPhase, initialContinuation };
+  }
+  return { ...rest, initialPhase, initialContinuation };
+}
+
+async function writeRecord(
+  hostHomeDir: string,
+  value: HostUpdateAttemptRecord | string,
+): Promise<void> {
+  await mkdir(hostHomeDir, { recursive: true });
+  await writeFile(
+    updateAttemptRecordPath(hostHomeDir),
+    typeof value === "string" ? value : `${JSON.stringify(value)}\n`,
+  );
+}
+
+async function waitForFile(path: string, maxWaitMs: number): Promise<void> {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    if (
+      await stat(path).then(
+        () => true,
+        () => false,
+      )
+    )
+      return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`timed out waiting for ${path}`);
+}
+
+// The fixtures now write every barrier file atomically (temp path + a
+// same-directory rename), so a stat-visible file is never a
+// truncated-but-not-yet-written one - but this content check is a second,
+// independent guard for `term-grace-started`, the one caller actually seen
+// failing on that race (`readFile` returning "" and `Number("")` being 0).
+async function waitForNonEmptyFile(
+  path: string,
+  maxWaitMs: number,
+): Promise<void> {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    const content = await readFile(path, "utf8").catch(() => "");
+    if (content.length > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`timed out waiting for non-empty ${path}`);
+}
+
+function spawnAttemptCompetitor(
+  hostHomeDir: string,
+  barrierDir: string,
+): ChildProcessWithoutNullStreams {
+  const worker = spawn(
+    "bun",
+    ["run", join(__dirname, "fixtures", "lock-worker.ts")],
+    {
+      env: {
+        ...process.env,
+        WORKER_HOST_HOME_DIR: hostHomeDir,
+        WORKER_BARRIER_DIR: barrierDir,
+        WORKER_WAIT_MS: "0",
+      },
+    },
+  );
+  children.push(worker);
+  return worker;
+}
+
+function forgetChild(child: ChildProcessWithoutNullStreams): void {
+  const index = children.indexOf(child);
+  if (index >= 0) children.splice(index, 1);
+}
+
+afterEach(async () => {
+  __setBeforeRecordRenameHookForTest(null);
+  __resetHeldInProcessForTest();
+  for (const pid of supervisedPids.splice(0)) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // Not a group leader, or already gone.
+    }
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // The actuator normally exits through its release barrier; cleanup is
+      // best effort when an assertion fails before that point.
+    }
+  }
+  await Promise.all(
+    children.splice(0).map(
+      (child) =>
+        new Promise<void>((resolve) => {
+          if (child.exitCode !== null) {
+            resolve();
+            return;
+          }
+          child.kill("SIGKILL");
+          // The test body already performs the barrier-level reap. Do not
+          // wait for inherited stdio/close bookkeeping from a killed helper.
+          resolve();
+        }),
+    ),
+  );
+  await Promise.all(
+    roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
+  );
+});
+
+describe("withUpdateContender - canonical first-run boundary", () => {
+  it("keeps rebindAttemptLockLiveness authority on a blocked actuator when helper or executor dies", async () => {
+    const hostHomeDir = await freshHome();
+    const barrierDir = join(hostHomeDir, "bcd-barrier");
+    await mkdir(barrierDir, { recursive: true });
+    const helper = spawn(
+      "bun",
+      [
+        "run",
+        join(__dirname, "fixtures", "maintenance-helper-executor-actuator.ts"),
+      ],
+      {
+        env: {
+          ...process.env,
+          MAINTENANCE_HOST_HOME: hostHomeDir,
+          MAINTENANCE_BARRIER_DIR: barrierDir,
+        },
+      },
+    );
+    children.push(helper);
+    await waitForFile(join(barrierDir, "helper-rebound"), 10_000);
+    await waitForFile(join(barrierDir, "supervisor-bind"), 10_000);
+    await waitForFile(join(barrierDir, "supervisor-granted"), 10_000);
+    const bindMessage = JSON.parse(
+      await readFile(join(barrierDir, "supervisor-bind"), "utf8"),
+    ) as { readonly kind: string; readonly pid: number };
+    expect(bindMessage.kind).toBe("bind-actuator");
+    expect(bindMessage.pid).toBeGreaterThan(0);
+    const grantMessage = JSON.parse(
+      await readFile(join(barrierDir, "supervisor-granted"), "utf8"),
+    ) as { readonly kind: string };
+    expect(grantMessage.kind).toBe("actuator-bound");
+    const rebound = JSON.parse(
+      await readFile(join(barrierDir, "helper-rebound"), "utf8"),
+    ) as {
+      readonly helperPid: number;
+      readonly executorPid: number;
+      readonly actuatorPid: number;
+    };
+    expect(rebound.helperPid).toBe(helper.pid);
+    supervisedPids.push(rebound.actuatorPid);
+    await waitForFile(join(barrierDir, "actuator-ready"), 10_000);
+    await waitForFile(join(barrierDir, "actuator-edge-running"), 10_000);
+
+    // The lock-acquiring helper's death must not make the blocked actuator's
+    // irreversible edge reclaimable. This is a lower-level
+    // rebindAttemptLockLiveness primitive test, not the production C-envelope
+    // process topology (covered by the OS-descendant fixture below).
+    helper.kill("SIGKILL");
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    forgetChild(helper);
+    const afterHelperDeath = join(barrierDir, "after-helper-death");
+    await mkdir(afterHelperDeath, { recursive: true });
+    const helperCompetitor = spawnAttemptCompetitor(
+      hostHomeDir,
+      afterHelperDeath,
+    );
+    await waitForFile(join(afterHelperDeath, "busy"), 10_000);
+    await new Promise<void>((resolve) => {
+      if (helperCompetitor.exitCode !== null) resolve();
+      else helperCompetitor.once("close", resolve);
+    });
+    forgetChild(helperCompetitor);
+    expect(
+      (
+        JSON.parse(await readFile(join(afterHelperDeath, "busy"), "utf8")) as {
+          readonly holder: { readonly pid: number } | null;
+        }
+      ).holder?.pid,
+    ).toBe(rebound.actuatorPid);
+
+    // The executor can be terminated without making a live actuator look like
+    // a stale lock owner after the primitive rebind.
+    process.kill(rebound.executorPid, "SIGTERM");
+    const whileActuatorBlocked = join(barrierDir, "while-actuator-blocked");
+    await mkdir(whileActuatorBlocked, { recursive: true });
+    const blockedAfterSupervisorDeath = spawnAttemptCompetitor(
+      hostHomeDir,
+      whileActuatorBlocked,
+    );
+    await waitForFile(join(whileActuatorBlocked, "busy"), 10_000);
+    await new Promise<void>((resolve) => {
+      if (blockedAfterSupervisorDeath.exitCode !== null) resolve();
+      else blockedAfterSupervisorDeath.once("close", resolve);
+    });
+    forgetChild(blockedAfterSupervisorDeath);
+    expect(
+      (
+        JSON.parse(
+          await readFile(join(whileActuatorBlocked, "busy"), "utf8"),
+        ) as {
+          readonly holder: { readonly pid: number } | null;
+        }
+      ).holder?.pid,
+    ).toBe(rebound.actuatorPid);
+    expect(
+      await stat(join(barrierDir, "actuator-exited")).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
+    await writeFile(join(barrierDir, "actuator-release"), "");
+    await waitForFile(join(barrierDir, "actuator-exited"), 10_000);
+
+    // Only after the rebound actuator exits may a fresh contender acquire and
+    // release the lock.
+    const afterActuatorDeath = join(barrierDir, "after-actuator-death");
+    await mkdir(afterActuatorDeath, { recursive: true });
+    const reclaim = spawnAttemptCompetitor(hostHomeDir, afterActuatorDeath);
+    await waitForFile(join(afterActuatorDeath, "held"), 10_000);
+    await writeFile(join(afterActuatorDeath, "release"), "");
+    await waitForFile(join(afterActuatorDeath, "released"), 10_000);
+    await new Promise<void>((resolve) => {
+      if (reclaim.exitCode !== null) resolve();
+      else reclaim.once("close", resolve);
+    });
+    forgetChild(reclaim);
+  }, 60_000);
+
+  it("keeps the actuator authoritative after its helper dies", async () => {
+    const hostHomeDir = await freshHome();
+    const barrierDir = join(hostHomeDir, "maintenance-barrier");
+    await mkdir(barrierDir, { recursive: true });
+    const helper = spawn(
+      "bun",
+      ["run", join(__dirname, "fixtures", "maintenance-helper-actuator.ts")],
+      {
+        env: {
+          ...process.env,
+          MAINTENANCE_HOST_HOME: hostHomeDir,
+          MAINTENANCE_BARRIER_DIR: barrierDir,
+        },
+      },
+    );
+    children.push(helper);
+    await waitForFile(join(barrierDir, "helper-rebound"), 10_000);
+    const rebound = JSON.parse(
+      await readFile(join(barrierDir, "helper-rebound"), "utf8"),
+    ) as { readonly helperPid: number; readonly actuatorPid: number };
+    supervisedPids.push(rebound.actuatorPid);
+    await new Promise<void>((resolve) => {
+      if (helper.exitCode !== null) {
+        resolve();
+        return;
+      }
+      helper.once("close", () => resolve());
+    });
+    expect(helper.exitCode).toBe(0);
+    expect(rebound.helperPid).not.toBe(rebound.actuatorPid);
+
+    const blockedBarrier = join(hostHomeDir, "blocked-contender");
+    await mkdir(blockedBarrier, { recursive: true });
+    const blocked = spawnAttemptCompetitor(hostHomeDir, blockedBarrier);
+    await waitForFile(join(blockedBarrier, "busy"), 10_000);
+    await new Promise<void>((resolve) => {
+      if (blocked.exitCode !== null) {
+        resolve();
+        return;
+      }
+      blocked.once("close", () => resolve());
+    });
+    const busy = JSON.parse(
+      await readFile(join(blockedBarrier, "busy"), "utf8"),
+    ) as { readonly holder: { readonly pid: number } | null };
+    expect(busy.holder?.pid).toBe(rebound.actuatorPid);
+
+    await writeFile(join(barrierDir, "actuator-release"), "");
+    await waitForFile(join(barrierDir, "actuator-exited"), 10_000);
+
+    const reclaimBarrier = join(hostHomeDir, "reclaim-contender");
+    await mkdir(reclaimBarrier, { recursive: true });
+    const reclaim = spawnAttemptCompetitor(hostHomeDir, reclaimBarrier);
+    await waitForFile(join(reclaimBarrier, "held"), 10_000);
+    const held = JSON.parse(
+      await readFile(join(reclaimBarrier, "held"), "utf8"),
+    ) as { readonly pid: number };
+    expect(held.pid).toBe(reclaim.pid);
+    await writeFile(join(reclaimBarrier, "release"), "");
+    await waitForFile(join(reclaimBarrier, "released"), 10_000);
+  }, 60_000);
+
+  it("uses the live supervisor as the liveness envelope across D death and B/C death ordering", async () => {
+    const hostHomeDir = await freshHome();
+    const barrierDir = join(hostHomeDir, "os-descendant-barrier");
+    await mkdir(barrierDir, { recursive: true });
+    const helper = spawn(
+      "bun",
+      [
+        "run",
+        join(__dirname, "fixtures", "maintenance-os-descendant-actuator.ts"),
+      ],
+      {
+        env: {
+          ...process.env,
+          MAINTENANCE_HOST_HOME: hostHomeDir,
+          MAINTENANCE_BARRIER_DIR: barrierDir,
+          MAINTENANCE_NODE_BINARY: process.execPath,
+        },
+      },
+    );
+    children.push(helper);
+
+    await waitForFile(join(barrierDir, "helper-rebound"), 10_000);
+    const rebound = JSON.parse(
+      await readFile(join(barrierDir, "helper-rebound"), "utf8"),
+    ) as {
+      readonly wrapperPid: number;
+      readonly descendantPid: number;
+      readonly supervisorPid: number;
+    };
+    supervisedPids.push(rebound.supervisorPid, rebound.descendantPid);
+    await waitForFile(join(barrierDir, "descendant-ready"), 10_000);
+
+    // D is only a wrapper. Killing it must not make the still-running OS
+    // descendant breakable or let a contender race the publisher handoff.
+    process.kill(rebound.wrapperPid, "SIGKILL");
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    const blockedBarrier = join(hostHomeDir, "after-wrapper-death");
+    await mkdir(blockedBarrier, { recursive: true });
+    const blocked = spawnAttemptCompetitor(hostHomeDir, blockedBarrier);
+    await waitForFile(join(blockedBarrier, "busy"), 10_000);
+    await new Promise<void>((resolve) => {
+      if (blocked.exitCode !== null) resolve();
+      else blocked.once("close", () => resolve());
+    });
+    forgetChild(blocked);
+    const busy = JSON.parse(
+      await readFile(join(blockedBarrier, "busy"), "utf8"),
+    ) as {
+      readonly holder: { readonly pid: number } | null;
+    };
+    // The holder is the live C envelope, never transient D or E.
+    expect(busy.holder?.pid).toBe(rebound.supervisorPid);
+
+    // B dying first must not reclaim the attempt while C still owns the
+    // detached D/E process group and can perform cleanup.
+    process.kill(helper.pid!, "SIGKILL");
+    const afterBBarrier = join(hostHomeDir, "after-helper-death");
+    await mkdir(afterBBarrier, { recursive: true });
+    const afterB = spawnAttemptCompetitor(hostHomeDir, afterBBarrier);
+    await waitForFile(join(afterBBarrier, "busy"), 10_000);
+    await new Promise<void>((resolve) => {
+      if (afterB.exitCode !== null) resolve();
+      else afterB.once("close", () => resolve());
+    });
+    forgetChild(afterB);
+    expect(
+      JSON.parse(await readFile(join(afterBBarrier, "busy"), "utf8")) as {
+        readonly holder: { readonly pid: number } | null;
+      },
+    ).toMatchObject({ holder: { pid: rebound.supervisorPid } });
+
+    // C death is the reclamation boundary: it kills/reaps D/E before the
+    // envelope disappears, after which a fresh contender may acquire.
+    process.kill(rebound.supervisorPid, "SIGTERM");
+    await waitForFile(join(barrierDir, "descendant-exited"), 10_000);
+    await waitForFile(join(barrierDir, "supervisor-exited"), 10_000);
+    const reclaimBarrier = join(hostHomeDir, "after-supervisor-death");
+    await mkdir(reclaimBarrier, { recursive: true });
+    const reclaim = spawnAttemptCompetitor(hostHomeDir, reclaimBarrier);
+    await waitForFile(join(reclaimBarrier, "held"), 10_000);
+    await writeFile(join(reclaimBarrier, "release"), "");
+    await waitForFile(join(reclaimBarrier, "released"), 10_000);
+  }, 60_000);
+
+  it("keeps admission busy after hard C death until the supervised D/E group is gone", async () => {
+    const hostHomeDir = await freshHome();
+    const barrierDir = join(hostHomeDir, "hard-supervisor-death-barrier");
+    await mkdir(barrierDir, { recursive: true });
+    const helper = spawn(
+      "bun",
+      [
+        "run",
+        join(__dirname, "fixtures", "maintenance-os-descendant-actuator.ts"),
+      ],
+      {
+        env: {
+          ...process.env,
+          MAINTENANCE_HOST_HOME: hostHomeDir,
+          MAINTENANCE_BARRIER_DIR: barrierDir,
+          MAINTENANCE_NODE_BINARY: process.execPath,
+        },
+      },
+    );
+    children.push(helper);
+    await waitForFile(join(barrierDir, "helper-rebound"), 10_000);
+    const rebound = JSON.parse(
+      await readFile(join(barrierDir, "helper-rebound"), "utf8"),
+    ) as {
+      readonly wrapperPid: number;
+      readonly descendantPid: number;
+      readonly supervisorPid: number;
+    };
+    supervisedPids.push(
+      rebound.supervisorPid,
+      rebound.wrapperPid,
+      rebound.descendantPid,
+    );
+    await waitForFile(join(barrierDir, "descendant-ready"), 10_000);
+    const published = JSON.parse(
+      await readFile(updateAttemptLockPath(hostHomeDir), "utf8"),
+    ) as {
+      readonly pid: number;
+      readonly supervisedProcessGroupId?: number;
+      readonly retainOnPublisherDeath?: boolean;
+    };
+    expect(published.pid).toBe(rebound.supervisorPid);
+    expect(published.supervisedProcessGroupId).toBe(rebound.wrapperPid);
+    expect(published.retainOnPublisherDeath).toBe(true);
+
+    // Hard C death bypasses its graceful group-reap handler. B also dies so
+    // no normal handback can make the lock disappear while D/E remain live.
+    process.kill(rebound.supervisorPid, "SIGKILL");
+    helper.kill("SIGKILL");
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    forgetChild(helper);
+    expect(() => process.kill(rebound.wrapperPid, 0)).not.toThrow();
+    expect(() => process.kill(rebound.descendantPid, 0)).not.toThrow();
+    expect(() => process.kill(-rebound.wrapperPid, 0)).not.toThrow();
+
+    const blockedBarrier = join(hostHomeDir, "after-hard-supervisor-death");
+    await mkdir(blockedBarrier, { recursive: true });
+    const blocked = spawnAttemptCompetitor(hostHomeDir, blockedBarrier);
+    await waitForFile(join(blockedBarrier, "busy"), 10_000);
+    await new Promise<void>((resolve) => {
+      if (blocked.exitCode !== null) resolve();
+      else blocked.once("close", () => resolve());
+    });
+    forgetChild(blocked);
+    expect(
+      JSON.parse(await readFile(join(blockedBarrier, "busy"), "utf8")) as {
+        readonly holder: { readonly pid: number } | null;
+      },
+    ).toMatchObject({ holder: { pid: rebound.supervisorPid } });
+    expect(
+      await stat(join(barrierDir, "descendant-exited")).then(
+        () => false,
+        () => true,
+      ),
+    ).toBe(true);
+
+    // Releasing E (and therefore D's group) is the only reclamation point.
+    await writeFile(join(barrierDir, "descendant-release"), "");
+    await waitForFile(join(barrierDir, "descendant-exited"), 10_000);
+    const reclaimBarrier = join(hostHomeDir, "after-final-descendant");
+    await mkdir(reclaimBarrier, { recursive: true });
+    const reclaim = spawnAttemptCompetitor(hostHomeDir, reclaimBarrier);
+    await waitForFile(join(reclaimBarrier, "held"), 10_000);
+    await writeFile(join(reclaimBarrier, "release"), "");
+    await waitForFile(join(reclaimBarrier, "released"), 10_000);
+  }, 60_000);
+
+  it("C escalates a TERM-resistant descendant and reclaims only after the group is reaped", async () => {
+    const hostHomeDir = await freshHome();
+    const barrierDir = join(hostHomeDir, "term-resistant-barrier");
+    await mkdir(barrierDir, { recursive: true });
+    const helper = spawn(
+      "bun",
+      [
+        "run",
+        join(__dirname, "fixtures", "maintenance-os-descendant-actuator.ts"),
+      ],
+      {
+        env: {
+          ...process.env,
+          MAINTENANCE_HOST_HOME: hostHomeDir,
+          MAINTENANCE_BARRIER_DIR: barrierDir,
+          MAINTENANCE_NODE_BINARY: process.execPath,
+          MAINTENANCE_TERM_RESISTANT: "1",
+        },
+      },
+    );
+    children.push(helper);
+    await waitForFile(join(barrierDir, "helper-rebound"), 10_000);
+    const rebound = JSON.parse(
+      await readFile(join(barrierDir, "helper-rebound"), "utf8"),
+    ) as {
+      readonly supervisorPid: number;
+      readonly wrapperPid: number;
+      readonly descendantPid: number;
+    };
+    supervisedPids.push(
+      rebound.supervisorPid,
+      rebound.wrapperPid,
+      rebound.descendantPid,
+    );
+    await waitForFile(join(barrierDir, "descendant-ready"), 10_000);
+
+    process.kill(rebound.supervisorPid, "SIGTERM");
+    await waitForFile(join(barrierDir, "descendant-term-received"), 10_000);
+    await waitForNonEmptyFile(join(barrierDir, "term-grace-started"), 10_000);
+    const graceStartedAt = Number(
+      await readFile(join(barrierDir, "term-grace-started"), "utf8"),
+    );
+    const blockedBarrier = join(hostHomeDir, "during-term-grace");
+    await mkdir(blockedBarrier, { recursive: true });
+    const blocked = spawnAttemptCompetitor(hostHomeDir, blockedBarrier);
+    await waitForFile(join(blockedBarrier, "busy"), 10_000);
+    expect(Date.now() - graceStartedAt).toBeLessThan(2_000);
+    expect(
+      await stat(join(barrierDir, "descendant-release")).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
+
+    // Pins "TERM-resistant" through the grace window. The supervisor's reap
+    // has already sent the descendant two SIGTERMs, one to the group and one
+    // to its pid; a third, sent from here, must not kill it either. With a
+    // `once` listener the first TERM reset the disposition to SIG_DFL, so a
+    // later one killed the descendant this case calls TERM-resistant, and no
+    // barrier below could show it: the supervisor writes `descendant-exited
+    // {kind: "sigkill"}` however the descendant died. The probe runs after the
+    // window check above so it adds nothing to that window, and it stops short
+    // of the window's end, before the supervisor escalates at
+    // `graceStartedAt` + TERM_GRACE_MS (2_100 ms), so the SIGKILL is never
+    // what it sees.
+    process.kill(rebound.descendantPid, "SIGTERM");
+    const probeEnd = Math.min(Date.now() + 200, graceStartedAt + 2_000);
+    let probes = 0;
+    while (Date.now() < probeEnd) {
+      expect(() => process.kill(rebound.descendantPid, 0)).not.toThrow();
+      probes += 1;
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    }
+    expect(probes).toBeGreaterThan(0);
+    forgetChild(blocked);
+    await waitForFile(join(barrierDir, "descendant-killed"), 10_000);
+    await waitForFile(join(barrierDir, "group-absent"), 10_000);
+    await waitForFile(join(barrierDir, "supervisor-exited"), 10_000);
+    await waitForFile(join(barrierDir, "descendant-exited"), 10_000);
+    const killedAt = Number(
+      await readFile(join(barrierDir, "descendant-killed"), "utf8"),
+    );
+    expect(killedAt - graceStartedAt).toBeGreaterThanOrEqual(2_000);
+    expect(
+      JSON.parse(await readFile(join(barrierDir, "descendant-exited"), "utf8")),
+    ).toMatchObject({ kind: "sigkill" });
+    expect(() => process.kill(-rebound.wrapperPid, 0)).toThrow();
+
+    const reclaimBarrier = join(hostHomeDir, "after-term-resistant-reap");
+    await mkdir(reclaimBarrier, { recursive: true });
+    const reclaim = spawnAttemptCompetitor(hostHomeDir, reclaimBarrier);
+    await waitForFile(join(reclaimBarrier, "held"), 10_000);
+    await writeFile(join(reclaimBarrier, "release"), "");
+    await waitForFile(join(reclaimBarrier, "released"), 10_000);
+    forgetChild(reclaim);
+    helper.kill("SIGKILL");
+    forgetChild(helper);
+  }, 60_000);
+
+  it("keeps a root-style maintenance lease live through the CLI completion gap", async () => {
+    const hostHomeDir = await freshHome();
+    const barrierDir = join(hostHomeDir, "competitor-barrier");
+    await mkdir(barrierDir, { recursive: true });
+    let rootActuatorRan = false;
+
+    const outcome = await withUpdateContender(
+      options(hostHomeDir, "service-maintenance"),
+      async () => {
+        // This is the gap a root script has after its lock-aware CLI child
+        // reports success and before the first root-side launchctl/rm edge.
+        // A real second OS process must still lose the canonical lease here.
+        const competitor = spawnAttemptCompetitor(hostHomeDir, barrierDir);
+        await waitForFile(join(barrierDir, "busy"), 10_000);
+        await new Promise<void>((resolve) => {
+          if (competitor.exitCode !== null) {
+            resolve();
+            return;
+          }
+          competitor.once("close", () => resolve());
+        });
+        rootActuatorRan = true;
+        return "root-maintenance-complete";
+      },
+    );
+
+    expect(rootActuatorRan).toBe(true);
+    expect(outcome).toEqual({
+      kind: "ran",
+      result: "root-maintenance-complete",
+    });
+    await expect(readFile(join(barrierDir, "busy"), "utf8")).resolves.toContain(
+      '"holder"',
+    );
+  }, 30_000);
+
+  it("creates only the canonical parent, binds the capability to it, and preserves legacy absence", async () => {
+    const hostHomeDir = await freshHome();
+    let callbackCalls = 0;
+    let capabilityHome = "";
+
+    const outcome = await withUpdateContender(
+      options(hostHomeDir, "legacy-update-shadow"),
+      async (capability) => {
+        callbackCalls += 1;
+        capabilityHome = capability.hostHomeDir;
+        expect(
+          await verifyUpdateMutationCapability(capability, hostHomeDir),
+        ).toEqual({ kind: "live" });
+        return "legacy-result";
+      },
+    );
+
+    expect(outcome).toEqual({ kind: "ran", result: "legacy-result" });
+    expect(callbackCalls).toBe(1);
+    expect(capabilityHome).toBe(resolve(hostHomeDir));
+    await expect(stat(hostHomeDir)).resolves.toBeDefined();
+    await expect(stat(updateAttemptRecordPath(hostHomeDir))).rejects.toThrow();
+    await expect(stat(updateAttemptLockPath(hostHomeDir))).rejects.toThrow();
+    expect(isUpdateAttemptLockHeldInProcess(hostHomeDir)).toBe(false);
+  });
+
+  it("preserves the callback for a retained terminal record without selecting a schema-v2 executor", async () => {
+    const hostHomeDir = await freshHome();
+    // `completedAt` must be INSIDE `TERMINAL_ATTEMPT_RETENTION_MS` for this
+    // record to be "retained" at all, which is what the test name claims. It
+    // was previously a fixed `2026-01-01`, i.e. months past a seven-day
+    // retention - harmless only for as long as `pruneTerminalAttemptRecord` had
+    // no production caller. Now that attempt-store open prunes, an expired
+    // fixture would be legitimately deleted and the survival assertion below
+    // would be asserting that retention does NOT work.
+    const terminal = record({
+      phase: "complete",
+      execution: "terminal",
+      completedAt: new Date().toISOString(),
+    });
+    await writeRecord(hostHomeDir, terminal);
+
+    const outcome = await withUpdateContender(
+      options(hostHomeDir, "legacy-update-shadow"),
+      async () => "legacy-terminal-result",
+    );
+
+    expect(outcome).toEqual({ kind: "ran", result: "legacy-terminal-result" });
+    await expect(
+      readFile(updateAttemptRecordPath(hostHomeDir), "utf8"),
+    ).resolves.toBe(`${JSON.stringify(terminal)}\n`);
+  });
+
+  describe("terminal-attempt retention is enforced at attempt-store open", () => {
+    // Codex round 3, P2. `pruneTerminalAttemptRecord` had no production caller,
+    // so `TERMINAL_ATTEMPT_RETENTION_MS` was dead policy: a terminal attempt
+    // that no newer attempt replaced survived forever and `host.status` kept
+    // projecting it, so the Overview could show an old failure indefinitely.
+    //
+    // Wired at lock acquisition because that is the ONLY place it can go: prune
+    // is handle-bound, and a handle exists here and on no read path - the very
+    // surface that exposes the stale record is structurally unable to expire
+    // it.
+    const EXPIRED_MS = TERMINAL_ATTEMPT_RETENTION_MS + 60_000;
+
+    it("removes a terminal record older than the retention window", async () => {
+      const hostHomeDir = await freshHome();
+      await writeRecord(
+        hostHomeDir,
+        record({
+          phase: "complete",
+          execution: "terminal",
+          completedAt: new Date(Date.now() - EXPIRED_MS).toISOString(),
+        }),
+      );
+
+      const outcome = await withUpdateContender(
+        options(hostHomeDir, "legacy-update-shadow"),
+        async () => "ran",
+      );
+
+      expect(outcome).toEqual({ kind: "ran", result: "ran" });
+      // Gone from disk is exactly what stops `host.status` projecting it: the
+      // status read decodes this file, so an absent record is an absent
+      // projection.
+      await expect(
+        stat(updateAttemptRecordPath(hostHomeDir)),
+      ).rejects.toThrow();
+    });
+
+    it("keeps a terminal record that is still INSIDE the retention window", async () => {
+      // The paired direction, and the one that matters: retention must expire
+      // old records without becoming "delete every terminal record", which
+      // would erase a just-completed failure before anyone could read it.
+      const hostHomeDir = await freshHome();
+      const fresh = record({
+        phase: "complete",
+        execution: "terminal",
+        completedAt: new Date(Date.now() - 60_000).toISOString(),
+      });
+      await writeRecord(hostHomeDir, fresh);
+
+      await withUpdateContender(
+        options(hostHomeDir, "legacy-update-shadow"),
+        async () => "ran",
+      );
+
+      await expect(
+        readFile(updateAttemptRecordPath(hostHomeDir), "utf8"),
+      ).resolves.toBe(`${JSON.stringify(fresh)}\n`);
+    });
+
+    it("leaves a NON-terminal record alone however old it is", async () => {
+      // Retention is scoped to terminal records. An active attempt that has
+      // been running a long time is not garbage, and pruning it would delete
+      // live state - so age alone must never be sufficient.
+      const hostHomeDir = await freshHome();
+      const active = record({
+        phase: "downloading",
+        execution: "active",
+        updatedAt: new Date(Date.now() - EXPIRED_MS).toISOString(),
+      });
+      await writeRecord(hostHomeDir, active);
+
+      await withUpdateContender(
+        options(hostHomeDir, "recovery-maintenance"),
+        async () => "ran",
+      );
+
+      await expect(
+        readFile(updateAttemptRecordPath(hostHomeDir), "utf8"),
+      ).resolves.toBe(`${JSON.stringify(active)}\n`);
+    });
+  });
+
+  it("lets first-run maintenance proceed without manufacturing schema-v2 evidence", async () => {
+    const hostHomeDir = await freshHome();
+    let callbackCalls = 0;
+
+    const outcome = await withUpdateContender(
+      options(hostHomeDir, "service-maintenance"),
+      async () => {
+        callbackCalls += 1;
+        return "legacy-service-result";
+      },
+    );
+
+    expect(outcome).toEqual({ kind: "ran", result: "legacy-service-result" });
+    expect(callbackCalls).toBe(1);
+    await expect(stat(updateAttemptRecordPath(hostHomeDir))).rejects.toThrow();
+    await expect(stat(updateAttemptLockPath(hostHomeDir))).rejects.toThrow();
+  });
+});
+
+describe("update mutation capabilities", () => {
+  it("distinguishes issued-live, forged, wrong-home, released, and lost capabilities", async () => {
+    const hostHomeDir = await freshHome();
+    const otherHomeDir = await freshHome();
+    let issued: UpdateMutationCapability | null = null;
+    let lostInCallback: unknown = null;
+
+    const outcome = await withUpdateContender(
+      options(hostHomeDir, "legacy-update-shadow"),
+      async (capability) => {
+        issued = capability;
+        expect(
+          await verifyUpdateMutationCapability(capability, hostHomeDir),
+        ).toEqual({
+          kind: "live",
+        });
+        expect(
+          await verifyUpdateMutationCapability(
+            { hostHomeDir } as UpdateMutationCapability,
+            hostHomeDir,
+          ),
+        ).toEqual({ kind: "not-issued" });
+        expect(
+          await verifyUpdateMutationCapability(capability, otherHomeDir),
+        ).toEqual({
+          kind: "wrong-host-home",
+        });
+
+        await unlink(updateAttemptLockPath(hostHomeDir));
+        lostInCallback = await verifyUpdateMutationCapability(
+          capability,
+          hostHomeDir,
+        );
+        return "done";
+      },
+    );
+
+    expect(outcome).toEqual({
+      kind: "lock-not-live",
+      verdict: { kind: "lost" },
+    });
+    expect(lostInCallback).toEqual({ kind: "lost" });
+    if (issued === null) throw new Error("contender did not issue capability");
+    expect(await verifyUpdateMutationCapability(issued, hostHomeDir)).toEqual({
+      kind: "released",
+    });
+  });
+});
+
+describe("withUpdateContender - active attempt admissions", () => {
+  it("keeps recovery context at both restart consumers while kill-only free-port stays context-free", async () => {
+    const cliCommands = resolve(__dirname, "../../../traycer-cli/src/commands");
+    const restart = await readFile(
+      join(cliCommands, "host-restart.ts"),
+      "utf8",
+    );
+    const freePortAndRestart = await readFile(
+      join(cliCommands, "host-free-port-and-restart.ts"),
+      "utf8",
+    );
+    const freePort = await readFile(
+      join(cliCommands, "host-free-port.ts"),
+      "utf8",
+    );
+
+    for (const source of [restart, freePortAndRestart]) {
+      expect(source).toContain("withCliUpdateContenderContext");
+      expect(source).toContain("contenderContext.recoveryAction");
+      expect(source).toContain('admission: "recovery-maintenance"');
+    }
+    expect(freePort).toContain("withCliUpdateContender");
+    expect(freePort).not.toContain("withCliUpdateContenderContext");
+    expect(freePort).toContain('admission: "recovery-maintenance"');
+  });
+
+  it.each([
+    ["legacy-update-shadow", "yield"],
+    ["service-maintenance", "refuse"],
+    ["desktop-activation-maintenance", "refuse"],
+    // The Desktop login-item STEP of an uninstall - removes nothing, so it
+    // keeps refusing. The whole-product removal is the row below.
+    ["uninstall-maintenance", "refuse"],
+    ["host-uninstall-maintenance", "allow"],
+    ["desktop-install-maintenance", "allow"],
+    ["recovery-maintenance", "allow"],
+  ] as const)(
+    "returns the exact %s disposition for a nonterminal record",
+    async (admission, disposition) => {
+      const hostHomeDir = await freshHome();
+      await writeRecord(hostHomeDir, record({}));
+      let callbackCalls = 0;
+
+      const outcome = await withUpdateContender(
+        options(hostHomeDir, admission),
+        async () => {
+          callbackCalls += 1;
+          return "must-not-run";
+        },
+      );
+
+      if (disposition === "allow") {
+        expect(outcome).toEqual({ kind: "ran", result: "must-not-run" });
+        expect(callbackCalls).toBe(1);
+        return;
+      }
+      expect(outcome.kind).toBe("nonterminal-attempt");
+      if (outcome.kind !== "nonterminal-attempt") return;
+      expect(outcome.admission).toBe(admission);
+      expect(outcome.disposition).toBe(disposition);
+      expect(outcome.record).toEqual(record({}));
+      expect(callbackCalls).toBe(0);
+    },
+  );
+
+  it.each([
+    [
+      "active-fresh",
+      record({ updatedAt: "2026-08-25T00:00:00.000Z" }),
+      "restart-current",
+    ],
+    [
+      "active-stale",
+      record({ updatedAt: "2020-01-01T00:00:00.000Z" }),
+      "restart-current",
+    ],
+    [
+      "parked",
+      record({
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+      }),
+      "stop-only",
+    ],
+    [
+      "preparing-activate",
+      record({
+        phase: "preparing",
+        execution: "active",
+        continuation: "activate",
+      }),
+      "stop-only",
+    ],
+    [
+      "preparing-resume-apply",
+      record({
+        phase: "preparing",
+        execution: "active",
+        continuation: "resume-apply",
+      }),
+      "restart-current",
+    ],
+    [
+      "restarting-activate",
+      record({
+        phase: "restarting",
+        execution: "active",
+        continuation: "activate",
+      }),
+      "restart-current",
+    ],
+    [
+      "verifying-activate",
+      record({
+        phase: "verifying",
+        execution: "active",
+        continuation: "activate",
+      }),
+      "restart-current",
+    ],
+    [
+      "applying-fresh",
+      record({
+        phase: "applying",
+        execution: "active",
+        continuation: null,
+      }),
+      "stop-only",
+    ],
+    [
+      "applying-resume-apply",
+      record({
+        phase: "applying",
+        execution: "active",
+        continuation: "resume-apply",
+      }),
+      "stop-only",
+    ],
+    [
+      "failed-terminal",
+      record({
+        phase: "failed",
+        execution: "terminal",
+        completedAt: "2026-01-01T00:10:00.000Z",
+        error: {
+          code: "HOST_UPDATE_FAILED",
+          message: "test failure",
+          phase: "failed",
+        },
+      }),
+      "restart-current",
+    ],
+    ["absent", null, "restart-current"],
+  ] as const)(
+    "keeps independent service restart available for %s attempt evidence",
+    async (_label, current, expectedRecoveryAction) => {
+      const hostHomeDir = await freshHome();
+      if (current !== null) await writeRecord(hostHomeDir, current);
+      let callbackCalls = 0;
+      let recoveryAction: string | undefined;
+      const outcome = await withUpdateContender(
+        options(hostHomeDir, "recovery-maintenance"),
+        async (_capability, context) => {
+          callbackCalls += 1;
+          recoveryAction = context.recoveryAction;
+          return "restart-ran";
+        },
+      );
+
+      expect(outcome).toEqual({ kind: "ran", result: "restart-ran" });
+      expect(callbackCalls).toBe(1);
+      expect(recoveryAction).toBe(expectedRecoveryAction);
+    },
+  );
+});
+
+describe("withSupervisorRelaunchContender - the parked-record admission exemption", () => {
+  const INSTALL_GENERATION = "install-7|2026-01-01T00:00:00.000Z|abc123|1.2.3";
+
+  function claim(
+    overrides: Partial<HostUpdateAttemptClaimBaseline>,
+  ): HostUpdateAttemptClaimBaseline {
+    return {
+      installedVersion: "1.2.3",
+      installGeneration: INSTALL_GENERATION,
+      stageFingerprint: null,
+      allowDowngrade: false,
+      acceptStoreFormatLoss: false,
+      ...overrides,
+    };
+  }
+
+  function installed(
+    overrides: Partial<SupervisorRelaunchInstalledIdentity>,
+  ): SupervisorRelaunchInstalledIdentity {
+    return {
+      installedVersion: "1.2.3",
+      installGeneration: INSTALL_GENERATION,
+      ...overrides,
+    };
+  }
+
+  /** A `waiting-to-activate` park whose bytes are already the installed ones. */
+  function activatablePark(
+    overrides: Partial<HostUpdateAttemptRecord>,
+  ): HostUpdateAttemptRecord {
+    return record({
+      phase: "waiting-to-activate",
+      execution: "parked",
+      continuation: "activate",
+      claim: claim({}),
+      ...overrides,
+    });
+  }
+
+  async function relaunch(
+    hostHomeDir: string,
+    identity: SupervisorRelaunchInstalledIdentity | null,
+  ): Promise<{
+    outcome: UpdateContenderOutcome<string>;
+    callbackCalls: number;
+    readerCalls: number;
+  }> {
+    let callbackCalls = 0;
+    let readerCalls = 0;
+    // `admission` is deliberately stripped rather than overridden: the entry
+    // point's options type has no such field, and supplying one is the
+    // excess-property error the last test in this block pins.
+    const { admission: _admission, ...base } = options(
+      hostHomeDir,
+      "recovery-maintenance",
+    );
+    const outcome = await withSupervisorRelaunchContender(
+      {
+        ...base,
+        readInstalledIdentity: async () => {
+          readerCalls += 1;
+          return identity;
+        },
+      },
+      async () => {
+        callbackCalls += 1;
+        return "host-spawned";
+      },
+    );
+    return { outcome, callbackCalls, readerCalls };
+  }
+
+  it("admits a waiting-to-activate park whose installed version and install generation both match the claim - the relaunch IS the activation the park is waiting for", async () => {
+    const hostHomeDir = await freshHome();
+    await writeRecord(hostHomeDir, activatablePark({}));
+    const before = await readFile(updateAttemptRecordPath(hostHomeDir), "utf8");
+
+    const { outcome, callbackCalls, readerCalls } = await relaunch(
+      hostHomeDir,
+      installed({}),
+    );
+
+    expect(outcome).toEqual({ kind: "ran", result: "host-spawned" });
+    expect(callbackCalls).toBe(1);
+    expect(readerCalls).toBe(1);
+    // The supervisor holds no capability that could close the record, and must
+    // not: the reconciler's evidence pass owns that (patch B). An admission
+    // that quietly advanced the attempt here would be a write from a process
+    // that never claimed it.
+    expect(await readFile(updateAttemptRecordPath(hostHomeDir), "utf8")).toBe(
+      before,
+    );
+  });
+
+  it.each([
+    [
+      "installed version is not the target",
+      activatablePark({ targetVersion: "1.3.0" }),
+      installed({}),
+    ],
+    [
+      "installed version drifted from the claim baseline",
+      activatablePark({ claim: claim({ installedVersion: "1.2.2" }) }),
+      installed({}),
+    ],
+    [
+      "install generation moved under the park",
+      activatablePark({}),
+      installed({ installGeneration: "install-9|later|def456|1.2.3" }),
+    ],
+    ["there is no readable install record", activatablePark({}), null],
+    [
+      // Pre-cutover records carry no baseline. Refused on the same terms a
+      // bound `host.update.activate` refuses them (`refused-unverifiable`):
+      // version equality alone cannot tell this attempt's bytes from a
+      // different install that happens to carry the same version.
+      "the park carries no claim baseline",
+      record({
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+      }),
+      installed({}),
+    ],
+  ] as const)(
+    "refuses a waiting-to-activate park when %s",
+    async (_label, current, identity) => {
+      const hostHomeDir = await freshHome();
+      await writeRecord(hostHomeDir, current);
+
+      const { outcome, callbackCalls } = await relaunch(hostHomeDir, identity);
+
+      expect(outcome.kind).toBe("nonterminal-attempt");
+      if (outcome.kind !== "nonterminal-attempt") return;
+      expect(outcome.disposition).toBe("refuse");
+      expect(outcome.admission).toBe("supervisor-relaunch-maintenance");
+      expect(outcome.record).toEqual(current);
+      expect(callbackCalls).toBe(0);
+    },
+  );
+
+  it("admits a waiting-for-work park without consulting the install record at all - no bytes are placed, so what comes up is the host that was already installed", async () => {
+    const hostHomeDir = await freshHome();
+    const parked = record({
+      phase: "waiting-for-work",
+      execution: "parked",
+      continuation: "resume-apply",
+      claim: claim({}),
+    });
+    await writeRecord(hostHomeDir, parked);
+
+    const { outcome, callbackCalls, readerCalls } = await relaunch(
+      hostHomeDir,
+      // Deliberately contradictory evidence: this arm must not depend on it.
+      installed({ installedVersion: "9.9.9" }),
+    );
+
+    expect(outcome).toEqual({ kind: "ran", result: "host-spawned" });
+    expect(callbackCalls).toBe(1);
+    expect(readerCalls).toBe(0);
+  });
+
+  it("admits a waiting-for-work park written before claim baselines existed", async () => {
+    const hostHomeDir = await freshHome();
+    await writeRecord(
+      hostHomeDir,
+      record({
+        phase: "waiting-for-work",
+        execution: "parked",
+        continuation: "resume-apply",
+      }),
+    );
+
+    const { outcome, callbackCalls } = await relaunch(hostHomeDir, null);
+
+    expect(outcome).toEqual({ kind: "ran", result: "host-spawned" });
+    expect(callbackCalls).toBe(1);
+  });
+
+  // The pre-placement rows are written NOW: a record written within
+  // `RECOMMENDED_ATTEMPT_STALENESS_MS` is not interrupted, and that freshness
+  // is what keeps them refused. The `applying` rows keep the fixture's
+  // long-past stamp on purpose - `applying` refuses at any age.
+  it.each([
+    [
+      "downloading",
+      record({ claim: claim({}), updatedAt: new Date().toISOString() }),
+    ],
+    [
+      "applying",
+      record({ phase: "applying", execution: "active", claim: claim({}) }),
+    ],
+    [
+      "applying-resume-apply",
+      record({
+        phase: "applying",
+        execution: "active",
+        continuation: "resume-apply",
+        claim: claim({}),
+      }),
+    ],
+    [
+      "preparing",
+      record({
+        phase: "preparing",
+        execution: "active",
+        claim: claim({}),
+        updatedAt: new Date().toISOString(),
+      }),
+    ],
+    [
+      "preparing-resume-apply",
+      record({
+        phase: "preparing",
+        execution: "active",
+        continuation: "resume-apply",
+        claim: claim({}),
+        updatedAt: new Date().toISOString(),
+      }),
+    ],
+  ] as const)(
+    "refuses an active %s record even with matching install evidence",
+    async (_label, current) => {
+      const hostHomeDir = await freshHome();
+      await writeRecord(hostHomeDir, current);
+
+      const { outcome, callbackCalls, readerCalls } = await relaunch(
+        hostHomeDir,
+        installed({}),
+      );
+
+      expect(outcome.kind).toBe("nonterminal-attempt");
+      if (outcome.kind !== "nonterminal-attempt") return;
+      expect(outcome.disposition).toBe("refuse");
+      expect(outcome.admission).toBe("supervisor-relaunch-maintenance");
+      expect(callbackCalls).toBe(0);
+      // The phase decides before any evidence is read: a record that has
+      // placed nothing must not even be compared against the install tree, or
+      // a future edit could make "the evidence lines up" enough to admit one.
+      // These are all PRE-placement, so a supervisor start is not this
+      // record's own next act - its next act is to STOP the host and swap.
+      expect(readerCalls).toBe(0);
+    },
+  );
+
+  it("Q9 dependency: a resume-apply record that has not written `applying` may not reach `restarting`", () => {
+    // `supervisorRelaunchOverActive` admits `restarting`/`verifying` on the
+    // premise that reaching either means this record's target is PLACED.
+    // `LEGAL_SUCCESSORS` does NOT carry that premise - `preparing ->
+    // restarting` is a legal edge, and `preparing` covers pre-placement
+    // states. `continuationPhaseOrderRejected` is what carries it for a
+    // `resume-apply` record, and this is the pin the admission actually
+    // depends on. (Cold review B found the citation naming the wrong
+    // function.)
+    //
+    // The `null`-continuation case falls through to `false` here and is NOT
+    // guarded by this package at all - what forbids it is that all three
+    // writers of `restarting` in `traycer-cli`'s `update-run.ts` write it
+    // after placement. That half stays a cross-package citation, and the
+    // live `installedVersion === targetVersion` read is what actually
+    // protects the admission in both halves.
+    const current = record({
+      phase: "preparing",
+      execution: "active",
+      continuation: "resume-apply",
+      claim: claim({}),
+    });
+
+    expect(
+      advanceAttempt(current, attemptIdentityOf(current), {
+        phase: "restarting",
+        continuation: "resume-apply",
+        progress: null,
+        error: null,
+        claimRefresh: null,
+        // Q1's field, required on every advance. `null` here: this row is
+        // about the claim refresh, and a `restarting` advance records no
+        // verification.
+        verification: null,
+        nowIso: "2026-01-01T00:00:01.000Z",
+      }),
+    ).toEqual({ kind: "rejected", reason: "continuation-phase-order" });
+  });
+
+  it.each([
+    [
+      "restarting-activate",
+      record({
+        phase: "restarting",
+        execution: "active",
+        continuation: "activate",
+        claim: claim({}),
+      }),
+    ],
+    [
+      "verifying-activate",
+      record({
+        phase: "verifying",
+        execution: "active",
+        continuation: "activate",
+        claim: claim({}),
+      }),
+    ],
+    [
+      "preparing-activate",
+      record({
+        phase: "preparing",
+        execution: "active",
+        continuation: "activate",
+        claim: claim({}),
+      }),
+    ],
+    // The literal shape the Linux E6L box wedged in: a CLI killed at
+    // `restarting` has written no continuation, because the continuation is
+    // what a RESUME computes. Nothing may key the admission on
+    // `continuation: "activate"` alone, or the one record this exists to
+    // rescue is the one it refuses.
+    [
+      "restarting with no continuation (the field-observed wedge)",
+      record({
+        phase: "restarting",
+        execution: "active",
+        continuation: null,
+        claim: claim({}),
+      }),
+    ],
+    [
+      "verifying with no continuation",
+      record({
+        phase: "verifying",
+        execution: "active",
+        continuation: null,
+        claim: claim({}),
+      }),
+    ],
+  ] as const)(
+    "admits a relaunch over an interrupted %s record: starting the host is that record's OWN next act",
+    async (_label, current) => {
+      // These three refused until Q9, on the argument that a live segment owns
+      // the continuation. The argument was sound and the conclusion was still
+      // an outage: a CLI killed after its swap leaves `restarting` with the
+      // host stopped for that swap, a refusal exits 0, no service manager
+      // relaunches on a zero exit, and the box stays down - with the
+      // reconciler that would resume the record living inside the host that is
+      // not running. That is the Linux E6L wedge.
+      //
+      // What replaced the argument is not "the holder is gone" - a supervisor
+      // still cannot prove that - but IDEMPOTENCE. In all three shapes the
+      // record's own next act IS starting the host, so a live holder and this
+      // supervisor are performing the same act on the same bytes and it does
+      // not matter which wins. `preparing-activate` is in the set because
+      // `resumedRecord` normalizes every recovery resume to `preparing`: the
+      // continuation, not the phase, is what says the bytes are placed.
+      const hostHomeDir = await freshHome();
+      await writeRecord(hostHomeDir, current);
+
+      const { outcome, callbackCalls, readerCalls } = await relaunch(
+        hostHomeDir,
+        installed({}),
+      );
+
+      expect(outcome).toEqual({ kind: "ran", result: "host-spawned" });
+      expect(callbackCalls).toBe(1);
+      // Read UNDER the lock, and read at all: the admission is only sound
+      // against live evidence, never against the phase alone.
+      expect(readerCalls).toBe(1);
+      // Left for recovery, byte for byte. A supervisor holds no capability
+      // that could advance, terminalize or complete a record, and must not
+      // appear to.
+      await expect(
+        readFile(updateAttemptRecordPath(hostHomeDir), "utf8"),
+      ).resolves.toBe(`${JSON.stringify(current)}\n`);
+    },
+  );
+
+  it("refuses an interrupted restarting record whose install is NOT the target - a supervisor may start the bytes this attempt placed, never someone else's", async () => {
+    const hostHomeDir = await freshHome();
+    const midActivation = record({
+      phase: "restarting",
+      execution: "active",
+      continuation: "activate",
+      claim: claim({}),
+    });
+    await writeRecord(hostHomeDir, midActivation);
+
+    // The install moved to a version this record never targeted, so starting
+    // it is no longer the record's own next act - it is a different act
+    // wearing the same phase.
+    const { outcome, callbackCalls, readerCalls } = await relaunch(
+      hostHomeDir,
+      installed({ installedVersion: "9.9.9" }),
+    );
+
+    expect(outcome.kind).toBe("nonterminal-attempt");
+    if (outcome.kind !== "nonterminal-attempt") return;
+    expect(outcome.disposition).toBe("refuse");
+    expect(outcome.record).toEqual(midActivation);
+    expect(callbackCalls).toBe(0);
+    expect(readerCalls).toBe(1);
+  });
+
+  it("refuses an interrupted restarting record when there is NO readable install record - the swap's absent window is not a whole tree", async () => {
+    const hostHomeDir = await freshHome();
+    await writeRecord(
+      hostHomeDir,
+      record({
+        phase: "restarting",
+        execution: "active",
+        continuation: "activate",
+        claim: claim({}),
+      }),
+    );
+
+    // `atomicSwap` renames the old install aside before renaming the new one
+    // in, so between those two renames there is no install directory at all.
+    // A reader that finds nothing is that window (or a broken install), and
+    // either way there is nothing to start.
+    const { outcome, callbackCalls, readerCalls } = await relaunch(
+      hostHomeDir,
+      null,
+    );
+
+    expect(outcome.kind).toBe("nonterminal-attempt");
+    if (outcome.kind !== "nonterminal-attempt") return;
+    expect(outcome.disposition).toBe("refuse");
+    expect(callbackCalls).toBe(0);
+    expect(readerCalls).toBe(1);
+  });
+
+  it("refuses an interrupted restarting record whose install matches only by GENERATION drift - the parked arm's claim test is deliberately not applied here", async () => {
+    const hostHomeDir = await freshHome();
+    await writeRecord(
+      hostHomeDir,
+      record({
+        phase: "restarting",
+        execution: "active",
+        continuation: "activate",
+        // The claim baseline still names the PRE-swap install, because nothing
+        // refreshes it across `applying -> restarting`. That staleness is the
+        // Q5 defect, and it is why this arm cannot use the parked arm's
+        // generation equality: applying it here would refuse every genuine
+        // post-swap record, E6L included.
+        claim: claim({
+          installedVersion: "1.0.0",
+          installGeneration: "id:pre-swap-generation",
+        }),
+      }),
+    );
+
+    // Target-equal, but the claim disagrees with the live install in both
+    // fields. The parked arm would refuse this; this arm admits it, and that
+    // asymmetry is the point of the pin.
+    const { outcome, callbackCalls } = await relaunch(
+      hostHomeDir,
+      installed({}),
+    );
+
+    expect(outcome).toEqual({ kind: "ran", result: "host-spawned" });
+    expect(callbackCalls).toBe(1);
+  });
+
+  describe("an INTERRUPTED pre-placement record - the updater died between its pre-swap stop and `applying`", () => {
+    // The field shape (RCA forced-host-update-stuck-restart, 2026-10-09): a
+    // `host update` CLI killed after it stopped the host for the swap but
+    // before it wrote `applying`. The supervisor exited 0 under a `stop`
+    // reason, the record stayed `preparing`/active, and every automatic start
+    // refused it until a person ran `host restart`.
+    const minutesAgo = (minutes: number): string =>
+      new Date(Date.now() - minutes * 60_000).toISOString();
+    const secondsAgo = (seconds: number): string =>
+      new Date(Date.now() - seconds * 1_000).toISOString();
+
+    it.each([
+      [
+        "preparing / resume-apply",
+        record({
+          phase: "preparing",
+          execution: "active",
+          continuation: "resume-apply",
+          claim: claim({}),
+          updatedAt: minutesAgo(3),
+        }),
+      ],
+      [
+        "preparing / null continuation",
+        record({
+          phase: "preparing",
+          execution: "active",
+          continuation: null,
+          claim: claim({}),
+          updatedAt: minutesAgo(3),
+        }),
+      ],
+      [
+        "downloading",
+        record({
+          phase: "downloading",
+          execution: "active",
+          claim: claim({}),
+          updatedAt: minutesAgo(3),
+        }),
+      ],
+    ] as const)(
+      "admits a relaunch over a stale, unheld %s record and leaves the record byte for byte",
+      async (_label, current) => {
+        const hostHomeDir = await freshHome();
+        await writeRecord(hostHomeDir, current);
+        const before = await readFile(
+          updateAttemptRecordPath(hostHomeDir),
+          "utf8",
+        );
+
+        const { outcome, callbackCalls } = await relaunch(
+          hostHomeDir,
+          // The INSTALLED bytes are the pre-attempt version, not the target:
+          // nothing was placed, so what comes up is what was running before.
+          installed({ installedVersion: "1.2.2" }),
+        );
+
+        expect(outcome).toEqual({ kind: "ran", result: "host-spawned" });
+        expect(callbackCalls).toBe(1);
+        // Left for `host update` to recover: the supervisor holds no
+        // capability that could advance or terminalize it, and must not.
+        expect(
+          await readFile(updateAttemptRecordPath(hostHomeDir), "utf8"),
+        ).toBe(before);
+      },
+    );
+
+    it("control: refuses a preparing record written 30 s ago - an updater between writes may still be alive", async () => {
+      const hostHomeDir = await freshHome();
+      const current = record({
+        phase: "preparing",
+        execution: "active",
+        continuation: "resume-apply",
+        claim: claim({}),
+        updatedAt: secondsAgo(30),
+      });
+      await writeRecord(hostHomeDir, current);
+
+      const { outcome, callbackCalls, readerCalls } = await relaunch(
+        hostHomeDir,
+        installed({}),
+      );
+
+      expect(outcome.kind).toBe("nonterminal-attempt");
+      if (outcome.kind !== "nonterminal-attempt") return;
+      expect(outcome.disposition).toBe("refuse");
+      expect(outcome.record).toEqual(current);
+      expect(callbackCalls).toBe(0);
+      expect(readerCalls).toBe(0);
+    });
+
+    it("control: a stale preparing record whose attempt lock is HELD by a live process answers busy", async () => {
+      const hostHomeDir = await freshHome();
+      await writeRecord(
+        hostHomeDir,
+        record({
+          phase: "preparing",
+          execution: "active",
+          continuation: "resume-apply",
+          claim: claim({}),
+          updatedAt: minutesAgo(3),
+        }),
+      );
+      const barrierDir = join(hostHomeDir, "live-holder-barrier");
+      await mkdir(barrierDir, { recursive: true });
+      const holder = spawnAttemptCompetitor(hostHomeDir, barrierDir);
+      await waitForFile(join(barrierDir, "held"), 10_000);
+
+      try {
+        const { outcome, callbackCalls, readerCalls } = await relaunch(
+          hostHomeDir,
+          installed({}),
+        );
+
+        expect(outcome.kind).toBe("busy");
+        expect(callbackCalls).toBe(0);
+        expect(readerCalls).toBe(0);
+      } finally {
+        await writeFile(join(barrierDir, "release"), "");
+        if (holder.exitCode === null) {
+          await new Promise<void>((resolve) => {
+            holder.once("exit", () => resolve());
+          });
+        }
+        forgetChild(holder);
+      }
+    });
+
+    it("control: refuses a stale, unheld applying record at any age - byte placement keeps today's answer", async () => {
+      const hostHomeDir = await freshHome();
+      const current = record({
+        phase: "applying",
+        execution: "active",
+        continuation: "resume-apply",
+        claim: claim({}),
+        updatedAt: minutesAgo(3),
+      });
+      await writeRecord(hostHomeDir, current);
+
+      const { outcome, callbackCalls, readerCalls } = await relaunch(
+        hostHomeDir,
+        installed({}),
+      );
+
+      expect(outcome.kind).toBe("nonterminal-attempt");
+      if (outcome.kind !== "nonterminal-attempt") return;
+      expect(outcome.disposition).toBe("refuse");
+      expect(callbackCalls).toBe(0);
+      expect(readerCalls).toBe(0);
+    });
+
+    it("control: refuses a stale, unheld preparing record when there is NO readable install record - there are no installed bytes to start", async () => {
+      const hostHomeDir = await freshHome();
+      await writeRecord(
+        hostHomeDir,
+        record({
+          phase: "preparing",
+          execution: "active",
+          continuation: "resume-apply",
+          claim: claim({}),
+          updatedAt: minutesAgo(3),
+        }),
+      );
+
+      const { outcome, callbackCalls, readerCalls } = await relaunch(
+        hostHomeDir,
+        null,
+      );
+
+      expect(outcome.kind).toBe("nonterminal-attempt");
+      if (outcome.kind !== "nonterminal-attempt") return;
+      expect(outcome.disposition).toBe("refuse");
+      expect(callbackCalls).toBe(0);
+      expect(readerCalls).toBe(1);
+    });
+  });
+
+  it.each([
+    ["waiting-to-activate", activatablePark({})],
+    [
+      "waiting-for-work",
+      record({
+        phase: "waiting-for-work",
+        execution: "parked",
+        continuation: "resume-apply",
+        claim: claim({}),
+      }),
+    ],
+  ] as const)(
+    "leaves every OTHER admission's disposition for a parked %s record exactly as it was - the exemption is this admission's alone",
+    async (_label, parked) => {
+      const hostHomeDir = await freshHome();
+      await writeRecord(hostHomeDir, parked);
+
+      for (const [admission, disposition] of [
+        // The name this exemption was carved out of. `host stamp-runtime`
+        // still shares it, and stamping moves the very install generation a
+        // park's claim is validated against.
+        ["runtime-repair-maintenance", "refuse"],
+        ["service-maintenance", "refuse"],
+        ["desktop-activation-maintenance", "refuse"],
+        // `uninstall-maintenance` and `desktop-install-maintenance` are
+        // absent on purpose: they admit every unheld nonterminal record,
+        // parks included, and have their own describe below.
+        // `recovery-maintenance` is absent for the same reason (`allow` by
+        // base disposition).
+        ["legacy-update-shadow", "yield"],
+      ] as const) {
+        let callbackCalls = 0;
+        const outcome = await withUpdateContender(
+          options(hostHomeDir, admission),
+          async () => {
+            callbackCalls += 1;
+            return "must-not-run";
+          },
+        );
+
+        expect(outcome.kind).toBe("nonterminal-attempt");
+        if (outcome.kind !== "nonterminal-attempt") continue;
+        expect(outcome.admission).toBe(admission);
+        expect(outcome.disposition).toBe(disposition);
+        expect(callbackCalls).toBe(0);
+      }
+    },
+  );
+
+  it("still admits a supervisor relaunch when no attempt record exists at all", async () => {
+    const hostHomeDir = await freshHome();
+
+    const { outcome, callbackCalls, readerCalls } = await relaunch(
+      hostHomeDir,
+      installed({}),
+    );
+
+    expect(outcome).toEqual({ kind: "ran", result: "host-spawned" });
+    expect(callbackCalls).toBe(1);
+    expect(readerCalls).toBe(0);
+  });
+
+  it("withSupervisorRelaunchContender forces its own admission - its options type has no admission field to override", () => {
+    const forced: Parameters<typeof withSupervisorRelaunchContender>[0] = {
+      hostHomeDir: "/does/not/matter",
+      reason: "contender-test",
+      waitMs: 0,
+      pollIntervalMs: 10,
+      readInstalledIdentity: async () => null,
+    };
+    // @ts-expect-error - `admission` is omitted from the options type, so a
+    // caller cannot select a wider exemption while supplying install evidence.
+    forced.admission = "recovery-maintenance";
+    expect(forced.reason).toBe("contender-test");
+  });
+});
+
+// `parkedActivationMatchesInstall` - the pure predicate `host restart`
+// (traycer-cli) and `supervisorRelaunchDisposition` (above) both call to
+// decide whether a `waiting-to-activate` park describes exactly the bytes
+// installed right now. ONE function for both, deliberately (see the
+// docstring in `../contender.ts`) - these are its own direct unit tests,
+// independent of either caller's admission machinery.
+describe("parkedActivationMatchesInstall", () => {
+  const INSTALL_GENERATION = "install-7|2026-01-01T00:00:00.000Z|abc123|1.2.3";
+
+  function claim(
+    overrides: Partial<HostUpdateAttemptClaimBaseline>,
+  ): HostUpdateAttemptClaimBaseline {
+    return {
+      installedVersion: "1.2.3",
+      installGeneration: INSTALL_GENERATION,
+      stageFingerprint: null,
+      allowDowngrade: false,
+      acceptStoreFormatLoss: false,
+      ...overrides,
+    };
+  }
+
+  function installed(
+    overrides: Partial<SupervisorRelaunchInstalledIdentity>,
+  ): SupervisorRelaunchInstalledIdentity {
+    return {
+      installedVersion: "1.2.3",
+      installGeneration: INSTALL_GENERATION,
+      ...overrides,
+    };
+  }
+
+  function activatablePark(
+    overrides: Partial<HostUpdateAttemptRecord>,
+  ): HostUpdateAttemptRecord {
+    return record({
+      phase: "waiting-to-activate",
+      execution: "parked",
+      continuation: "activate",
+      claim: claim({}),
+      ...overrides,
+    });
+  }
+
+  it("true for a full match: phase, claim, and installed identity all agree", () => {
+    expect(
+      parkedActivationMatchesInstall(activatablePark({}), installed({})),
+    ).toBe(true);
+  });
+
+  it("false for the wrong phase, even with a claim that would otherwise match", () => {
+    expect(
+      parkedActivationMatchesInstall(
+        record({
+          phase: "restarting",
+          execution: "active",
+          continuation: "activate",
+          claim: claim({}),
+          targetVersion: "1.2.3",
+        }),
+        installed({}),
+      ),
+    ).toBe(false);
+  });
+
+  it("false for a claim-less park - unverifiable is refused, never admitted", () => {
+    expect(
+      parkedActivationMatchesInstall(
+        record({
+          phase: "waiting-to-activate",
+          execution: "parked",
+          continuation: "activate",
+          targetVersion: "1.2.3",
+        }),
+        installed({}),
+      ),
+    ).toBe(false);
+  });
+
+  it("false for a null installed identity", () => {
+    expect(parkedActivationMatchesInstall(activatablePark({}), null)).toBe(
+      false,
+    );
+  });
+
+  it("false when the installed version disagrees with the claim/target", () => {
+    expect(
+      parkedActivationMatchesInstall(
+        activatablePark({}),
+        installed({ installedVersion: "9.9.9" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("false when the install generation disagrees, even with matching versions", () => {
+    expect(
+      parkedActivationMatchesInstall(
+        activatablePark({}),
+        installed({ installGeneration: "install-9|later|def456|1.2.3" }),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("withUpdateContender - the whole-product admissions admit every unheld nonterminal record", () => {
+  // The two operations that replace or remove the product itself: an
+  // uninstall removes the install the record describes (and, in
+  // `traycer-cli`'s `installer/uninstall.ts`, the record itself), and the
+  // cloud-install script swaps the app bundle without writing `install/`,
+  // promoting staged bytes, or stamping an install generation. Neither can
+  // corrupt what a park protects, so no standing record may refuse them.
+  // The lock is what rules out a LIVE segment: a running executor holds the
+  // attempt lock for its whole span and answers `busy` before any
+  // disposition is consulted, which the last pin below demonstrates
+  // directly.
+  //
+  // `desktop-activation-maintenance` is the deliberate NEGATIVE throughout -
+  // the Desktop app's own activation cycle applies bytes and stamps the
+  // generation, so it must keep refusing every record admitted here. Each
+  // case below asserts both directions against the SAME record, so a future
+  // widening of the Desktop admission cannot pass unnoticed.
+  const WHOLE_PRODUCT_ADMISSIONS = [
+    "host-uninstall-maintenance",
+    "desktop-install-maintenance",
+  ] as const;
+  // Both consent flags `false`: the routine park these admissions exist for is
+  // one nobody authorized anything special on. They are written EXPLICITLY
+  // rather than left out, because the decode side reconstructs an absent key
+  // as `false` - so an omitted flag would make the readback differ from this
+  // literal and redden the round-trip pins below for a reason that has
+  // nothing to do with admission policy.
+  const claimBaseline: HostUpdateAttemptClaimBaseline = {
+    installedVersion: "1.2.3",
+    installGeneration: "install-7|2026-01-01T00:00:00.000Z|abc123|1.2.3",
+    stageFingerprint: null,
+    allowDowngrade: false,
+    acceptStoreFormatLoss: false,
+  };
+
+  it.each([
+    [
+      "waiting-for-work park (the routine busy-host park)",
+      record({
+        phase: "waiting-for-work",
+        execution: "parked",
+        continuation: "resume-apply",
+        claim: claimBaseline,
+      }),
+    ],
+    [
+      "waiting-to-activate park with placed bytes",
+      record({
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+        claim: claimBaseline,
+      }),
+    ],
+    [
+      "claim-less waiting-for-work park",
+      record({
+        phase: "waiting-for-work",
+        execution: "parked",
+        continuation: "resume-apply",
+      }),
+    ],
+    [
+      "interrupted applying record (active, holder gone)",
+      record({
+        phase: "applying",
+        execution: "active",
+        updatedAt: "2020-01-01T00:00:00.000Z",
+      }),
+    ],
+    [
+      "fresh active record with no holder",
+      record({ updatedAt: "2026-08-25T00:00:00.000Z" }),
+    ],
+  ] as const)(
+    "runs the callback over a %s for both, while desktop-activation-maintenance still refuses the same record",
+    async (_label, standing) => {
+      for (const admission of WHOLE_PRODUCT_ADMISSIONS) {
+        const hostHomeDir = await freshHome();
+        await writeRecord(hostHomeDir, standing);
+        let callbackCalls = 0;
+        let seenAttempt: HostUpdateAttemptRecord | null | undefined;
+
+        const outcome = await withUpdateContender(
+          options(hostHomeDir, admission),
+          async (_capability, context) => {
+            callbackCalls += 1;
+            seenAttempt = context.activeAttempt;
+            return "ran-the-operation";
+          },
+        );
+
+        expect(outcome).toEqual({ kind: "ran", result: "ran-the-operation" });
+        expect(callbackCalls).toBe(1);
+        expect(seenAttempt).toEqual(standing);
+
+        // The paired negative, against the very same record: the Desktop
+        // app's activation admission is untouched by this widening.
+        let activationCalls = 0;
+        const refused = await withUpdateContender(
+          options(hostHomeDir, "desktop-activation-maintenance"),
+          async () => {
+            activationCalls += 1;
+            return "must-not-run";
+          },
+        );
+        expect(refused.kind).toBe("nonterminal-attempt");
+        if (refused.kind !== "nonterminal-attempt") return;
+        expect(refused.disposition).toBe("refuse");
+        expect(activationCalls).toBe(0);
+      }
+    },
+  );
+
+  it("does not itself touch the record - deleting it (uninstall) or leaving it for the next executor (install) is the caller's job", async () => {
+    for (const admission of WHOLE_PRODUCT_ADMISSIONS) {
+      const hostHomeDir = await freshHome();
+      const standing = record({
+        phase: "waiting-for-work",
+        execution: "parked",
+        continuation: "resume-apply",
+        claim: claimBaseline,
+      });
+      await writeRecord(hostHomeDir, standing);
+
+      // Reading the record back proves the VALUE survived, which a contender
+      // that atomically rewrote byte-identical JSON would also satisfy. Every
+      // record write lands through a rename, so counting renames is what
+      // separates "unchanged" from "never written" - the claim this test
+      // actually makes, and the one the uninstall's own deletion depends on.
+      let recordRenames = 0;
+      __setBeforeRecordRenameHookForTest(async () => {
+        recordRenames += 1;
+      });
+      try {
+        await withUpdateContender(
+          options(hostHomeDir, admission),
+          async () => "ran-the-operation",
+        );
+      } finally {
+        __setBeforeRecordRenameHookForTest(null);
+      }
+      expect(recordRenames).toBe(0);
+
+      const after = await readUpdateAttemptRecord(hostHomeDir);
+      expect(after.kind).toBe("valid");
+      if (after.kind !== "valid") return;
+      expect(after.value).toEqual(standing);
+    }
+  });
+
+  it.each(WHOLE_PRODUCT_ADMISSIONS)(
+    "%s answers busy to a live holder in ANOTHER PROCESS - the lock, not the disposition, is what excludes a running update",
+    async (admission) => {
+      // Deliberately cross-process. Nesting two `withUpdateContender` calls in
+      // THIS process proves nothing about `busy`:
+      // `acquireUpdateAttemptLock` short-circuits on its in-process map and
+      // returns `held-in-process` before `acquireLock` is ever reached, so
+      // such a test passes unchanged even if the cross-process path is
+      // broken outright. The real barrier tests above spawn `lock-worker.ts`
+      // for exactly this reason, and so does this one.
+      const hostHomeDir = await freshHome();
+      await writeRecord(hostHomeDir, record({ phase: "applying" }));
+      const barrierDir = join(hostHomeDir, "live-holder-barrier");
+      await mkdir(barrierDir, { recursive: true });
+
+      const holder = spawnAttemptCompetitor(hostHomeDir, barrierDir);
+      await waitForFile(join(barrierDir, "held"), 10_000);
+
+      let callbackCalls = 0;
+      const outcome = await withUpdateContender(
+        options(hostHomeDir, admission),
+        async () => {
+          callbackCalls += 1;
+          return "must-not-run";
+        },
+      );
+
+      expect(outcome.kind).toBe("busy");
+      expect(callbackCalls).toBe(0);
+
+      await writeFile(join(barrierDir, "release"), "");
+      await waitForFile(join(barrierDir, "released"), 10_000);
+      await new Promise<void>((resolve) => {
+        if (holder.exitCode !== null) resolve();
+        else holder.once("close", resolve);
+      });
+      forgetChild(holder);
+    },
+    60_000,
+  );
+
+  // The regression guard for the blast-radius miss this change was built
+  // around. `uninstall-maintenance` is NOT a whole-product admission: two
+  // shipped Desktop sites take it (`host-controller.ts#uninstallHost` and
+  // `#removeTraycer`) to run `unregisterHostLoginItemWithAttempt`, a
+  // login-item bootout that removes nothing and rewrites no record. Admitting
+  // it over a park would unregister the login item and then, if the teardown
+  // that follows failed, leave a host that will not relaunch beside a park
+  // nothing can reach. It must keep refusing every record the whole-product
+  // admissions are allowed to step over.
+  it.each([
+    ["waiting-for-work park", "waiting-for-work", "parked", "resume-apply"],
+    ["waiting-to-activate park", "waiting-to-activate", "parked", "activate"],
+  ] as const)(
+    "uninstall-maintenance (the Desktop login-item step) still REFUSES a %s",
+    async (_label, phase, execution, continuation) => {
+      const hostHomeDir = await freshHome();
+      await writeRecord(
+        hostHomeDir,
+        record({ phase, execution, continuation, claim: claimBaseline }),
+      );
+      let calls = 0;
+      const refused = await withUpdateContender(
+        options(hostHomeDir, "uninstall-maintenance"),
+        async () => {
+          calls += 1;
+          return "must-not-run";
+        },
+      );
+      expect(refused.kind).toBe("nonterminal-attempt");
+      if (refused.kind !== "nonterminal-attempt") return;
+      expect(refused.disposition).toBe("refuse");
+      expect(calls).toBe(0);
+    },
+  );
+});
+
+describe("withUpdateContender - fail closed record reads", () => {
+  it.each([
+    ["corrupt", "not-json"],
+    [
+      "unsupported-version",
+      JSON.stringify({ ...record({}), schemaVersion: 99 }),
+    ],
+  ] as const)(
+    "refuses a %s record without invoking the callback",
+    async (_label, bytes) => {
+      const hostHomeDir = await freshHome();
+      await writeRecord(hostHomeDir, bytes);
+      let callbackCalls = 0;
+
+      const outcome = await withUpdateContender(
+        options(hostHomeDir, "legacy-update-shadow"),
+        async () => {
+          callbackCalls += 1;
+          return "must-not-run";
+        },
+      );
+
+      expect(outcome.kind).toBe("record-fail-closed");
+      if (outcome.kind !== "record-fail-closed") return;
+      expect(outcome.record.kind).toBe(
+        _label === "unsupported-version" ? "unsupported-version" : "corrupt",
+      );
+      expect(callbackCalls).toBe(0);
+    },
+  );
+
+  it("refuses an unreadable record-shaped entry without treating it as absent", async () => {
+    const hostHomeDir = await freshHome();
+    await mkdir(hostHomeDir, { recursive: true });
+    await mkdir(updateAttemptRecordPath(hostHomeDir));
+    let callbackCalls = 0;
+
+    const outcome = await withUpdateContender(
+      options(hostHomeDir, "legacy-update-shadow"),
+      async () => {
+        callbackCalls += 1;
+        return "must-not-run";
+      },
+    );
+
+    expect(outcome.kind).toBe("record-fail-closed");
+    if (outcome.kind !== "record-fail-closed") return;
+    expect(outcome.record.kind).toBe("unreadable");
+    expect(callbackCalls).toBe(0);
+  });
+});
+
+describe("commitExecutorAttemptMutation - executor-only capability", () => {
+  it.each([
+    "legacy-update-shadow",
+    "stage-maintenance",
+    "uninstall-maintenance",
+    "host-uninstall-maintenance",
+    "service-maintenance",
+    "desktop-activation-maintenance",
+    "desktop-install-maintenance",
+    "runtime-repair-maintenance",
+    "recovery-maintenance",
+  ] as const)(
+    "throws for the %s admission - only attempt-executor may write through this facade",
+    async (admission) => {
+      const hostHomeDir = await freshHome();
+      let threw: unknown = null;
+
+      await withUpdateContender(
+        options(hostHomeDir, admission),
+        async (capability) => {
+          try {
+            await commitExecutorAttemptMutation(capability, hostHomeDir, {
+              kind: "create",
+              request: baseCreateRequest({}),
+            });
+          } catch (err) {
+            threw = err;
+          }
+          return "done";
+        },
+      );
+
+      expect(threw).toBeInstanceOf(Error);
+      expect((threw as Error).message).toContain("not admitted");
+      // Confirm nothing was actually written by the rejected attempt.
+      const record = await readFile(
+        updateAttemptRecordPath(hostHomeDir),
+        "utf8",
+      ).catch(() => null);
+      expect(record).toBeNull();
+    },
+  );
+
+  it("throws for a generic advance intent that targets phase complete - completion requires the verified facade", async () => {
+    const hostHomeDir = await freshHome();
+    let threw: unknown = null;
+
+    await withUpdateContender(
+      options(hostHomeDir, "attempt-executor"),
+      async (capability) => {
+        const created = await commitExecutorAttemptMutation(
+          capability,
+          hostHomeDir,
+          { kind: "create", request: baseCreateRequest({}) },
+        );
+        if (created.kind !== "committed") {
+          throw new Error(`expected committed create, got ${created.kind}`);
+        }
+        try {
+          await commitExecutorAttemptMutation(capability, hostHomeDir, {
+            kind: "advance",
+            held: created.identity,
+            advance: {
+              phase: "complete",
+              continuation: null,
+              progress: null,
+              error: null,
+              claimRefresh: null,
+              verification: null,
+              nowIso: "2026-01-01T00:05:00.000Z",
+            },
+          });
+        } catch (err) {
+          threw = err;
+        }
+        return "done";
+      },
+    );
+
+    expect(threw).toBeInstanceOf(Error);
+    expect((threw as Error).message).toContain(
+      "exact running-version verification",
+    );
+    const onDisk = JSON.parse(
+      await readFile(updateAttemptRecordPath(hostHomeDir), "utf8"),
+    ) as { readonly phase: string };
+    expect(onDisk.phase).toBe("downloading");
+  });
+
+  it("commits a legal non-complete advance for the attempt-executor capability", async () => {
+    const hostHomeDir = await freshHome();
+
+    const outcome = await withUpdateContender(
+      options(hostHomeDir, "attempt-executor"),
+      async (capability) => {
+        const created = await commitExecutorAttemptMutation(
+          capability,
+          hostHomeDir,
+          { kind: "create", request: baseCreateRequest({}) },
+        );
+        if (created.kind !== "committed") {
+          throw new Error(`expected committed create, got ${created.kind}`);
+        }
+        return commitExecutorAttemptMutation(capability, hostHomeDir, {
+          kind: "advance",
+          held: created.identity,
+          advance: {
+            phase: "preparing",
+            continuation: null,
+            progress: null,
+            error: null,
+            claimRefresh: null,
+            verification: null,
+            nowIso: "2026-01-01T00:05:00.000Z",
+          },
+        });
+      },
+    );
+
+    expect(outcome.kind).toBe("ran");
+    if (outcome.kind !== "ran") return;
+    expect(outcome.result.kind).toBe("committed");
+  });
+
+  it("commitExecutorAttemptMutation's intent parameter type excludes a structural recover intent - a `recover` literal is a compile-time error, closing the authority-fixup cold-review's public-facade bypass (previously this facade forwarded a caller-constructed recover intent unchanged)", () => {
+    const rejectsRecoverIntentAtCompileTime = (
+      capability: UpdateMutationCapability,
+      hostHomeDir: string,
+    ): void => {
+      void commitExecutorAttemptMutation(
+        capability,
+        hostHomeDir,
+        // @ts-expect-error `recover` is excluded from
+        // commitExecutorAttemptMutation's intent type - only
+        // commitExecutorRecoveryMutation accepts it now.
+        { kind: "recover", recovery: {} as never },
+      );
+    };
+    void rejectsRecoverIntentAtCompileTime;
+    expect(true).toBe(true);
+  });
+});
+
+describe("commitExecutorRecoveryMutation - the internal recovery-only writer, not barrel-exported", () => {
+  it.each([
+    "legacy-update-shadow",
+    "stage-maintenance",
+    "uninstall-maintenance",
+    "host-uninstall-maintenance",
+    "service-maintenance",
+    "desktop-activation-maintenance",
+    "desktop-install-maintenance",
+    "runtime-repair-maintenance",
+    "recovery-maintenance",
+  ] as const)(
+    "throws for the %s admission - only attempt-executor may write through this facade",
+    async (admission) => {
+      const hostHomeDir = await freshHome();
+      let threw: unknown = null;
+
+      await withUpdateContender(
+        options(hostHomeDir, admission),
+        async (capability) => {
+          try {
+            await commitExecutorRecoveryMutation(capability, hostHomeDir, {
+              kind: "recover",
+              recovery: {
+                expected: {
+                  attemptId: "attempt-1",
+                  generation: 1,
+                  sequence: 1,
+                },
+                action: "force",
+                requestedTargetVersion: "1.2.3",
+                evidence: {
+                  installed: { kind: "verified", version: "1.2.3" },
+                  staged: { kind: "absent" },
+                  running: {
+                    kind: "verified",
+                    version: "1.2.3",
+                    owner: "host-home-bound",
+                  },
+                },
+                nowIso: "2026-01-01T00:06:00.000Z",
+              },
+            });
+          } catch (err) {
+            threw = err;
+          }
+          return "done";
+        },
+      );
+
+      expect(threw).toBeInstanceOf(Error);
+      expect((threw as Error).message).toContain("not admitted");
+      const record = await readFile(
+        updateAttemptRecordPath(hostHomeDir),
+        "utf8",
+      ).catch(() => null);
+      expect(record).toBeNull();
+    },
+  );
+
+  it("commits a legal recover intent for the attempt-executor capability - the reviewer's exact reproduction shape, now reaching a real evidence-bound terminalization instead of a caller-testimony-only write", async () => {
+    const hostHomeDir = await freshHome();
+
+    const outcome = await withUpdateContender(
+      options(hostHomeDir, "attempt-executor"),
+      async (capability) => {
+        const created = await commitExecutorAttemptMutation(
+          capability,
+          hostHomeDir,
+          { kind: "create", request: baseCreateRequest({}) },
+        );
+        if (created.kind !== "committed") {
+          throw new Error(`expected committed create, got ${created.kind}`);
+        }
+        return commitExecutorRecoveryMutation(capability, hostHomeDir, {
+          kind: "recover",
+          recovery: {
+            expected: created.identity,
+            action: "force",
+            requestedTargetVersion: "1.2.3",
+            evidence: {
+              installed: { kind: "verified", version: "1.2.3" },
+              staged: { kind: "absent" },
+              running: {
+                kind: "verified",
+                version: "1.2.3",
+                owner: "host-home-bound",
+              },
+            },
+            nowIso: "2026-01-01T00:06:00.000Z",
+          },
+        });
+      },
+    );
+
+    expect(outcome.kind).toBe("ran");
+    if (outcome.kind !== "ran") return;
+    expect(outcome.result.kind).toBe("committed");
+    if (outcome.result.kind !== "committed") return;
+    expect(outcome.result.record.phase).toBe("complete");
+  });
+
+  it("commitExecutorRecoveryMutation's intent parameter type accepts only a recover intent - a create/advance/supersede literal is a compile-time error", () => {
+    const onlyAcceptsRecoverAtCompileTime = (
+      capability: UpdateMutationCapability,
+      hostHomeDir: string,
+    ): void => {
+      void commitExecutorRecoveryMutation(
+        capability,
+        hostHomeDir,
+        // @ts-expect-error `create` is not assignable to
+        // Extract<AttemptMutationIntent, { kind: "recover" }>.
+        { kind: "create", request: baseCreateRequest({}) },
+      );
+    };
+    void onlyAcceptsRecoverAtCompileTime;
+    expect(true).toBe(true);
+  });
+});
+
+describe("public barrel cannot reach a structural recover terminal write (authority-fixup cold-review regression)", () => {
+  it("the shared host-update barrel does not export commitExecutorAttemptMutation, commitExecutorRecoveryMutation, or withUpdateExecutorCompletionSegment", async () => {
+    const barrel: Record<string, unknown> = await import("../index");
+    expect("commitExecutorAttemptMutation" in barrel).toBe(false);
+    expect("commitExecutorRecoveryMutation" in barrel).toBe(false);
+    expect("withUpdateExecutorCompletionSegment" in barrel).toBe(false);
+    // withUpdateContender itself remains the only public admission route -
+    // it hands out a capability, never a mutation writer.
+    expect(typeof barrel.withUpdateContender).toBe("function");
+  });
+});
+
+describe("withUpdateExecutorCompletionSegment / ExecutorCompletionSession.complete - the sole terminal-completion path", () => {
+  // `sealVerifiedExecutorCompletion`/`commitVerifiedExecutorCompletion` are
+  // module-PRIVATE to `contender.ts`. `ExecutorCompletionObservation` (the
+  // evidence a caller supplies) is ALSO module-private now - it is a plain,
+  // non-exported interface, so `completionEvidence()` below builds a
+  // structurally-matching literal, the same as any other caller with access
+  // to this module would have to. What actually closes the authority gap is
+  // that the only way to reach a terminal write from outside this module is
+  // through the `ExecutorCompletionSession` object `withUpdateExecutorCompletionSegment`
+  // hands directly to its `run` callback as a THIRD argument - there is no
+  // free function to import and call from anywhere else, and the session
+  // itself is a plain closure (not an AsyncLocalStorage-propagated value), so
+  // it is `revoke()`-d and made single-use the instant that callback settles,
+  // not merely "intended" to be scope-bound.
+  async function advanceToVerifying(
+    capability: UpdateMutationCapability,
+    hostHomeDir: string,
+  ) {
+    const created = await commitExecutorAttemptMutation(
+      capability,
+      hostHomeDir,
+      { kind: "create", request: baseCreateRequest({}) },
+    );
+    if (created.kind !== "committed") {
+      throw new Error(`expected committed create, got ${created.kind}`);
+    }
+    let current = created;
+    for (const phase of [
+      "preparing",
+      "applying",
+      "restarting",
+      "verifying",
+    ] as const) {
+      const advanced = await commitExecutorAttemptMutation(
+        capability,
+        hostHomeDir,
+        {
+          kind: "advance",
+          held: current.identity,
+          advance: {
+            phase,
+            continuation: null,
+            progress: null,
+            error: null,
+            claimRefresh: null,
+            verification: null,
+            nowIso: "2026-01-01T00:05:00.000Z",
+          },
+        },
+      );
+      if (advanced.kind !== "committed") {
+        throw new Error(
+          `expected committed advance to ${phase}, got ${advanced.kind}`,
+        );
+      }
+      current = advanced;
+    }
+    return current;
+  }
+
+  // This local shape mirrors the exported, publicly-constructible
+  // `ExecutorCompletionObservation` - the argument to
+  // `completeUpdateExecutorCompletionSession()`. It is declared locally
+  // rather than imported only so the malformed-owner cast below has a named
+  // target type in this file; the type itself is not what production keeps
+  // private (that is the completion scope/session, not the evidence shape).
+  interface CompletionEvidenceInput {
+    readonly expected: {
+      readonly attemptId: string;
+      readonly generation: number;
+      readonly sequence: number;
+    };
+    readonly targetVersion: string;
+    readonly runningVersion: string;
+    readonly runningOwner: "host-home-bound";
+    readonly verification: HostUpdateAttemptVerification;
+    readonly nowIso: string;
+  }
+
+  // The real `ExecutorCompletionObservation.runningOwner` is typed as the
+  // single literal `"host-home-bound"`, so the only way to prove the session
+  // actually re-checks it (rather than trusting the type) is to force a
+  // differently-shaped value through a single direct cast to the exact
+  // seal-input type - not a chain through `unknown`.
+  type MalformedRunningOwnerEvidence = Omit<
+    CompletionEvidenceInput,
+    "runningOwner"
+  > & { readonly runningOwner: string };
+
+  function completionEvidence(
+    overrides: Partial<CompletionEvidenceInput>,
+    identity: { attemptId: string; generation: number; sequence: number },
+  ): CompletionEvidenceInput {
+    return {
+      expected: identity,
+      targetVersion: "1.2.3",
+      runningVersion: "1.2.3",
+      runningOwner: "host-home-bound",
+      verification: { mode: "identity" },
+      nowIso: "2026-01-01T00:06:00.000Z",
+      ...overrides,
+    };
+  }
+
+  interface ExecutorCompletionTestOptions {
+    readonly hostHomeDir: string;
+    readonly reason: string;
+    readonly waitMs: number;
+    readonly pollIntervalMs: number;
+  }
+
+  function executorCompletionOptions(
+    hostHomeDir: string,
+  ): ExecutorCompletionTestOptions {
+    return {
+      hostHomeDir,
+      reason: "contender-test",
+      waitMs: 0,
+      pollIntervalMs: 10,
+    };
+  }
+
+  it("ExecutorCompletionSession.complete commits with exact matching identity, target, running version, and host-home-bound owner", async () => {
+    const hostHomeDir = await freshHome();
+
+    const outcome = await withUpdateExecutorCompletionSegment(
+      executorCompletionOptions(hostHomeDir),
+      async (capability, _context, completion) => {
+        const verifying = await advanceToVerifying(capability, hostHomeDir);
+        return completion.complete(completionEvidence({}, verifying.identity));
+      },
+    );
+
+    expect(outcome.kind).toBe("ran");
+    if (outcome.kind !== "ran") return;
+    expect(outcome.result.kind).toBe("committed");
+    if (outcome.result.kind !== "committed") return;
+    expect(outcome.result.record.phase).toBe("complete");
+    expect(outcome.result.record.execution).toBe("terminal");
+  });
+
+  it.each([
+    [
+      "wrong version (running does not match target)",
+      (identity: { attemptId: string; generation: number; sequence: number }) =>
+        completionEvidence({ runningVersion: "9.9.9" }, identity),
+    ],
+    [
+      "wrong owner (running process is not host-home-bound)",
+      (identity: {
+        attemptId: string;
+        generation: number;
+        sequence: number;
+      }) => {
+        const malformed: MalformedRunningOwnerEvidence = {
+          ...completionEvidence({}, identity),
+          runningOwner: "unbound",
+        };
+        return malformed as CompletionEvidenceInput;
+      },
+    ],
+  ] as const)(
+    "ExecutorCompletionSession.complete itself throws for %s - never even reaches a durable write",
+    async (_label, makeEvidence) => {
+      const hostHomeDir = await freshHome();
+      let threw: unknown = null;
+
+      await withUpdateExecutorCompletionSegment(
+        executorCompletionOptions(hostHomeDir),
+        async (capability, _context, completion) => {
+          const verifying = await advanceToVerifying(capability, hostHomeDir);
+          try {
+            await completion.complete(makeEvidence(verifying.identity));
+          } catch (err) {
+            threw = err;
+          }
+          return "done";
+        },
+      );
+
+      expect(threw).toBeInstanceOf(Error);
+      expect((threw as Error).message).toContain("not exact");
+      const onDisk = JSON.parse(
+        await readFile(updateAttemptRecordPath(hostHomeDir), "utf8"),
+      ) as { readonly phase: string };
+      expect(onDisk.phase).toBe("verifying");
+    },
+  );
+
+  it.each([
+    [
+      "wrong target (targetVersion no longer matches canonical record)",
+      (identity: { attemptId: string; generation: number; sequence: number }) =>
+        completionEvidence(
+          { targetVersion: "9.9.9", runningVersion: "9.9.9" },
+          identity,
+        ),
+    ],
+    [
+      "wrong identity (stale generation/sequence)",
+      (identity: { attemptId: string; generation: number; sequence: number }) =>
+        completionEvidence(
+          {
+            expected: {
+              attemptId: identity.attemptId,
+              generation: identity.generation,
+              sequence: 1,
+            },
+          },
+          identity,
+        ),
+    ],
+  ] as const)(
+    "ExecutorCompletionSession.complete itself succeeds internally but the write is refused intent-not-legal for %s",
+    async (_label, makeEvidence) => {
+      const hostHomeDir = await freshHome();
+
+      const outcome = await withUpdateExecutorCompletionSegment(
+        executorCompletionOptions(hostHomeDir),
+        async (capability, _context, completion) => {
+          const verifying = await advanceToVerifying(capability, hostHomeDir);
+          return completion.complete(makeEvidence(verifying.identity));
+        },
+      );
+
+      expect(outcome.kind).toBe("ran");
+      if (outcome.kind !== "ran") return;
+      expect(outcome.result).toMatchObject({
+        kind: "rejected",
+        reason: "intent-not-legal",
+      });
+      const onDisk = JSON.parse(
+        await readFile(updateAttemptRecordPath(hostHomeDir), "utf8"),
+      ) as { readonly phase: string };
+      expect(onDisk.phase).toBe("verifying");
+    },
+  );
+
+  it("refuses intent-not-legal when the canonical record is not in the verifying phase", async () => {
+    const hostHomeDir = await freshHome();
+
+    const outcome = await withUpdateExecutorCompletionSegment(
+      executorCompletionOptions(hostHomeDir),
+      async (capability, _context, completion) => {
+        const created = await commitExecutorAttemptMutation(
+          capability,
+          hostHomeDir,
+          { kind: "create", request: baseCreateRequest({}) },
+        );
+        if (created.kind !== "committed") {
+          throw new Error(`expected committed create, got ${created.kind}`);
+        }
+        return completion.complete(completionEvidence({}, created.identity));
+      },
+    );
+
+    expect(outcome.kind).toBe("ran");
+    if (outcome.kind !== "ran") return;
+    expect(outcome.result).toMatchObject({
+      kind: "rejected",
+      reason: "intent-not-legal",
+    });
+  });
+
+  it("withUpdateExecutorCompletionSegment always forces attempt-executor admission - its options type has no admission field to override", () => {
+    const optionsHaveNoAdmissionField = (
+      value: ExecutorCompletionTestOptions,
+    ): void => {
+      // @ts-expect-error `admission` does not exist on
+      // WithUpdateExecutorCompletionSegmentOptions - the admission is fixed
+      // internally, not caller-selectable.
+      void value.admission;
+    };
+    void optionsHaveNoAdmissionField;
+    expect(true).toBe(true);
+  });
+
+  it("a session captured from the callback cannot be used after the executor segment settles - revoke() makes it single-use for the segment's own lifetime, not merely for as long as somebody happens to hold a reference", async () => {
+    const hostHomeDir = await freshHome();
+    const escaped: {
+      session: ExecutorCompletionSession | null;
+      identity: {
+        attemptId: string;
+        generation: number;
+        sequence: number;
+      } | null;
+    } = { session: null, identity: null };
+
+    const outcome = await withUpdateExecutorCompletionSegment(
+      executorCompletionOptions(hostHomeDir),
+      async (capability, _context, completion) => {
+        const verifying = await advanceToVerifying(capability, hostHomeDir);
+        // Simulates a caller stashing the session object somewhere it
+        // outlives the callback - the exact shape of the prior bug, where
+        // an AsyncLocalStorage-propagated flag could outlive the callback
+        // that established it through a detached async resource.
+        escaped.session = completion;
+        escaped.identity = verifying.identity;
+        return "done";
+      },
+    );
+
+    expect(outcome.kind).toBe("ran");
+    if (escaped.session === null || escaped.identity === null) {
+      throw new Error("session/identity were not captured by the callback");
+    }
+    await expect(
+      escaped.session.complete(completionEvidence({}, escaped.identity)),
+    ).rejects.toThrow(
+      "executor terminal completion was called outside its session",
+    );
+    const onDisk = JSON.parse(
+      await readFile(updateAttemptRecordPath(hostHomeDir), "utf8"),
+    ) as { readonly phase: string };
+    expect(onDisk.phase).toBe("verifying");
+  });
+
+  it("a detached async child that calls complete() after the callback has already returned is rejected, even though it was created while the callback was still live", async () => {
+    const hostHomeDir = await freshHome();
+    const detached: { promise: Promise<unknown> | null } = { promise: null };
+
+    const outcome = await withUpdateExecutorCompletionSegment(
+      executorCompletionOptions(hostHomeDir),
+      async (capability, _context, completion) => {
+        const verifying = await advanceToVerifying(capability, hostHomeDir);
+        // Deliberately NOT awaited: this schedules a macrotask from inside
+        // the still-live callback, then returns immediately. `revoke()` runs
+        // in `withUpdateExecutorCompletionSegment`'s `finally` as part of
+        // this callback's own microtask settling, strictly before the
+        // detached `setImmediate` macrotask below can fire.
+        detached.promise = new Promise((resolve) => {
+          setImmediate(() => {
+            resolve(
+              completion
+                .complete(completionEvidence({}, verifying.identity))
+                .catch((err: unknown) => err),
+            );
+          });
+        });
+        return "returned-before-detached-child-ran";
+      },
+    );
+
+    expect(outcome.kind).toBe("ran");
+    const detachedResult = await detached.promise;
+    if (!(detachedResult instanceof Error)) {
+      throw new Error("expected the detached complete() call to reject");
+    }
+    expect(detachedResult.message).toContain(
+      "executor terminal completion was called outside its session",
+    );
+    const onDisk = JSON.parse(
+      await readFile(updateAttemptRecordPath(hostHomeDir), "utf8"),
+    ) as { readonly phase: string };
+    expect(onDisk.phase).toBe("verifying");
+  });
+
+  it("a structurally-matching literal is rejected exactly the same way once the session has been revoked - revocation, not evidence shape, is what gates the write", async () => {
+    const hostHomeDir = await freshHome();
+    const escaped: { session: ExecutorCompletionSession | null } = {
+      session: null,
+    };
+
+    await withUpdateExecutorCompletionSegment(
+      executorCompletionOptions(hostHomeDir),
+      async (capability, _context, completion) => {
+        const verifying = await advanceToVerifying(capability, hostHomeDir);
+        escaped.session = completion;
+        // A perfectly legitimate, exactly-matching literal - the same shape
+        // the genuine live verifier would have produced. Even this cannot
+        // complete once the session outlives its callback.
+        void verifying;
+        return "done";
+      },
+    );
+
+    const verifyingAgain = JSON.parse(
+      await readFile(updateAttemptRecordPath(hostHomeDir), "utf8"),
+    ) as { attemptId: string; generation: number; sequence: number };
+    if (escaped.session === null) {
+      throw new Error("session was not captured by the callback");
+    }
+    await expect(
+      escaped.session.complete(completionEvidence({}, verifyingAgain)),
+    ).rejects.toThrow(
+      "executor terminal completion was called outside its session",
+    );
+  });
+
+  it("revoke() awaits an already-started in-flight complete() call before the outer segment settles - a completion that began before the callback returned must finish before revocation, not race it (authority-fixup cold-review P1: revocation checked liveness too early and did not track an in-flight write)", async () => {
+    const hostHomeDir = await freshHome();
+    const gate = deferred();
+    let hookEntered = false;
+    __setBeforeRecordRenameHookForTest(async () => {
+      hookEntered = true;
+      await gate.promise;
+    });
+
+    let completeSettled = false;
+    const detached: { promise: Promise<unknown> | null } = { promise: null };
+
+    const outcomePromise = withUpdateExecutorCompletionSegment(
+      executorCompletionOptions(hostHomeDir),
+      async (capability, _context, completion) => {
+        const verifying = await advanceToVerifying(capability, hostHomeDir);
+        // Deliberately NOT awaited: starts the terminal write and returns
+        // immediately - the same shape as the CLI's un-awaited detached call
+        // reaching the inner mutation lock before `execute()` returns. The
+        // hook above pauses this write mid-rename, simulating "already past
+        // the last liveness check, mid-durable-write" rather than "not yet
+        // started".
+        detached.promise = completion
+          .complete(completionEvidence({}, verifying.identity))
+          .finally(() => {
+            completeSettled = true;
+          });
+        return "returned-with-completion-in-flight";
+      },
+    );
+
+    await waitUntil(() => hookEntered, 5_000);
+
+    // The callback has already returned and the terminal write is paused
+    // mid-rename. `revoke()` runs inside withUpdateExecutorCompletionSegment's
+    // own `finally`, so the ENTIRE outer segment promise must not settle
+    // until the in-flight write actually finishes.
+    let outerSettled = false;
+    void outcomePromise.then(() => {
+      outerSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(outerSettled).toBe(false);
+    expect(completeSettled).toBe(false);
+
+    gate.resolve();
+
+    const outcome = await outcomePromise;
+    expect(completeSettled).toBe(true);
+    expect(outcome.kind).toBe("ran");
+    if (outcome.kind !== "ran") return;
+    // The callback's own return value settles independently of the detached
+    // write it started; the write's outcome is only observable through the
+    // promise it returned, asserted below.
+    expect(outcome.result).toBe("returned-with-completion-in-flight");
+
+    if (detached.promise === null) {
+      throw new Error("detached complete() promise was not captured");
+    }
+    await expect(detached.promise).resolves.toMatchObject({
+      kind: "committed",
+    });
+  });
+});
+
+describe("withUpdateContender - a generic contender callback cannot receive or use a completion session", () => {
+  it("does not accept a 3-parameter callback at the type level, even for attempt-executor admission", () => {
+    const attemptToWidenCallback = (): Promise<
+      UpdateContenderOutcome<string>
+    > =>
+      withUpdateContender(
+        options("/tmp/does-not-matter", "attempt-executor"),
+        // @ts-expect-error `run` is `(capability, context) => Promise<T>` -
+        // a third completion parameter is not assignable. Generic contenders
+        // are structurally incapable of receiving a session, not merely
+        // discouraged from asking for one.
+        async (
+          capability: UpdateMutationCapability,
+          context: UpdateContenderExecutionContext,
+          completion: unknown,
+        ) => {
+          void capability;
+          void context;
+          void completion;
+          return "done";
+        },
+      );
+    void attemptToWidenCallback;
+    expect(true).toBe(true);
+  });
+
+  it("never passes a third (completion) argument at runtime, even under a type-erasing cast and attempt-executor admission", async () => {
+    const hostHomeDir = await freshHome();
+    let observedArgCount = -1;
+    let observedThirdArg: unknown = "not-yet-observed";
+
+    const outcome = await withUpdateContender(
+      options(hostHomeDir, "attempt-executor"),
+      (async (...args: unknown[]) => {
+        observedArgCount = args.length;
+        observedThirdArg = args[2];
+        return "done";
+      }) as (
+        capability: UpdateMutationCapability,
+        context: UpdateContenderExecutionContext,
+      ) => Promise<string>,
+    );
+
+    expect(outcome.kind).toBe("ran");
+    expect(observedArgCount).toBe(2);
+    expect(observedThirdArg).toBeUndefined();
+  });
+});

@@ -1,0 +1,994 @@
+import { describe, expect, it } from "vitest";
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import {
+  hostIsLocalForLoginAutoOpen,
+  providerHostBlock,
+  providerHostBlockLabel,
+  providerLoginIsRemoteSafe,
+  providerSignInUnavailableHint,
+  providerStartLoginFailureMessage,
+  providerSupportsTerminalLogin,
+  shouldAutoOpenLoginUrl,
+  type ProviderHostBlock,
+} from "@/components/providers/provider-signin-availability";
+import {
+  MACOS_13_SENTENCE,
+  settledMacosBlock,
+} from "@/components/providers/__tests__/macos-requirement-test-support";
+
+function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
+  return {
+    providerId: "claude-code",
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [
+      {
+        kind: "bundled",
+        path: "/opt/traycer/bin/claude",
+        version: "1.0.0",
+        available: true,
+        versionPending: false,
+      },
+    ],
+    auth: { status: "unknown", badgeText: null, label: null, detail: null },
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    terminalAgentArgs: "",
+    envOverrides: [],
+    loginCapability: {
+      oauthArgs: ["login"],
+      token: null,
+      codePaste: null,
+      terminalLogin: null,
+      remoteSafe: null,
+      selfOpensBrowser: null,
+    },
+    availabilityPending: false,
+    profiles: [],
+    managedInstallState: null,
+    versionVisibility: null,
+    advisory: null,
+    nativeCapabilities: {
+      supportedTabs: ["general", "env", "usage"],
+      mcp: null,
+      plugins: null,
+      skills: null,
+      modelProviders: null,
+    },
+    ...overrides,
+  };
+}
+
+/**
+ * The tooltip used to be one hardcoded sentence - "Sign in requires a local
+ * host with browser sign-in available" - shown for every reason the button was
+ * disabled. On a local host, which is most of them, that sentence is false, and
+ * it is the same misdirection class `providerCliNotFoundMessage` exists to
+ * kill: the user reads a precondition they already satisfy and has nowhere to
+ * go.
+ */
+describe("providerSignInUnavailableHint", () => {
+  it("is null when sign-in actually works", () => {
+    expect(
+      providerSignInUnavailableHint(providerState({}), true, "sign-in"),
+    ).toBeNull();
+  });
+
+  it("names the provider's own capability before anything situational", () => {
+    // A permanent property outranks a fixable one: telling this user to switch
+    // hosts would send them somewhere that changes nothing.
+    const hint = providerSignInUnavailableHint(
+      providerState({ loginCapability: null }),
+      false,
+      "sign-in",
+    );
+    expect(hint).toContain("does not support browser sign-in");
+    expect(hint).toContain("own CLI");
+    expect(hint).not.toContain("API key");
+    expect(hint).not.toContain("above");
+    expect(hint).not.toContain("local host");
+  });
+
+  it.each([
+    {
+      providerId: "amp",
+      name: "Amp",
+      usage: false,
+      tab: "Account",
+    },
+    {
+      providerId: "kiro",
+      name: "Kiro",
+      usage: true,
+      tab: "Account",
+    },
+  ] as const)(
+    "names $tab when $name has no browser sign-in and a key",
+    ({ providerId, name, usage, tab }) => {
+      const hint = providerSignInUnavailableHint(
+        providerState({
+          providerId,
+          apiKey: { supported: true, configured: false, source: null },
+          loginCapability: null,
+          nativeCapabilities: {
+            supportedTabs: usage
+              ? ["general", "env", "usage"]
+              : ["general", "env"],
+            mcp: null,
+            plugins: null,
+            skills: null,
+            modelProviders: null,
+          },
+        }),
+        true,
+        "sign-in",
+      );
+      expect(hint).toBe(
+        `${name} does not support browser sign-in. Authenticate with its own CLI, or set an API key on ${tab}.`,
+      );
+    },
+  );
+
+  it("treats an empty-but-non-null oauthArgs as sign-in capable, not as no sign-in", () => {
+    // The ACP-authenticate shape (antigravity): no `terminalLogin`, and a
+    // headless sign-in that needs no login subcommand because the host spawns
+    // the server and drives ACP `authenticate`. This used to read `null ||
+    // length === 0` and answered the "does not support browser sign-in"
+    // sentence, which disabled the button for the one provider whose argv is
+    // legitimately empty. Distinct from the terminal-login rows below, which
+    // are answered by the earlier branch whichever way their argv points -
+    // this one has no `terminalLogin`, so it reaches the argv check.
+    expect(
+      providerSignInUnavailableHint(
+        providerState({
+          providerId: "antigravity",
+          loginCapability: {
+            oauthArgs: [],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
+          },
+        }),
+        true,
+        "sign-in",
+      ),
+    ).toBeNull();
+  });
+
+  it("does not invent a CLI or API-key path for traycer", () => {
+    const hint = providerSignInUnavailableHint(
+      providerState({ providerId: "traycer", loginCapability: null }),
+      true,
+      "sign-in",
+    );
+    expect(hint).toContain("does not support browser sign-in");
+    expect(hint).not.toContain("CLI");
+    expect(hint).not.toContain("API key");
+  });
+
+  it("explains the remote-host case in terms of what sign-in does", () => {
+    const hint = providerSignInUnavailableHint(
+      providerState({}),
+      false,
+      "sign-in",
+    );
+    expect(hint).toContain("opens a browser on the computer running Traycer");
+  });
+
+  it("allows Claude code-paste sign-in on a remote host", () => {
+    expect(
+      providerSignInUnavailableHint(
+        providerState({
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: {},
+            terminalLogin: null,
+            remoteSafe: null,
+            selfOpensBrowser: null,
+          },
+        }),
+        false,
+        "sign-in",
+      ),
+    ).toBeNull();
+  });
+
+  it("allows declared remote-safe sign-in on a remote host", () => {
+    expect(
+      providerSignInUnavailableHint(
+        providerState({
+          providerId: "codex",
+          loginCapability: {
+            oauthArgs: ["login", "--device-auth"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+            remoteSafe: {},
+            selfOpensBrowser: null,
+          },
+        }),
+        false,
+        "sign-in",
+      ),
+    ).toBeNull();
+  });
+
+  it("reports a blocking managed pack rather than a false host precondition", () => {
+    // The case the old sentence got most wrong: a local host, a provider that
+    // does support sign-in, and a pack that has not arrived. The user was told
+    // to find a local host while sitting at one.
+    const hint = providerSignInUnavailableHint(
+      providerState({
+        candidates: [],
+        managedInstallState: { status: "downloading", percent: 30 },
+      }),
+      true,
+      "sign-in",
+    );
+    expect(hint).toContain("30%");
+    expect(hint).not.toContain("local host");
+  });
+
+  it("does not withhold sign-in for a pack that blocks nothing", () => {
+    // A managed pack downloading behind a runnable binary takes nothing away -
+    // the login spawns whatever the resolver spawns.
+    expect(
+      providerSignInUnavailableHint(
+        providerState({
+          managedInstallState: { status: "downloading", percent: 30 },
+        }),
+        true,
+        "sign-in",
+      ),
+    ).toBeNull();
+  });
+
+  // Row 1 of the terminal-login contract table (this consumer's half): the
+  // hint must point at the terminal sign-in flow, not the generic
+  // "does not support browser sign-in" message.
+  it("points at the terminal sign-in flow for a terminal-login provider, not 'browser sign-in'", () => {
+    const hint = providerSignInUnavailableHint(
+      providerState({
+        loginCapability: {
+          oauthArgs: ["auth", "login"],
+          token: null,
+          codePaste: null,
+          terminalLogin: {},
+          remoteSafe: null,
+          selfOpensBrowser: null,
+        },
+      }),
+      true,
+      "sign-in",
+    );
+    expect(hint).toContain("signed in from a terminal");
+    expect(hint).not.toContain("browser sign-in");
+  });
+
+  it.each([
+    {
+      providerId: "amp",
+      name: "Amp",
+      apiKeySupported: true,
+      usage: false,
+      tab: "Account",
+    },
+    {
+      providerId: "kiro",
+      name: "Kiro",
+      apiKeySupported: true,
+      usage: true,
+      tab: "Account",
+    },
+    {
+      providerId: "hermes",
+      name: "Hermes Agent",
+      apiKeySupported: false,
+      usage: true,
+      tab: null,
+    },
+    {
+      providerId: "kilocode",
+      name: "Kilo Code",
+      apiKeySupported: false,
+      usage: false,
+      tab: null,
+    },
+  ] as const)(
+    "points $providerId at both model pickers and only its key tab",
+    ({ providerId, name, apiKeySupported, usage, tab }) => {
+      const state = providerState({
+        providerId,
+        apiKey: {
+          supported: apiKeySupported,
+          configured: false,
+          source: null,
+        },
+        loginCapability: {
+          oauthArgs: null,
+          token: null,
+          codePaste: null,
+          terminalLogin: {},
+          remoteSafe: null,
+          selfOpensBrowser: null,
+        },
+        nativeCapabilities: {
+          supportedTabs: usage
+            ? ["general", "env", "usage"]
+            : ["general", "env"],
+          mcp: null,
+          plugins: null,
+          skills: null,
+          modelProviders: null,
+        },
+      });
+      const terminalHint = `${name} is signed in from a terminal. Open its model picker in a chat or on the start page and use the terminal sign-in there.`;
+      for (const isSelectedHostLocal of [true, false]) {
+        const hint = providerSignInUnavailableHint(
+          state,
+          isSelectedHostLocal,
+          "sign-in",
+        );
+        if (tab !== null) {
+          expect(hint).toBe(`${terminalHint} Or set an API key on ${tab}.`);
+        } else {
+          expect(hint).toBe(terminalHint);
+          expect(hint).not.toContain("API key");
+        }
+      }
+    },
+  );
+
+  // A launch-the-CLI provider (Qwen, Droid, OMP, OpenCode) declares
+  // `terminalLogin` with `oauthArgs: null` - there is no headless command.
+  // The terminal branch must win over the "no browser sign-in, use its own
+  // CLI" one: Traycer opens that CLI for the user.
+  it.each([{ oauthArgs: null }, { oauthArgs: [] }])(
+    "points at the terminal sign-in flow for a terminal-login provider with no oauthArgs (%o)",
+    ({ oauthArgs }) => {
+      const hint = providerSignInUnavailableHint(
+        providerState({
+          providerId: "qwen",
+          loginCapability: {
+            oauthArgs,
+            token: null,
+            codePaste: null,
+            terminalLogin: {},
+            remoteSafe: null,
+            selfOpensBrowser: null,
+          },
+        }),
+        true,
+        "sign-in",
+      );
+      expect(hint).toContain("Qwen Code is signed in from a terminal");
+      expect(hint).not.toContain("its own CLI");
+    },
+  );
+});
+
+describe("providerLoginIsRemoteSafe", () => {
+  it("uses the remote-safe marker rather than a device-auth argv flag", () => {
+    const kimiCapability = {
+      oauthArgs: ["login"],
+      token: null,
+      codePaste: null,
+      terminalLogin: null,
+      remoteSafe: {},
+      selfOpensBrowser: null,
+    };
+    expect(providerLoginIsRemoteSafe(kimiCapability)).toBe(true);
+    expect(
+      providerSignInUnavailableHint(
+        providerState({ providerId: "kimi", loginCapability: kimiCapability }),
+        false,
+        "sign-in",
+      ),
+    ).toBeNull();
+    expect(
+      providerLoginIsRemoteSafe({
+        ...kimiCapability,
+        oauthArgs: ["login", "--device-auth"],
+        remoteSafe: null,
+        selfOpensBrowser: null,
+      }),
+    ).toBe(false);
+    expect(
+      providerLoginIsRemoteSafe({ ...kimiCapability, remoteSafe: null }),
+    ).toBe(false);
+    expect(providerLoginIsRemoteSafe(null)).toBe(false);
+    expect(providerLoginIsRemoteSafe(undefined)).toBe(false);
+  });
+
+  it("reads the marker itself, so a pre-marker host's projected null is not remote-safe", () => {
+    // This helper used to guard against the key arriving ABSENT, and that was
+    // real: the markers were first added to the already-released
+    // `providers.list@9.1` in place, and both response decoders return the
+    // payload by cast when the peers agree on the major and the client's minor
+    // is not ahead - so on a 9.1/9.1 pairing no schema and no bridge ran.
+    //
+    // The markers now ride 9.2, which puts such a host's payload back through
+    // 9.1's schema and then the 9.1 -> 9.2 bridge, so absence is no longer
+    // reachable and there is nothing here to defend against. What that bridge
+    // hands this function is a real `null` for a provider it could not
+    // establish, which must read as NOT remote-safe.
+    expect(
+      providerLoginIsRemoteSafe({
+        oauthArgs: ["login"],
+        token: null,
+        codePaste: null,
+        terminalLogin: null,
+        remoteSafe: null,
+        selfOpensBrowser: null,
+      }),
+    ).toBe(false);
+
+    // The control: the same row from a host that DOES establish the marker -
+    // or the bridge's projection of a legacy `--device-auth` flow, which is
+    // the same `{}` - is remote-safe. So the branch above refuses a null
+    // rather than refusing everything.
+    expect(
+      providerLoginIsRemoteSafe({
+        oauthArgs: ["login"],
+        token: null,
+        codePaste: null,
+        terminalLogin: null,
+        remoteSafe: {},
+        selfOpensBrowser: null,
+      }),
+    ).toBe(true);
+  });
+});
+
+const TERMINAL_LOGIN_CAP: ProviderCliState["loginCapability"] = {
+  oauthArgs: ["auth", "login"],
+  token: null,
+  codePaste: null,
+  terminalLogin: {},
+  remoteSafe: null,
+  selfOpensBrowser: null,
+};
+
+const NO_TERMINAL_LOGIN_CAP: ProviderCliState["loginCapability"] = {
+  oauthArgs: ["auth", "login"],
+  token: null,
+  codePaste: null,
+  terminalLogin: null,
+  remoteSafe: null,
+  selfOpensBrowser: null,
+};
+
+describe("providerSupportsTerminalLogin", () => {
+  it("is true only when terminalLogin is present and non-null", () => {
+    expect(providerSupportsTerminalLogin(TERMINAL_LOGIN_CAP)).toBe(true);
+    expect(providerSupportsTerminalLogin(NO_TERMINAL_LOGIN_CAP)).toBe(false);
+  });
+
+  // The real source of a "no key to check" capability is the optional chain
+  // over `loginCapability` itself, not an old host's echo: the v6 -> v7
+  // upgrade bridge (`registry.ts`) fills `terminalLogin: null` for exactly
+  // that case, so a pre-terminal-login host's payload decodes with the key
+  // present and `null` (the `NO_TERMINAL_LOGIN_CAP` case above), never absent.
+  // `loginCapability` reads `null` for an API-key-only provider (Cursor,
+  // Traycer) and `undefined` for one not yet loaded (a map lookup before
+  // `providers.list` resolves) - both must read as "does not support terminal
+  // login".
+  it("is false when loginCapability itself is null", () => {
+    expect(providerSupportsTerminalLogin(null)).toBe(false);
+  });
+
+  it("is false when loginCapability itself is undefined", () => {
+    expect(providerSupportsTerminalLogin(undefined)).toBe(false);
+  });
+
+  // The command the terminal runs is host-owned, not `oauthArgs` - that is
+  // the HEADLESS command, and the providers whose sign-in lives inside their
+  // own TUI (Qwen, Droid, OMP, OpenCode) ship `terminalLogin` with
+  // `oauthArgs: null` so a client predating the field never offers them a
+  // headless button. This helper once required `oauthArgs` too, which hid
+  // the terminal button for exactly those four.
+  it("is true when terminalLogin is present even though oauthArgs is null or empty", () => {
+    expect(
+      providerSupportsTerminalLogin({
+        oauthArgs: null,
+        token: null,
+        codePaste: null,
+        terminalLogin: {},
+        remoteSafe: null,
+        selfOpensBrowser: null,
+      }),
+    ).toBe(true);
+    expect(
+      providerSupportsTerminalLogin({
+        oauthArgs: [],
+        token: null,
+        codePaste: null,
+        terminalLogin: {},
+        remoteSafe: null,
+        selfOpensBrowser: null,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("shouldAutoOpenLoginUrl", () => {
+  // NonNullable, not the bare field type: the field is nullable, and spreading
+  // a possibly-null value into an object literal below would silently drop
+  // every required key rather than failing at the spread.
+  const capability = (
+    selfOpensBrowser: Record<string, never> | null,
+  ): NonNullable<ProviderCliState["loginCapability"]> => ({
+    oauthArgs: ["login"],
+    token: null,
+    codePaste: null,
+    terminalLogin: null,
+    remoteSafe: null,
+    selfOpensBrowser,
+  });
+
+  it("auto-opens on a remote host even when the child opens its own browser", () => {
+    // The host's browser is on a machine the user cannot see, so whatever the
+    // child does there is invisible. This branch never reads the marker.
+    expect(shouldAutoOpenLoginUrl(false, capability({}))).toBe(true);
+    expect(shouldAutoOpenLoginUrl(false, capability(null))).toBe(true);
+  });
+
+  it("does not auto-open on a local host when the child opens its own browser", () => {
+    // THE regression pin. Before the marker this read `userCode !== null`, and
+    // Kimi - which runs a device-code flow AND opens the browser itself -
+    // therefore got a second consent tab the moment the host keyed it
+    // device-auth. Written against a provider that is BOTH, because a provider
+    // that is only self-opening passed the old predicate too and so cannot
+    // tell the two implementations apart.
+    const kimiShaped: ProviderCliState["loginCapability"] = {
+      ...capability({}),
+      remoteSafe: {},
+    };
+    expect(shouldAutoOpenLoginUrl(true, kimiShaped)).toBe(false);
+  });
+
+  it("auto-opens on a local host when the child does not open a browser", () => {
+    // Codex and Grok print a URL and a code for the GUI to open; Antigravity
+    // prints a consent link that is the flow's only affordance. All three are
+    // `null` here, and all three must get a tab.
+    expect(shouldAutoOpenLoginUrl(true, capability(null))).toBe(true);
+  });
+
+  it("auto-opens when there is no capability to read", () => {
+    // The fail-safe direction: a duplicate tab is a nuisance, no tab at all is
+    // a dead end, so an unknown answer opens.
+    //
+    // The genuinely ABSENT key is not expressible here - the field is required
+    // on the live type - and it is not this test's job: the marker rides
+    // `providers.list@9.2`, so an older host's payload is parsed through its
+    // own frozen schema and then filled by the 9.1 -> 9.2 bridge. That fill is
+    // pinned in the protocol suite
+    // (`provider-login-remote-safe-marker.test.ts`), and the predicate's
+    // `?? null` is the belt to that braces.
+    expect(shouldAutoOpenLoginUrl(true, null)).toBe(true);
+    expect(shouldAutoOpenLoginUrl(true, undefined)).toBe(true);
+  });
+});
+
+describe("hostIsLocalForLoginAutoOpen", () => {
+  const directory = [
+    { hostId: "local-1", kind: "local" },
+    { hostId: "remote-1", kind: "remote" },
+  ];
+
+  it("follows the app-wide default when the captured host id is null", () => {
+    expect(hostIsLocalForLoginAutoOpen(directory, null, "remote-1")).toBe(
+      false,
+    );
+    expect(hostIsLocalForLoginAutoOpen(directory, null, "local-1")).toBe(true);
+  });
+
+  it("prefers the captured host id over the default", () => {
+    expect(hostIsLocalForLoginAutoOpen(directory, "remote-1", "local-1")).toBe(
+      false,
+    );
+    expect(hostIsLocalForLoginAutoOpen(directory, "local-1", "remote-1")).toBe(
+      true,
+    );
+  });
+
+  it("fails closed as local when the resolved host is missing", () => {
+    expect(hostIsLocalForLoginAutoOpen(directory, null, null)).toBe(true);
+    expect(hostIsLocalForLoginAutoOpen(directory, "gone", "remote-1")).toBe(
+      true,
+    );
+  });
+});
+
+describe("providerStartLoginFailureMessage", () => {
+  it("names a ChatGPT workspace that has not enabled device-code login", () => {
+    expect(
+      providerStartLoginFailureMessage(
+        "device_auth_unavailable",
+        "Sign-in did not start.",
+      ),
+    ).toContain("Device-code login is not enabled");
+  });
+
+  it("names a missing device code instead of provider-unavailable copy", () => {
+    expect(
+      providerStartLoginFailureMessage(
+        "device_code_missing",
+        "Sign-in did not start.",
+      ),
+    ).toContain("did not print a device code");
+  });
+});
+
+describe("providerHostBlock", () => {
+  it("blocks a disabled provider for the sign-in gesture", () => {
+    expect(
+      providerHostBlock(providerState({ enabled: false }), "sign-in"),
+    ).toEqual({ kind: "disabled" });
+  });
+
+  // Onboarding's "Sign in & enable" turns the provider on as its LAST step,
+  // so being off is where it starts from, not a reason to refuse the click.
+  it("does not block a disabled provider for sign-in-and-enable", () => {
+    expect(
+      providerHostBlock(
+        providerState({ enabled: false }),
+        "sign-in-and-enable",
+      ),
+    ).toBeNull();
+  });
+
+  it("is unblocked whenever any candidate is available, whatever the pack state says", () => {
+    expect(
+      providerHostBlock(
+        providerState({
+          candidates: [
+            {
+              kind: "bundled",
+              path: "/opt/traycer/bin/claude",
+              version: "1.0.0",
+              available: true,
+              versionPending: false,
+            },
+          ],
+          managedInstallState: { status: "downloading", percent: 10 },
+        }),
+        "sign-in",
+      ),
+    ).toBeNull();
+  });
+
+  it("reports the pack with fallbackRunnable forced to false", () => {
+    // No candidate is available, so nothing stands in for the pack whatever
+    // the raw preparing state says - the label has to say "preparing", not
+    // "updating in the background".
+    expect(
+      providerHostBlock(
+        providerState({
+          candidates: [],
+          managedInstallState: { status: "downloading", percent: 42 },
+        }),
+        "sign-in",
+      ),
+    ).toEqual({
+      kind: "pack",
+      preparing: {
+        kind: "downloading",
+        percent: 42,
+        retryAtMs: null,
+        reason: null,
+        fallbackRunnable: false,
+      },
+    });
+  });
+
+  it("reports cli-checking while the CLI probe has not settled", () => {
+    expect(
+      providerHostBlock(
+        providerState({ candidates: [], availabilityPending: true }),
+        "sign-in",
+      ),
+    ).toEqual({ kind: "cli-checking" });
+    expect(
+      providerHostBlock(
+        providerState({
+          candidates: [
+            {
+              kind: "bundled",
+              path: "/opt/traycer/bin/claude",
+              version: null,
+              available: false,
+              versionPending: true,
+            },
+          ],
+        }),
+        "sign-in",
+      ),
+    ).toEqual({ kind: "cli-checking" });
+  });
+
+  it("reports cli-missing once the probe has settled with nothing to run", () => {
+    expect(
+      providerHostBlock(providerState({ candidates: [] }), "sign-in"),
+    ).toEqual({ kind: "cli-missing" });
+  });
+
+  it("answers disabled for sign-in and pack for sign-in-and-enable on a disabled provider with a downloading pack", () => {
+    const state = providerState({
+      enabled: false,
+      candidates: [],
+      managedInstallState: { status: "downloading", percent: 5 },
+    });
+    expect(providerHostBlock(state, "sign-in")).toEqual({ kind: "disabled" });
+    expect(providerHostBlock(state, "sign-in-and-enable")).toEqual({
+      kind: "pack",
+      preparing: {
+        kind: "downloading",
+        percent: 5,
+        retryAtMs: null,
+        reason: null,
+        fallbackRunnable: false,
+      },
+    });
+  });
+
+  // The host resolves a sign-in's CLI as selected -> bundled -> PATH and never
+  // falls back to an unselected custom path, so "a candidate is available" is
+  // not "the host can run one". `cliBinaryResolved` is the host's own answer.
+  describe("with the host's cliBinaryResolved verdict", () => {
+    const deletedSelection: ProviderCliState["candidates"][number] = {
+      kind: "custom",
+      path: "/gone/claude",
+      version: null,
+      available: false,
+      versionPending: false,
+    };
+    const unselectedCustom: ProviderCliState["candidates"][number] = {
+      kind: "custom",
+      path: "/other/claude",
+      version: "1.0.0",
+      available: true,
+      versionPending: false,
+    };
+
+    it("holds sign-in when the host resolved nothing although an unselected custom path is available", () => {
+      const state = providerState({
+        selected: { kind: "custom", path: "/gone/claude" },
+        candidates: [deletedSelection, unselectedCustom],
+        cliBinaryResolved: false,
+      });
+      expect(providerHostBlock(state, "sign-in")).toEqual({
+        kind: "cli-selection-unavailable",
+      });
+      expect(providerHostBlock(state, "sign-in-and-enable")).toEqual({
+        kind: "cli-selection-unavailable",
+      });
+    });
+
+    it("reports the pack rather than the selection while the pack the host would fall back to is downloading", () => {
+      expect(
+        providerHostBlock(
+          providerState({
+            selected: { kind: "custom", path: "/gone/claude" },
+            candidates: [deletedSelection, unselectedCustom],
+            cliBinaryResolved: false,
+            managedInstallState: { status: "downloading", percent: 30 },
+          }),
+          "sign-in",
+        ),
+      ).toEqual({
+        kind: "pack",
+        preparing: {
+          kind: "downloading",
+          percent: 30,
+          retryAtMs: null,
+          reason: null,
+          fallbackRunnable: false,
+        },
+      });
+    });
+
+    it("reports cli-checking while the probe has not settled", () => {
+      expect(
+        providerHostBlock(
+          providerState({
+            selected: { kind: "custom", path: "/gone/claude" },
+            candidates: [deletedSelection, unselectedCustom],
+            cliBinaryResolved: false,
+            availabilityPending: true,
+          }),
+          "sign-in",
+        ),
+      ).toEqual({ kind: "cli-checking" });
+    });
+
+    it("reports cli-missing when the host resolved nothing and no candidate is available", () => {
+      expect(
+        providerHostBlock(
+          providerState({ candidates: [], cliBinaryResolved: false }),
+          "sign-in",
+        ),
+      ).toEqual({ kind: "cli-missing" });
+    });
+
+    it("is unblocked when the host resolved a CLI, even with the selected path gone", () => {
+      expect(
+        providerHostBlock(
+          providerState({
+            selected: { kind: "custom", path: "/gone/claude" },
+            candidates: [
+              deletedSelection,
+              {
+                kind: "bundled",
+                path: "/opt/traycer/bin/claude",
+                version: "1.0.0",
+                available: true,
+                versionPending: false,
+              },
+            ],
+            cliBinaryResolved: true,
+          }),
+          "sign-in",
+        ),
+      ).toBeNull();
+    });
+
+    // A host older than the field omits it. Nothing better is known then, so
+    // the gate keeps its any-available-candidate reading rather than holding
+    // every provider on that host.
+    it("falls back to candidate availability for a host that does not send the verdict", () => {
+      const state = providerState({
+        selected: { kind: "custom", path: "/gone/claude" },
+        candidates: [deletedSelection, unselectedCustom],
+      });
+      expect(state.cliBinaryResolved).toBeUndefined();
+      expect(providerHostBlock(state, "sign-in")).toBeNull();
+    });
+  });
+});
+
+describe("providerHostBlockLabel", () => {
+  const label = "Claude Code";
+
+  it("labels the disabled, cli-checking and cli-missing kinds", () => {
+    expect(providerHostBlockLabel({ kind: "disabled" }, label)).toBe(
+      `${label} is turned off. Turn it on to sign in or manage its profiles.`,
+    );
+    expect(providerHostBlockLabel({ kind: "cli-checking" }, label)).toBe(
+      `Checking for the ${label} CLI…`,
+    );
+    expect(providerHostBlockLabel({ kind: "cli-missing" }, label)).toBe(
+      `The ${label} CLI is not installed on this host.`,
+    );
+  });
+
+  it("labels cli-selection-unavailable with where to choose another CLI", () => {
+    expect(
+      providerHostBlockLabel({ kind: "cli-selection-unavailable" }, label),
+    ).toBe(
+      `The selected ${label} CLI is not available on this host. Choose another under CLI & Args.`,
+    );
+  });
+
+  it("renders a pack block through providerPackPreparingLabel", () => {
+    const block: ProviderHostBlock = {
+      kind: "pack",
+      preparing: {
+        kind: "downloading",
+        percent: 42,
+        retryAtMs: null,
+        reason: null,
+        fallbackRunnable: false,
+      },
+    };
+    expect(providerHostBlockLabel(block, label)).toBe(
+      `Preparing ${label}… 42%`,
+    );
+  });
+});
+
+describe("providerHostBlock - macOS requirement", () => {
+  const antigravity = (
+    overrides: Partial<ProviderCliState>,
+  ): ProviderCliState =>
+    providerState({
+      providerId: "antigravity",
+      candidates: [],
+      cliBinaryResolved: false,
+      ...overrides,
+    });
+
+  it("returns the macos kind once the host has settled that nothing can run here", () => {
+    const state = antigravity({ ...settledMacosBlock({}) });
+    for (const gesture of ["sign-in", "sign-in-and-enable"] as const) {
+      expect(providerHostBlock(state, gesture), gesture).toEqual({
+        kind: "macos",
+        requiredMacos: "14.0",
+        runningMacos: "13.6",
+      });
+    }
+  });
+
+  it("takes the lowest floor the host reports, never one it computed itself", () => {
+    const state = antigravity({
+      ...settledMacosBlock({ launch: { requiredMacos: "15.0" } }),
+    });
+    expect(providerHostBlock(state, "sign-in")).toEqual({
+      kind: "macos",
+      requiredMacos: "15.0",
+      runningMacos: "13.6",
+    });
+  });
+
+  it("answers before the pack and checking kinds, but after a disabled provider", () => {
+    const withPack = antigravity({
+      ...settledMacosBlock({}),
+      managedInstallState: { status: "downloading", percent: 10 },
+    });
+    expect(providerHostBlock(withPack, "sign-in")?.kind).toBe("macos");
+    expect(
+      providerHostBlock(
+        antigravity({ ...settledMacosBlock({}), enabled: false }),
+        "sign-in",
+      ),
+    ).toEqual({ kind: "disabled" });
+  });
+
+  it("keeps saying Checking while discovery is pending and launch is null", () => {
+    const state = antigravity({
+      availabilityPending: true,
+      ...settledMacosBlock({ launch: null }),
+    });
+    expect(providerHostBlock(state, "sign-in")).toEqual({
+      kind: "cli-checking",
+    });
+  });
+
+  it("does not block on the managed withhold alone", () => {
+    // `launch` null: something else can run, so there is no block to show.
+    const state = antigravity({
+      cliBinaryResolved: true,
+      candidates: [
+        {
+          kind: "path",
+          path: "/usr/local/bin/agy_acp_server",
+          version: "1.0.0",
+          available: true,
+          versionPending: false,
+        },
+      ],
+      ...settledMacosBlock({ launch: null }),
+    });
+    expect(providerHostBlock(state, "sign-in")).toBeNull();
+  });
+
+  it("behaves exactly as before when an older host omits the field", () => {
+    expect(providerHostBlock(antigravity({}), "sign-in")).toEqual({
+      kind: "cli-missing",
+    });
+    expect(
+      providerHostBlock(antigravity({ macosRequirement: null }), "sign-in"),
+    ).toEqual({ kind: "cli-missing" });
+  });
+
+  it("labels the block with the sentence, naming both versions", () => {
+    expect(
+      providerHostBlockLabel(
+        { kind: "macos", requiredMacos: "14.0", runningMacos: "13.6" },
+        "Antigravity",
+      ),
+    ).toBe(MACOS_13_SENTENCE);
+  });
+
+  it("surfaces the sentence through the shared sign-in hint", () => {
+    const state = antigravity({ ...settledMacosBlock({}) });
+    expect(providerSignInUnavailableHint(state, true, "sign-in")).toContain(
+      MACOS_13_SENTENCE,
+    );
+  });
+});

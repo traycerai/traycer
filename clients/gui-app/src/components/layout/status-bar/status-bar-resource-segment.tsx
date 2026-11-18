@@ -1,0 +1,275 @@
+import {
+  Fragment,
+  useCallback,
+  type ComponentPropsWithoutRef,
+  type ReactNode,
+  type Ref,
+} from "react";
+import { Cpu } from "lucide-react";
+import { useLayoutRegion } from "@/components/layout-editor/use-layout-region";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { UNAVAILABLE_DASH } from "@/lib/resources/memory-metric";
+import {
+  statusBarResourceSegmentLabel,
+  type StatusBarResourceMetricView,
+} from "@/lib/resources/status-bar-resource-reading";
+import { cn } from "@/lib/utils";
+import {
+  isCpuWarning,
+  useStatusBarResourceMetrics,
+} from "@/components/layout/status-bar/use-status-bar-resource-views";
+import { useRegionDensity } from "@/lib/layout-overrides";
+import { resolveReadingDensity } from "@/lib/layout/reading-density";
+import { RUNNING_LOW_TEXT_CLASS_NAME } from "@/lib/rate-limits/window-severity";
+
+interface StatusBarResourceSegmentProps extends ComponentPropsWithoutRef<"button"> {
+  /** The watched host, for the "too old to stream" verdict and its copy. */
+  readonly hostId: string | null;
+  readonly hostLabel: string;
+  /**
+   * Whether that host was PICKED rather than followed — the burden of proof the
+   * projection has to meet before its numbers may be printed under this host's
+   * name. See `attributedProjection`.
+   */
+  readonly hasExplicitPick: boolean;
+  /**
+   * The watched host is this computer, so the desktop shell counts in its
+   * total, as it does in the resource monitor's headline
+   * (`readingShowsLocalDesktop`).
+   */
+  readonly watchesThisMachine: boolean;
+  /**
+   * Radix injects this through `PopoverTrigger asChild`. Declared for the same
+   * reason `EpicsFilterTrigger` declares it: the slot hands the trigger's ref
+   * and handlers to this component, and they have to reach the real `<button>`.
+   */
+  readonly ref?: Ref<HTMLButtonElement>;
+  /** `false` for every passive mount: the Settings preview, an option picture. */
+  readonly interactive: boolean;
+}
+
+/**
+ * The strip's right-hand readout, and the resource monitor's trigger.
+ *
+ * Pinned to the strip's right edge at its natural width (`shrink-0`) and
+ * printing every selected metric with its label at every window width: the
+ * usage cluster to its left is the box that gives way, scrolling its readings
+ * rather than pushing this readout off the strip, so nothing here has to
+ * shorten itself for a narrow window.
+ *
+ * It renders no popover of its own: `ResourceMonitorPopover` owns the single
+ * always-mounted `resources.subscribe` stream, and mounting that popover CLOSED
+ * around this segment is exactly what keeps these numbers live without anybody
+ * opening anything. So this is a trigger, never a second reader.
+ */
+export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
+  const {
+    hostId,
+    hostLabel,
+    hasExplicitPick,
+    watchesThisMachine,
+    interactive,
+    className,
+    ref,
+    ...buttonProps
+  } = props;
+  const compact =
+    resolveReadingDensity(useRegionDensity("resourceMonitor"), "status-bar") ===
+    "compact";
+  const { views, cpuPercent } = useStatusBarResourceMetrics({
+    hostId,
+    hostLabel,
+    hasExplicitPick,
+    watchesThisMachine,
+    compact,
+  });
+  const cpuWarning = isCpuWarning(cpuPercent);
+  const noMetrics = views.length === 0;
+  const { ref: regionRef } = useLayoutRegion({
+    regionId: "resourceMonitor",
+    instanceId: null,
+  });
+  const icon = <Cpu className="size-3 shrink-0" aria-hidden />;
+  const setMergedRef = useCallback(
+    (node: HTMLButtonElement | null) => {
+      regionRef(node);
+      if (typeof ref === "function") {
+        ref(node);
+      } else if (ref) {
+        ref.current = node;
+      }
+    },
+    [ref, regionRef],
+  );
+
+  const readout = (): ReactNode => {
+    if (noMetrics) {
+      // Every metric switched off is reachable from Settings, so it gets an
+      // answer rather than a bare glyph: an icon alone is exactly what a
+      // broken readout looks like, and the remedy - turn one back on - is not
+      // guessable from it. The tooltip is the sighted half of that sentence;
+      // the button's own name above is the other. The segment stays mounted
+      // because it is also the resource panel's trigger, and the panel is
+      // where the numbers still are.
+      return (
+        <TooltipWrapper
+          label="No metrics selected"
+          side="top"
+          sideOffset={6}
+          align={undefined}
+        >
+          <span
+            className="inline-flex items-center"
+            data-testid="status-bar-resource-no-metrics"
+          >
+            {icon}
+          </span>
+        </TooltipWrapper>
+      );
+    }
+    if (compact) {
+      // Compact is the CPU icon alone, as in the top strip: the number is one
+      // hover away, and the icon takes the warning color when CPU runs hot.
+      const { value, unavailableReason, cpuCoresLabel } = views[0];
+      return (
+        <TooltipWrapper
+          label={
+            unavailableReason ??
+            (value === null
+              ? null
+              : `CPU ${value}${cpuCoresLabel === null ? "" : ` (${cpuCoresLabel})`}`)
+          }
+          side="top"
+          sideOffset={6}
+          align={undefined}
+        >
+          <span
+            className={cn(
+              "inline-flex items-center",
+              cpuWarning && RUNNING_LOW_TEXT_CLASS_NAME,
+            )}
+            data-testid="status-bar-resource-cpu-icon"
+          >
+            {icon}
+          </span>
+        </TooltipWrapper>
+      );
+    }
+    return (
+      <>
+        {icon}
+        {views.map((view, index) => (
+          <Fragment key={view.metric}>
+            {index === 0 ? null : (
+              <span aria-hidden className="text-muted-foreground/60">
+                ·
+              </span>
+            )}
+            <StatusBarMetric
+              view={view}
+              warning={view.metric === "cpu" && cpuWarning}
+            />
+          </Fragment>
+        ))}
+      </>
+    );
+  };
+
+  return (
+    <button
+      ref={interactive ? setMergedRef : ref}
+      type="button"
+      // An `aria-label` REPLACES the flattened contents in the accessible-name
+      // computation, so a hidden sentence inside the button would never be
+      // announced. In the empty state the readout is the only thing that could
+      // have explained the glyph, and there is none — so the explanation has to
+      // be the name itself.
+      //
+      // For the same reason the readings have to be IN the name rather than
+      // beside it: the numbers are the segment's whole content, and a bare
+      // "Resources" replaced every one of them — including `StatusBarMetric`'s
+      // own `sr-only` unavailable sentence.
+      aria-label={statusBarResourceSegmentLabel(views)}
+      data-testid="status-bar-resource-segment"
+      {...buttonProps}
+      className={cn(
+        "inline-flex h-6 max-w-full shrink-0 items-center gap-1.5 px-2 text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground",
+        "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+        className,
+      )}
+    >
+      {readout()}
+    </button>
+  );
+}
+
+/**
+ * CPU carries its cores figure on hover; an unavailable metric always
+ * carries its sentence — the dash alone cannot distinguish "no data
+ * yet" from "not on this build" from "this host is too old".
+ *
+ * The dash is `aria-hidden` with a visually-hidden sentence beside it, the
+ * repo's idiom (`MetricBlock`): an em dash is decoration, and a screen reader
+ * left with it hears punctuation where a value should be.
+ */
+export function StatusBarMetric(props: {
+  readonly view: StatusBarResourceMetricView;
+  /** The value reads in the warning color (CPU at the shared threshold). */
+  readonly warning: boolean;
+}) {
+  const { view, warning } = props;
+  return (
+    <TooltipWrapper
+      label={view.unavailableReason ?? view.cpuCoresLabel}
+      side="top"
+      sideOffset={6}
+      align={undefined}
+    >
+      <span
+        className="inline-flex min-w-0 items-center gap-1"
+        data-testid={`status-bar-resource-metric-${view.metric}`}
+      >
+        <span className="text-muted-foreground/80">{view.label}</span>
+        {view.value === null ? (
+          <>
+            <span aria-hidden="true">{UNAVAILABLE_DASH}</span>
+            <span className="sr-only">{view.label}: unavailable</span>
+          </>
+        ) : (
+          <span
+            className={cn("truncate", warning && RUNNING_LOW_TEXT_CLASS_NAME)}
+          >
+            {view.value}
+          </span>
+        )}
+      </span>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * The expanded side strip's Compact tile: the CPU icon and "cpu N%", in the
+ * warning color from the shared threshold. The percent holds a fixed minimum
+ * width, so the tile does not change width as the value moves.
+ */
+export function CpuReading(props: {
+  readonly view: StatusBarResourceMetricView;
+  readonly cpuPercent: number | null;
+}): ReactNode {
+  const { view } = props;
+  const value = view.value ?? UNAVAILABLE_DASH;
+  return (
+    <span
+      data-testid="resource-cpu-reading"
+      className={cn(
+        "inline-flex items-center gap-1.5",
+        isCpuWarning(props.cpuPercent) && RUNNING_LOW_TEXT_CLASS_NAME,
+      )}
+    >
+      <Cpu className="size-3.5" aria-hidden />
+      <span className="min-w-6 text-end tabular-nums">
+        {`${view.label} ${value}`}
+      </span>
+    </span>
+  );
+}

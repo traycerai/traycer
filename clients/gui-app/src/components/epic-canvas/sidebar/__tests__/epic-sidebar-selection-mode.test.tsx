@@ -1,0 +1,6643 @@
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as renderWithoutQueryClient,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { toast } from "sonner";
+import {
+  HostRpcError,
+  RetryableTransportError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { domMax, LazyMotion } from "motion/react";
+import { forwardRef, type ReactElement, type ReactNode } from "react";
+import { userEvent } from "@testing-library/user-event";
+import type { Mock } from "vitest";
+import type { ChatSearchMessageHitsStatus } from "@/hooks/chats/use-chat-search-message-hits";
+import type { ProviderId } from "@/components/home/data/landing-options";
+import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type {
+  AgentSessionLastExit,
+  AgentSessionState,
+} from "@traycer/protocol/host/agent-session-state";
+import type { HoverCardProps } from "@/components/ui/hover-card";
+import {
+  createChatSessionStore,
+  type ChatSessionStoreHandle,
+} from "@/stores/chats/chat-session-store";
+import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import { useAppDialogStore } from "@/stores/dialogs/app-dialog-store";
+import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
+import {
+  panelHeaderSearchSurfaceKey,
+  usePanelHeaderSearchStore,
+} from "@/stores/epics/panel-header-search-store";
+import {
+  ChatTreeSurfaceContext,
+  type ChatTreeSurface,
+} from "@/components/epic-canvas/sidebar/chat-tree-surface";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  requestSidebarNodeReveal,
+  useSidebarNodeRevealStore,
+} from "@/stores/epics/sidebar-node-reveal-store";
+import { RAIL_REGION_BY_PANEL } from "@/lib/layout/rail";
+
+const writeText = vi.hoisted(() =>
+  vi.fn((_value: string) => Promise.resolve()),
+);
+Object.defineProperty(globalThis.navigator, "clipboard", {
+  value: { writeText },
+  configurable: true,
+});
+
+interface TestTreeNode {
+  readonly id: string;
+  readonly parentId: string | null;
+  readonly title: string;
+  readonly type:
+    | "spec"
+    | "ticket"
+    | "story"
+    | "review"
+    | "chat"
+    | "terminal-agent";
+  readonly status: number | null;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+
+interface TestRecord {
+  readonly id: string;
+  readonly parentId: string | null;
+  readonly name: string;
+  readonly type: TestTreeNode["type"];
+  readonly status: number | null;
+  readonly hostId: string;
+}
+
+interface TestIndicatorState {
+  readonly unreadFailure: boolean;
+  readonly pendingFork: boolean;
+  readonly pendingApproval: boolean;
+  readonly pendingInterview: boolean;
+  readonly unreadDone: boolean;
+}
+
+interface TestState {
+  readonly createChatMutate: Mock;
+  readonly createArtifactMutate: Mock;
+  readonly deleteArtifactMutateAsync: Mock;
+  readonly deleteChatMutateAsync: Mock;
+  readonly deleteTuiAgentMutateAsync: Mock;
+  /**
+   * Rename RPCs, deliberately NEVER settled by default (they return a promise
+   * that stays pending). The rename editor must close on COMMIT, not on the
+   * ack, so a mock that resolved would make that assertion vacuous - it would
+   * pass on the old close-on-success code too.
+   */
+  readonly renameChatMutateAsync: Mock;
+  readonly renameTuiAgentMutateAsync: Mock;
+  /** Phase 1.1 optimistic-overlay stamps, as the rename path calls them. */
+  readonly beginRenameMutation: Mock;
+  readonly retirePendingMutation: Mock;
+  readonly exportArtifactsMutate: Mock;
+  readonly localDeleteArtifact: Mock;
+  readonly closeCanvasTab: Mock;
+  /**
+   * What `findOpenArtifactInTab` returns for a content id. Used to prove bulk
+   * chat delete does not close tiles by id (a same-id other-host tab).
+   */
+  openArtifactById: Readonly<
+    Record<string, { readonly paneId: string; readonly instanceId: string }>
+  >;
+  /** What `findOpenTileInTab` returns for a `${id}::${hostId}` identity. */
+  openTileByIdentity: Readonly<
+    Record<string, { readonly paneId: string; readonly instanceId: string }>
+  >;
+  readonly markArtifactSelfDeleted: Mock;
+  readonly unmarkArtifactSelfDeleted: Mock;
+  readonly pruneRecoveryTiles: Mock;
+  sessionReady: boolean;
+  snapshotLoaded: boolean;
+  /**
+   * Whether `epic.listChatRecords` has answered. While false a persisted
+   * nested row can still be absent from the tree, so the delete disclosure
+   * states no number.
+   */
+  chatRecordListAuthoritative: boolean;
+  /** The terminal twin: `epic.listTuiAgents` has answered. */
+  tuiAgentRecordListAuthoritative: boolean;
+  /** Whether the session's host serves Deleted artifacts. */
+  deletedArtifactsAvailable: boolean;
+  activeArtifactId: string | null;
+  openTileContentIds: ReadonlySet<string>;
+  activePanelId: "chats" | "artifacts";
+  artifactFilterKinds: ReadonlyArray<string>;
+  chatFilterOrigin: "all" | "gui" | "tui";
+  chatFilterOwnership: "all" | "mine" | "others";
+  expandedIds: ReadonlySet<string>;
+  unreadArtifactIds: ReadonlySet<string>;
+  tree: {
+    readonly rootIds: readonly string[];
+    readonly childrenByParent: Readonly<Record<string, readonly string[]>>;
+    readonly nodeById: Readonly<Record<string, TestTreeNode | undefined>>;
+  };
+  records: readonly TestRecord[];
+  indicatorChats: Readonly<Record<string, TestIndicatorState>>;
+  indicatorChatsByHost: Readonly<
+    Record<string, Readonly<Record<string, TestIndicatorState>>>
+  >;
+  activeAgentIds: ReadonlySet<string>;
+  activityTierById: Map<string, "turn" | "background">;
+  chatHarnessIds: Readonly<Partial<Record<string, ProviderId>>>;
+  tuiHarnessIds: Readonly<Partial<Record<string, ProviderId>>>;
+  /**
+   * Optional TUI agent projection fields for the leading harness mark. When a
+   * node is missing here, the row still renders the harness (via
+   * `tuiHarnessIds`) but without a managed-profile accent.
+   */
+  tuiAgentById: Readonly<
+    Partial<
+      Record<
+        string,
+        {
+          readonly hostId: string;
+          readonly profileId: string | null;
+          /**
+           * The session facet (`@1.3`'s `sessionState`/`lastExit`), for the
+           * "Asleep"/"Stopped" sidebar badge. Optional and defaulted to `null`
+           * in the store mock below - every fixture that predates the badge
+           * never sets these, and `null` is the honest "not stated" answer.
+           */
+          readonly sessionState?: AgentSessionState | null;
+          readonly lastExit?: AgentSessionLastExit | null;
+        }
+      >
+    >
+  >;
+  tuiProviderProfiles: ReadonlyArray<{
+    readonly profileId: string;
+    readonly kind: "ambient" | "managed";
+    readonly label: string;
+  }>;
+  permissionRole: "owner" | "editor" | null;
+  /**
+   * The host's `epic.setChatArchived` support, as the registry reports it:
+   * `true` advertised, `false` known absent, `null` no handshake yet. One knob
+   * for both consumers - affordances read the fail-closed boolean derived from
+   * it, and archive HIDING reads the tri-state - so a test can never put the
+   * two into a combination the real registry could not produce.
+   */
+  archiveSupport: boolean | null;
+  archiveVisibility: "unarchived" | "archived" | "all";
+  /** Ids whose record carries a non-null `archivedAt`. */
+  archivedIds: readonly string[];
+  archiveMutate: Mock;
+  archiveBatchPending: boolean;
+  /**
+   * `useEpicArchiveChat().isPending` - the PER-ROW mutation. Distinct from
+   * `archiveBatchPending`, which drives the bulk `useEpicArchiveChats` hook
+   * only; a row's own hard-disabled-while-in-flight state is unreachable
+   * through that one.
+   */
+  archiveRowPending: boolean;
+  /** The targets the last bulk archive was given, with their row weights. */
+  archiveBatchChats: ReadonlyArray<{
+    readonly chatId: string;
+    readonly hostId: string | null;
+    readonly selectedRows: number;
+  }>;
+  /** Each bulk-archive target's covered rows, read when the batch settled. */
+  archiveCoveredRowsAtSettlement: readonly number[];
+  archiveMutateAsync: Mock<
+    (input: {
+      readonly epicId: string;
+      readonly chatId: string;
+      readonly hostId: string | null;
+      readonly archived: boolean;
+    }) => Promise<unknown>
+  >;
+  rowHostId: string | null;
+  rowHostReachability: "reachable" | "unreachable";
+  preparedOpenRefs: Array<{ type: string; id: string; hostId: string }>;
+  rowHostEntry: unknown;
+  rowHostClient: unknown;
+  activeHostClient: unknown;
+  sessionHandleByChatId: Readonly<
+    Record<string, ChatSessionStoreHandle | null>
+  >;
+}
+
+const EMPTY_WORKSPACE_FOLDERS = vi.hoisted<readonly string[]>(() =>
+  Object.freeze([]),
+);
+
+const testState = vi.hoisted<TestState>(() => ({
+  createChatMutate: vi.fn(),
+  createArtifactMutate: vi.fn(),
+  deleteArtifactMutateAsync: vi.fn(),
+  deleteChatMutateAsync: vi.fn(),
+  deleteTuiAgentMutateAsync: vi.fn(),
+  renameChatMutateAsync: vi.fn(() => new Promise(() => {})),
+  renameTuiAgentMutateAsync: vi.fn(() => new Promise(() => {})),
+  beginRenameMutation: vi.fn(() => "req-rename-1"),
+  retirePendingMutation: vi.fn(),
+  exportArtifactsMutate: vi.fn(),
+  localDeleteArtifact: vi.fn(),
+  closeCanvasTab: vi.fn(),
+  openArtifactById: {},
+  openTileByIdentity: {},
+  markArtifactSelfDeleted: vi.fn(),
+  unmarkArtifactSelfDeleted: vi.fn(),
+  pruneRecoveryTiles: vi.fn(),
+  sessionReady: true,
+  snapshotLoaded: true,
+  chatRecordListAuthoritative: true,
+  tuiAgentRecordListAuthoritative: true,
+  deletedArtifactsAvailable: false,
+  activeArtifactId: null,
+  openTileContentIds: new Set<string>(),
+  activePanelId: "chats",
+  artifactFilterKinds: [],
+  chatFilterOrigin: "all",
+  chatFilterOwnership: "all",
+  expandedIds: new Set<string>(),
+  unreadArtifactIds: new Set<string>(),
+  tree: {
+    rootIds: [],
+    childrenByParent: {},
+    nodeById: {},
+  },
+  records: [],
+  indicatorChats: {},
+  indicatorChatsByHost: {},
+  activeAgentIds: new Set<string>(),
+  activityTierById: new Map<string, "turn" | "background">(),
+  chatHarnessIds: {},
+  tuiHarnessIds: {},
+  tuiAgentById: {},
+  tuiProviderProfiles: [],
+  permissionRole: "owner",
+  archiveSupport: true,
+  archiveVisibility: "unarchived",
+  archivedIds: [],
+  archiveMutate: vi.fn(),
+  archiveBatchPending: false,
+  archiveRowPending: false,
+  archiveBatchChats: [],
+  archiveCoveredRowsAtSettlement: [],
+  archiveMutateAsync: vi.fn(),
+  rowHostId: "host-1",
+  rowHostReachability: "reachable",
+  preparedOpenRefs: [],
+  rowHostEntry: { hostId: "host-1" },
+  rowHostClient: { getActiveHostId: () => "host-1" },
+  activeHostClient: { getActiveHostId: () => "host-1" },
+  sessionHandleByChatId: {},
+}));
+
+// The panel re-provides its own `StreamRuntimeContext` for the host its pin
+// resolved to. `null` is that hook's FOLLOWING answer, so the panel falls back
+// to the ambient binding this suite supplies - the client every assertion here
+// is about. Which transport the pin resolves to is a different question, and
+// it has its own suite: `use-surface-host-stream-binding.test.tsx`.
+// The hook returns the value to PROVIDE: the ambient binding while following
+// (this suite's), the pin's own once built, null while pending. Following here.
+vi.mock("@/hooks/host/use-surface-host-stream-binding", async () => {
+  const { use } = await import("react");
+  const { StreamRuntimeContext } =
+    await import("@/lib/host/stream-runtime-context");
+  return { useSurfaceHostStreamBinding: () => use(StreamRuntimeContext) };
+});
+
+vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/lib/registries/chat-session-registry")
+    >();
+  return {
+    ...actual,
+    useExistingChatSessionHandle: (_epicId: string, chatId: string) =>
+      testState.sessionHandleByChatId[chatId] ?? null,
+  };
+});
+
+// The artifact panel now hosts a search box; keep its host query inert so these
+// tree-focused tests do not depend on cloud-search results. The render wrapper
+// supplies QueryClient for local mutations; this fixture has no real host
+// client to serve cloud reads.
+vi.mock("@/hooks/epic/use-epic-search-artifacts-query", () => ({
+  useEpicSearchArtifacts: () => ({
+    isSuccess: false,
+    isError: false,
+    isFetching: false,
+    data: undefined,
+    error: null,
+    refetch: () => undefined,
+  }),
+}));
+
+vi.mock("@/components/epic-canvas/dnd/epic-canvas-dnd-context-value", () => ({
+  useEpicCanvasDnd: () => ({
+    activeSource: null,
+    dropPreview: null,
+    interactionLocked: false,
+    clearDropPreview: () => undefined,
+  }),
+}));
+
+vi.mock("@/components/epic-canvas/snapshots/snapshot-loading-context", () => ({
+  SnapshotGate: (props: { readonly children: ReactNode }) => props.children,
+}));
+
+vi.mock("@/components/epic-canvas/add-node-dropdown", () => ({
+  AddNodeDropdown: (props: { readonly children: ReactNode }) => props.children,
+}));
+
+vi.mock("@/components/epic-canvas/add-node-options", () => ({
+  CHAT_PANEL_EXCLUDED_TYPES: [],
+  ARTIFACT_PANEL_EXCLUDED_TYPES: [],
+}));
+
+vi.mock("@/components/epic-canvas/sidebar/epic-sidebar-filter-menu", () => ({
+  ChatFilterMenu: () => <button type="button">Chat filter</button>,
+  ArtifactFilterMenu: (props: {
+    readonly onMarkAllRead: () => void;
+    readonly markAllReadDisabled: boolean;
+  }) => (
+    <>
+      <button type="button">Artifact filter</button>
+      <button
+        type="button"
+        disabled={props.markAllReadDisabled}
+        onClick={props.onMarkAllRead}
+      >
+        Mark all unread artifacts as read
+      </button>
+    </>
+  ),
+}));
+
+vi.mock("@/components/epic-canvas/sidebar/epic-terminal-sidebar", () => ({
+  TerminalsPanelActions: () => null,
+  TerminalsPanelBody: () => null,
+}));
+
+vi.mock("@/components/epic-canvas/git-diff/git-diff-panel-body-live", () => ({
+  GitDiffPanelBodyLive: () => null,
+}));
+
+vi.mock("@/components/epic-canvas/git-diff/git-diff-panel-actions", () => ({
+  GitDiffPanelActions: () => null,
+}));
+
+vi.mock(
+  "@/components/epic-canvas/hooks/use-terminal-agent-worktree-gate",
+  () => ({
+    useTerminalAgentWorktreeGate: () => ({
+      isPending: false,
+      requestCreate: vi.fn(),
+    }),
+  }),
+);
+
+vi.mock("@/components/worktree/worktree-owner-metadata", () => ({
+  WorktreeOwnerMetadataTooltip: (props: { readonly trigger: ReactNode }) =>
+    props.trigger,
+}));
+
+vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
+  useHostNotificationIndicators: (args: {
+    readonly hostId: string | null;
+  }) => ({
+    data: {
+      epics: {},
+      chats:
+        (args.hostId === null
+          ? undefined
+          : testState.indicatorChatsByHost[args.hostId]) ??
+        testState.indicatorChats,
+    },
+    isPending: false,
+    isFetching: false,
+    error: null,
+    refetch: () => Promise.resolve(),
+    // The host that ANSWERED - the query files its rows under this origin, so
+    // an omitted field (undefined, not null) would scope them to no host.
+    hostId: "host-1",
+  }),
+}));
+
+// Pass-through by default, so every entry is in the DOM without opening its
+// menu. The overflow-to-search focus tests switch to the real Radix menu: what
+// they pin is where focus lands once the menu closes, and only Radix's own
+// close handling can move it.
+const dropdownMenuMode = vi.hoisted(() => ({ real: false }));
+
+interface PassThroughMenuItemProps {
+  readonly children: ReactNode;
+  readonly onSelect: () => void;
+  readonly "data-testid": string;
+  readonly disabled: boolean;
+  // `undefined` is not padding: a HARD-disabled entry OMITS the key entirely
+  // so Radix's own derived `aria-disabled` survives, and only a soft-disabled
+  // one spreads `true`. Declaring it as a required boolean would describe a
+  // shape the production component never emits.
+  readonly "aria-disabled": boolean | undefined;
+  readonly "aria-describedby": string | undefined;
+}
+
+vi.mock("@/components/ui/dropdown-menu", async (importOriginal) => {
+  const realMenu =
+    await importOriginal<typeof import("@/components/ui/dropdown-menu")>();
+  return {
+    DropdownMenu: (props: { readonly children: ReactNode }) =>
+      dropdownMenuMode.real ? (
+        <realMenu.DropdownMenu {...props} />
+      ) : (
+        props.children
+      ),
+    DropdownMenuTrigger: (props: { readonly children: ReactNode }) =>
+      dropdownMenuMode.real ? (
+        <realMenu.DropdownMenuTrigger {...props} />
+      ) : (
+        props.children
+      ),
+    DropdownMenuContent: (props: { readonly children: ReactNode }) =>
+      dropdownMenuMode.real ? (
+        <realMenu.DropdownMenuContent {...props} />
+      ) : (
+        <div>{props.children}</div>
+      ),
+    // Forwards `aria-disabled` as well as `disabled`: real Radix renders a
+    // `<div role="menuitem" aria-disabled>`, and an entry that carries a
+    // disabled-reason is soft-disabled through ARIA alone (so it stays
+    // keyboard-reachable). A mock that dropped it would report every such entry
+    // as ENABLED and quietly invert the assertions that depend on it.
+    DropdownMenuItem: (props: PassThroughMenuItemProps) =>
+      dropdownMenuMode.real ? (
+        <realMenu.DropdownMenuItem {...props} />
+      ) : (
+        <button
+          type="button"
+          role="menuitem"
+          data-testid={props["data-testid"]}
+          disabled={props.disabled}
+          aria-disabled={props["aria-disabled"]}
+          aria-describedby={props["aria-describedby"]}
+          onClick={props.onSelect}
+        >
+          {props.children}
+        </button>
+      ),
+    DropdownMenuSeparator: () =>
+      dropdownMenuMode.real ? <realMenu.DropdownMenuSeparator /> : null,
+  };
+});
+
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: (props: { readonly children: ReactNode }) => props.children,
+  TooltipTrigger: (props: { readonly children: ReactNode }) => props.children,
+  // `role="tooltip"` so `tooltipTextIn` can find the label this mock renders
+  // eagerly (the real content only exists while the tooltip is open).
+  TooltipContent: (props: { readonly children: ReactNode }) => (
+    <div role="tooltip">{props.children}</div>
+  ),
+}));
+
+vi.mock("@/components/ui/hover-card", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/ui/hover-card")>();
+  return {
+    ...actual,
+    // The label-chip appearance (`AgentHoverTooltip`'s fallback, the rail's
+    // tile labels) is the plain-tooltip case this suite's rows exercise
+    // without hovering, same as the `ui/tooltip` mock above and for the same
+    // reason: mounted eagerly here so a query can find it, where the real
+    // primitive mounts content only while open. The preview-card appearance
+    // (worktree owner metadata) keeps the real component - this file already
+    // short-circuits that path via its own `worktree-owner-metadata` mock, so
+    // nothing here depends on it, and other suites in this tree do rely on its
+    // real hover/floating behaviour.
+    HoverCard: (props: HoverCardProps) =>
+      props.appearance === "tooltip" ? (
+        <>
+          {props.trigger}
+          <div role="tooltip">{props.content}</div>
+        </>
+      ) : (
+        <actual.HoverCard {...props} />
+      ),
+  };
+});
+
+function openRowMore(nodeId: string): void {
+  fireEvent.click(screen.getByTestId(`epic-sidebar-more-${nodeId}`));
+}
+
+const ROW_MORE_NODE_IDS = [
+  "chat-grandchild",
+  "ticket-child",
+  "chat-child",
+  "agent-child",
+  "agent-root",
+  "chat-root",
+  "spec-root",
+] as const;
+
+function dropdownItem(suffix: string): HTMLElement {
+  const testId = `epic-sidebar-${suffix}`;
+  const existing = screen.queryByTestId(testId);
+  if (existing !== null) return existing;
+  for (const nodeId of ROW_MORE_NODE_IDS) {
+    if (suffix === nodeId || suffix.endsWith(`-${nodeId}`)) {
+      openRowMore(nodeId);
+      break;
+    }
+  }
+  return screen.getByTestId(testId);
+}
+
+vi.mock("@/components/ui/sidebar", () => ({
+  Sidebar: (props: {
+    readonly children: ReactNode;
+    readonly "data-testid": string;
+    readonly "data-left-panel-id": string;
+  }) => (
+    <aside
+      data-testid={props["data-testid"]}
+      data-left-panel-id={props["data-left-panel-id"]}
+    >
+      {props.children}
+    </aside>
+  ),
+  SidebarContent: (props: { readonly children: ReactNode }) => (
+    <div>{props.children}</div>
+  ),
+  SidebarGroup: (props: { readonly children: ReactNode }) => (
+    <div>{props.children}</div>
+  ),
+  SidebarGroupContent: forwardRef<
+    HTMLDivElement,
+    { readonly children: ReactNode; readonly "data-testid"?: string }
+  >((props, ref) => (
+    <div ref={ref} data-testid={props["data-testid"]}>
+      {props.children}
+    </div>
+  )),
+}));
+
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => "host-1",
+}));
+
+// The row's unreachable-owner lock reads the host directory through
+// `useHostReachability`; this harness mounts no HostRuntimeProvider, so mock
+// at the hook boundary. "reachable" everywhere = the pre-lock rendering, so
+// every existing assertion is exercised unchanged; the lock's own behavior is
+// pinned where the directory is faked per-entry (host-binding.test.ts).
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: (hostId: string) => ({
+    status: testState.rowHostReachability,
+    hostLabel: hostId,
+  }),
+}));
+
+vi.mock("@/hooks/worktree/use-latest-conversation-workspace-seed", () => ({
+  useLatestConversationWorkspaceSeed: () => null,
+}));
+
+vi.mock("@/hooks/worktree/use-worktree-get-binding-query", () => ({
+  useWorktreeGetBinding: () => ({
+    data: { binding: null, missingWorktreePaths: [] },
+    isError: false,
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
+  useEpicArchiveChats: () => ({
+    isPending: testState.archiveBatchPending,
+    mutate: (
+      variables: {
+        readonly epicId: string;
+        readonly chats: ReadonlyArray<{
+          readonly chatId: string;
+          readonly hostId: string | null;
+          readonly selectedRows: number;
+          readonly coveredRows: () => number;
+        }>;
+        readonly archived: boolean;
+      },
+      options: {
+        readonly onSuccess: (
+          results: readonly PromiseSettledResult<unknown>[],
+        ) => void;
+      },
+    ) => {
+      testState.archiveBatchPending = true;
+      testState.archiveBatchChats = variables.chats;
+      void Promise.allSettled(
+        variables.chats.map((chat) =>
+          testState.archiveMutateAsync({
+            epicId: variables.epicId,
+            chatId: chat.chatId,
+            hostId: chat.hostId,
+            archived: variables.archived,
+          }),
+        ),
+      ).then((results) => {
+        testState.archiveBatchPending = false;
+        testState.archiveCoveredRowsAtSettlement = variables.chats.map((chat) =>
+          chat.coveredRows(),
+        );
+        options.onSuccess(results);
+      });
+    },
+  }),
+  useEpicArchiveChat: () => ({
+    mutate: testState.archiveMutate,
+    mutateAsync: testState.archiveMutateAsync,
+    isPending: testState.archiveRowPending,
+  }),
+  useEpicCreateChatForHostClient: () => ({
+    mutate: testState.createChatMutate,
+    isPending: false,
+  }),
+  useEpicDeleteChat: () => ({
+    mutate: vi.fn(),
+    mutateAsync: testState.deleteChatMutateAsync,
+    isPending: false,
+  }),
+  useEpicDeleteChatInBatch: () => ({
+    mutate: vi.fn(),
+    mutateAsync: testState.deleteChatMutateAsync,
+    isPending: false,
+  }),
+  useEpicRenameChat: () => ({
+    mutate: vi.fn(),
+    mutateAsync: testState.renameChatMutateAsync,
+    // Honest pending, derived from the spy: every call returns a promise that
+    // never settles, so once one has been issued the rename IS in flight. A
+    // hardcoded `false` makes any "second rename while the first is pending"
+    // assertion VACUOUS - a re-introduced pending guard would never see a
+    // pending state under it, so the test would pass against the very code it
+    // exists to reject. Cleared per test by `vi.clearAllMocks()`.
+    isPending: testState.renameChatMutateAsync.mock.calls.length > 0,
+  }),
+}));
+
+vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
+  useCreateTuiAgentForClient: () => ({
+    create: vi.fn(() => Promise.resolve(null)),
+    isPending: false,
+  }),
+}));
+
+/**
+ * The two host queries behind the unified list's cloud rows, stubbed to
+ * "nothing to add".
+ *
+ * The chat panel reads both directly now that the "other devices" section is
+ * gone, and both are ordinary host queries. This harness has no real host
+ * client to serve them, and the rows they produce are not rendered here either
+ * way. The fold and interleave they feed are asserted without a renderer in
+ * `unified-chat-list.test.ts`.
+ */
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/chats/use-cloud-chat-queries")
+    >();
+  return {
+    ...actual,
+    useCloudChatList: () => ({
+      data: undefined,
+      isError: false,
+      isPending: true,
+      isFetching: false,
+      // DISABLED, which is what this harness would really produce: it mounts no
+      // host client and no signed-in viewer, and the real hook gates on both. It
+      // matters to the assertions below - the panel's empty state waits for the
+      // list to have answered, and "it will never run" is an answer, while a
+      // request still in flight is not.
+      isEnabled: false,
+    }),
+    useCloudChatPayload: () => ({ data: undefined, isError: false }),
+    useCloudChatViewerId: () => "",
+    // The real predicate rather than a constant, so the stub above actually
+    // decides: a hard-coded `true` here would hide the difference between "this
+    // query will never run" and "its answer has not arrived yet", which is the
+    // one distinction the panel's empty state depends on.
+    isCloudChatListSettled: (
+      query: {
+        readonly isEnabled: boolean;
+        readonly isSuccess: boolean;
+        readonly isError: boolean;
+      },
+      cloudAuthorized: boolean,
+    ) => {
+      if (!cloudAuthorized) return false;
+      return !query.isEnabled || query.isSuccess || query.isError;
+    },
+  };
+});
+
+// The fold's mapping. Stubbed alongside the list rather than left real for the
+// same reason, and to `undefined` deliberately: that is the shape an older host
+// (or an in-flight request) produces, so this suite exercises the degraded
+// path the fold is specified to tolerate.
+vi.mock("@/hooks/chats/use-chat-publication-targets", () => ({
+  useChatPublicationTargets: () => ({ data: undefined, isError: false }),
+  publicationTargetMap: () => new Map<string, string>(),
+}));
+
+// The Agents panel's message-hit section, which the chats panel body asks for
+// on every render. Leave it absent because this fixture has no host client to
+// serve its real query, and message hits are not under test here.
+vi.mock("@/hooks/chats/use-chat-search-message-hits", () => ({
+  useChatSearchMessageHits: (): ChatSearchMessageHitsStatus => ({
+    kind: "absent",
+  }),
+}));
+
+// The task's hosts view is asked for on every render. Leave it out because this
+// fixture has no host client to serve its real query.
+vi.mock("@/hooks/epic/use-task-hosts-view", () => ({
+  useTaskHostsView: () => ({ kind: "none" }),
+}));
+
+// The Mobile simulators panel's presence rule is asked for on every render of
+// the panel host. This fixture has no host binding to serve `simulator.status`,
+// so neither input is present and the panel is absent from the rail.
+vi.mock(
+  "@/components/epic-canvas/sidebar/use-simulator-panel-availability",
+  () => ({
+    useSimulatorPanelAvailability: () => ({
+      localHostRunsSimulators: false,
+      hasSimulatorRecords: false,
+    }),
+  }),
+);
+
+// The agent hover card's host projection reads the sandbox list, and this
+// suite's eager hover-card mock mounts that card on every agent row. Keep the
+// list empty because this fixture has no host binding for the real query.
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
+  useSandboxList: () => ({ data: undefined }),
+}));
+
+vi.mock("@/lib/host/runtime", () => ({
+  useHostClient: () => testState.activeHostClient,
+  // The SPINE, a separate export.
+  useHostRuntimeClient: () => testState.activeHostClient,
+  // A local chat row asks whether a team owns its host; no sign-in, no read.
+  useHostBinding: () => null,
+}));
+
+vi.mock("@/hooks/host/use-host-client-for", () => ({
+  useHostClientFor: () => testState.rowHostClient,
+}));
+
+vi.mock("@/hooks/host/use-host-directory-list-query", () => {
+  const useHostDirectoryList = () => ({
+    data: undefined,
+    fetchStatus: "idle",
+  });
+  return {
+    useHostDirectoryList,
+    useHostDirectoryListQuery: useHostDirectoryList,
+  };
+});
+
+vi.mock(
+  "@/hooks/runner/use-runner-feature-settings-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/runner/use-runner-feature-settings-query")
+    >()),
+    useAgentRolesEnabled: () => false,
+  }),
+);
+
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => testState.rowHostEntry,
+}));
+
+vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
+  useEpicCreateArtifact: () => ({
+    mutate: testState.createArtifactMutate,
+    isPending: false,
+  }),
+  useEpicDeleteArtifact: () => ({
+    mutate: vi.fn(),
+    mutateAsync: testState.deleteArtifactMutateAsync,
+    isPending: false,
+  }),
+  useEpicDeleteArtifactInBatch: () => ({
+    mutate: vi.fn(),
+    mutateAsync: testState.deleteArtifactMutateAsync,
+    isPending: false,
+  }),
+  useEpicRenameArtifact: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-export-artifacts-mutation", () => ({
+  useEpicExportArtifacts: () => ({
+    mutate: testState.exportArtifactsMutate,
+    isPending: false,
+  }),
+}));
+
+// `pruneRecoveryTiles` spied so its PREDICATE can be inspected directly -
+// the fact under test ("terminal agents are excluded from this broad prune,
+// deferring to the hook's own owner-scoped one") lives in that predicate's
+// body, not in any store side effect this harness could otherwise observe.
+vi.mock("@/lib/tab-recovery/history", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/tab-recovery/history")>()),
+  pruneRecoveryTiles: (
+    isDeleted: (tile: unknown, epicId: string) => boolean,
+  ): void => {
+    testState.pruneRecoveryTiles(isDeleted);
+  },
+}));
+
+// Tile-close and closed-payload cleanup for a TUI delete are owned by
+// `useEpicDeleteTuiAgentInBatch` itself (`discardDeletedTuiAgentPayloads` is a
+// private, unexported detail of that module) - this suite only pins that the
+// SIDEBAR never does that work itself, so the hook is a plain mock.
+vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
+  useEpicDeleteTuiAgent: () => ({
+    mutate: vi.fn(),
+    mutateAsync: testState.deleteTuiAgentMutateAsync,
+    isPending: false,
+  }),
+  useEpicDeleteTuiAgentInBatch: () => ({
+    mutate: vi.fn(),
+    mutateAsync: testState.deleteTuiAgentMutateAsync,
+    isPending: false,
+  }),
+  useEpicRenameTuiAgent: () => ({
+    mutate: vi.fn(),
+    mutateAsync: testState.renameTuiAgentMutateAsync,
+    // Honest pending, for the same reason as `useEpicRenameChat` above.
+    isPending: testState.renameTuiAgentMutateAsync.mock.calls.length > 0,
+  }),
+}));
+
+vi.mock("@/providers/use-open-epic-handle", () => ({
+  // The row-level optional-session gate reads no mounted EpicSessionContext.
+  // The deletion controller below gets its own store fixture for preflight.
+  useMaybeOpenEpicHandle: () => null,
+  useOpenEpicHandle: () => {
+    if (!testState.sessionReady) {
+      throw new Error(
+        "useOpenEpicHandle must be called inside <EpicSessionProvider>.",
+      );
+    }
+    return {
+      epicId: "epic-1",
+      store: {
+        getState: () => {
+          const state = fakeEpicStoreState();
+          // The controller's real preflight routes through this handle union,
+          // so keep owner hosts and list authority aligned with the panel's
+          // store fixture.
+          const tuiAgentRecords = testState.records.filter(
+            (record) => record.type === "terminal-agent",
+          );
+          const tuiAgentsById = Object.fromEntries(
+            tuiAgentRecords.map((record) => [
+              record.id,
+              state.tuiAgents.byId[record.id] ?? {
+                id: record.id,
+                hostId: record.hostId,
+                profileId: null,
+                sessionState: null,
+                lastExit: null,
+              },
+            ]),
+          );
+          return {
+            ...state,
+            deleteArtifact: testState.localDeleteArtifact,
+            tree: testState.tree,
+            renameArtifact: vi.fn(),
+            beginRenameMutation: testState.beginRenameMutation,
+            retirePendingMutation: testState.retirePendingMutation,
+            isLatestRenameStamp: () => true,
+            tuiAgents: {
+              ...state.tuiAgents,
+              allIds: [
+                ...new Set([
+                  ...state.tuiAgents.allIds,
+                  ...tuiAgentRecords.map((record) => record.id),
+                ]),
+              ],
+              byId: { ...state.tuiAgents.byId, ...tuiAgentsById },
+            },
+          };
+        },
+        subscribe: () => () => undefined,
+      },
+    };
+  },
+}));
+
+/** Records what the tile-open executor prepared, for the routing assertions. */
+function recordPreparedOpen(
+  _tabId: string,
+  ref: { type: string; id: string; hostId: string },
+): null {
+  testState.preparedOpenRefs.push({
+    type: ref.type,
+    id: ref.id,
+    hostId: ref.hostId,
+  });
+  return null;
+}
+
+vi.mock("@/stores/epics/canvas/store", () => ({
+  findOpenArtifactInTab: (_tabId: string, nodeId: string) =>
+    testState.openArtifactById[nodeId] ?? null,
+  // Keyed by id AND host, like the real selector: a same-id tile on another
+  // host is a different identity and must never be returned for a lookup
+  // naming this one.
+  findOpenTileInTab: (
+    _tabId: string,
+    node: { readonly id: string; readonly hostId?: string | null },
+  ) => testState.openTileByIdentity[`${node.id}::${node.hostId ?? ""}`] ?? null,
+  useActiveEpicArtifactId: () => testState.activeArtifactId,
+  useEpicCanvasStore: Object.assign(
+    (selector: (state: unknown) => unknown) =>
+      selector({
+        closeCanvasTab: testState.closeCanvasTab,
+        markArtifactSelfDeleted: testState.markArtifactSelfDeleted,
+        openTilePreviewInTab: vi.fn(),
+        pendingRootCreatesByEpic: {},
+        preAckRootCreatesByEpic: {},
+        promotePreviewInTab: vi.fn(),
+        renameArtifactInTab: vi.fn(),
+        unmarkArtifactSelfDeleted: testState.unmarkArtifactSelfDeleted,
+      }),
+    {
+      // `openTileWithNavigation` reads the store imperatively: `canvasByTabId`
+      // for the resolver, `tabsById[tabId].epicId` to decide whether to wrap
+      // the prepare in `navigateNested`, and the `*FromSource` actions the
+      // executor dispatches into. Only the boundary functions are exposed -
+      // never a raw `openTileInTab` - so a regression to a direct canvas
+      // mutation throws instead of silently passing.
+      getState: () => ({
+        canvasByTabId: {},
+        tabsById: { [TAB_ID]: { epicId: EPIC_ID } },
+        prepareOpenTileInTabFocusTargetFromSource: recordPreparedOpen,
+        prepareOpenTilePreviewInTabFocusTargetFromSource: recordPreparedOpen,
+        prepareOpenTileInBackgroundTabFocusTargetFromSource: recordPreparedOpen,
+        closedTilePayloadsByTabId: {},
+        discardClosedTilePayload: vi.fn(),
+      }),
+    },
+  ),
+  useIsActiveEpicArtifact: () => false,
+  useOpenTileContentIds: () => testState.openTileContentIds,
+}));
+
+vi.mock("@/stores/epics/epic-sidebar-expansion-store", () => ({
+  useEpicSidebarEffectiveExpanded: () => testState.expandedIds,
+  useEpicSidebarExpansionStore: (selector: (state: unknown) => unknown) =>
+    selector({
+      collapse: vi.fn(),
+      collapseAll: vi.fn(),
+      expand: vi.fn(),
+    }),
+}));
+
+// The rail's shape and its per-panel Hide/Show live beside the bijection
+// now, not on the panel store, so the sidebar's two reads are
+// stubbed where they are actually imported from.
+vi.mock("@/lib/layout/rail-view", () => ({
+  useLayoutRail: () => [
+    { kind: "panel", id: RAIL_REGION_BY_PANEL[testState.activePanelId] },
+  ],
+  usePanelVisibilityOverrides: () => ({}),
+}));
+vi.mock("@/stores/epics/left-panel-store", () => ({
+  CHAT_ARCHIVE_VISIBILITY: {
+    Unarchived: "unarchived",
+    Archived: "archived",
+    All: "all",
+  },
+  CHAT_OWNERSHIP: {
+    All: "all",
+    Mine: "mine",
+    Others: "others",
+  },
+  CHAT_ORIGIN: {
+    All: "all",
+    Gui: "gui",
+    Tui: "tui",
+  },
+  DEFAULT_LEFT_PANEL_ID: "chats",
+  isArtifactFilterActive: () => testState.artifactFilterKinds.length > 0,
+  isChatFilterActive: () =>
+    testState.chatFilterOrigin !== "all" ||
+    testState.chatFilterOwnership !== "all",
+  matchesChatOwnershipFilter: (
+    isOwnedByViewer: boolean,
+    ownership: "all" | "mine" | "others",
+  ) =>
+    ownership === "all" ||
+    (ownership === "mine" ? isOwnedByViewer : !isOwnedByViewer),
+  useAcknowledgedRootCreatePending: () => null,
+  useActiveLeftPanelId: () => testState.activePanelId,
+  useArtifactFilter: () => ({
+    statuses: [],
+    kinds: testState.artifactFilterKinds,
+    read: "all",
+  }),
+  useArtifactSort: () => ({ field: "updated", direction: "desc" }),
+  useChatFilter: () => ({
+    origin: testState.chatFilterOrigin,
+    ownership: testState.chatFilterOwnership,
+  }),
+  useChatArchiveVisibility: () => testState.archiveVisibility,
+  useChatSort: () => ({ field: "updated", direction: "desc" }),
+  useCommentsPanelRevealed: () => false,
+  useEpicLeftPanelStore: (selector: (state: unknown) => unknown) =>
+    selector({
+      clearAcknowledgedRootCreatePending: vi.fn(),
+      clearLocalRootCreatePending: vi.fn(),
+      setAcknowledgedRootCreatePending: vi.fn(),
+      setActivePanelId: vi.fn(),
+      setLocalRootCreatePending: vi.fn(),
+    }),
+  useLocalRootCreatePending: () => null,
+}));
+
+vi.mock("@/hooks/epic/use-chat-archive-support", () => ({
+  SET_CHAT_ARCHIVED_METHOD: "epic.setChatArchived",
+  useChatArchiveSupported: () => testState.archiveSupport === true,
+  useChatArchiveSupportState: () => testState.archiveSupport,
+}));
+
+vi.mock("@/hooks/epic/use-deleted-artifacts-available", () => ({
+  useDeletedArtifactsAvailable: () => testState.deletedArtifactsAvailable,
+}));
+
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: () => testState.archiveSupport === true,
+  useHostMethodSupport: () => testState.archiveSupport,
+}));
+
+const ARCHIVE_SUPPORTED_METHODS = vi.hoisted(
+  () => new Set(["epic.setChatArchived"]),
+);
+const ARCHIVE_ABSENT_METHODS = vi.hoisted(() => new Set<string>());
+vi.mock(
+  "@traycer-clients/shared/host-transport/negotiated-manifest-registry",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-transport/negotiated-manifest-registry")
+      >();
+    return {
+      ...actual,
+      getNegotiatedHostMethods: () => {
+        if (testState.archiveSupport === null) return null;
+        if (!testState.archiveSupport) return ARCHIVE_ABSENT_METHODS;
+        return ARCHIVE_SUPPORTED_METHODS;
+      },
+    };
+  },
+);
+
+vi.mock("@/hooks/epic/use-chat-sharing-support", () => ({
+  SET_CLOUD_CHAT_VISIBILITY_METHOD: "epic.setCloudChatVisibility",
+  SET_CHAT_SHARING_DEFAULT_METHOD: "epic.setChatSharingDefault",
+  useCloudChatVisibilitySupported: () => false,
+  useChatSharingDefaultSupported: () => false,
+}));
+
+vi.mock("@/hooks/epic/use-epic-chat-visibility-mutations", () => ({
+  useEpicSetCloudChatVisibility: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+  useEpicSetChatSharingDefault: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/hooks/epics/use-epic-collaborators-query", () => ({
+  EPIC_COLLABORATORS_OPEN_REFRESH_MS: 5 * 60_000,
+  useEpicCollaboratorsQuery: () => ({
+    data: undefined,
+    isLoading: false,
+    isFetching: false,
+    isError: false,
+    error: null,
+    query: { dataUpdatedAt: 0, refetch: vi.fn() },
+  }),
+}));
+
+vi.mock("@/lib/epic-selectors", () => ({
+  useAncestorIds: () => new Set<string>(),
+  useChildIds: (parentId: string) =>
+    testState.tree.childrenByParent[parentId] ?? [],
+  useEpicActiveAgentIds: () => testState.activeAgentIds,
+  useEpicAgentRoleClaims: () => [],
+  // The row's session facet, sourced from the same `tuiAgentById` fixture the
+  // `useEpicStore` mock builds `tuiAgents.byId` from - one source, so the
+  // badge (this selector) and the row's aria-label (which reads the same
+  // facet through `useEpicStore`, per the production comment on that read)
+  // cannot disagree in a fixture.
+  useEpicAgentSessionFacet: (nodeId: string) => {
+    const agent = testState.tuiAgentById[nodeId];
+    return {
+      sessionState: agent?.sessionState ?? null,
+      lastExit: agent?.lastExit ?? null,
+    };
+  },
+  // Awareness reports a tier per working agent. An agent whose host did not
+  // classify it reads as "turn", so tests that only set `activeAgentIds` keep
+  // their pre-tier behaviour.
+  useEpicAgentActivityTiers: () =>
+    new Map(
+      [...testState.activeAgentIds].map((id) => [
+        id,
+        testState.activityTierById.get(id) ?? "turn",
+      ]),
+    ),
+  // ChatProgressIcon reads the REGISTERED (keyed, non-throwing) selector for
+  // the same data, so a whole-module mock has to answer that form too.
+  useRegisteredEpicAgentActivityTiers: () =>
+    new Map(
+      [...testState.activeAgentIds].map((id) => [
+        id,
+        testState.activityTierById.get(id) ?? "turn",
+      ]),
+    ),
+  useEpicArtifact: (artifactId: string | null) => {
+    if (artifactId === null) return null;
+    const node = testState.tree.nodeById[artifactId];
+    if (node === undefined) return null;
+    return {
+      id: node.id,
+      kind: node.type,
+      title: node.title,
+      updatedAt: node.updatedAt,
+    };
+  },
+  useEpicArchivedNodeIds: () => testState.archivedIds,
+  // The sidebar's archive-hidden and chat-order hooks read the tree and the
+  // archived ids through the PROVIDER-OPTIONAL selectors, so the picker can
+  // also resolve on the Start Page where there is no epic session. A
+  // whole-module mock has to answer those forms too, with the same test state
+  // as their strict twins below - a fake that disagreed would make the panel
+  // and the picker read different trees.
+  useMaybeEpicArchivedNodeIds: () => testState.archivedIds,
+  useMaybeEpicTreeIndex: () => testState.tree,
+  useEpicArtifactRecords: () => testState.records,
+  // Dedup input for the cloud-chat section. Empty: this suite is about the
+  // LOCAL tree, and the section hides itself when the cloud list has nothing
+  // to add - which, with no host client bound here, it never does.
+  useEpicChatIds: () => [],
+  useEpicChatIdsNamedByCloudRows: () => [],
+  useEpicFileArtifactViewer: () => null,
+  useEpicArtifactStatus: (artifactId: string) =>
+    testState.tree.nodeById[artifactId]?.status ?? null,
+  useEpicChatHarnessId: (nodeId: string) =>
+    testState.chatHarnessIds[nodeId] ?? null,
+  useEpicConnectionStatus: () => "open",
+  useEpicNodeArchived: (nodeId: string) =>
+    testState.archivedIds.includes(nodeId),
+  useEpicNodeHostId: () => testState.rowHostId,
+  useEpicNodeHostIds: (nodeIds: ReadonlyArray<string>) =>
+    nodeIds.map(() => testState.rowHostId ?? "host-1"),
+  useEpicNodeOwnerUserId: () => "user-1",
+  useEpicNodeOwnerKind: () => "chat",
+  // The row's last-activity time. Production reads the chat/TUI PROJECTION
+  // rather than the tree node (the node's copy lags - see the selector's doc),
+  // but these fixtures only ever set it on the node, so the fake sources it
+  // from there. Rows without one read 0, which the row renders as no time.
+  useEpicNodeUpdatedAt: (nodeId: string) =>
+    testState.tree.nodeById[nodeId]?.updatedAt ?? 0,
+  // Stable empty array (reference-stable across renders) so the chat-row seed
+  // effect's dependency never changes and it never seeds in these tests.
+  useEpicNodeWorkspaceFolders: () => EMPTY_WORKSPACE_FOLDERS,
+  useEpicPermissionRole: () => testState.permissionRole,
+  useRegisteredEpicPermissionRole: () => testState.permissionRole,
+  useEpicSnapshotMeta: () => ({ epicLight: { title: "Test epic" } }),
+  useEpicTreeIndex: () => testState.tree,
+  useEpicTreeNode: (nodeId: string) => testState.tree.nodeById[nodeId] ?? null,
+  useMaybeEpicTuiAgentHarnessId: (nodeId: string) =>
+    testState.tuiHarnessIds[nodeId] ?? null,
+  useRootIds: () => testState.tree.rootIds,
+}));
+
+function fakeEpicStoreState() {
+  const tuiAgentEntries = Object.entries(testState.tuiAgentById).flatMap(
+    ([id, agent]) => {
+      if (agent === undefined) return [];
+      return [
+        [
+          id,
+          {
+            id,
+            hostId: agent.hostId,
+            profileId: agent.profileId,
+            sessionState: agent.sessionState ?? null,
+            lastExit: agent.lastExit ?? null,
+          },
+        ] as const,
+      ];
+    },
+  );
+  const chatRecords = testState.records.filter(
+    (record) => record.type === "chat",
+  );
+  return {
+    snapshotLoaded: testState.snapshotLoaded,
+    // Whether each record list has answered. True in every fixture that
+    // predates the delete disclosure's readiness read, which is the settled
+    // state every count assertion here is about.
+    chatRecordListAuthoritative: testState.chatRecordListAuthoritative,
+    tuiAgentRecordListAuthoritative: testState.tuiAgentRecordListAuthoritative,
+    // The list's sort-clock override reads the record heads, which these
+    // fixtures still publish none of, so the override stays empty and every
+    // row sorts by the stamp on its node; `chats` itself is populated below
+    // so the real `useEpicNodeHostIds`/`useSurfaceHostPin` selector can see
+    // this task's GUI hosts alongside `tuiAgents`' TUI ones.
+    chatRecordHeads: {},
+    chatRecordStarters: {},
+    chats: {
+      allIds: chatRecords.map((record) => record.id),
+      byId: Object.fromEntries(
+        chatRecords.map((record) => [record.id, { hostId: record.hostId }]),
+      ),
+    },
+    // The tree index, because the row-level tree reads subscribe HERE now
+    // rather than through `useEpicTreeIndex`. A row that used to take the
+    // whole slice re-rendered on every record change; it now selects its own
+    // answer out of the store, so this fake has to carry what production
+    // reads. Same object the `epic-selectors` fake hands back, so the two
+    // mocks cannot disagree about the shape of the tree.
+    tree: testState.tree,
+    artifacts: {
+      allIds: testState.records
+        .filter((record) => record.type !== "chat")
+        .filter((record) => record.type !== "terminal-agent")
+        .map((record) => record.id),
+      byId: Object.fromEntries(
+        testState.records.map((record) => [
+          record.id,
+          {
+            id: record.id,
+            kind: record.type,
+            status: record.status,
+            title: record.name,
+            updatedAt: 1,
+          },
+        ]),
+      ),
+    },
+    tuiAgents: {
+      allIds: tuiAgentEntries.map(([id]) => id),
+      byId: Object.fromEntries(tuiAgentEntries),
+    },
+  };
+}
+
+vi.mock("@/hooks/use-epic-store", () => ({
+  useEpicStore: (selector: (state: unknown) => unknown) =>
+    selector(fakeEpicStoreState()),
+  useMaybeEpicStore: (selector: (state: unknown) => unknown) =>
+    selector(fakeEpicStoreState()),
+}));
+
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => testState.rowHostClient,
+}));
+
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({
+    data: {
+      providers: [
+        {
+          // Wire id for the `claude` / `codex` harnesses used in identity tests.
+          // Codex is not multi-profile here; claude-code carries the profiles
+          // the managed-badge case resolves against.
+          providerId: "claude-code",
+          profiles: testState.tuiProviderProfiles.map((entry) => ({
+            profileId: entry.profileId,
+            kind: entry.kind,
+            authType: "oauth",
+            label: entry.label,
+            auth: {
+              status: "authenticated",
+              badgeText: null,
+              label: null,
+              detail: null,
+            },
+            identity: null,
+            usageUpdatedAt: null,
+            rateLimitStatus: "unknown",
+            rateLimitLimitedScopes: null,
+            duplicateOfProfileId: null,
+            accentColor: null,
+            ambientDriftNotice: null,
+          })),
+        },
+      ],
+    },
+  }),
+}));
+
+const seedEpicArtifacts = vi.hoisted(() => vi.fn());
+const markRead = vi.hoisted(() => vi.fn());
+const useArtifactReadStateStoreMock = vi.hoisted(() => {
+  const store = Object.assign(
+    vi.fn((selector: (state: unknown) => unknown) =>
+      selector({
+        lastSeenByArtifact: {},
+        markRead,
+        seedAtByEpic: {},
+        seedEpicArtifacts,
+      }),
+    ),
+    {
+      getState: () => ({
+        lastSeenByArtifact: {},
+        markRead,
+        seedAtByEpic: {},
+        seedEpicArtifacts,
+      }),
+    },
+  );
+  return store;
+});
+
+vi.mock("@/stores/epics/artifact-read-state-store", () => ({
+  isArtifactUnread: (args: { readonly artifactId: string }) =>
+    testState.unreadArtifactIds.has(args.artifactId),
+  useArtifactReadStateStore: useArtifactReadStateStoreMock,
+}));
+
+// `importOriginal` keeps the real `tilePlacement` defaults: a row click runs
+// the real `openTile` seam, which reads placement off `getState()`.
+vi.mock("@/stores/settings/settings-store", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/stores/settings/settings-store")>();
+  const state = {
+    artifactIconColorMode: "none",
+    artifactIconColors: {
+      chat: undefined,
+      review: undefined,
+      spec: undefined,
+      story: undefined,
+      ticket: undefined,
+      "terminal-agent": undefined,
+    },
+    tilePlacement: actual.DEFAULT_TILE_PLACEMENT_SETTINGS,
+  };
+  return {
+    ...actual,
+    useSettingsStore: Object.assign(
+      (selector: (settingsState: typeof state) => unknown) => selector(state),
+      {
+        getState: () => state,
+        // `theme-applier` subscribes at module load, and this graph reaches it.
+        subscribe: () => () => undefined,
+      },
+    ),
+  };
+});
+
+import {
+  EpicLeftPanelHost,
+  EpicLeftPanelLoadingHost,
+} from "@/components/epic-canvas/sidebar/epic-sidebar";
+import {
+  BASE_PAD_LEFT,
+  INDENT_PX,
+} from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
+
+const TAB_ID = "tab-1";
+const EPIC_ID = "epic-1";
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { retry: false },
+    mutations: { retry: false },
+  },
+});
+
+function render(ui: ReactElement) {
+  return renderWithoutQueryClient(ui, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+}
+
+function seedLocalChatFailure(chatId: string): void {
+  const notifications = useAppLocalNotificationsStore.getState();
+  if (notifications.activeUserId === null) {
+    notifications.activateIdentity("test-user");
+  }
+  useAppLocalNotificationsStore.getState().upsert({
+    id: `local-failure:${chatId}`,
+    originHostId: testState.rowHostId,
+    updatedAt: Date.now(),
+    readAt: null,
+    kind: "host.error",
+    sourceRef: null,
+    payload: { kind: "chat", epicId: EPIC_ID, chatId },
+    message: "Test non-terminal failure",
+    detail: null,
+  });
+}
+
+function clearLocalChatFailure(chatId: string): void {
+  useAppLocalNotificationsStore
+    .getState()
+    .markEntityAsRead(
+      testState.rowHostId,
+      { epicId: EPIC_ID, chatId },
+      Date.now(),
+    );
+}
+
+// `isCloudChatListSettled` / `cloudChatListAuthorizesRecordSweep` now take the
+// cloud-capability verdict as a required argument, read here off the REAL
+// `useAuthStore` (only `useCloudChatList` itself is stubbed above). The store
+// defaults to `signed-out`, under which every "settled" assertion in this
+// file would fail closed vacuously - stage `signed-in` for the whole file,
+// module-scope, so every describe block below gets it without its own copy.
+beforeEach(() => {
+  queryClient.clear();
+  useAuthStore.setState({ status: "signed-in" });
+});
+
+afterEach(() => {
+  cleanup();
+  queryClient.clear();
+  useAppLocalNotificationsStore.getState().resetForTests();
+  // Zustand stores are module scope, so a status staged here outlives this
+  // file inside the same worker.
+  useAuthStore.setState({ status: "signed-out" });
+});
+
+describe("epic sidebar selection mode", () => {
+  beforeEach(() => {
+    testState.archiveMutateAsync.mockResolvedValue({ updated: true });
+    testState.deleteArtifactMutateAsync.mockResolvedValue({});
+    testState.deleteChatMutateAsync.mockResolvedValue({});
+    testState.deleteTuiAgentMutateAsync.mockResolvedValue({});
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    testState.sessionReady = true;
+    testState.snapshotLoaded = true;
+    testState.chatRecordListAuthoritative = true;
+    testState.tuiAgentRecordListAuthoritative = true;
+    testState.deletedArtifactsAvailable = false;
+    testState.activeArtifactId = null;
+    testState.openTileContentIds = new Set<string>();
+    testState.activePanelId = "chats";
+    testState.artifactFilterKinds = [];
+    testState.chatFilterOrigin = "all";
+    testState.chatFilterOwnership = "all";
+    testState.expandedIds = new Set<string>();
+    testState.unreadArtifactIds = new Set<string>();
+    testState.tree = {
+      rootIds: [],
+      childrenByParent: {},
+      nodeById: {},
+    };
+    testState.records = [];
+    testState.indicatorChats = {};
+    testState.indicatorChatsByHost = {};
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    testState.chatHarnessIds = {};
+    testState.tuiHarnessIds = {};
+    testState.permissionRole = "owner";
+    testState.archiveSupport = true;
+    testState.archiveVisibility = "unarchived";
+    testState.archivedIds = [];
+    testState.archiveMutate = vi.fn();
+    testState.archiveBatchPending = false;
+    testState.archiveBatchChats = [];
+    testState.archiveCoveredRowsAtSettlement = [];
+    testState.archiveRowPending = false;
+    testState.archiveMutateAsync = vi.fn();
+    testState.openArtifactById = {};
+    testState.openTileByIdentity = {};
+    testState.rowHostId = "host-1";
+    testState.rowHostReachability = "reachable";
+    testState.preparedOpenRefs = [];
+    testState.rowHostEntry = { hostId: "host-1" };
+    testState.rowHostClient = { getActiveHostId: () => "host-1" };
+    testState.activeHostClient = { getActiveHostId: () => "host-1" };
+    testState.sessionHandleByChatId = {};
+    useNewConversationModalStore.getState().resetForTests();
+    useNewConversationModalOpenStore.getState().close();
+    useAppDialogStore.getState().closeDialog();
+    usePanelHeaderSearchStore.setState(
+      usePanelHeaderSearchStore.getInitialState(),
+      true,
+    );
+    useSidebarNodeRevealStore.setState(
+      { requestsByViewTabId: {}, visibleByViewTabId: {} },
+      true,
+    );
+  });
+
+  it("scrolls a requested agent row into view and consumes the request", async () => {
+    seedChatTree();
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    requestSidebarNodeReveal(TAB_ID, "agent-root");
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const row = screen.getByTestId("epic-sidebar-item-agent-root");
+    await waitFor(() => {
+      expect(scrollIntoView).toHaveBeenCalledWith({
+        block: "nearest",
+        inline: "nearest",
+      });
+    });
+    expect(scrollIntoView.mock.instances).toContain(row);
+    expect(row.dataset.sidebarRevealHighlighted).toBe("true");
+    expect(
+      useSidebarNodeRevealStore.getState().requestsByViewTabId[TAB_ID],
+    ).toBeUndefined();
+  });
+
+  it("scrolls to and flash-highlights a requested artifact row", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.artifactFilterKinds = ["review"];
+    usePanelHeaderSearchStore
+      .getState()
+      .openSearch(TAB_ID, "artifacts", "no match");
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => undefined);
+    requestSidebarNodeReveal(TAB_ID, "ticket-child");
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const row = screen.getByRole("button", { name: /^Child ticket/ });
+    await waitFor(() => {
+      expect(scrollIntoView.mock.instances).toContain(row);
+    });
+    expect(row.dataset.sidebarRevealHighlighted).toBe("true");
+    expect(screen.getByRole("button", { name: /^Child ticket/ })).toBe(row);
+    expect(
+      usePanelHeaderSearchStore.getState().openBySurfaceKey[
+        panelHeaderSearchSurfaceKey(TAB_ID, "artifacts")
+      ],
+    ).toBeUndefined();
+    expect(
+      useSidebarNodeRevealStore.getState().requestsByViewTabId[TAB_ID],
+    ).toBeUndefined();
+  });
+
+  it("flash-highlights an artifact row while it is being renamed", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    openRowMore("ticket-child");
+    fireEvent.click(dropdownItem("rename-ticket-child"));
+
+    act(() => requestSidebarNodeReveal(TAB_ID, "ticket-child"));
+
+    const row = document.querySelector<HTMLElement>(
+      '[data-sidebar-node-id="ticket-child"]',
+    );
+    await waitFor(() => {
+      expect(row?.dataset.sidebarRevealHighlighted).toBe("true");
+    });
+  });
+
+  it("flash-highlights a chat row while it is being renamed", async () => {
+    seedChatTree();
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    openRowMore("chat-child");
+    fireEvent.click(dropdownItem("rename-chat-child"));
+
+    act(() => requestSidebarNodeReveal(TAB_ID, "chat-child"));
+
+    const row = document.querySelector<HTMLElement>(
+      '[data-sidebar-node-id="chat-child"]',
+    );
+    await waitFor(() => {
+      expect(row?.dataset.sidebarRevealHighlighted).toBe("true");
+    });
+  });
+
+  it("selects chat rows explicitly and bulk-deletes every selected agent, nested ones included", async () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const startSelectionButton = screen.getByRole("menuitem", {
+      name: "Select agents",
+    });
+    expect(startSelectionButton.textContent).toBe("Select agents");
+    expect(screen.queryByTestId("epic-sidebar-select-chat-root")).toBeNull();
+
+    fireEvent.click(startSelectionButton);
+    const chatCheckbox = screen.getByTestId("epic-sidebar-select-chat-root");
+    expect(
+      screen.getByTestId("epic-sidebar-item-chat-root").style.paddingLeft,
+    ).toBe(`${BASE_PAD_LEFT}px`);
+    expect(
+      screen.getByTestId("epic-sidebar-item-chat-child").style.paddingLeft,
+    ).toBe(`${INDENT_PX + BASE_PAD_LEFT}px`);
+    expect(chatCheckbox.matches(":checked")).toBe(false);
+    fireEvent.click(chatCheckbox);
+    expect(
+      screen
+        .getByTestId("epic-sidebar-delete-selected-chats")
+        .matches(":disabled"),
+    ).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+
+    expect(
+      screen
+        .getAllByRole("checkbox")
+        .every((checkbox) => checkbox.matches(":checked")),
+    ).toBe(true);
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(testState.deleteChatMutateAsync).toHaveBeenCalledWith({
+        epicId: EPIC_ID,
+        chatId: "chat-root",
+        hostId: null,
+      });
+    });
+    // Deleting an agent keeps the agents nested under it, so a selected
+    // child is a row the user asked for and nothing else would delete.
+    await waitFor(() => {
+      expect(testState.deleteChatMutateAsync).toHaveBeenCalledWith({
+        epicId: EPIC_ID,
+        chatId: "chat-child",
+        hostId: null,
+      });
+    });
+    expect(testState.deleteChatMutateAsync).toHaveBeenCalledTimes(2);
+    expect(testState.deleteTuiAgentMutateAsync).toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      tuiAgentId: "agent-root",
+      hostId: "host-1",
+    });
+  });
+
+  it("keeps deleting the other selected agents when one delete fails", async () => {
+    seedChatTree();
+    testState.deleteChatMutateAsync.mockImplementation(
+      (input: { readonly chatId: string }) =>
+        input.chatId === "chat-child"
+          ? Promise.reject(new Error("host refused"))
+          : Promise.resolve({}),
+    );
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(testState.deleteTuiAgentMutateAsync).toHaveBeenCalledWith({
+        epicId: EPIC_ID,
+        tuiAgentId: "agent-root",
+        hostId: "host-1",
+      });
+    });
+    expect(testState.deleteChatMutateAsync).toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      chatId: "chat-root",
+      hostId: null,
+    });
+    expect(testState.deleteChatMutateAsync).toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      chatId: "chat-child",
+      hostId: null,
+    });
+  });
+
+  it("reports one notice naming several hosts when a GUI and terminal agent bulk delete spans two unreachable hosts", async () => {
+    // The chats resolve to the (null) session host and the terminal agent to
+    // host-1: two owner hosts, neither reachable.
+    seedChatTree();
+    const toastMessage = vi.spyOn(toast, "message");
+    testState.deleteChatMutateAsync.mockImplementation(() =>
+      Promise.reject(unreachableOwnerHost("epic.deleteChat")),
+    );
+    testState.deleteTuiAgentMutateAsync.mockImplementation(() =>
+      Promise.reject(unreachableOwnerHost("epic.deleteTuiAgent")),
+    );
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(toastMessage).toHaveBeenCalledWith(
+        "Traycer can't reach the hosts these agents run on, so nothing on them was changed. Try again once they are reachable.",
+        expect.anything(),
+      );
+    });
+    expect(toastMessage).toHaveBeenCalledTimes(1);
+    toastMessage.mockRestore();
+  });
+
+  // Deletes go out deepest agent first; the notice's advice follows the
+  // selection (traycerai/traycer#2546, rows 5 and 7).
+  it("lists refusal advice in selection order, not the order the deletes were sent", async () => {
+    seedGuiChatTree();
+    const toastError = vi.spyOn(toast, "error");
+    testState.deleteChatMutateAsync.mockImplementation(
+      (input: { readonly chatId: string }) =>
+        Promise.reject(
+          new HostRpcError({
+            code:
+              input.chatId === "chat-root"
+                ? "FORBIDDEN"
+                : "E_HOST_STORAGE_FULL",
+            message: "refused",
+            requestId: `req-${input.chatId}`,
+            method: "epic.deleteChat",
+            fatalDetails: null,
+          }),
+        ),
+    );
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-child"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(toastError).toHaveBeenCalledTimes(1);
+    });
+    // Sent child first, root second: the child is the deeper agent.
+    expect(testState.deleteChatMutateAsync).toHaveBeenNthCalledWith(1, {
+      epicId: EPIC_ID,
+      chatId: "chat-child",
+      hostId: null,
+    });
+    expect(testState.deleteChatMutateAsync).toHaveBeenNthCalledWith(2, {
+      epicId: EPIC_ID,
+      chatId: "chat-root",
+      hostId: null,
+    });
+    const title = toastError.mock.calls[0][0];
+    const notice = typeof title === "string" ? title : "";
+    const permission = notice.indexOf("You don't have permission to do that.");
+    const diskFull = notice.indexOf("out of disk space");
+    expect(permission).toBeGreaterThan(-1);
+    expect(diskFull).toBeGreaterThan(permission);
+    toastError.mockRestore();
+  });
+
+  it("reports one notice naming one host when every agent in an unreachable bulk delete runs on it", async () => {
+    seedGuiChatTree();
+    const toastMessage = vi.spyOn(toast, "message");
+    testState.deleteChatMutateAsync.mockImplementation(() =>
+      Promise.reject(unreachableOwnerHost("epic.deleteChat")),
+    );
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(toastMessage).toHaveBeenCalledWith(
+        "Traycer can't reach the host these agents run on, so nothing on it was changed. Try again once it is reachable.",
+        expect.anything(),
+      );
+    });
+    expect(toastMessage).toHaveBeenCalledTimes(1);
+    toastMessage.mockRestore();
+  });
+
+  it("bulk-deletes a terminal agent on its owning host, targeting a same-id row correctly and leaving tile/payload teardown to the mutation hook", async () => {
+    // A host-minted id is unique per host, not globally (see `tileHostId` in
+    // `actions.ts`) - the sidebar's single row for "agent-shared" is bound to
+    // host-B, distinct from whatever a same-id row on another host would be.
+    const agentShared = treeNode(
+      "agent-shared",
+      null,
+      "Shared terminal agent",
+      "terminal-agent",
+    );
+    testState.tree = {
+      rootIds: ["agent-shared"],
+      childrenByParent: {},
+      nodeById: { "agent-shared": agentShared },
+    };
+    testState.records = [{ ...recordFromNode(agentShared), hostId: "host-B" }];
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-agent-shared"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(testState.deleteTuiAgentMutateAsync).toHaveBeenCalledWith({
+        epicId: EPIC_ID,
+        tuiAgentId: "agent-shared",
+        hostId: "host-B",
+      });
+    });
+
+    // Tile-close and closed-payload teardown are now owned entirely by
+    // `useEpicDeleteTuiAgent` (mocked here), not the caller - the controller
+    // must never touch the canvas itself for a terminal-agent target.
+    expect(testState.closeCanvasTab).not.toHaveBeenCalled();
+
+    // The bare-id `selfDeletedArtifactIds` marker is global, not host-scoped -
+    // setting it for this row would also block Back/Forward restoration of a
+    // same-id row on another host. Terminal-agent targets are deliberately
+    // excluded from marking.
+    expect(testState.markArtifactSelfDeleted).not.toHaveBeenCalled();
+
+    // The broad recovery-tile prune this controller runs itself excludes
+    // both agent kinds entirely - their own delete mutations already prune,
+    // scoped to the host they actually deleted from.
+    expect(testState.pruneRecoveryTiles).toHaveBeenCalledTimes(1);
+    const isDeleted = testState.pruneRecoveryTiles.mock.calls[0][0] as (
+      tile: { readonly type: string; readonly id: string },
+      epicId: string,
+    ) => boolean;
+    expect(
+      isDeleted({ type: "terminal-agent", id: "agent-shared" }, EPIC_ID),
+    ).toBe(false);
+    expect(isDeleted({ type: "chat", id: "agent-shared" }, EPIC_ID)).toBe(
+      false,
+    );
+    // Proves the predicate isn't trivially false for everything - an
+    // artifact sharing the deleted id would still be pruned.
+    expect(isDeleted({ type: "spec", id: "agent-shared" }, EPIC_ID)).toBe(true);
+  });
+
+  it("archives the topmost selected agents and exits selection mode", async () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-selected-chats"));
+
+    await waitFor(() => {
+      expect(testState.archiveMutateAsync).toHaveBeenCalledWith({
+        epicId: EPIC_ID,
+        chatId: "chat-root",
+        hostId: "host-1",
+        archived: true,
+      });
+      expect(testState.archiveMutateAsync).toHaveBeenCalledWith({
+        epicId: EPIC_ID,
+        chatId: "agent-root",
+        hostId: "host-1",
+        archived: true,
+      });
+    });
+    expect(testState.archiveMutateAsync).not.toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      chatId: "chat-child",
+      hostId: "host-1",
+      archived: true,
+    });
+    // Thread taOw7: the root's request stands for the selected child its
+    // archive hides, so the batch notice counts both.
+    expect(testState.archiveBatchChats).toEqual([
+      expect.objectContaining({
+        chatId: "chat-root",
+        hostId: "host-1",
+        selectedRows: 2,
+      }),
+      expect.objectContaining({
+        chatId: "agent-root",
+        hostId: "host-1",
+        selectedRows: 1,
+      }),
+    ]);
+    // Nothing moved, so each request still covers every row it stood for.
+    await waitFor(() => {
+      expect(testState.archiveCoveredRowsAtSettlement).toEqual([2, 1]);
+    });
+    expect(
+      screen.queryByRole("button", { name: "Cancel selection" }),
+    ).toBeNull();
+  });
+
+  it("exits selection after projection prunes archived rows before the batch settles", async () => {
+    let resolveArchive: (value: { readonly updated: boolean }) => void = () => {
+      throw new Error("Archive resolver is unavailable");
+    };
+    const archivePromise = new Promise<{ readonly updated: boolean }>(
+      (resolve) => {
+        resolveArchive = resolve;
+      },
+    );
+    testState.archiveMutateAsync.mockReturnValue(archivePromise);
+    seedChatTree();
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-selected-chats"));
+
+    testState.archivedIds = ["chat-root"];
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    await waitFor(() => {
+      expect(screen.queryByTestId("epic-sidebar-item-chat-root")).toBeNull();
+      expect(
+        screen.getByRole("button", { name: "Cancel selection" }),
+      ).toBeTruthy();
+    });
+
+    resolveArchive({ updated: true });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "Cancel selection" }),
+      ).toBeNull();
+    });
+  });
+
+  it("preserves agents selected while an archive batch is pending", async () => {
+    let resolveArchive: (value: { readonly updated: boolean }) => void = () => {
+      throw new Error("Archive resolver is unavailable");
+    };
+    const archivePromise = new Promise<{ readonly updated: boolean }>(
+      (resolve) => {
+        resolveArchive = resolve;
+      },
+    );
+    testState.archiveMutateAsync.mockReturnValue(archivePromise);
+    seedChatTree();
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-selected-chats"));
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.getByRole("button", { name: "Select all" }).matches(":disabled"),
+    ).toBe(true);
+    expect(
+      screen
+        .getByRole("button", { name: "Cancel selection" })
+        .matches(":disabled"),
+    ).toBe(true);
+    expect(
+      screen
+        .getByTestId("epic-sidebar-delete-selected-chats")
+        .matches(":disabled"),
+    ).toBe(true);
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-agent-root"));
+
+    resolveArchive({ updated: true });
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("epic-sidebar-select-chat-root").matches(":checked"),
+      ).toBe(false);
+      expect(
+        screen
+          .getByTestId("epic-sidebar-select-agent-root")
+          .matches(":checked"),
+      ).toBe(true);
+    });
+    expect(
+      screen.getByRole("button", { name: "Cancel selection" }),
+    ).toBeTruthy();
+  });
+
+  it("clears descendants selected before an archive response whose projection lands later", async () => {
+    let resolveArchive: (value: { readonly updated: boolean }) => void = () => {
+      throw new Error("Archive resolver is unavailable");
+    };
+    const archivePromise = new Promise<{ readonly updated: boolean }>(
+      (resolve) => {
+        resolveArchive = resolve;
+      },
+    );
+    testState.archiveMutateAsync.mockReturnValue(archivePromise);
+    seedChatTree();
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-selected-chats"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-child"));
+
+    resolveArchive({ updated: true });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "Cancel selection" }),
+      ).toBeNull();
+    });
+
+    testState.archivedIds = ["chat-root"];
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    await waitFor(() => {
+      expect(screen.queryByTestId("epic-sidebar-item-chat-root")).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Cancel selection" }),
+      ).toBeNull();
+    });
+  });
+
+  it("clears descendants added while an archive request is pending", async () => {
+    let resolveArchive: (value: { readonly updated: boolean }) => void = () => {
+      throw new Error("Archive resolver is unavailable");
+    };
+    const archivePromise = new Promise<{ readonly updated: boolean }>(
+      (resolve) => {
+        resolveArchive = resolve;
+      },
+    );
+    testState.archiveMutateAsync.mockReturnValue(archivePromise);
+    seedChatTree();
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-selected-chats"));
+
+    const addedChild = treeNode(
+      "chat-added-child",
+      "chat-root",
+      "Added child",
+      "chat",
+    );
+    testState.tree = {
+      rootIds: testState.tree.rootIds,
+      childrenByParent: {
+        ...testState.tree.childrenByParent,
+        "chat-root": ["chat-child", addedChild.id],
+      },
+      nodeById: {
+        ...testState.tree.nodeById,
+        [addedChild.id]: addedChild,
+      },
+    };
+    testState.records = [...testState.records, recordFromNode(addedChild)];
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(screen.getByTestId(`epic-sidebar-select-${addedChild.id}`));
+
+    resolveArchive({ updated: true });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "Cancel selection" }),
+      ).toBeNull();
+    });
+
+    testState.archivedIds = ["chat-root"];
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.queryByRole("button", { name: "Cancel selection" }),
+    ).toBeNull();
+  });
+
+  it("preserves selected descendants reparented out of an archive request", async () => {
+    let resolveArchive: (value: { readonly updated: boolean }) => void = () => {
+      throw new Error("Archive resolver is unavailable");
+    };
+    const archivePromise = new Promise<{ readonly updated: boolean }>(
+      (resolve) => {
+        resolveArchive = resolve;
+      },
+    );
+    testState.archiveMutateAsync.mockReturnValue(archivePromise);
+    seedChatTree();
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-selected-chats"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-child"));
+
+    const reparentedChild = treeNode("chat-child", null, "Child chat", "chat");
+    testState.tree = {
+      rootIds: ["chat-root", reparentedChild.id, "agent-root"],
+      childrenByParent: { "chat-root": [] },
+      nodeById: {
+        ...testState.tree.nodeById,
+        [reparentedChild.id]: reparentedChild,
+      },
+    };
+    testState.records = testState.records.map((record) =>
+      record.id === reparentedChild.id
+        ? recordFromNode(reparentedChild)
+        : record,
+    );
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    resolveArchive({ updated: true });
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("epic-sidebar-select-chat-root").matches(":checked"),
+      ).toBe(false);
+      expect(
+        screen
+          .getByTestId("epic-sidebar-select-chat-child")
+          .matches(":checked"),
+      ).toBe(true);
+    });
+    expect(
+      screen.getByRole("button", { name: "Cancel selection" }),
+    ).toBeTruthy();
+
+    testState.archivedIds = ["chat-root"];
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(screen.queryByTestId("epic-sidebar-item-chat-root")).toBeNull();
+    expect(
+      screen.getByTestId("epic-sidebar-select-chat-child").matches(":checked"),
+    ).toBe(true);
+  });
+
+  // A selected child moved out of the selected parent while the archive is
+  // in flight is not archived with it: at settlement the parent's request
+  // covers itself alone, and the child stays selected.
+  it("recounts an archive request's selected rows against the tree it settles in", async () => {
+    let resolveRootArchive: (value: {
+      readonly updated: boolean;
+    }) => void = () => {
+      throw new Error("Archive resolver is unavailable");
+    };
+    testState.archiveMutateAsync.mockImplementation((input) =>
+      input.chatId === "chat-root"
+        ? new Promise<{ readonly updated: boolean }>((resolve) => {
+            resolveRootArchive = resolve;
+          })
+        : Promise.reject(new Error("refused")),
+    );
+    seedChatTree();
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-selected-chats"));
+    expect(
+      testState.archiveBatchChats.map((chat) => chat.selectedRows),
+    ).toEqual([2, 1]);
+
+    const reparentedChild = treeNode("chat-child", null, "Child chat", "chat");
+    testState.tree = {
+      rootIds: ["chat-root", reparentedChild.id, "agent-root"],
+      childrenByParent: { "chat-root": [] },
+      nodeById: {
+        ...testState.tree.nodeById,
+        [reparentedChild.id]: reparentedChild,
+      },
+    };
+    testState.records = testState.records.map((record) =>
+      record.id === reparentedChild.id
+        ? recordFromNode(reparentedChild)
+        : record,
+    );
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    resolveRootArchive({ updated: true });
+
+    await waitFor(() => {
+      expect(testState.archiveCoveredRowsAtSettlement).toEqual([1, 1]);
+    });
+    await waitFor(() => {
+      expect(
+        screen
+          .getByTestId("epic-sidebar-select-chat-child")
+          .matches(":checked"),
+      ).toBe(true);
+    });
+  });
+
+  // Archiving a root removes nothing from the tree - archived records stay in
+  // it - so a selected child missing at settlement was deleted, not hidden:
+  // the root's request no longer covers it.
+  it("does not credit an archive request with a selected child deleted before it settles", async () => {
+    let resolveRootArchive: (value: {
+      readonly updated: boolean;
+    }) => void = () => {
+      throw new Error("Archive resolver is unavailable");
+    };
+    testState.archiveMutateAsync.mockImplementation((input) =>
+      input.chatId === "chat-root"
+        ? new Promise<{ readonly updated: boolean }>((resolve) => {
+            resolveRootArchive = resolve;
+          })
+        : Promise.reject(new Error("refused")),
+    );
+    seedChatTree();
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-selected-chats"));
+    expect(
+      testState.archiveBatchChats.map((chat) => chat.selectedRows),
+    ).toEqual([2, 1]);
+
+    const { "chat-child": _deletedChild, ...remainingNodes } =
+      testState.tree.nodeById;
+    testState.tree = {
+      rootIds: ["chat-root", "agent-root"],
+      childrenByParent: { "chat-root": [] },
+      nodeById: remainingNodes,
+    };
+    testState.records = testState.records.filter(
+      (record) => record.id !== "chat-child",
+    );
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    resolveRootArchive({ updated: true });
+
+    await waitFor(() => {
+      expect(testState.archiveCoveredRowsAtSettlement).toEqual([1, 1]);
+    });
+  });
+
+  it("hides the bulk archive action when the host lacks archive support", () => {
+    seedChatTree();
+    testState.archiveSupport = false;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
+
+    expect(
+      screen.queryByTestId("epic-sidebar-archive-selected-chats"),
+    ).toBeNull();
+  });
+
+  it("keeps bulk archive disabled while a selected agent is working", () => {
+    seedChatTree();
+    testState.activeAgentIds = new Set(["chat-root"]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
+
+    expect(
+      screen
+        .getByTestId("epic-sidebar-archive-selected-chats")
+        .matches(":disabled"),
+    ).toBe(true);
+  });
+
+  it("keeps bulk archive disabled for an active collapsed descendant", () => {
+    seedChatTree();
+    testState.expandedIds = new Set<string>();
+    testState.activeAgentIds = new Set(["chat-child"]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
+
+    expect(screen.queryByTestId("epic-sidebar-select-chat-child")).toBeNull();
+    expect(
+      screen
+        .getByTestId("epic-sidebar-archive-selected-chats")
+        .matches(":disabled"),
+    ).toBe(true);
+  });
+
+  it("toggles the Select all button to Deselect all once everything is selected", () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+
+    // Nothing selected yet: the button offers "Select all".
+    expect(screen.queryByRole("button", { name: "Deselect all" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+
+    expect(
+      screen
+        .getAllByRole("checkbox")
+        .every((checkbox) => checkbox.matches(":checked")),
+    ).toBe(true);
+    // All selected: the button flips to "Deselect all".
+    expect(screen.queryByRole("button", { name: "Select all" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Deselect all" }));
+
+    // Back to nothing selected, but still in selection mode (checkboxes stay
+    // rendered) and the button reverts to "Select all".
+    expect(
+      screen
+        .getAllByRole("checkbox")
+        .every((checkbox) => !checkbox.matches(":checked")),
+    ).toBe(true);
+    expect(
+      screen.queryByTestId("epic-sidebar-select-chat-root"),
+    ).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Select all" })).not.toBeNull();
+  });
+
+  it("keeps checkbox focus across Tab onto a never-touched selection row", async () => {
+    seedChatTree();
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+
+    const user = userEvent.setup();
+    screen.getByTestId("epic-sidebar-select-chat-root").focus();
+    await waitFor(() => {
+      const active = document.activeElement;
+      expect(active).toBeInstanceOf(HTMLInputElement);
+      expect(active).not.toBe(document.body);
+      expect(active?.getAttribute("data-testid")).toBe(
+        "epic-sidebar-select-chat-root",
+      );
+    });
+    if (!(document.activeElement instanceof HTMLInputElement)) {
+      throw new Error("expected the row checkbox");
+    }
+    expect(document.activeElement.checked).toBe(false);
+    await user.keyboard(" ");
+    if (!(document.activeElement instanceof HTMLInputElement)) {
+      throw new Error("expected the row checkbox after Space");
+    }
+    expect(document.activeElement.checked).toBe(true);
+  });
+
+  it("gives selection controls the full header row without changing its height", () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const section = screen.getByTestId("epic-left-panel-section-chats");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+
+    const selectionHeader = section.querySelector(
+      '[data-panel-header-mode="selection"]',
+    );
+    expect(selectionHeader).not.toBeNull();
+    expect(selectionHeader?.className).toContain("h-9");
+    expect(
+      screen.getByRole("button", { name: "Cancel selection" }),
+    ).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel selection" }));
+    expect(
+      section.querySelector('[data-panel-header-mode="selection"]'),
+    ).toBeNull();
+    expect(screen.getByText("Agents")).not.toBeNull();
+  });
+
+  it("keeps artifact header actions in stable create, more, filter order", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const section = screen.getByTestId("epic-left-panel-section-artifacts");
+    expect(section.firstElementChild?.className).toContain("@container");
+    const add = screen.getByRole("button", { name: "Add artifact" });
+    const more = screen.getByTestId("epic-sidebar-more-artifacts");
+    const filter = screen.getByRole("button", { name: "Artifact filter" });
+    expect(add.compareDocumentPosition(more)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(more.compareDocumentPosition(filter)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(more.className).not.toContain("hidden");
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select artifacts" }));
+    expect(
+      screen.getByTestId("epic-sidebar-artifact-selection-count").className,
+    ).toContain("@max-[21rem]:hidden");
+    expect(
+      section.querySelector('[data-panel-header-mode="selection"]'),
+    ).not.toBeNull();
+  });
+
+  it("keeps the communication graph available in the Agents overflow", () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(
+      screen.getByRole("menuitem", { name: "Agent office" }),
+    ).not.toBeNull();
+  });
+
+  it("renders loading chat and artifact panels before the epic session handle exists", () => {
+    testState.sessionReady = false;
+
+    render(<EpicLeftPanelLoadingHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.getByTestId("epic-sidebar")).not.toBeNull();
+  });
+
+  it("names the primary panel Agents and offers an interface choice when empty", () => {
+    testState.activePanelId = "chats";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.getByText("Agents")).not.toBeNull();
+    expect(screen.getByTestId("epic-chat-sidebar-empty")).not.toBeNull();
+    expect(screen.getByText("No agents yet.")).not.toBeNull();
+    expect(
+      screen.getByText("Add an agent and choose a Chat or Terminal interface."),
+    ).not.toBeNull();
+    expect(screen.queryByText("No agents use this interface.")).toBeNull();
+  });
+
+  it("exposes each full agent title on hover without worktree metadata", () => {
+    seedChatTree();
+    testState.rowHostId = null;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.getByRole("tooltip", { name: "Root chat" })).toBeTruthy();
+    expect(
+      screen.getByRole("tooltip", { name: "Terminal agent" }),
+    ).toBeTruthy();
+  });
+
+  it("blames the interface filter, not the Task, when a filter hides every agent", () => {
+    seedGuiChatTree();
+    testState.chatFilterOrigin = "tui";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.getByTestId("epic-chat-sidebar-filter-empty")).not.toBeNull();
+    // The Task HAS agents - they just use the other interface. The empty state
+    // must not read as "this Task has no agents".
+    expect(
+      screen.getByText("No matches for the current filters."),
+    ).not.toBeNull();
+    expect(
+      screen.getByText("The Interface filter is hiding the other agents."),
+    ).not.toBeNull();
+    expect(screen.queryByText("No agents yet.")).toBeNull();
+  });
+
+  it("hides local agents as Mine when the Ownership filter selects Others", () => {
+    seedChatTree();
+    testState.chatFilterOwnership = "others";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.queryByTestId("epic-sidebar-item-chat-root")).toBeNull();
+    expect(screen.queryByTestId("epic-sidebar-item-agent-root")).toBeNull();
+    expect(screen.getByTestId("epic-chat-sidebar-filter-empty")).toBeTruthy();
+    expect(
+      screen.getByText("The Ownership filter is hiding the other agents."),
+    ).toBeTruthy();
+  });
+
+  it("shows the empty artifact panel state when there are no artifacts", () => {
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.getByTestId("epic-artifact-sidebar-empty")).not.toBeNull();
+    expect(screen.getByText("No artifacts yet.")).not.toBeNull();
+    expect(screen.queryByText("No artifacts match the filter.")).toBeNull();
+  });
+
+  it("shows the filtered artifact empty state when no artifacts match the filter", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.artifactFilterKinds = ["review"];
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(
+      screen.getByTestId("epic-artifact-sidebar-filter-empty"),
+    ).not.toBeNull();
+    expect(
+      screen.getByText("No matches for the current filters."),
+    ).not.toBeNull();
+    expect(screen.queryByText("No artifacts yet.")).toBeNull();
+  });
+
+  it("hides sidebar bulk selection while the role is not known", () => {
+    seedChatTree();
+    testState.permissionRole = null;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(
+      screen.queryByRole("menuitem", { name: "Select agents" }),
+    ).toBeNull();
+    expect(screen.queryByTestId("epic-sidebar-select-chat-root")).toBeNull();
+  });
+
+  it("uses the shared chat menu for terminal-agent row actions", () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.getByTestId("epic-sidebar-more-agent-root")).not.toBeNull();
+    openRowMore("agent-root");
+    expect(dropdownItem("rename-agent-root")).not.toBeNull();
+    expect(dropdownItem("delete-agent-root")).not.toBeNull();
+    expect(screen.getByTestId("epic-sidebar-more-chat-root")).not.toBeNull();
+  });
+
+  it("renders chat glyph (never harness brand) on chat rows and harness brand on idle TUI rows", () => {
+    seedChatTree();
+    testState.chatHarnessIds = {
+      "chat-root": "codex",
+      "chat-child": "claude",
+    };
+    testState.tuiHarnessIds = { "agent-root": "codex" };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    // Chat rows deliberately keep the plain chat glyph even when a harness id
+    // is known - brand marks are a TUI-only leading-icon affordance.
+    const chatRow = screen.getByTestId("epic-sidebar-item-chat-root");
+    expect(chatRow.querySelector(".lucide-message-square")).not.toBeNull();
+    expect(screen.queryByTestId("sidebar-agent-harness-chat-root")).toBeNull();
+    expect(screen.queryByTestId("sidebar-agent-surface-chat-root")).toBeNull();
+
+    // Idle TUI rows wear the harness brand + terminal surface subscript.
+    expect(
+      screen.getByTestId("sidebar-agent-harness-agent-root"),
+    ).not.toBeNull();
+    expect(
+      screen.getByTestId("sidebar-agent-surface-agent-root"),
+    ).not.toBeNull();
+  });
+
+  it("consolidates row actions into one menu with 'New child agent' first, reachable from both the ⋯ dropdown and right-click", async () => {
+    seedChatTree();
+    useNewConversationModalStore
+      .getState()
+      .setComposerMode(EPIC_ID, "terminal");
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    // The standalone hover "+" is gone; "New child agent" now lives in the
+    // consolidated row menu, reachable via the ⋯ dropdown...
+    const chatRow = screen.getByTestId("epic-sidebar-item-chat-root");
+    expect(
+      chatRow.parentElement?.querySelector('[aria-label="Add child agent"]'),
+    ).toBeNull();
+    openRowMore("chat-root");
+    expect(dropdownItem("new-child-chat-root")).not.toBeNull();
+
+    // ...and via the right-click context menu, both seeded with this row as
+    // parent.
+    fireEvent.contextMenu(chatRow);
+    expect(
+      await screen.findByTestId("epic-sidebar-context-new-child-chat-root"),
+    ).not.toBeNull();
+    const newChildAgent = screen.getByRole("menuitem", {
+      name: "New child agent",
+    });
+    expect(
+      await screen.findByRole("menuitem", { name: "Rename" }),
+    ).not.toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Delete" })).not.toBeNull();
+
+    fireEvent.click(newChildAgent);
+
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
+        ?.composerMode,
+    ).toBe("terminal");
+    expect(useNewConversationModalOpenStore.getState().request).toMatchObject({
+      epicId: EPIC_ID,
+      tabId: TAB_ID,
+      parentId: "chat-root",
+    });
+  });
+
+  it("does not say deleting an agent deletes the agents nested under it", async () => {
+    // Deleting an agent removes that one record; its nested agents are kept
+    // and drawn at the top level (orphan promotion in `projectTreeSlice`), so
+    // the confirm dialog must not claim otherwise.
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(dropdownItem("delete-chat-root"));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+
+    expect(within(dialog).queryByTestId("confirm-cascade-meta")).toBeNull();
+    expect(dialog.textContent).not.toContain("also delete");
+    expect(dialog.textContent).toContain(
+      "1 agent nested under it will be kept and moved to the top level.",
+    );
+  });
+
+  it("counts only the agents directly under a deleted agent", async () => {
+    // A grandchild stays under its own (kept) parent, so it does not move to
+    // the top level and is not part of the sentence.
+    seedChatTree();
+    const grandchild = treeNode(
+      "chat-grandchild",
+      "chat-child",
+      "Grandchild chat",
+      "chat",
+    );
+    testState.tree = {
+      ...testState.tree,
+      childrenByParent: {
+        ...testState.tree.childrenByParent,
+        "chat-child": ["chat-grandchild"],
+      },
+      nodeById: { ...testState.tree.nodeById, "chat-grandchild": grandchild },
+    };
+    testState.records = [...testState.records, recordFromNode(grandchild)];
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(dropdownItem("delete-chat-root"));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+
+    expect(dialog.textContent).toContain(
+      "1 agent nested under it will be kept and moved to the top level.",
+    );
+    expect(dialog.textContent).not.toContain("2 agents");
+  });
+
+  it("says a deleted terminal agent's nested agents are kept and moved to the top level", async () => {
+    seedChatTree();
+    const agentChild = treeNode(
+      "agent-child",
+      "agent-root",
+      "Nested terminal agent",
+      "terminal-agent",
+    );
+    testState.tree = {
+      ...testState.tree,
+      childrenByParent: {
+        ...testState.tree.childrenByParent,
+        "agent-root": ["agent-child"],
+      },
+      nodeById: { ...testState.tree.nodeById, "agent-child": agentChild },
+    };
+    testState.records = [...testState.records, recordFromNode(agentChild)];
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(dropdownItem("delete-agent-root"));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+
+    expect(within(dialog).queryByTestId("confirm-cascade-meta")).toBeNull();
+    expect(dialog.textContent).toContain(
+      "1 agent nested under it will be kept and moved to the top level.",
+    );
+  });
+
+  /**
+   * "This will ALSO delete" is what the selection does not already name, so a
+   * selection holding both the spec and its only ticket adds nothing. It used
+   * to read "Nested items under selected rows may also be deleted." - a hedge
+   * that was wrong in both directions: vague where the tree knows the count,
+   * and alarming where there is nothing extra to delete.
+   */
+  it("says nothing extra when the whole artifact subtree is selected", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select artifacts" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(
+      screen.getByTestId("epic-sidebar-delete-selected-artifacts"),
+    );
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+
+    expect(within(dialog).queryByTestId("confirm-cascade-meta")).toBeNull();
+    expect(
+      within(dialog).getByText("This action cannot be undone."),
+    ).toBeTruthy();
+  });
+
+  /**
+   * Two spec roots, one ticket each: the selection names only the roots, so
+   * both tickets are extra, and the sentence addresses the roots as "them".
+   */
+  it("counts the artifacts a whole selection takes with it and addresses them as them", async () => {
+    const specA = treeNode("spec-a", null, "Spec A", "spec");
+    const specB = treeNode("spec-b", null, "Spec B", "spec");
+    const ticketA = treeNode("ticket-a", "spec-a", "Ticket A", "ticket");
+    const ticketB = treeNode("ticket-b", "spec-b", "Ticket B", "ticket");
+    testState.expandedIds = new Set<string>();
+    testState.tree = {
+      rootIds: ["spec-a", "spec-b"],
+      childrenByParent: { "spec-a": ["ticket-a"], "spec-b": ["ticket-b"] },
+      nodeById: {
+        "spec-a": specA,
+        "spec-b": specB,
+        "ticket-a": ticketA,
+        "ticket-b": ticketB,
+      },
+    };
+    testState.records = [specA, specB, ticketA, ticketB].map(recordFromNode);
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select artifacts" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-spec-a"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-spec-b"));
+    fireEvent.click(
+      screen.getByTestId("epic-sidebar-delete-selected-artifacts"),
+    );
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+
+    expect(within(dialog).getByTestId("confirm-cascade-meta").textContent).toBe(
+      "This will also delete 2 tickets nested under them.",
+    );
+  });
+
+  it("says nothing about nested agents when a deleted agent has none", async () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(dropdownItem("delete-agent-root"));
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+
+    expect(within(dialog).queryByTestId("confirm-cascade-meta")).toBeNull();
+    expect(dialog.textContent).not.toContain("nested under it");
+  });
+
+  it("keeps artifact add inline and exposes ellipsis actions on right-click", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.getByTestId("epic-sidebar-add-spec-root")).not.toBeNull();
+    fireEvent.contextMenu(screen.getByTestId("epic-sidebar-item-spec-root"));
+
+    expect(
+      await screen.findByRole("menuitem", { name: "Export as Markdown" }),
+    ).not.toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Rename" })).not.toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Delete" })).not.toBeNull();
+  });
+
+  it("enters chat selection mode from cmd-click on a row", () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.queryByTestId("epic-sidebar-select-chat-root")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-item-chat-root"), {
+      metaKey: true,
+    });
+
+    expect(
+      screen.getByTestId("epic-sidebar-select-chat-root").matches(":checked"),
+    ).toBe(true);
+    expect(
+      screen
+        .getByTestId("epic-sidebar-delete-selected-chats")
+        .matches(":disabled"),
+    ).toBe(false);
+  });
+
+  it("keeps the Agents overflow actions available during search", () => {
+    seedChatTree();
+    usePanelHeaderSearchStore.getState().openSearch(TAB_ID, "chats", "agent");
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(
+      screen.getByRole("button", { name: "More agent actions" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Collapse all" })).toBeTruthy();
+    expect(
+      screen.queryByRole("menuitem", { name: "Search agents" }),
+    ).toBeNull();
+  });
+
+  it("keeps the Artifacts overflow actions available during search", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    usePanelHeaderSearchStore
+      .getState()
+      .openSearch(TAB_ID, "artifacts", "spec");
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(
+      screen.getByRole("button", { name: "More artifact actions" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Collapse all" })).toBeTruthy();
+    expect(
+      screen.queryByRole("menuitem", { name: "Search artifacts" }),
+    ).toBeNull();
+  });
+
+  describe("overflow menu search entry, through the real menu", () => {
+    beforeEach(() => {
+      dropdownMenuMode.real = true;
+    });
+
+    afterEach(() => {
+      dropdownMenuMode.real = false;
+    });
+
+    // Selects the entry the way a click does, then lets Radix finish closing:
+    // it hands focus back on a timer after the menu content unmounts, so an
+    // assertion made before that timer would pass on a focus that is about to
+    // be taken away.
+    async function selectOverflowEntry(
+      triggerLabel: string,
+      entryLabel: string,
+    ): Promise<void> {
+      fireEvent.pointerDown(
+        screen.getByRole("button", { name: triggerLabel }),
+        { button: 0, ctrlKey: false },
+      );
+      fireEvent.click(
+        await screen.findByRole("menuitem", { name: entryLabel }),
+      );
+      await waitFor(() => {
+        expect(screen.queryByRole("menu")).toBeNull();
+      });
+      await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    }
+
+    it("moves focus from the Agents overflow menu into chat search", async () => {
+      seedChatTree();
+
+      render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+      await selectOverflowEntry("More agent actions", "Search agents");
+
+      expect(document.activeElement).toBe(
+        screen.getByRole("textbox", { name: "Search agents" }),
+      );
+    });
+
+    it("moves focus from the Artifacts overflow menu into artifact search", async () => {
+      seedArtifactTree();
+      testState.activePanelId = "artifacts";
+
+      render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+      await selectOverflowEntry("More artifact actions", "Search artifacts");
+
+      expect(document.activeElement).toBe(
+        screen.getByRole("combobox", { name: "Search artifacts" }),
+      );
+    });
+  });
+
+  it("hides artifact selection when there are no artifacts to select", () => {
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Select artifacts" })
+        .matches(":disabled"),
+    ).toBe(true);
+    expect(
+      screen.queryByRole("button", { name: "Add artifact" }),
+    ).not.toBeNull();
+  });
+
+  it("disables mark-all-read when no artifacts are unread", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    const { rerender } = render(
+      <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />,
+    );
+
+    const markAllReadButton = screen.getByRole("button", {
+      name: "Mark all unread artifacts as read",
+    });
+
+    expect(markAllReadButton.matches(":disabled")).toBe(true);
+
+    testState.unreadArtifactIds = new Set(["ticket-child"]);
+    rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(
+      screen
+        .getByRole("button", {
+          name: "Mark all unread artifacts as read",
+        })
+        .matches(":disabled"),
+    ).toBe(false);
+
+    testState.unreadArtifactIds = new Set<string>();
+    rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(
+      screen
+        .getByRole("button", {
+          name: "Mark all unread artifacts as read",
+        })
+        .matches(":disabled"),
+    ).toBe(true);
+  });
+
+  it("marks every unread artifact read from the artifact header action", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.unreadArtifactIds = new Set(["spec-root", "ticket-child"]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Mark all unread artifacts as read",
+      }),
+    );
+
+    expect(markRead).toHaveBeenCalledWith(EPIC_ID, "spec-root", 2);
+    expect(markRead).toHaveBeenCalledWith(EPIC_ID, "ticket-child", 2);
+  });
+
+  it("exports one artifact from its row actions without a role", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.permissionRole = null;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    openRowMore("spec-root");
+
+    fireEvent.click(dropdownItem("export-markdown-spec-root"));
+
+    expect(testState.exportArtifactsMutate).toHaveBeenCalledWith({
+      archive: false,
+      archiveTitle: null,
+      artifacts: [{ id: "spec-root", title: "Root spec" }],
+      format: "markdown",
+      includeNested: false,
+    });
+    expect(dropdownItem("rename-spec-root").matches(":disabled")).toBe(true);
+    expect(dropdownItem("delete-spec-root").matches(":disabled")).toBe(true);
+  });
+
+  it("exports one artifact with everything nested under it from its row actions", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.permissionRole = null;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    openRowMore("spec-root");
+
+    fireEvent.click(dropdownItem("export-nested-pdf-spec-root"));
+
+    expect(testState.exportArtifactsMutate).toHaveBeenCalledWith({
+      archive: true,
+      archiveTitle: "Root spec",
+      artifacts: [{ id: "spec-root", title: "Root spec" }],
+      format: "pdf",
+      includeNested: true,
+    });
+  });
+
+  it("offers no nested export on a row with nothing under it", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    openRowMore("ticket-child");
+
+    expect(
+      screen.queryByTestId("epic-sidebar-export-nested-pdf-ticket-child"),
+    ).toBeNull();
+  });
+
+  it("bulk-exports every selected visible artifact, including descendants", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.permissionRole = null;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select artifacts" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-spec-root"));
+    expect(
+      screen
+        .getByTestId("epic-sidebar-export-selected-markdown")
+        .matches(":disabled"),
+    ).toBe(true);
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-ticket-child"));
+    expect(
+      screen
+        .getByTestId("epic-sidebar-export-selected-markdown")
+        .matches(":disabled"),
+    ).toBe(false);
+    fireEvent.click(
+      screen.getByTestId("epic-sidebar-export-selected-markdown"),
+    );
+
+    expect(testState.exportArtifactsMutate).toHaveBeenCalledWith({
+      archive: true,
+      archiveTitle: "Test epic",
+      artifacts: [
+        { id: "spec-root", title: "Root spec" },
+        { id: "ticket-child", title: "Child ticket" },
+      ],
+      format: "markdown",
+      includeNested: false,
+    });
+    expect(
+      screen
+        .getByTestId("epic-sidebar-delete-selected-artifacts")
+        .matches(":disabled"),
+    ).toBe(true);
+  });
+
+  it("selects artifact rows explicitly and bulk-deletes topmost selected artifacts", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select artifacts" }));
+    expect(
+      screen.getByTestId("epic-sidebar-item-ticket-child").style.paddingLeft,
+    ).toBe(`${INDENT_PX + BASE_PAD_LEFT}px`);
+    expect(
+      screen
+        .getByTestId("epic-sidebar-delete-selected-artifacts")
+        .matches(":disabled"),
+    ).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(
+      screen.getByTestId("epic-sidebar-delete-selected-artifacts"),
+    );
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(testState.deleteArtifactMutateAsync).toHaveBeenCalledWith({
+        epicId: EPIC_ID,
+        artifactId: "spec-root",
+      });
+    });
+    expect(testState.deleteArtifactMutateAsync).not.toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      artifactId: "ticket-child",
+    });
+  });
+
+  it("reports one notice for a bulk artifact delete in which every delete failed", async () => {
+    const specA = treeNode("spec-a", null, "Spec A", "spec");
+    const specB = treeNode("spec-b", null, "Spec B", "spec");
+    testState.expandedIds = new Set();
+    testState.tree = {
+      rootIds: ["spec-a", "spec-b"],
+      childrenByParent: {},
+      nodeById: { "spec-a": specA, "spec-b": specB },
+    };
+    testState.records = [specA, specB].map(recordFromNode);
+    testState.activePanelId = "artifacts";
+    const toastError = vi.spyOn(toast, "error");
+    testState.deleteArtifactMutateAsync.mockImplementation(() =>
+      Promise.reject(new Error("write rejected")),
+    );
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select artifacts" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(
+      screen.getByTestId("epic-sidebar-delete-selected-artifacts"),
+    );
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(toastError).toHaveBeenCalledWith(
+        "Couldn't delete any of the 2 selected artifacts.",
+        expect.anything(),
+      );
+    });
+    expect(toastError).toHaveBeenCalledTimes(1);
+    toastError.mockRestore();
+  });
+
+  // Thread taF0r: a row confirmed in the dialog can vanish before the delete
+  // is sent, and no request then stands for it. It stays in the count the
+  // dialog showed, never as deleted and never as failed: unconfirmed.
+  function vanishRecord(id: string): void {
+    const { [id]: _vanished, ...remainingNodes } = testState.tree.nodeById;
+    testState.tree = {
+      rootIds: testState.tree.rootIds.filter((rootId) => rootId !== id),
+      childrenByParent: Object.fromEntries(
+        Object.entries(testState.tree.childrenByParent).map(
+          ([parentId, childIds]) => [
+            parentId,
+            childIds.filter((childId) => childId !== id),
+          ],
+        ),
+      ),
+      nodeById: remainingNodes,
+    };
+    testState.records = testState.records.filter((record) => record.id !== id);
+  }
+
+  function forbidden(method: string): HostRpcError {
+    return new HostRpcError({
+      code: "FORBIDDEN",
+      message: "refused",
+      requestId: "req-forbidden",
+      method,
+      fatalDetails: null,
+    });
+  }
+
+  it("keeps an agent that vanished before the delete was sent in the dialog's count, unconfirmed", async () => {
+    seedChatTree();
+    const toastError = vi.spyOn(toast, "error");
+    testState.deleteChatMutateAsync.mockImplementation(
+      (input: { readonly chatId: string }) =>
+        input.chatId === "chat-child"
+          ? Promise.reject(forbidden("epic.deleteChat"))
+          : Promise.resolve({ outcome: "applied" }),
+    );
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+    expect(screen.getByText("Delete 3 selected agents?")).toBeTruthy();
+    vanishRecord("agent-root");
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(toastError).toHaveBeenCalledTimes(1);
+    });
+    expect(toastError.mock.calls[0]?.[0]).toBe(
+      "Couldn't confirm all 3 selected agents were deleted. Check them and delete any that weren't. You don't have permission to do that.",
+    );
+    expect(testState.deleteTuiAgentMutateAsync).not.toHaveBeenCalled();
+    toastError.mockRestore();
+  });
+
+  it("stays quiet when a row vanished before the delete was sent and every sent delete applied", async () => {
+    seedChatTree();
+    const toastError = vi.spyOn(toast, "error");
+    const toastMessage = vi.spyOn(toast, "message");
+    testState.deleteChatMutateAsync.mockResolvedValue({ outcome: "applied" });
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+    vanishRecord("agent-root");
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(testState.deleteChatMutateAsync).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "Cancel selection" }),
+      ).toBeNull();
+    });
+    expect(toastError).not.toHaveBeenCalled();
+    expect(toastMessage).not.toHaveBeenCalled();
+    toastError.mockRestore();
+    toastMessage.mockRestore();
+  });
+
+  it("keeps a selected descendant that vanished under a selected artifact in the dialog's count, unconfirmed", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    const toastError = vi.spyOn(toast, "error");
+    testState.deleteArtifactMutateAsync.mockImplementation(() =>
+      Promise.reject(forbidden("epic.deleteArtifact")),
+    );
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select artifacts" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(
+      screen.getByTestId("epic-sidebar-delete-selected-artifacts"),
+    );
+    expect(screen.getByText("Delete 2 selected artifacts?")).toBeTruthy();
+    vanishRecord("ticket-child");
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(toastError).toHaveBeenCalledTimes(1);
+    });
+    expect(toastError.mock.calls[0]?.[0]).toBe(
+      "Couldn't confirm all 2 selected artifacts were deleted. Check them and delete any that weren't. You don't have permission to do that.",
+    );
+    toastError.mockRestore();
+  });
+
+  it("enters artifact selection mode from cmd-click on a row", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.queryByTestId("epic-sidebar-select-spec-root")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-item-spec-root"), {
+      metaKey: true,
+    });
+
+    expect(
+      screen.getByTestId("epic-sidebar-select-spec-root").matches(":checked"),
+    ).toBe(true);
+    expect(
+      screen
+        .getByTestId("epic-sidebar-delete-selected-artifacts")
+        .matches(":disabled"),
+    ).toBe(false);
+  });
+
+  it("renders nested unread markers inside the artifact row title area", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.unreadArtifactIds = new Set(["ticket-child"]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const row = screen.getByTestId("epic-sidebar-item-ticket-child");
+    const marker = screen.getByTestId("epic-sidebar-unread-ticket-child");
+    expect(row.contains(marker)).toBe(true);
+    expect(marker.className).not.toContain("absolute");
+    expect(marker.getAttribute("data-unread-marker")).toBe("self");
+    // Solid bar (exact token, not the muted `bg-info/50` descendant class)
+    // for the artifact's own unread state.
+    expect(marker.classList.contains("bg-info")).toBe(true);
+    // An expanded, read parent shows no marker (its child carries its own bar).
+    expect(screen.queryByTestId("epic-sidebar-unread-spec-root")).toBeNull();
+  });
+
+  it("shows a descendant unread marker on a collapsed parent artifact", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.expandedIds = new Set<string>();
+    testState.unreadArtifactIds = new Set(["ticket-child"]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.queryByTestId("epic-sidebar-item-ticket-child")).toBeNull();
+    const marker = screen.getByTestId("epic-sidebar-unread-spec-root");
+    expect(
+      screen.getByTestId("epic-sidebar-item-spec-root").contains(marker),
+    ).toBe(true);
+    expect(marker.getAttribute("data-unread-marker")).toBe("descendant");
+    // A muted (not full-opacity) bar distinguishes "contains unread" from "is unread".
+    expect(marker.className).toContain("bg-info/50");
+  });
+
+  it("hides the descendant marker once the parent is expanded", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.expandedIds = new Set(["spec-root"]);
+    testState.unreadArtifactIds = new Set(["ticket-child"]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    // Expanded: the child is visible with its own marker and the parent shows
+    // none (no double-signal of the same unread artifact).
+    expect(
+      screen.getByTestId("epic-sidebar-unread-ticket-child"),
+    ).not.toBeNull();
+    expect(screen.queryByTestId("epic-sidebar-unread-spec-root")).toBeNull();
+  });
+
+  it("seeds the artifact read baseline once the snapshot is loaded", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(seedEpicArtifacts).toHaveBeenCalledWith(
+      EPIC_ID,
+      expect.arrayContaining([
+        expect.objectContaining({ id: "spec-root" }),
+        expect.objectContaining({ id: "ticket-child" }),
+      ]),
+    );
+  });
+
+  it("does not seed the read baseline before the snapshot is loaded", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.snapshotLoaded = false;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(seedEpicArtifacts).not.toHaveBeenCalled();
+  });
+
+  it("marks the active artifact read when it is the active tile", () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.activeArtifactId = "ticket-child";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(markRead).toHaveBeenCalledWith(EPIC_ID, "ticket-child", 1);
+  });
+
+  it("does not mark read when the active tile is not an artifact", () => {
+    seedChatTree();
+    testState.activePanelId = "chats";
+    testState.activeArtifactId = "chat-root";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(markRead).not.toHaveBeenCalled();
+  });
+
+  /** Enter select mode, check `ids`, open the delete dialog. */
+  function openChatDeleteDialog(ids: readonly string[]): void {
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    for (const id of ids) {
+      fireEvent.click(screen.getByTestId(`epic-sidebar-select-${id}`));
+    }
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+  }
+
+  /** Gives `agent-root` a child of its own, so two selected rows are parents. */
+  function nestUnderAgentRoot(): void {
+    const agentChild = treeNode(
+      "agent-child",
+      "agent-root",
+      "Nested terminal agent",
+      "terminal-agent",
+    );
+    testState.tree = {
+      ...testState.tree,
+      childrenByParent: {
+        ...testState.tree.childrenByParent,
+        "agent-root": ["agent-child"],
+      },
+      nodeById: { ...testState.tree.nodeById, "agent-child": agentChild },
+    };
+    testState.records = [...testState.records, recordFromNode(agentChild)];
+  }
+
+  /**
+   * Deleting an agent removes that one record: the agents nested under it are
+   * KEPT and redrawn at the top level. An agent row's own menu has always
+   * disclosed that; select mode deletes the same records and said only "This
+   * action cannot be undone.", so the reader got less warning for the same
+   * act, by the route that deletes MORE at once.
+   */
+  it("discloses the agent one selected parent promotes, as the row menu does", () => {
+    seedChatTree();
+
+    openChatDeleteDialog(["chat-root"]);
+
+    expect(
+      screen.getByText(
+        "This action cannot be undone. 1 agent nested under it will be kept and moved to the top level.",
+      ),
+    ).toBeTruthy();
+    // A promoted agent SURVIVES, so it must never reach the count paragraph:
+    // routing agent rows through the artifact arm would render "This will also
+    // delete 1 agent nested under it." here. A whole-subtree selection cannot
+    // witness that - the artifact arm subtracts the selection and answers with
+    // the same bare sentence - so the claim lives on this strict subset.
+    expect(screen.queryByTestId("confirm-cascade-meta")).toBeNull();
+  });
+
+  /** What survives, not a per-row sum - see `countPromotedAgentChildren`. */
+  it("says nothing about a child that is itself selected", () => {
+    seedChatTree();
+
+    openChatDeleteDialog(["chat-root", "chat-child"]);
+
+    expect(screen.getByText("This action cannot be undone.")).toBeTruthy();
+  });
+
+  /** Two parents: their children add up, and they are "them", not "it". */
+  it("adds up across selected parents and addresses them as them", () => {
+    seedChatTree();
+    nestUnderAgentRoot();
+
+    openChatDeleteDialog(["chat-root", "agent-root"]);
+
+    expect(
+      screen.getByText(
+        "This action cannot be undone. 2 agents nested under them will be kept and moved to the top level.",
+      ),
+    ).toBeTruthy();
+  });
+
+  /** Enter select mode, check `ids`, open the artifact delete dialog. */
+  function openArtifactDeleteDialog(ids: readonly string[]): void {
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select artifacts" }));
+    for (const id of ids) {
+      fireEvent.click(screen.getByTestId(`epic-sidebar-select-${id}`));
+    }
+    fireEvent.click(
+      screen.getByTestId("epic-sidebar-delete-selected-artifacts"),
+    );
+  }
+
+  /**
+   * The artifact half of the same disagreement: ONE selected spec, two routes
+   * to delete it, and select mode said only "This action cannot be undone."
+   * while the row menu beside it named the ticket. Asserted as the identical
+   * paragraph rather than as two similar strings, because "reads the same" is
+   * the claim.
+   */
+  it("gives one selected artifact the cascade count its own row menu gives", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(dropdownItem("delete-spec-root"));
+    const fromRowMenu = within(
+      await screen.findByTestId("confirm-destructive-dialog"),
+    ).getByTestId("confirm-cascade-meta").textContent;
+    cleanup();
+
+    openArtifactDeleteDialog(["spec-root"]);
+
+    expect(
+      within(
+        await screen.findByTestId("confirm-destructive-dialog"),
+      ).getByTestId("confirm-cascade-meta").textContent,
+    ).toBe(fromRowMenu);
+    expect(fromRowMenu).toBe("This will also delete 1 ticket nested under it.");
+  });
+
+  /**
+   * Both routes, because each reads the host's restore support through its
+   * own hook, and the row menu and select mode must not disagree about it.
+   */
+  it("offers the restore from both routes where the host serves it", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.deletedArtifactsAvailable = true;
+    const expected =
+      "You can bring it back from Deleted artifacts. Artifacts nested under it come back separately.";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(dropdownItem("delete-spec-root"));
+    expect(
+      within(await screen.findByTestId("confirm-destructive-dialog")).getByText(
+        expected,
+      ),
+    ).toBeTruthy();
+    cleanup();
+
+    openArtifactDeleteDialog(["spec-root"]);
+    expect(
+      within(await screen.findByTestId("confirm-destructive-dialog")).getByText(
+        expected,
+      ),
+    ).toBeTruthy();
+  });
+
+  /**
+   * The delete acts on the RECORDS, not on the view, so a promoted agent the
+   * archive filter is hiding is still promoted and still counted. Understating
+   * it would be the panel's filter quietly deciding what the reader is told
+   * about rows it is only hiding.
+   */
+  it("counts a promoted agent the archive filter is hiding", () => {
+    seedChatTree();
+    testState.archivedIds = ["chat-child"];
+
+    openChatDeleteDialog(["chat-root"]);
+
+    expect(screen.queryByTestId("epic-sidebar-item-chat-child")).toBeNull();
+    expect(
+      screen.getByText(
+        "This action cannot be undone. 1 agent nested under it will be kept and moved to the top level.",
+      ),
+    ).toBeTruthy();
+  });
+
+  /**
+   * Before the chat record list answers - and a transient failure leaves it
+   * unanswered - a persisted nested chat can still be absent from the tree, so
+   * a number read off it would be low. The sentence names the consequence and
+   * states none, and the delete stays available: refusing a delete on a row
+   * that is visible and selectable, with a working row menu beside it, is the
+   * worse failure.
+   */
+  it("states no agent count while the nested chats have not all arrived", () => {
+    seedChatTree();
+    testState.chatRecordListAuthoritative = false;
+
+    openChatDeleteDialog(["chat-root"]);
+
+    expect(
+      screen.getByText(
+        "This action cannot be undone. Any agents nested under it will be kept and moved to the top level.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByTestId("confirm-action").matches(":disabled")).toBe(
+      false,
+    );
+  });
+
+  /**
+   * Answered chats say nothing about terminal agents, which arrive on their
+   * own list. Here that list has not answered, so the tree holds no children
+   * for `agent-root` while a persisted one can exist, and a count of zero would
+   * disarm the very sentence that exists for this row. Row menu and select mode
+   * are both asked, because each reads the flags through its own subscription.
+   */
+  it.each([
+    [
+      "select mode",
+      (): void => {
+        openChatDeleteDialog(["agent-root"]);
+      },
+    ],
+    [
+      "the row menu",
+      (): void => {
+        render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+        fireEvent.click(dropdownItem("delete-agent-root"));
+      },
+    ],
+  ])(
+    "states no agent count from %s while only the terminal-agent list is unanswered",
+    (_route, openDialog) => {
+      seedChatTree();
+      testState.chatRecordListAuthoritative = true;
+      testState.tuiAgentRecordListAuthoritative = false;
+
+      openDialog();
+
+      expect(
+        screen.getByText(
+          "This action cannot be undone. Any agents nested under it will be kept and moved to the top level.",
+        ),
+      ).toBeTruthy();
+      expect(screen.getByTestId("confirm-action").matches(":disabled")).toBe(
+        false,
+      );
+    },
+  );
+
+  /** The other half of that AND: both answered, so the tree's count stands. */
+  it("states the count once the terminal-agent child has arrived with its list", () => {
+    seedChatTree();
+    nestUnderAgentRoot();
+
+    openChatDeleteDialog(["agent-root"]);
+
+    expect(
+      screen.getByText(
+        "This action cannot be undone. 1 agent nested under it will be kept and moved to the top level.",
+      ),
+    ).toBeTruthy();
+  });
+
+  /**
+   * The artifact arm does NOT take that readiness answer. An artifact's
+   * subtree is artifacts (the projector is family-separated) and artifacts are
+   * doc-sourced, so the agent lists have nothing to say about this count - and
+   * the signals are independent, so hedging here would withhold a known count
+   * for as long as either RPC is slow or failing, on every artifact row,
+   * including childless ones.
+   */
+  it("states the artifact count whatever the agent record lists have answered", async () => {
+    seedArtifactTree();
+    testState.activePanelId = "artifacts";
+    testState.chatRecordListAuthoritative = false;
+    testState.tuiAgentRecordListAuthoritative = false;
+
+    openArtifactDeleteDialog(["spec-root"]);
+    const dialog = await screen.findByTestId("confirm-destructive-dialog");
+
+    expect(within(dialog).getByTestId("confirm-cascade-meta").textContent).toBe(
+      "This will also delete 1 ticket nested under it.",
+    );
+    expect(dialog.textContent).not.toContain("Anything nested under");
+  });
+});
+
+/**
+ * The leading icon's status kinds, in the lattice's own precedence order.
+ *
+ * Status lives on the LEADING icon: the row's trailing slot was a status chip
+ * until the single-line redesign removed it, leaving that slot to the relative
+ * last-activity time and the archive/menu controls that replace it on hover.
+ * These ids are `ChatProgressIcon`'s (`chat-sidebar-spinner` prefix + the tone
+ * / activity id from `NotificationIndicatorIcon`).
+ */
+const LEADING_STATUS_KINDS = [
+  "failure",
+  "interview",
+  "approval",
+  "activity",
+  "background-activity",
+  "done",
+] as const;
+
+/**
+ * Which of those kinds a chat row is currently showing.
+ *
+ * Returned as a LIST rather than asserted one at a time so a precedence step
+ * proves the losing kinds are gone, not merely that the winner arrived - and so
+ * an idle row is `[]` rather than a pile of separate `queryByTestId` nulls.
+ */
+function leadingStatusKinds(nodeId: string): readonly string[] {
+  return LEADING_STATUS_KINDS.filter(
+    (kind) =>
+      screen.queryByTestId(`chat-sidebar-spinner-${kind}-${nodeId}`) !== null,
+  );
+}
+
+/**
+ * The `data-status-glyph` kind drawn inside a leading status testid, for the
+ * sidebar tree's rows (the shared vocabulary, which every surface now
+ * draws - only a tone the glyph set has no shape for keeps a lucide icon).
+ */
+function statusGlyphKind(testId: string): string | null {
+  return (
+    screen
+      .getByTestId(testId)
+      .closest("[data-status-glyph]")
+      ?.getAttribute("data-status-glyph") ?? null
+  );
+}
+
+/**
+ * The hover label attached to `el`. Leaf tooltips mount on hover; the
+ * `@/components/ui/tooltip` mock then renders content inline as a sibling of
+ * the trigger.
+ */
+function tooltipTextIn(el: HTMLElement): string | null {
+  const testId = el.getAttribute("data-testid");
+  vi.useFakeTimers();
+  fireEvent.pointerEnter(el, { pointerType: "mouse", buttons: 0 });
+  act(() => {
+    vi.advanceTimersByTime(150);
+  });
+  vi.useRealTimers();
+  const current = testId === null ? el : screen.getByTestId(testId);
+  const tip = current.parentElement?.querySelector('[role="tooltip"]') ?? null;
+  return tip === null ? null : tip.textContent;
+}
+
+/**
+ * A row's read-only lock, which `ChatProgressIcon` renders in the IDLE slot -
+ * so it appears only once no attention tone, activity tier or unread completion
+ * has claimed the icon. Scoped to the row so a sibling's lock cannot satisfy it.
+ */
+function readOnlyLock(nodeId: string): HTMLElement | null {
+  const row = screen.queryByTestId(`epic-sidebar-item-${nodeId}`);
+  if (row === null) return null;
+  return within(row).queryByRole("status", { name: "Read-only agent" });
+}
+
+/** The row's trailing relative last-activity time. */
+function idleTime(nodeId: string): HTMLElement | null {
+  const row = screen.queryByTestId(`epic-sidebar-item-${nodeId}`);
+  if (row === null) return null;
+  return within(row).queryByTestId("chat-row-idle-time");
+}
+
+describe("chat descendant status rollup", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set<string>();
+    testState.tree = {
+      rootIds: [],
+      childrenByParent: {},
+      nodeById: {},
+    };
+    testState.records = [];
+    testState.indicatorChats = {};
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    testState.chatFilterOrigin = "all";
+  });
+
+  function seedNestedChatTree(): void {
+    const chatRoot = treeNode("chat-root", null, "Root chat", "chat");
+    const chatChild = treeNode("chat-child", "chat-root", "Child chat", "chat");
+    const chatGrandchild = treeNode(
+      "chat-grandchild",
+      "chat-child",
+      "Grandchild chat",
+      "chat",
+    );
+    const agentChild = treeNode(
+      "agent-child",
+      "chat-root",
+      "Terminal agent",
+      "terminal-agent",
+    );
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set<string>();
+    testState.tree = {
+      rootIds: ["chat-root"],
+      childrenByParent: {
+        "chat-root": ["chat-child", "agent-child"],
+        "chat-child": ["chat-grandchild"],
+      },
+      nodeById: {
+        "chat-root": chatRoot,
+        "chat-child": chatChild,
+        "chat-grandchild": chatGrandchild,
+        "agent-child": agentChild,
+      },
+    };
+    testState.records = [chatRoot, chatChild, chatGrandchild, agentChild].map(
+      recordFromNode,
+    );
+  }
+
+  function indicator(
+    overrides: Partial<TestIndicatorState>,
+  ): TestIndicatorState {
+    return {
+      unreadFailure: false,
+      pendingFork: false,
+      pendingApproval: false,
+      pendingInterview: false,
+      unreadDone: false,
+      ...overrides,
+    };
+  }
+
+  // The fork indicator is an OBSERVATION now, not an entry point: a
+  // publication fork resolves itself and the user is told afterwards by a
+  // notification, so clicking the glyph opens nothing. Pinned as a click that
+  // selects the row like any other part of it, because the previous behaviour
+  // (swallow the click, open an arbitration dialog) is exactly what the
+  // demolition removed and a silent no-op glyph would read as a bug.
+  it("shows the fork glyph as a status, with no arbitration to click into", () => {
+    seedNestedChatTree();
+    testState.indicatorChats = {
+      "chat-root": indicator({ pendingFork: true }),
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const glyph = screen.getByTestId("chat-sidebar-spinner-fork-chat-root");
+    // The indicator survives - an open episode is real state and worth showing
+    // while it lasts - but it is an OBSERVATION now. The affordance that made
+    // it an entry point into the fork dialog is gone, and both halves of that
+    // are asserted structurally rather than through a click: the delegation
+    // hook the row used to read, and the pointer affordance that advertised
+    // it. A click assertion alone would pass against a handler that silently
+    // did nothing.
+    const span = glyph.parentElement;
+    expect(span?.getAttribute("data-notification-indicator-action")).toBeNull();
+    expect(span?.className).not.toContain("cursor-pointer");
+
+    fireEvent.click(glyph);
+    expect(useAppDialogStore.getState().activeDialog).toBeNull();
+  });
+
+  it("bubbles a hidden grandchild's needs-attention status onto the collapsed root", () => {
+    seedNestedChatTree();
+    seedLocalChatFailure("chat-grandchild");
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    // The grandchild's row is not even mounted, yet its status reaches the
+    // collapsed root as the rollup badge.
+    expect(
+      screen.queryByTestId("epic-sidebar-item-chat-grandchild"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("chat-descendant-status-failure-chat-root"),
+    ).toBeTruthy();
+
+    // Expanding the root moves the rollup down to the still-collapsed child.
+    testState.expandedIds = new Set(["chat-root"]);
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.queryByTestId("chat-descendant-status-failure-chat-root"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("chat-descendant-status-failure-chat-child"),
+    ).toBeTruthy();
+
+    // Fully expanded: the grandchild presents its own status, no rollups left.
+    testState.expandedIds = new Set(["chat-root", "chat-child"]);
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.queryByTestId("chat-descendant-status-failure-chat-child"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("epic-sidebar-item-chat-grandchild"),
+    ).toBeTruthy();
+  });
+
+  it("rolls an active terminal-agent descendant up as running, outranked by failure", () => {
+    seedNestedChatTree();
+    testState.activeAgentIds = new Set(["agent-child"]);
+    testState.indicatorChats = {
+      "chat-grandchild": indicator({ unreadDone: true }),
+    };
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    // Running outranks unread completion...
+    expect(
+      screen.getByTestId("chat-descendant-status-running-chat-root"),
+    ).toBeTruthy();
+
+    // ...and a failure anywhere below outranks running.
+    testState.indicatorChats = {
+      "chat-grandchild": indicator({ unreadDone: true }),
+    };
+    act(() => {
+      seedLocalChatFailure("chat-child");
+    });
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.queryByTestId("chat-descendant-status-running-chat-root"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("chat-descendant-status-failure-chat-root"),
+    ).toBeTruthy();
+  });
+
+  it("surfaces a terminal-agent's chat-scoped unread-done: rollup while collapsed, own row indicator when expanded", () => {
+    seedNestedChatTree();
+    testState.tuiHarnessIds = { "agent-child": "codex" };
+    // TUI `agent.stopped` rows are chat-scoped to the agent id, so the
+    // indicator entry lands under the terminal-agent's own id.
+    testState.indicatorChats = {
+      "agent-child": indicator({ unreadDone: true }),
+    };
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    // Hidden behind the collapsed root, the agent's completion rolls up.
+    expect(
+      screen.getByTestId("chat-descendant-status-done-chat-root"),
+    ).toBeTruthy();
+
+    // Expanded, the agent row wears its own done indicator instead of the
+    // harness brand mark.
+    testState.expandedIds = new Set(["chat-root"]);
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.queryByTestId("chat-descendant-status-done-chat-root"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("terminal-agent-sidebar-done-agent-child"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("sidebar-agent-harness-agent-child"),
+    ).toBeNull();
+  });
+
+  it("lets a hidden failure take the slot from a merely-running parent, with a breakdown tooltip", () => {
+    seedNestedChatTree();
+    testState.activeAgentIds = new Set(["chat-root", "agent-child"]);
+    seedLocalChatFailure("chat-grandchild");
+    testState.indicatorChats = {
+      "chat-child": indicator({ unreadDone: true }),
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    // The parent is running (rank below failure), so the nested failure owns
+    // the icon slot - rendered as the muted variant in place of the parent's
+    // own icon, with the tooltip carrying the full nested breakdown.
+    const nested = screen.getByTestId(
+      "chat-descendant-status-failure-chat-root",
+    );
+    expect(tooltipTextIn(nested)).toBe(
+      "Nested: 1 needs attention · 1 running · 1 completed",
+    );
+    // The nested rollup owns the slot, so the parent's own spinner is absent.
+    expect(leadingStatusKinds("chat-root")).toEqual([]);
+  });
+
+  it("keeps the slot with the parent when its own status is at least as urgent", () => {
+    seedNestedChatTree();
+    // Parent's own failure vs a nested running agent: parent outranks.
+    testState.activeAgentIds = new Set(["agent-child"]);
+    seedLocalChatFailure("chat-root");
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.queryByTestId("chat-descendant-status-running-chat-root"),
+    ).toBeNull();
+    expect(leadingStatusKinds("chat-root")).toEqual(["failure"]);
+
+    // Equal tiers: the tie goes to the parent's own (solid) presentation.
+    act(() => {
+      clearLocalChatFailure("chat-root");
+    });
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    testState.indicatorChats = {
+      "chat-root": indicator({ pendingApproval: true }),
+      "chat-grandchild": indicator({ pendingApproval: true }),
+    };
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.queryByTestId("chat-descendant-status-approval-chat-root"),
+    ).toBeNull();
+    expect(leadingStatusKinds("chat-root")).toEqual(["approval"]);
+  });
+
+  it("distinguishes a background-only descendant from one mid-turn", () => {
+    seedNestedChatTree();
+    // The grandchild is non-idle, but only because a background task
+    // (run_in_background / Monitor / a scheduled wakeup) is keeping it alive -
+    // the agent itself is not executing. Before the awareness tier existed
+    // this was indistinguishable from a live turn.
+    testState.activeAgentIds = new Set(["chat-grandchild"]);
+    testState.activityTierById = new Map([["chat-grandchild", "background"]]);
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    const backgroundIcon = screen.getByTestId(
+      "chat-descendant-status-background-chat-root",
+    );
+    expect(backgroundIcon).toBeTruthy();
+    expect(backgroundIcon.getAttribute("class")).toContain("opacity-60");
+    expect(
+      backgroundIcon.querySelector('[data-status-glyph="background"]'),
+    ).not.toBeNull();
+    expect(
+      screen.queryByTestId("chat-descendant-status-running-chat-root"),
+    ).toBeNull();
+
+    // Same descendant, now genuinely mid-turn: the busier tier takes the slot.
+    testState.activityTierById = new Map([["chat-grandchild", "turn"]]);
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.getByTestId("chat-descendant-status-running-chat-root"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("chat-descendant-status-background-chat-root"),
+    ).toBeNull();
+  });
+
+  it("ranks a descendant's turn above a descendant's background work", () => {
+    seedNestedChatTree();
+    testState.activeAgentIds = new Set(["chat-child", "chat-grandchild"]);
+    testState.activityTierById = new Map([
+      ["chat-child", "background"],
+      ["chat-grandchild", "turn"],
+    ]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    const icon = screen.getByTestId("chat-descendant-status-running-chat-root");
+    expect(icon).toBeTruthy();
+    // The tooltip breaks the aggregate down across both tiers.
+    expect(tooltipTextIn(icon)).toContain("1 running");
+    expect(tooltipTextIn(icon)).toContain("1 in background");
+  });
+
+  it("lets a descendant's turn outrank the parent's own background work", () => {
+    seedNestedChatTree();
+    // Parent is non-idle but only in background; a hidden descendant is
+    // actually mid-turn, so the busier nested tier must win the slot rather
+    // than being masked by the parent's own (lower) tier.
+    testState.activeAgentIds = new Set(["chat-root", "chat-grandchild"]);
+    testState.activityTierById = new Map([
+      ["chat-root", "background"],
+      ["chat-grandchild", "turn"],
+    ]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.getByTestId("chat-descendant-status-running-chat-root"),
+    ).toBeTruthy();
+  });
+
+  it("shows an unread-done rollup and nothing when descendants are idle", () => {
+    seedNestedChatTree();
+    testState.indicatorChats = {
+      "chat-child": indicator({ unreadDone: true }),
+    };
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.getByTestId("chat-descendant-status-done-chat-root"),
+    ).toBeTruthy();
+
+    testState.indicatorChats = {};
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.queryByTestId("chat-descendant-status-done-chat-root"),
+    ).toBeNull();
+  });
+
+  it("ranks interview above approval, both outranked by failure", () => {
+    seedNestedChatTree();
+    testState.indicatorChats = {
+      "chat-child": indicator({ pendingApproval: true }),
+      "chat-grandchild": indicator({ pendingInterview: true }),
+    };
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.getByTestId("chat-descendant-status-interview-chat-root"),
+    ).toBeTruthy();
+
+    act(() => {
+      seedLocalChatFailure("chat-child");
+    });
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.queryByTestId("chat-descendant-status-interview-chat-root"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("chat-descendant-status-failure-chat-root"),
+    ).toBeTruthy();
+  });
+
+  it("excludes a filter-hidden subtree from the rollup while keeping a visible descendant's status", () => {
+    seedNestedChatTree();
+    // GUI-only origin filter hides the terminal-agent descendant entirely -
+    // its active-run state must not leak into the rollup as "running" - while
+    // the chat subtree (still reachable under the filter) keeps surfacing.
+    testState.chatFilterOrigin = "gui";
+    testState.activeAgentIds = new Set(["agent-child"]);
+    seedLocalChatFailure("chat-grandchild");
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.queryByTestId("chat-descendant-status-running-chat-root"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("chat-descendant-status-failure-chat-root"),
+    ).toBeTruthy();
+  });
+});
+
+describe("chat row leading status icon", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set<string>();
+    testState.tree = { rootIds: [], childrenByParent: {}, nodeById: {} };
+    testState.records = [];
+    testState.indicatorChats = {};
+    testState.indicatorChatsByHost = {};
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    testState.rowHostId = "host-1";
+  });
+
+  function indicator(
+    overrides: Partial<TestIndicatorState>,
+  ): TestIndicatorState {
+    return {
+      unreadFailure: false,
+      pendingFork: false,
+      pendingApproval: false,
+      pendingInterview: false,
+      unreadDone: false,
+      ...overrides,
+    };
+  }
+
+  it("uses a retained row's owner host for its Done glyph", () => {
+    seedChatTree();
+    testState.rowHostId = "offline-owner-host";
+    testState.indicatorChatsByHost = {
+      "host-1": {},
+      "offline-owner-host": {
+        "chat-child": indicator({ unreadDone: true }),
+      },
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(leadingStatusKinds("chat-child")).toEqual(["done"]);
+  });
+
+  it("walks a leaf chat row through every leading status icon in precedence order", () => {
+    seedChatTree();
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    // Idle: no attention state, no activity tier - the icon falls back to the
+    // plain chat glyph and the trailing slot carries the relative time.
+    expect(leadingStatusKinds("chat-child")).toEqual([]);
+    expect(idleTime("chat-child")).toBeTruthy();
+
+    // Unread-done outranks idle.
+    testState.indicatorChats = {
+      "chat-child": indicator({ unreadDone: true }),
+    };
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(leadingStatusKinds("chat-child")).toEqual(["done"]);
+    // The tree draws every state through the shared glyph vocabulary,
+    // not a surface-specific tone icon.
+    expect(statusGlyphKind("chat-sidebar-spinner-done-chat-child")).toBe(
+      "done",
+    );
+
+    // Background activity outranks unread-done.
+    testState.activeAgentIds = new Set(["chat-child"]);
+    testState.activityTierById = new Map([["chat-child", "background"]]);
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(leadingStatusKinds("chat-child")).toEqual(["background-activity"]);
+    expect(
+      statusGlyphKind("chat-sidebar-spinner-background-activity-chat-child"),
+    ).toBe("background");
+
+    // A running turn outranks background activity.
+    testState.activityTierById = new Map([["chat-child", "turn"]]);
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(leadingStatusKinds("chat-child")).toEqual(["activity"]);
+    expect(statusGlyphKind("chat-sidebar-spinner-activity-chat-child")).toBe(
+      "running",
+    );
+
+    // A pending approval outranks a running turn.
+    testState.indicatorChats = {
+      "chat-child": indicator({ pendingApproval: true }),
+    };
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(leadingStatusKinds("chat-child")).toEqual(["approval"]);
+    expect(statusGlyphKind("chat-sidebar-spinner-approval-chat-child")).toBe(
+      "approval",
+    );
+
+    // A pending interview outranks a pending approval.
+    testState.indicatorChats = {
+      "chat-child": indicator({
+        pendingApproval: true,
+        pendingInterview: true,
+      }),
+    };
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(leadingStatusKinds("chat-child")).toEqual(["interview"]);
+    expect(statusGlyphKind("chat-sidebar-spinner-interview-chat-child")).toBe(
+      "interview",
+    );
+
+    // A failure outranks everything, including a pending interview.
+    testState.indicatorChats = {
+      "chat-child": indicator({
+        pendingInterview: true,
+      }),
+    };
+    act(() => {
+      seedLocalChatFailure("chat-child");
+    });
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(leadingStatusKinds("chat-child")).toEqual(["failure"]);
+    expect(statusGlyphKind("chat-sidebar-spinner-failure-chat-child")).toBe(
+      "failure",
+    );
+
+    // Through all of it the trailing slot keeps the relative time: the icon
+    // carries status, the slot carries time, and neither displaces the other.
+    expect(idleTime("chat-child")).toBeTruthy();
+  });
+
+  it("splits a TUI terminal-agent row's own icon by activity tier, as the rollup already does", () => {
+    seedChatTree();
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    // With no notification state for this agent the icon only reaches the
+    // tier / idle arms: idle wears the harness brand.
+    const agentRow = screen.getByTestId("epic-sidebar-item-agent-root");
+    expect(
+      within(agentRow).queryByTestId(
+        "terminal-agent-sidebar-activity-agent-root",
+      ),
+    ).toBeNull();
+    expect(idleTime("agent-root")).toBeTruthy();
+
+    testState.activeAgentIds = new Set(["agent-root"]);
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.getByTestId("terminal-agent-sidebar-activity-agent-root"),
+    ).toBeTruthy();
+
+    // Background-only work reads calm, not busy. Without this split the agent's
+    // own row wore the turn spinner while its collapsed parent rendered the
+    // background glyph for that same agent - two surfaces disagreeing about one
+    // fact. The trailing chip used to carry the tier; the icon carries it now.
+    testState.activityTierById = new Map([["agent-root", "background"]]);
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.getByTestId(
+        "terminal-agent-sidebar-background-activity-agent-root",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("terminal-agent-sidebar-activity-agent-root"),
+    ).toBeNull();
+  });
+});
+
+describe("unreachable-owner chat rows (tree lock + published-copy routing)", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set<string>();
+    testState.tree = { rootIds: [], childrenByParent: {}, nodeById: {} };
+    testState.records = [];
+    testState.indicatorChats = {};
+    testState.indicatorChatsByHost = {};
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    testState.permissionRole = "owner";
+    testState.rowHostId = "host-1";
+    testState.rowHostReachability = "reachable";
+    testState.preparedOpenRefs = [];
+  });
+
+  it("locks a chat row whose owner host is unreachable, matching the cloud rows", () => {
+    seedChatTree();
+    testState.rowHostId = "host-dead";
+    testState.rowHostReachability = "unreachable";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.getByTestId("epic-sidebar-tree-lock-chat-root")).toBeTruthy();
+  });
+
+  it("keeps reachable-owner rows lock-free", () => {
+    seedChatTree();
+    testState.rowHostId = "host-1";
+    testState.rowHostReachability = "reachable";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.queryByTestId("epic-sidebar-tree-lock-chat-root")).toBeNull();
+  });
+
+  it("routes an unreachable-owner row's click to the PUBLISHED COPY, not a live tab", () => {
+    seedChatTree();
+    testState.rowHostId = "host-dead";
+    testState.rowHostReachability = "unreachable";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(screen.getByTestId("epic-sidebar-item-chat-root"));
+
+    expect(testState.preparedOpenRefs).toHaveLength(1);
+    expect(testState.preparedOpenRefs[0].type).toBe("published-chat");
+  });
+
+  it("routes a reachable-owner row's click to a LIVE tab bound to the owner", () => {
+    seedChatTree();
+    testState.rowHostId = "host-b";
+    testState.rowHostReachability = "reachable";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(screen.getByTestId("epic-sidebar-item-chat-root"));
+
+    expect(testState.preparedOpenRefs).toHaveLength(1);
+    expect(testState.preparedOpenRefs[0].type).toBe("chat");
+    expect(testState.preparedOpenRefs[0].hostId).toBe("host-b");
+  });
+});
+
+describe("chat row read-only arm", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set<string>();
+    testState.tree = { rootIds: [], childrenByParent: {}, nodeById: {} };
+    testState.records = [];
+    testState.indicatorChats = {};
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    testState.permissionRole = "owner";
+  });
+
+  // The task's role no longer locks a row: every task role may write, so the
+  // lock is the chat's own (its session's access snapshot) and nothing else.
+  it("shows the idle glyph, not a read-only lock, for a chat row when the task grants no role", () => {
+    seedChatTree();
+    testState.permissionRole = null;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(readOnlyLock("chat-child")).toBeNull();
+    const row = screen.getByTestId("epic-sidebar-item-chat-child");
+    expect(row.querySelector(".lucide-message-square")).not.toBeNull();
+    expect(idleTime("chat-child")).toBeTruthy();
+  });
+});
+
+describe("status survives selection mode and rename", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set<string>();
+    testState.tree = { rootIds: [], childrenByParent: {}, nodeById: {} };
+    testState.records = [];
+    testState.indicatorChats = {};
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+  });
+
+  function seedSelectionParityTree(): void {
+    const chatRoot = treeNode("chat-root", null, "Root chat", "chat");
+    const chatChild = treeNode("chat-child", "chat-root", "Child chat", "chat");
+    const chatGrandchild = treeNode(
+      "chat-grandchild",
+      "chat-child",
+      "Grandchild chat",
+      "chat",
+    );
+    testState.tree = {
+      rootIds: ["chat-root"],
+      childrenByParent: {
+        "chat-root": ["chat-child"],
+        "chat-child": ["chat-grandchild"],
+      },
+      nodeById: {
+        "chat-root": chatRoot,
+        "chat-child": chatChild,
+        "chat-grandchild": chatGrandchild,
+      },
+    };
+    testState.records = [chatRoot, chatChild, chatGrandchild].map(
+      recordFromNode,
+    );
+    // chat-root expanded (its own chip renders); chat-child collapsed (rolls
+    // its hidden grandchild's status up instead).
+    testState.expandedIds = new Set(["chat-root"]);
+  }
+
+  it("keeps a row's own status AND a collapsed parent's rollup visible in bulk-selection mode", () => {
+    seedSelectionParityTree();
+    testState.activeAgentIds = new Set(["chat-root"]);
+    seedLocalChatFailure("chat-grandchild");
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    // Sanity check before entering selection mode: chat-root shows its own
+    // turn spinner and chat-child shows the hidden grandchild's rollup.
+    expect(leadingStatusKinds("chat-root")).toEqual(["activity"]);
+    expect(
+      screen.getByTestId("chat-descendant-status-failure-chat-child"),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+
+    // Both signals survive the switch to the selection-mode <label> row, which
+    // grows a checkbox between the chevron and the leading icon.
+    expect(leadingStatusKinds("chat-root")).toEqual(["activity"]);
+    expect(
+      screen.getByTestId("chat-descendant-status-failure-chat-child"),
+    ).toBeTruthy();
+  });
+
+  it("shows only the row's own status while renaming, never the collapsed-parent rollup", () => {
+    seedSelectionParityTree();
+    seedLocalChatFailure("chat-grandchild");
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    // Sanity check: chat-child is collapsed and rolls the grandchild's
+    // failure up while not being renamed.
+    expect(
+      screen.getByTestId("chat-descendant-status-failure-chat-child"),
+    ).toBeTruthy();
+
+    openRowMore("chat-child");
+    fireEvent.click(dropdownItem("rename-chat-child"));
+
+    const input = screen.getByTestId("epic-sidebar-rename-input-chat-child");
+    // Renaming shows chat-child's OWN status - idle, since it has no attention
+    // state of its own - so the plain chat glyph, not the nested rollup. The
+    // rename row swaps the whole display row out, hence resolving it from the
+    // input's known ancestry rather than from `epic-sidebar-item-*`.
+    const renameRow = input.parentElement?.parentElement?.parentElement;
+    expect(renameRow).toBeTruthy();
+    expect(renameRow?.querySelector(".lucide-message-square")).toBeTruthy();
+    expect(leadingStatusKinds("chat-child")).toEqual([]);
+    expect(
+      screen.queryByTestId("chat-descendant-status-failure-chat-child"),
+    ).toBeNull();
+  });
+});
+
+const createdSessionHandles: ChatSessionStoreHandle[] = [];
+
+/**
+ * A real chat session store, standing in for an OPEN chat. Module-scope because
+ * two describes need one: the leading icon's authority order, and the archive
+ * gate - which reads the same store and must agree with the icon.
+ */
+function createSessionHandle(chatId: string): ChatSessionStoreHandle {
+  const handle = createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
+    hostId: "host-a",
+    epicId: EPIC_ID,
+    chatId,
+    userId: null,
+    onAuthError: null,
+    onProviderAuthError: null,
+    wakeTransport: null,
+    streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+    streamClientFactory: () => ({
+      sendAction: () => undefined,
+      sameTurnSteeringProtocolSupported: () => false,
+      draftBlobBridgeSupported: () => false,
+      requestTranscriptRange: () => undefined,
+      requestResnapshot: () => undefined,
+      close: () => undefined,
+    }),
+  });
+  createdSessionHandles.push(handle);
+  return handle;
+}
+
+function disposeCreatedSessionHandles(): void {
+  for (const handle of createdSessionHandles.splice(0)) {
+    handle.dispose();
+  }
+}
+
+function runningShell(chatId: string): ManagedCommand {
+  return {
+    id: `${chatId}-shell`,
+    monitoring: true,
+    description: "dev server",
+    command: "tail -f deploy.log",
+    cwd: "/work/repo",
+    cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
+    status: { state: "running", pid: 4242, startedAtMs: 1 },
+    chatId,
+    relaunchOnHostRestart: false,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+  };
+}
+
+describe("chat status icon session authority (open session vs awareness)", () => {
+  const MONITOR_ITEM = {
+    taskId: "task-1",
+    kind: "monitor" as const,
+    title: "Monitor",
+    blockId: "block-1",
+    parentTaskId: null,
+    scheduledFor: null,
+  };
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set<string>();
+    testState.tree = { rootIds: [], childrenByParent: {}, nodeById: {} };
+    testState.records = [];
+    testState.indicatorChats = {};
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    testState.sessionHandleByChatId = {};
+    disposeCreatedSessionHandles();
+  });
+
+  it("lets an open session's background tri-state override an awareness tier of turn, then falls back to awareness once the session closes", () => {
+    seedChatTree();
+    // Awareness alone would read "turn" (the default tier for an active id) -
+    // the scenario where the host doesn't publish the turn-awareness field
+    // and only a background task keeps the chat non-idle.
+    testState.activeAgentIds = new Set(["chat-child"]);
+
+    const handle = createSessionHandle("chat-child");
+    handle.store.setState({
+      runStatus: "running",
+      turnInProgress: undefined,
+      activeTurn: null,
+      backgroundItems: [MONITOR_ITEM],
+    });
+    testState.sessionHandleByChatId = { "chat-child": handle };
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(leadingStatusKinds("chat-child")).toEqual(["background-activity"]);
+
+    // No open session any more - falls back to the awareness tier ("turn").
+    testState.sessionHandleByChatId = {};
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(leadingStatusKinds("chat-child")).toEqual(["activity"]);
+  });
+
+  it("stays neutral while the open session's access snapshot is unknown, so no read-only flash precedes it", () => {
+    seedChatTree();
+    const handle = createSessionHandle("chat-child");
+    testState.sessionHandleByChatId = { "chat-child": handle };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    // Access snapshot not arrived yet (null) - must not flash the lock.
+    expect(leadingStatusKinds("chat-child")).toEqual([]);
+    expect(readOnlyLock("chat-child")).toBeNull();
+    expect(
+      screen
+        .getByTestId("epic-sidebar-item-chat-child")
+        .querySelector(".lucide-message-square"),
+    ).toBeTruthy();
+  });
+
+  it("locks a chat row once the session's access snapshot resolves to a non-owner role", () => {
+    seedChatTree();
+    const handle = createSessionHandle("chat-child");
+    handle.store.setState({
+      access: { role: "viewer", ownerUserId: "owner-1", canAct: false },
+    });
+    testState.sessionHandleByChatId = { "chat-child": handle };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(readOnlyLock("chat-child")).toBeTruthy();
+    // Exactly ONE announced read-only status in the whole tree. There used to
+    // be two candidates - the leading icon's lock and a trailing status chip -
+    // which is why the leading slot was `aria-hidden`. The chip is gone, the
+    // slot is announced again, and this guards the count either way.
+    expect(
+      screen.getAllByRole("status", { name: "Read-only agent" }),
+    ).toHaveLength(1);
+  });
+});
+
+describe("chat row idle-time compact format", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    testState.tree = { rootIds: [], childrenByParent: {}, nodeById: {} };
+    testState.records = [];
+  });
+
+  function seedIdleTimeTree(updatedAt: number): void {
+    const chatRoot: TestTreeNode = {
+      id: "chat-root",
+      parentId: null,
+      title: "Root chat",
+      type: "chat",
+      status: null,
+      createdAt: 1,
+      updatedAt,
+    };
+    testState.tree = {
+      rootIds: ["chat-root"],
+      childrenByParent: {},
+      nodeById: { "chat-root": chatRoot },
+    };
+    testState.records = [chatRoot].map(recordFromNode);
+  }
+
+  it("renders the tight compact form ('now' / '23m' / '3h' / '6d' / short date) instead of the verbose 'ago' phrasing", () => {
+    const now = Date.now();
+
+    seedIdleTimeTree(now);
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(idleTime("chat-root")?.textContent).toBe("now");
+
+    seedIdleTimeTree(now - 23 * 60_000);
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(idleTime("chat-root")?.textContent).toBe("23m");
+
+    seedIdleTimeTree(now - 3 * 60 * 60_000);
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(idleTime("chat-root")?.textContent).toBe("3h");
+
+    seedIdleTimeTree(now - 6 * 24 * 60 * 60_000);
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    const sixDays = idleTime("chat-root");
+    expect(sixDays?.textContent).toBe("6d");
+    expect(sixDays?.textContent).not.toContain("ago");
+
+    const farPast = now - 40 * 24 * 60 * 60_000;
+    seedIdleTimeTree(farPast);
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    const shortDate = idleTime("chat-root");
+    expect(shortDate?.textContent).toBe(
+      new Date(farPast).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      }),
+    );
+    expect(shortDate?.textContent).not.toBe("Yesterday");
+  });
+});
+
+/**
+ * Leading identity icon on chat / terminal-agent sidebar rows.
+ *
+ * The row is a horizontal flex (`items-center`): chevron → leading icon slot →
+ * text column → trailing time. Chat rows always wear the chat glyph (never a
+ * harness brand); idle TUI rows wear the harness brand + surface subscript (or
+ * bot fallback / spinner when active).
+ *
+ * This icon is also the row's ONLY status surface since the trailing chip was
+ * removed, so the tests below cover both jobs it now holds: identity, and
+ * being the single thing that announces status.
+ */
+describe("sidebar leading identity icon", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set<string>();
+    testState.tree = { rootIds: [], childrenByParent: {}, nodeById: {} };
+    testState.records = [];
+    testState.indicatorChats = {};
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    testState.chatHarnessIds = {};
+    testState.tuiHarnessIds = {};
+    testState.tuiAgentById = {};
+    testState.tuiProviderProfiles = [];
+    testState.permissionRole = "owner";
+  });
+
+  function expectChatGlyphWithoutHarness(nodeId: string): void {
+    // Display / selection rows expose epic-sidebar-item-*. Rename replaces that
+    // surface, so resolve the rename row from the input's known ancestry -
+    // input → row-1 flex → text column → the row itself, which is where the
+    // leading slot sits as the column's sibling.
+    //
+    // Resolved by walking a FIXED number of parents rather than searching
+    // upward for the glyph: an unbounded search escapes this row and would be
+    // satisfied by a sibling row's chat glyph. Assertions use `toBeTruthy` so
+    // an `undefined` from a broken ancestry chain fails instead of sliding
+    // past `not.toBeNull()`.
+    const item = screen.queryByTestId(`epic-sidebar-item-${nodeId}`);
+    if (item !== null) {
+      expect(item.querySelector(".lucide-message-square")).toBeTruthy();
+    } else {
+      const input = screen.getByTestId(`epic-sidebar-rename-input-${nodeId}`);
+      const renameRow = input.parentElement?.parentElement?.parentElement;
+      expect(renameRow).toBeTruthy();
+      expect(renameRow?.querySelector(".lucide-message-square")).toBeTruthy();
+    }
+    expect(screen.queryByTestId(`sidebar-agent-harness-${nodeId}`)).toBeNull();
+    expect(screen.queryByTestId(`sidebar-agent-surface-${nodeId}`)).toBeNull();
+  }
+
+  function expectTuiHarness(nodeId: string): void {
+    expect(
+      screen.getByTestId(`sidebar-agent-harness-${nodeId}`),
+    ).not.toBeNull();
+    expect(
+      screen.getByTestId(`sidebar-agent-surface-${nodeId}`),
+    ).not.toBeNull();
+  }
+
+  it("renders the chat glyph (never harness brand) in display, selection, and rename variants", () => {
+    seedChatTree();
+    testState.chatHarnessIds = {
+      "chat-root": "codex",
+      "chat-child": "claude",
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expectChatGlyphWithoutHarness("chat-root");
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    expectChatGlyphWithoutHarness("chat-root");
+
+    cleanup();
+    seedChatTree();
+    testState.chatHarnessIds = {
+      "chat-root": "codex",
+      "chat-child": "claude",
+    };
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(dropdownItem("rename-chat-root"));
+    expect(
+      screen.getByTestId("epic-sidebar-rename-input-chat-root"),
+    ).toBeTruthy();
+    expectChatGlyphWithoutHarness("chat-root");
+  });
+
+  it("renders TUI harness brand + surface subscript in display, selection, and rename variants", () => {
+    seedChatTree();
+    testState.tuiHarnessIds = { "agent-root": "codex" };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expectTuiHarness("agent-root");
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    expectTuiHarness("agent-root");
+
+    cleanup();
+    seedChatTree();
+    testState.tuiHarnessIds = { "agent-root": "codex" };
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(dropdownItem("rename-agent-root"));
+    expect(
+      screen.getByTestId("epic-sidebar-rename-input-agent-root"),
+    ).toBeTruthy();
+    expectTuiHarness("agent-root");
+  });
+
+  it("badges a managed-profile TUI row while keeping the terminal surface glyph", () => {
+    seedChatTree();
+    testState.tuiHarnessIds = { "agent-root": "claude" };
+    testState.tuiAgentById = {
+      "agent-root": { hostId: "host-1", profileId: "profile-1" },
+    };
+    testState.tuiProviderProfiles = [
+      {
+        profileId: "ambient",
+        kind: "ambient",
+        label: "Terminal account",
+      },
+      {
+        profileId: "profile-1",
+        kind: "managed",
+        label: "Work account",
+      },
+    ];
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expectTuiHarness("agent-root");
+    expect(
+      screen.getByTestId("sidebar-agent-profile-mark-agent-root"),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("img", { name: "claude, Work account" }),
+    ).toBeTruthy();
+    // Terminal surface mark still marks the row as a TUI agent.
+    expect(screen.getByTestId("sidebar-agent-surface-agent-root")).toBeTruthy();
+  });
+
+  it("keeps ambient TUI rows unbadged (bare harness + terminal glyph)", () => {
+    seedChatTree();
+    testState.tuiHarnessIds = { "agent-root": "claude" };
+    testState.tuiAgentById = {
+      "agent-root": { hostId: "host-1", profileId: null },
+    };
+    testState.tuiProviderProfiles = [
+      {
+        profileId: "ambient",
+        kind: "ambient",
+        label: "Terminal account",
+      },
+      {
+        profileId: "profile-1",
+        kind: "managed",
+        label: "Work account",
+      },
+    ];
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expectTuiHarness("agent-root");
+    expect(screen.getByRole("img", { name: "claude" })).toBeTruthy();
+    const mark = screen.getByTestId("sidebar-agent-profile-mark-agent-root");
+    expect(mark.querySelector('span[style*="background-color"]')).toBeNull();
+  });
+
+  it("falls back to the bot glyph when a TUI row has no harness id", () => {
+    seedChatTree();
+    // tuiHarnessIds stays empty → useMaybeEpicTuiAgentHarnessId returns null.
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const tuiRow = screen.getByTestId("epic-sidebar-item-agent-root");
+    expect(tuiRow.querySelector(".lucide-bot")).not.toBeNull();
+    expect(screen.queryByTestId("sidebar-agent-harness-agent-root")).toBeNull();
+    expect(screen.queryByTestId("sidebar-agent-surface-agent-root")).toBeNull();
+  });
+
+  it("swaps an active TUI row to the terminal spinner and hides the harness brand", () => {
+    seedChatTree();
+    testState.tuiHarnessIds = { "agent-root": "codex" };
+    testState.activeAgentIds = new Set(["agent-root"]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(
+      screen.getByTestId("terminal-agent-sidebar-activity-agent-root"),
+    ).not.toBeNull();
+    expect(screen.queryByTestId("sidebar-agent-harness-agent-root")).toBeNull();
+    expect(screen.queryByTestId("sidebar-agent-surface-agent-root")).toBeNull();
+  });
+
+  it("centers the leading icon via horizontal items-center siblings (no fixed row height)", () => {
+    seedChatTree();
+    testState.tuiHarnessIds = { "agent-root": "codex" };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    // jsdom has no layout, so assert the structural contract instead: the row
+    // is a horizontal flex with items-center; the chevron and the leading icon
+    // slot are direct children of the row and siblings of the text column, not
+    // nested inside it; and nothing pins a fixed height, so a row whose title
+    // wraps grows rather than clipping.
+    const row = screen.getByTestId("epic-sidebar-item-chat-root");
+    expect(row.className).toContain("items-center");
+    // Fixed height would be `h-N` / `h-[…]`; min-h is the allowed floor.
+    expect(row.className).not.toMatch(/(?:^|\s)h-(?:\d|\[)/);
+    expect(row.className).toContain("min-h-7");
+
+    const title = within(row).getByText("Root chat");
+    const textColumn = title.parentElement?.parentElement;
+    expect(textColumn).toBeTruthy();
+    expect(textColumn?.parentElement).toBe(row);
+
+    const chatGlyph = row.querySelector(".lucide-message-square");
+    expect(chatGlyph).not.toBeNull();
+    // Leading icon must not live inside the text column.
+    expect(textColumn?.contains(chatGlyph)).toBe(false);
+
+    // Walk up from the glyph to the row's direct-child slot.
+    let leadingSlot: Element | null = chatGlyph;
+    while (
+      leadingSlot !== null &&
+      leadingSlot.parentElement !== null &&
+      leadingSlot.parentElement !== row
+    ) {
+      leadingSlot = leadingSlot.parentElement;
+    }
+    expect(leadingSlot?.parentElement).toBe(row);
+    // Slot is a sibling of the text column, not nested under it.
+    expect(leadingSlot).not.toBe(textColumn);
+    expect(Array.from(row.children)).toContain(leadingSlot);
+    expect(Array.from(row.children)).toContain(textColumn);
+
+    // Chevron is also a direct child of the row (before the leading slot).
+    const chevronOrSpacer = row.children[0];
+    expect(chevronOrSpacer).toBeDefined();
+    expect(chevronOrSpacer).not.toBe(leadingSlot);
+    expect(chevronOrSpacer).not.toBe(textColumn);
+  });
+
+  it("carries status on the leading icon while the trailing slot keeps the time", () => {
+    seedChatTree();
+    testState.tuiHarnessIds = { "agent-root": "codex" };
+    testState.activeAgentIds = new Set(["chat-child"]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    // Idle chat: leading chat glyph, trailing relative time.
+    const chatRoot = screen.getByTestId("epic-sidebar-item-chat-root");
+    expect(chatRoot.querySelector(".lucide-message-square")).not.toBeNull();
+    expect(idleTime("chat-root")).toBeTruthy();
+
+    // Working chat: the glyph BECOMES the spinner - status replaces identity in
+    // the leading slot rather than being added beside it - and the time stays.
+    const chatChild = screen.getByTestId("epic-sidebar-item-chat-child");
+    expect(
+      chatChild.querySelector(
+        '[data-testid="chat-sidebar-spinner-activity-chat-child"]',
+      ),
+    ).not.toBeNull();
+    expect(chatChild.querySelector(".lucide-message-square")).toBeNull();
+    expect(idleTime("chat-child")).toBeTruthy();
+
+    // Idle TUI: leading harness brand, trailing relative time.
+    expectTuiHarness("agent-root");
+    expect(idleTime("agent-root")).toBeTruthy();
+  });
+
+  it("announces the leading icon, now that it is the row's only status surface", () => {
+    seedChatTree();
+    testState.tuiHarnessIds = { "agent-root": "codex" };
+    testState.activeAgentIds = new Set(["chat-child"]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    // The slot was `aria-hidden` while a trailing status chip existed, because
+    // the two said the same thing and a read-only row announced "Read-only
+    // agent" twice. With the chip gone, hiding it would drop running, approval,
+    // failure and read-only out of the a11y tree entirely - de-duplicating
+    // nothing. So the running row must announce, from inside the slot.
+    const chatChild = screen.getByTestId("epic-sidebar-item-chat-child");
+    const running = within(chatChild).getByRole("status", {
+      name: "Agent in progress",
+    });
+    expect(running.closest("[aria-hidden]")).toBeNull();
+
+    // The row's own accessible name stays its TITLE: the explicit `aria-label`
+    // keeps the status, badges and timestamp inside it from being concatenated
+    // into the name.
+    expect(chatChild.getAttribute("aria-label")).toBe("Child chat");
+
+    // Identity-only icons carry no status role to announce in the first place.
+    const harnessSlot = screen.getByTestId("sidebar-agent-harness-agent-root");
+    expect(harnessSlot.getAttribute("role")).toBeNull();
+  });
+});
+
+describe("terminal-agent row session-state badge", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set<string>();
+    testState.tree = { rootIds: [], childrenByParent: {}, nodeById: {} };
+    testState.records = [];
+    testState.tuiHarnessIds = {};
+    testState.tuiAgentById = {};
+    // The archive knobs too, because this block is OUTSIDE the top describe
+    // whose `beforeEach` resets them - the archived-row case below sets both,
+    // and a leaked "all" visibility makes the `chat row archive` block's
+    // hidden-subtree assertions find rows that should not be on screen.
+    testState.archivedIds = [];
+    testState.archiveVisibility = "unarchived";
+  });
+
+  it('renders "Asleep" for a sleeping agent, with the process-exit sentence only for that reason', () => {
+    seedChatTree();
+    testState.tuiAgentById = {
+      "agent-root": {
+        hostId: "host-1",
+        profileId: null,
+        sessionState: "sleeping",
+        lastExit: "process-exit",
+      },
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const badge = screen.getByTestId("chat-row-session-state-agent-root");
+    expect(badge.textContent).toBe("Asleep");
+    expect(badge.getAttribute("data-session-state")).toBe("sleeping");
+    // Focus, not hover: Radix honours it immediately, where pointer-enter
+    // sits behind the provider's open delay. `getAllByRole` and a filter,
+    // rather than `getByRole`, because the focus event bubbles to the row's
+    // own ancestor tooltip triggers (e.g. the offline lock) as well.
+    fireEvent.focus(badge);
+    const tooltips = screen.getAllByRole("tooltip").map((el) => el.textContent);
+    expect(tooltips).toContain(
+      "Sleeping. Resumes on the next message or when you open it. Last run exited on its own.",
+    );
+
+    // And the channel a keyboard user actually has. The assertion above proves
+    // the tooltip's CONTENT, not its reachability: the trigger is a decorative
+    // `span`, so `fireEvent.focus` works here and a real Tab key would never
+    // land on it - and the row button's explicit `aria-label` replaces its
+    // subtree anyway, so nothing on the badge is announced either.
+    //
+    // The row's own name is therefore the only place the guidance can reach
+    // assistive tech, and "asleep" alone would state a condition without
+    // saying it is recoverable - the exact misreading this change exists to
+    // stop. Asserted as a SUBSTRING of the row name rather than by re-stating
+    // the whole label, so an unrelated suffix (archived, shared, an offline
+    // lock) does not make this case red for the wrong reason.
+    // Reached from the badge rather than by name, so it is provably the SAME
+    // row this case seeded rather than whichever row happens to match.
+    const sleepingRow = screen.getByTestId("epic-sidebar-item-agent-root");
+    expect(sleepingRow.getAttribute("aria-label")).toContain(
+      "asleep, resumes on the next message or when you open it",
+    );
+
+    // The other three reasons resume identically and are deliberately not
+    // spelled out - only `process-exit` contradicts what a reader would
+    // otherwise assume.
+    for (const lastExit of ["reaped", "user-stop", "restart"] as const) {
+      cleanup();
+      testState.tuiAgentById = {
+        "agent-root": {
+          hostId: "host-1",
+          profileId: null,
+          sessionState: "sleeping",
+          lastExit,
+        },
+      };
+      render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+      const rowBadge = screen.getByTestId("chat-row-session-state-agent-root");
+      expect(rowBadge.textContent).toBe("Asleep");
+      fireEvent.focus(rowBadge);
+      expect(
+        screen.getAllByRole("tooltip").map((el) => el.textContent),
+      ).toContain("Sleeping. Resumes on the next message or when you open it.");
+    }
+  });
+
+  it("keeps the session state visible AND spoken in selection mode", () => {
+    // Selection mode takes its own early return and rebuilds the row, so the
+    // badge is not inherited - it has to be rendered there too. This is also
+    // the moment the state matters most: bulk-selecting is where a reader
+    // decides what to act on, and asleep-versus-stopped changes that decision.
+    seedChatTree();
+    testState.tuiAgentById = {
+      "agent-root": {
+        hostId: "host-1",
+        profileId: null,
+        sessionState: "sleeping",
+        lastExit: "reaped",
+      },
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+
+    expect(
+      screen.getByTestId("chat-row-session-state-agent-root").textContent,
+    ).toBe("Asleep");
+
+    // And spoken: the checkbox is the only NAMED control on a selection row -
+    // the row is a `<label>` with no name of its own - so its label is the
+    // whole of what a screen reader gets. A visible badge beside an unchanged
+    // "Select X" would be the same visible-but-unspoken split the row button
+    // already has to close.
+    expect(
+      screen
+        .getByTestId("epic-sidebar-select-agent-root")
+        .getAttribute("aria-label"),
+    ).toBe("Select Terminal agent, asleep");
+  });
+
+  it('renders "Stopped" for an agent whose record is over', () => {
+    seedChatTree();
+    testState.tuiAgentById = {
+      "agent-root": {
+        hostId: "host-1",
+        profileId: null,
+        sessionState: "stopped",
+        lastExit: null,
+      },
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const badge = screen.getByTestId("chat-row-session-state-agent-root");
+    expect(badge.textContent).toBe("Stopped");
+    expect(badge.getAttribute("data-session-state")).toBe("stopped");
+  });
+
+  it('says "Stopped" once, not twice, on a row that already reads Archived', () => {
+    seedChatTree();
+    // The only way a row normally reaches `stopped`: the archive mutation
+    // writes it, and a delete tombstones the row before anything could. So
+    // this pairing is the COMMON case for the badge, not an edge one - and
+    // "Archived · Stopped" would be the same fact said twice.
+    testState.archivedIds = ["agent-root"];
+    testState.archiveVisibility = "all";
+    testState.tuiAgentById = {
+      "agent-root": {
+        hostId: "host-1",
+        profileId: null,
+        sessionState: "stopped",
+        lastExit: null,
+      },
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    // The prefix still renders - suppressing the badge must not cost the row
+    // the state it does still need to show.
+    expect(
+      screen.getAllByTestId("chat-row-archived-label").length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.queryByTestId("chat-row-session-state-agent-root"),
+    ).toBeNull();
+    // And the same suppression in the ACCESSIBLE NAME, which replaces the
+    // row's subtree: a badge hidden visually while the name still said both
+    // would leave the repeat only for the reader who cannot see the row.
+    const rowName =
+      screen
+        .getByTestId("epic-sidebar-item-agent-root")
+        .getAttribute("aria-label") ?? "";
+    expect(rowName).toContain("archived");
+    expect(rowName).not.toContain("stopped");
+  });
+
+  it("renders NO badge for `null` (unknown) or `running` - the same row as before the facet shipped", () => {
+    seedChatTree();
+    testState.tuiAgentById = {
+      "agent-root": { hostId: "host-1", profileId: null, sessionState: null },
+    };
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.queryByTestId("chat-row-session-state-agent-root"),
+    ).toBeNull();
+
+    cleanup();
+    testState.tuiAgentById = {
+      "agent-root": {
+        hostId: "host-1",
+        profileId: null,
+        sessionState: "running",
+      },
+    };
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.queryByTestId("chat-row-session-state-agent-root"),
+    ).toBeNull();
+  });
+});
+
+/**
+ * Host-backed archive for Agents panel rows.
+ *
+ * Behaviours B1–B10 from the archive feature. The harness knobs
+ * (`archiveSupport`, `archiveVisibility`, `archivedIds`, `archiveMutate`) drive
+ * the gate, filter, and projected flags - these tests assert renderer
+ * behaviour against those knobs, not production selector/RPC wiring.
+ */
+describe("chat row archive", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    testState.sessionReady = true;
+    testState.snapshotLoaded = true;
+    testState.chatRecordListAuthoritative = true;
+    testState.tuiAgentRecordListAuthoritative = true;
+    testState.deletedArtifactsAvailable = false;
+    testState.activeArtifactId = null;
+    testState.openTileContentIds = new Set<string>();
+    testState.activePanelId = "chats";
+    testState.artifactFilterKinds = [];
+    testState.chatFilterOrigin = "all";
+    testState.expandedIds = new Set<string>();
+    testState.unreadArtifactIds = new Set<string>();
+    testState.tree = { rootIds: [], childrenByParent: {}, nodeById: {} };
+    testState.records = [];
+    testState.indicatorChats = {};
+    testState.indicatorChatsByHost = {};
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    testState.chatHarnessIds = {};
+    testState.tuiHarnessIds = {};
+    testState.permissionRole = "owner";
+    testState.archiveSupport = true;
+    testState.archiveVisibility = "unarchived";
+    testState.archivedIds = [];
+    testState.archiveMutate = vi.fn();
+    testState.archiveBatchPending = false;
+    // Leaking this one disables every later row's Archive for a reason no test
+    // named, which reads as the gate under test firing.
+    testState.archiveRowPending = false;
+    testState.archiveMutateAsync = vi.fn();
+    testState.openArtifactById = {};
+    testState.openTileByIdentity = {};
+    testState.rowHostId = "host-1";
+    testState.rowHostReachability = "reachable";
+    testState.preparedOpenRefs = [];
+    testState.rowHostEntry = { hostId: "host-1" };
+    testState.rowHostClient = { getActiveHostId: () => "host-1" };
+    testState.activeHostClient = { getActiveHostId: () => "host-1" };
+    testState.sessionHandleByChatId = {};
+    disposeCreatedSessionHandles();
+  });
+
+  function indicator(
+    overrides: Partial<TestIndicatorState>,
+  ): TestIndicatorState {
+    return {
+      unreadFailure: false,
+      pendingFork: false,
+      pendingApproval: false,
+      pendingInterview: false,
+      unreadDone: false,
+      ...overrides,
+    };
+  }
+
+  /** Parent → child → grandchild for B1/B2 subtree hiding. */
+  function seedArchiveSubtree(): void {
+    const chatRoot = treeNode("chat-root", null, "Root chat", "chat");
+    const chatChild = treeNode("chat-child", "chat-root", "Child chat", "chat");
+    const chatGrandchild = treeNode(
+      "chat-grandchild",
+      "chat-child",
+      "Grandchild chat",
+      "chat",
+    );
+    const agentRoot = treeNode(
+      "agent-root",
+      null,
+      "Terminal agent",
+      "terminal-agent",
+    );
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set(["chat-root", "chat-child"]);
+    testState.tree = {
+      rootIds: ["chat-root", "agent-root"],
+      childrenByParent: {
+        "chat-root": ["chat-child"],
+        "chat-child": ["chat-grandchild"],
+      },
+      nodeById: {
+        "chat-root": chatRoot,
+        "chat-child": chatChild,
+        "chat-grandchild": chatGrandchild,
+        "agent-root": agentRoot,
+      },
+    };
+    testState.records = [chatRoot, chatChild, chatGrandchild, agentRoot].map(
+      recordFromNode,
+    );
+  }
+
+  // --- B1: subtree hiding -------------------------------------------------
+
+  it("hides an archived node and its entire subtree without cascading archive flags (B1)", () => {
+    seedArchiveSubtree();
+    // Only the parent carries the flag - descendants are not in archivedIds.
+    testState.archivedIds = ["chat-root"];
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.queryByTestId("epic-sidebar-item-chat-root")).toBeNull();
+    expect(screen.queryByTestId("epic-sidebar-item-chat-child")).toBeNull();
+    expect(
+      screen.queryByTestId("epic-sidebar-item-chat-grandchild"),
+    ).toBeNull();
+    // Unrelated sibling root stays visible.
+    expect(screen.getByTestId("epic-sidebar-item-agent-root")).toBeTruthy();
+  });
+
+  // --- B2: unarchive restores subtree minus individually-archived descendants
+
+  it("unarchiving a parent restores the subtree except independently archived descendants (B2)", () => {
+    seedArchiveSubtree();
+    // Parent was archived (hiding everything under it); descendant was also
+    // archived on its own. Unarchive parent → only the parent's own flag
+    // clears; the descendant's flag keeps its subtree hidden.
+    testState.archivedIds = ["chat-child"];
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.getByTestId("epic-sidebar-item-chat-root")).toBeTruthy();
+    expect(screen.queryByTestId("epic-sidebar-item-chat-child")).toBeNull();
+    expect(
+      screen.queryByTestId("epic-sidebar-item-chat-grandchild"),
+    ).toBeNull();
+    expect(screen.getByTestId("epic-sidebar-item-agent-root")).toBeTruthy();
+  });
+
+  // --- B3: archive visibility modes ---------------------------------------
+
+  it('hides archived rows by default and reveals them dimmed in "All chats" (B3)', () => {
+    seedArchiveSubtree();
+    testState.archivedIds = ["chat-root"];
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(screen.queryByTestId("epic-sidebar-item-chat-root")).toBeNull();
+    expect(screen.queryByTestId("epic-sidebar-item-chat-child")).toBeNull();
+
+    testState.archiveVisibility = "all";
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const rootRow = screen.getByTestId("epic-sidebar-item-chat-root");
+    const childRow = screen.getByTestId("epic-sidebar-item-chat-child");
+    // Only the row that carries archivedAt is dimmed. Descendants that were
+    // hidden purely by the parent's flag reappear undimmed.
+    expect(rootRow.className).toContain("opacity-55");
+    expect(childRow.className).not.toContain("opacity-55");
+
+    testState.archiveVisibility = "unarchived";
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(screen.queryByTestId("epic-sidebar-item-chat-root")).toBeNull();
+    expect(screen.queryByTestId("epic-sidebar-item-chat-child")).toBeNull();
+  });
+
+  it("shows only archived rows plus their ancestor path in archived-only mode", () => {
+    seedArchiveSubtree();
+    testState.archivedIds = ["chat-child"];
+    testState.archiveVisibility = "archived";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const ancestor = screen.getByTestId("epic-sidebar-item-chat-root");
+    const archived = screen.getByTestId("epic-sidebar-item-chat-child");
+    expect(ancestor.className).not.toContain("opacity-55");
+    expect(archived.className).toContain("opacity-55");
+    expect(
+      screen.queryByTestId("epic-sidebar-item-chat-grandchild"),
+    ).toBeNull();
+    expect(screen.queryByTestId("epic-sidebar-item-agent-root")).toBeNull();
+  });
+
+  it("does not let open or busy unarchived rows leak into archived-only mode", () => {
+    seedArchiveSubtree();
+    testState.archivedIds = ["chat-child"];
+    testState.archiveVisibility = "archived";
+    testState.openTileContentIds = new Set(["agent-root"]);
+    testState.activityTierById = new Map([["agent-root", "turn"]]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.getByTestId("epic-sidebar-item-chat-child")).toBeTruthy();
+    expect(screen.queryByTestId("epic-sidebar-item-agent-root")).toBeNull();
+  });
+
+  // --- B4: capability gate ------------------------------------------------
+
+  it("omits every archive affordance when the host does not advertise the method (B4)", () => {
+    seedChatTree();
+    testState.archiveSupport = false;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    // Hover button absent (not disabled).
+    expect(screen.queryByTestId("epic-sidebar-archive-chat-root")).toBeNull();
+    expect(screen.queryByTestId("epic-sidebar-archive-agent-root")).toBeNull();
+    // Dropdown entry absent (not disabled).
+    expect(
+      screen.queryByTestId("epic-sidebar-archive-item-chat-root"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("epic-sidebar-archive-item-agent-root"),
+    ).toBeNull();
+
+    fireEvent.contextMenu(screen.getByTestId("epic-sidebar-item-chat-root"));
+    expect(
+      screen.queryByTestId("epic-sidebar-context-archive-chat-root"),
+    ).toBeNull();
+    // Non-archive menu still works so the gate did not blank the whole menu.
+    expect(dropdownItem("rename-chat-root")).toBeTruthy();
+  });
+
+  it("offers archive affordances when the host supports the method (B4)", () => {
+    seedChatTree();
+    testState.archiveSupport = true;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.getByTestId("epic-sidebar-archive-chat-root")).toBeTruthy();
+    expect(dropdownItem("archive-item-chat-root")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Archive Root chat" }),
+    ).toBeTruthy();
+
+    fireEvent.contextMenu(screen.getByTestId("epic-sidebar-item-chat-root"));
+    expect(
+      screen.getByTestId("epic-sidebar-context-archive-chat-root"),
+    ).toBeTruthy();
+  });
+
+  // --- B5: hover button, idle rows only -----------------------------------
+
+  it("shows the hover archive button only on idle rows (B5)", () => {
+    seedChatTree();
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(screen.getByTestId("epic-sidebar-archive-chat-child")).toBeTruthy();
+
+    // Working (turn).
+    testState.activeAgentIds = new Set(["chat-child"]);
+    testState.activityTierById = new Map([["chat-child", "turn"]]);
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(screen.queryByTestId("epic-sidebar-archive-chat-child")).toBeNull();
+
+    // Background activity.
+    testState.activityTierById = new Map([["chat-child", "background"]]);
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(screen.queryByTestId("epic-sidebar-archive-chat-child")).toBeNull();
+
+    // Attention states: failure / interview / approval / unread-done.
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    for (const attention of [
+      { unreadFailure: true },
+      { pendingInterview: true },
+      { pendingApproval: true },
+      { unreadDone: true },
+    ] as const) {
+      testState.indicatorChats = {
+        "chat-child": indicator(attention),
+      };
+      view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+      expect(
+        screen.queryByTestId("epic-sidebar-archive-chat-child"),
+      ).toBeNull();
+    }
+
+    // Back to idle: button returns.
+    testState.indicatorChats = {};
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(screen.getByTestId("epic-sidebar-archive-chat-child")).toBeTruthy();
+  });
+
+  it("hides the hover archive button in bulk-selection mode and while renaming (B5)", () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(screen.getByTestId("epic-sidebar-archive-chat-root")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    expect(screen.queryByTestId("epic-sidebar-archive-chat-root")).toBeNull();
+
+    // Leave selection mode via deselect all is still selection mode; re-render
+    // fresh for the rename case.
+    cleanup();
+    seedChatTree();
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(dropdownItem("rename-chat-root"));
+    expect(
+      screen.getByTestId("epic-sidebar-rename-input-chat-root"),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("epic-sidebar-archive-chat-root")).toBeNull();
+  });
+
+  // --- rename settles the editor on COMMIT, not on the ack ----------------
+
+  it("closes the rename input on commit while the rename RPC is still in flight", async () => {
+    seedChatTree();
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(dropdownItem("rename-chat-root"));
+    const input = screen.getByTestId("epic-sidebar-rename-input-chat-root");
+    fireEvent.change(input, { target: { value: "Renamed while in flight" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    // The optimistic patch is stamped and the RPC issued - and by construction
+    // of `renameChatMutateAsync` that RPC has NOT settled, so this asserts the
+    // editor closed on the commit itself. Under the previous close-on-success
+    // code the input was still mounted here, and stayed mounted for the whole
+    // round trip (and forever on a failure, whose arm never closed it at all).
+    expect(testState.beginRenameMutation).toHaveBeenCalledWith(
+      "chat-root",
+      "Renamed while in flight",
+    );
+    // AWAITED: `beginRenameMutation` is a bridge round trip, so the RPC it
+    // gates is issued a microtask after the key event rather than inside it.
+    // The stamp assertion above still reads synchronously - that call IS made
+    // on the event - which is what makes this a delivery boundary rather than
+    // a wholesale change of when the commit starts.
+    await waitFor(() =>
+      expect(testState.renameChatMutateAsync).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Renamed while in flight" }),
+      ),
+    );
+    expect(testState.retirePendingMutation).not.toHaveBeenCalled();
+    expect(
+      screen.queryByTestId("epic-sidebar-rename-input-chat-root"),
+    ).toBeNull();
+  });
+
+  it("issues a second rename committed while the first is still in flight", async () => {
+    seedChatTree();
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const commitRename = (value: string): void => {
+      fireEvent.click(dropdownItem("rename-chat-root"));
+      const input = screen.getByTestId("epic-sidebar-rename-input-chat-root");
+      fireEvent.change(input, { target: { value } });
+      fireEvent.keyDown(input, { key: "Enter" });
+    };
+
+    commitRename("First title");
+    commitRename("Second title");
+
+    // Closing on commit is what makes "renaming" and "pending" concurrent for
+    // the first time, and `renameChatMutateAsync` never settles - so the second
+    // commit here happens with the first rename genuinely still on the wire.
+    // The `if (renamePending) return` guard this change removed sat at the top
+    // of `commitRename`, so under it the second rename reached NEITHER the
+    // overlay nor the RPC and the user got no feedback that it was dropped.
+    // Asserting both calls is the point: a count of 1 was the old behaviour,
+    // and the rename hook mocks report `isPending` from their own call log, so
+    // a re-introduced guard in any form genuinely fires here.
+    expect(testState.beginRenameMutation).toHaveBeenNthCalledWith(
+      1,
+      "chat-root",
+      "First title",
+    );
+    expect(testState.beginRenameMutation).toHaveBeenNthCalledWith(
+      2,
+      "chat-root",
+      "Second title",
+    );
+    // AWAITED for the reason the in-flight pin above states.
+    await waitFor(() =>
+      expect(testState.renameChatMutateAsync).toHaveBeenCalledTimes(2),
+    );
+    expect(testState.renameChatMutateAsync).toHaveBeenLastCalledWith(
+      expect.objectContaining({ title: "Second title" }),
+    );
+    // Neither has acked, so nothing may have been retired yet - a stamp retired
+    // early is what would let a late ack overwrite the newer title.
+    expect(testState.retirePendingMutation).not.toHaveBeenCalled();
+    expect(
+      screen.queryByTestId("epic-sidebar-rename-input-chat-root"),
+    ).toBeNull();
+  });
+
+  // --- B6: row menu entry -------------------------------------------------
+
+  it("puts Archive/Unarchive in both the ⋯ menu and the right-click menu for non-running rows (B6)", async () => {
+    seedChatTree();
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const archiveItem = dropdownItem("archive-item-chat-root");
+    expect(archiveItem.textContent).toContain("Archive");
+    expect(archiveItem.matches(":disabled")).toBe(false);
+
+    fireEvent.contextMenu(screen.getByTestId("epic-sidebar-item-chat-root"));
+    expect(
+      await screen.findByTestId("epic-sidebar-context-archive-chat-root"),
+    ).toBeTruthy();
+
+    // Terminal-agent rows get the same entry.
+    expect(dropdownItem("archive-item-agent-root").textContent).toContain(
+      "Archive",
+    );
+
+    // Running row: entry present but unavailable. Soft-disabled (ARIA) rather
+    // than hard-disabled, so it stays keyboard-reachable and can explain
+    // itself - see the keyboard-reachability test below.
+    testState.activeAgentIds = new Set(["chat-root"]);
+    testState.activityTierById = new Map([["chat-root", "turn"]]);
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(isMenuItemUnavailable(dropdownItem("archive-item-chat-root"))).toBe(
+      true,
+    );
+
+    // Archived row offers the action "Unarchive".
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    testState.archivedIds = ["chat-root"];
+    testState.archiveVisibility = "all";
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(dropdownItem("archive-item-chat-root").textContent).toContain(
+      "Unarchive",
+    );
+    const unarchiveHover = screen.getByTestId("epic-sidebar-archive-chat-root");
+    expect(unarchiveHover.getAttribute("aria-label")).toBe(
+      "Unarchive Root chat",
+    );
+  });
+
+  // --- B7: viewer role ----------------------------------------------------
+
+  it("gives a row without a role no archive shortcut, a disabled Archive/Rename menu and a working Copy ID (B7)", () => {
+    seedChatTree();
+    testState.permissionRole = null;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    // Hover button absent without a role (requires canMutate).
+    expect(screen.queryByTestId("epic-sidebar-archive-chat-child")).toBeNull();
+    // Chat row ⋯ menu stays open - only its mutating entries
+    // (Archive, Rename) are hard-disabled; the read-only Copy ID entry works.
+    expect(screen.getByTestId("epic-sidebar-more-chat-child")).toBeTruthy();
+    expect(isMenuItemUnavailable(dropdownItem("archive-item-chat-child"))).toBe(
+      true,
+    );
+    expect(isMenuItemUnavailable(dropdownItem("rename-chat-child"))).toBe(true);
+
+    const copyItem = dropdownItem("copy-id-chat-child");
+    expect(isMenuItemUnavailable(copyItem)).toBe(false);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    fireEvent.click(copyItem);
+    expect(writeText).toHaveBeenCalledWith("chat-child");
+  });
+
+  // --- B8: status survives selection mode and rename (archive must not blank it)
+
+  it("keeps the row's status icon in bulk-selection and rename after the archive work (B8)", () => {
+    seedChatTree();
+    testState.activeAgentIds = new Set(["chat-child"]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(leadingStatusKinds("chat-child")).toEqual(["activity"]);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    expect(leadingStatusKinds("chat-child")).toEqual(["activity"]);
+
+    cleanup();
+    seedChatTree();
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    testState.indicatorChats = {
+      "chat-child": indicator({ unreadDone: true }),
+    };
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    openRowMore("chat-child");
+    fireEvent.click(dropdownItem("rename-chat-child"));
+    expect(
+      screen.getByTestId("epic-sidebar-rename-input-chat-child"),
+    ).toBeTruthy();
+    expect(leadingStatusKinds("chat-child")).toEqual(["done"]);
+  });
+
+  // --- B9: mutation contract (UI side - no optimistic hide, no tab close) -
+
+  it("calls the archive mutation without optimistically hiding the row (B9)", () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-chat-root"));
+
+    expect(testState.archiveMutate).toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      chatId: "chat-root",
+      hostId: "host-1",
+      archived: true,
+    });
+    // No optimistic write: archivedIds is still empty, so the row stays.
+    expect(screen.getByTestId("epic-sidebar-item-chat-root")).toBeTruthy();
+  });
+
+  it("uses the same archive mutation for a terminal-agent row (B9)", () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-agent-root"));
+
+    expect(testState.archiveMutate).toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      chatId: "agent-root",
+      hostId: "host-1",
+      archived: true,
+    });
+  });
+
+  it("shows a visible archive loader until a delayed request settles", () => {
+    seedChatTree();
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-chat-root"));
+    expect(testState.archiveMutate).toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      chatId: "chat-root",
+      hostId: "host-1",
+      archived: true,
+    });
+    expect(
+      screen.queryByTestId("epic-sidebar-archive-pending-chat-root"),
+    ).toBeNull();
+
+    testState.archiveRowPending = true;
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const pendingButton = screen.getByTestId("epic-sidebar-archive-chat-root");
+    expect(pendingButton.matches(":disabled")).toBe(true);
+    expect(pendingButton.getAttribute("aria-busy")).toBe("true");
+    expect(
+      screen.getByTestId("epic-sidebar-archive-pending-chat-root"),
+    ).toBeTruthy();
+    expect(pendingButton.className).toContain("opacity-100");
+
+    testState.archiveRowPending = false;
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.queryByTestId("epic-sidebar-archive-pending-chat-root"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("epic-sidebar-archive-chat-root").matches(":disabled"),
+    ).toBe(false);
+  });
+
+  it("clears the archive loader after a delayed request rejects", () => {
+    seedChatTree();
+    testState.archiveMutate.mockImplementation(() => {
+      testState.archiveRowPending = true;
+    });
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-chat-root"));
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.getByTestId("epic-sidebar-archive-pending-chat-root"),
+    ).toBeTruthy();
+
+    testState.archiveRowPending = false;
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(
+      screen.queryByTestId("epic-sidebar-archive-pending-chat-root"),
+    ).toBeNull();
+  });
+
+  it("keeps the pending archive loader visible after a menu trigger even when the idle hover button is hidden", () => {
+    seedGuiChatTree();
+    testState.expandedIds = new Set<string>();
+    seedLocalChatFailure("chat-child");
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(screen.queryByTestId("epic-sidebar-archive-chat-root")).toBeNull();
+
+    fireEvent.click(dropdownItem("archive-item-chat-root"));
+    testState.archiveRowPending = true;
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const pendingButton = screen.getByTestId("epic-sidebar-archive-chat-root");
+    expect(
+      screen.getByTestId("epic-sidebar-archive-pending-chat-root"),
+    ).toBeTruthy();
+    expect(pendingButton.className).toContain("opacity-100");
+    expect(pendingButton.matches(":disabled")).toBe(true);
+  });
+
+  it("shows the pending loader for a menu-triggered unarchive", () => {
+    seedChatTree();
+    testState.archivedIds = ["chat-root"];
+    testState.archiveVisibility = "all";
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(dropdownItem("archive-item-chat-root"));
+    testState.archiveRowPending = true;
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(
+      screen.getByTestId("epic-sidebar-archive-pending-chat-root"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("epic-sidebar-archive-chat-root").matches(":disabled"),
+    ).toBe(true);
+  });
+
+  it("removes the idle-time slot from layout when row controls are revealed", () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const idleTimeSlot = idleTime("chat-root")?.parentElement;
+    expect(idleTimeSlot).toBeTruthy();
+    expect(idleTimeSlot?.className).toContain("group-hover/tree-item:hidden");
+    expect(idleTimeSlot?.className).toContain(
+      "group-focus-within/tree-item:hidden",
+    );
+    expect(idleTimeSlot?.className).toContain(
+      "group-has-[[data-state=open]]/tree-item:hidden",
+    );
+    expect(idleTimeSlot?.className).not.toContain(
+      "group-hover/tree-item:invisible",
+    );
+  });
+
+  // --- B10: edge behaviour ------------------------------------------------
+
+  it("does not close the open tab when archiving the active chat (B10)", () => {
+    seedChatTree();
+    testState.activeArtifactId = "chat-root";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-archive-chat-root"));
+
+    expect(testState.archiveMutate).toHaveBeenCalled();
+    expect(testState.closeCanvasTab).not.toHaveBeenCalled();
+  });
+
+  it("keeps an archived chat with an open canvas tab visible and marked", () => {
+    seedGuiChatTree();
+    testState.archivedIds = ["chat-root"];
+    testState.openTileContentIds = new Set(["chat-root"]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const row = screen.getByTestId("epic-sidebar-item-chat-root");
+    expect(row.className).toContain("opacity-55");
+    const archivedLabel = within(row).getByTestId("chat-row-archived-label");
+    expect(archivedLabel.textContent).toBe("Archived·");
+    expect(within(archivedLabel).getByText("Archived").className).toContain(
+      "font-semibold",
+    );
+    // The exception is row-scoped, not an implicit "All chats": an idle
+    // descendant hidden by the archived root stays out.
+    expect(screen.queryByTestId("epic-sidebar-item-chat-child")).toBeNull();
+  });
+
+  it("always reveals an archived busy chat with its activity indicator", () => {
+    seedGuiChatTree();
+    testState.archivedIds = ["chat-root"];
+    testState.activeAgentIds = new Set(["chat-root"]);
+    testState.activityTierById = new Map([["chat-root", "turn"]]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const row = screen.getByTestId("epic-sidebar-item-chat-root");
+    expect(within(row).getByTestId("chat-row-archived-label")).toBeTruthy();
+    expect(leadingStatusKinds("chat-root")).toEqual(["activity"]);
+  });
+
+  it("always reveals an archived unread chat with its unread indicator", () => {
+    seedGuiChatTree();
+    testState.archivedIds = ["chat-root"];
+    testState.indicatorChats = {
+      "chat-root": indicator({ unreadDone: true }),
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const row = screen.getByTestId("epic-sidebar-item-chat-root");
+    expect(within(row).getByTestId("chat-row-archived-label")).toBeTruthy();
+    expect(leadingStatusKinds("chat-root")).toEqual(["done"]);
+  });
+
+  it("reveals an archived unread chat from the row owner's host", () => {
+    seedGuiChatTree();
+    testState.archivedIds = ["chat-root"];
+    testState.rowHostId = "offline-owner-host";
+    testState.indicatorChatsByHost = {
+      "host-1": {},
+      "offline-owner-host": {
+        "chat-root": indicator({ unreadDone: true }),
+      },
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const row = screen.getByTestId("epic-sidebar-item-chat-root");
+    expect(within(row).getByTestId("chat-row-archived-label")).toBeTruthy();
+    expect(leadingStatusKinds("chat-root")).toEqual(["done"]);
+  });
+
+  it("keeps the final archived row mounted while its tree branch exits", async () => {
+    seedGuiChatTree();
+    testState.archivedIds = ["chat-root"];
+    testState.indicatorChats = {
+      "chat-root": indicator({ unreadDone: true }),
+    };
+    const panel = () => (
+      <LazyMotion features={domMax}>
+        <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />
+      </LazyMotion>
+    );
+    const view = render(panel());
+
+    expect(
+      await screen.findByTestId("epic-sidebar-item-chat-root"),
+    ).toBeTruthy();
+
+    testState.indicatorChats = {};
+    view.rerender(panel());
+
+    // The archived-empty branch waits until Motion finishes the tree branch's
+    // exit, so the final row cannot disappear in the same render.
+    expect(screen.getByTestId("epic-sidebar-item-chat-root")).toBeTruthy();
+    expect(screen.queryByTestId("epic-chat-sidebar-archived-empty")).toBeNull();
+  });
+
+  it("clears archived row styling when the unarchive projection arrives", () => {
+    seedGuiChatTree();
+    testState.archivedIds = ["chat-root"];
+    testState.openTileContentIds = new Set(["chat-root"]);
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.getByTestId("chat-row-archived-label")).toBeTruthy();
+
+    testState.archivedIds = [];
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const row = screen.getByTestId("epic-sidebar-item-chat-root");
+    expect(within(row).queryByTestId("chat-row-archived-label")).toBeNull();
+    expect(row.className).not.toContain("opacity-55");
+  });
+
+  it("leaves the bulk-selection delete flow intact alongside archive (B10)", async () => {
+    seedChatTree();
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(testState.deleteChatMutateAsync).toHaveBeenCalledWith({
+        epicId: EPIC_ID,
+        chatId: "chat-root",
+        hostId: null,
+      });
+    });
+    // Archive hover control is not the delete path.
+    expect(testState.archiveMutate).not.toHaveBeenCalled();
+  });
+
+  it("does not close a same-id other-host tab after bulk chat delete", async () => {
+    // Chat tile teardown is hook-owned (`closeConfirmedDeletedAgentTiles` is
+    // host-scoped). An id-only `findOpenArtifactInTab` close here would shut
+    // a surviving clone on another host after the hook already closed the
+    // matching tile.
+    seedChatTree();
+    testState.openArtifactById = {
+      "chat-root": { paneId: "pane-1", instanceId: "peer-same-id" },
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    fireEvent.click(screen.getByTestId("epic-sidebar-select-chat-root"));
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    await waitFor(() => {
+      expect(testState.deleteChatMutateAsync).toHaveBeenCalledWith({
+        epicId: EPIC_ID,
+        chatId: "chat-root",
+        hostId: null,
+      });
+    });
+    expect(testState.closeCanvasTab).not.toHaveBeenCalled();
+  });
+
+  it("shows a distinct empty state when every visible agent is archived (B10)", () => {
+    seedGuiChatTree();
+    testState.archivedIds = ["chat-root"];
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.getByTestId("epic-chat-sidebar-archived-empty")).toBeTruthy();
+    expect(screen.getByText("Every agent here is archived.")).toBeTruthy();
+    expect(
+      screen.getByText('Choose "Archived only" or "All chats" under Show.'),
+    ).toBeTruthy();
+    // Must not falsely claim the interface filter emptied the panel.
+    expect(screen.queryByText("No agents use this interface.")).toBeNull();
+    expect(screen.queryByText("No agents yet.")).toBeNull();
+  });
+
+  it("shows a distinct empty state when archived-only has no matches", () => {
+    seedGuiChatTree();
+    testState.archiveVisibility = "archived";
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.getByTestId("epic-chat-sidebar-archived-empty")).toBeTruthy();
+    expect(
+      screen.getByText("No archived agents match this view."),
+    ).toBeTruthy();
+    expect(
+      screen.getByText('Choose "Unarchived only" or "All chats" under Show.'),
+    ).toBeTruthy();
+  });
+
+  it("never lets the hover archive button displace a collapsed parent's descendant rollup (B5)", () => {
+    seedGuiChatTree();
+    // Parent COLLAPSED, so its trailing slot rolls the hidden child up. The
+    // parent itself is idle; only the hidden child needs attention. That muted
+    // rollup glyph is the sole signal those descendants have.
+    testState.expandedIds = new Set<string>();
+    seedLocalChatFailure("chat-child");
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(
+      screen.getByTestId("chat-descendant-status-failure-chat-root"),
+    ).toBeTruthy();
+    // The button would take over that slot and hover would blank the glyph, so
+    // one click could archive the whole subtree, failure and all. The row's own
+    // status being idle is NOT sufficient - the slot must be the idle time.
+    expect(screen.queryByTestId("epic-sidebar-archive-chat-root")).toBeNull();
+
+    // The menu entry stays available: it does not touch the status slot.
+    expect(dropdownItem("archive-item-chat-root")).toBeTruthy();
+  });
+
+  it("reveals archived rows instead of hiding them once the host is KNOWN to lack archive support (B4/B10)", () => {
+    seedGuiChatTree();
+    testState.archivedIds = ["chat-root"];
+    testState.archiveSupport = false;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    // The invariant: an archived record must never become unreachable. Every
+    // route back to one - the archive visibility filter, Unarchive entry, the
+    // empty-state hint - is capability-gated, so a host that is known to lack
+    // the method must stop hiding. Otherwise a row archived on a newer host and
+    // then viewed from an older one is invisible with nothing left to recover
+    // it (a real path: hosts can be rolled back, and the default host can
+    // simply be an older machine).
+    expect(screen.getByTestId("epic-sidebar-item-chat-root")).toBeTruthy();
+    expect(screen.queryByTestId("epic-chat-sidebar-archived-empty")).toBeNull();
+    // ...and still no affordances, because the host genuinely cannot archive.
+    expect(screen.queryByTestId("epic-sidebar-archive-chat-root")).toBeNull();
+  });
+
+  it("keeps hiding archived rows while the host's support is still UNKNOWN (B4)", () => {
+    seedGuiChatTree();
+    testState.archivedIds = ["chat-root"];
+    // No handshake yet. Revealing here would flash archived rows on every cold
+    // start and hide them again a moment later, so unknown keeps hiding - only
+    // a positive "known absent" reveals.
+    testState.archiveSupport = null;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(screen.queryByTestId("epic-sidebar-item-chat-root")).toBeNull();
+  });
+
+  // --- B11: busy rows cannot be archived, and say why ----------------------
+
+  /**
+   * The attention tones are the regression this pins. `chatOwnStatusKind` folds
+   * failure/interview/approval AHEAD of the running tier, so gating archive on
+   * the folded kind left the entry enabled on a chat that was genuinely
+   * mid-turn - and a pending approval is raised from inside a running turn, so
+   * that is the common case, not a rare interleaving.
+   */
+  it("keeps Archive disabled on a running row even under an attention tone (B11)", () => {
+    seedChatTree();
+    testState.activeAgentIds = new Set(["chat-root"]);
+    testState.activityTierById = new Map([["chat-root", "turn"]]);
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    for (const attention of [
+      { pendingApproval: true },
+      { pendingInterview: true },
+      { unreadFailure: true },
+      { unreadDone: true },
+    ] as const) {
+      testState.indicatorChats = { "chat-root": indicator(attention) };
+      view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+      expect(
+        isMenuItemUnavailable(dropdownItem("archive-item-chat-root")),
+      ).toBe(true);
+    }
+
+    // Control: the same tones on an IDLE row leave archive available, so the
+    // assertion above is pinning "running", not "any notification at all".
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    testState.indicatorChats = {
+      "chat-root": indicator({ pendingApproval: true }),
+    };
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    expect(isMenuItemUnavailable(dropdownItem("archive-item-chat-root"))).toBe(
+      false,
+    );
+  });
+
+  /**
+   * The tooltip's trigger sits on the menu ITEM, with no element in between.
+   *
+   * A soft-disabled entry is not Radix-`disabled`, so it carries no
+   * `data-disabled` and takes hover itself - the wrapper that used to be needed
+   * for that is gone. Keeping the item a direct child of the menu is what
+   * preserves `menu` -> `menuitem` ownership: an intermediate
+   * `role="presentation"` element could NOT, because ARIA ignores a
+   * presentational role on any element carrying a global ARIA property, and
+   * Radix Tooltip puts `aria-describedby` on its trigger while open. The
+   * wrapper stopped being presentational exactly when a keyboard user focused
+   * the busy entry and opened its tooltip.
+   *
+   * (The `pointer-events` rule itself is CSS, which jsdom does not evaluate;
+   * the mocked tooltip here renders its content eagerly, as every other tooltip
+   * assertion in this file does.)
+   */
+  it("explains the refusal, per activity tier (B11)", () => {
+    seedChatTree();
+    testState.activeAgentIds = new Set(["chat-root"]);
+    testState.activityTierById = new Map([["chat-root", "turn"]]);
+
+    const view = render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const turnItem = dropdownItem("archive-item-chat-root");
+    expect(isMenuItemUnavailable(turnItem)).toBe(true);
+    expect(tooltipTextIn(turnItem)).toBe(
+      "Can't archive while this agent is working. Stopping it ends a turn, but not a detached subagent or workflow. Wait for it to go idle, or stop it, then archive.",
+    );
+    // The `turn` TIER is not "a turn is running": `chatActivityIndicator` maps
+    // a detached subagent or workflow outliving its turn into it, and
+    // `resolvedTurnStatus` reports no active turn for that same state so no
+    // Stop-turn affordance surfaces. An unhedged "stop it" would point at an
+    // action the host early-returns from.
+    expect(tooltipTextIn(turnItem)).toContain("not a detached subagent");
+
+    testState.activityTierById = new Map([["chat-root", "background"]]);
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    const bgItem = dropdownItem("archive-item-chat-root");
+    expect(tooltipTextIn(bgItem)).toBe(
+      "Can't archive while this agent has background items running. Stopping the agent won't clear them — wait for them to finish, or stop them from its chat.",
+    );
+    // The background arm must never advertise stopping the AGENT as the
+    // remedy. `stopActiveTurn()` early-returns with no turn running, and this
+    // tooltip is the only message a soft-disabled entry produces - the host's
+    // corrected refusal never fires because `onSelect` is prevented. Getting
+    // this wrong sends the user round a loop with nothing to correct it.
+    expect(tooltipTextIn(bgItem)).toContain("stop them from its chat");
+
+    // No wrapper: a busy entry stays a direct sibling of the other entries, so
+    // the menu owns it in every state. Nesting it under a presentational node
+    // would have un-owned it the moment its tooltip opened.
+    expect(bgItem.parentElement).toBe(
+      dropdownItem("rename-chat-root").parentElement,
+    );
+
+    // On an idle row there is no tooltip at all: an available action must carry
+    // no explanation. Scoped to the item's own menu container rather than the
+    // whole row, because an idle row also renders the hover Archive button,
+    // whose own ("Archive <name>") tooltip would satisfy a looser query and
+    // make this pass for the wrong reason.
+    testState.activeAgentIds = new Set<string>();
+    testState.activityTierById = new Map();
+    view.rerender(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    const idleItem = dropdownItem("archive-item-chat-root");
+    expect(isMenuItemUnavailable(idleItem)).toBe(false);
+    expect(tooltipTextIn(idleItem)).toBeNull();
+    expect(idleItem.parentElement).toBe(
+      dropdownItem("rename-chat-root").parentElement,
+    );
+  });
+
+  it("still offers Unarchive on a running archived row (B11)", () => {
+    seedChatTree();
+    testState.archivedIds = ["chat-root"];
+    testState.archiveVisibility = "all";
+    // An inbound message auto-unarchives and wakes the agent, so archived+busy
+    // is a real state - and unarchiving is the direction the host allows.
+    testState.activeAgentIds = new Set(["chat-root"]);
+    testState.activityTierById = new Map([["chat-root", "turn"]]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const entry = dropdownItem("archive-item-chat-root");
+    expect(entry.textContent).toContain("Unarchive");
+    expect(isMenuItemUnavailable(entry)).toBe(false);
+  });
+
+  it("keeps a busy row's Archive entry keyboard-reachable (B11)", () => {
+    // Radix renders a `disabled` item as non-focusable AND filters it out of
+    // typeahead. Since the hover button is hidden while the row is busy, hard
+    // -disabling here would make the action and its reason invisible to
+    // keyboard/screen-reader users: Archive would simply vanish from the menu
+    // with no signal it exists. `aria-disabled` keeps it announced and
+    // focusable while still refusing selection.
+    seedChatTree();
+    testState.activeAgentIds = new Set(["chat-root"]);
+    testState.activityTierById = new Map([["chat-root", "turn"]]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const item = dropdownItem("archive-item-chat-root");
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    // NOT the hard-disabled form, which is what removes it from the keyboard.
+    expect(item.matches(":disabled")).toBe(false);
+  });
+
+  it("puts NOTHING between the menu and a busy item (B11)", () => {
+    // Any element between `role="menu"` and `role="menuitem"` breaks the
+    // owned-children relationship, so the item's announced position/count goes
+    // wrong - and only on busy rows. `role="presentation"` does not rescue it
+    // here: ARIA ignores a presentational role on an element carrying a global
+    // ARIA property, and Radix Tooltip assigns `aria-describedby` to its
+    // trigger while open. A wrapper would therefore un-presentation itself at
+    // the exact moment a keyboard user focused the entry and opened its
+    // tooltip - the one state it was added for.
+    seedChatTree();
+    testState.activeAgentIds = new Set(["chat-root"]);
+    testState.activityTierById = new Map([["chat-root", "turn"]]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const busyItem = dropdownItem("archive-item-chat-root");
+    // Same parent as an entry that has no tooltip: no extra level was
+    // introduced for the busy one.
+    expect(busyItem.parentElement).toBe(
+      dropdownItem("rename-chat-root").parentElement,
+    );
+  });
+
+  it("applies the same refusal to the CONTEXT menu entry (B11)", () => {
+    // The context menu is the one path that runs against unmocked Radix in
+    // this file (`@/components/ui/dropdown-menu` is mocked,
+    // `@/components/ui/context-menu` is not), so it is the only place a real
+    // Radix regression in the wrapper could surface.
+    seedChatTree();
+    testState.activeAgentIds = new Set(["chat-root"]);
+    testState.activityTierById = new Map([["chat-root", "background"]]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.contextMenu(screen.getByTestId("epic-sidebar-item-chat-root"));
+
+    const item = screen.getByTestId("epic-sidebar-context-archive-chat-root");
+    expect(isMenuItemUnavailable(item)).toBe(true);
+    // Soft-disabled, so Radix `disabled` is false and no `data-disabled`
+    // pointer-events trap applies - which is what lets the tooltip trigger sit
+    // on the item and keeps the item directly under the menu.
+    //
+    // `data-disabled` carries the whole assertion. A `:disabled` check would
+    // read like a second one but could never fail here: this item is real
+    // Radix, so it is a `<div role="menuitem">`, and CSS `:disabled` matches
+    // only form elements. See `isMenuItemUnavailable` below.
+    expect(item.hasAttribute("data-disabled")).toBe(false);
+    expect(item.parentElement).toBe(
+      screen.getByTestId("epic-sidebar-context-rename-chat-root")
+        .parentElement ?? null,
+    );
+  });
+
+  it("describes the FOCUSED item with the reason, not just the wrapper (B11)", () => {
+    // The tooltip alone does not reach a screen reader. `TooltipWrapper` uses
+    // `asChild`, so Radix owns `aria-describedby` on the WRAPPER while keyboard
+    // focus lands on the item inside it - and ARIA descriptions are not
+    // inherited by descendants. Without the item's own description the user
+    // hears "Archive, dimmed" and never the reason, which is the entire point
+    // of keeping the entry reachable.
+    //
+    // Asserted on the context menu because it runs against unmocked Radix: a
+    // mock could satisfy this by construction.
+    seedChatTree();
+    testState.activeAgentIds = new Set(["chat-root"]);
+    testState.activityTierById = new Map([["chat-root", "background"]]);
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.contextMenu(screen.getByTestId("epic-sidebar-item-chat-root"));
+
+    const item = screen.getByTestId("epic-sidebar-context-archive-chat-root");
+    const describedBy = item.getAttribute("aria-describedby");
+    if (describedBy === null) {
+      throw new Error("expected the item itself to carry aria-describedby");
+    }
+    // Must RESOLVE - a dangling id reads to a screen reader as no description
+    // at all, which is exactly the bug this guards, wearing the right attribute.
+    const description = document.getElementById(describedBy);
+    if (description === null) {
+      throw new Error(`aria-describedby '${describedBy}' resolves to nothing`);
+    }
+    expect(description.textContent).toContain("background items running");
+    expect(description.textContent).toContain("stop them from its chat");
+    // Scoped to the item that owns it, so sibling rows cannot collide.
+    expect(item.contains(description)).toBe(true);
+  });
+
+  it("leaves an unexplained disabled entry undescribed (B11)", () => {
+    // A transient in-flight mutation is hard-disabled and carries no reason.
+    // Pointing `aria-describedby` at an element that does not exist would be
+    // worse than omitting it, so the id must be absent, not empty.
+    //
+    // Driven through `archiveRowPending`, the PER-ROW hook. Clearing
+    // `activeAgentIds` alone would leave the entry fully ENABLED, so the
+    // assertion would hold for a row that is not disabled at all - passing
+    // without ever reaching the state named in the title.
+    seedChatTree();
+    testState.activeAgentIds = new Set();
+    testState.archiveRowPending = true;
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    const item = dropdownItem("archive-item-chat-root");
+    // Genuinely unavailable...
+    expect(isMenuItemUnavailable(item)).toBe(true);
+    // ...and hard-disabled, so Radix keeps its own ARIA rather than ours.
+    expect(item.getAttribute("aria-describedby")).toBeNull();
+  });
+
+  /**
+   * A running shell is the one activity `runStatus` cannot speak for: it
+   * outlives the turn that started it, so the chat reads idle while a process
+   * of its own is still printing. The host refuses to archive over one, so the
+   * row must refuse too - both halves of the affordance, since the hover button
+   * is offered only on an idle row.
+   */
+  it("refuses Archive while an open session owns a running shell (B11)", () => {
+    seedChatTree();
+    const handle = createSessionHandle("chat-child");
+    handle.store.setState({ managedCommands: [runningShell("chat-child")] });
+    testState.sessionHandleByChatId = { "chat-child": handle };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    // The leading icon has always read the shell; the gate must agree with it,
+    // or the row shows "working" beside an Archive that says it is idle.
+    expect(leadingStatusKinds("chat-child")).toEqual(["background-activity"]);
+    const entry = dropdownItem("archive-item-chat-child");
+    expect(isMenuItemUnavailable(entry)).toBe(true);
+    expect(tooltipTextIn(entry)).toBe(
+      "Can't archive while this agent has background items running. Stopping the agent won't clear them — wait for them to finish, or stop them from its chat.",
+    );
+    expect(screen.queryByTestId("epic-sidebar-archive-chat-child")).toBeNull();
+  });
+
+  it("returns both archive affordances once the shell exits (B11)", () => {
+    // Only a RUNNING shell is activity. An exited one is a durable record, and
+    // gating on it would strand the row's Archive forever.
+    seedChatTree();
+    const handle = createSessionHandle("chat-child");
+    handle.store.setState({
+      managedCommands: [
+        {
+          ...runningShell("chat-child"),
+          status: {
+            state: "exited",
+            exitCode: 0,
+            signal: null,
+            exitedAtMs: 2,
+          },
+        },
+      ],
+    });
+    testState.sessionHandleByChatId = { "chat-child": handle };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+
+    expect(leadingStatusKinds("chat-child")).toEqual([]);
+    const entry = dropdownItem("archive-item-chat-child");
+    expect(isMenuItemUnavailable(entry)).toBe(false);
+    expect(
+      screen.getByTestId("epic-sidebar-archive-chat-child"),
+    ).not.toBeNull();
+  });
+});
+
+/**
+ * "Unavailable" as the USER experiences it, across both disable mechanisms.
+ *
+ * An entry that carries an explanation is soft-disabled (`aria-disabled`) so it
+ * stays keyboard-reachable and can still surface its tooltip; a transient one
+ * is hard-disabled. Asserting `:disabled` alone would both miss the soft form
+ * and, in this file, only ever be testing the tooltip MOCK - CSS `:disabled`
+ * matches form elements, and real Radix renders
+ * `<div role="menuitem" aria-disabled="true">`, which it can never match.
+ */
+function isMenuItemUnavailable(el: HTMLElement): boolean {
+  return el.matches(":disabled") || el.getAttribute("aria-disabled") === "true";
+}
+
+/** A pre-send failure: the owning host's session was not ready. */
+function unreachableOwnerHost(method: string): RetryableTransportError {
+  return new RetryableTransportError({
+    replaySafetyFromKey: false,
+    code: "RPC_ERROR",
+    message: "Remote session is not ready",
+    requestId: "req-1",
+    method,
+    fatalDetails: null,
+  });
+}
+
+function seedChatTree(): void {
+  const chatRoot = treeNode("chat-root", null, "Root chat", "chat");
+  const chatChild = treeNode("chat-child", "chat-root", "Child chat", "chat");
+  const agentRoot = treeNode(
+    "agent-root",
+    null,
+    "Terminal agent",
+    "terminal-agent",
+  );
+  testState.activePanelId = "chats";
+  testState.expandedIds = new Set(["chat-root"]);
+  testState.tree = {
+    rootIds: ["chat-root", "agent-root"],
+    childrenByParent: { "chat-root": ["chat-child"] },
+    nodeById: {
+      "agent-root": agentRoot,
+      "chat-child": chatChild,
+      "chat-root": chatRoot,
+    },
+  };
+  testState.records = [chatRoot, chatChild, agentRoot].map(recordFromNode);
+}
+
+function seedGuiChatTree(): void {
+  const chatRoot = treeNode("chat-root", null, "Root chat", "chat");
+  const chatChild = treeNode("chat-child", "chat-root", "Child chat", "chat");
+  testState.activePanelId = "chats";
+  testState.expandedIds = new Set(["chat-root"]);
+  testState.tree = {
+    rootIds: ["chat-root"],
+    childrenByParent: { "chat-root": ["chat-child"] },
+    nodeById: {
+      "chat-child": chatChild,
+      "chat-root": chatRoot,
+    },
+  };
+  testState.records = [chatRoot, chatChild].map(recordFromNode);
+}
+
+function seedArtifactTree(): void {
+  const specRoot = treeNode("spec-root", null, "Root spec", "spec");
+  const ticketChild = treeNode(
+    "ticket-child",
+    "spec-root",
+    "Child ticket",
+    "ticket",
+  );
+  testState.expandedIds = new Set(["spec-root"]);
+  testState.tree = {
+    rootIds: ["spec-root"],
+    childrenByParent: { "spec-root": ["ticket-child"] },
+    nodeById: {
+      "spec-root": specRoot,
+      "ticket-child": ticketChild,
+    },
+  };
+  testState.records = [specRoot, ticketChild].map(recordFromNode);
+}
+
+function treeNode(
+  id: string,
+  parentId: string | null,
+  title: string,
+  type: TestTreeNode["type"],
+): TestTreeNode {
+  return {
+    id,
+    parentId,
+    title,
+    type,
+    status: type === "ticket" ? 0 : null,
+    createdAt: 1,
+    updatedAt: 2,
+  };
+}
+
+function recordFromNode(node: TestTreeNode): TestRecord {
+  return {
+    id: node.id,
+    parentId: node.parentId,
+    name: node.title,
+    type: node.type,
+    status: node.status,
+    hostId: "host-1",
+  };
+}
+
+/**
+ * The tree mounted on a non-desktop SURFACE - the mobile switcher's Agents tab.
+ *
+ * These live beside the desktop cases rather than in a switcher test file
+ * because the harness above is what standing this tree up costs: 45 module
+ * mocks, every one of them derived from a real producer. A second copy of that
+ * set would be fixtures chosen to go green, not fixtures that describe the
+ * system, so the surface's cases reuse this one.
+ */
+describe("chat tree on a mounting surface", () => {
+  afterEach(cleanup);
+  beforeEach(() => {
+    // This describe drives the panel search store directly, and the outer
+    // suite's reset does not reach here - without this, the case that seeds a
+    // query leaks it into the case asserting the store stays untouched.
+    usePanelHeaderSearchStore.setState(
+      usePanelHeaderSearchStore.getInitialState(),
+      true,
+    );
+  });
+
+  function mountedSurface(
+    overrides: Partial<ChatTreeSurface>,
+  ): ChatTreeSurface {
+    return {
+      onRowActivated: () => undefined,
+      revealRowControls: true,
+      searchQuery: null,
+      startNewChat: () => undefined,
+      ...overrides,
+    };
+  }
+
+  function renderOnSurface(surface: ChatTreeSurface | null) {
+    return render(
+      <ChatTreeSurfaceContext.Provider value={surface}>
+        <EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />
+      </ChatTreeSurfaceContext.Provider>,
+    );
+  }
+
+  it("dismisses the surface when a local row is tapped", () => {
+    seedChatTree();
+    let dismissed = 0;
+    renderOnSurface(mountedSurface({ onRowActivated: () => (dismissed += 1) }));
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-item-chat-root"));
+
+    expect(dismissed).toBe(1);
+  });
+
+  it("does not dismiss on the desktop sidebar, which mounts no surface", () => {
+    // The control arm. Without it a dismiss that fired unconditionally would
+    // pass the case above and still be wrong.
+    seedChatTree();
+    renderOnSurface(null);
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-item-chat-root"));
+
+    // Nothing to assert a count on - the point is that the desktop path takes
+    // no surface at all, so reaching this line without throwing IS the result.
+    expect(screen.getByTestId("epic-sidebar-item-chat-root")).toBeTruthy();
+  });
+
+  it("hands a row's child create to the surface instead of the modal", () => {
+    // The phone sheet creates the child itself, like its root "+". The modal
+    // it replaces mounts only on a matching route, which a phone cold launch
+    // does not have.
+    seedChatTree();
+    useNewConversationModalOpenStore.getState().close();
+    const started: Array<string | null> = [];
+    renderOnSurface(
+      mountedSurface({ startNewChat: (parentId) => started.push(parentId) }),
+    );
+
+    fireEvent.click(screen.getByTestId("epic-sidebar-more-chat-root"));
+    fireEvent.click(dropdownItem("new-child-chat-root"));
+
+    expect(started).toEqual(["chat-root"]);
+    expect(useNewConversationModalOpenStore.getState().request).toBeNull();
+  });
+
+  it("narrows by the SURFACE's query when it owns one", () => {
+    seedChatTree();
+    renderOnSurface(mountedSurface({ searchQuery: "Child" }));
+
+    expect(screen.getByTestId("epic-sidebar-item-chat-child")).toBeTruthy();
+    // The TUI agent matches neither the query nor an ancestor of a match.
+    expect(screen.queryByTestId("epic-sidebar-item-agent-root")).toBeNull();
+  });
+
+  it("leaves the panel's own query authoritative when the surface owns none", () => {
+    // The other direction. `searchQuery: null` must read the store, or the
+    // desktop panel silently stops filtering the moment anything mounts a
+    // surface anywhere above it.
+    seedChatTree();
+    act(() => {
+      usePanelHeaderSearchStore.getState().openSearch(TAB_ID, "chats", "Child");
+    });
+    renderOnSurface(mountedSurface({ searchQuery: null }));
+
+    expect(screen.getByTestId("epic-sidebar-item-chat-child")).toBeTruthy();
+    expect(screen.queryByTestId("epic-sidebar-item-agent-root")).toBeNull();
+  });
+
+  it("does not write the invisible panel query from type-to-filter", () => {
+    // The surface renders its own field; this store's query would be edited by
+    // a control the user cannot see, and would still be there when the desktop
+    // panel next opened.
+    seedChatTree();
+    renderOnSurface(mountedSurface({ searchQuery: "" }));
+    // The two fields `openSearch` would have written. Asserting them by name
+    // rather than snapshotting the store, which holds live DOM nodes in
+    // `slotBySurfaceKey` and cannot be serialized.
+    const before = usePanelHeaderSearchStore.getState();
+    expect(before.openBySurfaceKey).toEqual({});
+    expect(before.queryBySurfaceKey).toEqual({});
+
+    fireEvent.keyDown(screen.getByTestId("epic-chat-tree-region"), {
+      key: "z",
+    });
+
+    const after = usePanelHeaderSearchStore.getState();
+    expect(after.openBySurfaceKey).toEqual({});
+    expect(after.queryBySurfaceKey).toEqual({});
+  });
+
+  it("gives the chevron a hit area only on a mounting surface", () => {
+    seedChatTree();
+    const onSurface = renderOnSurface(mountedSurface({}));
+    expect(
+      onSurface.container.querySelector('[class*="before:-inset-2"]'),
+    ).not.toBeNull();
+    onSurface.unmount();
+
+    const desktop = renderOnSurface(null);
+    expect(
+      desktop.container.querySelector('[class*="before:-inset-2"]'),
+    ).toBeNull();
+  });
+});

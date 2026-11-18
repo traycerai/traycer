@@ -1,0 +1,105 @@
+import type { EpicTreeRecord } from "@/lib/epic-selectors";
+
+export interface SwitcherTreeNode {
+  readonly record: EpicTreeRecord;
+  readonly children: ReadonlyArray<SwitcherTreeNode>;
+}
+
+const NO_NODES: ReadonlyArray<SwitcherTreeNode> = Object.freeze([]);
+
+/**
+ * Re-arranges an already-ordered record slice into an intermediate tree. The
+ * list flattens this tree into rows with depth and sibling positions before
+ * windowing them.
+ *
+ * Depth is measured over the records PRESENT in the slice, not over the epic's
+ * full tree. A record whose parent the facet filters removed is returned as a
+ * root rather than nested under a row that is not on screen, which is what lets
+ * this surface keep narrowing by plain membership - no ancestor expansion -
+ * now that it draws nesting: a match is still shown, and shown at a depth that
+ * describes the list the user is actually looking at.
+ *
+ * Sibling order is the slice's own order, so whatever the epic's sort decided
+ * still decides. Nesting regroups; it never re-sorts.
+ *
+ * Every input record appears exactly once. A record no root reaches - a parent
+ * cycle in a malformed tree - is adopted as a root after the walk rather than
+ * dropped, because a row the user cannot see at all is worse than one whose
+ * position is arbitrary.
+ */
+export function buildSwitcherArtifactTree(
+  records: ReadonlyArray<EpicTreeRecord>,
+): ReadonlyArray<SwitcherTreeNode> {
+  if (records.length === 0) return NO_NODES;
+  const present = new Set(records.map((record) => record.id));
+  const rootRecords: EpicTreeRecord[] = [];
+  const childrenByParent = new Map<string, EpicTreeRecord[]>();
+  for (const record of records) {
+    const parentId = record.parentId;
+    if (parentId === null || parentId === record.id || !present.has(parentId)) {
+      rootRecords.push(record);
+      continue;
+    }
+    const siblings = childrenByParent.get(parentId);
+    if (siblings === undefined) childrenByParent.set(parentId, [record]);
+    else siblings.push(record);
+  }
+
+  const emitted = new Set<string>();
+  function build(record: EpicTreeRecord): SwitcherTreeNode {
+    // Marked before the descent, so a cycle terminates at the record that
+    // opened it instead of recurring through its own descendants forever.
+    emitted.add(record.id);
+    const children = childrenByParent.get(record.id);
+    if (children === undefined) return { record, children: NO_NODES };
+    return {
+      record,
+      children: children
+        .filter((child) => !emitted.has(child.id))
+        .map((child) => build(child)),
+    };
+  }
+
+  const roots = rootRecords.map((record) => build(record));
+  const stranded = records.flatMap((record) =>
+    emitted.has(record.id) ? [] : [build(record)],
+  );
+  return stranded.length === 0 ? roots : [...roots, ...stranded];
+}
+
+/**
+ * One row of the list the tree is drawn as: the node and where it sits, in
+ * the terms a flat `role="tree"` announces (WAI-ARIA's `aria-level`,
+ * `aria-posinset`, `aria-setsize`). The list windows its rows, so a parent
+ * and its children are siblings in the DOM and the nesting has to be said
+ * per row rather than built from `role="group"` containment.
+ */
+export interface SwitcherArtifactTreeRow {
+  readonly record: EpicTreeRecord;
+  readonly depth: number;
+  readonly branch: boolean;
+  /** 1-based position among its siblings. */
+  readonly posInSet: number;
+  readonly setSize: number;
+}
+
+/** Pre-order, the order the tree reads top to bottom. */
+export function flattenSwitcherArtifactTree(
+  roots: ReadonlyArray<SwitcherTreeNode>,
+): ReadonlyArray<SwitcherArtifactTreeRow> {
+  const rows: SwitcherArtifactTreeRow[] = [];
+  function walk(nodes: ReadonlyArray<SwitcherTreeNode>, depth: number): void {
+    nodes.forEach((node, index) => {
+      rows.push({
+        record: node.record,
+        depth,
+        branch: node.children.length > 0,
+        posInSet: index + 1,
+        setSize: nodes.length,
+      });
+      walk(node.children, depth + 1);
+    });
+  }
+  walk(roots, 0);
+  return rows;
+}

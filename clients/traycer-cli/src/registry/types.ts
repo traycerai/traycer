@@ -1,0 +1,114 @@
+// Host registry types per the Native Packaging Tech Plan. The CLI
+// reads `versions.json` from a Traycer-hosted CDN to discover available
+// host releases; downloads each archive from the URL recorded in the
+// per-platform entry, verifies its sha256 + minisign signature, and
+// only then unpacks/replaces the install directory.
+//
+// NP-2 ships the type seam + a stub `RegistryClient` so the installer
+// can be wired up end-to-end against local-file sources. NP-4 fills in
+// the actual HTTP fetch + minisign verifier.
+
+import type { HostStoreFormats } from "@traycer/protocol/host/store-formats";
+
+export type HostPlatformKey =
+  | "darwin-arm64"
+  | "darwin-x64"
+  | "linux-arm64"
+  | "linux-x64"
+  | "win32-arm64"
+  | "win32-x64";
+
+export interface HostPlatformAsset {
+  readonly mirrors?: readonly {
+    readonly url: string;
+    readonly signatureUrl: string;
+  }[];
+  readonly descriptorUrl?: string;
+  readonly available: boolean;
+  readonly unavailableReason: string | null;
+  readonly url: string;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+  readonly signatureUrl: string;
+  readonly signatureAlgorithm: "minisign";
+  readonly publicKeyId: string;
+}
+
+export interface HostVersionEntry {
+  readonly version: string;
+  readonly releasedAt: string;
+  readonly releaseNotesUrl: string;
+  readonly yanked: boolean;
+  readonly deprecationReason: string | null;
+  readonly requiredCliVersion: string | null;
+  /**
+   * The on-disk store formats this host build writes, or `null` when the entry
+   * predates the field. Published from 1.3.0 on; earlier entries are covered by
+   * the fixed table in `@traycer/protocol/host/store-formats`, and an entry
+   * above that table's ceiling with no field is treated as UNKNOWN, which the
+   * downgrade floor refuses.
+   */
+  readonly storeFormats: HostStoreFormats | null;
+  /**
+   * The client-compatibility EPOCH this host build baked, or `null` when it
+   * baked none.
+   *
+   * PURELY DESCRIPTIVE HERE. Nothing on the client reads it to decide anything:
+   * the floor is enforced by the host itself at connection time, from its own
+   * bytes, and a client that tried to pre-empt that would be second-guessing a
+   * decision it does not own. It is recorded so RELEASE TOOLING can answer the
+   * one question nothing else can - "which floors are currently active in the
+   * field" - before letting a client build become the candidate an updater
+   * resolves.
+   *
+   * ABSENT MEANS NO FLOOR, and absence is the common case: every entry
+   * published before this field existed lacks it. That is why it parses as
+   * nullable rather than required - making it required would reject the entire
+   * existing manifest, and this parser is shipped in clients that must keep
+   * reading manifests written both before and after this change.
+   */
+  readonly minimumEpoch: number | null;
+  readonly platforms: Readonly<Record<string, HostPlatformAsset>>;
+}
+
+export interface HostVersionsManifest {
+  readonly schemaVersion: 1;
+  readonly generatedAt: string;
+  readonly latest: string;
+  readonly versions: readonly HostVersionEntry[];
+}
+
+export interface RegistryClient {
+  // Fetch the canonical versions.json manifest. NP-4 implements this
+  // against the production CDN; NP-2 returns a NotImplemented error so
+  // commands that depend on the registry surface a clean message and
+  // doctor can flag the gap.
+  fetchManifest(): Promise<HostVersionsManifest>;
+  // Resolve a version string ("latest" or an explicit semver) against
+  // the manifest, returning the platform-appropriate asset. NP-2 stub
+  // returns a NotImplemented error.
+  resolveAsset(
+    versionRequest: string,
+    platformKey: HostPlatformKey,
+  ): Promise<{
+    readonly entry: HostVersionEntry;
+    readonly asset: HostPlatformAsset;
+  }>;
+  // Download + verify a previously-resolved asset, returning the path
+  // of the verified archive on local disk (typically a temp file). NP-4
+  // implements the minisign + sha256 chain; NP-2 returns a
+  // NotImplemented error.
+  downloadAndVerify(
+    entry: HostVersionEntry,
+    asset: HostPlatformAsset,
+    onProgress: (progress: {
+      downloadedBytes: number;
+      totalBytes: number;
+    }) => void,
+  ): Promise<{
+    readonly archivePath: string;
+    readonly archiveSha256: string;
+    readonly signatureKeyId: string;
+    readonly signatureVerifiedAt: string;
+  }>;
+}

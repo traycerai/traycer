@@ -1,0 +1,58 @@
+.traycer-mobile-client,
+.traycer-mobile-client body,
+.traycer-mobile-client #root {
+  min-height: 100%;
+  min-height: 100dvh;
+}
+
+.traycer-mobile-client body {
+  margin: 0;
+  overscroll-behavior: none;
+}
+
+.traycer-mobile-client
+  [data-layout="hero"]
+  [data-testid="signin-device-progress"]
+  .text-muted-foreground {
+  color: rgb(255 255 255 / 0.68);
+}
+
+@media (max-width: 639px), (max-height: 639px) and (orientation: landscape) {
+  .traycer-mobile-client main:has([data-layout="hero"]) {
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  /* `100dvh` is the whole screen, and correct here: sign-in renders in the
+     standalone shell, which is the app's one full-bleed surface and takes the
+     viewport directly rather than sitting inside `#root`'s safe-area
+     reservation. The section's own padding is therefore what keeps the
+     sign-in controls clear of the status bar and, in landscape, of the sensor
+     housing. `max()` and not a sum, so the layout's gutter is unchanged on a
+     device with no inset. */
+  .traycer-mobile-client main:has([data-layout="hero"]) > section {
+    min-height: 100dvh;
+    padding: max(3rem, var(--safe-area-inset-top))
+      max(1rem, var(--safe-area-inset-right)) 3rem
+      max(1rem, var(--safe-area-inset-left));
+  }
+
+  .traycer-mobile-client [data-layout="hero"] button {
+    min-height: 2.75rem;
+  }
+
+  /* Pinned to the bottom-right corner, which is where the home indicator and
+     a landscape sensor housing both are. */
+  .traycer-mobile-client footer {
+    padding-right: max(1rem, var(--safe-area-inset-right));
+    padding-bottom: max(0.75rem, var(--safe-area-inset-bottom));
+  }
+}
+
+@media (max-height: 639px) {
+  .traycer-mobile-client main:has([data-layout="hero"]) > section {
+    justify-content: flex-start;
+    padding-top: max(1.5rem, var(--safe-area-inset-top));
+    padding-bottom: 1.5rem;
+  }
+}

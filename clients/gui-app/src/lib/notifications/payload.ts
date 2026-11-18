@@ -1,0 +1,1239 @@
+// Notification payload contract consumed by `NotificationFocusBridge`.
+//
+// Payloads travel from the runner (desktop / mobile) as `unknown`. The GUI
+// decides how to interpret them. Parsing is total - unrecognized shapes
+// produce `null` instead of throwing, so a bad payload cannot break the
+// mounted runtime.
+
+import type { UseNavigateResult } from "@tanstack/react-router";
+import {
+  NOTIFICATION_EVENT_TYPES,
+  type NotificationEvent,
+} from "@traycer/protocol/notifications/notification-entry";
+import { parseKnownHostNotificationPayloadForKind } from "@traycer/protocol/host/notifications/contracts";
+import { botIdSchema } from "@traycer/protocol/host/bot/schemas";
+import {
+  existingEpicTabIntentWithNestedFocus,
+  navigateToTabIntent,
+  openOrFocusEpicIntent,
+} from "@/lib/tab-navigation";
+import { ensureSettingsTab } from "@/lib/commands/actions/open-system-tab";
+import { preservedTileRecordIsLive } from "@/lib/commands/actions/history-navigation";
+import type { SettingsSectionId } from "@/lib/settings-sections";
+import {
+  findOpenArtifactInTab,
+  findOpenTileInTab,
+  useEpicCanvasStore,
+} from "@/stores/epics/canvas/store";
+import { TILE_KIND_BROWSER_SESSION } from "@/stores/epics/canvas/tile-kinds";
+import { browserSessionTileId } from "@/stores/epics/canvas/tile-schema/browser-tile";
+import {
+  type ChatTranscriptJumpTarget,
+  useChatTranscriptJumpStore,
+} from "@/stores/chats/chat-transcript-jump-store";
+import { selectWorktreeCleanupView } from "@/stores/settings/worktree-cleanup-view-store";
+import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
+import { openBotChannel } from "@/lib/bots/open-bot-channel";
+import { tracySurfaceHostId } from "@/stores/bots/tracy-surface-store";
+import type { BotTabLanding } from "@/stores/bots/bot-tab-landing-store";
+
+export type NotificationPayloadKind =
+  | "session"
+  | "artifact"
+  | "epic"
+  | "approval"
+  | "interview"
+  | "feedbackDraft"
+  | "chat"
+  | "terminal"
+  | "browserSession"
+  | "hostSurface";
+
+export interface SessionNotificationPayload {
+  readonly kind: "session";
+  readonly sessionId: string;
+}
+
+export interface ArtifactNotificationPayload {
+  readonly kind: "artifact";
+  readonly artifactId: string;
+  readonly epicId: string | undefined;
+  readonly threadId: string | undefined;
+}
+
+export interface EpicNotificationPayload {
+  readonly kind: "epic";
+  readonly epicId: string;
+}
+
+export interface ApprovalNotificationPayload {
+  readonly kind: "approval";
+  readonly epicId: string | undefined;
+  readonly chatId: string | undefined;
+  readonly approvalId: string | undefined;
+  readonly sessionId: string | undefined;
+  readonly artifactId: string | undefined;
+}
+
+export interface InterviewNotificationPayload {
+  readonly kind: "interview";
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly interviewBlockId: string | undefined;
+}
+
+/** A feedback draft an agent wrote, waiting on its `tool_call` block. */
+export interface FeedbackDraftNotificationPayload {
+  readonly kind: "feedbackDraft";
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly blockId: string;
+}
+
+/**
+ * A bot's conversation a notification is about (a push of the bot's
+ * channel, Tracy Bots VN4): the bot, the thread of it, and the row.
+ */
+export interface BotNotificationTarget {
+  readonly botId: string;
+  /** `null` for a row of the channel no thread hangs off. */
+  readonly threadId: string | null;
+  readonly messageId: string | null;
+}
+
+export interface ChatNotificationPayload {
+  readonly kind: "chat";
+  readonly epicId: string;
+  readonly chatId: string | undefined;
+  /** Opens the bot's tab rather than the chat, where a bot is named. */
+  readonly bot?: BotNotificationTarget;
+  /** Durable host binding of the chat itself. This may differ from the host
+   * that authored the notification feed row. */
+  readonly hostId?: string;
+  /** Optional transcript row associated with the notification occurrence. */
+  readonly messageId?: string;
+  /** Optional durable event associated with an inline transcript occurrence. */
+  readonly eventId?: string;
+  /** Explicit current-state navigation. Final Done always supersedes an older
+   * occurrence anchor and opens at the live end of the transcript. */
+  readonly scrollToEnd?: true;
+}
+
+export interface TerminalNotificationPayload {
+  readonly kind: "terminal";
+  readonly epicId: string;
+  readonly terminalId: string;
+  readonly tabId: string;
+  readonly paneId: string;
+  readonly tileInstanceId: string;
+}
+
+/**
+ * A parked browser session's tile. `sessionId`/`tabId` address the tile
+ * deterministically (its canvas node id is `browser-session:<sessionId>:<tabId>`),
+ * and the session is host-local for life - so this routes only to a tile bound
+ * to the row's origin host, never to a same-id tile on another machine.
+ */
+export interface BrowserSessionNotificationPayload {
+  readonly kind: "browserSession";
+  readonly epicId: string;
+  readonly sessionId: string;
+  readonly tabId: string;
+}
+
+/**
+ * A host-managed surface rather than a document inside an epic.
+ *
+ * One destination FAMILY, not one payload kind per operation: the notification
+ * model is expected to grow to test boxes, development environments, and other
+ * host-owned resources, and each of those would otherwise add a transport type
+ * for what is really the same navigation shape. `surface` grows here in client
+ * code - it is never persisted in a notification row, because a durable route
+ * would freeze today's UI into data that outlives it.
+ *
+ * `focus` is a HINT. A surface must always be reachable without it: the
+ * resource a row describes may be gone by the time the row is read (a deleted
+ * worktree, by construction), and failing to resolve a focus target must never
+ * turn into a dead-end activation.
+ */
+export type HostSurfaceNotificationPayload = {
+  readonly kind: "hostSurface";
+  /**
+   * Which view WITHIN the surface, when the surface has more than one. Also a
+   * hint, and for the same reason `focus` is: a build that does not know a view
+   * must land on the surface itself rather than refuse to navigate, so this can
+   * only ever narrow a destination that already works without it.
+   */
+  readonly view?: "cleanupHistory" | undefined;
+  readonly focus: { readonly resourceId: string } | undefined;
+} & (
+  | {
+      readonly surface: "worktreeSettings";
+      /** Cleanup history names its host; manual deletion keeps the current scope. */
+      readonly hostId?: string | undefined;
+    }
+  | {
+      readonly surface: "notificationSettings";
+      /** The computer whose hooks were removed. Still required on the wire; the row opens Alerts, which no host scopes. */
+      readonly hostId: string;
+    }
+);
+
+export type NotificationPayload =
+  | SessionNotificationPayload
+  | ArtifactNotificationPayload
+  | EpicNotificationPayload
+  | ApprovalNotificationPayload
+  | InterviewNotificationPayload
+  | FeedbackDraftNotificationPayload
+  | ChatNotificationPayload
+  | TerminalNotificationPayload
+  | BrowserSessionNotificationPayload
+  | HostSurfaceNotificationPayload;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function parseSessionPayload(
+  value: Record<string, unknown>,
+): SessionNotificationPayload | null {
+  const sessionId = readString(value.sessionId);
+  if (sessionId === null) {
+    return null;
+  }
+  return { kind: "session", sessionId };
+}
+
+function parseArtifactPayload(
+  value: Record<string, unknown>,
+): ArtifactNotificationPayload | null {
+  const artifactId = readString(value.artifactId);
+  if (artifactId === null) {
+    return null;
+  }
+  const epicId = readString(value.epicId);
+  const threadId = readString(value.threadId);
+  return {
+    kind: "artifact",
+    artifactId,
+    epicId: epicId === null ? undefined : epicId,
+    threadId: threadId === null ? undefined : threadId,
+  };
+}
+
+function parseEpicPayload(
+  value: Record<string, unknown>,
+): EpicNotificationPayload | null {
+  const epicId = readString(value.epicId);
+  if (epicId === null) {
+    return null;
+  }
+  return { kind: "epic", epicId };
+}
+
+/** A present bot target is never discarded in favour of generic chat routing. */
+function readBotNotificationTarget(
+  value: Record<string, unknown>,
+  nested: boolean,
+): BotNotificationTarget | null {
+  const botId = readString(value.botId);
+  if (botId === null) return null;
+  const threadId = readString(value.threadId);
+  const messageId = readString(value.messageId);
+  if (
+    threadId === null &&
+    value.threadId !== null &&
+    (nested || Object.hasOwn(value, "threadId"))
+  )
+    return null;
+  if (
+    messageId === null &&
+    value.messageId !== null &&
+    (nested || Object.hasOwn(value, "messageId"))
+  )
+    return null;
+  if (threadId !== null && messageId === null) return null;
+  return { botId, threadId, messageId };
+}
+
+/** Native envelopes carry a nested target; mobile and older callers carry flat fields. */
+function parseBotNotificationTarget(
+  value: Record<string, unknown>,
+): BotNotificationTarget | null | undefined {
+  if (!Object.hasOwn(value, "bot")) {
+    return Object.hasOwn(value, "botId")
+      ? readBotNotificationTarget(value, false)
+      : undefined;
+  }
+  if (!isRecord(value.bot) || Array.isArray(value.bot)) return null;
+  const nested = readBotNotificationTarget(value.bot, true);
+  if (nested === null) return null;
+  for (const key of ["botId", "threadId", "messageId"] as const) {
+    if (Object.hasOwn(value, key) && value[key] !== nested[key]) return null;
+  }
+  return nested;
+}
+
+function parseChatPayload(
+  value: Record<string, unknown>,
+): ChatNotificationPayload | null {
+  const epicId = readString(value.epicId);
+  if (epicId === null) {
+    return null;
+  }
+  const chatId = readString(value.chatId);
+  const hostId = readString(value.hostId);
+  const messageId = readString(value.messageId);
+  const eventId = readString(value.eventId);
+  const bot = parseBotNotificationTarget(value);
+  if (bot === null) return null;
+  const scrollToEnd =
+    value.outcome === "completed" && value.backgroundWorkRunning !== true;
+  const includeTranscriptAnchor = !scrollToEnd;
+  return {
+    kind: "chat",
+    epicId,
+    chatId: chatId === null ? undefined : chatId,
+    ...(bot === undefined ? {} : { bot }),
+    ...(hostId === null ? {} : { hostId }),
+    messageId:
+      includeTranscriptAnchor && messageId !== null ? messageId : undefined,
+    eventId: includeTranscriptAnchor && eventId !== null ? eventId : undefined,
+    ...(scrollToEnd ? { scrollToEnd: true as const } : {}),
+  };
+}
+
+function parseTerminalPayload(
+  value: Record<string, unknown>,
+): TerminalNotificationPayload | null {
+  const epicId = readString(value.epicId);
+  const terminalId = readString(value.terminalId);
+  const tabId = readString(value.tabId);
+  const paneId = readString(value.paneId);
+  const tileInstanceId = readString(value.tileInstanceId);
+  if (
+    epicId === null ||
+    terminalId === null ||
+    tabId === null ||
+    paneId === null ||
+    tileInstanceId === null
+  ) {
+    return null;
+  }
+  return {
+    kind: "terminal",
+    epicId,
+    terminalId,
+    tabId,
+    paneId,
+    tileInstanceId,
+  };
+}
+
+function parseBrowserSessionPayload(
+  value: Record<string, unknown>,
+): BrowserSessionNotificationPayload | null {
+  const parsed = parseKnownHostNotificationPayloadForKind(
+    "browser.human.needed",
+    value,
+  );
+  if (parsed === null || parsed.kind !== "browser_human_needed") {
+    return null;
+  }
+  return {
+    kind: "browserSession",
+    epicId: parsed.epicId,
+    sessionId: parsed.sessionId,
+    tabId: parsed.tabId,
+  };
+}
+
+/**
+ * The already-normalized shape, as it rides a native activation envelope's
+ * `route`. `parseBrowserSessionPayload` above reads the RAW host payload
+ * (`browser.human.needed`); this reads what that produced, because
+ * `parseEnvelopeV1` re-parses its own route on the way back in.
+ */
+function parseNormalizedBrowserSessionPayload(
+  value: Record<string, unknown>,
+): BrowserSessionNotificationPayload | null {
+  const epicId = readString(value.epicId);
+  const sessionId = readString(value.sessionId);
+  const tabId = readString(value.tabId);
+  if (epicId === null || sessionId === null || tabId === null) {
+    return null;
+  }
+  return { kind: "browserSession", epicId, sessionId, tabId };
+}
+
+function parseApprovalPayload(
+  value: Record<string, unknown>,
+): ApprovalNotificationPayload | null {
+  const epicId = readString(value.epicId);
+  const chatId = readString(value.chatId);
+  const sessionId = readString(value.sessionId);
+  if (epicId === null && sessionId === null) {
+    return null;
+  }
+  const approvalId = readString(value.approvalId);
+  const artifactId = readString(value.artifactId);
+  return {
+    kind: "approval",
+    epicId: epicId === null ? undefined : epicId,
+    chatId: chatId === null ? undefined : chatId,
+    approvalId: approvalId === null ? undefined : approvalId,
+    sessionId: sessionId === null ? undefined : sessionId,
+    artifactId: artifactId === null ? undefined : artifactId,
+  };
+}
+
+function parseInterviewPayload(
+  value: Record<string, unknown>,
+): InterviewNotificationPayload | null {
+  const epicId = readString(value.epicId);
+  const chatId = readString(value.chatId);
+  if (epicId === null || chatId === null) {
+    return null;
+  }
+  const interviewBlockId = readString(value.interviewBlockId);
+  return {
+    kind: "interview",
+    epicId,
+    chatId,
+    interviewBlockId: interviewBlockId === null ? undefined : interviewBlockId,
+  };
+}
+
+function parseFeedbackDraftPayload(
+  value: Record<string, unknown>,
+): FeedbackDraftNotificationPayload | null {
+  const epicId = readString(value.epicId);
+  const chatId = readString(value.chatId);
+  const blockId = readString(value.blockId);
+  if (epicId === null || chatId === null || blockId === null) {
+    return null;
+  }
+  return { kind: "feedbackDraft", epicId, chatId, blockId };
+}
+
+/**
+ * Total parse of a host-surface destination. An unknown `surface` yields
+ * `null` (degrade to opening the centre) rather than a payload the router
+ * would have to guess at - a native envelope can arrive from a NEWER build
+ * that knows surfaces this one does not.
+ */
+function parseHostSurfacePayload(
+  value: Record<string, unknown>,
+): HostSurfaceNotificationPayload | null {
+  if (
+    value.surface !== "worktreeSettings" &&
+    value.surface !== "notificationSettings"
+  ) {
+    return null;
+  }
+  const focus = isRecord(value.focus)
+    ? readString(value.focus.resourceId)
+    : null;
+  // An unknown `view` degrades to the surface's default view, exactly as an
+  // unresolvable `focus` degrades to no focus. A native envelope can arrive
+  // from a newer build naming views this one has never heard of.
+  const view = value.view === "cleanupHistory" ? "cleanupHistory" : undefined;
+  const hostId = readString(value.hostId);
+  if (value.surface === "notificationSettings") {
+    return hostId === null
+      ? null
+      : {
+          kind: "hostSurface",
+          surface: "notificationSettings",
+          hostId,
+          focus: undefined,
+        };
+  }
+  return {
+    kind: "hostSurface",
+    surface: "worktreeSettings",
+    view,
+    hostId: hostId === null ? undefined : hostId,
+    focus: focus === null ? undefined : { resourceId: focus },
+  };
+}
+
+export function parseNotificationPayload(
+  value: unknown,
+): NotificationPayload | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  switch (value.kind) {
+    case "hostSurface":
+      return parseHostSurfacePayload(value);
+    case "session":
+      return parseSessionPayload(value);
+    case "artifact":
+      return parseArtifactPayload(value);
+    case "epic":
+      return parseEpicPayload(value);
+    case "chat":
+      return parseChatPayload(value);
+    case "terminal":
+      return parseTerminalPayload(value);
+    case "browser_human_needed":
+      return parseBrowserSessionPayload(value);
+    case "browserSession":
+      return parseNormalizedBrowserSessionPayload(value);
+    case "approval":
+      return parseApprovalPayload(value);
+    case "interview":
+      return parseInterviewPayload(value);
+    case "feedback_draft":
+    case "feedbackDraft":
+      return parseFeedbackDraftPayload(value);
+    default:
+      return null;
+  }
+}
+
+/**
+ * Derives a typed `NotificationPayload` from a `NotificationEvent` stored in
+ * the shared notification-room schema. Comment-thread events carry epic +
+ * artifact + thread context; permission events carry only the epic.
+ */
+export function buildPayloadFromEvent(
+  event: NotificationEvent,
+): NotificationPayload {
+  switch (event.kind) {
+    case NOTIFICATION_EVENT_TYPES.INVITED:
+    case NOTIFICATION_EVENT_TYPES.ROLE_CHANGED:
+    case NOTIFICATION_EVENT_TYPES.REVOKED:
+      return { kind: "epic", epicId: event.epicId };
+    case NOTIFICATION_EVENT_TYPES.THREAD_CREATED:
+    case NOTIFICATION_EVENT_TYPES.COMMENT_ADDED:
+    case NOTIFICATION_EVENT_TYPES.THREAD_RESOLVED:
+    case NOTIFICATION_EVENT_TYPES.THREAD_DELETED:
+      return {
+        kind: "artifact",
+        epicId: event.epicId,
+        artifactId: event.artifactId,
+        threadId: event.threadId,
+      };
+  }
+}
+
+export type NotificationNavigate = UseNavigateResult<string>;
+
+/**
+ * Pure predicate mirroring `routeNotification`'s no-op branches, without
+ * navigating. Lets a caller (native click routing) decide upfront whether an
+ * activation will actually go anywhere, so a non-navigable payload (a
+ * `session` kind, or an `artifact`/`approval` missing the ids it needs) can
+ * fall back to opening the center instead of activating silently.
+ */
+export function isNotificationPayloadRoutable(
+  payload: NotificationPayload,
+): boolean {
+  switch (payload.kind) {
+    // `hostSurface` is always routable: the surface needs no ids to resolve,
+    // and its focus hint is allowed to miss.
+    case "epic":
+    case "chat":
+    case "interview":
+    case "feedbackDraft":
+    case "terminal":
+    case "browserSession":
+    case "hostSurface":
+      return true;
+    case "approval":
+      return payload.epicId !== undefined && payload.chatId !== undefined;
+    case "artifact":
+      return payload.epicId !== undefined;
+    case "session":
+      return false;
+  }
+}
+
+/**
+ * Single routing entry point used by both `NotificationFocusBridge` (OS toast
+ * clicks) and the in-app notifications popover. Keeps the route-target
+ * contract in one place so the two surfaces cannot drift.
+ */
+export function routeNotification(
+  navigate: NotificationNavigate,
+  payload: NotificationPayload,
+  receivedAt: number,
+): void {
+  // Host-agnostic legacy entry: no origin to honour, so the hostless fallback
+  // is the correct destination and the origin-bound answer is not consulted.
+  routeNotificationForHost(navigate, payload, receivedAt, {
+    originHostId: null,
+    effectiveHostId: null,
+  });
+}
+
+export interface NotificationHostRouteContext {
+  readonly originHostId: string | null;
+  readonly effectiveHostId: string | null;
+}
+
+/**
+ * Routes a notification and answers whether it reached the required
+ * host-bound target. Approval/interview rows require their feed origin;
+ * chat lifecycle rows may name the chat's distinct durable host in payload.
+ *
+ * `false` means the route fell through to a hostless intent, which resolves
+ * through the ambient effective host - fine for an epic or a plain chat, wrong
+ * for an approval or interview that only its origin host can serve.
+ */
+export function routeNotificationForHost(
+  navigate: NotificationNavigate,
+  payload: NotificationPayload,
+  receivedAt: number,
+  context: NotificationHostRouteContext,
+): boolean {
+  const { originHostId, effectiveHostId } = context;
+  switch (payload.kind) {
+    case "epic":
+      navigateToTabIntent(
+        navigate,
+        openOrFocusEpicIntent({
+          epicId: payload.epicId,
+          focus: {
+            focusedAt: receivedAt,
+            focusArtifactId: undefined,
+            focusThreadId: undefined,
+            migrationSource: undefined,
+          },
+        }),
+        undefined,
+      );
+      return true;
+    case "chat":
+      return routeChatNotification(navigate, payload, receivedAt, context);
+    case "terminal":
+      routeTerminalNotification(navigate, payload, receivedAt);
+      return true;
+    case "browserSession":
+      return routeBrowserSessionNotification(
+        navigate,
+        payload,
+        receivedAt,
+        originHostId,
+      );
+    case "approval":
+      if (payload.epicId === undefined || payload.chatId === undefined) {
+        return false;
+      }
+      return routeEpicChatNotification(
+        navigate,
+        {
+          kind: "chat",
+          epicId: payload.epicId,
+          chatId: payload.chatId,
+          messageId: undefined,
+          eventId: undefined,
+        },
+        receivedAt,
+        {
+          targetHostId: originHostId,
+          effectiveHostId,
+          transcriptTarget:
+            payload.approvalId === undefined
+              ? null
+              : { kind: "approval", approvalId: payload.approvalId },
+        },
+      );
+    case "interview":
+      return routeEpicChatNotification(
+        navigate,
+        {
+          kind: "chat",
+          epicId: payload.epicId,
+          chatId: payload.chatId,
+          messageId: undefined,
+          eventId: undefined,
+        },
+        receivedAt,
+        {
+          targetHostId: originHostId,
+          effectiveHostId,
+          transcriptTarget:
+            payload.interviewBlockId === undefined
+              ? null
+              : { kind: "block", blockId: payload.interviewBlockId },
+        },
+      );
+    // The draft's card is the block itself: open the chat, scroll to it and
+    // expand it, on the host that holds the draft.
+    case "feedbackDraft":
+      return routeEpicChatNotification(
+        navigate,
+        {
+          kind: "chat",
+          epicId: payload.epicId,
+          chatId: payload.chatId,
+          messageId: undefined,
+          eventId: undefined,
+        },
+        receivedAt,
+        {
+          targetHostId: originHostId,
+          effectiveHostId,
+          transcriptTarget: { kind: "block", blockId: payload.blockId },
+        },
+      );
+    case "artifact": {
+      if (payload.epicId === undefined) {
+        return false;
+      }
+      navigateToTabIntent(
+        navigate,
+        openOrFocusEpicIntent({
+          epicId: payload.epicId,
+          focus: {
+            focusedAt: receivedAt,
+            focusArtifactId: payload.artifactId,
+            focusThreadId: payload.threadId,
+            migrationSource: undefined,
+          },
+        }),
+        undefined,
+      );
+      return true;
+    }
+    case "hostSurface":
+      routeHostSurfaceNotification(navigate, payload);
+      return true;
+    case "session":
+      return false;
+  }
+}
+
+/**
+ * The tab intent shared by every "focus a specific tile, or fall back to just
+ * opening the epic" route: prepare the tile's nested focus and activate its
+ * tab when a match was found on the canvas, else fall back to the hostless
+ * epic intent. `routeTerminalNotification` and `routeBrowserSessionNotification`
+ * differ only in how they locate `match` (a terminal row names its tab
+ * directly; a browser row searches the canvas for its parked tile).
+ */
+function focusTileIntent(input: {
+  readonly epicId: string;
+  readonly receivedAt: number;
+  readonly focusArtifactId: string | undefined;
+  readonly match: {
+    readonly tabId: string;
+    readonly paneId: string;
+    readonly instanceId: string;
+  } | null;
+}) {
+  const focus = {
+    focusedAt: input.receivedAt,
+    focusArtifactId: input.focusArtifactId,
+    focusThreadId: undefined,
+    migrationSource: undefined,
+  };
+  if (input.match === null) {
+    return openOrFocusEpicIntent({ epicId: input.epicId, focus });
+  }
+  return existingEpicTabIntentWithNestedFocus({
+    epicId: input.epicId,
+    tabId: input.match.tabId,
+    focus,
+    nestedFocus: useEpicCanvasStore
+      .getState()
+      .prepareSetActiveTileTabFocusTarget(
+        input.match.tabId,
+        input.match.paneId,
+        input.match.instanceId,
+      ),
+  });
+}
+
+/**
+ * Focuses the parked browser tile, or opens its epic when no such tile is on a
+ * canvas. `false` when it fell through to the hostless epic intent, so the
+ * caller can decline to credit an activation that never reached the parked
+ * host.
+ */
+function routeBrowserSessionNotification(
+  navigate: NotificationNavigate,
+  payload: BrowserSessionNotificationPayload,
+  receivedAt: number,
+  originHostId: string | null,
+): boolean {
+  const tileId = browserSessionTileId(payload);
+  const state = useEpicCanvasStore.getState();
+  const match = Object.values(state.tabsById)
+    .flatMap((tab) => {
+      if (tab === undefined || tab.epicId !== payload.epicId) return [];
+      const found = findOpenArtifactInTab(tab.tabId, tileId);
+      if (found === null) return [];
+      const tile =
+        state.canvasByTabId[tab.tabId]?.tilesByInstanceId[found.instanceId];
+      if (tile?.type !== TILE_KIND_BROWSER_SESSION) return [];
+      if (originHostId !== null && tile.hostId !== originHostId) return [];
+      return [{ tabId: tab.tabId, ...found }];
+    })
+    .at(0);
+  navigateToTabIntent(
+    navigate,
+    focusTileIntent({
+      epicId: payload.epicId,
+      receivedAt,
+      focusArtifactId: tileId,
+      match: match === undefined ? null : match,
+    }),
+    undefined,
+  );
+  return match !== undefined;
+}
+
+/**
+ * Opens the host-managed surface a row points at.
+ *
+ * Goes through `ensureSettingsTab` rather than navigating to the route
+ * directly so the Settings tab exists, is focused, and REMEMBERS worktrees as
+ * its last section - the same path the command palette and header take. Panel
+ * state that lives outside the route (search text, tier filters, sort) is
+ * therefore untouched: the user lands back on the list they had set up.
+ *
+ * Worktree deletion passes no focus hint on purpose. The row it would point at
+ * has just been deleted, so the only honest destination is the list.
+ *
+ * The two host-scoped hints are applied BEFORE navigating, so the panel reads
+ * them on its first render rather than flashing the wrong host or the wrong
+ * sub-view. Both are total: a row with neither (every manual deletion row)
+ * leaves the administered host alone and selects the inventory, which is the
+ * destination those rows have always had.
+ */
+function routeHostSurfaceNotification(
+  navigate: NotificationNavigate,
+  payload: HostSurfaceNotificationPayload,
+): void {
+  if (payload.surface === "worktreeSettings") {
+    carryViewedHostIntoSettingsScope(payload.hostId ?? null);
+    selectWorktreeCleanupView(
+      payload.view === "cleanupHistory" ? "cleanupHistory" : "settings",
+      payload.focus?.resourceId ?? null,
+    );
+  }
+  navigateToTabIntent(
+    navigate,
+    ensureSettingsTab({
+      subSection: HOST_SURFACE_SETTINGS_SECTION[payload.surface],
+      resetToGeneral: false,
+    }),
+    undefined,
+  );
+}
+
+/**
+ * Every host surface, mapped to the Settings section that hosts it.
+ *
+ * A `Record` keyed by the surface union rather than a switch: it is exhaustive
+ * by construction, so adding a surface fails to compile here until it declares
+ * a destination. A future surface that is NOT a Settings section (a dedicated
+ * route, say) is the point at which this becomes a real dispatch rather than a
+ * table - which is a change to make then, not a switch to guess at now.
+ */
+const HOST_SURFACE_SETTINGS_SECTION: Record<
+  HostSurfaceNotificationPayload["surface"],
+  SettingsSectionId
+> = {
+  worktreeSettings: "worktrees",
+  // A "hooks removed" row. Notification hooks are gone from the app, and with
+  // them the host page that listed them, so it opens Alerts, where what is
+  // left to set about notifications lives; that page is not the host's, so
+  // the row's host is not carried into the Settings scope.
+  notificationSettings: "alerts",
+};
+
+function routeTerminalNotification(
+  navigate: NotificationNavigate,
+  payload: TerminalNotificationPayload,
+  receivedAt: number,
+): void {
+  const tab = useEpicCanvasStore.getState().tabsById[payload.tabId];
+  // The payload names the EXACT tab that owns the terminal. Prepare THAT tab's
+  // nested focus and activate it - never resolve by epic, which would pick an
+  // active/MRU same-epic sibling and land on the wrong tab. A retained,
+  // currently-closed tab is reopened by the controller's legacy projection
+  // (`setActiveTab` reinserts it into `openTabOrder`).
+  const match =
+    tab?.epicId === payload.epicId
+      ? {
+          tabId: payload.tabId,
+          paneId: payload.paneId,
+          instanceId: payload.tileInstanceId,
+        }
+      : null;
+  navigateToTabIntent(
+    navigate,
+    focusTileIntent({
+      epicId: payload.epicId,
+      receivedAt,
+      focusArtifactId: undefined,
+      match,
+    }),
+    undefined,
+  );
+}
+
+interface ChatNotificationRouteContext {
+  readonly targetHostId: string | null;
+  readonly effectiveHostId: string | null;
+  readonly transcriptTarget: ChatTranscriptJumpTarget | null;
+}
+
+function chatNotificationTranscriptTarget(
+  payload: ChatNotificationPayload,
+): ChatTranscriptJumpTarget | null {
+  if (payload.scrollToEnd === true) {
+    return { kind: "end" };
+  }
+  if (payload.eventId !== undefined) {
+    return { kind: "event", eventId: payload.eventId };
+  }
+  if (payload.messageId !== undefined) {
+    return { kind: "message", messageId: payload.messageId };
+  }
+  return null;
+}
+
+function parkChatTranscriptJump(
+  payload: ChatNotificationPayload,
+  context: ChatNotificationRouteContext,
+): void {
+  if (
+    context.targetHostId === null ||
+    payload.chatId === undefined ||
+    context.transcriptTarget === null
+  ) {
+    return;
+  }
+  useChatTranscriptJumpStore
+    .getState()
+    .requestJump(
+      context.targetHostId,
+      payload.chatId,
+      context.transcriptTarget,
+    );
+}
+
+/**
+ * A chat row: the Tracy surface on the bot's channel where the chat is a
+ * bot's, else the chat. A bot's
+ * chat never opens as an epic: its container id is the bot id, so the epic
+ * route would open a tab named after it.
+ */
+function routeChatNotification(
+  navigate: NotificationNavigate,
+  payload: ChatNotificationPayload,
+  receivedAt: number,
+  context: NotificationHostRouteContext,
+): boolean {
+  const { originHostId, effectiveHostId } = context;
+  const bot = botTargetOf(payload);
+  if (bot !== null) return routeBotNotification(navigate, bot, effectiveHostId);
+  return routeEpicChatNotification(navigate, payload, receivedAt, {
+    targetHostId: payload.hostId ?? originHostId,
+    effectiveHostId,
+    transcriptTarget: chatNotificationTranscriptTarget(payload),
+  });
+}
+
+/** A bot's channel to open, and where to land it. */
+interface BotOpenTarget {
+  readonly botId: string;
+  readonly landing: BotTabLanding;
+}
+
+/**
+ * The bot a chat row opens: the one the row names, landed on its thread or
+ * channel, else the bot whose container the chat lives in (a chat search hit,
+ * a session link), landed on that chat, which the tab resolves to its channel,
+ * a thread or a session. `null` for an epic's chat.
+ */
+function botTargetOf(payload: ChatNotificationPayload): BotOpenTarget | null {
+  const { bot } = payload;
+  if (bot !== undefined) {
+    return {
+      botId: bot.botId,
+      landing: {
+        kind: "thread",
+        threadId: bot.threadId,
+        messageId: bot.messageId,
+      },
+    };
+  }
+  if (!botIdSchema.safeParse(payload.epicId).success) return null;
+  if (payload.chatId === undefined) {
+    return {
+      botId: payload.epicId,
+      landing: { kind: "thread", threadId: null, messageId: null },
+    };
+  }
+  return {
+    botId: payload.epicId,
+    landing: {
+      kind: "chat",
+      chatId: payload.chatId,
+      messageId: payload.messageId ?? null,
+      sendPostId: null,
+    },
+  };
+}
+
+/**
+ * Whether routing `payload` would open nothing because it is a bot's chat and
+ * the window has no device to open the Tracy surface on: the surface is
+ * closed and there is no effective host. An open surface reads any bot's
+ * channel through its own host, whether or not that channel was shown.
+ */
+export function isBotChatWithoutDevice(
+  payload: NotificationPayload,
+  effectiveHostId: string | null,
+): boolean {
+  if (payload.kind !== "chat") return false;
+  return (
+    botTargetOf(payload) !== null &&
+    (tracySurfaceHostId() ?? effectiveHostId) === null
+  );
+}
+
+/**
+ * The bot a chat row opens and the host its Tracy surface reads through: the
+ * open surface's own, else the effective host a closed one would bind to.
+ * `null` for any other row, or while the window has no such host.
+ */
+export function botNotificationDestination(
+  payload: NotificationPayload,
+  effectiveHostId: string | null,
+): { readonly botId: string; readonly hostId: string } | null {
+  if (payload.kind !== "chat") return null;
+  const bot = botTargetOf(payload);
+  const hostId = tracySurfaceHostId() ?? effectiveHostId;
+  return bot === null || hostId === null ? null : { botId: bot.botId, hostId };
+}
+
+/**
+ * Opens the Tracy surface on the bot's channel, landed where `target` asks
+ * once the channel can: the landing is asked for before the navigation. An
+ * open surface keeps its host, and a closed one is bound to the window's.
+ * `false`, with nothing opened, while the window has no host to open it on.
+ */
+function routeBotNotification(
+  navigate: NotificationNavigate,
+  target: BotOpenTarget,
+  effectiveHostId: string | null,
+): boolean {
+  if ((tracySurfaceHostId() ?? effectiveHostId) === null) return false;
+  return openBotChannel(navigate, target.botId, {
+    landing: target.landing,
+    isConnectable: null,
+    onRejected: null,
+  });
+}
+
+function routeEpicChatNotification(
+  navigate: NotificationNavigate,
+  payload: ChatNotificationPayload,
+  receivedAt: number,
+  context: ChatNotificationRouteContext,
+): boolean {
+  if (
+    routeLegacyTerminalNotification(
+      navigate,
+      payload,
+      receivedAt,
+      context.targetHostId,
+    )
+  )
+    return true;
+  if (
+    routeOpenChatNotification(
+      navigate,
+      payload,
+      receivedAt,
+      context.targetHostId,
+    )
+  ) {
+    parkChatTranscriptJump(payload, context);
+    return true;
+  }
+  // A fresh tile is opened through a hostless epic intent. Park its jump only
+  // when the window is already addressing the chat's target host; a
+  // different-host tile with the same chat id must never consume the target.
+  if (
+    context.targetHostId !== null &&
+    context.targetHostId === context.effectiveHostId
+  ) {
+    parkChatTranscriptJump(payload, context);
+  }
+  // Everything above matched a target BOUND to `targetHostId`. The fallback
+  // below does not: `openOrFocusEpicIntent` is hostless by construction, so it
+  // resolves through whichever host is effective. Reported as `false` so an
+  // ORIGIN-REQUIRED activation can decline to ACKNOWLEDGE a prompt it did not
+  // open on its own host - see `useNotificationActivationWithNavigate`. The
+  // navigation still happens: opening the epic is useful either way, and
+  // suppressing it would strand every row whose origin cannot be established.
+  navigateToTabIntent(
+    navigate,
+    openOrFocusEpicIntent({
+      epicId: payload.epicId,
+      focus: {
+        focusedAt: receivedAt,
+        focusArtifactId: payload.chatId,
+        focusThreadId: undefined,
+        migrationSource: undefined,
+      },
+    }),
+    undefined,
+  );
+  return false;
+}
+
+function isChatArtifactTileType(type: string | undefined): boolean {
+  return type === "chat" || type === "terminal-agent";
+}
+
+function routeOpenChatNotification(
+  navigate: NotificationNavigate,
+  payload: ChatNotificationPayload,
+  receivedAt: number,
+  targetHostId: string | null,
+): boolean {
+  const chatId = payload.chatId;
+  if (chatId === undefined) return false;
+  const state = useEpicCanvasStore.getState();
+  const preferredTabId = state.resolveTabIdForEpic(payload.epicId);
+  const candidateTabIds = [
+    ...(preferredTabId === null ? [] : [preferredTabId]),
+    ...state.openTabOrder,
+    ...Object.keys(state.tabsById),
+  ].filter((tabId, index, tabIds) => tabIds.indexOf(tabId) === index);
+  let match = candidateTabIds
+    .flatMap((tabId) => {
+      const tab = state.tabsById[tabId];
+      if (tab?.epicId !== payload.epicId) return [];
+      const found =
+        targetHostId === null
+          ? findOpenArtifactInTab(tabId, chatId)
+          : findOpenTileInTab(tabId, { id: chatId, hostId: targetHostId });
+      if (found === null) return [];
+      const tile =
+        state.canvasByTabId[tabId]?.tilesByInstanceId[found.instanceId];
+      if (
+        !isChatArtifactTileType(tile?.type) ||
+        (targetHostId !== null && tile?.hostId !== targetHostId)
+      )
+        return [];
+      return [{ tabId, ...found }];
+    })
+    .at(0);
+  if (match === undefined) {
+    const closedMatch = candidateTabIds
+      .flatMap((tabId) => {
+        const tab = state.tabsById[tabId];
+        if (tab?.epicId !== payload.epicId) return [];
+        const closed = Object.values(
+          state.closedTilePayloadsByTabId[tabId] ?? {},
+        ).find((entry) => {
+          const node = entry?.node;
+          if (node === undefined) return false;
+          return (
+            node.id === chatId &&
+            isChatArtifactTileType(node.type) &&
+            (targetHostId === null || node.hostId === targetHostId)
+          );
+        });
+        return closed === undefined ? [] : [{ tabId, payload: closed }];
+      })
+      .at(0);
+    if (closedMatch === undefined) return false;
+    const node = closedMatch.payload.node;
+    if (
+      !preservedTileRecordIsLive(
+        closedMatch.payload,
+        payload.epicId,
+        state.pendingCreateArtifactIds,
+      )
+    ) {
+      state.discardClosedTilePayload(closedMatch.tabId, node.instanceId);
+      return false;
+    }
+    state.restoreClosedTilePreview(closedMatch.tabId, null, node);
+    const restored = findOpenTileInTab(closedMatch.tabId, {
+      id: node.id,
+      hostId: node.hostId,
+    });
+    if (restored === null) return false;
+    match = { tabId: closedMatch.tabId, ...restored };
+  }
+
+  const nestedFocus = state.prepareSetActiveTileTabFocusTarget(
+    match.tabId,
+    match.paneId,
+    match.instanceId,
+  );
+  navigateToTabIntent(
+    navigate,
+    existingEpicTabIntentWithNestedFocus({
+      epicId: payload.epicId,
+      tabId: match.tabId,
+      focus: {
+        focusedAt: receivedAt,
+        focusArtifactId: chatId,
+        focusThreadId: undefined,
+        migrationSource: undefined,
+      },
+      nestedFocus,
+    }),
+    undefined,
+  );
+  return true;
+}
+
+function routeLegacyTerminalNotification(
+  navigate: NotificationNavigate,
+  payload: ChatNotificationPayload,
+  receivedAt: number,
+  originHostId: string | null,
+): boolean {
+  if (payload.chatId === undefined) return false;
+  const terminalId = payload.chatId;
+  const state = useEpicCanvasStore.getState();
+  const match = Object.values(state.tabsById)
+    .flatMap((tab) => {
+      if (tab === undefined || tab.epicId !== payload.epicId) return [];
+      const found = findOpenArtifactInTab(tab.tabId, terminalId);
+      if (found === null) return [];
+      const tile =
+        state.canvasByTabId[tab.tabId]?.tilesByInstanceId[found.instanceId];
+      return tile?.type === "terminal" &&
+        (originHostId === null || tile.hostId === originHostId)
+        ? [{ tab, found }]
+        : [];
+    })
+    .at(0);
+  if (match === undefined) return false;
+
+  routeTerminalNotification(
+    navigate,
+    {
+      kind: "terminal",
+      epicId: payload.epicId,
+      terminalId,
+      tabId: match.tab.tabId,
+      paneId: match.found.paneId,
+      tileInstanceId: match.found.instanceId,
+    },
+    receivedAt,
+  );
+  return true;
+}

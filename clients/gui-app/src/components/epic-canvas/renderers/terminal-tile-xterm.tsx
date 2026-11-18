@@ -1,0 +1,1693 @@
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type DragEvent,
+  type RefObject,
+} from "react";
+import { Terminal, type ITerminalOptions } from "@xterm/xterm";
+import { ClipboardAddon } from "@xterm/addon-clipboard";
+import { FitAddon } from "@xterm/addon-fit";
+import {
+  SearchAddon,
+  type ISearchResultChangeEvent,
+} from "@xterm/addon-search";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { CanvasAddon } from "@xterm/addon-canvas";
+import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
+import "@xterm/xterm/css/xterm.css";
+import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
+import {
+  isPlainBoundaryKey,
+  isPlatformModifiedBoundaryKey,
+} from "@/lib/keybindings/chord";
+import { isMac } from "@/lib/keybindings/platform";
+import { translateLineEditChord } from "@/lib/terminal-line-edit";
+import {
+  useSettingsStore,
+  inactiveCursorStyleFor,
+  type TerminalCursorStyle,
+} from "@/stores/settings/settings-store";
+import { useEffectiveTerminalFont } from "@/hooks/settings/use-effective-terminal-font";
+import { useRunnerHost } from "@/providers/use-runner-host";
+import {
+  dataTransferHasFiles,
+  resolveFileTransferPaths,
+  uniquePaths,
+} from "@/lib/files/file-transfer-paths";
+import { isMobileApp } from "@/lib/mobile-app";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { cn } from "@/lib/utils";
+import { appLogger } from "@/lib/logger";
+import {
+  getNativeKeyboardState,
+  runWhenNativeKeyboardSettled,
+} from "@/lib/native-keyboard";
+import { getNegotiatedHostMethodVersion } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { useTerminalTheme } from "@/lib/terminal-theme";
+import { scheduleAtlasClear } from "@/lib/terminal-theme-scheduler";
+import { useOpenLink } from "@/lib/links/open-link";
+import type { TerminalDataWriter } from "@/stores/terminals/terminal-session-store";
+import { useFindInPageStore } from "@/stores/find-in-page/find-in-page-store";
+import { registerActiveTerminalFindController } from "@/stores/find-in-page/terminal-find-store";
+import {
+  useActivePaneEffect,
+  usePaneFocused,
+  useFocusedPaneValue,
+  useVisiblePaneEffect,
+} from "@/components/epic-tabs/pane-visibility-context";
+import { markTerminalLoad } from "@/lib/perf/terminal-load-perf";
+import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
+import {
+  focusTerminalInstance,
+  registerTerminalFocus,
+} from "@/lib/terminals/terminal-focus-registry";
+import { applyTerminalKeyBarLatchToTypedInput } from "@/lib/terminals/terminal-key-bar-latch";
+import { registerTerminalKeyInput } from "@/lib/terminals/terminal-key-input-registry";
+import {
+  acquireXtermHost,
+  adoptWarmSessionInstance,
+  createXtermRendererController,
+  hasPeerXtermHostForSession,
+  releaseXtermHost,
+  type XtermHostControls,
+  type XtermHostEntry,
+  type XtermHostLiveCallbacks,
+  type XtermRendererController,
+} from "@/components/epic-canvas/renderers/xterm-host-registry";
+import { useTileBodyVisible } from "@/components/epic-canvas/hooks/use-tile-body-visible";
+import {
+  createTerminalTileFindAdapter,
+  runTerminalXtermSearch,
+  type TerminalSearchResultSource,
+  type TerminalTileFindAdapter,
+  type TerminalTileFindKind,
+} from "@/components/epic-canvas/renderers/terminal-tile-find-adapter";
+import {
+  TerminalTouchMenu,
+  type TerminalTouchMenuState,
+} from "@/components/epic-canvas/renderers/terminal-touch/terminal-touch-menu";
+import {
+  terminalWordAtPoint,
+  type TerminalClientPoint,
+} from "@/components/epic-canvas/renderers/terminal-touch/terminal-touch-selection";
+import { useTerminalTouchGestures } from "@/components/epic-canvas/renderers/terminal-touch/use-terminal-touch-gestures";
+
+const RESIZE_DEBOUNCE_MS = 50;
+const XTERM_STARTUP_DISPOSE_DELAY_MS = 0;
+// Consecutive dedupe-skipped fits (box unchanged) observed while the local grid
+// still differs from that box's natural size before the engine logs the
+// latched-grid warning. The mismatch is legitimate for the one round-trip
+// between reporting a size and the host echoing the effective grid back; a
+// streak this long means the echo never arrived (or was never requested) and
+// the session is stuck rendering at the wrong size - the field-reported
+// "TUI latched at 80 cols in a wide pane" state.
+const GRID_LATCH_WARN_STREAK = 5;
+// Below this (px, both axes) the container is mid-relayout - a collapsed flex
+// height on window restore, a hidden pane, or a box detached mid-reattach -
+// rather than a real terminal surface. Measuring it yields xterm's floored 2x1
+// grid, which must never reach the host's shared min-size grid. No usable
+// terminal pane is this small, so the floor only ever rejects degenerate boxes.
+const MIN_FIT_CONTAINER_PX = 48;
+
+interface XtermInitialOptions extends ITerminalOptions {
+  readonly vtExtensions: {
+    readonly kittyKeyboard: boolean;
+  };
+}
+
+const TERMINAL_PATH_ESCAPE_PATTERN = /([\\\s!"#$&'()*;<>?[\]^`{|}])/g;
+
+// xterm's replies to OSC 10/11 default-colour queries, which surface on
+// `onData` like keystrokes do. Filtered out of the user-input forwarding path:
+// the HOST is the single authority for colour queries (it answers with the
+// session's spawn-time `themeHint`), and a per-viewer reply would race it with
+// a different answer per attached client. Deliberately restricted to the exact
+// report grammar xterm generates - `ESC ] 10|11 ; rgb:RRRR/GGGG/BBBB BEL|ST`
+// (16-bit X11 channels, see `toRgbString` in @xterm/xterm) - so a query or
+// colour-SET sequence arriving as genuine user input (a paste) still flows
+// through untouched.
+const OSC_COLOR_REPORT_PATTERN =
+  // eslint-disable-next-line no-control-regex -- intentional ANSI escape matching
+  /\x1b\](?:10|11);rgb:[0-9a-fA-F]{1,4}\/[0-9a-fA-F]{1,4}\/[0-9a-fA-F]{1,4}(?:\x07|\x1b\\)/g;
+const getEmptyFindTargetId = (): string | null => null;
+const ignoreSearchResults = (): void => {};
+
+export interface TerminalXtermHostProps {
+  /**
+   * Session id this host renders, used to key first-load perf marks
+   * (`xterm-open`, `writer-ready`, `first-render`) to the same timeline the
+   * tile and session store report into.
+   */
+  readonly sessionId: string;
+  /**
+   * Bound owner host for warm-session identity. Terminal tiles pass the tab's
+   * lifetime `hostId`. `null` is the explicit hostless/non-terminal path.
+   */
+  readonly hostId: string | null;
+  readonly tileKind: TerminalTileFindKind;
+  /**
+   * Per-tab instance id this host's persistent xterm engine is cached under in
+   * `xterm-host-registry`. Keying by `instanceId` (not `sessionId`) lets two
+   * tab instances of the same session each own their own `Terminal` + container
+   * and render live side by side.
+   */
+  readonly instanceId: string;
+  /**
+   * Effective grid size as decided by the host (`min(cols)` across attached
+   * clients). The host calls `term.resize(cols, rows)` when this changes so
+   * every viewer of the same session shows identical glyph dimensions.
+   */
+  readonly effectiveCols: number;
+  readonly effectiveRows: number;
+  /** Receives keystrokes and pasted text from the user. */
+  readonly onUserInput: (data: string) => void;
+  /**
+   * Reports the container's "natural" cols/rows whenever it resizes; the
+   * caller forwards this to `requestResize` on the store.
+   */
+  readonly onContainerResize: (cols: number, rows: number) => void;
+  /**
+   * Registers a `term.write` proxy so the parent can stream host frames
+   * (snapshot + data) into the terminal. The host re-registers on every mount
+   * (reattaching the persistent engine), and never clears it on unmount - the
+   * session store nulls the writer in its own `dispose`, so host output that
+   * arrives during a split/reparent gap still lands in the live buffer.
+   */
+  readonly onWriterReady: (writer: TerminalDataWriter | null) => void;
+  /**
+   * Focuses xterm when the surrounding retained pane becomes visible. The
+   * caller passes the tile-level active state so split layouts don't race every
+   * mounted terminal for focus.
+   */
+  readonly shouldFocusOnActivePane: boolean;
+  /**
+   * Whether this host is an interactive focus target for explicit surface
+   * gestures. Measurement-only hosts reuse the real xterm engine before a
+   * session handle exists, but must leave a parked focus request untouched so
+   * the live host can fulfil it after taking ownership of input.
+   */
+  readonly registerImperativeFocus: boolean;
+  /**
+   * Whether the underlying terminal session is still live. The host keeps the
+   * persistent xterm engine cached across unmount when true, so splitting a
+   * pane / switching tabs / reopening does not dispose the `Terminal` and lose
+   * its scrollback. Mirrors the lease-free retention rules in
+   * `TerminalSessionRegistry`: a running terminal-agent's handle is kept warm
+   * indefinitely and a running plain terminal's lingers for the release-linger
+   * window, and in both cases the session store's writer keeps pointing at
+   * this engine - so the engine must outlive the unmount with it, or the
+   * reattach would render blank (the host snapshot was already consumed).
+   * Exited sessions pass false: their handle is torn down with the tile, and
+   * the registry follower disposes any cached engine once the handle leaves
+   * the session registry.
+   */
+  readonly keepAlive: boolean;
+  /**
+   * Non-null while this terminal tile owns the app-level find bar. The xterm
+   * search addon is terminal-local, so the active tile registers itself as
+   * the current terminal search target instead of making the page finder scan
+   * xterm's rendered DOM.
+   */
+  readonly findTargetId: string | null;
+  /**
+   * How the xterm viewport meets its container. `"padded"` insets the grid
+   * from the tile's edges - the canvas tiles sit on a card, so the gutter reads
+   * as tile chrome. `"flush"` gives the grid the full box; the landing panel
+   * IS the terminal's frame, so an inset there just leaks panel background
+   * around a rectangle of terminal background.
+   */
+  readonly chrome: "padded" | "flush";
+  /**
+   * Hands the pane's live `Terminal` to the owner (and `null` on unmount), for
+   * surfaces that must read the engine's own state rather than the session
+   * store's - today the quote control, which needs xterm's selection and buffer
+   * coordinates. `null` opts out; only the epic terminal tile passes one.
+   *
+   * Deliberately narrower than it looks: the engine is shared and cached, so an
+   * owner may READ it and subscribe to its events, but writing to it here would
+   * race the resize/appearance/find hooks below that already own those knobs.
+   */
+  readonly onTerminalReady: ((term: Terminal | null) => void) | null;
+}
+
+export function TerminalXtermHost(props: TerminalXtermHostProps) {
+  const mountRef = useRef<HTMLDivElement | null>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const searchAddonRef = useRef<SearchAddon | null>(null);
+  const rendererRef = useRef<XtermRendererController | null>(null);
+  // Whether THIS host currently holds a presented mount on the shared engine.
+  // One boolean per host is exactly right (a host presents at most once at a
+  // time); it is the guard that keeps the acquire-effect cleanup and the
+  // presentation effect's cleanup from both dropping the same count.
+  const presentedRef = useRef(false);
+  const controlsRef = useRef<XtermHostControls | null>(null);
+  const findTargetIdRef = useRef(props.findTargetId);
+  const terminalSearchResultSourceRef =
+    useRef<TerminalSearchResultSource | null>(null);
+  const dragDepthRef = useRef(0);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  // Stable for the host's lifetime; held in a ref so the acquire effect can tag
+  // its perf marks and key the registry without taking `props.sessionId` /
+  // `props.instanceId` as dependencies. `sessionId` tags perf marks and builds
+  // the engine; `instanceId` is the registry cache key.
+  const sessionIdRef = useRef(props.sessionId);
+  const hostIdRef = useRef(props.hostId);
+  const instanceIdRef = useRef(props.instanceId);
+
+  // Theme + font tokens are read synchronously during render so the first call
+  // to `new Terminal({ theme })` paints the correct palette - no flash of
+  // default xterm colors. The engine factory captures these values through
+  // `initialOptionsRef.current` so a parent re-render mid-mount can't change the
+  // constructor inputs; subsequent updates flow through dedicated reactive
+  // effects below. These initial options apply on first create only - a
+  // reattached engine keeps its already-synced options.
+  const theme = useTerminalTheme();
+  const cursorStyle = useSettingsStore((s) => s.terminalCursorStyle);
+  const cursorBlink = useSettingsStore((s) => s.terminalCursorBlink);
+  // xterm measures glyph cell width on a hidden canvas where CSS variables do
+  // not resolve, so the font is applied as concrete values here; `letterSpacing`
+  // / `lineHeight` are pinned on the constructed Terminal so paint and
+  // measurement agree.
+  const { fontFamily, fontSize: effectiveFontSize } =
+    useEffectiveTerminalFont();
+  const runnerHost = useRunnerHost();
+  const openLink = useOpenLink();
+  // Unfocused panes unregister global find ownership. Both split halves stay
+  // mounted and visible, so app-level find is scoped to the FOCUSED terminal -
+  // visibility alone would leave two panes claiming it.
+  const activeFindTargetId = useFocusedPaneValue(props.findTargetId, null);
+  const markSearchResultSource = useCallback(
+    (source: TerminalSearchResultSource): void => {
+      terminalSearchResultSourceRef.current = source;
+    },
+    [],
+  );
+  const tileFindAdapter = useMemo(
+    () =>
+      createTerminalTileFindAdapter({
+        tileInstanceId: props.instanceId,
+        tileKind: props.tileKind,
+      }),
+    [props.instanceId, props.tileKind],
+  );
+  const tileFindAdapterRef = useRef<TerminalTileFindAdapter>(tileFindAdapter);
+  useEffect(() => {
+    tileFindAdapterRef.current = tileFindAdapter;
+  }, [tileFindAdapter]);
+  useEffect(() => {
+    tileFindAdapter.setSearchAddon(searchAddonRef.current);
+    tileFindAdapter.setSearchResultSourceSink(markSearchResultSource);
+    return () => {
+      tileFindAdapter.setSearchAddon(null);
+      tileFindAdapter.setSearchResultSourceSink(null);
+    };
+  }, [markSearchResultSource, tileFindAdapter]);
+  useRegisterTileFindAdapter(tileFindAdapter);
+
+  const initialOptionsRef = useRef<XtermInitialOptions>({
+    cursorStyle,
+    cursorInactiveStyle: inactiveCursorStyleFor(cursorStyle),
+    cursorBlink,
+    allowProposedApi: true,
+    scrollback: 5000,
+    // xterm's own slider defaults to a 14px VS Code-width gutter. The app's
+    // scrollbars are 4px (`index.css`), and a terminal tile is routinely docked
+    // beside a chat pane, so the two bars have to agree. Slider colors come
+    // through the ITheme in `terminal-theme.ts`.
+    //
+    // Setting a width is also the only switch that turns xterm's overview ruler
+    // on, which is what finally gives find-in-terminal's `matchOverviewRuler`
+    // color somewhere to paint. The ruler's own left-edge outline is suppressed
+    // via `overviewRulerBorder` in the theme.
+    scrollbar: { width: 4 },
+    fontFamily,
+    fontSize: effectiveFontSize,
+    letterSpacing: 0,
+    lineHeight: 1,
+    theme,
+    // The host never answers OSC 10/11 background queries (the terminal is
+    // viewed from multiple clients whose themes can disagree, so there is no
+    // single true answer), which means a TUI probing for light/dark can guess
+    // wrong and paint its opposite-mode palette - e.g. bright-white text on
+    // ANSI black in a light terminal. Have xterm nudge any foreground toward
+    // WCAG AA against its cell background so a wrong guess degrades to a
+    // mismatched-but-readable theme instead of invisible text.
+    minimumContrastRatio: 4.5,
+    // Programs emit arbitrary/binary bytes; xterm's VT parser logs (and
+    // recovers from) every malformed sequence. Under a high-rate binary stream
+    // that flood of `console.error`s is itself the bottleneck - in Electron each
+    // log is IPC'd renderer->main, saturating the renderer thread until it can no
+    // longer answer WebSocket pings and the host's pong watchdog kills the
+    // stream. Silence the parser; the errors are non-actionable (the byte stream
+    // is the program's doing and xterm recovers).
+    logLevel: "off",
+    // Kitty keyboard protocol lets TUIs distinguish Shift+Enter from Enter (and
+    // encode other modifier chords) instead of collapsing both to `\r`. This is
+    // what makes Shift+Enter a newline inside chat/agent TUIs. The encoder only
+    // activates once the running program opts into kitty mode, so a plain shell
+    // prompt is unaffected.
+    vtExtensions: { kittyKeyboard: true },
+    // Keep Mac Option as the native character composer (Option+2 = @, dead-key
+    // accents). Option+Arrow word-jump is handled explicitly in
+    // `translateLineEditChord`, so we don't need Option-as-Meta here.
+    macOptionIsMeta: false,
+  });
+
+  // Keep the latest callbacks / keep-alive flag in refs so the persistent
+  // engine (which outlives this React instance across splits and reopens)
+  // always reaches the current host's wiring, and the unmount cleanup reads the
+  // latest keep-alive value. Refs are updated in a layout effect so the lint
+  // rule forbidding ref writes during render is satisfied.
+  const onUserInputRef = useRef(props.onUserInput);
+  const onContainerResizeRef = useRef(props.onContainerResize);
+  const onWriterReadyRef = useRef(props.onWriterReady);
+  const openLinkRef = useRef(openLink);
+  const onTerminalReadyRef = useRef(props.onTerminalReady);
+  const keepAliveRef = useRef(props.keepAlive);
+  useEffect(() => {
+    onUserInputRef.current = props.onUserInput;
+    onContainerResizeRef.current = props.onContainerResize;
+    onWriterReadyRef.current = props.onWriterReady;
+    openLinkRef.current = openLink;
+    onTerminalReadyRef.current = props.onTerminalReady;
+    findTargetIdRef.current = activeFindTargetId;
+    keepAliveRef.current = props.keepAlive;
+  }, [
+    props.onUserInput,
+    props.onContainerResize,
+    props.onWriterReady,
+    props.onTerminalReady,
+    props.keepAlive,
+    activeFindTargetId,
+    openLink,
+  ]);
+
+  // Acquire the persistent xterm engine for this session and attach its
+  // container into the live mount point. The engine - `Terminal`, addons, and
+  // the container it was `open()`-ed into - lives in `xterm-host-registry` keyed
+  // by session id, so a pane split / tab switch / reopen reattaches the SAME
+  // instance (scrollback + cursor intact) instead of disposing and recreating
+  // it. A layout effect (not passive) so the reattach lands before paint and
+  // before the reactive effects below read `termRef`.
+  useLayoutEffect(() => {
+    const mount = mountRef.current;
+    if (mount === null) return;
+    const sessionId = sessionIdRef.current;
+    const hostId = hostIdRef.current;
+    const instanceId = instanceIdRef.current;
+    // Adopt a closed tab's warm handle + engine for this session BEFORE the
+    // acquire below can build a fresh engine under the new instance id. This
+    // host is the earliest toucher of the engine registry (child layout
+    // effects run before any parent bootstrap effect), so adoption must
+    // happen here to keep the reopened tab's scrollback. Idempotent.
+    // Identity is `(hostId, sessionId)` so a same-id terminal on another host
+    // cannot steal this engine or its retained stream.
+    adoptWarmSessionInstance({ hostId, sessionId }, instanceId);
+    const entry = acquireXtermHost(instanceId, () =>
+      createXtermEntry(sessionId, hostId, initialOptionsRef.current),
+    );
+    // Point the engine's live callbacks at this host's current refs. On a
+    // reattach this overwrites the previous host's wiring; the refs themselves
+    // stay current via the layout effect above.
+    entry.live.onUserInput = (data) => onUserInputRef.current(data);
+    entry.live.onContainerResize = (cols, rows) =>
+      onContainerResizeRef.current(cols, rows);
+    entry.live.openLink = (uri, event) => {
+      void openLinkRef.current(uri, "terminal", event);
+    };
+    const getFindTargetId = () => findTargetIdRef.current;
+    const onSearchResults = (result: ISearchResultChangeEvent): void => {
+      const source = terminalSearchResultSourceRef.current;
+      if (source === "tile") {
+        tileFindAdapterRef.current.publishResults(result);
+      }
+      if (source === "legacy" && getFindTargetId() !== null) {
+        publishLegacyTerminalSearchResult(result);
+      }
+    };
+    entry.live.getFindTargetId = getFindTargetId;
+    entry.live.onSearchResults = onSearchResults;
+
+    termRef.current = entry.term;
+    searchAddonRef.current = entry.searchAddon;
+    tileFindAdapterRef.current.setSearchAddon(entry.searchAddon);
+    rendererRef.current = entry.rendererController;
+    controlsRef.current = entry.controls;
+
+    mount.appendChild(entry.containerEl);
+    // (Re)register the writer with the current session store. Idempotent on a
+    // reattach (same proxy, already-drained queue); on a fresh plain-terminal
+    // open it triggers the buffered-snapshot flush.
+    onWriterReadyRef.current(entry.writerProxy);
+    onTerminalReadyRef.current?.(entry.term);
+    markTerminalLoad(sessionId, "writer-ready");
+
+    return () => {
+      if (entry.containerEl.parentElement === mount) {
+        mount.removeChild(entry.containerEl);
+      }
+      onTerminalReadyRef.current?.(null);
+      termRef.current = null;
+      searchAddonRef.current = null;
+      tileFindAdapterRef.current.setSearchAddon(null);
+      terminalSearchResultSourceRef.current = null;
+      if (entry.live.getFindTargetId === getFindTargetId) {
+        entry.live.getFindTargetId = getEmptyFindTargetId;
+      }
+      if (entry.live.onSearchResults === onSearchResults) {
+        entry.live.onSearchResults = ignoreSearchResults;
+      }
+      rendererRef.current = null;
+      controlsRef.current = null;
+      // Keep the engine cached for a still-live session; dispose it otherwise.
+      // Never dispose synchronously on a layout change - that is the
+      // blank-on-split bug this registry exists to prevent.
+      //
+      // Hand the registry this host's presented state in the same call, so the
+      // engine's renderer count is settled by the same code that settles its
+      // mount count. React destroys cleanups in declaration order, so this one
+      // runs BEFORE the presentation effect's cleanup below; clearing the flag
+      // as we pass it is what stops that later cleanup dropping the count a
+      // second time.
+      const wasPresented = presentedRef.current;
+      presentedRef.current = false;
+      releaseXtermHost(instanceId, keepAliveRef.current, wasPresented);
+    };
+  }, []);
+
+  // Presentation gate: accelerated canvases exist only while this tile body is
+  // actually on screen. `useTileBodyVisible()` is the composed predicate -
+  // pane shown AND this tab selected - so a tab deselected inside a still
+  // visible pane counts as unpresented, which `usePaneVisible()` alone would
+  // miss. Both contexts default to `true` only where no provider exists at all
+  // (isolated renders, tests); every real placement inherits real values -
+  // mobile provides `selected=true` and inherits its pane's visibility, and the
+  // measure probe provides BOTH itself, because a grid measured through the
+  // wrong renderer must never reach the host (see `TerminalGridMeasureProbe`).
+  //
+  // A LAYOUT effect, and declared after the acquire effect above, so the
+  // engine's container is attached and its controller published before
+  // `present()` reloads the addon and repaints - the restore lands ahead of
+  // the next paint rather than a frame late. A host born hidden never runs the
+  // body at all, so it never allocates.
+  const tileBodyVisible = useTileBodyVisible();
+  useLayoutEffect(() => {
+    if (!tileBodyVisible) return;
+    const renderer = rendererRef.current;
+    if (renderer === null) return;
+    renderer.present();
+    presentedRef.current = true;
+    return () => {
+      if (!presentedRef.current) return;
+      presentedRef.current = false;
+      renderer.unpresent();
+    };
+  }, [tileBodyVisible]);
+
+  useTerminalFindRegistration(
+    activeFindTargetId,
+    searchAddonRef,
+    markSearchResultSource,
+  );
+  useTerminalResizeSync(termRef, props.effectiveCols, props.effectiveRows);
+  useHostGridReconcile(controlsRef, props.effectiveCols, props.effectiveRows);
+  useTerminalAppearanceSync({
+    termRef,
+    controlsRef,
+    rendererRef,
+    theme,
+    fontSize: effectiveFontSize,
+    fontFamily,
+    cursorStyle,
+    cursorBlink,
+  });
+  useVisibleTerminalRepair({
+    termRef,
+    controlsRef,
+    rendererRef,
+    theme,
+  });
+  const paneFocused = usePaneFocused();
+  useActiveTerminalFocus(props.instanceId, props.shouldFocusOnActivePane);
+  // Imperative focus bridge. Surfaces whose reveal is not a pane-visibility
+  // flip (the landing panel expanding around an always-mounted tile, or a tab
+  // created before its engine exists) focus through the registry instead of
+  // `shouldFocusOnActivePane`.
+  useEffect(() => {
+    if (!props.registerImperativeFocus) return;
+    return registerTerminalFocus(
+      props.instanceId,
+      () => {
+        termRef.current?.focus();
+      },
+      (activeElement) =>
+        activeElement !== null &&
+        mountRef.current?.contains(activeElement) === true,
+      () => paneFocused && mountRef.current !== null,
+    );
+  }, [paneFocused, props.instanceId, props.registerImperativeFocus]);
+  // Input bridge for the mobile key bar. Registered unconditionally (unlike
+  // focus, which only some surfaces route imperatively): whichever tile hosts
+  // this engine on a phone is the one the bar targets. Injection goes through
+  // `term.input` so bar keys ride the ordinary onData -> writeInput path, and
+  // the cursor-key mode is read live so arrows encode the dialect (CSI vs
+  // SS3) the running program asked for via DECCKM.
+  useEffect(() => {
+    return registerTerminalKeyInput(props.instanceId, {
+      input: (data) => termRef.current?.input(data, true),
+      getCursorKeyMode: () =>
+        termRef.current?.modes.applicationCursorKeysMode === true
+          ? "application"
+          : "normal",
+    });
+  }, [props.instanceId]);
+
+  const pastePaths = useCallback((paths: readonly string[]): void => {
+    const input = terminalPathInput(uniquePaths(paths));
+    if (input.length === 0) return;
+    termRef.current?.paste(input);
+    termRef.current?.focus();
+  }, []);
+
+  // Touch over the grid. xterm's own click-to-focus and drag-selection ride
+  // the compatibility mouse events iOS synthesizes after a tap, which never
+  // arrive over the terminal (xterm's touch recognizer cancels them to keep a
+  // pan a scroll) - so on a phone, tapping the terminal never focused it and
+  // the soft keyboard could not come up, and nothing could be selected at all.
+  // `useTerminalTouchGestures` owns all of it: a tap focuses (and drops a
+  // selection), a short hold then drag selects, a long press opens the edit
+  // menu. Mouse/pen still use xterm's native mouse paths.
+  const handleTouchTap = useCallback((): void => {
+    const term = termRef.current;
+    if (term === null) return;
+    if (term.hasSelection()) term.clearSelection();
+    term.focus();
+  }, []);
+  // The menu is a phone-layout affordance: in a wide window a touch-capable
+  // screen keeps the tap and the selection drag (neither changes anything
+  // for a mouse), but its long press opens nothing, as before.
+  const phoneLayout = useIsMobileViewport();
+  const [touchMenu, setTouchMenu] = useState<TerminalTouchMenuState | null>(
+    null,
+  );
+  const closeTouchMenu = useCallback((): void => setTouchMenu(null), []);
+  const handleTouchLongPress = useCallback(
+    (point: TerminalClientPoint): void => {
+      if (!phoneLayout) return;
+      const term = termRef.current;
+      const mount = mountRef.current;
+      if (term === null || mount === null) return;
+      // The anchor is a sibling of the mount inside the same positioned box,
+      // so the press point is expressed against the mount's own rect.
+      const rect = mount.getBoundingClientRect();
+      setTouchMenu({
+        left: point.x - rect.left,
+        top: point.y - rect.top,
+        word: terminalWordAtPoint(term, point),
+        selectionText: term.hasSelection() ? term.getSelection() : null,
+        restoreFocus: term.element?.contains(document.activeElement) === true,
+      });
+    },
+    [phoneLayout],
+  );
+  const touchGestures = useTerminalTouchGestures({
+    termRef,
+    mountRef,
+    onTap: handleTouchTap,
+    onLongPress: handleTouchLongPress,
+  });
+
+  const handleDragEnter = useCallback(
+    (event: DragEvent<HTMLDivElement>): void => {
+      if (!dataTransferHasFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      dragDepthRef.current += 1;
+      setIsDraggingFiles(true);
+    },
+    [setIsDraggingFiles],
+  );
+
+  const handleDragOver = useCallback(
+    (event: DragEvent<HTMLDivElement>): void => {
+      if (!dataTransferHasFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = "copy";
+      setIsDraggingFiles(true);
+    },
+    [setIsDraggingFiles],
+  );
+
+  const handleDragLeave = useCallback(
+    (event: DragEvent<HTMLDivElement>): void => {
+      if (!dataTransferHasFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+      if (dragDepthRef.current === 0) {
+        setIsDraggingFiles(false);
+      }
+    },
+    [setIsDraggingFiles],
+  );
+
+  const handleDrop = useCallback(
+    (event: DragEvent<HTMLDivElement>): void => {
+      if (!dataTransferHasFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      dragDepthRef.current = 0;
+      setIsDraggingFiles(false);
+      const resolvedPaths = resolveFileTransferPaths(
+        event.dataTransfer,
+        runnerHost.fileDrops,
+      );
+      if (resolvedPaths === null) return;
+      void resolvedPaths
+        .then((paths) => {
+          pastePaths(paths);
+        })
+        .catch(() => undefined);
+    },
+    [pastePaths, runnerHost.fileDrops, setIsDraggingFiles],
+  );
+
+  const handlePaste = useCallback(
+    (event: ClipboardEvent<HTMLDivElement>): void => {
+      const resolvedPaths = resolveFileTransferPaths(
+        event.clipboardData,
+        runnerHost.fileDrops,
+      );
+      if (resolvedPaths === null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void resolvedPaths
+        .then((paths) => {
+          pastePaths(paths);
+        })
+        .catch(() => undefined);
+    },
+    [pastePaths, runnerHost.fileDrops],
+  );
+
+  // `absolute inset-0` sidesteps the percentage-height chain (`h-full` →
+  // `min-h-0 flex-1` parent → flex column ancestor → ...) which fails to
+  // resolve at mount in some flex layouts: the inner box collapses to its
+  // content, xterm renders at default 80x24, and `fitAddon.proposeDimensions()`
+  // - which reads `getComputedStyle(parent).height` - feeds those small
+  // dims back to the resize roundtrip. A window resize triggers a full
+  // reflow that settles the chain, which is why resizing "fixes" the
+  // layout. The host's parent in TerminalLive is `relative`, so anchoring
+  // the container with `inset-0` takes the size from the ancestor's box
+  // directly and is robust to initial-mount timing.
+  //
+  // `mountRef` is the imperative attach point for the persistent xterm
+  // container (owned by the registry, not React) and carries the file-transfer
+  // handlers so it stays the direct parent of `data-testid="terminal-xterm-host"`.
+  // Paste uses capture because xterm handles clipboard events on its hidden
+  // textarea; file clipboard entries must be claimed before that target handler
+  // discards their empty text payload.
+  // The drag overlay is a React sibling so React never reconciles around the
+  // foreign container node.
+  return (
+    <div className="absolute inset-0 bg-canvas">
+      <div
+        ref={mountRef}
+        className={cn(
+          "h-full w-full",
+          props.chrome === "padded" ? "p-2" : "p-0",
+        )}
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        onPasteCapture={handlePaste}
+        onPointerDown={touchGestures.onPointerDown}
+        onPointerMove={touchGestures.onPointerMove}
+        onPointerUp={touchGestures.onPointerUp}
+        onPointerCancel={touchGestures.onPointerCancel}
+      />
+      <TerminalTouchMenu
+        state={touchMenu}
+        termRef={termRef}
+        onClose={closeTouchMenu}
+      />
+      {isDraggingFiles ? (
+        <div
+          aria-hidden
+          className={cn(
+            "pointer-events-none absolute z-10 flex items-center justify-center border-2 border-dashed border-primary bg-canvas/85 text-ui-sm font-medium text-foreground",
+            props.chrome === "padded" ? "inset-2" : "inset-0",
+          )}
+        >
+          Drop files to paste paths
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// RIS ("\x1bc") as raw bytes, for prepending to a `Uint8Array` snapshot chunk
+// (`terminal.subscribe@1.2`+) - see `writerProxy`'s reset-before-replay
+// comment. ASCII-only, so this is the same 2 bytes either way.
+const RESET_ESCAPE_BYTES = new Uint8Array([0x1b, 0x63]);
+
+function prependResetEscape(chunk: string | Uint8Array): string | Uint8Array {
+  if (typeof chunk === "string") return `\x1bc${chunk}`;
+  const combined = new Uint8Array(RESET_ESCAPE_BYTES.length + chunk.length);
+  combined.set(RESET_ESCAPE_BYTES, 0);
+  combined.set(chunk, RESET_ESCAPE_BYTES.length);
+  return combined;
+}
+
+/**
+ * Build the long-lived xterm engine for a session: `Terminal` + addons opened
+ * into a detached container element that the registry keeps alive across host
+ * remounts. All user-facing wiring (input, resize, links, find) reads through
+ * the mutable `live` callbacks so a reattached host can repoint them without
+ * recreating anything. See `xterm-host-registry`.
+ */
+function createXtermEntry(
+  sessionId: string,
+  hostId: string | null,
+  initialOptions: XtermInitialOptions,
+): XtermHostEntry {
+  const live: XtermHostLiveCallbacks = {
+    onUserInput: () => {},
+    onContainerResize: () => {},
+    openLink: () => {},
+    getFindTargetId: getEmptyFindTargetId,
+    onSearchResults: ignoreSearchResults,
+  };
+
+  const containerEl = document.createElement("div");
+  containerEl.className = "h-full w-full overflow-hidden";
+  containerEl.dataset.testid = "terminal-xterm-host";
+  containerEl.setAttribute("data-terminal-host", "");
+
+  const term = new Terminal(initialOptions);
+  // Measure cells as grapheme clusters with the Unicode 15 width tables, not
+  // xterm's Unicode 6 default. The host advertises `TERM_PROGRAM=kitty` to TUI
+  // sessions, so chat TUIs (claude-code, codex) lay out their frames with
+  // string-width semantics: emoji like U+2705/U+274C, an emoji-style
+  // U+26A0 U+FE0F, a ZWJ family and a flag are each one two-column cluster.
+  // A per-code-point table gets some of those wrong (Unicode 11 counts the ZWJ
+  // family as eight columns and the U+FE0F warning sign as one), and the
+  // disagreement only shows up on INCREMENTAL repaints: the TUI moves the
+  // cursor relatively (column 1 + cursor-forward) to rewrite a span, lands
+  // short or long by the difference, and paints over its own table borders -
+  // garble that "fixes itself" on the next resize because that forces a full
+  // redraw with absolute positioning.
+  //
+  // This is one half of a width contract with the host's snapshot emulator
+  // (traycer-host `terminal-snapshot-emulator.ts`), which loads the same addon
+  // so a reattach snapshot replays into an identically measured grid. The two
+  // must move together.
+  term.loadAddon(new UnicodeGraphemesAddon());
+  term.unicode.activeVersion = "15-graphemes";
+  const fitAddon = new FitAddon();
+  term.loadAddon(fitAddon);
+  // Route every clicked link through the app's one link seam. Left at its
+  // defaults xterm wraps `window.open(uri)` in a confirm dialog, but
+  // `window.open` to an external URL is a no-op in the Electron renderer - so
+  // the dialog's OK did nothing. `openLink` opens it in a browser tile or the
+  // OS browser per the user's setting (e.g. the Codex OAuth sign-in link).
+  //
+  // Two independent link paths both need this. `WebLinksAddon` matches
+  // plain-text URLs via regex; `linkHandler` covers OSC 8 escape-sequence
+  // hyperlinks through xterm's built-in OscLinkProvider. Codex emits its
+  // sign-in URL as an OSC 8 link, so without `linkHandler` it kept hitting
+  // OscLinkProvider's dead default confirm dialog even after WebLinksAddon was
+  // wired up.
+  const openClickedLink = (event: MouseEvent, uri: string): void => {
+    live.openLink(uri, event);
+  };
+  term.loadAddon(
+    new WebLinksAddon((event, uri) => openClickedLink(event, uri)),
+  );
+  term.options.linkHandler = {
+    activate: (event, uri) => openClickedLink(event, uri),
+  };
+  const searchAddon = new SearchAddon();
+  term.loadAddon(searchAddon);
+  term.loadAddon(new ClipboardAddon());
+
+  term.open(containerEl);
+  markTerminalLoad(sessionId, "xterm-open");
+
+  // Use the CANVAS renderer, not WebGL. WebGL gives one GPU context per
+  // terminal, and browsers cap live contexts (~16); opening many terminals
+  // exhausts the pool, evicts the oldest context, and triggers a loss/rebind
+  // cascade that thrashes the renderer (multi-second first paints, main-thread
+  // stalls). The canvas renderer is not subject to the GPU context limit, so
+  // any number of terminals coexist with no context loss - and it needs no
+  // `onContextLoss` recovery. Its throughput is a hair below WebGL only for
+  // pathological full-screen scroll storms, which is not the TUI workload here.
+  //
+  // The addon is patched (`patches/@xterm%2Faddon-canvas@*.patch`): its cursor
+  // layer paints from its own blink timer and cursor-move animation frame,
+  // bypassing the one place xterm gates painting on DEC 2026 synchronized
+  // output. A TUI that draws with the cursor shown (Codex's composer sparkle)
+  // then got a ghost cursor at whatever cell the frame had last painted, at a
+  // new column every blink. The patch skips those paints while the bracket is
+  // open; `xterm-canvas-cursor-synchronized-output-patch.test.ts` certifies
+  // the installed file still carries it.
+  //
+  // The addon is NOT created here: its four full-size backing surfaces are the
+  // GPU cost a kept-alive engine used to pay while off screen. The renderer
+  // controller creates it on the first `present()` and drops it once the engine
+  // has been unpresented for the grace, so an engine built behind a hidden pane
+  // (or a keep-alive body behind another tab) never allocates one at all.
+  // Loading after `term.open` is deliberate and required: `CanvasAddon.activate`
+  // installs the renderer immediately on an opened terminal, where before open
+  // it merely parks itself on `onWillOpen`.
+  const rendererController = createXtermRendererController({
+    loadCanvasAddon: () => {
+      let addon: CanvasAddon | null = null;
+      try {
+        addon = new CanvasAddon();
+        term.loadAddon(addon);
+        return addon;
+      } catch {
+        // Canvas unavailable (headless / blocked). xterm does NOT roll back for
+        // us: `AddonManager` stores the addon before activating it, and
+        // `CanvasAddon.activate` builds its layers, installs its renderer and
+        // resizes it BEFORE registering the disposable that restores the DOM
+        // renderer. So dispose what we built - that runs whatever the addon did
+        // manage to register (the DOM restore and the layers' own removal) and
+        // is a no-op when it registered nothing.
+        //
+        // One window is not recoverable: a throw between `setRenderer` and that
+        // registration leaves the partial canvas renderer owning the render
+        // service, and no public API can hand the DOM renderer back (xterm's
+        // own restore reaches `_core._createRenderer()`). We still latch - a
+        // per-present retry of a construction that just failed is worse - so
+        // `currentCanvas() === null` means this controller owns no addon, not
+        // that nothing accelerated is installed.
+        if (addon !== null) {
+          try {
+            addon.dispose();
+          } catch {
+            // Rollback itself failed; nothing further is reachable from here.
+          }
+        }
+        return null;
+      }
+    },
+    refreshAllRows: () => {
+      term.refresh(0, term.rows - 1);
+    },
+  });
+
+  term.attachCustomKeyEventHandler((event) =>
+    handleTerminalCustomKeyEvent(term, event),
+  );
+
+  let snapshotReplayDepth = 0;
+  // True once this kept-alive engine has had ANY output written to it. A second
+  // snapshot (transport reconnect / reopen of a kept-alive engine) then arrives
+  // for a buffer that already holds pre-disconnect content: see `writerProxy`.
+  let hasReceivedContent = false;
+  // Live output chunks currently between `term.write` and its parse callback.
+  // xterm emits its OSC 10/11 colour-query replies synchronously WHILE parsing
+  // written output, so `> 0` is what distinguishes a generated reply from
+  // user input that merely looks like one (a pasted report while the terminal
+  // is idle) - payload shape alone cannot.
+  let liveParseDepth = 0;
+  // A host answers colour queries itself from `terminal.create@2.1` (it
+  // replies with the session's spawn-time `themeHint`). Older hosts have no
+  // responder, so this viewer's xterm reply - imperfect as it is (it misses
+  // every startup probe and conflicts across viewers) - is the only answer a
+  // late-probing TUI would get there; suppressing it would be a regression.
+  // Read per event, not captured: the negotiated
+  // manifest fills in on the first completed RPC and flips when a host is
+  // upgraded in place. `null` (no handshake recorded, or a legacy name-only
+  // recording) fails toward forwarding, the legacy-safe side.
+  const hostAnswersColorQueries = (): boolean => {
+    if (hostId === null) return false;
+    const version = getNegotiatedHostMethodVersion(hostId, "terminal.create");
+    if (version === null) return false;
+    return version.major > 2 || (version.major === 2 && version.minor >= 1);
+  };
+  const dataDisposable = term.onData((d) => {
+    if (snapshotReplayDepth > 0) return;
+    // The HOST answers OSC 10/11 default-colour queries (with the theme the
+    // session was spawned under - see `themeHint` on `terminal.create`), so
+    // xterm's own replies to queries it sees in the live stream must not be
+    // forwarded: with N attached viewers the TUI would otherwise hear N+1
+    // answers in unpredictable order, each viewer reporting its own theme.
+    // Replies are emitted as standalone onData payloads while a live chunk is
+    // mid-parse, never mixed with keystrokes; the remainder check keeps any
+    // interleaved real input. A paste that overlaps in-flight output is the
+    // one residual ambiguity and stays filtered only if it is byte-exact
+    // report grammar.
+    const filtered =
+      liveParseDepth > 0 && hostAnswersColorQueries()
+        ? d.replace(OSC_COLOR_REPORT_PATTERN, "")
+        : d;
+    if (filtered.length === 0 && d.length > 0) return;
+    // A sticky modifier latched on the mobile key bar combines with the next
+    // typed character here. Desktop input takes the empty-latch fast path
+    // (only the bar ever sets a latch).
+    live.onUserInput(applyTerminalKeyBarLatchToTypedInput(filtered));
+  });
+  const searchResultsDisposable = searchAddon.onDidChangeResults((result) => {
+    live.onSearchResults(result);
+  });
+
+  // Dedupe so the host isn't spammed with identical resize frames on every
+  // render tick (cursor blink, keystroke echo, etc.). Scoped to one host
+  // session: a snapshot (fresh subscribe / reconnect / revive) clears it, so a
+  // recreated host session - which never heard what this engine reported to
+  // its predecessor - always gets one fresh report. Without the clear, a
+  // revive that spawned at the 80x24 bootstrap defaults dedupe-skipped every
+  // re-report (the box hadn't changed since the previous session) and the TUI
+  // stayed latched at 80 cols in a full-width pane.
+  let lastSentCols = 0;
+  let lastSentRows = 0;
+  let resizeDebounce: number | null = null;
+  // A reconcile that found the container unmeasurable (hidden pane, collapsed
+  // box) is remembered here and retried by the next successful fit measurement
+  // (pane-show refit / onRender) instead of being dropped. Dropping it was the
+  // second half of the latch: the host's effective grid only changes once per
+  // resize, so a reconcile missed while the pane was hidden never re-fired.
+  let pendingHostGrid: { cols: number; rows: number } | null = null;
+  // Latched-grid field evidence (see GRID_LATCH_WARN_STREAK). One warn per
+  // latch episode; re-armed once the grid matches the box again.
+  let latchSkipStreak = 0;
+  let latchWarned = false;
+
+  const writerProxy: TerminalDataWriter = (write) => {
+    if (write.kind === "snapshot") {
+      // Resize the grid to the snapshot's dimensions BEFORE replaying it. The
+      // host snapshot is a full-screen redraw (absolute cursor positioning, the
+      // serialized emulator screen) valid only at the cols/rows the host
+      // rendered it for. Replaying it into a differently-sized grid - the 80x24
+      // default on a fresh open, or a wider pane under "smaller-pane-wins" -
+      // lands every line at the wrong column and leaves stale cells, producing
+      // garbled, overlapping frames. The post-snapshot resize via
+      // `useTerminalResizeSync` runs too late: xterm can't un-mangle an
+      // already-misparsed redraw (and for alt-screen content it can't reflow at
+      // all). Resizing here, synchronously ahead of the write, is the fix.
+      if (
+        write.cols > 0 &&
+        write.rows > 0 &&
+        (term.cols !== write.cols || term.rows !== write.rows)
+      ) {
+        term.resize(write.cols, write.rows);
+      }
+      // A snapshot marks a (re)attach to a host session that may have been
+      // recreated since this kept-alive engine last reported its size (idle
+      // reap -> revive, host restart). That session was born at the bootstrap
+      // defaults and never heard `lastSent*`, so the dedupe must not carry
+      // over: clear it so the next measurable fit re-reports the container's
+      // natural grid once. (When nothing actually changed, the host's
+      // recompute is a no-op - one redundant frame per snapshot, not a loop.)
+      lastSentCols = 0;
+      lastSentRows = 0;
+      latchSkipStreak = 0;
+      latchWarned = false;
+      // Reset before replaying a snapshot into an engine that already holds
+      // content. A snapshot is always the host's AUTHORITATIVE full-screen state
+      // (serialized emulator screen + scrollback + OSC colour preamble), so it
+      // must land on a clean buffer. On a transport reconnect / reopen the
+      // engine is kept alive and still shows pre-disconnect content; replaying
+      // the serialized redraw on top of it collides with the stale
+      // cursor/content - dropping the tail (the "last few output chars lost on
+      // resume" bug) and leaving the native OSC theme un-rasterized until a tab
+      // switch forces a repaint ("theme lost, comes back on tab switch"). RIS
+      // (`ESC c`) is a full reset through the parser - clears buffer + scrollback
+      // and restores default colours while preserving the grid size we just set
+      // - so the snapshot's OSC preamble then re-applies the native palette,
+      // exactly like a fresh open. (We use the escape, not `term.reset()`, which
+      // is unbound in this xterm build.) The first snapshot on a fresh engine
+      // skips this - nothing to clear. Prepended to the chunk (string or, for
+      // a `@1.2` binary connection, `Uint8Array` - see `prependResetEscape`)
+      // so it parses in-order, ahead of the redraw, inside the
+      // replay-suppression guard.
+      const replay = hasReceivedContent
+        ? prependResetEscape(write.chunk)
+        : write.chunk;
+      hasReceivedContent = true;
+      // Fresh engine + empty snapshot: nothing to replay. xterm's WriteBuffer
+      // can drop the parse callback for a zero-length write, so credit now
+      // instead of leaking snapshotReplayDepth. A retained engine prepends
+      // RIS, which is never empty, and takes the write path below.
+      if (replay.length === 0) {
+        write.onAckable();
+        return;
+      }
+      snapshotReplayDepth += 1;
+      term.write(replay, () => {
+        snapshotReplayDepth = Math.max(0, snapshotReplayDepth - 1);
+        // Ack-credit (terminal.subscribe@1.1): report the ORIGINAL
+        // `write.chunk` length the host actually counted, not the
+        // longer `replay` payload this proxy prepended the reset escape to.
+        write.onAckable();
+      });
+      return;
+    }
+    hasReceivedContent = true;
+    // Track the parse window (see `liveParseDepth` at the onData handler):
+    // any OSC colour report xterm emits before this chunk's parse callback
+    // fires is a generated query reply, not user input. A zero-length chunk
+    // parses nothing and can reply to nothing, so it skips the window -
+    // xterm's WriteBuffer can drop callbacks queued behind an empty chunk
+    // (see the snapshot emulator's writeSnapshotChunk note host-side), and a
+    // leaked depth here would leave the reply filter latched on forever.
+    if (write.chunk.length === 0) {
+      term.write(write.chunk, write.onAckable);
+      return;
+    }
+    liveParseDepth += 1;
+    term.write(write.chunk, () => {
+      liveParseDepth = Math.max(0, liveParseDepth - 1);
+      write.onAckable();
+    });
+  };
+
+  // Measure the container's natural grid, or return null when the box is in a
+  // state we must NOT report from. `proposeDimensions` floors to its 2x1
+  // minimum whenever the box is 0x0 (hidden `display:none` pane / detached
+  // mid-reattach) OR collapsed mid window-restore (the flex height chain hasn't
+  // resettled, so the box is a few px tall while still full width). Reporting
+  // that floored size to the host poisons its shared `min(cols/rows)` grid for
+  // every attached client - the "terminal came back tiny and won't recover"
+  // failure. Skipping keeps the last good grid; the ResizeObserver re-measures
+  // once the box settles. The minimum-px floor is what catches the transient
+  // collapse the plain `=== 0` guard let through: no usable terminal surface is
+  // ever this small.
+  const proposeContainerDims = (): { cols: number; rows: number } | null => {
+    if (!containerEl.isConnected) return null;
+    // Never measure through a renderer this engine is only passing through.
+    // `FitAddon.proposeDimensions` divides the box by the LIVE renderer's cell
+    // width, and xterm's two renderers round it differently, so an unpresented
+    // engine sitting on the temporary DOM renderer proposes a different grid
+    // for an unchanged box - and reporting that would shrink the host's
+    // `min()` for every attached client and grow it back on the next present.
+    // See `XtermRendererController.isRendererSettled`. Both readers below
+    // treat `null` as "unmeasurable right now": the fit reports nothing and
+    // `reconcileWithHost` defers into `pendingHostGrid`, which the first fit
+    // after the canvas is back completes.
+    if (!rendererController.isRendererSettled()) return null;
+    if (
+      containerEl.clientWidth < MIN_FIT_CONTAINER_PX ||
+      containerEl.clientHeight < MIN_FIT_CONTAINER_PX
+    ) {
+      return null;
+    }
+    const dims = fitAddon.proposeDimensions();
+    if (dims === undefined) return null;
+    if (dims.cols <= 0 || dims.rows <= 0) return null;
+    return { cols: dims.cols, rows: dims.rows };
+  };
+
+  // Report the measured grid to the host. We deliberately do NOT size the local
+  // `term` here. The host owns the authoritative grid - it computes the
+  // effective size as `min(cols/rows)` across every attached subscriber
+  // ("smaller pane wins") and echoes it back, where `useTerminalResizeSync` is
+  // the single owner that applies it to `term`. Resizing locally to our own
+  // proposal would let this client run wider than a legitimately-smaller peer's
+  // effective grid, desyncing the local grid from the PTY. The cost is one host
+  // round-trip of latency before a fresh open / drag-resize repaints at the new
+  // size; the reattach snapshot path already sizes `term` to the snapshot's
+  // grid up front, so reattach doesn't flash.
+  const reportDims = (cols: number, rows: number): void => {
+    lastSentCols = cols;
+    lastSentRows = rows;
+    // A report is progress toward re-sync; the latch detector only measures
+    // stretches where nothing is reported at all. `latchWarned` is NOT reset
+    // here: the latch self-heal below re-reports through this path, and a
+    // still-stuck session must retry without re-warning on every attempt.
+    // The episode flag resets once the grid matches the box again (or on a
+    // snapshot).
+    latchSkipStreak = 0;
+    live.onContainerResize(cols, rows);
+  };
+
+  // Fit the local grid to the container and report it to the host, deduped
+  // against the last size we reported so render-tick churn doesn't re-send.
+  // Repairing a stale *shared* grid (the box hasn't changed, but the host's
+  // min(cols/rows) is pinned tiny) is `reconcileWithHost`'s job, not this one's
+  // - except for a reconcile that was deferred because the box was unmeasurable
+  // at the time, which this path completes on the next good measurement.
+  const fitToContainerNow = (): void => {
+    const dims = proposeContainerDims();
+    if (dims === null) return;
+    if (pendingHostGrid !== null) {
+      const hostGrid = pendingHostGrid;
+      pendingHostGrid = null;
+      if (dims.cols !== hostGrid.cols || dims.rows !== hostGrid.rows) {
+        // Peer check: with a second tab instance of this session ("smaller
+        // pane wins"), the host grid legitimately differs from this pane's
+        // natural size - still re-report (the host recompute no-ops), but
+        // don't log it as a heal.
+        if (!hasPeerXtermHostForSession({ hostId, sessionId }, containerEl)) {
+          appLogger.warn(
+            "[terminal] deferred grid reconcile healed a stale grid",
+            {
+              sessionId,
+              hostCols: hostGrid.cols,
+              hostRows: hostGrid.rows,
+              cols: dims.cols,
+              rows: dims.rows,
+            },
+          );
+        }
+        reportDims(dims.cols, dims.rows);
+        return;
+      }
+    }
+    if (dims.cols === lastSentCols && dims.rows === lastSentRows) {
+      // Latch detector + self-heal: the box hasn't changed since the last
+      // report, yet the local grid never became that size - the host echo is
+      // missing (report frame lost on a dying socket, host-side resize
+      // hiccup, stale dedupe). Legitimate for one report->echo round trip,
+      // and as a steady state when a smaller peer pane holds the shared grid
+      // down; a streak with no peer means the session is stuck rendering at
+      // the wrong size (the field-reported "half-width TUI in a fullscreen
+      // pane"). Warn once per episode for field evidence, then re-report
+      // THROUGH the dedupe - whatever link dropped, the host recompute runs
+      // again and the echo resizes the grid. `reportDims` resets the streak,
+      // so a still-stuck session retries at most once per
+      // GRID_LATCH_WARN_STREAK fits, without re-warning.
+      if (term.cols !== dims.cols || term.rows !== dims.rows) {
+        latchSkipStreak += 1;
+        if (
+          latchSkipStreak >= GRID_LATCH_WARN_STREAK &&
+          !hasPeerXtermHostForSession({ hostId, sessionId }, containerEl)
+        ) {
+          if (!latchWarned) {
+            latchWarned = true;
+            appLogger.warn(
+              "[terminal] grid latch detected: re-reporting the container's size",
+              {
+                sessionId,
+                termCols: term.cols,
+                termRows: term.rows,
+                cols: dims.cols,
+                rows: dims.rows,
+              },
+            );
+          }
+          reportDims(dims.cols, dims.rows);
+        }
+      } else {
+        latchSkipStreak = 0;
+        latchWarned = false;
+      }
+      return;
+    }
+    reportDims(dims.cols, dims.rows);
+  };
+
+  // While the mobile soft keyboard is animating (native-resize mode shrinks
+  // this container as part of the show/hide transition), hold the fit until
+  // the transition settles so the PTY re-grids once, at the final size,
+  // instead of repainting at intermediate sizes. Gated here, at the single
+  // choke point, because every fit source funnels through this wrapper -
+  // the ResizeObserver AND `term.onRender`, which fires on every committed
+  // render and would otherwise re-grid mid-transition whenever the PTY is
+  // streaming output. Re-arming cancels the previous pending fit, so a burst
+  // of calls during the transition coalesces into one settled fit. Outside
+  // the installed app the keyboard state never transitions and this runs
+  // synchronously.
+  let keyboardSettleCancel: (() => void) | null = null;
+  const fitToContainer = (): void => {
+    keyboardSettleCancel?.();
+    keyboardSettleCancel = runWhenNativeKeyboardSettled(() => {
+      keyboardSettleCancel = null;
+      fitToContainerNow();
+    });
+  };
+
+  // Recovery: when the host's authoritative grid disagrees with what this
+  // healthy container would naturally propose, re-report our natural size. This
+  // unsticks a session whose shared grid was latched to a stale/tiny value by a
+  // transient (or by a client that has since corrected); without it the engine
+  // dedupe keeps us pinned because nothing re-measures the unchanged box.
+  // An unmeasurable container (hidden pane, collapsed box) defers the
+  // reconcile to the next good fit measurement instead of dropping it - the
+  // host grid only changes once per resize, so a dropped reconcile never
+  // re-fires and the session latches at the stale size.
+  const reconcileWithHost = (hostCols: number, hostRows: number): void => {
+    // Mid-keyboard-transition the container is animating through intermediate
+    // heights, so measuring now would report a grid that is wrong by the time
+    // the glide ends. Defer through the same pending slot as an unmeasurable
+    // box: a transition implies ResizeObserver activity, whose settled fit
+    // completes the pending reconcile.
+    if (getNativeKeyboardState().transitioning) {
+      pendingHostGrid = { cols: hostCols, rows: hostRows };
+      return;
+    }
+    const dims = proposeContainerDims();
+    if (dims === null) {
+      pendingHostGrid = { cols: hostCols, rows: hostRows };
+      return;
+    }
+    pendingHostGrid = null;
+    if (dims.cols === hostCols && dims.rows === hostRows) return;
+    reportDims(dims.cols, dims.rows);
+  };
+
+  // `term.onRender` is the event xterm fires after committing a render. The
+  // first render is also when cell dimensions become measurable, so listening
+  // here removes the need for ad-hoc rAF/setTimeout retries -
+  // `fitAddon.proposeDimensions()` only ever bails because the renderer hasn't
+  // measured cells yet, and that condition resolves at exactly this moment.
+  // Subsequent fires are cheap because of the dedupe above.
+  const renderDisposable = term.onRender(() => {
+    markTerminalLoad(sessionId, "first-render");
+    fitToContainer();
+  });
+
+  const observer = new ResizeObserver(() => {
+    if (resizeDebounce !== null) {
+      clearTimeout(resizeDebounce);
+    }
+    resizeDebounce = window.setTimeout(() => {
+      resizeDebounce = null;
+      fitToContainer();
+    }, RESIZE_DEBOUNCE_MS);
+  });
+  observer.observe(containerEl);
+
+  const disposeEngine = (): void => {
+    observer.disconnect();
+    renderDisposable.dispose();
+    if (resizeDebounce !== null) {
+      clearTimeout(resizeDebounce);
+      resizeDebounce = null;
+    }
+    if (keyboardSettleCancel !== null) {
+      keyboardSettleCancel();
+      keyboardSettleCancel = null;
+    }
+    dataDisposable.dispose();
+    searchResultsDisposable.dispose();
+    // Cancels a pending unpresented-canvas disposal as well as dropping a live
+    // addon, so a grace timer can never fire into a torn-down engine.
+    rendererController.dispose();
+    // xterm's Viewport schedules an initial `setTimeout(syncScrollArea)`. A
+    // fast open→close (or StrictMode mount/cleanup/mount) can dispose before
+    // that timer fires; disposing immediately clears xterm's renderer and the
+    // pending Viewport timer then crashes reading `renderService.dimensions`.
+    // Leave the terminal alive for one macrotask so xterm's startup timer
+    // drains before final disposal.
+    window.setTimeout(() => {
+      term.dispose();
+    }, XTERM_STARTUP_DISPOSE_DELAY_MS);
+    containerEl.remove();
+  };
+
+  return {
+    sessionId,
+    hostId,
+    containerEl,
+    term,
+    fitAddon,
+    searchAddon,
+    rendererController,
+    writerProxy,
+    live,
+    controls: { fitToContainer, reconcileWithHost },
+    disposeEngine,
+  };
+}
+
+function handleTerminalScrollKey(
+  term: Terminal,
+  event: KeyboardEvent,
+): boolean | null {
+  // Scroll-to-top/bottom on Cmd+Home/End (macOS) / Ctrl+Home/End (elsewhere),
+  // with VS Code's !terminalAltBufferActive gating: jump the viewport on the
+  // normal buffer, pass through on the alternate one so the program sees the
+  // chord. On macOS plain Home/End scroll too - Terminal.app convention, where
+  // line editing at the prompt is Cmd+arrows / Ctrl-A/E instead. Off-mac they
+  // stay shell line-edit keys.
+  if (
+    isPlatformModifiedBoundaryKey(event) ||
+    (isMac() && isPlainBoundaryKey(event))
+  ) {
+    if (term.buffer.active.type === "alternate") return true;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.key === "Home") {
+      term.scrollToTop();
+    } else {
+      term.scrollToBottom();
+    }
+    return false;
+  }
+
+  // Page keys scroll the viewport only on the normal buffer. Fullscreen
+  // programs (less, vim - the alternate buffer) have no scrollback to reveal;
+  // let xterm encode CSI 5~/6~ so the pager pages natively, matching VS Code's
+  // !terminalAltBufferActive gating.
+  if (event.key !== "PageUp" && event.key !== "PageDown") return null;
+  if (term.buffer.active.type === "alternate") return true;
+  event.preventDefault();
+  event.stopPropagation();
+  term.scrollPages(event.key === "PageUp" ? -1 : 1);
+  return false;
+}
+
+function handleTerminalCustomKeyEvent(
+  term: Terminal,
+  event: KeyboardEvent,
+): boolean {
+  if (event.type !== "keydown") return true;
+
+  // Inject shell line-edit escape sequences for Mac Cmd/Option chords (jump to
+  // line start/end, word-jump, kill to line start, TUI newline) before xterm's
+  // own key encoder runs.
+  const lineEdit = translateLineEditChord(event, { isMac: isMac() });
+  if (lineEdit !== null) {
+    event.preventDefault();
+    event.stopPropagation();
+    term.input(lineEdit, true);
+    return false;
+  }
+
+  // Must precede the Mac Cmd-chord early-return below: alternate-buffer
+  // Home/End explicitly bypass that generic guard and reach the program.
+  const scrollKeyResult = handleTerminalScrollKey(term, event);
+  if (scrollKeyResult !== null) return scrollKeyResult;
+
+  // Preserve Mac clipboard / select-all once the kitty protocol is on. With
+  // kitty active inside a TUI, xterm would otherwise CSI-u encode Cmd chords
+  // (and cancel the browser default), breaking copy/paste/select-all and
+  // leaking the chord into the program. App-bound Cmd chords never reach here -
+  // the capture-phase KeybindingProvider already claimed them.
+  if (isMac() && event.metaKey && !event.ctrlKey && !event.altKey) {
+    // Cmd+A selects the terminal buffer; the browser default would select the
+    // surrounding page instead.
+    if (event.code === "KeyA" && !event.shiftKey) {
+      event.preventDefault();
+      term.selectAll();
+      return false;
+    }
+    // Ghostty's rule: on macOS, Cmd chords don't encode text. Let them bubble
+    // to the browser so its keydown->copy/paste pipeline (which drives xterm's
+    // clipboard events) runs. Do NOT preventDefault - that pipeline needs the
+    // default action.
+    return false;
+  }
+
+  if (event.key === "Tab") {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  return true;
+}
+
+// Default export so `React.lazy(() => import("./terminal-tile-xterm"))`
+// resolves to the host component without an adapter. Static callers
+// (existing renderer registry, tests) keep using the named export.
+export default TerminalXtermHost;
+
+function terminalPathInput(paths: readonly string[]): string {
+  return paths.map(escapeTerminalPath).join(" ");
+}
+
+function escapeTerminalPath(path: string): string {
+  return path.replace(TERMINAL_PATH_ESCAPE_PATTERN, "\\$1");
+}
+
+function useTerminalFindRegistration(
+  activeFindTargetId: string | null,
+  searchAddonRef: RefObject<SearchAddon | null>,
+  markSearchResultSource: (source: TerminalSearchResultSource) => void,
+): void {
+  useEffect(() => {
+    const findTargetId = activeFindTargetId;
+    if (findTargetId === null) return;
+    return registerActiveTerminalFindController({
+      id: findTargetId,
+      findNext: (query, matchCase, incremental) => {
+        markSearchResultSource("legacy");
+        return runLegacyTerminalSearch({
+          addon: searchAddonRef.current,
+          query,
+          matchCase,
+          forward: true,
+          incremental,
+        });
+      },
+      findPrevious: (query, matchCase) => {
+        markSearchResultSource("legacy");
+        return runLegacyTerminalSearch({
+          addon: searchAddonRef.current,
+          query,
+          matchCase,
+          forward: false,
+          incremental: false,
+        });
+      },
+      clear: () => {
+        markSearchResultSource("legacy");
+        searchAddonRef.current?.clearDecorations();
+      },
+    });
+  }, [activeFindTargetId, markSearchResultSource, searchAddonRef]);
+}
+
+function useTerminalResizeSync(
+  termRef: RefObject<Terminal | null>,
+  effectiveCols: number,
+  effectiveRows: number,
+): void {
+  // Drive `term.resize` from the host's authoritative effective size so every
+  // attached client shows the same grid (the smaller pane wins). This is the
+  // single owner of local grid sizing in steady state - the propose/report path
+  // only reports to the host and never resizes `term` itself, so the local grid
+  // can never run ahead of the effective grid. (The reattach snapshot path also
+  // resizes `term`, but only once, to the snapshot's own dimensions.)
+  useEffect(() => {
+    const term = termRef.current;
+    if (term === null) return;
+    if (effectiveCols <= 0 || effectiveRows <= 0) return;
+    if (term.cols === effectiveCols && term.rows === effectiveRows) return;
+    term.resize(effectiveCols, effectiveRows);
+  }, [effectiveCols, effectiveRows, termRef]);
+}
+
+function useHostGridReconcile(
+  controlsRef: RefObject<XtermHostControls | null>,
+  effectiveCols: number,
+  effectiveRows: number,
+): void {
+  // When the host's authoritative grid changes, re-report this container's
+  // natural size if it disagrees. A transient (window restore, a hidden-pane
+  // measurement, or another client) can latch the shared `min(cols/rows)` grid
+  // to a stale/tiny value; re-reporting from a healthy container is what
+  // releases the latch. The engine's own dedupe would otherwise keep us pinned
+  // because nothing re-measures the unchanged box, and the store dedupes the
+  // re-report against its last-requested size so this can't loop.
+  useEffect(() => {
+    // A non-positive grid is a placeholder, not a host-decided size - the
+    // measurement probe mounts with 0x0 before any session exists. There is
+    // nothing to reconcile against; arming the deferred-reconcile path with
+    // zeros would force a spurious re-report (and heal-log) on first fit.
+    if (effectiveCols <= 0 || effectiveRows <= 0) return;
+    controlsRef.current?.reconcileWithHost(effectiveCols, effectiveRows);
+  }, [controlsRef, effectiveCols, effectiveRows]);
+}
+
+interface TerminalAppearanceSyncInput {
+  readonly termRef: RefObject<Terminal | null>;
+  readonly controlsRef: RefObject<XtermHostControls | null>;
+  readonly rendererRef: RefObject<XtermRendererController | null>;
+  readonly theme: ITerminalOptions["theme"];
+  readonly fontSize: number;
+  readonly fontFamily: string;
+  readonly cursorStyle: TerminalCursorStyle;
+  readonly cursorBlink: boolean;
+}
+
+function useTerminalAppearanceSync(input: TerminalAppearanceSyncInput): void {
+  const {
+    termRef,
+    controlsRef,
+    rendererRef,
+    theme,
+    fontSize,
+    fontFamily,
+    cursorStyle,
+    cursorBlink,
+  } = input;
+
+  // Live theme switching: rebuild the xterm palette when the resolved
+  // light/dark mode or active preset changes, then ask the WebGL atlas
+  // (if any) to re-rasterize glyphs. The schedule is rAF-batched across
+  // every mounted terminal so toggling a preset with N tiles open doesn't
+  // fire N independent atlas clears in the same tick.
+  useLayoutEffect(() => {
+    const term = termRef.current;
+    if (term === null) return;
+    term.options.theme = theme;
+    // Read the LIVE addon, never a cached reference: presentation disposes and
+    // reloads it, so the clear must reach whichever addon the renderer
+    // controller holds right now (and skips harmlessly when there is none).
+    scheduleAtlasClear(term, rendererRef.current?.currentCanvas() ?? null);
+  }, [termRef, theme, rendererRef]);
+
+  // Live font sync: `fontSize`/`fontFamily` are the effective terminal
+  // values - a Settings → Terminal override when set, else the Settings →
+  // Code value/font (see `resolveEffectiveFontFamily`) - so this effect
+  // tracks both the size slider and any font-family change.
+  useLayoutEffect(() => {
+    const term = termRef.current;
+    if (term === null) return;
+    term.options.fontSize = fontSize;
+    term.options.fontFamily = fontFamily;
+    scheduleAtlasClear(term, rendererRef.current?.currentCanvas() ?? null);
+    // A font/size change changes the cell box, so the grid must refit. Route it
+    // through the engine's guarded path (not a raw `fitAddon.fit()`) so the new
+    // size is reported to the host and kept in the engine's dedupe state. If the
+    // renderer hasn't re-measured cells yet this proposes nothing; the onRender
+    // propose loop refits on the next frame.
+    controlsRef.current?.fitToContainer();
+  }, [fontSize, controlsRef, fontFamily, termRef, rendererRef]);
+
+  // Live cursor sync: shape and blink are pure renderer options - they don't
+  // touch cell geometry, so unlike the font effect this neither refits the grid
+  // nor clears the glyph atlas. xterm repaints the cursor on the option write.
+  useLayoutEffect(() => {
+    const term = termRef.current;
+    if (term === null) return;
+    term.options.cursorStyle = cursorStyle;
+    term.options.cursorInactiveStyle = inactiveCursorStyleFor(cursorStyle);
+    term.options.cursorBlink = cursorBlink;
+  }, [termRef, cursorStyle, cursorBlink]);
+}
+
+function useVisibleTerminalRepair(input: {
+  readonly termRef: RefObject<Terminal | null>;
+  readonly controlsRef: RefObject<XtermHostControls | null>;
+  readonly rendererRef: RefObject<XtermRendererController | null>;
+  readonly theme: ITerminalOptions["theme"];
+}): void {
+  const { termRef, controlsRef, rendererRef, theme } = input;
+  // Repaint when this pane becomes visible again. A tab switch never unmounts
+  // the tile (the pane is hidden via `visibility:hidden` / `display:none` and
+  // kept mounted so xterm scrollback survives), so the Traycer Host reattach pulse
+  // never runs here - this hook is the ONLY recovery for the live screen.
+  //
+  // While hidden the container measures 0x0 (or a collapsed sub-`MIN_FIT_*`
+  // box), so the engine's guarded propose skips and `term.resize` is never
+  // called - the grid keeps its last cols/rows. On show, fit proposes the real
+  // dims again; if they match nothing resizes and the renderer never re-issues
+  // a full draw, leaving whatever the canvas last painted - and after a
+  // `display:none` cycle the canvas backing store and the glyph texture atlas
+  // can come back invalidated, which surfaces as a blank grid ("buffer
+  // dropped") or default-colored glyphs ("theme reset").
+  //
+  // Order is load-bearing: re-assert the palette, clear the glyph atlas
+  // SYNCHRONOUSLY, then `term.refresh(0, rows-1)` to mark every row dirty and
+  // force a full repaint. The rAF-batched `scheduleAtlasClear` would run AFTER
+  // this synchronous refresh, so the refresh would paint from the stale atlas
+  // and nothing would repaint once the deferred clear dropped it. Clearing
+  // first guarantees every cell re-rasterizes in the current theme. (The rAF
+  // batching exists to coalesce a theme toggle across N tiles; reshow only
+  // ever repaints the one pane becoming visible, so a direct clear is fine.)
+  const refitVisiblePane = useCallback(() => {
+    const term = termRef.current;
+    if (term === null) return;
+    const controls = controlsRef.current;
+    if (controls !== null) {
+      // Refit to the box this pane now occupies. This re-reports only when the
+      // measured grid differs from what we last sent (the `fitToContainer`
+      // dedupe), so an ordinary tab switch with an unchanged box sends nothing.
+      // We deliberately do NOT `reconcileWithHost` here: it compares natural
+      // dims against the host's effective grid (not lastSent), which legitimately
+      // differ under "smaller-pane-wins"/rounding, so it re-reported on every
+      // pane-show and caused the spurious resize-on-tab-switch. Recovery from a
+      // genuinely stale shared grid is left to `useHostGridReconcile`, which
+      // fires on an actual effective-size change, not on visibility.
+      controls.fitToContainer();
+    }
+    term.options.theme = theme;
+    clearTerminalAtlasSafely(rendererRef.current?.currentCanvas() ?? null);
+    term.refresh(0, term.rows - 1);
+  }, [controlsRef, termRef, rendererRef, theme]);
+  useVisiblePaneEffect(refitVisiblePane);
+}
+
+function clearTerminalAtlasSafely(canvas: CanvasAddon | null): void {
+  // `null` is the ordinary unpresented state (the renderer controller holds no
+  // addon) as well as the canvas-unavailable fallback - nothing to clear, and
+  // the next `present()` loads an addon with a fresh atlas anyway.
+  if (canvas === null) return;
+  try {
+    canvas.clearTextureAtlas();
+  } catch {
+    // Addon disposed (WebGL fallback path / mid-teardown); xterm's own
+    // renderer re-rasterizes glyphs on the next draw.
+  }
+}
+
+function useActiveTerminalFocus(
+  instanceId: string,
+  shouldFocusOnActivePane: boolean,
+): void {
+  const paneActivationFocusIntent = usePaneActivationFocusIntent();
+  const focusVisibleTerminal = useCallback(() => {
+    if (!shouldFocusOnActivePane) return;
+    // A phone keyboard must be summoned by a tap, not by pane activation: on
+    // the installed mobile app the terminal takes focus only from the tile's
+    // tap-to-focus path, which keeps the pane readable until the user asks to
+    // type. The key bar still reaches the engine while it is unfocused - it
+    // injects through `term.input`, not the hidden textarea.
+    if (isMobileApp()) return;
+    if (paneActivationFocusIntent.shouldYieldAutoFocus()) return;
+    focusTerminalInstance(instanceId);
+  }, [instanceId, paneActivationFocusIntent, shouldFocusOnActivePane]);
+  useActivePaneEffect(focusVisibleTerminal);
+}
+
+function runLegacyTerminalSearch(input: {
+  readonly addon: SearchAddon | null;
+  readonly query: string;
+  readonly matchCase: boolean;
+  readonly forward: boolean;
+  readonly incremental: boolean;
+}): boolean {
+  const result = runTerminalXtermSearch(input);
+  if (!result.attempted) return false;
+  if (result.cleared) {
+    useFindInPageStore.getState().setMatches(null);
+    return true;
+  }
+  if (!result.found) {
+    useFindInPageStore.getState().setMatches({ current: 0, total: 0 });
+  }
+  return true;
+}
+
+function publishLegacyTerminalSearchResult(
+  result: ISearchResultChangeEvent,
+): void {
+  if (result.resultCount === 0) {
+    useFindInPageStore.getState().setMatches({ current: 0, total: 0 });
+    return;
+  }
+  if (result.resultIndex < 0) {
+    useFindInPageStore.getState().setMatches({
+      current: 0,
+      total: result.resultCount,
+    });
+    return;
+  }
+  useFindInPageStore.getState().setMatches({
+    current: result.resultIndex + 1,
+    total: result.resultCount,
+  });
+}

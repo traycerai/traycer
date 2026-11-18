@@ -1,0 +1,2919 @@
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  InterviewAnswer,
+  InterviewQuestion,
+} from "@traycer/protocol/persistence/epic/schemas";
+import { PendingInterviewCard } from "@/components/chat/segments/pending-interview/pending-interview-card";
+import {
+  draftFromStoredAnswer,
+  draftsFromStoredAnswers,
+  draftToStoredAnswer,
+  emptyDraft,
+  questionIdentity,
+} from "@/components/chat/segments/pending-interview/interview-draft";
+import {
+  focusActiveComposer,
+  focusRegisteredActiveComposer,
+} from "@/lib/composer/composer-focus-registry";
+import {
+  PaneFocusProbeContext,
+  PaneSurfaceActivityContext,
+} from "@/components/epic-tabs/pane-visibility-context";
+import { setMobileApp } from "@/lib/mobile-app";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { interviewDraftKey } from "@/lib/persist";
+import {
+  readInterviewDraftSnapshot,
+  rehydrateInterviewDraftsFromStorage,
+  useInterviewDraftStore,
+  type StoredInterviewDraft,
+} from "@/stores/composer/interview-draft-store";
+import type { ChatForkMode } from "@/components/chat/chat-message";
+
+// Slightly longer than the card's ~110ms highlight-then-advance window.
+const ADVANCE_MS = 200;
+
+function expectStoredInterviewDraft(
+  actual: StoredInterviewDraft | null,
+  payload: {
+    readonly pageIndex: number;
+    readonly answers: StoredInterviewDraft["answers"];
+  },
+): void {
+  expect(actual).not.toBeNull();
+  if (actual === null) return;
+  expect(typeof actual.draftId).toBe("string");
+  expect(actual.draftId.length).toBeGreaterThan(0);
+  expect(typeof actual.lastTouchedAt).toBe("number");
+  expect(actual).toEqual({
+    pageIndex: payload.pageIndex,
+    answers: payload.answers,
+    draftId: actual.draftId,
+    hostRevision: 0,
+    targetEpicId: null,
+    lastTouchedAt: actual.lastTouchedAt,
+    generation: actual.generation,
+    syncedGeneration: 0,
+  });
+}
+
+describe("draftFromStoredAnswer", () => {
+  it("falls back to saved labels when option indices now name different labels", () => {
+    const restored = draftFromStoredAnswer(
+      {
+        questionIdentity: questionIdentity(
+          singleSelect("q1", "Choose", ["Beta", "Alpha"]),
+        ),
+        selected: ["Alpha"],
+        selectedOptionIndices: [0],
+        otherSelected: false,
+        otherText: "",
+      },
+      singleSelect("q1", "Choose", ["Beta", "Alpha"]),
+    );
+
+    expect([...restored.selected]).toEqual([1]);
+  });
+
+  it("does not treat indices from a different question as exact evidence", () => {
+    const restored = draftFromStoredAnswer(
+      {
+        questionIdentity: questionIdentity(
+          singleSelect("original-question", "Different prompt", ["Yes", "No"]),
+        ),
+        selected: ["Yes"],
+        selectedOptionIndices: [0],
+        otherSelected: false,
+        otherText: "",
+      },
+      singleSelect("replacement-question", "Different prompt", ["Yes", "No"]),
+    );
+
+    expect([...restored.selected]).toEqual([0]);
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
+
+  it("keeps legacy index rows visible without promoting them to exact evidence", () => {
+    const restored = draftFromStoredAnswer(
+      {
+        selected: ["Yes"],
+        selectedOptionIndices: [1],
+        otherSelected: false,
+        otherText: "",
+      },
+      singleSelect(null, "Continue?", ["Yes", "Yes"]),
+    );
+
+    expect([...restored.selected]).toEqual([0]);
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
+
+  it("preserves exact duplicate-label indices for a fresh question without an ID", () => {
+    const question = singleSelect(null, "Continue?", ["Yes", "Yes"]);
+    const stored = draftToStoredAnswer(
+      {
+        selected: new Set([1]),
+        selectionEvidenceExact: true,
+        otherText: "",
+        otherSelected: false,
+      },
+      question,
+    );
+
+    const restored = draftFromStoredAnswer(stored, question);
+    expect([...restored.selected]).toEqual([1]);
+    expect(restored.selectionEvidenceExact).toBe(true);
+  });
+
+  it("does not carry anonymous-question indices across different prompt framing", () => {
+    const original = singleSelect(null, "First prompt", ["Yes", "Yes"]);
+    const replacement = singleSelect(null, "Replacement prompt", [
+      "Yes",
+      "Yes",
+    ]);
+    const stored = draftToStoredAnswer(
+      {
+        selected: new Set([1]),
+        selectionEvidenceExact: true,
+        otherText: "",
+        otherSelected: false,
+      },
+      original,
+    );
+
+    const restored = draftFromStoredAnswer(stored, replacement);
+    expect([...restored.selected]).toEqual([0]);
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
+
+  it("matches modern drafts by unique identity when questions reorder", () => {
+    const first = singleSelect("first", "First prompt", ["Yes", "No"]);
+    const second = singleSelect("second", "Second prompt", ["Yes", "No"]);
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([0]),
+          selectionEvidenceExact: true,
+          otherText: "",
+          otherSelected: false,
+        },
+        first,
+      ),
+      draftToStoredAnswer(
+        {
+          selected: new Set(),
+          selectionEvidenceExact: true,
+          otherText: "second custom text",
+          otherSelected: true,
+        },
+        second,
+      ),
+    ];
+
+    const restored = draftsFromStoredAnswers(stored, [second, first]);
+    expect([...restored[0].selected]).toEqual([]);
+    expect(restored[0].otherText).toBe("second custom text");
+    expect([...restored[1].selected]).toEqual([0]);
+    expect(restored[1].otherText).toBe("");
+    expect(restored.every((draft) => draft.selectionEvidenceExact)).toBe(true);
+  });
+
+  it("preserves content but downgrades evidence across cosmetic framing updates", () => {
+    const original = singleSelect("stable", "Choose", ["Yes", "No"]);
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([1]),
+          selectionEvidenceExact: true,
+          otherText: "keep this note",
+          otherSelected: false,
+        },
+        original,
+      ),
+    ];
+    const changed = {
+      ...original,
+      header: "Updated header",
+      options: original.options.map((option) => ({
+        ...option,
+        description: `Updated ${option.label}`,
+      })),
+    };
+
+    const [restored] = draftsFromStoredAnswers(stored, [changed]);
+    expect([...restored.selected]).toEqual([1]);
+    expect(restored.otherText).toBe("keep this note");
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
+
+  it("preserves ID-less draft content across cosmetic framing updates", () => {
+    const original = {
+      ...singleSelect(null, "Choose", ["Yes", "No"]),
+      header: "Original header",
+    };
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([0]),
+          selectionEvidenceExact: true,
+          otherText: "anonymous custom text",
+          otherSelected: false,
+        },
+        original,
+      ),
+    ];
+    const changed = {
+      ...original,
+      header: "Updated header",
+      options: original.options.map((option) => ({
+        ...option,
+        preview: `Updated ${option.label}`,
+      })),
+    };
+
+    const [restored] = draftsFromStoredAnswers(stored, [changed]);
+    expect([...restored.selected]).toEqual([0]);
+    expect(restored.otherText).toBe("anonymous custom text");
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
+
+  it("does not positionally attach an unmatched modern draft", () => {
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([0]),
+          selectionEvidenceExact: true,
+          otherText: "belongs to the old prompt",
+          otherSelected: true,
+        },
+        singleSelect("old", "Old prompt", ["Yes", "No"]),
+      ),
+    ];
+
+    const [restored] = draftsFromStoredAnswers(stored, [
+      singleSelect("new", "New prompt", ["Yes", "No"]),
+    ]);
+    expect(restored).toEqual({
+      selected: new Set(),
+      selectionEvidenceExact: true,
+      otherText: "",
+      otherSelected: false,
+    });
+  });
+
+  it("does not duplicate one modern draft across identical current questions", () => {
+    const question = singleSelect("same", "Same prompt", ["Yes", "No"]);
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([1]),
+          selectionEvidenceExact: true,
+          otherText: "",
+          otherSelected: false,
+        },
+        question,
+      ),
+    ];
+
+    const restored = draftsFromStoredAnswers(stored, [question, question]);
+    expect(restored).toEqual([
+      {
+        selected: new Set(),
+        selectionEvidenceExact: true,
+        otherText: "",
+        otherSelected: false,
+      },
+      {
+        selected: new Set(),
+        selectionEvidenceExact: true,
+        otherText: "",
+        otherSelected: false,
+      },
+    ]);
+  });
+
+  it("preserves draft content when a unique question gains a stable ID", () => {
+    const original = singleSelect(null, "Choose", ["Yes", "No"]);
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([1]),
+          selectionEvidenceExact: true,
+          otherText: "keep this note",
+          otherSelected: false,
+        },
+        original,
+      ),
+    ];
+
+    const [restored] = draftsFromStoredAnswers(stored, [
+      { ...original, questionId: "provider-question" },
+    ]);
+    expect([...restored.selected]).toEqual([1]);
+    expect(restored.otherText).toBe("keep this note");
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
+
+  it("does not attach an ID-enriched draft across an ambiguous prompt", () => {
+    const original = singleSelect(null, "Choose", ["Yes", "No"]);
+    const stored = [
+      draftToStoredAnswer(
+        {
+          selected: new Set([1]),
+          selectionEvidenceExact: true,
+          otherText: "belongs to one question",
+          otherSelected: false,
+        },
+        original,
+      ),
+    ];
+    const current = { ...original, questionId: "provider-question" };
+
+    expect(draftsFromStoredAnswers(stored, [current, current])).toEqual([
+      emptyDraft(),
+      emptyDraft(),
+    ]);
+  });
+
+  it("downgrades exact evidence when options reorder under the same question ID", () => {
+    const original = singleSelect("same", "Choose", ["First", "Second"]);
+    const reordered = singleSelect("same", "Choose", ["Second", "First"]);
+    const stored = draftToStoredAnswer(
+      {
+        selected: new Set([1]),
+        selectionEvidenceExact: true,
+        otherText: "",
+        otherSelected: false,
+      },
+      original,
+    );
+
+    const restored = draftFromStoredAnswer(stored, reordered);
+    expect([...restored.selected]).toEqual([0]);
+    expect(restored.selectionEvidenceExact).toBe(false);
+  });
+});
+
+function singleSelect(
+  id: string | null,
+  question: string,
+  labels: ReadonlyArray<string>,
+): InterviewQuestion {
+  return {
+    questionId: id,
+    question,
+    header: null,
+    options: labels.map((label) => ({
+      label,
+      description: null,
+      preview: null,
+    })),
+    multiSelect: false,
+    allowsCustomAnswer: null,
+  };
+}
+
+function multiSelect(
+  id: string,
+  question: string,
+  labels: ReadonlyArray<string>,
+): InterviewQuestion {
+  return { ...singleSelect(id, question, labels), multiSelect: true };
+}
+
+/**
+ * A question whose answer channel cannot carry free text - what an interview
+ * riding an ACP `session/request_permission` looks like, since that request's
+ * answer is an option id and nothing else.
+ */
+function withoutCustomAnswer(question: InterviewQuestion): InterviewQuestion {
+  return { ...question, allowsCustomAnswer: false };
+}
+
+function renderCard(
+  questions: ReadonlyArray<InterviewQuestion>,
+  onSubmit:
+    | ((
+        blockId: string,
+        answers: ReadonlyArray<InterviewAnswer>,
+      ) => string | null)
+    | null,
+  onSkip:
+    | ((
+        blockId: string,
+        reason: string,
+        draftAnswers: ReadonlyArray<InterviewAnswer> | undefined,
+      ) => string | null)
+    | null,
+) {
+  return renderCardFor({
+    chatId: "chat-1",
+    blockId: "interview-1",
+    questions,
+    isBusy: false,
+    onSubmit,
+    onSkip,
+    onFork: null,
+  });
+}
+
+function renderCardFor(args: {
+  readonly chatId: string;
+  readonly blockId: string;
+  readonly questions: ReadonlyArray<InterviewQuestion>;
+  readonly isBusy: boolean;
+  readonly onSubmit:
+    | ((
+        blockId: string,
+        answers: ReadonlyArray<InterviewAnswer>,
+      ) => string | null)
+    | null;
+  readonly onSkip:
+    | ((
+        blockId: string,
+        reason: string,
+        draftAnswers: ReadonlyArray<InterviewAnswer> | undefined,
+      ) => string | null)
+    | null;
+  readonly onFork: ((mode: ChatForkMode) => void) | null;
+}) {
+  return render(
+    <TooltipProvider>
+      <PendingInterviewCard
+        chatId={args.chatId}
+        blockId={args.blockId}
+        questions={args.questions}
+        isActive
+        isBusy={args.isBusy}
+        onSubmit={args.onSubmit}
+        onSkip={args.onSkip}
+        onFork={args.onFork}
+        navigationHighlighted={false}
+      />
+    </TooltipProvider>,
+  );
+}
+
+function cardElement(args: {
+  readonly chatId: string;
+  readonly blockId: string;
+  readonly questions: ReadonlyArray<InterviewQuestion>;
+  readonly isBusy: boolean;
+  readonly onSubmit:
+    | ((
+        blockId: string,
+        answers: ReadonlyArray<InterviewAnswer>,
+      ) => string | null)
+    | null;
+  readonly onSkip:
+    | ((
+        blockId: string,
+        reason: string,
+        draftAnswers: ReadonlyArray<InterviewAnswer> | undefined,
+      ) => string | null)
+    | null;
+  readonly onFork: ((mode: ChatForkMode) => void) | null;
+}) {
+  return (
+    <PendingInterviewCard
+      chatId={args.chatId}
+      blockId={args.blockId}
+      questions={args.questions}
+      isActive
+      isBusy={args.isBusy}
+      onSubmit={args.onSubmit}
+      onSkip={args.onSkip}
+      onFork={args.onFork}
+      navigationHighlighted={false}
+    />
+  );
+}
+
+function card(): HTMLElement {
+  return screen.getByTestId("interview-card");
+}
+
+// The proceed (Next/Submit) action button, identified by its exact accessible
+// name - distinct from the pager's "Next question" / "Previous question"
+// buttons. `PrimaryActionShortcutHint` marks its chord `aria-hidden`, so the
+// name carries no "↵"; the anchored regex is what rules out "Next question"
+// matching "Next".
+function proceedButton(): HTMLButtonElement {
+  return screen.getByRole<HTMLButtonElement>("button", {
+    name: /^(Submit|Next)$/,
+  });
+}
+
+describe("PendingInterviewCard navigation highlight", () => {
+  afterEach(() => {
+    cleanup();
+    useInterviewDraftStore.setState({ draftsByChat: {} });
+    window.localStorage.clear();
+    setMobileApp(false);
+  });
+
+  it("stamps data-navigation-highlighted on the card when flashing", () => {
+    render(
+      <TooltipProvider>
+        <PendingInterviewCard
+          chatId="chat-1"
+          blockId="interview-1"
+          questions={[singleSelect("q", "Question?", ["Alpha"])]}
+          isActive={false}
+          isBusy={false}
+          onSubmit={vi.fn()}
+          onSkip={null}
+          onFork={null}
+          navigationHighlighted
+        />
+      </TooltipProvider>,
+    );
+
+    const card = screen.getByTestId("interview-card");
+    expect(card.getAttribute("data-block-id")).toBe("interview-1");
+    expect(card.getAttribute("data-navigation-highlighted")).toBe("true");
+  });
+
+  it("stamps a new highlight generation on a repeated flash of the same card", () => {
+    const ui = (generation: number) => (
+      <TooltipProvider>
+        <PendingInterviewCard
+          chatId="chat-1"
+          blockId="interview-1"
+          questions={[singleSelect("q", "Question?", ["Alpha"])]}
+          isActive={false}
+          isBusy={false}
+          onSubmit={vi.fn()}
+          onSkip={null}
+          onFork={null}
+          navigationHighlighted
+          highlightGeneration={generation}
+        />
+      </TooltipProvider>
+    );
+    const { rerender } = render(ui(1));
+    expect(
+      screen
+        .getByTestId("interview-card")
+        .getAttribute("data-navigation-highlight-generation"),
+    ).toBe("1");
+    rerender(ui(2));
+    expect(
+      screen
+        .getByTestId("interview-card")
+        .getAttribute("data-navigation-highlight-generation"),
+    ).toBe("2");
+  });
+});
+
+describe("PendingInterviewCard keyboard navigation", () => {
+  afterEach(() => {
+    cleanup();
+    useInterviewDraftStore.setState({ draftsByChat: {} });
+    window.localStorage.clear();
+    setMobileApp(false);
+  });
+
+  it("keeps the Submit shortcut keycaps at the primary action contrast", () => {
+    renderCard([singleSelect("free", "Describe it", [])], vi.fn(), null);
+
+    const submit = screen.getByRole("button", { name: "Submit" });
+    const keycaps = submit.querySelectorAll('[data-slot="kbd"]');
+    expect(keycaps).toHaveLength(2);
+    for (const keycap of keycaps) {
+      expect(keycap.className).toContain("border-current");
+      expect(keycap.className).toContain("bg-transparent");
+      expect(keycap.className).toContain("text-current");
+    }
+  });
+
+  it("restores each chat's current question and answers after remount", () => {
+    const questions = [
+      multiSelect("q1", "Pick some", ["Alpha", "Beta"]),
+      singleSelect("q2", "Describe it", []),
+    ];
+    const firstChat = renderCardFor({
+      chatId: "chat-1",
+      blockId: "shared-block-id",
+      questions,
+      isBusy: false,
+      onSubmit: vi.fn(),
+      onSkip: null,
+      onFork: null,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "1. Alpha" }));
+    fireEvent.click(proceedButton());
+    fireEvent.change(screen.getByLabelText("Interview answer"), {
+      target: { value: "Keep this draft" },
+    });
+    firstChat.unmount();
+
+    const otherChat = renderCardFor({
+      chatId: "chat-2",
+      blockId: "shared-block-id",
+      questions,
+      isBusy: false,
+      onSubmit: vi.fn(),
+      onSkip: null,
+      onFork: null,
+    });
+    expect(screen.getByText("Pick some")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "1. Alpha", pressed: false }),
+    ).toBeTruthy();
+    otherChat.unmount();
+
+    renderCardFor({
+      chatId: "chat-1",
+      blockId: "shared-block-id",
+      questions,
+      isBusy: false,
+      onSubmit: vi.fn(),
+      onSkip: null,
+      onFork: null,
+    });
+    expect(screen.getByText("Describe it")).toBeTruthy();
+    expect(
+      screen.getByLabelText<HTMLTextAreaElement>("Interview answer").value,
+    ).toBe("Keep this draft");
+    fireEvent.click(screen.getByRole("button", { name: "Previous question" }));
+    expect(
+      screen.getByRole("button", { name: "1. Alpha", pressed: true }),
+    ).toBeTruthy();
+  });
+
+  // The unanswerable pair: no options AND no free text. The schema tolerates it
+  // deliberately (rejecting would drop the whole content block, not one bad
+  // question), and `content-blocks.ts` promises the renderer leaves Skip as the
+  // only exit. Before this gate the card rendered no input and still offered an
+  // ENABLED Submit, which sent `values: []` down a channel that requires a
+  // listed option - the card contradicting its own contract.
+  //
+  // FALSIFICATION: drop `!hasUnanswerableQuestion` from `canSubmit` and the
+  // button arm reddens; drop the `hasUnanswerableQuestion` guard from
+  // `submitDrafts` and the Enter arm reddens. They are separate paths -
+  // `proceed()` checks `isBusy` alone - so one gate does not cover both.
+  it("refuses Submit for a question with no answer channel, by button and by Enter", () => {
+    const onSubmit = vi.fn(() => "action-1");
+    renderCardFor({
+      chatId: "chat-unanswerable",
+      blockId: "iv-unanswerable",
+      questions: [withoutCustomAnswer(singleSelect("q1", "Pick one", []))],
+      isBusy: false,
+      onSubmit,
+      onSkip: vi.fn(() => "skip-1"),
+      onFork: null,
+    });
+
+    const submit = screen.getByRole<HTMLButtonElement>("button", {
+      name: /^Submit$/,
+    });
+    expect(submit.disabled).toBe(true);
+
+    // The keyboard path is the one that does NOT consult the button's disabled
+    // state: `proceed()` checks `isBusy` alone, so it reaches `submitDrafts`
+    // whatever the button looks like. Cmd+Enter on the card is how this suite
+    // drives it.
+    fireEvent.click(submit);
+    fireEvent.keyDown(card(), { key: "Enter", metaKey: true });
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    // Skip remains the documented exit, so the card is still resolvable.
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: /Skip/ }).disabled,
+    ).toBe(false);
+  });
+
+  // CONTROL: the same question WITH an option submits normally, so the arm
+  // above is pinning the missing answer channel and not simply a card that
+  // never submits.
+  it("still submits when the question has a listed option", () => {
+    const onSubmit = vi.fn(() => "action-1");
+    renderCardFor({
+      chatId: "chat-answerable",
+      blockId: "iv-answerable",
+      questions: [withoutCustomAnswer(singleSelect("q1", "Pick one", ["A"]))],
+      isBusy: false,
+      onSubmit,
+      onSkip: vi.fn(() => "skip-1"),
+      onFork: null,
+    });
+
+    const submit = screen.getByRole<HTMLButtonElement>("button", {
+      name: /^Submit$/,
+    });
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+
+    // The keyboard path reaches the same place, so the control covers both
+    // gates the arm above ablates.
+    onSubmit.mockClear();
+    fireEvent.keyDown(card(), { key: "Enter", metaKey: true });
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains the persisted draft after Submit returns an action id", () => {
+    renderCard(
+      [singleSelect("free", "Describe it", [])],
+      vi.fn(() => "action-1"),
+      null,
+    );
+    fireEvent.change(screen.getByLabelText("Interview answer"), {
+      target: { value: "Ready to send" },
+    });
+    expect(
+      useInterviewDraftStore.getState().draftsByChat["chat-1"]?.["interview-1"],
+    ).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: /Submit/ }));
+
+    // Clearing is deferred to the host interviewAnswered frame; the isolated
+    // card never clears on dispatch acceptance.
+    expect(
+      useInterviewDraftStore.getState().draftsByChat["chat-1"]?.["interview-1"],
+    ).toBeDefined();
+  });
+
+  it("retains the persisted draft after Skip returns an action id", () => {
+    renderCard(
+      [singleSelect("free", "Describe it", [])],
+      vi.fn(),
+      vi.fn(() => "action-1"),
+    );
+    fireEvent.change(screen.getByLabelText("Interview answer"), {
+      target: { value: "Keep this draft for retry" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Skip/ }));
+
+    expect(
+      useInterviewDraftStore.getState().draftsByChat["chat-1"]?.["interview-1"],
+    ).toBeDefined();
+  });
+
+  it("locks the card while busy, retains the draft, and unlocks for retry after rejection", () => {
+    const onSubmit = vi.fn(() => "action-1");
+    const onSkip = vi.fn(() => "skip-1");
+    const questions = [singleSelect("free", "Describe it", [])];
+    const view = render(
+      <TooltipProvider>
+        {cardElement({
+          chatId: "chat-1",
+          blockId: "interview-1",
+          questions: questions,
+          isBusy: false,
+          onSubmit: onSubmit,
+          onSkip: onSkip,
+          onFork: null,
+        })}
+      </TooltipProvider>,
+    );
+
+    fireEvent.change(screen.getByLabelText("Interview answer"), {
+      target: { value: "Retryable answer" },
+    });
+    expect(
+      useInterviewDraftStore.getState().draftsByChat["chat-1"]?.["interview-1"],
+    ).toBeDefined();
+
+    // Simulate in-flight/accepted action: parent drives isBusy true.
+    view.rerender(
+      <TooltipProvider>
+        {cardElement({
+          chatId: "chat-1",
+          blockId: "interview-1",
+          questions: questions,
+          isBusy: true,
+          onSubmit: onSubmit,
+          onSkip: onSkip,
+          onFork: null,
+        })}
+      </TooltipProvider>,
+    );
+
+    const submitWhileBusy = screen.getByRole<HTMLButtonElement>("button", {
+      name: /Submit/,
+    });
+    const skipWhileBusy = screen.getByRole<HTMLButtonElement>("button", {
+      name: /Skip/,
+    });
+    expect(submitWhileBusy.disabled).toBe(true);
+    expect(skipWhileBusy.disabled).toBe(true);
+    fireEvent.click(submitWhileBusy);
+    fireEvent.click(skipWhileBusy);
+    fireEvent.change(screen.getByLabelText("Interview answer"), {
+      target: { value: "should not overwrite" },
+    });
+    fireEvent.keyDown(card(), { key: "Enter", metaKey: true });
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(onSkip).not.toHaveBeenCalled();
+    expect(
+      screen.getByLabelText<HTMLTextAreaElement>("Interview answer").value,
+    ).toBe("Retryable answer");
+    expect(
+      useInterviewDraftStore.getState().draftsByChat["chat-1"]?.["interview-1"],
+    ).toBeDefined();
+
+    // Rejected ack clears busy; draft retained for retry.
+    view.rerender(
+      <TooltipProvider>
+        {cardElement({
+          chatId: "chat-1",
+          blockId: "interview-1",
+          questions: questions,
+          isBusy: false,
+          onSubmit: onSubmit,
+          onSkip: onSkip,
+          onFork: null,
+        })}
+      </TooltipProvider>,
+    );
+    const submitUnlocked = screen.getByRole<HTMLButtonElement>("button", {
+      name: /Submit/,
+    });
+    expect(submitUnlocked.disabled).toBe(false);
+    expect(
+      screen.getByLabelText<HTMLTextAreaElement>("Interview answer").value,
+    ).toBe("Retryable answer");
+    fireEvent.click(submitUnlocked);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(
+      useInterviewDraftStore.getState().draftsByChat["chat-1"]?.["interview-1"],
+    ).toBeDefined();
+  });
+
+  it("refocuses the answer field when a rejection clears the busy gate", () => {
+    vi.useFakeTimers();
+    try {
+      const questions = [singleSelect("free", "Describe it", [])];
+      const view = render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: questions,
+            isBusy: true,
+            onSubmit: vi.fn(() => "action-1"),
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+      act(() => {
+        vi.runAllTimers();
+      });
+      screen.getByLabelText<HTMLTextAreaElement>("Interview answer").blur();
+
+      // Rejected ack clears busy; the field must regain focus so the user
+      // can retype without an extra click - a disabled field cannot take
+      // focus, so this only works if the ref re-runs once busy clears.
+      view.rerender(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: questions,
+            isBusy: false,
+            onSubmit: vi.fn(),
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      expect(document.activeElement).toBe(
+        screen.getByLabelText("Interview answer"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A free-text question renders its field the moment the card mounts. Taking
+  // focus there is a gift on desktop and an ambush on a phone, where it raises
+  // the software keyboard over the question the user has not read yet: a phone
+  // keyboard must be summoned by a tap.
+  it("focuses a free-text answer field on mount off the mobile app", () => {
+    vi.useFakeTimers();
+    try {
+      setMobileApp(false);
+      render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [singleSelect("free", "Describe it", [])],
+            isBusy: false,
+            onSubmit: vi.fn(),
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      expect(document.activeElement).toBe(
+        screen.getByLabelText("Interview answer"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves a free-text answer field unfocused on the mobile app", () => {
+    vi.useFakeTimers();
+    try {
+      setMobileApp(true);
+      render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [singleSelect("free", "Describe it", [])],
+            isBusy: false,
+            onSubmit: vi.fn(),
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      const field =
+        screen.getByLabelText<HTMLTextAreaElement>("Interview answer");
+      expect(document.activeElement).not.toBe(field);
+      // Tapping it is still the ordinary way in.
+      act(() => {
+        field.focus();
+      });
+      expect(document.activeElement).toBe(field);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("locks every affordance while isBusy", () => {
+    const onSubmit = vi.fn(() => "action-1");
+    const onSkip = vi.fn(() => "skip-1");
+    const onFork = vi.fn();
+    const questions = [
+      singleSelect("q1", "First question?", ["Alpha", "Beta"]),
+      singleSelect("q2", "Second question?", ["Gamma"]),
+    ];
+    useInterviewDraftStore.getState().saveDraft("chat-1", "interview-1", {
+      pageIndex: 0,
+      answers: [
+        { selected: ["Alpha"], otherText: "", otherSelected: false },
+        { selected: [], otherText: "", otherSelected: false },
+      ],
+    });
+
+    render(
+      <TooltipProvider>
+        {cardElement({
+          chatId: "chat-1",
+          blockId: "interview-1",
+          questions: questions,
+          isBusy: true,
+          onSubmit: onSubmit,
+          onSkip: onSkip,
+          onFork: onFork,
+        })}
+      </TooltipProvider>,
+    );
+
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: /Skip/ }).disabled,
+    ).toBe(true);
+    expect(proceedButton().disabled).toBe(true);
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: "Previous question",
+      }).disabled,
+    ).toBe(true);
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: "Next question",
+      }).disabled,
+    ).toBe(true);
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: "Cross Question",
+      }).disabled,
+    ).toBe(true);
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "A/B Fork" })
+        .disabled,
+    ).toBe(true);
+    // Option and Other affordances must be natively disabled too, not just
+    // rejected in the callback, so they are neither focusable nor exposed as
+    // actionable to assistive tech while busy.
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "2. Beta" })
+        .disabled,
+    ).toBe(true);
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Other" }).disabled,
+    ).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "2. Beta" }));
+    fireEvent.click(screen.getByRole("button", { name: "Other" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cross Question" }));
+    fireEvent.click(screen.getByRole("button", { name: "A/B Fork" }));
+    fireEvent.keyDown(card(), { key: "2" });
+    fireEvent.keyDown(card(), { key: "ArrowRight" });
+    fireEvent.keyDown(card(), { key: "Enter", metaKey: true });
+    fireEvent.keyDown(card(), { key: "Escape" });
+
+    expect(screen.getByText("First question?")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "1. Alpha", pressed: true }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "2. Beta", pressed: false }),
+    ).toBeTruthy();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(onSkip).not.toHaveBeenCalled();
+    expect(onFork).not.toHaveBeenCalled();
+    expectStoredInterviewDraft(
+      readInterviewDraftSnapshot("chat-1", "interview-1"),
+      {
+        pageIndex: 0,
+        answers: [
+          { selected: ["Alpha"], otherText: "", otherSelected: false },
+          { selected: [], otherText: "", otherSelected: false },
+        ],
+      },
+    );
+  });
+
+  it("withdraws the Other row when the question's answer channel cannot carry free text", () => {
+    renderCard(
+      [withoutCustomAnswer(singleSelect("q1", "Choose", ["Alpha", "Beta"]))],
+      () => null,
+      () => null,
+    );
+
+    // Falsification: render `OtherRow` unconditionally again and this finds
+    // the button - a field the user can type into whose text the ACP
+    // permission answer has no room to carry, so it is dropped in silence.
+    expect(screen.queryByRole("button", { name: "Other" })).toBeNull();
+    // The listed options are still offered: withdrawing free text must not
+    // withdraw the answer channel that DOES work.
+    expect(screen.getByRole("button", { name: "1. Alpha" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "2. Beta" })).not.toBeNull();
+  });
+
+  it("CONTROL: the same question still offers Other when the field is unstated, so the assertion above is about the flag and not the fixture", () => {
+    renderCard(
+      [singleSelect("q1", "Choose", ["Alpha", "Beta"])],
+      () => null,
+      () => null,
+    );
+
+    expect(screen.getByRole("button", { name: "Other" })).not.toBeNull();
+  });
+
+  it("offers no input at all for a question with no options that also withdraws free text, rather than a field whose answer cannot be delivered", () => {
+    renderCard(
+      [withoutCustomAnswer(singleSelect("q1", "Describe it", []))],
+      () => null,
+      () => null,
+    );
+
+    // The raiser is not supposed to produce this pair (see the schema's
+    // INVARIANT note); if it does, the card must not invite an answer it
+    // cannot deliver. Skip remains, so the card is still resolvable.
+    expect(
+      screen.queryByRole("textbox", { name: "Interview answer" }),
+    ).toBeNull();
+    // Name is a pattern: the button carries its `Esc` shortcut hint too.
+    expect(screen.getByRole("button", { name: /Skip/ })).not.toBeNull();
+  });
+
+  it("CONTROL: an option-less question with free text unstated still renders its textarea", () => {
+    renderCard(
+      [singleSelect("q1", "Describe it", [])],
+      () => null,
+      () => null,
+    );
+
+    expect(
+      screen.getByRole("textbox", { name: "Interview answer" }),
+    ).not.toBeNull();
+  });
+
+  // Hiding the Other ROW is only half of withdrawing the channel: the card
+  // also reaches it by digit, and a stored draft can carry one in from before
+  // the withdrawal. Both would produce an invisible custom selection - one the
+  // user cannot see, undo, or deliver.
+  it("ignores the withdrawn Other's digit instead of clearing the visible choice", () => {
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn();
+      renderCard(
+        [
+          withoutCustomAnswer(
+            singleSelect("only", "Choose", ["Alpha", "Beta"]),
+          ),
+        ],
+        onSubmit,
+        () => null,
+      );
+
+      fireEvent.keyDown(card(), { key: "1" });
+      expect(
+        screen.getByRole("button", { name: "1. Alpha", pressed: true }),
+      ).toBeTruthy();
+
+      // `options.length + 1` is the Other row's digit, and that row is not
+      // rendered. Ungated, this reached `toggleOther()`, which in single-select
+      // does `selected: new Set()` - clearing the visible choice AND setting
+      // `otherSelected` behind a row that does not exist.
+      //
+      // FALSIFICATION takes BOTH gates, because they are deliberately
+      // redundant: remove `&& questionAllowsCustomAnswer(question)` from
+      // `selectByDigit` AND the `questionAllowsCustomAnswer` early return in
+      // `toggleOther`. Then Alpha comes back unpressed and the submitted
+      // values are empty. Dropping either one alone leaves the other holding
+      // the line and this stays green - measured, not assumed.
+      fireEvent.keyDown(card(), { key: "3" });
+      expect(
+        screen.getByRole("button", { name: "1. Alpha", pressed: true }),
+      ).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+      expect(onSubmit).toHaveBeenCalledWith("interview-1", [
+        expect.objectContaining({ values: ["Alpha"] }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("CONTROL: the same digit DOES reach Other when the field is unstated, so the arm above is about the flag", () => {
+    // Without this, `key: "3"` could simply be an unbound key and the test
+    // above would pass against a card that never had the shortcut at all.
+    renderCard(
+      [singleSelect("only", "Choose", ["Alpha", "Beta"])],
+      () => null,
+      () => null,
+    );
+
+    fireEvent.keyDown(card(), { key: "3" });
+
+    expect(
+      screen.getByRole("textbox", { name: "Other answer" }),
+    ).not.toBeNull();
+  });
+
+  it("does not submit a custom answer restored from a draft written before the withdrawal", () => {
+    // The draft is per block in localStorage and outlives the
+    // `interview.requested` that raised the question, so a re-raise carrying
+    // `allowsCustomAnswer: false` inherits whatever the user had typed.
+    //
+    // FALSIFICATION: restore `otherSelected: stored.otherSelected` in
+    // `draftFromStoredAnswer` and this reddens - the values carry the text
+    // through a channel that cannot deliver it.
+    const onSubmit = vi.fn();
+    useInterviewDraftStore.getState().saveDraft("chat-1", "interview-1", {
+      pageIndex: 0,
+      answers: [
+        {
+          selected: ["Alpha"],
+          otherText: "typed before the withdrawal",
+          otherSelected: true,
+        },
+      ],
+    });
+
+    renderCardFor({
+      chatId: "chat-1",
+      blockId: "interview-1",
+      questions: [
+        withoutCustomAnswer(singleSelect("only", "Choose", ["Alpha", "Beta"])),
+      ],
+      isBusy: false,
+      onSubmit,
+      onSkip: null,
+      onFork: null,
+    });
+
+    fireEvent.click(proceedButton());
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit).toHaveBeenCalledWith("interview-1", [
+      expect.objectContaining({ values: ["Alpha"] }),
+    ]);
+  });
+
+  it("takes card focus itself when an optionless question renders no field, so the keyboard still reaches it", () => {
+    vi.useFakeTimers();
+    try {
+      renderCardFor({
+        chatId: "chat-1",
+        blockId: "interview-1",
+        questions: [withoutCustomAnswer(singleSelect("q1", "Describe it", []))],
+        isBusy: false,
+        onSubmit: vi.fn(),
+        onSkip: vi.fn(),
+        onFork: null,
+      });
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      // The card yields focus to a text field when it renders one. This pair
+      // renders none, so yielding would leave focus nowhere and the card's own
+      // key handler - which owns Escape/Skip and the pager - would never see a
+      // keystroke until the user clicked.
+      //
+      // FALSIFICATION: drop `&& questionAllowsCustomAnswer(question)` from
+      // `freeTextQuestion` and this reddens while the CONTROL below stays
+      // green.
+      expect(document.activeElement).toBe(screen.getByTestId("interview-card"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("CONTROL: the same optionless question yields focus to its textarea when free text is unstated", () => {
+    vi.useFakeTimers();
+    try {
+      renderCardFor({
+        chatId: "chat-1",
+        blockId: "interview-1",
+        questions: [singleSelect("q1", "Describe it", [])],
+        isBusy: false,
+        onSubmit: vi.fn(),
+        onSkip: vi.fn(),
+        onFork: null,
+      });
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      // Without this arm, "the card has focus" could be the behaviour for
+      // every optionless question and the assertion above would say nothing
+      // about the flag.
+      expect(document.activeElement).toBe(
+        screen.getByLabelText("Interview answer"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("natively disables the free-text and Other answer fields while isBusy", () => {
+    renderCardFor({
+      chatId: "chat-1",
+      blockId: "interview-1",
+      questions: [singleSelect("q1", "Describe it", [])],
+      isBusy: true,
+      onSubmit: vi.fn(),
+      onSkip: null,
+      onFork: null,
+    });
+    expect(
+      screen.getByLabelText<HTMLTextAreaElement>("Interview answer").disabled,
+    ).toBe(true);
+  });
+
+  it("keeps duplicate live cards in sync through the canonical store row", () => {
+    const questions = [multiSelect("m", "Pick some", ["Alpha", "Beta"])];
+    render(
+      <TooltipProvider>
+        {cardElement({
+          chatId: "chat-1",
+          blockId: "interview-1",
+          questions: questions,
+          isBusy: false,
+          onSubmit: vi.fn(),
+          onSkip: null,
+          onFork: null,
+        })}
+        {cardElement({
+          chatId: "chat-1",
+          blockId: "interview-1",
+          questions: questions,
+          isBusy: false,
+          onSubmit: vi.fn(),
+          onSkip: null,
+          onFork: null,
+        })}
+      </TooltipProvider>,
+    );
+
+    const cards = screen.getAllByTestId("interview-card");
+    expect(cards).toHaveLength(2);
+    const cardA = within(cards[0]);
+    const cardB = within(cards[1]);
+
+    fireEvent.click(cardA.getByRole("button", { name: "1. Alpha" }));
+    expect(
+      cardA.getByRole("button", { name: "1. Alpha", pressed: true }),
+    ).toBeTruthy();
+    expect(
+      cardB.getByRole("button", { name: "1. Alpha", pressed: true }),
+    ).toBeTruthy();
+
+    fireEvent.click(cardB.getByRole("button", { name: "2. Beta" }));
+    expect(
+      cardA.getByRole("button", { name: "2. Beta", pressed: true }),
+    ).toBeTruthy();
+    expect(
+      cardB.getByRole("button", { name: "2. Beta", pressed: true }),
+    ).toBeTruthy();
+    // Multi-select: Alpha must still be selected after Beta is added in B.
+    expect(
+      cardA.getByRole("button", { name: "1. Alpha", pressed: true }),
+    ).toBeTruthy();
+    expect(
+      cardB.getByRole("button", { name: "1. Alpha", pressed: true }),
+    ).toBeTruthy();
+  });
+
+  it("does not auto-advance when a duplicate view supersedes a single-select during the timer", () => {
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn();
+      const questions = [
+        singleSelect("q1", "First question?", ["Alpha", "Beta"]),
+        singleSelect("q2", "Second question?", ["Gamma"]),
+      ];
+      render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: questions,
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: questions,
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+
+      const cards = screen.getAllByTestId("interview-card");
+      const cardA = within(cards[0]);
+      const cardB = within(cards[1]);
+
+      fireEvent.click(cardA.getByRole("button", { name: "1. Alpha" }));
+      fireEvent.click(cardB.getByRole("button", { name: "Other" }));
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+
+      expect(cardA.getByText("First question?")).toBeTruthy();
+      expect(cardB.getByText("First question?")).toBeTruthy();
+      expect(onSubmit).not.toHaveBeenCalled();
+      expectStoredInterviewDraft(
+        readInterviewDraftSnapshot("chat-1", "interview-1"),
+        {
+          pageIndex: 0,
+          answers: [
+            {
+              questionIdentity: questionIdentity(
+                singleSelect("q1", "First question?", ["Alpha", "Beta"]),
+              ),
+              selected: [],
+              selectedOptionIndices: [],
+              otherText: "",
+              otherSelected: true,
+            },
+            {
+              questionIdentity: questionIdentity(
+                singleSelect("q2", "Second question?", ["Gamma"]),
+              ),
+              selected: [],
+              selectedOptionIndices: [],
+              otherText: "",
+              otherSelected: false,
+            },
+          ],
+        },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not stale-submit when a duplicate view supersedes the last-question choice", () => {
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn();
+      const questions = [
+        singleSelect("only", "Only question?", ["Alpha", "Beta"]),
+      ];
+      render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: questions,
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: questions,
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+
+      const cards = screen.getAllByTestId("interview-card");
+      const cardA = within(cards[0]);
+      const cardB = within(cards[1]);
+
+      fireEvent.click(cardA.getByRole("button", { name: "1. Alpha" }));
+      fireEvent.click(cardB.getByRole("button", { name: "Other" }));
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+
+      expect(onSubmit).not.toHaveBeenCalled();
+      expectStoredInterviewDraft(
+        readInterviewDraftSnapshot("chat-1", "interview-1"),
+        {
+          pageIndex: 0,
+          answers: [
+            {
+              questionIdentity: questionIdentity(
+                singleSelect("only", "Only question?", ["Alpha", "Beta"]),
+              ),
+              selected: [],
+              selectedOptionIndices: [],
+              otherText: "",
+              otherSelected: true,
+            },
+          ],
+        },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("auto-submits the latest canonical single-select choice when not superseded", () => {
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn();
+      renderCard(
+        [singleSelect("only", "Only question?", ["Alpha", "Beta"])],
+        onSubmit,
+        null,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "1. Alpha" }));
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+      expect(onSubmit).toHaveBeenCalledWith("interview-1", [
+        expect.objectContaining({ questionId: "only", values: ["Alpha"] }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not submit or advance when another action makes the interview busy before the timer fires", () => {
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn(() => "action-1");
+      const questions = [
+        singleSelect("only", "Only question?", ["Alpha", "Beta"]),
+      ];
+      const view = render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: questions,
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "1. Alpha" }));
+      // Another live view's Submit/Skip is accepted before this timer fires:
+      // the parent flips isBusy for the block. The scheduling-time
+      // `submitDrafts` closure captured `isBusy: false` and would otherwise
+      // still fire.
+      view.rerender(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: questions,
+            isBusy: true,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+
+      expect(onSubmit).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not answer with a DIFFERENT option when the options are reordered before the timer fires", () => {
+    // The sibling defect of the arm below, and the one that made holding only
+    // `submitDrafts` in a ref insufficient. `readCanonicalState` maps the
+    // stored row onto option INDICES for the questions IT was given, so a
+    // stale reader and a current submitter disagree about what index 0 means:
+    // pick `Alpha` from `[Alpha, Beta]`, receive `[Beta, Alpha]` during the
+    // highlight window, and the answer sent is `Beta` - a choice the user
+    // never made, from a card that showed them making another one.
+    //
+    // With both read from the current render, restoration repairs the index by
+    // LABEL (`draftFromStoredAnswer`), so the canonical answer is Alpha at its
+    // new index - which no longer matches the option this timer was armed on,
+    // and the supersession guard correctly declines to auto-advance. The user
+    // keeps their visible choice and submits it themselves.
+    //
+    // FALSIFICATION: read `readCanonicalState` from the arming closure instead
+    // of the ref and this reddens with `values: ["Beta"]`.
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn(() => "action-1");
+      const view = render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [
+              singleSelect("q1", "Which library?", ["Alpha", "Beta"]),
+            ],
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "1. Alpha" }));
+
+      view.rerender(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [
+              singleSelect("q1", "Which library?", ["Beta", "Alpha"]),
+            ],
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+
+      expect(onSubmit).not.toHaveBeenCalled();
+      // Not a dead end: the choice survived the reorder, so Submit is live and
+      // sends what the user actually picked. A green assertion above must not
+      // be the card having silently lost the answer instead.
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", { name: "Submit" })
+          .disabled,
+      ).toBe(false);
+      fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+      expect(onSubmit).toHaveBeenCalledWith(
+        "interview-1",
+        expect.arrayContaining([
+          expect.objectContaining({ values: ["Alpha"] }),
+        ]),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("advances instead of submitting when a later question arrives before the timer fires", () => {
+    // `isLast` is a claim about the question COUNT, and a repeated
+    // `interview.requested` can change it. Armed as the last page of a
+    // one-question interview and fired after a second arrived, the captured
+    // `isLast` submits without ever showing the user the new question - and
+    // `answersFromDrafts` maps the CURRENT list, so what it sends is the
+    // second question answered with nothing.
+    //
+    // FALSIFICATION: use the arming render's `isLast` instead of re-deriving
+    // from the ref's `total` and this reddens - `onSubmit` fires and the card
+    // never reaches the second question.
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn(() => "action-1");
+      const first = singleSelect("q1", "Which library?", ["Alpha", "Beta"]);
+      const view = render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [first],
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "1. Alpha" }));
+
+      view.rerender(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [first, singleSelect("q2", "Which runtime?", ["Bun"])],
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(screen.getByText("Which runtime?")).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not submit when the free-text channel is withdrawn before the timer fires", () => {
+    // The questions-side sibling of the busy-flip arm above, and the reason
+    // `latestIsBusyRef` alone was not enough: the timer's `submitDrafts` also
+    // captured its render's QUESTIONS, through `hasUnanswerableQuestion`.
+    //
+    // A repeated `interview.requested` for this block rewrites questions IN
+    // PLACE - the card is keyed by chat and block, so it re-renders rather than
+    // remounting - and here it withdraws free text from a question that has no
+    // options. That pair is unanswerable, the live render disables Submit, and
+    // the already-armed timer must not push the answer through behind it.
+    //
+    // FALSIFICATION: call the captured `submitDrafts` instead of the ref's and
+    // this reddens; the busy-flip arm above stays green either way, which is
+    // why it needed its own arm.
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn(() => "action-1");
+      const freeText = singleSelect("q1", "Anything else?", []);
+      const last = singleSelect("q2", "Which library?", ["Alpha", "Beta"]);
+      const view = render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [freeText, last],
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+
+      // Land on the last page and arm the advance timer with a real choice.
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+      fireEvent.click(screen.getByRole("button", { name: "1. Alpha" }));
+
+      view.rerender(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [withoutCustomAnswer(freeText), last],
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+
+      expect(onSubmit).not.toHaveBeenCalled();
+      // And the card agrees with the timer: the same guard drives the button,
+      // so a green assertion above cannot be the card having submitted and
+      // moved on.
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", { name: "Submit" })
+          .disabled,
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not stale-submit when a duplicate view navigates off the last question during the timer", () => {
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn();
+      const questions = [
+        singleSelect("q1", "First question?", ["Alpha", "Beta"]),
+        singleSelect("q2", "Second question?", ["Gamma", "Delta"]),
+      ];
+      render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: questions,
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: questions,
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+
+      const cards = screen.getAllByTestId("interview-card");
+      const cardA = within(cards[0]);
+      const cardB = within(cards[1]);
+
+      // The page index is canonical, so advancing in A moves both views to the
+      // last question. A then picks a single-select there, arming its submit
+      // timer; B explicitly navigates back before it fires.
+      fireEvent.click(cardA.getByRole("button", { name: "Next question" }));
+      fireEvent.click(cardA.getByRole("button", { name: "1. Gamma" }));
+      fireEvent.click(cardB.getByRole("button", { name: "Previous question" }));
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+
+      // The stale timer must not submit or drag both views back to the last
+      // page B just left.
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(cardA.getByText("First question?")).toBeTruthy();
+      expect(cardB.getByText("First question?")).toBeTruthy();
+      expectStoredInterviewDraft(
+        readInterviewDraftSnapshot("chat-1", "interview-1"),
+        {
+          pageIndex: 0,
+          answers: [
+            {
+              questionIdentity: questionIdentity(
+                singleSelect("q1", "First question?", ["Alpha", "Beta"]),
+              ),
+              selected: [],
+              selectedOptionIndices: [],
+              otherText: "",
+              otherSelected: false,
+            },
+            {
+              questionIdentity: questionIdentity(
+                singleSelect("q2", "Second question?", ["Gamma", "Delta"]),
+              ),
+              selected: ["Gamma"],
+              selectedOptionIndices: [0],
+              otherText: "",
+              otherSelected: false,
+            },
+          ],
+        },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not rewind the page when a duplicate view advances further during the timer", () => {
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn();
+      const questions = [
+        singleSelect("q1", "First question?", ["Alpha", "Beta"]),
+        singleSelect("q2", "Second question?", ["Gamma", "Delta"]),
+        singleSelect("q3", "Third question?", ["Epsilon", "Zeta"]),
+      ];
+      render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: questions,
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: questions,
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+
+      const cards = screen.getAllByTestId("interview-card");
+      const cardA = within(cards[0]);
+      const cardB = within(cards[1]);
+
+      // A picks a single-select on the first question, arming its +1 advance
+      // timer; B scans two pages ahead before it fires.
+      fireEvent.click(cardA.getByRole("button", { name: "1. Alpha" }));
+      fireEvent.click(cardB.getByRole("button", { name: "Next question" }));
+      fireEvent.click(cardB.getByRole("button", { name: "Next question" }));
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+
+      // The stale timer must not replay its +1 advance and rewind the views
+      // from the page B reached.
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(cardA.getByText("Third question?")).toBeTruthy();
+      expect(cardB.getByText("Third question?")).toBeTruthy();
+      expectStoredInterviewDraft(
+        readInterviewDraftSnapshot("chat-1", "interview-1"),
+        {
+          pageIndex: 2,
+          answers: [
+            {
+              questionIdentity: questionIdentity(
+                singleSelect("q1", "First question?", ["Alpha", "Beta"]),
+              ),
+              selected: ["Alpha"],
+              selectedOptionIndices: [0],
+              otherText: "",
+              otherSelected: false,
+            },
+            {
+              questionIdentity: questionIdentity(
+                singleSelect("q2", "Second question?", ["Gamma", "Delta"]),
+              ),
+              selected: [],
+              selectedOptionIndices: [],
+              otherText: "",
+              otherSelected: false,
+            },
+            {
+              questionIdentity: questionIdentity(
+                singleSelect("q3", "Third question?", ["Epsilon", "Zeta"]),
+              ),
+              selected: [],
+              selectedOptionIndices: [],
+              otherText: "",
+              otherSelected: false,
+            },
+          ],
+        },
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("restores page, selected options, and free-text from per-key storage on cold start", () => {
+    const questions = [
+      multiSelect("q1", "Pick some", ["Alpha", "Beta"]),
+      singleSelect("q2", "Describe it", []),
+    ];
+    const draft = {
+      pageIndex: 1,
+      answers: [
+        {
+          selected: ["Alpha"],
+          otherText: "",
+          otherSelected: false,
+        },
+        {
+          selected: [],
+          otherText: "Restored free text",
+          otherSelected: true,
+        },
+      ],
+    };
+    window.localStorage.setItem(
+      interviewDraftKey("chat-1", "interview-1"),
+      JSON.stringify(draft),
+    );
+    // Simulate a cold process: empty in-memory map, then hydrate from keys.
+    useInterviewDraftStore.setState({ draftsByChat: {} });
+    rehydrateInterviewDraftsFromStorage();
+
+    renderCard(questions, vi.fn(), null);
+
+    expect(screen.getByText("Describe it")).toBeTruthy();
+    expect(
+      screen.getByLabelText<HTMLTextAreaElement>("Interview answer").value,
+    ).toBe("Restored free text");
+
+    fireEvent.click(screen.getByRole("button", { name: "Previous question" }));
+    expect(
+      screen.getByRole("button", { name: "1. Alpha", pressed: true }),
+    ).toBeTruthy();
+  });
+
+  it("enforces single-select mutual exclusivity when a stored answer has both a selected option and Other", () => {
+    const questions = [singleSelect("q1", "Pick one", ["Alpha", "Beta"])];
+    const draft = {
+      pageIndex: 0,
+      answers: [
+        {
+          // A malformed/legacy stored answer: both a selected option and
+          // Other are set for a single-select question.
+          selected: ["Alpha"],
+          otherText: "custom",
+          otherSelected: true,
+        },
+      ],
+    };
+    window.localStorage.setItem(
+      interviewDraftKey("chat-1", "interview-1"),
+      JSON.stringify(draft),
+    );
+    useInterviewDraftStore.setState({ draftsByChat: {} });
+    rehydrateInterviewDraftsFromStorage();
+
+    renderCard(questions, vi.fn(), null);
+
+    // Other wins: the option must not also read as selected.
+    expect(
+      screen.getByLabelText<HTMLTextAreaElement>("Other answer").value,
+    ).toBe("custom");
+    expect(
+      screen.getByRole("button", { name: "1. Alpha", pressed: false }),
+    ).toBeTruthy();
+  });
+
+  it("selects a single-select option by number and auto-advances", () => {
+    vi.useFakeTimers();
+    try {
+      renderCard(
+        [
+          singleSelect("q1", "First question?", ["Alpha", "Beta"]),
+          singleSelect("q2", "Second question?", ["Gamma"]),
+        ],
+        vi.fn(),
+        null,
+      );
+
+      expect(screen.getByText("First question?")).toBeTruthy();
+      fireEvent.keyDown(card(), { key: "2" });
+      // Selection registers immediately; advance is deferred.
+      expect(
+        screen.getByRole("button", { name: "2. Beta", pressed: true }),
+      ).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+      expect(screen.getByText("Second question?")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("submits on the last single-select question when a number is pressed", () => {
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn();
+      renderCard(
+        [singleSelect("only", "Only question?", ["Alpha", "Beta"])],
+        onSubmit,
+        null,
+      );
+
+      fireEvent.keyDown(card(), { key: "1" });
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+
+      expect(onSubmit).toHaveBeenCalledWith("interview-1", [
+        expect.objectContaining({ questionId: "only", values: ["Alpha"] }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a quick re-pick during the advance window replace the choice", () => {
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn();
+      renderCard(
+        [singleSelect("only", "Only question?", ["Alpha", "Beta"])],
+        onSubmit,
+        null,
+      );
+
+      fireEvent.keyDown(card(), { key: "1" });
+      // Correct the mis-press before the auto-advance fires.
+      fireEvent.keyDown(card(), { key: "2" });
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+      expect(onSubmit).toHaveBeenCalledWith("interview-1", [
+        expect.objectContaining({ questionId: "only", values: ["Beta"] }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("submits with empty values for unanswered questions on Cmd+Enter", () => {
+    const onSubmit = vi.fn();
+    renderCard(
+      [
+        singleSelect("q1", "First question?", ["Alpha"]),
+        singleSelect("q2", "Second question?", ["Beta"]),
+      ],
+      onSubmit,
+      null,
+    );
+
+    // Cmd+Enter on a non-last question advances; on the last it submits the
+    // whole interview, leaving the skipped questions empty.
+    fireEvent.keyDown(card(), { key: "Enter", metaKey: true });
+    expect(screen.getByText("Second question?")).toBeTruthy();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(card(), { key: "Enter", metaKey: true });
+    expect(onSubmit).toHaveBeenCalledWith("interview-1", [
+      expect.objectContaining({ questionId: "q1", values: [] }),
+      expect.objectContaining({ questionId: "q2", values: [] }),
+    ]);
+  });
+
+  it("defers plain Enter to a focused button instead of proceeding", () => {
+    const onSubmit = vi.fn();
+    const onSkip = vi.fn();
+    renderCard(
+      [
+        singleSelect("q1", "First question?", ["Alpha"]),
+        singleSelect("q2", "Second question?", ["Beta"]),
+      ],
+      onSubmit,
+      onSkip,
+    );
+
+    // Enter on the focused Skip button must activate Skip, not Next/Submit.
+    const skipButton = screen.getByRole<HTMLButtonElement>("button", {
+      name: /Skip/,
+    });
+    skipButton.focus();
+    fireEvent.keyDown(skipButton, { key: "Enter" });
+
+    expect(onSubmit).not.toHaveBeenCalled();
+    // Still on the first question - the card-level Enter handler deferred.
+    expect(screen.getByText("First question?")).toBeTruthy();
+  });
+
+  it("toggles multiple options without advancing on a multi-select question", () => {
+    renderCard(
+      [multiSelect("m", "Pick some", ["Alpha", "Beta", "Gamma"])],
+      vi.fn(),
+      null,
+    );
+
+    fireEvent.keyDown(card(), { key: "1" });
+    fireEvent.keyDown(card(), { key: "3" });
+    expect(
+      screen.getByRole("button", { name: "1. Alpha", pressed: true }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "3. Gamma", pressed: true }),
+    ).toBeTruthy();
+    // Still on the same question - no auto-advance for multi-select.
+    expect(screen.getByText("Pick some")).toBeTruthy();
+
+    fireEvent.keyDown(card(), { key: "1" });
+    expect(
+      screen.getByRole("button", { name: "1. Alpha", pressed: false }),
+    ).toBeTruthy();
+  });
+
+  it("morphs the Other row into a textarea when picked with the N+1 number", () => {
+    renderCard(
+      [singleSelect("q", "Question?", ["Alpha", "Beta"])],
+      vi.fn(),
+      null,
+    );
+
+    // Unselected: a pickable "Other" row, no textarea yet.
+    expect(screen.getByRole("button", { name: "Other" })).toBeTruthy();
+    expect(screen.queryByLabelText("Other answer")).toBeNull();
+
+    fireEvent.keyDown(card(), { key: "3" });
+
+    // Selected: the row is replaced in place by the multi-line text field.
+    expect(screen.queryByRole("button", { name: "Other" })).toBeNull();
+    const textarea = screen.getByLabelText("Other answer");
+    expect(textarea.tagName).toBe("TEXTAREA");
+    expect(textarea.getAttribute("rows")).toBe("1");
+    expect(textarea.className).toContain("field-sizing-content");
+    expect(textarea.className).toContain("max-h-[3lh]");
+    expect(textarea.className).toContain("overflow-y-auto");
+  });
+
+  it("ignores digit shortcuts on free-text questions", () => {
+    const onSubmit = vi.fn();
+    renderCard([singleSelect("free", "Describe it", [])], onSubmit, null);
+
+    const textarea = screen.getByLabelText("Interview answer");
+    fireEvent.change(textarea, { target: { value: "typed details" } });
+    fireEvent.keyDown(card(), { key: "1" });
+    fireEvent.click(screen.getByRole("button", { name: /Submit/ }));
+
+    expect(onSubmit).toHaveBeenCalledWith("interview-1", [
+      expect.objectContaining({
+        questionId: "free",
+        values: ["typed details"],
+      }),
+    ]);
+  });
+
+  it("keeps plain Enter in the Other textarea and submits it with Cmd+Enter", () => {
+    const onSubmit = vi.fn();
+    renderCard(
+      [singleSelect("q", "Question?", ["Alpha", "Beta"])],
+      onSubmit,
+      null,
+    );
+
+    fireEvent.keyDown(card(), { key: "3" });
+    const textarea = screen.getByLabelText("Other answer");
+    fireEvent.change(textarea, { target: { value: "my own answer" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+
+    expect(onSubmit).toHaveBeenCalledWith("interview-1", [
+      expect.objectContaining({ values: ["my own answer"] }),
+    ]);
+  });
+
+  it("uses a two-stage Escape: blur the input first, then skip", () => {
+    const onSkip = vi.fn();
+    renderCard(
+      [singleSelect("q", "Question?", ["Alpha", "Beta"])],
+      vi.fn(),
+      onSkip,
+    );
+
+    fireEvent.keyDown(card(), { key: "3" });
+    const input = screen.getByLabelText("Other answer");
+
+    // First Escape (from the input) returns focus to the card, no skip.
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(onSkip).not.toHaveBeenCalled();
+
+    // Second Escape (from the card) skips the interview.
+    fireEvent.keyDown(card(), { key: "Escape" });
+    expect(onSkip).toHaveBeenCalledWith("interview-1", "Skipped by user", []);
+  });
+
+  it("keeps Submit enabled and submits even with nothing answered (mouse)", () => {
+    const onSubmit = vi.fn();
+    renderCard(
+      [
+        singleSelect("q1", "First question?", ["Alpha"]),
+        singleSelect("q2", "Second question?", ["Beta"]),
+      ],
+      onSubmit,
+      null,
+    );
+
+    const next = proceedButton();
+    expect(next.disabled).toBe(false);
+    fireEvent.click(next);
+    expect(screen.getByText("Second question?")).toBeTruthy();
+
+    const submit = screen.getByRole<HTMLButtonElement>("button", {
+      name: /Submit/,
+    });
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+
+    expect(onSubmit).toHaveBeenCalledWith("interview-1", [
+      expect.objectContaining({ values: [] }),
+      expect.objectContaining({ values: [] }),
+    ]);
+  });
+
+  it("keeps Submit retryable when dispatch cannot send yet", () => {
+    const onSubmit = vi.fn(() => null);
+    renderCard([singleSelect("q", "Question?", ["Alpha"])], onSubmit, null);
+
+    const submit = screen.getByRole<HTMLButtonElement>("button", {
+      name: /Submit/,
+    });
+    fireEvent.click(submit);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(submit.disabled).toBe(false);
+
+    fireEvent.click(submit);
+    expect(onSubmit).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps Skip retryable when dispatch cannot send yet", () => {
+    const onSkip = vi.fn(() => null);
+    renderCard([singleSelect("q", "Question?", ["Alpha"])], vi.fn(), onSkip);
+
+    const skip = screen.getByRole<HTMLButtonElement>("button", {
+      name: /Skip/,
+    });
+    fireEvent.click(skip);
+
+    expect(onSkip).toHaveBeenCalledTimes(1);
+    expect(skip.disabled).toBe(false);
+
+    fireEvent.click(skip);
+    expect(onSkip).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves duplicate-label option indices in exact selection evidence", () => {
+    const onSubmit =
+      vi.fn<
+        (
+          blockId: string,
+          answers: ReadonlyArray<InterviewAnswer>,
+        ) => string | null
+      >();
+    renderCard(
+      [multiSelect("q", "Which same label?", ["Same", "Same"])],
+      onSubmit,
+      null,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "2. Same" }));
+    fireEvent.click(screen.getByRole("button", { name: /Submit/ }));
+
+    expect(onSubmit.mock.calls).toEqual([
+      [
+        "interview-1",
+        [
+          {
+            questionId: "q",
+            question: "Which same label?",
+            values: ["Same"],
+            notes: null,
+            selection: {
+              questionIndex: 0,
+              optionIndices: [1],
+              optionLabels: ["Same"],
+              customText: null,
+            },
+          },
+        ],
+      ],
+    ]);
+  });
+
+  it("downgrades legacy label-only drafts to neutral selection evidence", () => {
+    useInterviewDraftStore.getState().saveDraft("chat-1", "interview-1", {
+      pageIndex: 0,
+      answers: [{ selected: ["Same"], otherText: "", otherSelected: false }],
+    });
+    const onSubmit = vi.fn();
+    renderCard(
+      [
+        multiSelect("q", "Which same label?", ["Same", "Same"]),
+        singleSelect("q2", "Second question?", ["Next"]),
+      ],
+      onSubmit,
+      null,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Next question" }));
+    fireEvent.click(screen.getByRole("button", { name: "Previous question" }));
+    expect(
+      useInterviewDraftStore.getState().draftsByChat["chat-1"]?.["interview-1"]
+        ?.answers[0]?.selectedOptionIndices,
+    ).toBeUndefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next question" }));
+    fireEvent.click(screen.getByRole("button", { name: /Submit/ }));
+
+    expect(onSubmit).toHaveBeenCalledWith("interview-1", [
+      expect.objectContaining({
+        values: ["Same"],
+        selection: null,
+      }),
+      expect.objectContaining({
+        values: [],
+        selection: null,
+      }),
+    ]);
+  });
+
+  it("promotes an explicit multi-select edit to exact selection evidence", () => {
+    useInterviewDraftStore.getState().saveDraft("chat-1", "interview-1", {
+      pageIndex: 0,
+      answers: [{ selected: ["Same"], otherText: "", otherSelected: false }],
+    });
+    const onSubmit =
+      vi.fn<
+        (
+          blockId: string,
+          answers: ReadonlyArray<InterviewAnswer>,
+        ) => string | null
+      >();
+    renderCard(
+      [multiSelect("q", "Which same label?", ["Same", "Same"])],
+      onSubmit,
+      null,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "2. Same" }));
+    fireEvent.click(screen.getByRole("button", { name: /Submit/ }));
+
+    expect(onSubmit.mock.calls[0]?.[1]?.[0]?.selection).toEqual({
+      questionIndex: 0,
+      optionIndices: [0, 1],
+      optionLabels: ["Same", "Same"],
+      customText: null,
+    });
+  });
+
+  it("promotes an explicit Other choice to exact selection evidence", () => {
+    useInterviewDraftStore.getState().saveDraft("chat-1", "interview-1", {
+      pageIndex: 0,
+      answers: [{ selected: ["Same"], otherText: "", otherSelected: false }],
+    });
+    const onSubmit =
+      vi.fn<
+        (
+          blockId: string,
+          answers: ReadonlyArray<InterviewAnswer>,
+        ) => string | null
+      >();
+    renderCard(
+      [singleSelect("q", "Which same label?", ["Same", "Same"])],
+      onSubmit,
+      null,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Other" }));
+    fireEvent.change(screen.getByLabelText("Other answer"), {
+      target: { value: "Custom" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Submit/ }));
+
+    expect(onSubmit.mock.calls[0]?.[1]?.[0]?.selection).toEqual({
+      questionIndex: 0,
+      optionIndices: [],
+      optionLabels: [],
+      customText: "Custom",
+    });
+  });
+
+  it("sends only non-empty saved pages when Skip includes draft metadata", () => {
+    vi.useFakeTimers();
+    try {
+      const onSkip = vi.fn();
+      renderCard(
+        [
+          singleSelect("q1", "First question?", ["Keep"]),
+          singleSelect("q2", "Untouched question?", ["Never send"]),
+        ],
+        vi.fn(),
+        onSkip,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "1. Keep" }));
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+      expect(screen.getByText("Untouched question?")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: /Skip/ }));
+
+      expect(onSkip).toHaveBeenCalledWith("interview-1", "Skipped by user", [
+        expect.objectContaining({
+          questionId: "q1",
+          values: ["Keep"],
+        }),
+      ]);
+      const draftAnswers = onSkip.mock.calls[0]?.[2] as
+        | ReadonlyArray<InterviewAnswer>
+        | undefined;
+      expect(draftAnswers?.some((answer) => answer.questionId === "q2")).toBe(
+        false,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("scans between questions with the Right and Left arrow keys", () => {
+    renderCard(
+      [
+        singleSelect("q1", "First question?", ["Alpha"]),
+        singleSelect("q2", "Second question?", ["Beta"]),
+      ],
+      vi.fn(),
+      null,
+    );
+
+    // ArrowRight advances without answering...
+    fireEvent.keyDown(card(), { key: "ArrowRight" });
+    expect(screen.getByText("Second question?")).toBeTruthy();
+
+    // ...and ArrowLeft goes back.
+    fireEvent.keyDown(card(), { key: "ArrowLeft" });
+    expect(screen.getByText("First question?")).toBeTruthy();
+  });
+
+  it("cancels a pending auto-submit when the interview is skipped", () => {
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn();
+      const onSkip = vi.fn();
+      renderCard(
+        [singleSelect("only", "Only question?", ["Alpha"])],
+        onSubmit,
+        onSkip,
+      );
+
+      fireEvent.keyDown(card(), { key: "1" });
+      fireEvent.click(screen.getByRole("button", { name: /Skip/ }));
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+
+      expect(onSkip).toHaveBeenCalledWith("interview-1", "Skipped by user", [
+        expect.objectContaining({
+          questionId: "only",
+          values: ["Alpha"],
+        }),
+      ]);
+      expect(onSubmit).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not steal focus while its tab is inactive", () => {
+    render(
+      <TooltipProvider>
+        <PendingInterviewCard
+          chatId="chat-1"
+          blockId="bg"
+          questions={[singleSelect("q", "Question?", ["Alpha", "Beta"])]}
+          isActive={false}
+          isBusy={false}
+          onSubmit={vi.fn()}
+          onSkip={null}
+          onFork={null}
+          navigationHighlighted={false}
+        />
+      </TooltipProvider>,
+    );
+
+    expect(document.activeElement).not.toBe(
+      screen.getByTestId("interview-card"),
+    );
+  });
+
+  it("refocuses through the composer focus registry when active", () => {
+    render(
+      <TooltipProvider>
+        <PendingInterviewCard
+          chatId="chat-1"
+          blockId="fg"
+          questions={[singleSelect("q", "Question?", ["Alpha", "Beta"])]}
+          isActive
+          isBusy={false}
+          onSubmit={vi.fn()}
+          onSkip={null}
+          onFork={null}
+          navigationHighlighted={false}
+        />
+      </TooltipProvider>,
+    );
+
+    const cardEl = screen.getByTestId("interview-card");
+    cardEl.blur();
+    // The active-pane focus flow (and ⌘L) reaches the card through the registry.
+    expect(focusActiveComposer()).toBe(true);
+    expect(document.activeElement).toBe(cardEl);
+  });
+
+  // The tile flag the hosted chat body hands this card deliberately excludes
+  // top-level tab focus, so `isActive` alone is true for a card sitting in a
+  // background tab. Focus ownership is the composer's own predicate - tile
+  // active AND pane focused AND tab selected.
+  it("neither registers as active nor autofocuses while its surface is not focused", () => {
+    render(
+      <PaneSurfaceActivityContext.Provider
+        value={{ visible: true, focused: false }}
+      >
+        <TooltipProvider>
+          <PendingInterviewCard
+            chatId="chat-1"
+            blockId="unfocused-surface"
+            questions={[singleSelect("q", "Question?", ["Alpha", "Beta"])]}
+            isActive
+            isBusy={false}
+            onSubmit={vi.fn()}
+            onSkip={null}
+            onFork={null}
+            navigationHighlighted={false}
+          />
+        </TooltipProvider>
+      </PaneSurfaceActivityContext.Provider>,
+    );
+
+    expect(document.activeElement).not.toBe(
+      screen.getByTestId("interview-card"),
+    );
+    // A surface that becomes focused elsewhere must not be handed this card.
+    expect(focusRegisteredActiveComposer()).toBe(false);
+  });
+
+  it("does not autofocus its free-text field while its surface is not focused", async () => {
+    render(
+      <PaneSurfaceActivityContext.Provider
+        value={{ visible: true, focused: false }}
+      >
+        <TooltipProvider>
+          <PendingInterviewCard
+            chatId="chat-1"
+            blockId="unfocused-free-text"
+            questions={[singleSelect("q", "Describe it", [])]}
+            isActive
+            isBusy={false}
+            onSubmit={vi.fn()}
+            onSkip={null}
+            onFork={null}
+            navigationHighlighted={false}
+          />
+        </TooltipProvider>
+      </PaneSurfaceActivityContext.Provider>,
+    );
+
+    // The field focuses itself from a callback ref, one frame late.
+    await act(async () => {
+      await new Promise<void>((resolve) =>
+        window.requestAnimationFrame(() => resolve()),
+      );
+    });
+
+    expect(document.activeElement).not.toBe(
+      screen.getByLabelText("Interview answer"),
+    );
+  });
+
+  // The registration itself is a render-time value, and the surface that is
+  // becoming focused restores its own focus before a backgrounded card has
+  // re-rendered. So selection re-asks the live probe rather than trusting a
+  // claim that is one commit old.
+  it("is skipped by the registry when the live probe says its pane lost focus", () => {
+    render(
+      <PaneFocusProbeContext.Provider value={() => false}>
+        <TooltipProvider>
+          <PendingInterviewCard
+            chatId="chat-1"
+            blockId="stale-registration"
+            questions={[singleSelect("q", "Question?", ["Alpha", "Beta"])]}
+            isActive
+            isBusy={false}
+            onSubmit={vi.fn()}
+            onSkip={null}
+            onFork={null}
+            navigationHighlighted={false}
+          />
+        </TooltipProvider>
+      </PaneFocusProbeContext.Provider>,
+    );
+
+    const cardEl = screen.getByTestId("interview-card");
+    cardEl.blur();
+
+    expect(focusRegisteredActiveComposer()).toBe(false);
+    expect(document.activeElement).not.toBe(cardEl);
+  });
+
+  // Deliberately NOT the shape of the `?`'s accessible name (`Beta details`):
+  // the disclosure assertions must prove they found the REVEALED text, and a
+  // description that reads the same as the trigger's label cannot distinguish
+  // the two if a query ever starts matching accessible names.
+  const BETA_DESCRIPTION = "Beta explains the scope";
+
+  function renderDetailsCard() {
+    renderCard(
+      [
+        {
+          questionId: "q1",
+          question: "Pick one",
+          header: null,
+          options: [
+            { label: "Alpha", description: null, preview: null },
+            { label: "Beta", description: BETA_DESCRIPTION, preview: null },
+          ],
+          multiSelect: false,
+          allowsCustomAnswer: null,
+        },
+      ],
+      vi.fn(),
+      null,
+    );
+    return screen.getByRole("button", { name: "Beta details" });
+  }
+
+  // Drives the exact sequence Radix's own trigger sees from a finger, so the
+  // assertion fails against the pre-fix trigger and passes only because
+  // `onClick` now toggles the disclosure independently of the tooltip.
+  function tapWithFinger(element: HTMLElement) {
+    fireEvent.pointerMove(element, { pointerType: "touch" });
+    fireEvent.pointerDown(element, { pointerType: "touch" });
+    fireEvent.pointerUp(element, { pointerType: "touch" });
+    fireEvent.click(element);
+  }
+
+  // Radix Tooltip is hover/focus-only by construction: the trigger's
+  // `onPointerMove` returns early for `pointerType === "touch"`, and the
+  // tap's own `pointerdown` sets the flag that suppresses the focus
+  // fallback. Before the fix the `?` had no `onClick`, so a finger could
+  // never reach these strings at all.
+  it("reveals an option's description on a touch tap and collapses it on the next", () => {
+    const detailsButton = renderDetailsCard();
+    expect(screen.queryByText(BETA_DESCRIPTION)).toBeNull();
+
+    tapWithFinger(detailsButton);
+    expect(screen.getByText(BETA_DESCRIPTION)).toBeTruthy();
+
+    tapWithFinger(detailsButton);
+    expect(screen.queryByText(BETA_DESCRIPTION)).toBeNull();
+  });
+
+  // The `?` sits at `z-20` over the row's own `absolute inset-0` toggle
+  // button. Tapping it must disclose the details WITHOUT also selecting the
+  // option underneath - and the row's own label must still select normally,
+  // so the disclosure is additive rather than a replacement for the row's
+  // existing tap target.
+  it("does not select the option when tapping its details button, but does when tapping the row", () => {
+    const detailsButton = renderDetailsCard();
+
+    tapWithFinger(detailsButton);
+
+    expect(screen.getByText(BETA_DESCRIPTION)).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "2. Beta", pressed: false }),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "2. Beta" }));
+    expect(
+      screen.getByRole("button", { name: "2. Beta", pressed: true }),
+    ).toBeTruthy();
+  });
+
+  it("flips aria-expanded and points aria-controls at the revealed region", () => {
+    const detailsButton = renderDetailsCard();
+    expect(detailsButton.getAttribute("aria-expanded")).toBe("false");
+    expect(detailsButton.getAttribute("aria-controls")).toBeNull();
+
+    fireEvent.click(detailsButton);
+
+    expect(detailsButton.getAttribute("aria-expanded")).toBe("true");
+    const controlsId = detailsButton.getAttribute("aria-controls");
+    expect(controlsId).not.toBeNull();
+    expect(document.getElementById(controlsId ?? "")).toBe(
+      screen.getByText(BETA_DESCRIPTION).closest("[role='note']"),
+    );
+
+    fireEvent.click(detailsButton);
+    expect(detailsButton.getAttribute("aria-expanded")).toBe("false");
+    expect(detailsButton.getAttribute("aria-controls")).toBeNull();
+  });
+});
+
+describe("PendingInterviewCard long option labels", () => {
+  afterEach(() => {
+    cleanup();
+    useInterviewDraftStore.setState({ draftsByChat: {} });
+    window.localStorage.clear();
+  });
+
+  // jsdom has no layout, so "readable in a narrow pane" is asserted on its
+  // cause: a single-line `truncate` (white-space: nowrap + ellipsis) leaves
+  // two characters in a narrow chat column, and the row has no other place
+  // the full text is visible.
+  it("lets a long option label wrap instead of truncating it to one line", () => {
+    const longLabel =
+      "Inside the agent harness as a thin proxy layer between the model and the tools";
+    renderCard(
+      [singleSelect("q", "Where does it live?", [longLabel, "Short"])],
+      vi.fn(),
+      null,
+    );
+
+    const labelEl = screen.getByText(longLabel);
+    expect(labelEl.textContent).toBe(longLabel);
+    expect(labelEl.classList.contains("truncate")).toBe(false);
+    expect(labelEl.classList.contains("whitespace-nowrap")).toBe(false);
+    expect(labelEl.classList.contains("break-words")).toBe(true);
+    // `min-w-0` is what lets the label shrink and wrap; overflow-wrap alone
+    // does not lower min-content. A clamp or ellipsis variant would hide text
+    // the same way `truncate` did.
+    expect(labelEl.classList.contains("min-w-0")).toBe(true);
+    expect(labelEl.className).not.toMatch(/text-ellipsis|line-clamp/);
+  });
+
+  // jsdom evaluates no container queries either, so the narrow-pane rule is
+  // pinned on its two halves: the option list is the named query container,
+  // and the number badge is `display: none` until that container is wide
+  // enough. The `1. ...` aria-label is untouched, so keyboard numbering and
+  // screen readers lose nothing.
+  it("hides the number badge and its spacer below a narrow container width", () => {
+    renderCard(
+      [singleSelect("q", "Where does it live?", ["First option", "Short"])],
+      vi.fn(),
+      null,
+    );
+
+    const rowButton = screen.getByRole("button", { name: "1. First option" });
+    const row = rowButton.parentElement;
+    expect(row).not.toBeNull();
+    const badge = Array.from(row?.querySelectorAll("span[aria-hidden]") ?? [])
+      .filter((el) => el.textContent === "1")
+      .at(0);
+    expect(badge).toBeDefined();
+    expect(badge?.classList.contains("hidden")).toBe(true);
+    expect(badge?.className).toMatch(
+      /@\[[\d.]+rem\]\/interview-options:inline-flex/,
+    );
+    // The badge itself carries the right-edge push, so no empty flex-1 spacer
+    // is left behind to hold a gap once the badge is gone.
+    expect(badge?.classList.contains("ml-auto")).toBe(true);
+    expect(row?.querySelector("span.flex-1")).toBeNull();
+    expect(
+      rowButton.closest('[class~="@container/interview-options"]'),
+    ).not.toBeNull();
+
+    // The custom-answer row has no number badge; its pencil badge is the
+    // right-edge element, so it needs the same `ml-auto` the spacer provided.
+    const otherRow = screen.getByRole("button", {
+      name: "Other",
+    }).parentElement;
+    const pencilBadge = otherRow?.querySelector("span[aria-hidden].size-5");
+    expect(pencilBadge).not.toBeNull();
+    expect(pencilBadge?.classList.contains("ml-auto")).toBe(true);
+  });
+});
+
+describe("PendingInterviewCard choice mode chrome", () => {
+  afterEach(() => {
+    cleanup();
+    useInterviewDraftStore.setState({ draftsByChat: {} });
+    window.localStorage.clear();
+    setMobileApp(false);
+  });
+
+  it("names a last single-choice pick as send, with radio glyphs", () => {
+    renderCard(
+      [withoutCustomAnswer(singleSelect("q1", "Choose", ["Alpha", "Beta"]))],
+      vi.fn(),
+      null,
+    );
+
+    expect(screen.getByTestId("interview-choice-mode-hint").textContent).toBe(
+      "Pick one to send",
+    );
+    expect(
+      document.querySelectorAll('[data-interview-choice-glyph="radio"]'),
+    ).toHaveLength(2);
+    expect(
+      document.querySelector('[data-interview-choice-glyph="checkbox"]'),
+    ).toBeNull();
+  });
+
+  it("names an earlier single-choice pick as continue", () => {
+    renderCard(
+      [
+        withoutCustomAnswer(singleSelect("q1", "First?", ["Alpha"])),
+        withoutCustomAnswer(singleSelect("q2", "Second?", ["Beta"])),
+      ],
+      vi.fn(),
+      null,
+    );
+
+    expect(screen.getByTestId("interview-choice-mode-hint").textContent).toBe(
+      "Pick one to continue",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByTestId("interview-choice-mode-hint").textContent).toBe(
+      "Pick one to send",
+    );
+  });
+
+  it("names a last multi-choice pick as Submit, with checkbox glyphs", () => {
+    renderCard(
+      [withoutCustomAnswer(multiSelect("m", "Pick some", ["Alpha", "Beta"]))],
+      vi.fn(),
+      null,
+    );
+
+    expect(screen.getByTestId("interview-choice-mode-hint").textContent).toBe(
+      "Pick any, then Submit",
+    );
+    expect(
+      document.querySelectorAll('[data-interview-choice-glyph="checkbox"]'),
+    ).toHaveLength(2);
+    expect(
+      document.querySelector('[data-interview-choice-glyph="radio"]'),
+    ).toBeNull();
+  });
+
+  it("names an earlier multi-choice pick as Next", () => {
+    renderCard(
+      [
+        withoutCustomAnswer(multiSelect("m1", "Pick some", ["Alpha"])),
+        withoutCustomAnswer(singleSelect("q2", "Second?", ["Beta"])),
+      ],
+      vi.fn(),
+      null,
+    );
+
+    expect(screen.getByTestId("interview-choice-mode-hint").textContent).toBe(
+      "Pick any, then Next",
+    );
+  });
+
+  it("omits the mode line on a free-text-only question", () => {
+    renderCard([singleSelect("free", "Describe it", [])], vi.fn(), null);
+    expect(screen.queryByTestId("interview-choice-mode-hint")).toBeNull();
+  });
+
+  it("keeps Other without a choice glyph", () => {
+    renderCard([singleSelect("q1", "Choose", ["Alpha"])], vi.fn(), null);
+    expect(
+      document.querySelectorAll('[data-interview-choice-glyph="radio"]'),
+    ).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Other" })).toBeTruthy();
+  });
+});

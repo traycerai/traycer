@@ -1,0 +1,285 @@
+import { Check } from "lucide-react";
+import { useEffect, useRef } from "react";
+import type { ChatForkMode } from "@/components/chat/chat-message";
+import { AnimatePresence, useReducedMotion } from "motion/react";
+import * as m from "motion/react-m";
+import type {
+  InterviewAnswer,
+  InterviewQuestion,
+} from "@traycer/protocol/persistence/epic/schemas";
+import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
+import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
+import { ShortcutHint } from "@/components/ui/shortcut-hint";
+import {
+  PENDING_CARD_HIGHLIGHT_CLASSNAME,
+  useRestartHighlightPulse,
+} from "@/components/chat/chat-navigation-highlight";
+import { InterviewForkActions } from "@/components/chat/segments/interview-fork-actions";
+import {
+  InterviewQuestionHeader,
+  InterviewQuestionPager,
+} from "@/components/chat/segments/interview-visuals";
+import { interviewChoiceModeHint } from "./interview-choice-mode";
+import { QuestionPage } from "./question-page";
+import { QUESTION_TRANSITION, useInterviewCard } from "./use-interview-card";
+import { cn } from "@/lib/utils";
+
+interface PendingInterviewCardProps {
+  chatId: string;
+  blockId: string;
+  questions: ReadonlyArray<InterviewQuestion>;
+  // Whether this card's chat tab is the active one in its pane - gates focus
+  // for multi-pane layouts (see useInterviewCard).
+  isActive: boolean;
+  // True while a Submit/Skip for this interview block is in flight or accepted
+  // but unresolved (from the chat session's pending/accepted actions). Locks
+  // every affordance so the action cannot be double-sent; clears on a
+  // rejected/failed ack so the retained draft becomes retryable.
+  isBusy: boolean;
+  /**
+   * `null` disables the Submit/Skip affordances while the chat cannot send.
+   * The card still paginates so the pending question remains readable.
+   */
+  onSubmit:
+    | ((
+        blockId: string,
+        answers: ReadonlyArray<InterviewAnswer>,
+      ) => string | null)
+    | null;
+  onSkip:
+    | ((
+        blockId: string,
+        reason: string,
+        draftAnswers: ReadonlyArray<InterviewAnswer> | undefined,
+      ) => string | null)
+    | null;
+  /**
+   * Opens the fork dialog to branch the chat at this question:
+   * `"cross-question"` forks on this chat's own workspace with the question
+   * carried as reference (interrogate the assistant), `"ab-worktree"` forks
+   * into new worktrees carrying the working tree with the question re-opened
+   * (proceed with different answers in parallel). `null` hides both
+   * affordances (the chat cannot act, or the owning message is not a stable
+   * fork boundary). The original chat stays paused with this question still
+   * pending either way.
+   */
+  onFork: ((mode: ChatForkMode) => void) | null;
+  readonly epicId?: string | null;
+  readonly hostId?: string | null;
+  /** External jump (interview notification) landed on this pending card. */
+  readonly navigationHighlighted: boolean;
+  /** Advances on each jump so a repeat to the same card restarts the pulse. */
+  readonly highlightGeneration?: number;
+}
+
+export function PendingInterviewCard(props: PendingInterviewCardProps) {
+  const shouldReduceMotion = useReducedMotion();
+  const {
+    containerRef,
+    focusActive,
+    total,
+    safeIndex,
+    question,
+    draft,
+    direction,
+    pendingOptionIndex,
+    isLast,
+    answeredCount,
+    canAdvance,
+    canSubmit,
+    canSkip,
+    goNext,
+    goPrevious,
+    skip,
+    submit,
+    toggleOption,
+    toggleOther,
+    setOtherText,
+    setFreeText,
+  } = useInterviewCard({
+    chatId: props.chatId,
+    blockId: props.blockId,
+    epicId: props.epicId,
+    hostId: props.hostId,
+    questions: props.questions,
+    isActive: props.isActive,
+    isBusy: props.isBusy,
+    onSubmit: props.onSubmit,
+    onSkip: props.onSkip,
+  });
+  useRestartHighlightPulse(
+    props.navigationHighlighted,
+    props.highlightGeneration ?? 0,
+    containerRef,
+  );
+  // The scroll container below outlives the question inside it, so an offset
+  // left by a long question would open the next one below its header.
+  const questionScrollRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (questionScrollRef.current !== null) {
+      questionScrollRef.current.scrollTop = 0;
+    }
+  }, [safeIndex]);
+
+  return (
+    <section
+      ref={containerRef}
+      aria-label="Interview"
+      data-testid="interview-card"
+      data-block-id={props.blockId}
+      data-navigation-highlighted={
+        props.navigationHighlighted ? "true" : undefined
+      }
+      data-navigation-highlight-generation={
+        props.navigationHighlighted
+          ? String(props.highlightGeneration ?? 0)
+          : undefined
+      }
+      tabIndex={-1}
+      className={cn(
+        "flex flex-col gap-3 rounded-md border border-border/70 bg-card/70 p-3 text-ui-sm shadow-sm outline-none transition-[background-color,box-shadow] duration-300",
+        props.navigationHighlighted && PENDING_CARD_HIGHLIGHT_CLASSNAME,
+      )}
+    >
+      {question === null ? (
+        <InterviewQuestionHeader
+          header={null}
+          questionText="Input needed"
+          headerFindUnitId={null}
+          questionFindUnitId={null}
+          modeHint={null}
+        />
+      ) : (
+        // The card is an overlay anchored to the bottom of the tile, so a tall
+        // question grows UPWARD and would clip its own first lines past the
+        // tile's top edge. Question text now renders markdown (code blocks,
+        // diagrams) and option previews open inline, so the body is bounded
+        // and scrolls while the pager and Skip/Submit row below stay put.
+        <div
+          ref={questionScrollRef}
+          data-native-scrollbar="true"
+          className="min-h-0 max-h-[min(55dvh,36rem)] overflow-y-auto overscroll-contain"
+        >
+          <AnimatePresence mode="wait" initial={false}>
+            <m.div
+              key={safeIndex}
+              initial={
+                shouldReduceMotion ? false : { opacity: 0, x: direction * 10 }
+              }
+              animate={{ opacity: 1, x: 0 }}
+              exit={
+                shouldReduceMotion
+                  ? { opacity: 0 }
+                  : { opacity: 0, x: direction * -10 }
+              }
+              transition={
+                shouldReduceMotion ? { duration: 0 } : QUESTION_TRANSITION
+              }
+              className="flex flex-col gap-3"
+            >
+              <InterviewQuestionHeader
+                header={question.header}
+                questionText={question.question}
+                headerFindUnitId={null}
+                questionFindUnitId={null}
+                modeHint={
+                  question.options.length === 0
+                    ? null
+                    : interviewChoiceModeHint(question.multiSelect, isLast)
+                }
+              />
+              <QuestionPage
+                question={question}
+                draft={draft}
+                focusActive={focusActive}
+                disabled={props.isBusy}
+                pendingOptionIndex={pendingOptionIndex}
+                onToggleOption={toggleOption}
+                onToggleOther={toggleOther}
+                onOtherTextChange={setOtherText}
+                onFreeTextChange={setFreeText}
+              />
+            </m.div>
+          </AnimatePresence>
+        </div>
+      )}
+      {/* The left cluster keeps its NATURAL width: `min-w-0 flex-1` here let
+          the cluster's box shrink while its shrink-0 children could not, so a
+          narrow card overflowed the fork actions under Skip/Submit instead of
+          ever triggering the row's wrap. Natural width makes the wrap real -
+          too narrow, and Skip/Submit drop to their own right-aligned line. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <InterviewQuestionPager
+            current={safeIndex + 1}
+            total={total}
+            disabled={props.isBusy}
+            onPrevious={goPrevious}
+            onNext={goNext}
+          />
+          <InterviewProgress answeredCount={answeredCount} total={total} />
+          {props.onFork !== null ? (
+            <InterviewForkActions
+              onFork={props.onFork}
+              disabled={props.isBusy}
+              display="labels"
+            />
+          ) : null}
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={!canSkip}
+            onClick={skip}
+          >
+            Skip
+            <ShortcutHint>
+              <Kbd>Esc</Kbd>
+            </ShortcutHint>
+          </Button>
+          {isLast ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="default"
+              disabled={!canSubmit}
+              onClick={submit}
+            >
+              <Check className="size-3.5" aria-hidden />
+              Submit
+              <PrimaryActionShortcutHint />
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              variant="default"
+              disabled={!canAdvance}
+              onClick={goNext}
+            >
+              Next
+              <PrimaryActionShortcutHint />
+            </Button>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+interface InterviewProgressProps {
+  readonly answeredCount: number;
+  readonly total: number;
+}
+
+function InterviewProgress(props: InterviewProgressProps) {
+  if (props.total === 0) return null;
+  return (
+    <div className="text-ui-xs text-muted-foreground">
+      Answered {props.answeredCount}/{props.total}
+    </div>
+  );
+}

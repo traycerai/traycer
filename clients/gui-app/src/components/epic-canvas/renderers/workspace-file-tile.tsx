@@ -1,0 +1,1442 @@
+import { showHostUpdateNeededForGesture } from "@/lib/host-error-toast";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { StartTruncatedText } from "@/components/ui/start-truncated-text";
+import { CopyPathButton } from "@/components/copy-path-button";
+import { HoverCard } from "@/components/ui/hover-card";
+import { resolveAbsolutePath } from "@/lib/path/cross-platform-path";
+import { useWorkspaceReadFile } from "@/hooks/workspace/use-read-file-query";
+import { useFileEditSession } from "@/hooks/workspace/use-file-edit-session";
+import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
+import type { FileEditRuntime } from "@/lib/workspace/file-edit-runtime";
+import { languageFromFilePath } from "@/lib/file-change-diff-hunks";
+import {
+  createReportIssueContext,
+  type ReportIssueContext,
+} from "@/lib/report-issue-context";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { ExternalLinkIcon, Settings2 } from "lucide-react";
+import { SvgViewToggleButton } from "@/components/epic-canvas/renderers/svg-view-toggle-button";
+import { cn } from "@/lib/utils";
+import { TraycerMarkdown } from "@/markdown";
+import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
+import {
+  createWorkspaceFileFindAdapter,
+  type WorkspaceFileFindEnvironment,
+  type WorkspaceFileSourceFindTarget,
+} from "@/components/epic-canvas/workspace-file/workspace-file-find-adapter";
+import type { WorkspaceFileRef } from "@/stores/epics/canvas/types";
+import {
+  clearWorkspaceFileRevealTarget,
+  useWorkspaceFileRevealTarget,
+  type WorkspaceFileRevealTarget,
+} from "@/stores/epics/canvas/workspace-file-reveal-store";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { useNativeDivScrollRestoration } from "@/hooks/scroll/use-native-div-scroll-restoration";
+import { WorkspaceFileDeadTileBanner } from "./dead-tile-banner";
+import { WorkspaceMarkdownLinkProvider } from "@/components/epic-canvas/workspace-file/workspace-markdown-link-provider";
+import { WorkspaceFileRenderer } from "@/components/epic-canvas/workspace-file/workspace-file-renderer";
+import { useWorkspaceFileWordWrap } from "@/components/epic-canvas/workspace-file/workspace-file-word-wrap";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import "@/components/layout/shell/mobile-shell-touch-targets.css";
+import { FileAutosaveStatus } from "@/components/diff/file-autosave-status";
+import {
+  useDiffClickToEdit,
+  type DiffClickToEditAdapter,
+} from "@/components/diff/use-diff-click-to-edit";
+import type { DiffContentFrameFileIdentity } from "@/components/diff/diff-content-primitive";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { hostQueryKeys } from "@/lib/query-keys";
+import { useQueryClient } from "@tanstack/react-query";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  documentAssetKindOf,
+  isImageAssetPath,
+  isSvgAssetPath,
+  type DocumentAssetKind,
+} from "@/lib/assets/image-extension-allowlist";
+import { useFileAsset } from "@/hooks/assets/use-file-asset";
+import {
+  PDF_VIEWER_UNAVAILABLE_REASON,
+  PdfPreviewLazy,
+} from "@/components/epic-canvas/pdf-preview/pdf-preview-lazy";
+import {
+  DOCX_VIEWER_UNAVAILABLE_REASON,
+  DocxPreviewLazy,
+} from "@/components/epic-canvas/docx-preview/docx-preview-lazy";
+import type { LazyDocumentViewerProps } from "@/components/epic-canvas/document-preview/lazy-document-viewer";
+import {
+  DEFAULT_ANIMATION_MS,
+  ImagePreview,
+} from "@/components/epic-canvas/image-preview/image-preview";
+import { BinaryPlaceholder } from "@/components/epic-canvas/binary-placeholder";
+import { MissingFilePlaceholder } from "@/components/epic-canvas/missing-file-placeholder";
+import { useEffectiveDefaultEditor } from "@/hooks/editor/use-effective-default-editor";
+import { useDocumentOpenExternallyTarget } from "@/hooks/editor/use-document-open-target";
+import { useWorkspaceFileOpenExternally } from "@/hooks/editor/use-workspace-file-open-externally";
+import { ownValue } from "@/lib/own-value";
+const MAX_MARKDOWN_PREVIEW_CHARS = 100_000;
+
+/**
+ * The viewer each document format opens in, and the placeholder copy for
+ * the viewer failing to load on this device. Both viewers take the same
+ * props and the same lazy-load contract (`lazy-document-viewer.tsx`).
+ */
+const DOCUMENT_VIEWERS: Record<
+  DocumentAssetKind,
+  {
+    readonly Viewer: (props: LazyDocumentViewerProps) => ReactNode;
+    readonly unavailableReason: string;
+  }
+> = {
+  pdf: {
+    Viewer: PdfPreviewLazy,
+    unavailableReason: PDF_VIEWER_UNAVAILABLE_REASON,
+  },
+  docx: {
+    Viewer: DocxPreviewLazy,
+    unavailableReason: DOCX_VIEWER_UNAVAILABLE_REASON,
+  },
+};
+
+type WorkspaceFileViewMode = "source" | "preview";
+
+interface WorkspaceFileSourceFindTargetWithNonce extends WorkspaceFileSourceFindTarget {
+  readonly nonce: number;
+}
+
+const MARKDOWN_VIEW_MODE_OPTIONS: ReadonlyArray<{
+  readonly mode: WorkspaceFileViewMode;
+  readonly label: string;
+}> = [
+  { mode: "preview", label: "Preview" },
+  { mode: "source", label: "Markdown" },
+];
+
+/**
+ * Host-binding gate for the file preview.
+ *
+ * Reads and writes resolve through the per-tab host client. An unreachable
+ * host cannot service the tile, so the outer gate keeps the live renderer and
+ * its edit mutation unmounted until that same host is reachable again.
+ */
+export function WorkspaceFileTile(props: {
+  readonly node: WorkspaceFileRef;
+  readonly viewTabId: string;
+  readonly isActive: boolean;
+}) {
+  const { node } = props;
+  const tabHostId = useTabHostId();
+  const reachability = useHostReachability(tabHostId);
+  // Read the target here (not just in the live body) so the dead-tile / inactive
+  // states - which return BEFORE the live preview mounts - can still evict a
+  // stranded entry. Scoped to this tab so a click meant for one tab's preview
+  // doesn't move another tab's preview of the same file (CL-6).
+  const revealTarget = useWorkspaceFileRevealTarget(props.viewTabId, node.id);
+  const isDeadTile = reachability.status === "unreachable";
+
+  // A reveal target on a dead / inactive tile can never be consumed: the live
+  // preview that runs the consume effect never mounts. Drop it so these
+  // states don't strand entries on the channel (CL-5). Keyed on the target so a
+  // fresh click while the tile stays dead still evicts.
+  useEffect(() => {
+    if (isDeadTile && revealTarget !== null) {
+      clearWorkspaceFileRevealTarget(props.viewTabId, node.id);
+    }
+  }, [isDeadTile, revealTarget, props.viewTabId, node.id]);
+
+  if (reachability.status === "unreachable") {
+    return (
+      <WorkspaceFileDeadTileBanner
+        hostLabel={reachability.hostLabel}
+        reason="offline"
+        testId={`workspace-file-tile-${node.id}`}
+      />
+    );
+  }
+  return (
+    <WorkspaceFileTileRouter
+      node={node}
+      viewTabId={props.viewTabId}
+      isActive={props.isActive}
+      revealTarget={revealTarget}
+    />
+  );
+}
+
+/**
+ * Extension gate BEFORE any RPC:
+ * a non-image extension takes the untouched text path below unconditionally.
+ * `.svg` is the one format with a source view - it defaults to image with a
+ * per-tile, non-persisted toggle back to `WorkspaceFileTileLive`'s existing
+ * (fully-functional, including editing) text path.
+ */
+function WorkspaceFileTileRouter(props: {
+  readonly node: WorkspaceFileRef;
+  readonly viewTabId: string;
+  readonly isActive: boolean;
+  readonly revealTarget: WorkspaceFileRevealTarget | null;
+}) {
+  const { node } = props;
+  const isImage = isImageAssetPath(node.filePath);
+  const isSvg = isSvgAssetPath(node.filePath);
+  const documentKind = documentAssetKindOf(node.filePath);
+  const [viewAsSource, setViewAsSource] = useState(false);
+  // A document needs the `workspace.streamAsset` minor that taught the host
+  // its media type (1.1 for PDF, 1.2 for Word), and the STREAM's own
+  // negotiation is the only authority on that: stream methods never reach
+  // the unary openAck manifest the negotiated-version registry records, so
+  // no client-side version gate can ever positively know a host is old. The
+  // asset hook maps an old host's refusal to the shared fallback placeholder
+  // (honest copy + Open Externally) - that IS the old-host path.
+
+  if (documentKind !== null) {
+    return (
+      <WorkspaceDocumentFileTile
+        node={node}
+        kind={documentKind}
+        viewTabId={props.viewTabId}
+        revealTarget={props.revealTarget}
+      />
+    );
+  }
+
+  if (!isImage) {
+    return (
+      <WorkspaceFileTileLive
+        node={node}
+        viewTabId={props.viewTabId}
+        isActive={props.isActive}
+        revealTarget={props.revealTarget}
+        svgToggle={null}
+      />
+    );
+  }
+
+  if (isSvg && viewAsSource) {
+    return (
+      <WorkspaceFileTileLive
+        node={node}
+        viewTabId={props.viewTabId}
+        isActive={props.isActive}
+        revealTarget={props.revealTarget}
+        svgToggle={
+          <SvgViewToggleButton
+            switchTo="image"
+            onClick={() => setViewAsSource(false)}
+          />
+        }
+      />
+    );
+  }
+
+  return (
+    <WorkspaceImageFileTile
+      node={node}
+      viewTabId={props.viewTabId}
+      revealTarget={props.revealTarget}
+      svgToggle={
+        isSvg ? (
+          <SvgViewToggleButton
+            switchTo="source"
+            onClick={() => setViewAsSource(true)}
+          />
+        ) : null
+      }
+    />
+  );
+}
+
+/**
+ * Image mode for a workspace file tile: fetches over `useFileAsset` (never
+ * `workspace.readFile`) and renders `ImagePreview`, or the shared
+ * `BinaryPlaceholder` for a `fallback` status - uniformly, regardless of
+ * WHY the fetch fell back.
+ * Editing/drafts/markdown/find never mount here.
+ */
+function WorkspaceImageFileTile(props: {
+  readonly node: WorkspaceFileRef;
+  readonly viewTabId: string;
+  readonly revealTarget: WorkspaceFileRevealTarget | null;
+  readonly svgToggle: ReactNode;
+}) {
+  const { node, revealTarget } = props;
+  const assetState = useFileAsset({
+    method: "workspace",
+    workspacePath: node.workspacePath,
+    filePath: node.filePath,
+  });
+  // Magic-valid, header-parseable bytes can still fail to decode in the
+  // browser `<img onError>` has no other signal
+  // path. `reportDecodeFailure` discards the exact
+  // cache entry AND transitions the hook's own state to `fallback`, so this
+  // tile renders straight from `assetState.status` like every other
+  // failure - no local decode-failed flag to track or reset.
+  const handleDecodeError = assetState.reportDecodeFailure;
+  const openTarget = useEffectiveDefaultEditor(node.hostId);
+  const {
+    opening: openExternallyOpening,
+    onOpenExternally: handleOpenExternally,
+  } = useWorkspaceFileOpenExternally({
+    workspacePath: node.workspacePath,
+    filePath: node.filePath,
+    target: openTarget,
+  });
+
+  // No line-goto in image mode - a reveal target aimed at this file can never
+  // be consumed here, so evict it immediately rather than stranding it on the
+  // channel (mirrors `isSettledUnconsumableWorkspaceFile` below, CL-5).
+  useEffect(() => {
+    if (revealTarget !== null) {
+      clearWorkspaceFileRevealTarget(props.viewTabId, node.id);
+    }
+  }, [revealTarget, props.viewTabId, node.id]);
+
+  if (assetState.status === "fallback") {
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
+        <WorkspaceMediaFileToolbar
+          workspacePath={node.workspacePath}
+          filePath={node.filePath}
+          svgToggle={props.svgToggle}
+          openExternally={null}
+        />
+        <div className="min-h-0 flex-1">
+          {assetState.missing ? (
+            <MissingFilePlaceholder fileName={node.name} />
+          ) : (
+            <BinaryPlaceholder
+              fileName={node.name}
+              sizeBytes={assetState.totalBytes}
+              reason={assetState.reason}
+              onOpenExternally={handleOpenExternally}
+              openExternallyOpening={openExternallyOpening}
+              compact={false}
+            />
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
+      <WorkspaceMediaFileToolbar
+        workspacePath={node.workspacePath}
+        filePath={node.filePath}
+        svgToggle={props.svgToggle}
+        openExternally={
+          handleOpenExternally === null
+            ? null
+            : {
+                onOpenExternally: handleOpenExternally,
+                opening: openExternallyOpening,
+              }
+        }
+      />
+      <div className="min-h-0 flex-1">
+        <ImagePreview
+          status={assetState.status}
+          url={assetState.url}
+          meta={assetState.meta}
+          servedFromCache={assetState.servedFromCache}
+          fileName={node.name}
+          compact={false}
+          gesturesEnabled
+          animationMs={DEFAULT_ANIMATION_MS}
+          transformRef={null}
+          onTransformChange={null}
+          doubleClickOverride={null}
+          onDecodeError={handleDecodeError}
+          toolbarActions={null}
+          toolbarLabel={null}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Document mode (PDF, Word) for a workspace file tile: same shape as the
+ * image mode above - `useFileAsset` for the bytes, `BinaryPlaceholder` for
+ * any fallback, uniformly - but the ready state hands the blob to the
+ * format's lazy-loaded viewer instead of an `<img>`.
+ */
+function WorkspaceDocumentFileTile(props: {
+  readonly node: WorkspaceFileRef;
+  readonly kind: DocumentAssetKind;
+  readonly viewTabId: string;
+  readonly revealTarget: WorkspaceFileRevealTarget | null;
+}) {
+  const { node, revealTarget } = props;
+  const { Viewer, unavailableReason } = DOCUMENT_VIEWERS[props.kind];
+  const assetState = useFileAsset({
+    method: "workspace",
+    workspacePath: node.workspacePath,
+    filePath: node.filePath,
+  });
+  const handleRenderFailure = assetState.reportDecodeFailure;
+  // The viewer itself could not load or start on this device (old engine) -
+  // distinct from a decode failure: the bytes are fine, so the blob stays
+  // cached and local hosts can still offer Open Externally.
+  const [viewerUnavailable, setViewerUnavailable] = useState(false);
+  const handleViewerUnavailable = useCallback(
+    () => setViewerUnavailable(true),
+    [],
+  );
+  // Documents open with the OS default application when the host's
+  // editor.openPaths admits the format; older hosts keep the default-editor
+  // behavior.
+  const openTarget = useDocumentOpenExternallyTarget(node.hostId, props.kind);
+  const {
+    opening: openExternallyOpening,
+    onOpenExternally: handleOpenExternally,
+  } = useWorkspaceFileOpenExternally({
+    workspacePath: node.workspacePath,
+    filePath: node.filePath,
+    target: openTarget,
+  });
+
+  // No line-goto in document mode either - evict a reveal target immediately
+  // rather than stranding it (same rationale as the image mode above).
+  useEffect(() => {
+    if (revealTarget !== null) {
+      clearWorkspaceFileRevealTarget(props.viewTabId, node.id);
+    }
+  }, [revealTarget, props.viewTabId, node.id]);
+
+  if (assetState.status === "fallback" || viewerUnavailable) {
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
+        <WorkspaceMediaFileToolbar
+          workspacePath={node.workspacePath}
+          filePath={node.filePath}
+          svgToggle={null}
+          openExternally={null}
+        />
+        <div className="min-h-0 flex-1">
+          {assetState.missing ? (
+            <MissingFilePlaceholder fileName={node.name} />
+          ) : (
+            <BinaryPlaceholder
+              fileName={node.name}
+              sizeBytes={assetState.totalBytes}
+              reason={viewerUnavailable ? unavailableReason : assetState.reason}
+              onOpenExternally={handleOpenExternally}
+              openExternallyOpening={openExternallyOpening}
+              compact={false}
+            />
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (assetState.status === "ready" && assetState.url !== null) {
+    // The viewer's toolbar is the tile's ONE bar: it carries the file path
+    // as its caption and the tile's Open Externally action - a second
+    // path/actions bar above it would repeat both.
+    return (
+      <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
+        <Viewer
+          url={assetState.url}
+          fileName={node.filePath}
+          compact={false}
+          toolbarActions={
+            handleOpenExternally === null ? null : (
+              <OpenExternallyIconButton
+                onOpenExternally={handleOpenExternally}
+                opening={openExternallyOpening}
+              />
+            )
+          }
+          onRenderFailure={handleRenderFailure}
+          onUnavailable={handleViewerUnavailable}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
+      <WorkspaceMediaFileToolbar
+        workspacePath={node.workspacePath}
+        filePath={node.filePath}
+        svgToggle={null}
+        openExternally={
+          handleOpenExternally === null
+            ? null
+            : {
+                onOpenExternally: handleOpenExternally,
+                opening: openExternallyOpening,
+              }
+        }
+      />
+      <div className="min-h-0 flex-1">
+        <div className="flex size-full items-center justify-center">
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OpenExternallyIconButton(props: {
+  readonly onOpenExternally: () => void;
+  readonly opening: boolean;
+}) {
+  return (
+    <TooltipWrapper
+      label="Open externally"
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        disabled={props.opening}
+        onClick={props.onOpenExternally}
+        aria-label="Open externally"
+      >
+        {props.opening ? (
+          <AgentSpinningDots
+            className="size-4"
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : (
+          <ExternalLinkIcon className="size-4" />
+        )}
+      </Button>
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * Toolbar for the MEDIA tile modes (image, and a document outside its ready
+ * state - the ready document viewer brings its own). Distinct from
+ * `WorkspaceFileToolbar` below, the text/markdown tile's toolbar.
+ */
+function WorkspaceMediaFileToolbar(props: {
+  readonly workspacePath: string;
+  readonly filePath: string;
+  readonly svgToggle: ReactNode;
+  readonly openExternally: {
+    readonly onOpenExternally: () => void;
+    readonly opening: boolean;
+  } | null;
+}) {
+  return (
+    <div
+      className="flex h-9 shrink-0 items-center gap-2 border-b border-canvas-border/70 px-3"
+      data-testid="workspace-file-toolbar"
+    >
+      <WorkspaceFilePath
+        workspacePath={props.workspacePath}
+        filePath={props.filePath}
+      />
+      {props.svgToggle}
+      {props.openExternally !== null ? (
+        <OpenExternallyIconButton
+          onOpenExternally={props.openExternally.onOpenExternally}
+          opening={props.openExternally.opening}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function WorkspaceFileTileLive(props: {
+  readonly node: WorkspaceFileRef;
+  readonly viewTabId: string;
+  readonly isActive: boolean;
+  readonly revealTarget: WorkspaceFileRevealTarget | null;
+  /** Non-null only when `node` is an SVG reached via its image-mode toggle; `null` renders nothing (byte-identical text path for every other file). */
+  readonly svgToggle: ReactNode;
+}) {
+  const { node, revealTarget } = props;
+  const tabHostId = useTabHostId();
+  const tabHostClient = useTabHostClient();
+  const supportsWrite = useHostSupportsMethod(tabHostId, "workspace.writeFile");
+  const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
+  const queryClient = useQueryClient();
+  const query = useWorkspaceReadFile(
+    tabHostClient,
+    node.workspacePath,
+    node.filePath,
+    undefined,
+  );
+  const rawContent = readFileContent(query.data);
+  const payloadError = readFilePayloadError(query.data);
+  const displayError = readFileDisplayError(
+    payloadError,
+    query.isError,
+    query.error,
+  );
+  // The current cached payload reporting an error (e.g. a permission-denied
+  // read) can still carry `content: ""` - empty-origin editing made "" a
+  // meaningful, editable value, so it can no longer stand in for "no
+  // content" the way `null` does. A payload error must never be treated as
+  // valid disk content to seed or reconcile editing from; a transport-only
+  // failure (query.isError with query.data retained from the last good
+  // fetch) is unaffected, since that retained payload's own error is null.
+  const validatedContent = payloadError === null ? rawContent : null;
+  const reportContext = readFileReportContext(
+    payloadError,
+    query.isError,
+    query.error,
+  );
+  const truncated = readFileTruncated(query.data);
+  const language = useMemo(() => languageForFileName(node.name), [node.name]);
+  const markdownFile = useMemo(
+    () => isMarkdownFileName(node.name),
+    [node.name],
+  );
+  const [viewMode, setViewMode] = useState<WorkspaceFileViewMode>("source");
+  const { wordWrap, setWordWrap } = useWorkspaceFileWordWrap();
+  const editIdentity = useMemo(
+    () => ({
+      userId,
+      hostId: tabHostId,
+      workspacePath: node.workspacePath,
+      filePath: node.filePath,
+    }),
+    [node.filePath, node.workspacePath, tabHostId, userId],
+  );
+  const editSurfaceId = `${props.viewTabId}:workspace-file:${node.instanceId}`;
+  // A later payload error must never yank ownership away from a surface that
+  // already owns this file's runtime (an active or dirty draft) - only gate
+  // the FIRST attach on payload validity. Read the registry directly (not
+  // `editSession.state` below, computed from THIS same decision) to break
+  // the circularity; `editSession`'s own subscription already guarantees a
+  // re-render whenever this ownership changes, so this read is never stale.
+  const editingProtected = isWorkspaceFileEditingProtected(
+    fileEditRuntimeRegistry.get(editIdentity),
+    editSurfaceId,
+  );
+  const editEnabled = isWorkspaceFileEditEnabled({
+    isActive: props.isActive,
+    hasContent: hasEditableWorkspaceFileContent(
+      validatedContent,
+      editingProtected,
+    ),
+    truncated,
+    supportsWrite,
+  });
+  const editSession = useFileEditSession({
+    client: tabHostClient,
+    identity: editIdentity,
+    diskContent: validatedContent,
+    surfaceId: editSurfaceId,
+    autoAttach: editEnabled,
+  });
+  const editing = editSession.state?.ownerSurfaceId === editSurfaceId;
+  const editAdapter = useDiffClickToEdit({
+    surfaceId: editSurfaceId,
+    enabled: editEnabled,
+    active: editing,
+    onActivate: async (request) => {
+      await request.editorReady;
+      return editSession.activate(request, validatedContent ?? "");
+    },
+    onActivationError: () => {
+      reportableErrorToast(
+        "Couldn’t start editing this file.",
+        undefined,
+        createReportIssueContext({
+          title: "Could not start editing this file",
+          message: null,
+          code: null,
+          source: "Folder file edit",
+        }),
+      );
+    },
+    onChange: editSession.setDraft,
+    onBlur: editSession.flush,
+    onSaveShortcut: editSession.flush,
+  });
+  // Stays byte-exact raw: this seeds the Diffs editor's own live buffer once
+  // it mounts editable, and onChange later submits that buffer's full
+  // content back for autosave. Normalizing it (or the fallback
+  // `validatedContent`) here would make the very first edit silently rewrite
+  // every CRLF/lone-CR line ending in the file. Only a read-only projection
+  // (markdown preview, find) may normalize - never what's rendered/seeded.
+  const renderedContent = editSession.state?.draftContent ?? validatedContent;
+  // Find offsets are computed against this normalized copy so CRLF/lone-CR
+  // don't throw off the match position, but it is never rendered or fed to
+  // Diffs - see `renderedContent` above. Memoized: `normalizeWorkspaceFileContent`
+  // scans the whole file with two regexes, and `renderedContent` changes on
+  // every keystroke while actively editing.
+  const findContent = useMemo(
+    () =>
+      renderedContent === null
+        ? null
+        : normalizeWorkspaceFileContent(renderedContent),
+    [renderedContent],
+  );
+  const markdownPreviewRootRef = useRef<HTMLElement | null>(null);
+  const findEnvironmentRef = useRef<WorkspaceFileFindEnvironment | null>(null);
+  const [sourceFindTarget, setSourceFindTarget] =
+    useState<WorkspaceFileSourceFindTargetWithNonce | null>(null);
+  const sourceFindNonceRef = useRef(0);
+  const findAdapter = useMemo(
+    () => createWorkspaceFileFindAdapter({ tileInstanceId: node.instanceId }),
+    [node.instanceId],
+  );
+  useRegisterTileFindAdapter(findAdapter);
+  const revealSourceMatch = useCallback(
+    (target: WorkspaceFileSourceFindTarget | null): void => {
+      if (target === null) {
+        setSourceFindTarget(null);
+        return;
+      }
+      sourceFindNonceRef.current += 1;
+      setSourceFindTarget({
+        ...target,
+        nonce: sourceFindNonceRef.current,
+      });
+    },
+    [],
+  );
+
+  // The preview content has loaded into a state the consume effect never runs
+  // from - a host/payload error, or an empty/failed read (`renderedContent === null`).
+  // Neither mounts the Diffs source renderer, so evict any pending target here rather
+  // than strand it on the channel (CL-5). The loading state is excluded: the
+  // content may still resolve to code and consume the target normally.
+  const settledUnconsumable = isSettledUnconsumableWorkspaceFile({
+    isLoading: query.isLoading,
+    hasError: displayError !== null,
+    hasContent: renderedContent !== null,
+  });
+  useEffect(() => {
+    if (settledUnconsumable && revealTarget !== null) {
+      clearWorkspaceFileRevealTarget(props.viewTabId, node.id);
+    }
+  }, [settledUnconsumable, revealTarget, props.viewTabId, node.id]);
+
+  const markdownPreviewDisabled =
+    renderedContent !== null &&
+    renderedContent.length > MAX_MARKDOWN_PREVIEW_CHARS;
+  // A pending line target forces source view so the line is addressable -
+  // rendered markdown has none. Purely derived: the child consumes the
+  // target right after the scroll, so a markdown file the user had on
+  // preview returns to preview once the one-shot reveal completes. Line links
+  // are almost always to code files, where source is the only view anyway.
+  const effectiveViewMode = editing
+    ? "source"
+    : computeViewMode(
+        revealTarget !== null,
+        markdownFile,
+        viewMode,
+        markdownPreviewDisabled,
+      );
+  // Preserve scroll (both axes - long lines scroll horizontally) across epic
+  // switches and remount, once the file content has loaded.
+  const { scrollContainerRef, onScroll } = useNativeDivScrollRestoration(
+    node.instanceId,
+    renderedContent !== null && !query.isLoading,
+  );
+
+  const publishFindEnvironment = useCallback((): void => {
+    const environment = findEnvironmentRef.current;
+    if (environment === null) return;
+    findAdapter.updateEnvironment({
+      ...environment,
+      previewRoot: markdownPreviewRootRef.current,
+    });
+  }, [findAdapter]);
+
+  const handleMarkdownPreviewRootChange = useCallback(
+    (root: HTMLElement | null): void => {
+      markdownPreviewRootRef.current = root;
+      publishFindEnvironment();
+    },
+    [publishFindEnvironment],
+  );
+
+  const invalidatedSaveRef = useRef<number | null>(null);
+  useEffect(() => {
+    const savedAt = editSession.state?.lastSavedAt ?? null;
+    if (savedAt === null || invalidatedSaveRef.current === savedAt) return;
+    invalidatedSaveRef.current = savedAt;
+    void queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(tabHostId, "workspace.readFile"),
+    });
+  }, [editSession.state?.lastSavedAt, queryClient, tabHostId]);
+
+  // This tile is kept alive (not remounted) across an inactive/active toggle,
+  // so `refetchOnMount` never re-fires when the user switches back to it -
+  // only the false→true edge should force one fresh read past `staleTime`.
+  const wasActiveRef = useRef(props.isActive);
+  useEffect(() => {
+    const wasActive = wasActiveRef.current;
+    wasActiveRef.current = props.isActive;
+    if (props.isActive && !wasActive) {
+      void query.refetch();
+    }
+  }, [props.isActive, query]);
+
+  const readLatestDiskContent = useCallback(async (): Promise<string> => {
+    const conflictDiskContent = editSession.state?.conflict?.diskContent;
+    if (conflictDiskContent !== null && conflictDiskContent !== undefined) {
+      return conflictDiskContent;
+    }
+    const refreshed = await query.refetch();
+    if (refreshed.error !== null) {
+      throw new Error(transportErrorMessage(refreshed.error));
+    }
+    const payloadError = readFilePayloadError(refreshed.data);
+    if (payloadError !== null) throw new Error(payloadError);
+    if (readFileTruncated(refreshed.data)) {
+      throw new Error(
+        "The latest file is too large to load completely. Your recovered draft was kept.",
+      );
+    }
+    const refreshedContent = readFileContent(refreshed.data);
+    if (refreshedContent === null) {
+      throw new Error(
+        "Couldn't load the latest file from disk. Your recovered draft was kept.",
+      );
+    }
+    return refreshedContent;
+  }, [editSession.state?.conflict?.diskContent, query]);
+  const handleKeepMine = useCallback(async (): Promise<void> => {
+    if (showHostUpdateNeededForGesture(tabHostId)) return;
+    try {
+      await editSession.resolveKeepMine(await readLatestDiskContent());
+    } catch (error) {
+      editSession.reportConflictResolutionError(
+        conflictResolutionErrorMessage(error),
+      );
+    }
+  }, [editSession, readLatestDiskContent, tabHostId]);
+  const handleUseDisk = useCallback(async (): Promise<void> => {
+    const diskContent = editSession.state?.conflict?.diskContent ?? null;
+    if (diskContent === null && showHostUpdateNeededForGesture(tabHostId))
+      return;
+    try {
+      await editSession.resolveUseDisk(await readLatestDiskContent());
+    } catch (error) {
+      editSession.reportConflictResolutionError(
+        conflictResolutionErrorMessage(error),
+      );
+    }
+  }, [editSession, readLatestDiskContent, tabHostId]);
+  const handleRevealConsumed = useCallback((): void => {
+    clearWorkspaceFileRevealTarget(props.viewTabId, node.id);
+  }, [node.id, props.viewTabId]);
+
+  useLayoutEffect(() => {
+    findEnvironmentRef.current = {
+      viewMode: effectiveViewMode,
+      content: findContent,
+      isLoading: query.isLoading,
+      displayError,
+      truncated,
+      previewRoot: markdownPreviewRootRef.current,
+      revealSourceMatch,
+    };
+    publishFindEnvironment();
+  }, [
+    displayError,
+    effectiveViewMode,
+    findContent,
+    publishFindEnvironment,
+    query.isLoading,
+    revealSourceMatch,
+    truncated,
+  ]);
+
+  return (
+    <WorkspaceMarkdownLinkProvider
+      tabId={props.viewTabId}
+      hostId={node.hostId}
+      workspacePath={node.workspacePath}
+      filePath={node.filePath}
+    >
+      <div className="flex h-full min-h-0 flex-col bg-canvas text-canvas-foreground">
+        <WorkspaceFileToolbar
+          workspacePath={node.workspacePath}
+          filePath={node.filePath}
+          hasContent={renderedContent !== null}
+          isLoading={query.isLoading}
+          truncated={truncated}
+          markdownFile={markdownFile}
+          markdownPreviewDisabled={markdownPreviewDisabled}
+          viewMode={effectiveViewMode}
+          editing={editing}
+          onViewModeChange={setViewMode}
+          wordWrap={wordWrap}
+          onWordWrapChange={setWordWrap}
+          svgToggle={props.svgToggle}
+          status={
+            <FileAutosaveStatus
+              appearance="pill"
+              state={editSession.state}
+              onRetry={() => {
+                if (showHostUpdateNeededForGesture(tabHostId)) return;
+                editSession.retry();
+              }}
+              onKeepMine={() => {
+                void handleKeepMine();
+              }}
+              onUseDisk={() => {
+                void handleUseDisk();
+              }}
+            />
+          }
+        />
+        <div
+          ref={scrollContainerRef}
+          onScroll={onScroll}
+          // Ctrl/Cmd+A selects the file body, not the whole window (#592).
+          data-selection-root=""
+          className={cn(
+            "relative min-h-0 flex-1 overflow-auto",
+            props.isActive && "selection:bg-primary/25",
+          )}
+        >
+          <WorkspaceFilePreviewContent
+            content={renderedContent}
+            displayError={displayError}
+            reportContext={reportContext}
+            fileName={node.name}
+            isLoading={query.isLoading}
+            language={language}
+            viewMode={effectiveViewMode}
+            wordWrap={wordWrap}
+            revealLine={revealTarget?.line ?? null}
+            revealNonce={revealTarget?.nonce ?? null}
+            sourceFindTarget={sourceFindTarget}
+            editing={editing}
+            editAdapter={editAdapter}
+            fileIdentity={{
+              findFilePath: node.filePath,
+              bundleFindFileId: node.id,
+            }}
+            onMarkdownPreviewRootChange={handleMarkdownPreviewRootChange}
+            onRevealConsumed={handleRevealConsumed}
+          />
+        </div>
+      </div>
+    </WorkspaceMarkdownLinkProvider>
+  );
+}
+
+function WorkspaceFileToolbar(props: {
+  readonly workspacePath: string;
+  readonly filePath: string;
+  readonly hasContent: boolean;
+  readonly isLoading: boolean;
+  readonly truncated: boolean;
+  readonly markdownFile: boolean;
+  readonly markdownPreviewDisabled: boolean;
+  readonly viewMode: WorkspaceFileViewMode;
+  readonly editing: boolean;
+  readonly onViewModeChange: (mode: WorkspaceFileViewMode) => void;
+  readonly wordWrap: boolean;
+  readonly onWordWrapChange: (value: boolean) => void;
+  readonly status: ReactNode;
+  readonly svgToggle: ReactNode;
+}) {
+  // The settings trigger is an `icon-sm` control - below the 44px touch-target
+  // guideline, and on a phone this toolbar is the tile's own chrome, outside
+  // the mobile shell's hit-slop scope (header, drawer, sheets). Opt in here,
+  // and only where the mobile layout is live, so desktop never carries the
+  // scope. Same arrangement as the diff tab header.
+  const isMobileViewport = useIsMobileViewport();
+  const showContentControls = props.hasContent && !props.isLoading;
+
+  return (
+    <div
+      className="flex h-9 shrink-0 items-center gap-2 border-b border-canvas-border/70 px-3"
+      data-mobile-shell-touch-scope={isMobileViewport ? "" : undefined}
+      data-testid="workspace-file-toolbar"
+    >
+      <WorkspaceFilePath
+        workspacePath={props.workspacePath}
+        filePath={props.filePath}
+      />
+      {showContentControls && props.truncated ? (
+        <span className="shrink-0 text-badge text-muted-foreground">
+          Preview truncated
+        </span>
+      ) : null}
+      {props.status}
+      {showContentControls && props.markdownFile && !props.editing ? (
+        <MarkdownViewModeToggle
+          previewDisabled={props.markdownPreviewDisabled}
+          mode={props.viewMode}
+          onModeChange={props.onViewModeChange}
+        />
+      ) : null}
+      {/* Wrapping only describes the source surface. Rendered markdown reflows
+          on its own and has no line to wrap, so the control stays out of the
+          preview's toolbar rather than sitting there doing nothing. */}
+      {showContentControls && props.viewMode === "source" ? (
+        <WorkspaceFileSettingsMenu
+          wordWrap={props.wordWrap}
+          onWordWrapChange={props.onWordWrapChange}
+        />
+      ) : null}
+      {props.svgToggle}
+    </div>
+  );
+}
+
+function WorkspaceFilePath(props: {
+  readonly workspacePath: string;
+  readonly filePath: string;
+}) {
+  const [popoverOpen, setPopoverOpen] = useState(false);
+  const absolutePath = resolveAbsolutePath(props.workspacePath, props.filePath);
+  const details = (
+    <div className="flex max-w-[min(28rem,90vw)] items-center gap-2 px-3 py-1.5 text-ui-xs">
+      <span className="min-w-0 font-mono wrap-anywhere">{absolutePath}</span>
+      <CopyPathButton
+        path={absolutePath}
+        ariaLabel="Copy file path"
+        testId="workspace-file-copy-path"
+        appearance="tooltip"
+      />
+    </div>
+  );
+  return (
+    <div className="flex h-full min-w-0 flex-1 items-center">
+      <Popover open={popoverOpen} onOpenChange={setPopoverOpen}>
+        <HoverCard
+          trigger={
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="flex h-full max-w-full min-w-0 items-center text-left text-ui-xs text-muted-foreground"
+                aria-label="Show full file path"
+              >
+                <StartTruncatedText className="block min-w-0">
+                  {props.filePath}
+                </StartTruncatedText>
+              </button>
+            </PopoverTrigger>
+          }
+          content={details}
+          appearance="tooltip"
+          // A chip to look at, but it carries the Copy button.
+          semantics={{ role: "dialog", label: "File path" }}
+          side="bottom"
+          sideOffset={4}
+          align="start"
+          enabled={!popoverOpen}
+          open={null}
+          onOpenChange={null}
+          testId={null}
+          className={null}
+        />
+        <PopoverContent
+          appearance="tooltip"
+          layout="bare"
+          align="start"
+          className="w-auto"
+        >
+          {details}
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
+/**
+ * The file viewer's view-options menu, mirroring the diff tab's settings
+ * popover: an `icon-sm` trigger opening one switch row per option. It serves
+ * both pointer classes - this toolbar is part of the tile body, so a phone
+ * rendering the tile full-screen reaches the same menu the desktop chrome
+ * shows, and there is no second placement to keep in step with this one.
+ */
+function WorkspaceFileSettingsMenu(props: {
+  readonly wordWrap: boolean;
+  readonly onWordWrapChange: (value: boolean) => void;
+}): ReactNode {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <TooltipWrapper
+          label="File view settings"
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <Button
+            type="button"
+            variant="muted"
+            size="icon-sm"
+            aria-label="File view settings"
+            data-testid="workspace-file-settings"
+            className="shrink-0"
+          >
+            <Settings2 className="size-4" />
+          </Button>
+        </TooltipWrapper>
+      </PopoverTrigger>
+      <PopoverContent layout="bare" align="end" className="w-[min(80vw,15rem)]">
+        {/* The gutter belongs to the LIST, not to the plate: the row paints its
+            own hover and would otherwise run into the plate's corner. */}
+        <div className="p-1">
+          <Label variant="row" className="cursor-pointer justify-between">
+            <span>Word wrap</span>
+            <Switch
+              checked={props.wordWrap}
+              onCheckedChange={props.onWordWrapChange}
+            />
+          </Label>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function readFileContent(
+  data: { readonly content?: string | null } | undefined,
+): string | null {
+  return data?.content ?? null;
+}
+
+function readFilePayloadError(
+  data: { readonly error?: string | null } | undefined,
+): string | null {
+  return data?.error ?? null;
+}
+
+function readFileTruncated(
+  data: { readonly truncated?: boolean | null } | undefined,
+): boolean {
+  return data?.truncated === true;
+}
+
+function readFileDisplayError(
+  payloadError: string | null,
+  isTransportError: boolean,
+  error: unknown,
+): string | null {
+  if (payloadError !== null) return payloadError;
+  if (!isTransportError) return null;
+  return transportErrorMessage(error);
+}
+
+function WorkspaceFilePreviewContent(props: {
+  readonly content: string | null;
+  readonly displayError: string | null;
+  readonly reportContext: ReportIssueContext;
+  readonly fileName: string;
+  readonly isLoading: boolean;
+  readonly language: string;
+  readonly viewMode: WorkspaceFileViewMode;
+  readonly wordWrap: boolean;
+  readonly revealLine: number | null;
+  readonly revealNonce: number | null;
+  readonly sourceFindTarget: WorkspaceFileSourceFindTargetWithNonce | null;
+  readonly editing: boolean;
+  readonly editAdapter: DiffClickToEditAdapter;
+  readonly fileIdentity: DiffContentFrameFileIdentity | null;
+  readonly onMarkdownPreviewRootChange: (root: HTMLElement | null) => void;
+  readonly onRevealConsumed: () => void;
+}) {
+  if (props.isLoading) {
+    return (
+      <div className="flex h-full items-center justify-center text-muted-foreground">
+        <AgentSpinningDots
+          className={undefined}
+          testId={undefined}
+          variant={undefined}
+        />
+      </div>
+    );
+  }
+
+  // A background refetch (e.g. the post-save `workspace.readFile`
+  // invalidation) can fail while TanStack Query still holds the last good
+  // `content` and only flips `isError`. Content availability wins over that
+  // stale error: an active editor keeps the runtime's ownership regardless,
+  // so hiding it behind an error screen here would strand the tile
+  // unrenderable while another surface for the same file still gets routed
+  // to this invisible owner via `focus-owner`. A genuine load failure never
+  // has content to fall back on, so this never masks it.
+  if (props.content === null) {
+    if (props.displayError !== null) {
+      return (
+        <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-ui-sm text-muted-foreground">
+          <p>{props.displayError}</p>
+          <ReportIssueAction
+            context={props.reportContext}
+            presentation="text"
+            className={undefined}
+          />
+        </div>
+      );
+    }
+    return null;
+  }
+
+  if (props.viewMode === "preview") {
+    return (
+      <MarkdownFilePreview
+        // `props.content` is raw (see workspace-file-tile.tsx's
+        // renderedContent) so the Diffs editor never receives normalized
+        // text; the read-only markdown renderer still gets a normalized
+        // copy, matching its prior behavior.
+        markdown={normalizeWorkspaceFileContent(props.content)}
+        fileName={props.fileName}
+        onRootChange={props.onMarkdownPreviewRootChange}
+      />
+    );
+  }
+
+  return (
+    <WorkspaceFileRenderer
+      content={props.content}
+      language={props.language}
+      fileName={props.fileName}
+      editing={props.editing}
+      editAdapter={props.editAdapter}
+      wordWrap={props.wordWrap}
+      revealLine={props.revealLine}
+      revealNonce={props.revealNonce}
+      findTarget={props.sourceFindTarget}
+      fileIdentity={props.fileIdentity}
+      onRevealConsumed={props.onRevealConsumed}
+    />
+  );
+}
+
+function transportErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.length > 0) return error.message;
+  return "Couldn't load file preview from the host.";
+}
+
+/**
+ * The preview fails in two unrelated ways, and the filed report has to say
+ * which: a payload error means the host answered and named a file-level
+ * problem, while a transport error means the request never reached a verdict
+ * at all (host unreachable, session rejected, method unsupported). Reporting
+ * the second as "could not be read" sent one field report's triage hunting an
+ * `ENOENT` that never existed - the failure was an auth-plane outage.
+ *
+ * Neither arm may carry error text: `createReportIssueContext` deliberately
+ * does not redact, the payload string can embed the user's absolute path, and
+ * `HostRpcError.message` can carry host-supplied detail. Only fixed copy and
+ * the stable wire code cross into a public issue.
+ */
+function readFileReportContext(
+  payloadError: string | null,
+  isTransportError: boolean,
+  error: unknown,
+): ReportIssueContext {
+  if (payloadError === null && isTransportError) {
+    return createReportIssueContext({
+      title: "Folder file preview failed to load from the host",
+      message:
+        "The app could not reach the Traycer host to load the file preview.",
+      // Narrowed, never asserted: TanStack's error generic is an unchecked
+      // cast, so a bare `Error` can occupy this channel.
+      code: error instanceof HostRpcError ? error.code : null,
+      source: "Host",
+    });
+  }
+  return createReportIssueContext({
+    title: "Folder file could not be read",
+    message: "The folder file preview could not be loaded.",
+    code: null,
+    source: "Folder file",
+  });
+}
+
+function MarkdownViewModeToggle(props: {
+  readonly mode: WorkspaceFileViewMode;
+  readonly previewDisabled: boolean;
+  readonly onModeChange: (mode: WorkspaceFileViewMode) => void;
+}) {
+  return (
+    <div
+      className="flex shrink-0 items-center gap-1"
+      role="toolbar"
+      aria-label="Markdown view mode"
+    >
+      {MARKDOWN_VIEW_MODE_OPTIONS.map((option) => {
+        const active = props.mode === option.mode;
+        const disabled = option.mode === "preview" && props.previewDisabled;
+        return (
+          <TooltipWrapper
+            key={option.mode}
+            label={
+              disabled ? "Preview unavailable - file is too large" : undefined
+            }
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
+          >
+            <span className="inline-flex">
+              <button
+                type="button"
+                aria-pressed={active}
+                disabled={disabled}
+                className={cn(
+                  "inline-flex h-6 items-center rounded-xs px-1.5 text-ui-xs leading-none font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
+                  disabled &&
+                    "cursor-not-allowed opacity-45 hover:text-muted-foreground",
+                  // muted-fill-ok: toolbar row on bg-canvas, never inside this file's popover; --canvas never equals --muted
+                  active && "bg-muted text-foreground",
+                )}
+                onClick={() => {
+                  props.onModeChange(option.mode);
+                }}
+              >
+                {option.label}
+              </button>
+            </span>
+          </TooltipWrapper>
+        );
+      })}
+    </div>
+  );
+}
+
+function MarkdownFilePreview(props: {
+  readonly markdown: string;
+  readonly fileName: string;
+  readonly onRootChange: (root: HTMLElement | null) => void;
+}) {
+  const { fileName, markdown, onRootChange } = props;
+  const handleRootChange = useCallback(
+    (root: HTMLElement | null): void => {
+      onRootChange(root);
+    },
+    [onRootChange],
+  );
+
+  return (
+    <section
+      ref={handleRootChange}
+      className="min-h-full bg-canvas px-6 py-5"
+      aria-label={`${fileName} markdown preview`}
+    >
+      <TraycerMarkdown
+        className="mx-auto w-full max-w-4xl text-foreground"
+        proseSize="normal"
+        components={null}
+        remarkPlugins={null}
+        rehypePlugins={null}
+        quotable={false}
+        isStreaming={false}
+      >
+        {markdown}
+      </TraycerMarkdown>
+    </section>
+  );
+}
+
+function computeViewMode(
+  hasRevealTarget: boolean,
+  markdownFile: boolean,
+  viewMode: WorkspaceFileViewMode,
+  markdownPreviewDisabled: boolean,
+): WorkspaceFileViewMode {
+  // A line target always wins: rendered markdown can't address a line.
+  if (hasRevealTarget) return "source";
+  if (markdownFile && viewMode === "preview" && !markdownPreviewDisabled) {
+    return "preview";
+  }
+  return "source";
+}
+
+function normalizeWorkspaceFileContent(content: string): string {
+  return content.replace(/\r\n?/g, "\n");
+}
+
+function isWorkspaceFileEditEnabled(args: {
+  readonly isActive: boolean;
+  readonly hasContent: boolean;
+  readonly truncated: boolean;
+  readonly supportsWrite: boolean;
+}): boolean {
+  return (
+    args.isActive && args.hasContent && !args.truncated && args.supportsWrite
+  );
+}
+
+function isWorkspaceFileEditingProtected(
+  runtime: FileEditRuntime | null,
+  surfaceId: string,
+): boolean {
+  return runtime?.store.getState().ownerSurfaceId === surfaceId;
+}
+
+function hasEditableWorkspaceFileContent(
+  validatedContent: string | null,
+  editingProtected: boolean,
+): boolean {
+  return validatedContent !== null || editingProtected;
+}
+
+function isSettledUnconsumableWorkspaceFile(args: {
+  readonly isLoading: boolean;
+  readonly hasError: boolean;
+  readonly hasContent: boolean;
+}): boolean {
+  return !args.isLoading && (args.hasError || !args.hasContent);
+}
+
+function conflictResolutionErrorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : "Couldn't load the latest file from disk. Your recovered draft was kept.";
+}
+
+function languageForFileName(fileName: string): string {
+  // Extension-less names (`Dockerfile`, `Makefile`) get an exact-name
+  // mapping; everything else defers to the shared extension table.
+  return (
+    ownValue(EXACT_LANGUAGE_BY_FILE_NAME, fileName.toLowerCase()) ??
+    languageFromFilePath(fileName)
+  );
+}
+
+function isMarkdownFileName(fileName: string): boolean {
+  const lower = fileName.toLowerCase();
+  const extensionIndex = lower.lastIndexOf(".");
+  if (extensionIndex === -1 || extensionIndex === lower.length - 1) {
+    return false;
+  }
+  const extension = lower.slice(extensionIndex + 1);
+  return extension === "md" || extension === "markdown";
+}
+
+const EXACT_LANGUAGE_BY_FILE_NAME: Readonly<Partial<Record<string, string>>> = {
+  dockerfile: "dockerfile",
+  makefile: "make",
+};

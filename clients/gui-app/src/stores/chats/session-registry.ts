@@ -1,0 +1,624 @@
+import {
+  createSessionRegistry,
+  sessionKeyOf,
+  sessionKeyPartsOf,
+  type SessionKey,
+  type SessionRegistry,
+} from "@traycer-clients/shared/replica-runtime";
+import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
+import { DESKTOP_RETENTION_PROFILE } from "@/stores/replica-memory/retention-profile";
+import { agentActivityTurnForHost } from "@/stores/agent-activity-store";
+import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import {
+  chatActivityIndicator,
+  composerTurnStatus,
+} from "@/stores/chats/chat-run-activity";
+import {
+  acceptedActionIsUnsettled,
+  noticeCarriesOnlyCopy,
+} from "@/stores/chats/chat-queue-reconciler";
+import { isSandboxHostId } from "@/lib/sandboxes/sandbox-host-directory";
+import { queueEditRecordsInCustody } from "@/stores/chats/queue-edit-custody";
+
+/**
+ * How long a chat session is kept warm after its last tile unmounts. A chat
+ * not re-opened within this window has its `chat.subscribe` websocket closed
+ * and its snapshot dropped; re-opening it later re-subscribes (and shows the
+ * usual loading state once). Switching back inside the window is instant.
+ */
+export const DEFAULT_CHAT_IDLE_TTL_MS = 10 * 60 * 1_000;
+export const MAX_ACTIVE_CHAT_IDLE_DEFER_MS = 60 * 60 * 1_000;
+
+/**
+ * Upper bound on inactive lease-free warm sessions held at once. The idle TTL
+ * bounds retention in time; this bounds it in count, so cycling through many
+ * chats inside one TTL window cannot pin an unbounded set of finished
+ * transcripts and open websockets. Oldest-released inactive sessions are
+ * disposed first. Leased sessions are outside the warm pool. Lease-free
+ * sessions with active chat work are never evicted by the cap, but they still
+ * contribute to overflow and can crowd out older inactive warm sessions.
+ */
+export const DEFAULT_MAX_WARM_CHAT_SESSIONS =
+  DESKTOP_RETENTION_PROFILE.maxWarmChatSessions;
+
+/**
+ * Everything `acquire` needs to name ONE session: its identity - (epic, chat,
+ * host), see the class doc on why the host is part of it - plus the scope key
+ * that discriminates rebuilds within that identity.
+ */
+export interface ChatSessionTarget {
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly hostId: string;
+  readonly scopeKey: string;
+}
+
+export interface ChatSessionRegistryOptions {
+  readonly idleTtlMs: number;
+  /**
+   * The warm-pool cap. A function is resolved on every cap walk, which is
+   * how the production singleton follows the shell's retention profile
+   * without having to be constructed after the shell selected it.
+   */
+  readonly maxWarmSessions: number | (() => number);
+}
+
+/**
+ * Small per-renderer registry for live `chat.subscribe` sessions. It mirrors
+ * the open-Epic registry shape, but chat tiles are lease-counted because the
+ * same chat can be rendered by more than one surface in a window.
+ *
+ * The warm-pool MECHANISM - the lease count, the idle clock, the cap, the one
+ * teardown path - is the shared {@link createSessionRegistry}, which the
+ * terminal twin and the open-epic registry also run on. What is left here is
+ * this plane's identity (below), its policy VALUES, and its own answer to what
+ * "busy" means. Nothing about any of those changed when the three
+ * implementations became one.
+ *
+ * ## Session identity is (epic, chat, HOST)
+ *
+ * `chatId` is HOST-MINTED, so it is unique per host, not globally: two
+ * different hosts can legitimately own a chat with the same id under the same
+ * epic (post-fork twins in production, `--adopt-store` copies of one identity
+ * store in dev). Keying sessions on `epic:chat` alone made those two chats
+ * ONE entry, and since the scope key does carry the host, a second tile's
+ * `acquire` read the first host's entry, saw a scope mismatch, and DISPOSED
+ * it - closing the live websocket out from under a mounted tile that was
+ * still holding the handle. The host therefore belongs in the entry key, not
+ * only in the scope key: a different host is a DIFFERENT session, never a
+ * rebuild of the same one.
+ *
+ * The scope key keeps its own (narrower) job: within one (epic, chat, host)
+ * it still discriminates user, transport dialability and owner identity, and
+ * a mismatch there is still a legitimate in-place rebuild.
+ *
+ * Time-based keep-alive: when a chat's last lease is dropped (its tile
+ * unmounts - no longer on a mere tab switch, since pane chat retention keeps
+ * the tile mounted, but still on eviction or close) the session is NOT torn
+ * down. Its websocket stays
+ * open and its loaded snapshot is retained so switching back paints instantly
+ * - no reconnect, no loading spinner. A lease-free ("idle") session is held
+ * until it goes untouched for `idleTtlMs`, at which point it is disposed.
+ * Re-opening or otherwise touching the session resets that window. Leased
+ * sessions (a currently-rendered tile) never expire - only the idle clock
+ * runs - so a window with many open chat tiles keeps them all. Inactive idle
+ * sessions are additionally count-bounded by `maxWarmSessions`
+ * (oldest-released evicted first) so the TTL window alone cannot accumulate an
+ * unbounded set. Idle sessions with active work are retained until the work
+ * settles or the active defer cap elapses, though they still contribute to the
+ * overflow count while selecting inactive eviction candidates.
+ */
+export class ChatSessionRegistry {
+  private readonly sessions: SessionRegistry<ChatSessionStoreHandle>;
+  // The shared policy receives a handle, not its key. Keep the acquire-time
+  // host beside that handle so the activity verdict cannot use another host's
+  // narrow union for a same-id chat. Weak keys do not extend handle lifetime.
+  private readonly hostIdByHandle = new WeakMap<
+    ChatSessionStoreHandle,
+    string
+  >();
+
+  constructor(options: ChatSessionRegistryOptions) {
+    this.sessions = createSessionRegistry<ChatSessionStoreHandle>({
+      environment: createRendererRuntimeEnvironment(),
+      policy: {
+        idleTtlMs: options.idleTtlMs,
+        // A getter, read on every cap walk - see `maxWarmSessions`.
+        get maxWarm(): number {
+          return typeof options.maxWarmSessions === "function"
+            ? options.maxWarmSessions()
+            : options.maxWarmSessions;
+        },
+        // The cap bounds the WARM pool: "Leased sessions are outside the warm
+        // pool."
+        warmCapScope: "demand-free",
+        // "Lease-free sessions with active chat work are never evicted by the
+        // cap, but they still contribute to overflow and can crowd out older
+        // inactive warm sessions."
+        busyCountsTowardWarmCap: true,
+        maxActiveDeferMs: MAX_ACTIVE_CHAT_IDLE_DEFER_MS,
+        // A release stamps `lastUsedAt`, which is what the overflow sort reads.
+        refreshOrderOnRelease: true,
+        // Every chat session is worth keeping warm; this plane has no
+        // unreattachable state. On a sandbox the stream goes at once
+        // (`isSandboxHostId`), unless it holds a prompt not yet recorded.
+        retainWhenIdle: (handle) =>
+          !isSandboxHostId(this.hostIdByHandle.get(handle) ?? null) ||
+          holdsUnrecordedPrompt(handle),
+        hasActiveWork: (handle) =>
+          chatCapHasActiveWork(handle, this.hostIdByHandle.get(handle) ?? null),
+        activeWorkReason: (handle) =>
+          hasActiveChatWork(handle, this.hostIdByHandle.get(handle) ?? null)
+            ? "chat-work"
+            : "unrecorded-prompt",
+        // NOTHING is gated here, and that is the correction rather than an
+        // omission. This read `!holdsUnrecordedPrompt(handle)`, on the premise
+        // that the two eviction routes do not share a gate - the warm-cap walk
+        // asking `isEvictable` and idle expiry asking only `hasActiveWork`.
+        // The first half is false. `enforceWarmCap` filters its candidates
+        // `hasActiveWork` FIRST and `isEvictable` second (shared registry,
+        // `session-registry.ts`), so once the hold is in `hasActiveWork` - and
+        // it must be, because that is the only thing idle expiry reads - every
+        // case this clause would have refused was already skipped one line
+        // above it. It was unreachable.
+        //
+        // An unreachable guard is worse than an absent one: four tests were
+        // written against it and passed, each for a reason other than the one
+        // its name claimed. So the hold lives in exactly one predicate,
+        // `hasActiveWork`, which both routes reach. Narrowing that predicate
+        // now loses the warm-cap hold too - which is the honest coupling, and
+        // is why it is written down here.
+        isEvictable: () => true,
+        // Left as an unconditional dispose ON PURPOSE. `"retain"` means "the
+        // plane has taken ownership", and the shared registry removes the
+        // entry from its map either way - so returning it here would leave the
+        // prompt in a store nothing can reacquire, which is the same loss by a
+        // quieter route. The idle path is held off in `hasActiveWork` instead,
+        // where the deferral is bounded by `MAX_ACTIVE_CHAT_IDLE_DEFER_MS`.
+        onBeforeDispose: () => "dispose",
+        dispose: (handle) => {
+          handle.dispose();
+        },
+        onParked: () => {},
+        onRevived: () => {},
+      },
+    });
+  }
+
+  size(): number {
+    return this.sessions.size();
+  }
+
+  get(
+    epicId: string,
+    chatId: string,
+    hostId: string,
+    scopeKey: string,
+  ): ChatSessionStoreHandle | null {
+    const key = chatSessionKey(epicId, chatId, hostId);
+    // Read the scope BEFORE touching: a mismatch here is not the rebuild
+    // `acquire` performs, it is "this caller is asking about a session that no
+    // longer exists on its terms", and a touch would extend the life of an
+    // entry the caller is not going to use.
+    const entry = this.sessions.peekEntry(key);
+    if (entry === null || entry.scopeKey !== scopeKey) return null;
+    return this.sessions.get(key);
+  }
+
+  peek(
+    epicId: string,
+    chatId: string,
+    hostId: string,
+  ): ChatSessionStoreHandle | null {
+    return this.sessions.peek(chatSessionKey(epicId, chatId, hostId));
+  }
+
+  /** Live session handles, for aggregate reads (e.g. agent-activity). */
+  listHandles(): ChatSessionStoreHandle[] {
+    return Array.from(this.sessions.list());
+  }
+
+  /**
+   * The live sessions of ONE host in one epic. The host is part of a session's
+   * identity, so a surface bound to a host - a tab, a card - must read through
+   * this rather than filtering `listHandles` on the chat id alone: chat ids are
+   * host-minted, and a cross-host clone carries the source's ids verbatim.
+   */
+  listHandlesForHost(epicId: string, hostId: string): ChatSessionStoreHandle[] {
+    const handles: ChatSessionStoreHandle[] = [];
+    for (const entry of this.sessions.entries()) {
+      if (chatSessionKeyHostId(entry.key) !== hostId) continue;
+      if (entry.session.epicId !== epicId) continue;
+      handles.push(entry.session);
+    }
+    return handles;
+  }
+
+  /**
+   * Live session keys bound to one host, across every epic. Overview's
+   * `host.status` refresh uses this so a membership change on host B does
+   * not void host A's settled busy. Reads the acquire-time identity out of
+   * the key, not the WeakMap the React hook stamps.
+   */
+  membershipIdsForHost(hostId: string): string[] {
+    const ids: string[] = [];
+    for (const key of this.sessions.keys()) {
+      if (chatSessionKeyHostId(key) !== hostId) continue;
+      ids.push(key);
+    }
+    ids.sort();
+    return ids;
+  }
+
+  /**
+   * The chat plane's half of a park verdict for one Epic: whether any of its
+   * chats still holds work, and which hosts those chats are served from.
+   *
+   * Parking decides ONCE, at the epic, and then force-disposes every chat under
+   * it through {@link disposeForEpic}. Before this existed the epic-side gates
+   * read the epic store and the agent-activity plane and nothing else, so a
+   * chat holding an unacknowledged queue action was destroyed by a decision
+   * that never looked at it. The hosts come back with the answer because the
+   * activity plane's COVERAGE is per host, and a chat can be served from a host
+   * the epic's own session is not - so an epic-only coverage check can be
+   * satisfied while the plane is blind to exactly the host whose chat is about
+   * to be thrown away.
+   */
+  unsettledWorkForEpic(epicId: string): {
+    readonly unsettled: boolean;
+    readonly hostIds: readonly string[];
+  } {
+    const hostIds = new Set<string>();
+    let unsettled = false;
+    for (const entry of this.sessions.entries()) {
+      const handle = entry.session;
+      if (handle.epicId !== epicId) continue;
+      // Off the KEY, not the handle: the host is part of a chat session's
+      // identity rather than a field on it, which is why `listHandlesForHost`
+      // reads it the same way.
+      hostIds.add(chatSessionKeyHostId(entry.key));
+      if (hasUnsettledChatWork(handle)) unsettled = true;
+    }
+    return { unsettled, hostIds: Array.from(hostIds) };
+  }
+
+  subscribe(listener: () => void): () => void {
+    return this.sessions.subscribe(listener);
+  }
+
+  /** The host bound to this handle from its acquisition onward. */
+  hostIdForHandle(handle: ChatSessionStoreHandle): string | null {
+    return this.hostIdByHandle.get(handle) ?? null;
+  }
+
+  acquire(
+    target: ChatSessionTarget,
+    factory: (epicId: string, chatId: string) => ChatSessionStoreHandle,
+  ): ChatSessionStoreHandle {
+    const { epicId, chatId, hostId, scopeKey } = target;
+    return this.sessions.acquire(
+      chatSessionKey(epicId, chatId, hostId),
+      scopeKey,
+      () => {
+        const handle = factory(epicId, chatId);
+        this.hostIdByHandle.set(handle, hostId);
+        return handle;
+      },
+    );
+  }
+
+  release(epicId: string, chatId: string, hostId: string): void {
+    this.sessions.release(chatSessionKey(epicId, chatId, hostId), "warm");
+  }
+
+  releaseHandle(
+    epicId: string,
+    chatId: string,
+    hostId: string,
+    handle: ChatSessionStoreHandle,
+  ): void {
+    this.sessions.releaseHandle(
+      chatSessionKey(epicId, chatId, hostId),
+      handle,
+      "warm",
+    );
+  }
+
+  forceRelease(epicId: string, chatId: string, hostId: string): void {
+    this.sessions.forceRelease(chatSessionKey(epicId, chatId, hostId));
+  }
+
+  /** Byte pressure uses the same active-work hold as the count cap. */
+  evictOldestEligibleForByteBudget(): boolean {
+    return this.sessions.evictOldestEligible(
+      (entry) =>
+        !chatCapHasActiveWork(
+          entry.session,
+          this.hostIdByHandle.get(entry.session) ?? null,
+        ),
+    );
+  }
+
+  /**
+   * End every live session of one epic - leased, warm, on any host.
+   *
+   * Renderer parking's half of this plane. A chat session
+   * claims a VISIBLE lease on its epic through the host's chat session, so one
+   * surviving `chat.subscribe` keeps the epic pinned and the whole park buys
+   * nothing. Dropping the tiles' leases is not enough on its own: this plane's
+   * whole design is that a lease-free session stays warm with its websocket
+   * open for `idleTtlMs`, so a park that only released leases would leave the
+   * epic pinned for another ten minutes - past the host's own idle window, and
+   * past the "an epic with no agent activity sheds in about seven minutes"
+   * the plan is sized around.
+   *
+   * Leased sessions go too, and that is not a violation of the lease contract
+   * so much as the reason this method exists: parking is the caller stating
+   * that no surface of this epic is visible, so a lease still held is one from
+   * a tile that is about to unmount with the epic's own React subtree. The
+   * shared `discard` tears down regardless of demand and the later
+   * `releaseHandle` from that unmount is a no-op against a gone entry, so the
+   * order the two happen in does not matter.
+   *
+   * Deliberately NOT `hasActiveChatWork`-gated. That predicate governs whether
+   * the TTL and the cap may reclaim a session on their own schedule; this is a
+   * caller with a fact neither of them has. Eligibility for a park is decided
+   * once, at the epic, through the open-epic registry's own gates - and an epic
+   * whose agents are working never reaches this call.
+   */
+  disposeForEpic(epicId: string): void {
+    this.sessions.transact(() => {
+      for (const entry of this.sessions.entries()) {
+        if (entry.session.epicId !== epicId) continue;
+        this.sessions.discard(entry.key, "released");
+      }
+    });
+  }
+
+  disposeAll(): void {
+    this.sessions.disposeAll();
+  }
+}
+
+function chatSessionKey(
+  epicId: string,
+  chatId: string,
+  hostId: string,
+): SessionKey {
+  return sessionKeyOf([epicId, chatId, hostId]);
+}
+
+/**
+ * The host a key was built for.
+ *
+ * Reading the identity back out of the key rather than mirroring it on the
+ * entry, so there is one record of which host a session belongs to and it
+ * cannot disagree with the key the session is filed under.
+ *
+ * Decoded with the ENCODER's own reader. This used to keep a private copy of
+ * the separator and `split` on it - a duplication that survives only until the
+ * encoding changes. When `sessionKeyOf` moved to a length-prefixed form (a NUL
+ * is no more excluded from an id than a `:` is), a local split would have gone
+ * on parsing a shape nobody writes, and answered a confidently wrong host id
+ * rather than failing to compile.
+ */
+function chatSessionKeyHostId(key: SessionKey): string {
+  return sessionKeyPartsOf(key)[2] ?? "";
+}
+/**
+ * {@link hasActiveChatWork} plus everything the user has issued that has not
+ * reached its OWN end - a pause, a queue edit, an approval response, a
+ * checkpoint restore still running, an accepted send the host has not confirmed,
+ * and a rejected send's prompt still waiting for the composer to take it.
+ *
+ * The unit is the lifecycle, not the acknowledgement. `pendingActions` empties
+ * when the host says it heard the frame, which is the START of the interesting
+ * part for a send: an ack moves the record to `acceptedActions` with its
+ * recovery fields, and a rejection moves the prompt to `failedSendRestoration`
+ * where it is the only copy until a mounted driver persists it. Both are read
+ * here, because a park that fires between the ack and the end destroys the
+ * state that would have recovered.
+ *
+ * SEPARATE from `hasActiveChatWork`, and deliberately so. That predicate
+ * governs whether the idle TTL and the warm-overflow cap may reclaim a session
+ * on their own schedule, and those two are allowed to reclaim a chat whose only
+ * outstanding item is an unacknowledged action: re-opening re-subscribes and
+ * the reconciler replays from the host's answer. A PARK is not that. It is a
+ * decision taken at the epic that force-disposes every chat beneath it at once,
+ * so it has to see the action that a TTL is entitled to ignore. Widening
+ * `hasActiveChatWork` itself would silently change the TTL and cap behaviour
+ * for a reason that belongs only to parking.
+ */
+function hasUnsettledChatWork(handle: ChatSessionStoreHandle): boolean {
+  // The epic registry checks the activity plane with each chat host before it
+  // parks. This independent local read protects chat-owned actions and prompts.
+  if (hasActiveChatWork(handle, null)) return true;
+  const state = handle.store.getState();
+  if (Object.keys(state.pendingActions).length > 0) return true;
+  // AN ACTION LEAVING `pendingActions` IS AN ACKNOWLEDGEMENT, NOT A
+  // SETTLEMENT, and reading it as one destroyed user text.
+  //
+  // A send rejected after a deferred deadline does not simply vanish: it moves
+  // the prompt into `failedSendRestoration`, where it is the ONLY copy until
+  // the initial-chat-handoff driver's effect writes it into the composer draft
+  // store. Parking on the acknowledgement disposes both planes, the gate
+  // unmounts that driver, and the effect never runs - so the prompt is gone.
+  // Held until the slot is consumed, which is what `ackFailedSendRestoration`
+  // marks.
+  if (state.failedSendRestoration !== null) return true;
+  // A recovery is the same kind of hold, one step earlier. Its action has left
+  // `pendingActions` (the host answered it) and its prompt has not reached
+  // `failedSendRestoration` yet, so between those two it is invisible to both
+  // checks above - and for a QUEUED send there is no optimistic echo either.
+  // Parking an otherwise-idle recovering chat disposes the only copy.
+  if (Object.keys(state.hashOnlyRecoveries).length > 0) return true;
+  // An accepted action is not finished at its ACK - but what "finished" means
+  // is the action's own, so `acceptedActionIsUnsettled` decides per kind
+  // against the live queue (a `restoreCheckpoint` record is retired by its
+  // own frames instead, so for it existence is the hold). Reading
+  // `confirmedByHost` here instead was wrong twice over: it is a send-only
+  // fact that no other kind ever gains, so a session that once paused a queue
+  // never parked again; and the records it judged were free to be pruned by
+  // age or by the cap while the hold was still needed, which is why the
+  // pruner now locks exactly the records this asks about.
+  const settlement = { queue: state.queue };
+  for (const action of Object.values(state.acceptedActions)) {
+    if (acceptedActionIsUnsettled(action, settlement)) return true;
+  }
+  // A checkpoint restore that is still running. `completed` persists in this
+  // slot for toast and dialog consumers, so it is finished and does not hold.
+  const restoreKind = state.restore?.kind;
+  if (restoreKind === "in-flight" || restoreKind === "progressing") return true;
+  // A notice that IS the last copy of someone's prompt, not yet shown. The
+  // restoration slot above is not the only home a failed send's text ends up
+  // in: when the composer already holds a newer draft, `stateFailedSendRestoration`
+  // clears the slot and states the displaced prompt in a `SEND_NOT_RECORDED`
+  // notice instead, whose message body is now the only copy. The toast layer
+  // replays such a notice only when a pane focuses and marks it delivered
+  // then; a hidden chat never focuses, so the slot is empty, no action is
+  // accepted, and parking would dispose the session with the notice in it
+  // (Codex on ac6c4eca1). Held until delivered - the same promise the slot
+  // makes, kept for the text's other home. "Delivered" is the LAST-COPY
+  // notice's own delivery, not the action's: the action-wide set answers
+  // yes for a rejection toast shown before the draft was ever stated, and it
+  // is a FIFO that forgets a shown draft while its record stays in the ring
+  // (Codex on 4df091443) - see `deliveredLastCopyActionIds`.
+  if (
+    state.errorNotices.some(
+      (notice) =>
+        noticeCarriesOnlyCopy(notice) &&
+        notice.clientActionId !== null &&
+        !state.deliveredLastCopyActionIds.has(notice.clientActionId),
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Whether this chat still holds a prompt that exists NOWHERE ELSE - not in the
+ * host's transcript, not in a draft row, not in any other store.
+ *
+ * The registry's default answer is that a chat holds nothing to lose, because
+ * a re-open re-subscribes and the host is the source of truth. The hash-only
+ * refusal path breaks that premise, and it breaks it in three consecutive
+ * states, not one:
+ *
+ *  1. **Recovering.** The settled action is gone and the retry has not been
+ *     built; the recovery record is the only copy.
+ *  2. **Retry dispatched, not acknowledged.** The record is gone the moment
+ *     `sendAction` returns, but the host has not confirmed anything, and the
+ *     original send it replaces was REFUSED - so there is nothing to replay.
+ *     Only a `hashOnlyRetry` action counts here: an ordinary unacknowledged
+ *     send is the pre-existing retention policy's business, and widening this
+ *     to every pending action would change the idle TTL for every chat.
+ *  4. **An undelivered last-copy notice.** The slot was displaced, so the
+ *     prompt now lives only in a `SEND_NOT_RECORDED` notice the user has not
+ *     seen yet.
+ *  3. **Handed back, not consumed.** `failedSendRestoration` is the only copy
+ *     until a mounted tile's driver writes it into the composer draft store -
+ *     which is exactly the reasoning `hasUnsettledChatWork` already gives for
+ *     holding a PARK on the same slot.
+ *
+ * Covering only (1) - the first version - meant the hold expired at the
+ * instant custody moved to (2) or (3), and warm overflow then destroyed the
+ * only copy a few milliseconds later.
+ *
+ * Bounded, not indefinite: (1) has its own 30-second deadline, and the idle
+ * deferral this feeds is capped by `MAX_ACTIVE_CHAT_IDLE_DEFER_MS`.
+ */
+function holdsUnrecordedPrompt(handle: ChatSessionStoreHandle): boolean {
+  const state = handle.store.getState();
+  if (Object.keys(state.hashOnlyRecoveries).length > 0) return true;
+  if (state.failedSendRestoration !== null) return true;
+  if (
+    Object.values(state.pendingActions).some((action) => action.hashOnlyRetry)
+  ) {
+    return true;
+  }
+  // 5. An edit to a queued prompt still in custody. The composer cleared when
+  //    it was submitted, and until the host has answered for both of its
+  //    frames - or the text is handed back - this store holds the only copy of
+  //    the submission.
+  if (queueEditRecordsInCustody(state.queueEditRecords).length > 0) {
+    return true;
+  }
+  // 4. The prompt has become an UNDELIVERED last-copy notice. A restoration
+  //    displaced by the user's newer draft ends up here, and so does a
+  //    recovery abandoned into an occupied slot - and once the slot is
+  //    cleared, the notice is the only copy. `hasUnsettledChatWork` already
+  //    protects exactly this state through `deliveredLastCopyActionIds`;
+  //    omitting it here meant warm overflow could discard the notice before
+  //    the pane ever showed it.
+  return state.errorNotices.some(
+    (notice) =>
+      noticeCarriesOnlyCopy(notice) &&
+      notice.clientActionId !== null &&
+      !state.deliveredLastCopyActionIds.has(notice.clientActionId),
+  );
+}
+
+/** Shared warm-cap hold for chat count and byte eviction callers. */
+export function chatCapHasActiveWork(
+  handle: ChatSessionStoreHandle,
+  hostId: string | null,
+): boolean {
+  return hasActiveChatWork(handle, hostId) || holdsUnrecordedPrompt(handle);
+}
+
+function hasActiveChatWork(
+  handle: ChatSessionStoreHandle,
+  hostId: string | null,
+): boolean {
+  const state = handle.store.getState();
+  // A chat parked on a human gate (interview / command approval / file-edit
+  // approval) is in progress - the turn is blocked on the user, not finished.
+  // Count it as active work so the warm-chat idle TTL and the warm-overflow cap
+  // do not dispose its `chat.subscribe` stream while the user is still expected
+  // to answer (the host holds its session alive in the same situation).
+  //
+  // The run arm is the AGENT working - a turn active or activating, a runnable
+  // queue, a detached subagent or workflow - and not raw `runStatus`, which the
+  // host also holds at "running" for as long as a background shell, monitor or
+  // wake outlives the turn. That can be hours for a dev server, and releasing
+  // this renderer's stream stops none of it on the host: the shell keeps
+  // running, and a re-lease reconnects to its current state. Counting it here
+  // pinned a finished chat warm past the TTL and the cap, refused its epic's
+  // park, and kept it awake on the app's background edge.
+  //
+  // The host's activity plane can distinguish those cases where it covers
+  // this chat's host. Without an attested covering frame, an older chat host
+  // with no `turnInProgress` still needs raw runStatus: its local heuristic
+  // cannot distinguish an activating turn from background work.
+  const legacyHostRunning =
+    state.turnInProgress === undefined &&
+    composerTurnStatus(state.runStatus) !== null;
+  if (
+    state.activeTurn !== null ||
+    // A chat frame can reach this store before the separate activity stream's
+    // turn-start frame. Preserve its explicit active-turn claim in that gap.
+    state.turnInProgress === true ||
+    // A pre-turn activation on an older chat host has no explicit turn bit.
+    // Its raw running status must survive a covered but lagging activity frame.
+    legacyHostRunning ||
+    state.pendingApprovals.length > 0 ||
+    state.pendingFileEditApprovals.length > 0 ||
+    state.pendingInterviews.length > 0
+  ) {
+    return true;
+  }
+  // A queue or native item can appear in chat.subscribe before the activity
+  // stream's coalesced replacement frame lands. Its positive signal must keep
+  // the stream warm even when the last attested activity frame was negative.
+  // In the stale-session retry gap, this local indicator instead reads
+  // background; the activity plane's turn set supplies the missing positive.
+  if (chatActivityIndicator(state) === "turn") return true;
+  // A shared viewer's activity stream is scoped to the viewer, while this
+  // chat's activity registration belongs to its owner. Its silence says
+  // nothing about the owner's turn, even when it covers the same host.
+  if (hostId === null || state.access?.role !== "owner") return false;
+  return (
+    agentActivityTurnForHost(handle.epicId, handle.chatId, hostId) === true
+  );
+}

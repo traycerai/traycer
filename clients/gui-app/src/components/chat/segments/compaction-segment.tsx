@@ -1,0 +1,178 @@
+import { ChevronDown, ChevronRight, FoldVertical } from "lucide-react";
+import { useState } from "react";
+import { cn } from "@/lib/utils";
+import { useReadingWidthStyle } from "@/lib/layout-overrides";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { TraycerMarkdown } from "@/markdown";
+
+interface CompactionSegmentProps {
+  status: "streaming" | "completed" | "errored";
+  notApplied: boolean;
+  trigger: "auto" | "manual" | null;
+  preTokens: number | null;
+  postTokens: number | null;
+  durationMs: number | null;
+  summary: string | null;
+  error: string | null;
+  findUnitId: string | null;
+}
+
+function formatTokens(n: number): string {
+  return n.toLocaleString();
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.round(seconds % 60);
+  return `${minutes}m ${remainder}s`;
+}
+
+// Pre-compaction token count is intentionally NOT shown on its own - a bare
+// "before" number reads like a result/savings when it is not. Only the real
+// before→after pair (when a harness reports both) or a standalone post count
+// are meaningful enough to surface.
+function compactionMetricText(
+  preTokens: number | null,
+  postTokens: number | null,
+  durationMs: number | null,
+): string {
+  const metricParts: string[] = [];
+  if (preTokens !== null && postTokens !== null) {
+    metricParts.push(
+      `${formatTokens(preTokens)} → ${formatTokens(postTokens)} tokens`,
+    );
+  } else if (postTokens !== null) {
+    metricParts.push(`${formatTokens(postTokens)} tokens`);
+  }
+  if (durationMs !== null) {
+    metricParts.push(formatDuration(durationMs));
+  }
+  return metricParts.length === 0 ? "" : ` · ${metricParts.join(" · ")}`;
+}
+
+// "Compacted" is a claim about what happened to the context. When compaction
+// was unsuccessful nothing was folded, so the bar marks the attempt. A real
+// failure shows its reason; a not-applied outcome stays neutral.
+function terminalCompactionLabel(
+  status: "completed" | "errored",
+  isAuto: boolean,
+  notApplied: boolean,
+): string {
+  if (status === "errored") {
+    if (notApplied) {
+      return isAuto ? "Auto-compaction not applied" : "Compaction not applied";
+    }
+    return isAuto ? "Auto-compaction failed" : "Compaction failed";
+  }
+  return isAuto ? "Auto-compacted" : "Compacted";
+}
+
+export function CompactionSegment(props: CompactionSegmentProps) {
+  const {
+    status,
+    notApplied,
+    trigger,
+    preTokens,
+    postTokens,
+    durationMs,
+    summary,
+    error,
+  } = props;
+  const isStreaming = status === "streaming";
+  const isErrored = status === "errored";
+  const readingWidth = useReadingWidthStyle();
+  const [expanded, setExpanded] = useState(false);
+  const toggleExpanded = (): void => setExpanded((current) => !current);
+
+  // A failed compaction has no boundary, so there are no real metrics and no
+  // summary to expand.
+  const metricText = isErrored
+    ? ""
+    : compactionMetricText(preTokens, postTokens, durationMs);
+
+  const hasSummary =
+    status === "completed" && summary !== null && summary.length > 0;
+  const ExpandIcon = expanded ? ChevronDown : ChevronRight;
+  // Only `auto` earns a distinct label. A manual compaction is one the user
+  // just asked for, so naming it adds nothing; an automatic one interrupted
+  // them because the window filled up, and that is worth saying. `null` (most
+  // harnesses report no trigger) stays neutral rather than guessing.
+  const isAuto = trigger === "auto";
+
+  const labelInner = isStreaming ? (
+    <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
+      <AgentSpinningDots
+        className="shrink-0"
+        testId={undefined}
+        variant={undefined}
+      />
+      <span>{isAuto ? "Auto-compacting…" : "Compacting…"}</span>
+    </div>
+  ) : (
+    <div className="flex items-center gap-2 text-ui-xs text-muted-foreground">
+      <FoldVertical className="size-3.5 shrink-0" aria-hidden />
+      <span>
+        {terminalCompactionLabel(status, isAuto, notApplied)}
+        <span className="text-muted-foreground/80">{metricText}</span>
+      </span>
+      {hasSummary ? (
+        <ExpandIcon className="size-3 shrink-0" aria-hidden />
+      ) : null}
+    </div>
+  );
+
+  return (
+    <div
+      data-chat-find-unit={props.findUnitId ?? undefined}
+      className="flex w-full flex-col gap-1"
+    >
+      <div className="flex items-center gap-3">
+        <span aria-hidden className="h-px flex-1 bg-border/60" />
+        {hasSummary ? (
+          <button
+            type="button"
+            onClick={toggleExpanded}
+            aria-expanded={expanded}
+            className={cn(
+              "rounded-sm outline-none transition-colors",
+              "hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
+            )}
+          >
+            {labelInner}
+          </button>
+        ) : (
+          labelInner
+        )}
+        <span aria-hidden className="h-px flex-1 bg-border/60" />
+      </div>
+      {hasSummary && expanded ? (
+        <div
+          className={cn(
+            "mx-auto w-full",
+            "rounded-md border border-border/60 bg-muted/30 p-3",
+            readingWidth.className,
+          )}
+          style={{ maxWidth: readingWidth.maxWidth }}
+        >
+          <TraycerMarkdown
+            className={null}
+            proseSize="compact"
+            components={null}
+            remarkPlugins={null}
+            rehypePlugins={null}
+            quotable={false}
+            isStreaming={false}
+          >
+            {summary}
+          </TraycerMarkdown>
+        </div>
+      ) : null}
+      {!(isErrored && notApplied) && error !== null && error.length > 0 ? (
+        <div className="text-center text-ui-xs text-destructive">{error}</div>
+      ) : null}
+    </div>
+  );
+}

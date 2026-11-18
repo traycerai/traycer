@@ -1,0 +1,1944 @@
+import { PostHog, type CaptureResult } from "posthog-js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+afterEach(() => {
+  window.history.replaceState({}, "", "/");
+});
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+// MODE === "test" in vitest, so analytics is disabled and posthog never boots.
+describe("analytics", () => {
+  it("is a no-op when MODE is test", async () => {
+    const posthog = await import("posthog-js");
+    const initSpy = vi.spyOn(posthog.default, "init");
+    const identifySpy = vi.spyOn(posthog.default, "identify");
+    const captureSpy = vi.spyOn(posthog.default, "capture");
+
+    const { Analytics, AnalyticsEvent } = await import("@/lib/analytics");
+    const analytics = Analytics.getInstance();
+
+    analytics.identify("7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1", null);
+    analytics.track(AnalyticsEvent.TaskCreated, { mode: "chat" });
+
+    expect(initSpy).not.toHaveBeenCalled();
+    expect(identifySpy).not.toHaveBeenCalled();
+    expect(captureSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps every automatic PostHog capture surface disabled", async () => {
+    const { POSTHOG_CONFIG } = await import("@/lib/analytics");
+
+    expect(POSTHOG_CONFIG).toMatchObject({
+      autocapture: false,
+      rageclick: false,
+      capture_pageview: false,
+      capture_pageleave: false,
+      capture_heatmaps: false,
+      capture_dead_clicks: false,
+      capture_exceptions: false,
+      capture_performance: false,
+      disable_session_recording: true,
+      disable_surveys: true,
+      disable_surveys_automatic_display: true,
+      disable_product_tours: true,
+      disable_web_experiments: true,
+      advanced_disable_flags: true,
+      advanced_disable_feature_flags: true,
+      save_campaign_params: false,
+      save_referrer: false,
+    });
+    expect(POSTHOG_CONFIG.property_denylist).toEqual(
+      expect.arrayContaining([
+        "$current_url",
+        "$pathname",
+        "$referrer",
+        "$initial_current_url",
+        "$session_entry_url",
+      ]),
+    );
+  });
+
+  it("refuses to identify with a non-UUID user id", async () => {
+    const { Analytics } = await import("@/lib/analytics");
+    const analytics = Analytics.getInstance();
+
+    expect(analytics.identify("alice@example.com", null)).toBe(false);
+    expect(analytics.identify("/Users/alice/secret-repo", null)).toBe(false);
+    expect(
+      analytics.identify("7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1", null),
+    ).toBe(true);
+    analytics.reset();
+  });
+
+  it("strips identifiers, paths, content, queries, and raw errors at runtime", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ChatMessageSent, {
+        source: "direct_ui",
+        harness: "codex",
+        path: "/private/repository",
+        query: "customer secret",
+        prompt: "user content",
+        error: "raw server response",
+        userId: "user-1",
+      }),
+    ).toEqual({ harness: "codex" });
+  });
+
+  it("accepts antigravity as a harness and as a provider value", async () => {
+    // `ANALYTICS_HARNESSES` / `ANALYTICS_PROVIDERS` are the silent
+    // validators: a value the `AnalyticsHarness`/`AnalyticsProvider` type
+    // unions declare but that is missing from these runtime Sets is dropped
+    // with no type error anywhere, exactly like the missing settings
+    // sections below. Assert through the public sanitize path, the same way
+    // every other value in this allowlist is proven.
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ChatMessageSent, {
+        harness: "antigravity",
+      }),
+    ).toEqual({ harness: "antigravity" });
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProviderProfileLinkSucceeded, {
+        provider: "antigravity",
+        mode: "create",
+      }),
+    ).toEqual({ provider: "antigravity", mode: "create" });
+  });
+
+  it("accepts commandcode as a harness and as a provider value, and still drops an unknown id", async () => {
+    // The silent validators again: a missing runtime entry drops the property
+    // with no type error, so this goes through the public sanitize path.
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ChatMessageSent, {
+        harness: "commandcode",
+      }),
+    ).toEqual({ harness: "commandcode" });
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ProviderProfileLinkSucceeded, {
+        provider: "commandcode",
+        mode: "create",
+      }),
+    ).toEqual({ provider: "commandcode", mode: "create" });
+    // Positive control for the drop: an id outside the allowlist is rejected,
+    // which is what a missing runtime entry for commandcode would have done.
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ChatMessageSent, {
+        harness: "not-a-harness",
+      }),
+    ).toBeNull();
+  });
+
+  it("accepts every settings section the type union declares", async () => {
+    // The runtime allowlist is what `section` is validated against, and a
+    // union member missing from it drops the event with no error anywhere -
+    // `devices` and `usage` had both gone missing exactly that way.
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    const sections = [
+      "agents",
+      "alerts",
+      "app-diagnostics",
+      "app-notifications",
+      "appearance",
+      "browser-agent-access",
+      "devices",
+      "diagnostics",
+      "general",
+      "host",
+      "keybindings",
+      "notifications",
+      "permissions",
+      "agent-memories",
+      "providers",
+      "mcp-servers",
+      "skills",
+      "agent-definitions",
+      "machine-setup",
+      "secrets",
+      "shell",
+      "usage",
+      "worktrees",
+    ];
+    // `source` alongside `section`, matching what the sidebars actually emit -
+    // the sanitizer requires every expected key to be present, so omitting it
+    // would reject all twelve and prove nothing.
+    const rejected = sections.filter(
+      (section) =>
+        sanitizeAnalyticsProperties(AnalyticsEvent.SettingsOpened, {
+          source: "direct_ui",
+          section,
+        }) === null,
+    );
+    expect(rejected).toEqual([]);
+  });
+
+  it("rejects an allowed key with a value outside its event taxonomy", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ChatMessageSent, {
+        harness: "customer-secret",
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects values that belong to another event sharing the same key", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.OnboardingStarted, {
+        mode: "chat",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ApprovalDecided, {
+        decision: "discard",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.ArtifactCreated, {
+        kind: "shell",
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects contradictory outcome/blocker pairs and partial-count arithmetic", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.WorktreeDeleted, {
+        outcome: "succeeded",
+        blocker: "conflict",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.WorktreeDeleted, {
+        outcome: "failed",
+        blocker: null,
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.WorktreesBulkDeleted, {
+        requested_count: 3,
+        succeeded_count: 1,
+        failed_count: 1,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the voice transcription succeeded payload and rejects values outside its schema", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.VoiceTranscriptionSucceeded, {
+        duration_bucket: "under_10s",
+        had_text: true,
+        decode_bucket: "1_to_5s",
+      }),
+    ).toEqual({
+      duration_bucket: "under_10s",
+      had_text: true,
+      decode_bucket: "1_to_5s",
+    });
+    for (const decodeBucket of ["under_1s", "1_to_5s", "over_5s"]) {
+      expect(
+        sanitizeAnalyticsProperties(
+          AnalyticsEvent.VoiceTranscriptionSucceeded,
+          {
+            duration_bucket: "over_30s",
+            had_text: false,
+            decode_bucket: decodeBucket,
+          },
+        ),
+      ).not.toBeNull();
+    }
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.VoiceTranscriptionSucceeded, {
+        duration_bucket: "under_10s",
+        had_text: true,
+        decode_bucket: "fast",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.VoiceTranscriptionSucceeded, {
+        duration_bucket: "under_10s",
+        had_text: "yes",
+        decode_bucket: "1_to_5s",
+      }),
+    ).toBeNull();
+  });
+
+  it("has a runtime schema for every declared event", async () => {
+    const { analyticsEventContractIsComplete } =
+      await import("@/lib/analytics");
+
+    expect(analyticsEventContractIsComplete()).toBe(true);
+  });
+
+  it("maps typed host RPC codes and error text to bounded blockers", async () => {
+    const { analyticsBlockerFromError } = await import("@/lib/analytics");
+
+    expect(
+      analyticsBlockerFromError({ code: "WORKTREE_BUSY", message: "opaque" }),
+    ).toBe("conflict");
+    expect(
+      analyticsBlockerFromError({ code: "UNAUTHORIZED", message: "opaque" }),
+    ).toBe("authentication");
+    expect(analyticsBlockerFromError(new Error("Request timed out"))).toBe(
+      "timeout",
+    );
+    expect(analyticsBlockerFromError("something inscrutable")).toBe("unknown");
+  });
+
+  it("maps a host error code named like an inherited member by its text, not to a blocker", async () => {
+    const { analyticsBlockerFromError } = await import("@/lib/analytics");
+
+    expect(
+      analyticsBlockerFromError({ code: "constructor", message: "opaque" }),
+    ).toBe("unknown");
+    expect(
+      analyticsBlockerFromError({
+        code: "constructor",
+        message: "Request timed out",
+      }),
+    ).toBe("timeout");
+  });
+
+  it("filters real SDK custom and identify CaptureResults after enrichment", async () => {
+    const { POSTHOG_CONFIG, sanitizePostHogCaptureResult } =
+      await import("@/lib/analytics");
+    const captured: CaptureResult[] = [];
+    window.history.replaceState(
+      {},
+      "",
+      "/epics/epic-secret/tab-secret?focusArtifactId=artifact-secret&focusThreadId=thread-secret",
+    );
+    const sdk = new PostHog();
+    sdk.init("phc_test_project_key", {
+      ...POSTHOG_CONFIG,
+      before_send: (result) => {
+        const sanitized = sanitizePostHogCaptureResult(result);
+        if (sanitized !== null) captured.push(sanitized);
+        return null;
+      },
+      persistence: "memory",
+      request_batching: false,
+    });
+    sdk.register({
+      app: "gui-app",
+      app_surface: "desktop",
+      app_version: "1.2.3",
+      platform: "macos",
+      release_channel: "production",
+    });
+
+    sdk.capture("chat_message_sent", {
+      harness: "codex",
+    });
+    sdk.identify("7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1", {
+      email: "alice@example.com",
+      name: "Alice Smith",
+      favorite_repo: "/Users/alice/secret-repo",
+    });
+
+    const custom = captured.find(({ event }) => event === "chat_message_sent");
+    const identify = captured.find(({ event }) => event === "$identify");
+    expect(typeof custom?.properties.distinct_id).toBe("string");
+    expect(custom?.properties).toMatchObject({
+      token: "phc_test_project_key",
+      app: "gui-app",
+      app_surface: "desktop",
+      app_version: "1.2.3",
+      platform: "macos",
+      release_channel: "production",
+      harness: "codex",
+    });
+    // $session_id / $window_id are the ONLY SDK enrichment allowed through:
+    // opaque SDK-generated UUIDs that keep session analyses working.
+    const allowedKeys = new Set([
+      "app",
+      "app_surface",
+      "app_version",
+      "distinct_id",
+      "harness",
+      "platform",
+      "release_channel",
+      "token",
+      "$session_id",
+      "$window_id",
+    ]);
+    for (const key of Object.keys(custom?.properties ?? {})) {
+      expect(allowedKeys.has(key)).toBe(true);
+    }
+    // Unconditional: session-based analyses (paths, session funnels) depend
+    // on this passthrough, so its silent disappearance must fail the suite.
+    expect(custom?.properties.$session_id).toMatch(UUID_PATTERN);
+    expect(typeof identify?.properties.$anon_distinct_id).toBe("string");
+    expect(identify?.properties).toMatchObject({
+      token: "phc_test_project_key",
+      distinct_id: "7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1",
+    });
+    // Identity events carry the same registered app globals as declared
+    // events - the surface a sign-in came from is as real as a click's.
+    expect(Object.keys(identify?.properties ?? {}).sort()).toEqual(
+      [
+        "$anon_distinct_id",
+        "app",
+        "app_surface",
+        "app_version",
+        "distinct_id",
+        "platform",
+        "release_channel",
+        "token",
+      ].sort(),
+    );
+    // Email is the ONLY person property allowed through; everything else the
+    // SDK staged on $set/$set_once (name, custom props, referrer/campaign
+    // enrichment) is dropped.
+    expect(identify?.$set).toEqual({ email: "alice@example.com" });
+    expect(identify?.$set_once).toBeUndefined();
+    expect(identify?.$unset).toBeUndefined();
+    expect(JSON.stringify(captured)).not.toMatch(
+      /epic-secret|artifact-secret|thread-secret|pathname|referrer|user_agent|Alice Smith|secret-repo/,
+    );
+  });
+
+  it("rejects content-shaped identities from real SDK CaptureResults", async () => {
+    const { POSTHOG_CONFIG, sanitizePostHogCaptureResult } =
+      await import("@/lib/analytics");
+    const unsafeIdentities = [
+      "/Users/alice/secret-repo",
+      "alice@example.com",
+      "https://example.com/private/task",
+      "Alice Smith",
+      "secret-team-slug",
+    ];
+
+    for (const unsafeIdentity of unsafeIdentities) {
+      const captured: CaptureResult[] = [];
+      const sdk = new PostHog();
+      sdk.init("phc_test_project_key", {
+        ...POSTHOG_CONFIG,
+        before_send: (result) => {
+          const sanitized = sanitizePostHogCaptureResult(result);
+          if (sanitized !== null) captured.push(sanitized);
+          return null;
+        },
+        persistence: "memory",
+        request_batching: false,
+      });
+      sdk.register({
+        app: "gui-app",
+        app_surface: "desktop",
+        app_version: "1.2.3",
+        platform: "macos",
+        release_channel: "production",
+      });
+      sdk.identify(unsafeIdentity);
+      sdk.capture("command_palette_opened");
+
+      expect(JSON.stringify(captured)).not.toContain(unsafeIdentity);
+    }
+  });
+
+  it("keeps the email when a repeat identify surfaces as a $set event", async () => {
+    const { POSTHOG_CONFIG, sanitizePostHogCaptureResult } =
+      await import("@/lib/analytics");
+    const captured: CaptureResult[] = [];
+    const sdk = new PostHog();
+    // Unique token: posthog-js shares instances (and identified state) by
+    // token, and this test needs a genuinely fresh anonymous -> identified
+    // -> repeat-identify sequence.
+    sdk.init("phc_test_project_key_repeat_identify", {
+      ...POSTHOG_CONFIG,
+      before_send: (result) => {
+        const sanitized = sanitizePostHogCaptureResult(result);
+        if (sanitized !== null) captured.push(sanitized);
+        return null;
+      },
+      persistence: "memory",
+      request_batching: false,
+    });
+    sdk.register({
+      app: "gui-app",
+      app_surface: "desktop",
+      app_version: "1.2.3",
+      platform: "macos",
+      release_channel: "production",
+    });
+
+    // Second identify for an ALREADY-identified distinct id: the real SDK
+    // emits `$set` instead of `$identify` (this is the renderer-restart /
+    // changed-email shape). The sanitizer must pass the email through.
+    sdk.identify("7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1", {
+      email: "alice@example.com",
+      name: "Alice Smith",
+    });
+    sdk.identify("7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1", {
+      email: "alice.renamed@example.com",
+      name: "Alice Renamed",
+    });
+
+    const setEvent = captured.filter(({ event }) => event === "$set").at(-1);
+    expect(setEvent).toBeDefined();
+    expect(setEvent?.$set).toEqual({ email: "alice.renamed@example.com" });
+    expect(setEvent?.properties).toMatchObject({
+      token: "phc_test_project_key_repeat_identify",
+      distinct_id: "7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1",
+    });
+    expect(Object.keys(setEvent?.properties ?? {}).sort()).toEqual(
+      [
+        "app",
+        "app_surface",
+        "app_version",
+        "distinct_id",
+        "platform",
+        "release_channel",
+        "token",
+      ].sort(),
+    );
+    expect(JSON.stringify(captured)).not.toMatch(/Alice/);
+  });
+
+  it("contains SDK exceptions: a throwing init permanently disables analytics", async () => {
+    vi.resetModules();
+    vi.stubEnv("MODE", "development");
+    vi.stubEnv("VITE_POSTHOG_KEY", "phc_test_project_key");
+    try {
+      const posthog = (await import("posthog-js")).default;
+      const initSpy = vi.spyOn(posthog, "init").mockImplementation(() => {
+        throw new Error("storage denied");
+      });
+      const captureSpy = vi.spyOn(posthog, "capture");
+      const { Analytics, AnalyticsEvent } = await import("@/lib/analytics");
+
+      const analytics = Analytics.getInstance();
+      expect(initSpy).toHaveBeenCalledTimes(1);
+      // Valid payloads still report local acceptance; the SDK is never
+      // touched again, and nothing escapes into the caller.
+      expect(
+        analytics.track(AnalyticsEvent.TaskCreated, { mode: "chat" }),
+      ).toBe(true);
+      expect(
+        analytics.identify("7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1", null),
+      ).toBe(true);
+      expect(() => {
+        analytics.reset();
+      }).not.toThrow();
+      expect(captureSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+      vi.resetModules();
+    }
+  });
+
+  it("contains SDK exceptions thrown by capture/identify/reset mid-session", async () => {
+    vi.resetModules();
+    vi.stubEnv("MODE", "development");
+    vi.stubEnv("VITE_POSTHOG_KEY", "phc_test_project_key");
+    try {
+      const posthog = (await import("posthog-js")).default;
+      vi.spyOn(posthog, "init").mockImplementation(() => posthog);
+      vi.spyOn(posthog, "register").mockImplementation(() => undefined);
+      vi.spyOn(posthog, "capture").mockImplementation(() => {
+        throw new Error("before_send exploded");
+      });
+      vi.spyOn(posthog, "identify").mockImplementation(() => {
+        throw new Error("identify exploded");
+      });
+      vi.spyOn(posthog, "reset").mockImplementation(() => {
+        throw new Error("reset exploded");
+      });
+      vi.spyOn(posthog, "get_distinct_id").mockImplementation(() => {
+        throw new Error("persistence exploded");
+      });
+      const { Analytics, AnalyticsEvent } = await import("@/lib/analytics");
+
+      const analytics = Analytics.getInstance();
+      expect(
+        analytics.track(AnalyticsEvent.TaskCreated, { mode: "chat" }),
+      ).toBe(true);
+      expect(
+        analytics.identify(
+          "7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1",
+          "alice@example.com",
+        ),
+      ).toBe(true);
+      expect(() => {
+        analytics.reset();
+      }).not.toThrow();
+    } finally {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+      vi.resetModules();
+    }
+  });
+
+  it("resets persisted cross-account identity before identifying the new user", async () => {
+    vi.resetModules();
+    vi.stubEnv("MODE", "development");
+    vi.stubEnv("VITE_POSTHOG_KEY", "phc_test_project_key");
+    try {
+      const posthog = (await import("posthog-js")).default;
+      const calls: string[] = [];
+      // Simulate a cold start on ANOTHER account's persisted SDK state:
+      // distinct_id differs from $device_id (= identified) and from the
+      // signing-in user.
+      vi.spyOn(posthog, "init").mockImplementation(() => posthog);
+      vi.spyOn(posthog, "register").mockImplementation(() => undefined);
+      vi.spyOn(posthog, "get_distinct_id").mockImplementation(
+        () => "0f0e23f5-8a3d-4d2b-923c-8d02b8ef8000",
+      );
+      vi.spyOn(posthog, "get_property").mockImplementation(
+        () => "9a9e23f5-8a3d-4d2b-923c-8d02b8ef8999",
+      );
+      vi.spyOn(posthog, "reset").mockImplementation(() => {
+        calls.push("reset");
+      });
+      vi.spyOn(posthog, "identify").mockImplementation(() => {
+        calls.push("identify");
+      });
+      const { Analytics } = await import("@/lib/analytics");
+
+      Analytics.getInstance().identify(
+        "7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1",
+        "alice@example.com",
+      );
+      // The stale account's identity/session is dropped BEFORE the new
+      // identify so the two accounts' streams cannot blend.
+      expect(calls).toEqual(["reset", "identify"]);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+      vi.resetModules();
+    }
+  });
+
+  it("does not reset when the persisted identity already belongs to the signing-in user", async () => {
+    vi.resetModules();
+    vi.stubEnv("MODE", "development");
+    vi.stubEnv("VITE_POSTHOG_KEY", "phc_test_project_key");
+    try {
+      const posthog = (await import("posthog-js")).default;
+      const calls: string[] = [];
+      vi.spyOn(posthog, "init").mockImplementation(() => posthog);
+      vi.spyOn(posthog, "register").mockImplementation(() => undefined);
+      // Renderer restart: the SDK still holds THIS user's identity.
+      vi.spyOn(posthog, "get_distinct_id").mockImplementation(
+        () => "7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1",
+      );
+      vi.spyOn(posthog, "get_property").mockImplementation(
+        () => "9a9e23f5-8a3d-4d2b-923c-8d02b8ef8999",
+      );
+      vi.spyOn(posthog, "reset").mockImplementation(() => {
+        calls.push("reset");
+      });
+      vi.spyOn(posthog, "identify").mockImplementation(() => {
+        calls.push("identify");
+      });
+      const { Analytics } = await import("@/lib/analytics");
+
+      Analytics.getInstance().identify(
+        "7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1",
+        "alice@example.com",
+      );
+      // No reset: the repeat identify keeps the session and lets the SDK
+      // surface the email refresh as a $set event.
+      expect(calls).toEqual(["identify"]);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+      vi.resetModules();
+    }
+  });
+
+  it("drops events that are not part of the declared contract", async () => {
+    const { sanitizePostHogCaptureResult } = await import("@/lib/analytics");
+
+    expect(
+      sanitizePostHogCaptureResult({
+        event: "$pageview",
+        properties: {
+          token: "phc_test_project_key",
+          distinct_id: "7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1",
+        },
+        uuid: "7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizePostHogCaptureResult({
+        event: "made_up_event",
+        properties: {
+          token: "phc_test_project_key",
+          distinct_id: "7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1",
+        },
+        uuid: "7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1",
+      }),
+    ).toBeNull();
+  });
+
+  describe("notification analytics schema", () => {
+    it("maps count edges through analyticsCountBucket()", async () => {
+      const { analyticsCountBucket } = await import("@/lib/analytics");
+
+      expect(analyticsCountBucket(null)).toBe("unknown");
+      expect(analyticsCountBucket(0)).toBe("0");
+      expect(analyticsCountBucket(1)).toBe("1");
+      expect(analyticsCountBucket(2)).toBe("2-5");
+      expect(analyticsCountBucket(5)).toBe("2-5");
+      expect(analyticsCountBucket(6)).toBe("6-20");
+      expect(analyticsCountBucket(20)).toBe("6-20");
+      expect(analyticsCountBucket(21)).toBe("21+");
+      expect(analyticsCountBucket(100)).toBe("21+");
+    });
+
+    it("accepts every notification event with its exact allowlisted key set", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationCenterOpened, {
+          entry_point: "direct_ui",
+          host_state: "exact",
+          attention_bucket: "2-5",
+          unread_bucket: "6-20",
+        }),
+      ).toEqual({
+        entry_point: "direct_ui",
+        host_state: "exact",
+        attention_bucket: "2-5",
+        unread_bucket: "6-20",
+      });
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationFilterChanged, {
+          filter: "unread_only",
+          enabled: true,
+        }),
+      ).toEqual({ filter: "unread_only", enabled: true });
+      expect(
+        sanitizeAnalyticsProperties(
+          AnalyticsEvent.NotificationActivationCompleted,
+          {
+            category: "task",
+            section: "attention",
+            surface: "center",
+            outcome: "success",
+          },
+        ),
+      ).toEqual({
+        category: "task",
+        section: "attention",
+        surface: "center",
+        outcome: "success",
+      });
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationMarkedRead, {
+          category: "collaboration",
+          acknowledgment_source: "activation",
+        }),
+      ).toEqual({
+        category: "collaboration",
+        acknowledgment_source: "activation",
+      });
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationsMarkedAllRead, {
+          affected_count_bucket: "1",
+        }),
+      ).toEqual({ affected_count_bucket: "1" });
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationPageLoaded, {
+          section: "recent",
+          outcome: "success",
+          result_count_bucket: "2-5",
+          has_more: true,
+        }),
+      ).toEqual({
+        section: "recent",
+        outcome: "success",
+        result_count_bucket: "2-5",
+        has_more: true,
+      });
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationPageLoaded, {
+          section: "attention",
+          outcome: "failure",
+          result_count_bucket: null,
+          has_more: null,
+        }),
+      ).toEqual({
+        section: "attention",
+        outcome: "failure",
+        result_count_bucket: null,
+        has_more: null,
+      });
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationNewRevealed, {
+          count_bucket: "21+",
+        }),
+      ).toEqual({ count_bucket: "21+" });
+    });
+
+    it("accepts every finite enum member on each notification event key", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      for (const entry_point of ["direct_ui", "notification"] as const) {
+        for (const host_state of ["exact", "unknown"] as const) {
+          for (const bucket of [
+            "unknown",
+            "0",
+            "1",
+            "2-5",
+            "6-20",
+            "21+",
+          ] as const) {
+            expect(
+              sanitizeAnalyticsProperties(
+                AnalyticsEvent.NotificationCenterOpened,
+                {
+                  entry_point,
+                  host_state,
+                  attention_bucket: bucket,
+                  unread_bucket: bucket,
+                },
+              ),
+            ).not.toBeNull();
+          }
+        }
+      }
+
+      for (const filter of [
+        "unread_only",
+        "task",
+        "collaboration",
+        "system",
+      ] as const) {
+        for (const enabled of [true, false]) {
+          expect(
+            sanitizeAnalyticsProperties(
+              AnalyticsEvent.NotificationFilterChanged,
+              { filter, enabled },
+            ),
+          ).not.toBeNull();
+        }
+      }
+
+      for (const category of ["task", "collaboration", "system"] as const) {
+        for (const section of ["attention", "recent"] as const) {
+          // `home` is the fourth surface and it is a REGRESSION guard, not a
+          // completeness one: Home's prompt rows go through the same
+          // `activationResultHandler`, and while the validator listed only the
+          // other three the whole event failed here and never reached
+          // `posthog.capture` - invisibly, because the TYPE already allowed it.
+          for (const surface of [
+            "center",
+            "toast",
+            "native",
+            "home",
+          ] as const) {
+            for (const outcome of ["success", "failure"] as const) {
+              expect(
+                sanitizeAnalyticsProperties(
+                  AnalyticsEvent.NotificationActivationCompleted,
+                  { category, section, surface, outcome },
+                ),
+              ).not.toBeNull();
+            }
+          }
+        }
+        for (const acknowledgment_source of [
+          "explicit_action",
+          "activation",
+        ] as const) {
+          expect(
+            sanitizeAnalyticsProperties(AnalyticsEvent.NotificationMarkedRead, {
+              category,
+              acknowledgment_source,
+            }),
+          ).not.toBeNull();
+        }
+      }
+    });
+
+    it("rejects out-of-taxonomy values and missing required keys on every notification event", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationCenterOpened, {
+          entry_point: "command_palette",
+          host_state: "exact",
+          attention_bucket: "0",
+          unread_bucket: "0",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationCenterOpened, {
+          entry_point: "direct_ui",
+          host_state: "partial",
+          attention_bucket: "0",
+          unread_bucket: "0",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationFilterChanged, {
+          filter: "host",
+          enabled: true,
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(
+          AnalyticsEvent.NotificationActivationCompleted,
+          {
+            category: "app-local",
+            section: "attention",
+            surface: "center",
+            outcome: "success",
+          },
+        ),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(
+          AnalyticsEvent.NotificationActivationCompleted,
+          {
+            category: "task",
+            section: "recent",
+            surface: "popover",
+            outcome: "success",
+          },
+        ),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationMarkedRead, {
+          category: "global",
+          acknowledgment_source: "activation",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationMarkedRead, {
+          category: "task",
+          acknowledgment_source: "auto",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationsMarkedAllRead, {
+          affected_count_bucket: "many",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationNewRevealed, {
+          count_bucket: "lots",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationCenterOpened, {
+          entry_point: "direct_ui",
+          host_state: "exact",
+          attention_bucket: "0",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationFilterChanged, {
+          filter: "task",
+        }),
+      ).toBeNull();
+    });
+
+    it("enforces NotificationPageLoaded success/failure relational nullability", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationPageLoaded, {
+          section: "recent",
+          outcome: "success",
+          result_count_bucket: null,
+          has_more: true,
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationPageLoaded, {
+          section: "recent",
+          outcome: "success",
+          result_count_bucket: "2-5",
+          has_more: null,
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationPageLoaded, {
+          section: "attention",
+          outcome: "failure",
+          result_count_bucket: "2-5",
+          has_more: null,
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationPageLoaded, {
+          section: "attention",
+          outcome: "failure",
+          result_count_bucket: null,
+          has_more: false,
+        }),
+      ).toBeNull();
+      // A completed page always carries an exact row count - `unknown` is
+      // reserved for a composite count that genuinely cannot be formed, which
+      // never applies to a finished page fetch.
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationPageLoaded, {
+          section: "recent",
+          outcome: "success",
+          result_count_bucket: "unknown",
+          has_more: false,
+        }),
+      ).toBeNull();
+    });
+
+    it("rejects unknown for notification_new_revealed's count_bucket", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      // The revealed count is always derived from the local arrival set, so
+      // it can never be genuinely unknown the way a host composite count can.
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationNewRevealed, {
+          count_bucket: "unknown",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationNewRevealed, {
+          count_bucket: "1",
+        }),
+      ).toEqual({ count_bucket: "1" });
+    });
+
+    it("accepts analyticsCountBucket edges end-to-end on a notification event", async () => {
+      const {
+        AnalyticsEvent,
+        analyticsCountBucket,
+        sanitizeAnalyticsProperties,
+      } = await import("@/lib/analytics");
+
+      const edges: ReadonlyArray<{
+        readonly input: number | null;
+        readonly bucket: string;
+      }> = [
+        { input: null, bucket: "unknown" },
+        { input: 0, bucket: "0" },
+        { input: 1, bucket: "1" },
+        { input: 2, bucket: "2-5" },
+        { input: 5, bucket: "2-5" },
+        { input: 6, bucket: "6-20" },
+        { input: 20, bucket: "6-20" },
+        { input: 21, bucket: "21+" },
+      ];
+
+      for (const edge of edges) {
+        expect(analyticsCountBucket(edge.input)).toBe(edge.bucket);
+        expect(
+          sanitizeAnalyticsProperties(
+            AnalyticsEvent.NotificationsMarkedAllRead,
+            {
+              affected_count_bucket: analyticsCountBucket(edge.input),
+            },
+          ),
+        ).toEqual({ affected_count_bucket: edge.bucket });
+      }
+    });
+
+    it("rejects notification payloads that only carry forbidden identity/content keys", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      const forbiddenOnly = {
+        notificationId: "n-1",
+        feedId: "host:n-1",
+        hostId: "host-a",
+        deviceLabel: "Anurag's MacBook",
+        title: "Agent finished",
+        body: "Deploy checkout fix completed",
+        route: "/epics/secret/tab",
+        age: 12_000,
+        timestamp: 1_777_768_800_000,
+        unreadCount: 3,
+        attentionCount: 1,
+      };
+
+      const events = [
+        AnalyticsEvent.NotificationCenterOpened,
+        AnalyticsEvent.NotificationFilterChanged,
+        AnalyticsEvent.NotificationActivationCompleted,
+        AnalyticsEvent.NotificationMarkedRead,
+        AnalyticsEvent.NotificationsMarkedAllRead,
+        AnalyticsEvent.NotificationPageLoaded,
+        AnalyticsEvent.NotificationNewRevealed,
+      ] as const;
+
+      for (const event of events) {
+        expect(sanitizeAnalyticsProperties(event, forbiddenOnly)).toBeNull();
+      }
+    });
+
+    it("rejects an otherwise-valid payload carrying one extra forbidden key", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      // Confirms the sanitizer rejects the whole payload rather than
+      // silently stripping the extra key and returning the valid subset.
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationMarkedRead, {
+          category: "task",
+          acknowledgment_source: "activation",
+          feedId: "host:n-1",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationPageLoaded, {
+          section: "recent",
+          outcome: "success",
+          result_count_bucket: "2-5",
+          has_more: true,
+          notificationId: "n-1",
+        }),
+      ).toBeNull();
+    });
+
+    it("rejects raw counts and out-of-bucket values in place of bucket strings", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationCenterOpened, {
+          entry_point: "direct_ui",
+          host_state: "exact",
+          attention_bucket: 3,
+          unread_bucket: "1",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationCenterOpened, {
+          entry_point: "direct_ui",
+          host_state: "exact",
+          attention_bucket: "1",
+          unread_bucket: 7,
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationsMarkedAllRead, {
+          affected_count_bucket: 21,
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationNewRevealed, {
+          count_bucket: 4,
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationPageLoaded, {
+          section: "recent",
+          outcome: "success",
+          result_count_bucket: 50,
+          has_more: true,
+        }),
+      ).toBeNull();
+    });
+
+    it("rejects every notification event when an allowed key is missing even if forbidden keys are present", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationCenterOpened, {
+          entry_point: "direct_ui",
+          host_state: "exact",
+          attention_bucket: "0",
+          notificationId: "n-1",
+          title: "secret",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(
+          AnalyticsEvent.NotificationActivationCompleted,
+          {
+            category: "task",
+            section: "recent",
+            surface: "center",
+            feedId: "host:n-1",
+            route: "/epics/x/y",
+          },
+        ),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationMarkedRead, {
+          category: "system",
+          hostId: "host-a",
+          body: "detail",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.NotificationPageLoaded, {
+          section: "recent",
+          outcome: "success",
+          has_more: true,
+          notificationId: "page-1",
+        }),
+      ).toBeNull();
+    });
+  });
+
+  describe("draft analytics schema", () => {
+    it("accepts every draft event with its exact allowlisted key set", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+          surface: "start_page",
+          entry_point: "button",
+          draft_count: "1",
+        }),
+      ).toEqual({
+        surface: "start_page",
+        entry_point: "button",
+        draft_count: "1",
+      });
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftOpened, {
+          surface: "avatar_menu",
+          draft_kind: "chat",
+          input: "pointer",
+          already_open: false,
+          draft_age: "under_1h",
+          used_search: true,
+        }),
+      ).toEqual({
+        surface: "avatar_menu",
+        draft_kind: "chat",
+        input: "pointer",
+        already_open: false,
+        draft_age: "under_1h",
+        used_search: true,
+      });
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsFilterChanged, {
+          surface: "avatar_menu",
+          this_task: null,
+          other_tasks: true,
+          start_pages: false,
+        }),
+      ).toEqual({
+        surface: "avatar_menu",
+        this_task: null,
+        other_tasks: true,
+        start_pages: false,
+      });
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftCopied, {
+          surface: "start_page",
+          draft_kind: "new_agent",
+          input: "keyboard",
+        }),
+      ).toEqual({
+        surface: "start_page",
+        draft_kind: "new_agent",
+        input: "keyboard",
+      });
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftDeleted, {
+          surface: "avatar_menu",
+          draft_kind: "start_page",
+          input: "pointer",
+          undo_offered: true,
+          draft_age: "over_7d",
+        }),
+      ).toEqual({
+        surface: "avatar_menu",
+        draft_kind: "start_page",
+        input: "pointer",
+        undo_offered: true,
+        draft_age: "over_7d",
+      });
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftDeleteUndone, {
+          surface: "start_page",
+          draft_kind: "chat",
+        }),
+      ).toEqual({ surface: "start_page", draft_kind: "chat" });
+    });
+
+    // H13: the avatar dialog opens from the menu item and the palette only.
+    it("accepts drafts_list_opened from the avatar menu at each of its entry points", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      for (const entry_point of ["menu", "palette"] as const) {
+        expect(
+          sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+            surface: "avatar_menu",
+            entry_point,
+            draft_count: "0",
+          }),
+        ).toEqual({
+          surface: "avatar_menu",
+          entry_point,
+          draft_count: "0",
+        });
+      }
+    });
+
+    it("rejects drafts_list_opened surface and entry_point pairs the UI cannot emit", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+          surface: "avatar_menu",
+          entry_point: "shortcut",
+          draft_count: "0",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+          surface: "avatar_menu",
+          entry_point: "button",
+          draft_count: "1",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+          surface: "start_page",
+          entry_point: "menu",
+          draft_count: "1",
+        }),
+      ).toBeNull();
+    });
+
+    it("rejects an out-of-set value for each draft event's enum keys", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      // `chat` is a valid `surface` value on OTHER events, not on a draft one.
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+          surface: "chat",
+          entry_point: "button",
+          draft_count: "1",
+        }),
+      ).toBeNull();
+      // `page` was Home's entry point before H09-H12 retired it; it is not a
+      // member of `AnalyticsDraftEntryPoint` any more.
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+          surface: "start_page",
+          entry_point: "page",
+          draft_count: "1",
+        }),
+      ).toBeNull();
+      // `home` was the surface before H09-H12 moved Drafts to the avatar
+      // menu; it is not a member of `AnalyticsDraftSurface` any more.
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+          surface: "home",
+          entry_point: "menu",
+          draft_count: "1",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftOpened, {
+          surface: "start_page",
+          draft_kind: "epic",
+          input: "pointer",
+          already_open: false,
+          draft_age: "under_1h",
+          used_search: false,
+        }),
+      ).toBeNull();
+      // `null` is only meaningful for the filter's `this_task`; a search flag
+      // is always a real boolean, and the search text has no key at all.
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftOpened, {
+          surface: "avatar_menu",
+          draft_kind: "chat",
+          input: "pointer",
+          already_open: false,
+          draft_age: "under_1h",
+          used_search: null,
+        }),
+      ).toBeNull();
+      // The filter lives only in the avatar dialog.
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsFilterChanged, {
+          surface: "start_page",
+          this_task: true,
+          other_tasks: true,
+          start_pages: true,
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsFilterChanged, {
+          surface: "avatar_menu",
+          this_task: null,
+          other_tasks: null,
+          start_pages: true,
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsFilterChanged, {
+          surface: "avatar_menu",
+          this_task: true,
+          other_tasks: true,
+          start_pages: true,
+          query: "secret",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftCopied, {
+          surface: "start_page",
+          draft_kind: "chat",
+          input: "mouse",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftDeleted, {
+          surface: "start_page",
+          draft_kind: "chat",
+          input: "pointer",
+          undo_offered: true,
+          draft_age: "last_week",
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftDeleteUndone, {
+          surface: "everywhere",
+          draft_kind: "chat",
+        }),
+      ).toBeNull();
+    });
+
+    it("rejects a draft count or boolean sent as the wrong type", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftsListOpened, {
+          surface: "start_page",
+          entry_point: "button",
+          draft_count: 1,
+        }),
+      ).toBeNull();
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftOpened, {
+          surface: "start_page",
+          draft_kind: "chat",
+          input: "pointer",
+          already_open: "false",
+          draft_age: "under_1h",
+          used_search: false,
+        }),
+      ).toBeNull();
+    });
+
+    // The rule: never draft text, titles, task/chat names, ids,
+    // host ids or paths. A payload carrying only those must fail closed.
+    it("rejects a draft event payload carrying only what must never be sent", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      const forbiddenOnly = {
+        draftText: "fix the parser",
+        draftTitle: "Ship the release notes",
+        chatName: "Sibling chat",
+        taskName: "Payments",
+        draftId: "draft-1",
+        hostId: "host-a",
+        path: "/tmp/CODE_OF_CONDUCT.md",
+      };
+
+      const events = [
+        AnalyticsEvent.DraftsListOpened,
+        AnalyticsEvent.DraftOpened,
+        AnalyticsEvent.DraftsFilterChanged,
+        AnalyticsEvent.DraftCopied,
+        AnalyticsEvent.DraftDeleted,
+        AnalyticsEvent.DraftDeleteUndone,
+      ] as const;
+
+      for (const event of events) {
+        expect(sanitizeAnalyticsProperties(event, forbiddenOnly)).toBeNull();
+      }
+    });
+
+    it("rejects every draft event with one extra forbidden key", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      const fixtures = [
+        [
+          AnalyticsEvent.DraftsListOpened,
+          {
+            surface: "start_page",
+            entry_point: "button",
+            draft_count: "0",
+            draftId: "draft-1",
+          },
+        ],
+        [
+          AnalyticsEvent.DraftOpened,
+          {
+            surface: "avatar_menu",
+            draft_kind: "chat",
+            input: "pointer",
+            already_open: false,
+            draft_age: "under_1h",
+            used_search: true,
+            draftId: "draft-1",
+          },
+        ],
+        [
+          AnalyticsEvent.DraftsFilterChanged,
+          {
+            surface: "avatar_menu",
+            this_task: null,
+            other_tasks: true,
+            start_pages: false,
+            draftId: "draft-1",
+          },
+        ],
+        [
+          AnalyticsEvent.DraftCopied,
+          {
+            surface: "start_page",
+            draft_kind: "new_agent",
+            input: "keyboard",
+            draftId: "draft-1",
+          },
+        ],
+        [
+          AnalyticsEvent.DraftDeleted,
+          {
+            surface: "avatar_menu",
+            draft_kind: "start_page",
+            input: "pointer",
+            undo_offered: true,
+            draft_age: "over_7d",
+            draftId: "draft-1",
+          },
+        ],
+        [
+          AnalyticsEvent.DraftDeleteUndone,
+          {
+            surface: "start_page",
+            draft_kind: "chat",
+            draftId: "draft-1",
+          },
+        ],
+      ] as const;
+
+      for (const [event, properties] of fixtures) {
+        expect(sanitizeAnalyticsProperties(event, properties)).toBeNull();
+      }
+    });
+
+    it("rejects a draft event missing one of its required keys", async () => {
+      const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+        await import("@/lib/analytics");
+
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.DraftOpened, {
+          surface: "avatar_menu",
+          draft_kind: "chat",
+          input: "pointer",
+          draft_age: "under_1h",
+          used_search: true,
+          // `already_open` omitted.
+        }),
+      ).toBeNull();
+    });
+  });
+});
+
+describe("app surface and platform globals", () => {
+  afterEach(async () => {
+    const { setMobileApp } = await import("@/lib/mobile-app");
+    setMobileApp(false);
+  });
+
+  it("reports desktop off the mobile app and mobile on it", async () => {
+    const { analyticsAppSurface } = await import("@/lib/analytics");
+    const { setMobileApp } = await import("@/lib/mobile-app");
+    expect(analyticsAppSurface()).toBe("desktop");
+    setMobileApp(true);
+    expect(analyticsAppSurface()).toBe("mobile");
+  });
+
+  it("names the mobile OS from the user agent on the mobile app", async () => {
+    const { analyticsPlatform } = await import("@/lib/analytics");
+    const { setMobileApp } = await import("@/lib/mobile-app");
+    setMobileApp(true);
+    try {
+      Object.defineProperty(navigator, "userAgent", {
+        configurable: true,
+        value:
+          "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15",
+      });
+      expect(analyticsPlatform()).toBe("ios");
+      Object.defineProperty(navigator, "userAgent", {
+        configurable: true,
+        value: "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36",
+      });
+      expect(analyticsPlatform()).toBe("android");
+    } finally {
+      // The stub is an OWN property shadowing the prototype accessor, so
+      // deleting it restores the real user agent.
+      Reflect.deleteProperty(navigator, "userAgent");
+    }
+  });
+});
+
+describe("app-surface pass-through in the outbound sanitizer", () => {
+  function capture(overrides: Record<string, unknown>): {
+    uuid: string;
+    event: string;
+    properties: Record<string, unknown>;
+  } {
+    return {
+      uuid: "5a3c2d1e-0f1b-4c2d-8e3f-9a8b7c6d5e4f",
+      event: "chat_message_sent",
+      properties: {
+        token: "phc_test_project_key",
+        distinct_id: "7b6e23f5-8a3d-4d2b-923c-8d02b8ef80d1",
+        app: "gui-app",
+        app_surface: "desktop",
+        app_version: "1.2.3",
+        platform: "macos",
+        release_channel: "production",
+        harness: "codex",
+        ...overrides,
+      },
+    };
+  }
+
+  it("passes mobile surface and OS through instead of dropping the event", async () => {
+    // The regression this pins: the globals allowlist rebuilds outbound
+    // properties and returns null - dropping the WHOLE event - on any value
+    // outside its sets. Before app_surface/ios/android were admitted, every
+    // event from the installed mobile app would have vanished silently.
+    const { sanitizePostHogCaptureResult } = await import("@/lib/analytics");
+    const sanitized = sanitizePostHogCaptureResult(
+      capture({ app_surface: "mobile", platform: "ios" }),
+    );
+    expect(sanitized?.properties).toMatchObject({
+      app_surface: "mobile",
+      platform: "ios",
+    });
+  });
+
+  it("drops an event whose surface global is missing or out of vocabulary", async () => {
+    const { sanitizePostHogCaptureResult } = await import("@/lib/analytics");
+    expect(
+      sanitizePostHogCaptureResult(capture({ app_surface: undefined })),
+    ).toBeNull();
+    expect(
+      sanitizePostHogCaptureResult(capture({ app_surface: "toaster" })),
+    ).toBeNull();
+  });
+});
+
+describe("Layout page settings analytics", () => {
+  it("accepts the layout section id in the runtime settings-section allowlist", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.SettingsOpened, {
+        source: "direct_ui",
+        section: "layout",
+      }),
+    ).toEqual({ source: "direct_ui", section: "layout" });
+  });
+
+  // Home reported two Layout rows and reports neither now: the view switch
+  // went with the flat reading, and the density segment went because the two
+  // spacings were barely distinguishable (user ruling, 2026-09-12). Nothing
+  // can emit either id - but the runtime allowlist is what a stray emit would
+  // be checked against, so it has to stop ACCEPTING them rather than merely
+  // stop being called. An unallowlisted setting id drops the whole event
+  // rather than the one property.
+  //
+  // The `layout.statusBar.*`, `layout.sidebar.*`, `layout.composer.*` and
+  // `layout.preset.*` ids join the list here for the same reason (L-46, L-54):
+  // Layout fires no per-control `setting_changed` at all now that
+  // `layout_snapshot` reports it (`trackLayoutSetting` and every one of these
+  // ids were deleted with the old visual editor's analytics).
+  //
+  // The five camelCase ids at the top are the LAST emitters of that shape to
+  // go. They were the old Layout page's relocated rows, and when the page
+  // went there was nothing left to fire them - a vocabulary the sanitizer
+  // still accepted and no site could produce. Deleting them from
+  // `AnalyticsSetting` is what makes a future emit a compile error; this is
+  // the runtime half.
+  it.each([
+    "chatTurnMinimapSide",
+    "homeTabEnabled",
+    "pinContextUsageBreakdown",
+    "showGlobalResourceMonitor",
+    "showNavigatorResourceStats",
+    "layout.home.density",
+    "layout.home.view",
+    "layout.preset.compact",
+    "layout.preset.default",
+    "layout.preset.detailed",
+    "layout.sidebar.panelOrder",
+    "layout.sidebar.panelVisibility",
+    "layout.sidebar.resetOrder",
+    "layout.sidebar.resetVisibility",
+    "layout.sidebar.resourceMetrics",
+    "layout.statusBar.placement",
+    "layout.statusBar.mobileFooter",
+    "layout.statusBar.rateLimits.enabled",
+    "layout.statusBar.rateLimits.percentMode",
+    "layout.statusBar.rateLimits.provider",
+    "layout.statusBar.rateLimits.providerAutomatic",
+    "layout.statusBar.rateLimits.providerLimits",
+    "layout.statusBar.rateLimits.showBar",
+    "layout.statusBar.rateLimits.showModeWord",
+    "layout.statusBar.rateLimits.showTimer",
+    "layout.statusBar.shownProfiles",
+    "layout.statusBar.resources.enabled",
+    "layout.statusBar.resources.metric",
+    "layout.statusBar.resources.scope",
+    "layout.statusBar.segmentOrder",
+    "layout.statusBar.resourceSide",
+    "layout.composer.filesChanged",
+    "layout.composer.activeAgents",
+    "layout.composer.background",
+    "layout.composer.attachImage",
+    "layout.composer.access",
+    "layout.composer.mic",
+    "layout.composer.compactButton",
+    "layout.composer.reasoningIndicator",
+    "layout.composer.reasoningFooterControl",
+    "layout.composer.toolbarOrder",
+    "layout.composer.dockOrder",
+  ])("has dropped %s from the runtime allowlist", async (setting) => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
+        source: "direct_ui",
+        section: "layout",
+        setting,
+      }),
+    ).toBeNull();
+  });
+
+  it("accepts the general-section setting ids that the runtime allowlist used to omit", async () => {
+    // These three sat in the `AnalyticsSetting` union with no entry in the
+    // runtime allowlist, exactly as `chatTurnMinimapSide` did, so the sanitizer
+    // dropped every one of their events - `general-settings-panel.tsx` emits
+    // `steerOnModEnterEnabled` on each toggle. Building the allowlist from a
+    // `satisfies Record<AnalyticsSetting, true>` is what forced them in and
+    // makes the next omission a compile error; this asserts the runtime half
+    // that a type cannot.
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    const previouslyMissing = [
+      "steerOnModEnterEnabled",
+      "summonHotkeyChord",
+      "summonHotkeyEnabled",
+    ] as const;
+
+    for (const setting of previouslyMissing) {
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
+          source: "direct_ui",
+          section: "general",
+          setting,
+        }),
+      ).toEqual({ source: "direct_ui", section: "general", setting });
+    }
+  });
+});
+
+describe("host lifecycle analytics schema", () => {
+  it("accepts host_lifecycle_mode_set with every mode/source combination", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    const modes = [
+      "background",
+      "ask",
+      "stop-if-idle",
+      "linked",
+      "none",
+    ] as const;
+    const sources = ["settings", "quit-modal", "no-host-card", "cli"] as const;
+
+    for (const mode of modes) {
+      for (const source of sources) {
+        expect(
+          sanitizeAnalyticsProperties(AnalyticsEvent.HostLifecycleModeSet, {
+            mode,
+            source,
+          }),
+        ).toEqual({ mode, source });
+      }
+    }
+  });
+
+  it("rejects host_lifecycle_mode_set with an extra key", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostLifecycleModeSet, {
+        mode: "background",
+        source: "settings",
+        hostId: "host-1",
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects host_lifecycle_mode_set with an out-of-taxonomy mode or source", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostLifecycleModeSet, {
+        mode: "always-on",
+        source: "settings",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostLifecycleModeSet, {
+        mode: "background",
+        source: "tray",
+      }),
+    ).toBeNull();
+  });
+
+  it("accepts host_quit_decision with every verdict/choice combination", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    const modes = ["ask", "stop-if-idle"] as const;
+    const verdicts = ["idle", "busy", "unknown"] as const;
+    const choices = ["keep", "stop", "cancel"] as const;
+
+    for (const mode of modes) {
+      for (const verdict of verdicts) {
+        for (const choice of choices) {
+          expect(
+            sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+              mode,
+              verdict,
+              choice,
+              forced: choice === "stop",
+              remembered: false,
+            }),
+          ).toEqual({
+            mode,
+            verdict,
+            choice,
+            forced: choice === "stop",
+            remembered: false,
+          });
+        }
+      }
+    }
+  });
+
+  it("rejects host_quit_decision with an extra key", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "ask",
+        verdict: "busy",
+        choice: "stop",
+        forced: true,
+        remembered: false,
+        requestId: "req-1",
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects host_quit_decision with an invalid mode or verdict", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "always-ask",
+        verdict: "busy",
+        choice: "stop",
+        forced: true,
+        remembered: false,
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "ask",
+        verdict: "checking",
+        choice: "stop",
+        forced: true,
+        remembered: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects host_quit_decision with an invalid choice", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "ask",
+        verdict: "busy",
+        choice: "force-stop",
+        forced: true,
+        remembered: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects host_quit_decision with forced/remembered sent as non-booleans", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.HostQuitDecision, {
+        mode: "ask",
+        verdict: "busy",
+        choice: "stop",
+        forced: "true",
+        remembered: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps the runtime event contract complete after adding both events", async () => {
+    const { analyticsEventContractIsComplete } =
+      await import("@/lib/analytics");
+
+    expect(analyticsEventContractIsComplete()).toBe(true);
+  });
+});

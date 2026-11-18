@@ -1,0 +1,1014 @@
+/**
+ * The lane arm completes an OPEN CYCLE: content becomes readable, and a write
+ * is delivered.
+ *
+ * ## Why this suite exists
+ *
+ * The lane arm had five suites and no integration coverage. Every one of them
+ * proved a SUB-SYSTEM - body availability projection, arm selection, body seed
+ * timing, byte parity across arms - and not one drove a lane session to the
+ * point where a user could read the epic or change it. Meanwhile every suite
+ * that DID assert `snapshotLoaded`, and the one that asserted write DELIVERY,
+ * opened with `laneSelection: null`: the legacy arm.
+ *
+ * That is not a gap in any single test. It is the shape of a two-arm system:
+ * equivalence suites read as covering both arms, the fixture default picks one,
+ * and the other arm's whole-cycle behaviour is unproven no matter how green the
+ * tree is. Four defects lived there at once - two of them here.
+ *
+ * ## What it pins, and why these two assertions specifically
+ *
+ * On the legacy arm both facts are established by ONE function,
+ * `applyRootSnapshot`: it calls `control.adoptSnapshotRole` (the only writer of
+ * `hasFreshRootSnapshotForOpenCycle`, which the write gate reads) and
+ * `records.publishSnapshotLanded` (the only writer of `snapshotLoaded`). The
+ * lane arm reaches neither - its frames land through `applyLaneState` and
+ * `control.apply` - so both facts were false for the life of a lane session:
+ * the UI sat behind loading skeletons and every write was refused before
+ * dispatch.
+ *
+ * DELIVERY, not enqueue, is the second assertion, because the queue answers
+ * enqueue locally, before the gate. `write-command-delivery.test.ts` exists
+ * because that distinction already hid this exact class of defect once; it
+ * closed the hole for the arm it opened with, and the other arm reopened it.
+ */
+import { describe, expect, it } from "vitest";
+import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
+import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
+import {
+  EPIC_STATUS_SUBSCRIBE_METHOD,
+  EpicStatusStreamClient,
+  type EpicStatusSnapshotFrame,
+} from "@traycer-clients/shared/host-transport/epic-status-stream-client";
+import type { EpicStateSnapshotFrame } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
+import type {
+  ArtifactStreamClientFactory,
+  EpicStateStreamClientFactory,
+  EpicStatusStreamClientFactory,
+} from "@traycer-clients/shared/epic-lanes";
+import type { EpicStateStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
+import type { EpicStatusStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
+import type { IStreamClient } from "@traycer-clients/shared/host-transport/i-stream-client";
+import {
+  LogicalStream,
+  type LogicalStreamPort,
+} from "@traycer-clients/shared/host-transport/remote/logical-stream";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import { QosClass } from "@traycer/protocol/host-transport/mux";
+import type { EarlyMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import type { EpicMigrationStatus } from "@traycer/protocol/host/epic/status-subscribe";
+import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
+import type {
+  EpicLaneSelectionSources,
+  EpicLaneUnaries,
+} from "../runtime/epic-replica-runtime";
+import type { EpicWriteCommandIntent } from "../runtime/epic-write-command";
+import {
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "../test-support/open-store-for-test";
+import { absentLaneUnaries } from "../test-support/absent-lane-unaries";
+
+const EPIC_ID = "epic-lane-open-cycle";
+const EPOCH = "authority-epoch-1";
+const ANSWERING_HOST = "host-that-answered";
+
+interface LaneRigOptions {
+  /**
+   * The two lane unaries. EXPLICIT with no default, exactly as
+   * `openStoreForTest`'s `writeCommand` is: a default would hide which of
+   * these tests depends on a unary, and the whole subject here is a pair of
+   * transports that were never reached.
+   */
+  readonly unaries: EpicLaneUnaries;
+  /** What the status snapshot says about a major migration. */
+  readonly migration: EpicMigrationStatus | null;
+  /**
+   * The role the status snapshot establishes. Defaults to `"editor"` (the
+   * pre-existing suites' fixed value) so every call site above is unaffected;
+   * a suite pinning the displayed-vs-write-gate role split needs a specific
+   * value (e.g. `"owner"`) rather than this default.
+   */
+  readonly statusRole?: PermissionRole;
+  /**
+   * Replaces the rig's callback-capturing status lane with a caller-built one.
+   * Optional, like `statusRole`, so every existing call site is unaffected. A
+   * suite that passes it drives the status lane through its own transport and
+   * opens only the records lane here, with `openStateLane`.
+   */
+  readonly statusStreamClientFactory?: EpicStatusStreamClientFactory;
+}
+
+interface LaneRig {
+  readonly handle: OpenedStoreForTest;
+  readonly received: { commandId: string; intent: EpicWriteCommandIntent }[];
+  readonly openLanes: () => void;
+  /** The records lane's half of `openLanes`, for a suite that owns the status lane. */
+  readonly openStateLane: () => void;
+  /**
+   * A transport drop and return on the CONTROL lane - the policy's named
+   * `reconnect` trigger. Only a return to `open` after the transport had left
+   * it counts, so both halves are driven.
+   */
+  readonly reconnectControlLane: () => void;
+  readonly holdControlLane: () => void;
+  readonly continueControlLane: () => void;
+  /**
+   * A transport drop and return on the RECORDS lane ALONE - the
+   * `ownsControlCycle: false` half of the same event, never touching the
+   * status lane. Mirrors `reconnectControlLane` on the other lane.
+   */
+  readonly reconnectStateLane: () => void;
+  /**
+   * A `migrationProgress` transition on the status lane - the host reporting
+   * on a migration it has actually taken up. Needed to tell "the retry was
+   * refused and nothing happened" from "the retry landed and the host is
+   * mid-migration", which is the whole distinction the retry token draws.
+   */
+  readonly emitMigrationProgress: (progress: {
+    readonly phase: "prepare" | "upload" | "finalize";
+    readonly chunksDone: number;
+    readonly chunksTotal: number;
+  }) => void;
+  /** A `permissionChanged` transition on the status (control) lane. */
+  readonly emitPermissionChanged: (role: PermissionRole | null) => void;
+  /** A second/later status SNAPSHOT on an already-open control lane. */
+  readonly emitStatusSnapshot: (role: PermissionRole) => void;
+}
+
+function statusSnapshot(
+  migration: EpicMigrationStatus | null,
+  // Required, no default: callers pass it explicitly (repo ESLint bans
+  // default parameters). Most suites here pass "editor" - about the
+  // freshness arm of the write gate, not the permission arm, and a viewer
+  // role would refuse the write for the other reason and pass for the wrong
+  // one.
+  role: PermissionRole,
+  securityEpoch: number,
+): EpicStatusSnapshotFrame {
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    authorityEpoch: EPOCH,
+    securityEpoch,
+    permissionRole: role,
+    cloudSyncStatus: "connected",
+    dirty: false,
+    migration,
+    deletion: { state: "none" },
+  });
+  if (parsed.kind !== "snapshot") {
+    throw new Error(`expected a status snapshot, got ${parsed.kind}`);
+  }
+  return parsed;
+}
+
+function stateSnapshot(): EpicStateSnapshotFrame {
+  const parsed = epicStateSubscribeServerFrameSchemaV11.parse({
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    authorityEpoch: EPOCH,
+    basis: "cold",
+    position: 1,
+    reconciledWithCloud: true,
+    artifactRecords: [],
+    deletedArtifacts: [],
+    commentThreads: [],
+    roleClaims: { revision: 1, claims: [] },
+    epicMeta: {
+      revision: 1,
+      meta: { title: "Lane epic", updatedAt: 1000 },
+    },
+  });
+  if (parsed.kind !== "snapshot") {
+    throw new Error(`expected a state snapshot, got ${parsed.kind}`);
+  }
+  return parsed;
+}
+
+function openLaneRig(options: LaneRigOptions): LaneRig {
+  let statusCallbacks: EpicStatusStreamCallbacks | null = null;
+  let stateCallbacks: EpicStateStreamCallbacks | null = null;
+  const received: { commandId: string; intent: EpicWriteCommandIntent }[] = [];
+  // Keep revocation and regrant epochs ahead of the initial snapshot.
+  let currentSecurityEpoch = 1;
+
+  const statusFactory: EpicStatusStreamClientFactory =
+    options.statusStreamClientFactory ??
+    ((_epicId, callbacks) => {
+      statusCallbacks = callbacks;
+      return { close: () => undefined };
+    });
+  const stateFactory: EpicStateStreamClientFactory = (_epicId, callbacks) => {
+    stateCallbacks = callbacks;
+    return { close: () => undefined };
+  };
+  const artifactFactory: ArtifactStreamClientFactory = () => ({
+    applyUpdate: () => undefined,
+    awareness: () => undefined,
+    close: () => undefined,
+  });
+
+  const laneSelection: EpicLaneSelectionSources = {
+    // Declared support rather than the probe's outcome: this suite is about
+    // what the lane arm DOES once installed, not about how it gets chosen -
+    // `lane-adapter-probe.test.ts` owns that question.
+    support: () => "supported",
+    subscribeSupport: () => () => {},
+    unaries: options.unaries,
+    stateStreamClientFactory: stateFactory,
+    statusStreamClientFactory: statusFactory,
+    artifactStreamClientFactory: artifactFactory,
+  };
+
+  const handle = openStoreForTest({
+    epicId: EPIC_ID,
+    userId: null,
+    factories: {
+      streamClientFactory: () => {
+        throw new Error(
+          "the legacy stream must not open: this suite is the LANE arm",
+        );
+      },
+      laneSelection,
+    },
+    // Recording rather than dispatching, exactly as the legacy delivery suite
+    // does: the question is whether the command arrives, not what the
+    // dispatcher maps it to.
+    writeCommand: (commandId, intent) => {
+      received.push({ commandId, intent });
+      return Promise.resolve({ hostId: ANSWERING_HOST });
+    },
+  });
+
+  function openLanes(): void {
+    if (statusCallbacks === null || stateCallbacks === null) {
+      throw new Error("the lane factories were not invoked");
+    }
+    // Transport BEFORE the snapshots, for the reason the legacy delivery suite
+    // documents: the control replica clears the open-cycle freshness on every
+    // transport-status transition, so opening afterwards would wipe what the
+    // snapshot established and this suite would fail for the wrong reason.
+    statusCallbacks.onConnectionStatus("open", null, null, null);
+    stateCallbacks.onConnectionStatus("open", null, null, null);
+    statusCallbacks.onSnapshot(
+      // `statusRole` is optional on `LaneRigOptions` (defaults the pre-existing
+      // suites did not have to change); the fallback moves here since
+      // `statusSnapshot` itself may not default its own parameter. The
+      // initial snapshot establishes the rig's starting epoch (1) without
+      // advancing it.
+      statusSnapshot(
+        options.migration,
+        options.statusRole ?? "editor",
+        currentSecurityEpoch,
+      ),
+      true,
+    );
+    stateCallbacks.onSnapshot(stateSnapshot());
+  }
+
+  function openStateLane(): void {
+    if (stateCallbacks === null) {
+      throw new Error("the state lane factory was not invoked");
+    }
+    stateCallbacks.onConnectionStatus("open", null, null, null);
+    stateCallbacks.onSnapshot(stateSnapshot());
+  }
+
+  /**
+   * A second (or later) status SNAPSHOT on an already-open control lane - a
+   * restated/regranted answer, as the protocol allows at any point, not only
+   * at attach. Reuses `statusSnapshot()`, so the real adapter maps it to both
+   * `control-snapshot` AND a `permission-changed` restatement, exactly as
+   * `openLanes()`'s own status half does.
+   */
+  function emitStatusSnapshot(role: PermissionRole): void {
+    if (statusCallbacks === null) {
+      throw new Error("the status lane factory was not invoked");
+    }
+    // This helper models a regrant learned after the preceding status frame.
+    currentSecurityEpoch += 1;
+    statusCallbacks.onSnapshot(
+      statusSnapshot(options.migration, role, currentSecurityEpoch),
+      true,
+    );
+  }
+
+  function reconnectControlLane(): void {
+    if (statusCallbacks === null) {
+      throw new Error("the status lane factory was not invoked");
+    }
+    statusCallbacks.onConnectionStatus("reconnecting", null, null, null);
+    statusCallbacks.onConnectionStatus("open", null, null, null);
+  }
+
+  function holdControlLane(): void {
+    if (statusCallbacks === null) {
+      throw new Error("the status lane factory was not invoked");
+    }
+    statusCallbacks.onConnectionStatus("reconnecting", null, null, "held");
+  }
+
+  function continueControlLane(): void {
+    if (statusCallbacks === null) {
+      throw new Error("the status lane factory was not invoked");
+    }
+    statusCallbacks.onConnectionStatus("open", null, null, "continued");
+  }
+
+  function reconnectStateLane(): void {
+    if (stateCallbacks === null) {
+      throw new Error("the state lane factory was not invoked");
+    }
+    stateCallbacks.onConnectionStatus("reconnecting", null, null, null);
+    stateCallbacks.onConnectionStatus("open", null, null, null);
+  }
+
+  function emitMigrationProgress(progress: {
+    readonly phase: "prepare" | "upload" | "finalize";
+    readonly chunksDone: number;
+    readonly chunksTotal: number;
+  }): void {
+    if (statusCallbacks === null) {
+      throw new Error("the status lane factory was not invoked");
+    }
+    const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
+      kind: "migrationProgress",
+      hasBinaryPayload: false,
+      authorityEpoch: EPOCH,
+      securityEpoch: currentSecurityEpoch,
+      ...progress,
+    });
+    // Narrowed POSITIVELY. Excluding `snapshot` still leaves `ping`/`pong`,
+    // which the parsed union carries and `onTransition` does not accept.
+    if (parsed.kind !== "migrationProgress") {
+      throw new Error(`expected a migrationProgress frame, got ${parsed.kind}`);
+    }
+    statusCallbacks.onTransition(parsed, true);
+  }
+
+  function emitPermissionChanged(role: PermissionRole | null): void {
+    if (statusCallbacks === null) {
+      throw new Error("the status lane factory was not invoked");
+    }
+    currentSecurityEpoch += 1;
+    const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
+      kind: "permissionChanged",
+      hasBinaryPayload: false,
+      authorityEpoch: EPOCH,
+      securityEpoch: currentSecurityEpoch,
+      permissionRole: role,
+    });
+    if (parsed.kind !== "permissionChanged") {
+      throw new Error(`expected a permissionChanged frame, got ${parsed.kind}`);
+    }
+    statusCallbacks.onTransition(parsed, true);
+  }
+
+  return {
+    handle,
+    received,
+    openLanes,
+    openStateLane,
+    reconnectControlLane,
+    holdControlLane,
+    continueControlLane,
+    reconnectStateLane,
+    emitMigrationProgress,
+    emitPermissionChanged,
+    emitStatusSnapshot,
+  };
+}
+
+async function settle(handle: OpenedStoreForTest): Promise<void> {
+  // Three drains, named rather than looped, for the same reason the legacy
+  // delivery suite names them: the command crosses to the worker queue, the
+  // send crosses back for `main/write-command`, and the answer crosses again
+  // to resolve the record.
+  await handle.flush();
+  await handle.flush();
+  await handle.flush();
+}
+
+describe("a lane-selected session completes an open cycle", () => {
+  it("reports the lead snapshot as LOADED, so the UI leaves its skeletons", async () => {
+    // ABSENT unaries on purpose. Neither assertion in this block depends on a
+    // workspace context, and the rejecting default proves it: the refresh
+    // policy fires its tab-open read on attach, that read fails, and both
+    // facts below still land. A resolving stub would have made these two
+    // assertions depend on a payload they have nothing to do with.
+    const rig = openLaneRig({ unaries: absentLaneUnaries(), migration: null });
+    rig.openLanes();
+    await settle(rig.handle);
+
+    expect(rig.handle.store.getState().snapshotLoaded).toBe(true);
+
+    rig.handle.dispose();
+  });
+
+  it("DELIVERS a write command, rather than refusing it before dispatch", async () => {
+    // ABSENT unaries on purpose. Neither assertion in this block depends on a
+    // workspace context, and the rejecting default proves it: the refresh
+    // policy fires its tab-open read on attach, that read fails, and both
+    // facts below still land. A resolving stub would have made these two
+    // assertions depend on a payload they have nothing to do with.
+    const rig = openLaneRig({ unaries: absentLaneUnaries(), migration: null });
+    rig.openLanes();
+    await settle(rig.handle);
+
+    const commandId = await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "Renamed on the lane arm",
+      updatedAt: 2000,
+    });
+    expect(commandId).not.toBeNull();
+    await settle(rig.handle);
+
+    // The leg the lane arm never proved. Under the unfixed tree this list is
+    // empty: `hasFreshRootSnapshotForOpenCycle` is false for the session's
+    // life, so the queue's send gate throws
+    // `EpicWriteCommandTransportUnavailableError` before `send` runs.
+    expect(rig.received).toHaveLength(1);
+    expect(rig.received[0].commandId).toBe(commandId);
+    expect(rig.received[0].intent).toEqual({
+      kind: "update-epic-title",
+      title: "Renamed on the lane arm",
+      updatedAt: 2000,
+    });
+
+    rig.handle.dispose();
+  });
+});
+
+const STATUS_LANE_VERSION: SchemaVersion = { major: 1, minor: 1 };
+
+/**
+ * The status lane as a REMOTE host serves it: the production
+ * `EpicStatusStreamClient` over the production `LogicalStream`.
+ *
+ * Every other block here reports `open` by hand, before the snapshot - the
+ * order `openLanes` documents as the one that does not wipe the snapshot's
+ * freshness. That is the local session's order, and nothing drove the remote
+ * one. A `LogicalStream` has no subscribe ack: its first frame is what opens
+ * it, so the stream itself decides which of `open` and that frame its consumer
+ * hears first.
+ */
+function relayStatusLane(): {
+  readonly factory: EpicStatusStreamClientFactory;
+  readonly stream: LogicalStream;
+} {
+  const port: LogicalStreamPort = {
+    sendStreamFrame: () => undefined,
+    closeStream: () => undefined,
+    requestSessionReconnect: () => undefined,
+    streamOutboundDebtBytes: () => 0,
+  };
+  const stream = new LogicalStream({
+    streamId: 1,
+    method: EPIC_STATUS_SUBSCRIBE_METHOD,
+    paramsProvider: () => ({ epicId: EPIC_ID }),
+    schemaVersion: STATUS_LANE_VERSION,
+    requiredSchemaVersion: null,
+    qos: QosClass.INTERACTIVE,
+    port,
+  });
+  // What `RemoteSession.openSubscription` does as it sends the SUBSCRIBE.
+  stream.updateSchemaVersion(STATUS_LANE_VERSION);
+  const streamClient: IStreamClient<HostStreamRpcRegistry> = {
+    subscribe: () => stream,
+    subscribeWithParamsProvider: () => stream,
+    getMethodSchemaVersion: () => STATUS_LANE_VERSION,
+  };
+  return {
+    stream,
+    factory: (epicId, callbacks) =>
+      new EpicStatusStreamClient({
+        epicId,
+        callbacks,
+        wsStreamClient: streamClient,
+      }),
+  };
+}
+
+describe("a lane-selected session completes an open cycle over the remote transport's stream", () => {
+  it("DELIVERS a write command when the status snapshot is the frame that opens the stream", async () => {
+    const relay = relayStatusLane();
+    const rig = openLaneRig({
+      unaries: absentLaneUnaries(),
+      migration: null,
+      statusStreamClientFactory: relay.factory,
+    });
+    // The host's answer to the subscribe: ONE frame, which both opens the
+    // stream and carries the control snapshot.
+    expect(
+      relay.stream.deliverServerFrame(statusSnapshot(null, "editor", 1), null),
+    ).toBe(true);
+    rig.openStateLane();
+    await settle(rig.handle);
+
+    const commandId = await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "Renamed on a remote host",
+      updatedAt: 2000,
+    });
+    expect(commandId).not.toBeNull();
+    await settle(rig.handle);
+
+    // While the stream reported `open` AFTER handing that frame on, the
+    // control replica cleared `hasFreshRootSnapshotForOpenCycle` one step
+    // after the snapshot set it, and an open stream owes no second snapshot:
+    // this list stayed empty, the rename sat queued behind the tab's
+    // optimistic title, and a restart dropped it.
+    expect(rig.received).toHaveLength(1);
+    expect(rig.received[0].commandId).toBe(commandId);
+    expect(rig.received[0].intent).toEqual({
+      kind: "update-epic-title",
+      title: "Renamed on a remote host",
+      updatedAt: 2000,
+    });
+
+    rig.handle.dispose();
+  });
+});
+
+describe("only the CONTROL lane's own reconnect may close the write gate (ownsControlCycle)", () => {
+  it("the records lane's own reconnect leaves freshness intact; the control lane's own reconnect clears it", async () => {
+    // ABSENT unaries, as above - neither assertion depends on a workspace
+    // context.
+    const rig = openLaneRig({ unaries: absentLaneUnaries(), migration: null });
+    rig.openLanes();
+    await settle(rig.handle);
+
+    // The write gate is open: the control snapshot from openLanes() already
+    // established `hasFreshRootSnapshotForOpenCycle`.
+    const first = await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "before any reconnect",
+      updatedAt: 1000,
+    });
+    expect(first).not.toBeNull();
+    await settle(rig.handle);
+    expect(rig.received).toHaveLength(1);
+
+    // The RECORDS lane alone drops and returns - `ownsControlCycle: false`
+    // on this lane's transport-status event. Only the status (control) lane
+    // may clear this cycle's snapshot freshness, because only a CONTROL
+    // snapshot can restore it; a lane that can clear it but cannot restore
+    // it is a one-way door.
+    rig.reconnectStateLane();
+    await settle(rig.handle);
+
+    const second = await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "after the records lane reconnected alone",
+      updatedAt: 2000,
+    });
+    expect(second).not.toBeNull();
+    await settle(rig.handle);
+    // Freshness SURVIVED the records lane's own reconnect: the write reached
+    // the host. Before the fix, `applyTransportStatus` cleared
+    // `hasFreshRootSnapshotForOpenCycle` on EVERY transport-status frame
+    // regardless of which lane reported it, so this command would have been
+    // refused before dispatch and never appear in `rig.received`.
+    expect(rig.received).toHaveLength(2);
+
+    // The CONTROL lane's own reconnect DOES own the cycle and clears it - no
+    // status snapshot has arrived since, so nothing re-establishes it.
+    rig.reconnectControlLane();
+    await settle(rig.handle);
+
+    await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "after the control lane reconnected",
+      updatedAt: 3000,
+    });
+    await settle(rig.handle);
+    // The write gate is now shut: the third command never reached the host.
+    expect(rig.received).toHaveLength(2);
+
+    rig.handle.dispose();
+  });
+});
+
+/**
+ * The workspace context every lane session needs and no lane session read.
+ *
+ * `epic.getWorkspaceContext@1.0` had no production caller anywhere: the policy
+ * module existed, the protocol declared the read, and nothing ever instantiated
+ * or started it. Neither lane carries repos, workspaces, repo mapping or
+ * resolved folders - only `epic.subscribe@1`'s `earlyMeta` frame did - so a
+ * lane session's `snapshotMeta` held none of it, and the workspace-derived UI
+ * (git status, file tree, sidebar repo chip) had nothing to initialise from.
+ */
+const WORKSPACE_CONTEXT: EarlyMetaEpic = {
+  epicLight: null,
+  permissionRole: "editor",
+  repos: [
+    {
+      task: null,
+      repoIdentifier: { owner: "acme", repo: "widgets" },
+      createdAt: 10,
+      createdBy: "user-1",
+    },
+  ],
+  workspaces: [
+    {
+      task: null,
+      hostId: "test-host",
+      workspacePath: "/w/widgets",
+      createdAt: 11,
+    },
+  ],
+  repoMapping: [
+    {
+      repoIdentifier: "github:acme/widgets",
+      workspacePath: "/w/widgets",
+      lastSyncedAt: 12,
+    },
+  ],
+  workspaceFolders: [
+    {
+      workspacePath: "/w/widgets",
+      hostId: "test-host",
+      repoIdentifier: { owner: "acme", repo: "widgets" },
+      lastSyncedAt: 12,
+    },
+  ],
+  unresolvedRepos: [],
+};
+
+/** Counts reads and answers the fixture. The retry never fires in this block. */
+function recordingWorkspaceContext(): {
+  readonly unaries: EpicLaneUnaries;
+  reads(): number;
+} {
+  let reads = 0;
+  return {
+    unaries: {
+      getWorkspaceContext: () => {
+        reads += 1;
+        return Promise.resolve(WORKSPACE_CONTEXT);
+      },
+      retryMigration: () =>
+        Promise.reject(new Error("this test never retries a migration")),
+    },
+    reads: () => reads,
+  };
+}
+
+describe("a held control lane keeps the write proof", () => {
+  it("delivers writes after a held reconnect and a continued open with no new snapshot, but not after a plain reconnect", async () => {
+    const rig = openLaneRig({ unaries: absentLaneUnaries(), migration: null });
+    rig.openLanes();
+    await settle(rig.handle);
+
+    rig.holdControlLane();
+    rig.continueControlLane();
+    await settle(rig.handle);
+    await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "after a continued open",
+      updatedAt: 1000,
+    });
+    await settle(rig.handle);
+    expect(rig.received).toHaveLength(1);
+
+    rig.holdControlLane();
+    rig.reconnectControlLane();
+    await settle(rig.handle);
+    await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "after the hold ended",
+      updatedAt: 2000,
+    });
+    await settle(rig.handle);
+    expect(rig.received).toHaveLength(1);
+
+    rig.handle.dispose();
+  });
+});
+
+describe("a lane-selected session reads its workspace context", () => {
+  it("projects repos, folders and mapping into snapshotMeta at open", async () => {
+    const context = recordingWorkspaceContext();
+    const rig = openLaneRig({ unaries: context.unaries, migration: null });
+    rig.openLanes();
+    await settle(rig.handle);
+
+    // TWO, and the number is the coalescer's documented cost rather than a
+    // defect. The tab-open read goes out at attach; the lead snapshot then
+    // RESTATES the role, the cloud-sync status and the dirty flag as ordinary
+    // events, and the first of those is a permission frame - which the refetch
+    // contract names. Those three restatements arrive while the open read is
+    // still in flight, so they collapse into ONE trailing fetch: "the cost of a
+    // burst is two requests rather than N".
+    //
+    // Pinned exactly rather than as `>= 1`, because both directions are
+    // regressions worth catching. Three would mean the burst stopped
+    // coalescing; one would mean the snapshot's permission frame stopped
+    // reaching the policy, which is the trigger that keeps the projected
+    // context's role in agreement with the snapshot's rather than predating it.
+    expect(context.reads()).toBe(2);
+    const meta = rig.handle.store.getState().snapshotMeta;
+    // Read off the STORE rather than the runtime: this payload's whole purpose
+    // is to reach a renderer before the snapshot does, so the projection is
+    // the fact, not the call.
+    expect(meta?.repos).toEqual(WORKSPACE_CONTEXT.repos);
+    expect(meta?.workspaceFolders).toEqual(WORKSPACE_CONTEXT.workspaceFolders);
+    expect(meta?.repoMapping).toEqual(WORKSPACE_CONTEXT.repoMapping);
+
+    rig.handle.dispose();
+  });
+
+  it("REFETCHES on reconnect, which is the half a naive unary port drops", async () => {
+    const context = recordingWorkspaceContext();
+    const rig = openLaneRig({ unaries: context.unaries, migration: null });
+    rig.openLanes();
+    await settle(rig.handle);
+    // The cold open's two - see the previous test for why it is two.
+    expect(context.reads()).toBe(2);
+
+    // The monolith RE-EMITTED `earlyMeta`; a unary called once at tab open is a
+    // behaviour regression whose symptom is a stale repo chip that nothing ever
+    // corrects. Only a RETURN to `open` after the transport had left it counts,
+    // so the drop is driven explicitly - the session's first `open`, above, is
+    // the tab opening and deliberately does not refetch.
+    rig.reconnectControlLane();
+    await settle(rig.handle);
+
+    expect(context.reads()).toBe(3);
+
+    rig.handle.dispose();
+  });
+});
+
+describe("a lane-selected session retries a failed migration", () => {
+  it("sends epic.retryMigration on the LANE unary, not the detached @1 adapter", async () => {
+    let retries = 0;
+    const rig = openLaneRig({
+      unaries: {
+        getWorkspaceContext: () => Promise.resolve(WORKSPACE_CONTEXT),
+        retryMigration: () => {
+          retries += 1;
+          return Promise.resolve();
+        },
+      },
+      // A lane-serving host reporting a failed migration on a lane that STAYS
+      // OPEN - the condition the contract is explicit about, and the one that
+      // reaches the in-stream branch rather than the reopen branch.
+      migration: { state: "failed", reason: "chunk upload rejected" },
+    });
+    rig.openLanes();
+    await settle(rig.handle);
+
+    rig.handle.store.getState().retryMigration();
+    await settle(rig.handle);
+
+    // The TRANSPORT, not the modal. `markMigrationRetrying` is an optimistic
+    // flip that ran on the unfixed tree too, so a modal-state assertion passed
+    // while the host was never asked: `adapter` is the `@1` stream adapter and
+    // it is detached on this arm, so its `send` answered `dropped` and the
+    // Retry button did nothing at all.
+    expect(retries).toBe(1);
+
+    rig.handle.dispose();
+  });
+
+  it("restores the error state when the retry is REFUSED, so Retry comes back", async () => {
+    // A refused retry - an absent requester, a host that declines, a bridge
+    // failure - produces no migration frame at all. The optimistic flip to
+    // `running` would then be terminal: the modal sits on a running body with
+    // its Retry button gone, for the rest of the session.
+    const rig = openLaneRig({
+      unaries: {
+        getWorkspaceContext: () => Promise.resolve(WORKSPACE_CONTEXT),
+        retryMigration: () => Promise.reject(new Error("host refused")),
+      },
+      migration: { state: "failed", reason: "chunk upload rejected" },
+    });
+    rig.openLanes();
+    await settle(rig.handle);
+    expect(rig.handle.store.getState().migration.status).toBe("error");
+
+    rig.handle.store.getState().retryMigration();
+    await settle(rig.handle);
+
+    // THE REDDENING ASSERTION. Before this the rejection was swallowed on the
+    // grounds that "the modal's recovery is the same path it has always had" -
+    // but that path is a status-lane migration frame, and a refused retry
+    // never produces one, so the state stayed `running` forever.
+    expect(rig.handle.store.getState().migration.status).toBe("error");
+
+    rig.handle.dispose();
+  });
+
+  it("does NOT overwrite host progress with an error when the rejection arrives late", async () => {
+    // The control, and the reason the restore is token-guarded rather than
+    // unconditional: a host can accept the retry and start reporting while the
+    // unary's own answer is still in flight (or fails for an unrelated reason).
+    // Publishing an error over a running migration would be this runtime
+    // inventing a failure the host never reported.
+    // Built eagerly so the rejector exists before anything can await it; the
+    // initializer below is unreachable, and throws rather than no-ops so a
+    // future refactor that defers construction fails loudly.
+    let rejectRetry: () => void = () => {
+      throw new Error("the retry never published its rejector");
+    };
+    const retryAnswer = new Promise<void>((_resolve, reject) => {
+      rejectRetry = () => {
+        reject(new Error("late failure"));
+      };
+    });
+    const rig = openLaneRig({
+      unaries: {
+        getWorkspaceContext: () => Promise.resolve(WORKSPACE_CONTEXT),
+        retryMigration: () => retryAnswer,
+      },
+      migration: { state: "failed", reason: "chunk upload rejected" },
+    });
+    rig.openLanes();
+    await settle(rig.handle);
+
+    rig.handle.store.getState().retryMigration();
+    await settle(rig.handle);
+
+    // The host accepts and starts reporting BEFORE the unary settles.
+    rig.emitMigrationProgress({
+      phase: "upload",
+      chunksDone: 3,
+      chunksTotal: 10,
+    });
+    await settle(rig.handle);
+    expect(rig.handle.store.getState().migration.phase).toBe("upload");
+
+    rejectRetry();
+    await settle(rig.handle);
+
+    // Still the host's reading, not a fabricated error.
+    expect(rig.handle.store.getState().migration.status).toBe("running");
+    expect(rig.handle.store.getState().migration.chunksDone).toBe(3);
+
+    rig.handle.dispose();
+  });
+});
+
+/**
+ * Like {@link recordingWorkspaceContext}, but the caller controls WHEN each
+ * `getWorkspaceContext` call answers - needed to land a workspace-context
+ * response after a specific status-lane event rather than at attach.
+ */
+function controllableWorkspaceContext(): {
+  readonly unaries: EpicLaneUnaries;
+  /** Resolves every currently-pending `getWorkspaceContext` call with `context`. */
+  resolveAll(context: EarlyMetaEpic): void;
+  pendingCount(): number;
+} {
+  let resolvers: Array<(context: EarlyMetaEpic) => void> = [];
+  return {
+    unaries: {
+      getWorkspaceContext: () =>
+        new Promise<EarlyMetaEpic>((resolve) => {
+          resolvers.push(resolve);
+        }),
+      retryMigration: () =>
+        Promise.reject(new Error("this test never retries a migration")),
+    },
+    resolveAll: (context) => {
+      const pending = resolvers;
+      resolvers = [];
+      for (const resolve of pending) resolve(context);
+    },
+    pendingCount: () => resolvers.length,
+  };
+}
+
+/**
+ * Regression: `onWorkspaceContext` (`epic-replica-runtime.ts`) must not move
+ * the DISPLAYED permission role - `useEpicPermissionRole()`, what every UI
+ * surface gates on. Only the status lane's `control-snapshot` /
+ * `permissionChanged` frames are that authority. Before the fix, every
+ * workspace-context answer - the tab-open read, or its reconnect refetch -
+ * was ALSO routed through `control.apply({kind: "early-meta", ...})`, which
+ * unconditionally overwrote the displayed role regardless of arrival order,
+ * while leaving the write gate (`currentRole`) untouched. So a late `null`
+ * answer could show a real owner as a viewer, and a late STALE `"owner"`
+ * answer could show a real viewer as an owner - two directions, one cause.
+ */
+describe("a lane session's displayed role is not moved by a workspace-context answer", () => {
+  it("keeps the snapshot-established owner role when a late workspace-context read answers permissionRole: null", async () => {
+    const context = controllableWorkspaceContext();
+    const rig = openLaneRig({
+      unaries: context.unaries,
+      migration: null,
+      statusRole: "owner",
+    });
+    rig.openLanes();
+    await settle(rig.handle);
+
+    expect(rig.handle.store.getState().permissionRole).toBe("owner");
+    expect(context.pendingCount()).toBeGreaterThan(0);
+
+    context.resolveAll({ ...WORKSPACE_CONTEXT, permissionRole: null });
+    await settle(rig.handle);
+
+    // The display field - unaffected by the workspace-context answer.
+    expect(rig.handle.store.getState().permissionRole).toBe("owner");
+
+    // The write gate agrees - not merely the display field.
+    const commandId = await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "still an owner",
+      updatedAt: 5000,
+    });
+    expect(commandId).not.toBeNull();
+    await settle(rig.handle);
+    expect(rig.received).toHaveLength(1);
+
+    rig.handle.dispose();
+  });
+
+  it("does not let a late, stale workspace-context read restore a role permissionChanged just revoked", async () => {
+    const context = controllableWorkspaceContext();
+    const rig = openLaneRig({
+      unaries: context.unaries,
+      migration: null,
+      statusRole: "owner",
+    });
+    rig.openLanes();
+    await settle(rig.handle);
+    expect(rig.handle.store.getState().permissionRole).toBe("owner");
+
+    rig.emitPermissionChanged(null);
+    await settle(rig.handle);
+    expect(rig.handle.store.getState().permissionRole).toBeNull();
+
+    // Every workspace-context read still pending - the tab-open read, any
+    // coalesced restatement, and the refetch the revocation itself may
+    // trigger - answers with the STALE, pre-revocation role.
+    context.resolveAll({ ...WORKSPACE_CONTEXT, permissionRole: "owner" });
+    await settle(rig.handle);
+
+    expect(rig.handle.store.getState().permissionRole).toBeNull();
+
+    await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "should never reach the host",
+      updatedAt: 6000,
+    });
+    await settle(rig.handle);
+    expect(rig.received).toHaveLength(0);
+
+    rig.handle.dispose();
+  });
+});
+
+/**
+ * Regression: `accessLost` clears only on a real regrant (a status
+ * `control-snapshot` naming a non-null role), never on a workspace-context
+ * answer - the same authority split as `permissionRole` above, for the
+ * sibling field the access coordinator force-closes a tab on.
+ */
+describe("accessLost clears on a real snapshot regrant, not on a workspace-context answer", () => {
+  it("stays denied through a delayed, stale workspace-context read, and clears only when a real status snapshot regrants", async () => {
+    const context = controllableWorkspaceContext();
+    const rig = openLaneRig({
+      unaries: context.unaries,
+      migration: null,
+      statusRole: "owner",
+    });
+    rig.openLanes();
+    await settle(rig.handle);
+    expect(rig.handle.store.getState().permissionRole).toBe("owner");
+    expect(rig.handle.store.getState().accessLost).toBe(false);
+
+    rig.emitPermissionChanged(null);
+    await settle(rig.handle);
+    expect(rig.handle.store.getState().permissionRole).toBeNull();
+    expect(rig.handle.store.getState().accessLost).toBe(true);
+
+    // A delayed workspace-context read, stale from before the revocation,
+    // must not restore access.
+    context.resolveAll({ ...WORKSPACE_CONTEXT, permissionRole: "owner" });
+    await settle(rig.handle);
+    expect(rig.handle.store.getState().permissionRole).toBeNull();
+    expect(rig.handle.store.getState().accessLost).toBe(true);
+
+    // The host actually regrants: a real status snapshot.
+    rig.emitStatusSnapshot("owner");
+    await settle(rig.handle);
+    expect(rig.handle.store.getState().permissionRole).toBe("owner");
+    expect(rig.handle.store.getState().accessLost).toBe(false);
+
+    const commandId = await rig.handle.store.getState().enqueueWriteCommand({
+      kind: "update-epic-title",
+      title: "regranted",
+      updatedAt: 7000,
+    });
+    expect(commandId).not.toBeNull();
+    await settle(rig.handle);
+    expect(rig.received).toHaveLength(1);
+
+    rig.handle.dispose();
+  });
+});

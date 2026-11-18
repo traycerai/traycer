@@ -1,0 +1,1499 @@
+import {
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  ImagePlus,
+  MoreHorizontal,
+  Pencil,
+  SendHorizontal,
+  Trash2,
+  X,
+} from "lucide-react";
+import {
+  use,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ReactNode,
+} from "react";
+import type { KeyboardEvent } from "react";
+import type { JsonContent } from "@traycer/protocol/common/registry";
+import {
+  ComposerPromptEditor,
+  type ComposerPromptEditorHandle,
+} from "@/components/chat/composer/composer-prompt-editor";
+import { ChatComposerAttachmentsStrip } from "@/components/chat/composer/chat-composer-attachments-strip";
+import { REFUSING_DROP_ZONE_PROPS } from "@/components/chat/composer/composer-drop-scope";
+import { ComposerContentRenderer } from "@/components/chat/composer/content-renderer";
+import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
+import { useComposerPickerItems } from "@/components/chat/composer/picker/use-composer-picker-items";
+import { NO_LOCAL_SLASH_COMMANDS } from "@/hooks/composer/use-slash-commands";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import {
+  TabHostContext,
+  useTabHostId,
+} from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
+import { useOpenA2AMessagePeer } from "@/hooks/agent/use-open-a2a-message-peer";
+import {
+  composerClipboardPlainText,
+  copyComposerContentToClipboard,
+} from "@/lib/composer/composer-clipboard";
+import { bytesToBase64 } from "@/lib/composer/image-base64";
+import {
+  containsImageAtoms,
+  hashOnlyImageHashes,
+  inlineHashOnlyImageBytes,
+  omitImageAtomsByHash,
+} from "@/lib/composer/image-atoms";
+import { useA2AMessagePeer } from "@/hooks/agent/use-a2a-message-peer";
+import { useStandaloneBotName } from "@/hooks/bots/use-standalone-bot-name";
+import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
+import { cn } from "@/lib/utils";
+import { SlackMark } from "@/components/icons/slack-mark";
+import { collapseToSingleLine } from "@/lib/text/format-single-line";
+import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
+import { moveChatTimelineScroller } from "@/components/chat/chat-timeline-follow-latch";
+import {
+  chatFindA2AReceivedBodyUnitId,
+  chatFindMessageContentUnitId,
+} from "@/components/chat/chat-find";
+import type {
+  ChatMessage as ChatMessageModel,
+  ChatMessageSteerBadge,
+} from "@/stores/composer/chat-store";
+import {
+  useA2AReceivedOpen,
+  useSetA2AReceivedOpen,
+} from "@/stores/chats/a2a-open-store-context";
+import {
+  useChatCollapsibleTileInstanceId,
+  useChatFindForcedOpen,
+  useSetChatFindForcedOpen,
+} from "@/stores/chats/chat-find-force-store-context";
+import type {
+  ChatMessageEditing,
+  ChatMessageUserActions,
+} from "./chat-message";
+import { ChatMessageTimestamp } from "./chat-message-timestamp";
+import {
+  ChatUserMessageContent,
+  UserMessageBubble,
+} from "./chat-user-message-content";
+import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery";
+import { BrowserReferenceChips } from "./browser-reference-chips";
+import { ComposerArea } from "@/components/home/composer/composer-shell";
+import { LivePulse } from "@/components/ui/live-pulse";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { A2APeerPicture } from "./segments/a2a-peer-picture";
+import { AgentHeaderLink } from "./segments/agent-header-link";
+import { AgentMessageBody } from "./segments/agent-message-body";
+import {
+  ReplyExpectedIcon,
+  ReplyExpectedNote,
+} from "./segments/reply-expected";
+import { SegmentCard } from "./segments/segment-card";
+import { useTombstonedProfileLabel } from "./use-tombstoned-profile-label";
+import { AccentDot } from "@/components/providers/accent-dot";
+import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import type { ProviderId } from "@/components/home/data/landing-options";
+import { reportableErrorToast } from "@/lib/reportable-error-toast";
+import {
+  composerAttachmentsHoldSend,
+  useComposerHashPaste,
+} from "@/hooks/composer/use-composer-paste";
+import { useTypedPathsReach } from "@/hooks/composer/use-typed-paths-reach";
+import { containsPendingFileAttachment } from "@/lib/composer/file-attachments";
+import { useComposerPendingImageIngest } from "@/hooks/composer/use-composer-pending-image-ingest";
+import { useWorkspaceMentionRoots } from "@/hooks/composer/use-workspace-mention-roots";
+import { useEpicAttachmentBytesPresence } from "@/lib/attachments/use-attachment-blob-src";
+import { hasLandingImageBytes } from "@/lib/composer/landing-image-store";
+import { useChatAttachmentByteReader } from "@/lib/attachments/use-chat-image-fetcher";
+import { draftImageByteTargetForHost } from "@/lib/drafts/draft-image-byte-target";
+import { resolveDraftImageBytes } from "@/lib/drafts/resolve-draft-image-bytes";
+import { useRunnerHost } from "@/providers/use-runner-host";
+
+const NOOP: () => void = () => undefined;
+
+function visibleUserSteerBadge(
+  message: ChatMessageModel,
+): ChatMessageSteerBadge | null {
+  if (message.steerBadge === null) return null;
+  if (message.steerBadge.status === "steered") return null;
+  return message.steerBadge;
+}
+
+function userMessageDisplayContent(
+  message: ChatMessageModel,
+): JsonContent | null {
+  if (message.structuredContent === null) return null;
+  const hashes = new Set(
+    (message.browserAnnotations ?? []).flatMap((annotation) =>
+      annotation.imageHash === null ? [] : [annotation.imageHash],
+    ),
+  );
+  return omitImageAtomsByHash(message.structuredContent, hashes);
+}
+
+// Keep long prompts compact: ~3-4 lines (leading-7 ≈ 28px/line) stay visible
+// before the bubble clamps and fades, with "Show more" revealing the rest.
+const DISPLAY_MAX_HEIGHT_PX = 120;
+
+const COPIED_RESET_MS = 1600;
+
+const handleCopyError = (): void => {
+  reportableErrorToast("Couldn't copy to clipboard.", undefined, {
+    title: "Could not copy to clipboard",
+    message: null,
+    code: null,
+    source: "Clipboard",
+  });
+};
+
+interface UserBodyProps {
+  message: ChatMessageModel;
+  actions: ChatMessageUserActions | null;
+}
+
+export function UserMessageBody({
+  actions,
+  message,
+}: UserBodyProps): ReactNode {
+  const editing = actions?.editing ?? null;
+
+  if (message.role !== "user") {
+    return (
+      <>
+        <UserMessageAttachmentGallery
+          attachments={message.attachments}
+          browserAnnotations={message.browserAnnotations}
+          align="end"
+        />
+        <div className="w-full rounded-lg border border-border/40 bg-muted/20 px-4 py-3 text-ui leading-7 text-muted-foreground">
+          <ChatUserMessageContent
+            content={message.content}
+            attachments={message.attachments}
+          />
+        </div>
+      </>
+    );
+  }
+
+  if (editing !== null) {
+    return <InlineUserMessageEditor editing={editing} />;
+  }
+
+  if (message.slackMessage !== undefined) {
+    return (
+      <>
+        <UserMessageAttachmentGallery
+          attachments={message.attachments}
+          browserAnnotations={message.browserAnnotations}
+          align="end"
+        />
+        <SlackMessageDisplayView
+          messageId={message.id}
+          messageText={message.content}
+          slackMessage={message.slackMessage}
+          sentAt={message.sentAt ?? message.createdAt}
+        />
+      </>
+    );
+  }
+
+  if (message.agentSenderInfo !== null) {
+    return (
+      <>
+        <UserMessageAttachmentGallery
+          attachments={message.attachments}
+          browserAnnotations={message.browserAnnotations}
+          align="end"
+        />
+        <AgentMessageDisplayView
+          messageId={message.id}
+          messageText={message.content}
+          agentMessage={message.agentMessage}
+          agentSenderInfo={message.agentSenderInfo}
+          sentAt={message.sentAt ?? message.createdAt}
+        />
+        <MessageDeliveryFooter actions={actions} />
+      </>
+    );
+  }
+
+  return <UserMessageDisplayView message={message} actions={actions} />;
+}
+
+/**
+ * Display variant for a `role: "user"` message whose sender was another
+ * agent. It is rendered as operational agent traffic, not as a human-authored
+ * user bubble; the visible body is the structured message body only.
+ */
+function AgentMessageDisplayView({
+  messageId,
+  messageText,
+  agentMessage,
+  agentSenderInfo,
+  sentAt,
+}: {
+  messageId: string;
+  messageText: string;
+  agentMessage: ChatMessageModel["agentMessage"];
+  agentSenderInfo: NonNullable<ChatMessageModel["agentSenderInfo"]>;
+  sentAt: number;
+}): ReactNode {
+  const tileInstanceId = useChatCollapsibleTileInstanceId();
+  const collapsibleKey = useMemo(
+    () => deriveA2AReceivedCollapsibleKey(tileInstanceId, messageId),
+    [messageId, tileInstanceId],
+  );
+  const bodyFindUnitId = chatFindA2AReceivedBodyUnitId(messageId);
+  const userOpen = useA2AReceivedOpen(messageId);
+  const findForcedOpen = useChatFindForcedOpen(collapsibleKey);
+  const open = userOpen || findForcedOpen;
+  const setOpen = useSetA2AReceivedOpen();
+  const setFindForcedOpen = useSetChatFindForcedOpen();
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      setOpen(messageId, next);
+      if (!next) setFindForcedOpen(collapsibleKey, false);
+    },
+    [collapsibleKey, messageId, setFindForcedOpen, setOpen],
+  );
+
+  const openPeer = useOpenA2AMessagePeer();
+  const sender = useA2AMessagePeer(agentSenderInfo.agentId, {
+    direction: "received",
+    messageId,
+  });
+  const senderName =
+    sender?.title ??
+    agentMessage?.senderTitle ??
+    agentSenderInfo.senderTitle ??
+    `${agentSenderInfo.agentId.slice(0, 8)}…`;
+  const senderBotId = sender?.bot?.botId ?? null;
+  const senderChipName = useStandaloneBotName(senderBotId, senderName);
+  const expectReply =
+    agentMessage?.reply.expectsReply ?? agentSenderInfo.expectReply;
+
+  const requestJump = useChatTranscriptJumpStore((s) => s.requestJump);
+  const openSenderTab = useCallback(() => {
+    if (sender === null) return;
+    openPeer(sender, senderName);
+    // Mirror of the sent card's receiver link: park a jump for the sender's
+    // tile, which picks it up whether it is already mounted or is being
+    // opened by the call above. This row's own id IS the receipt the sender's
+    // harness stamped on its send block, so the landing is the exact "Sent
+    // message" card. A terminal-agent sender has no transcript, a bot's
+    // session opens the bot's channel, which has no such card, and a send
+    // persisted before receipts existed just leaves the tile open at rest.
+    if (sender.surface !== "gui" || sender.bot !== null) return;
+    requestJump(sender.hostId, sender.agentId, {
+      kind: "receipt",
+      messageId,
+    });
+  }, [messageId, sender, openPeer, requestJump, senderName]);
+
+  // Same shape as the sent card's header (`A2ASendToolSegment`): the sender
+  // name is the only element allowed to shrink, so the direction words are
+  // for assistive tech only and reply-expected is an icon. "from" carries
+  // the direction for sighted users, and the picture after it says whether
+  // the sender is a bot or an agent.
+  //
+  // The arrival stamp trails the row, past the `flex-1` name cell, so it lands
+  // at the header's right edge. Agent-to-agent traffic is where a timeline is
+  // hardest to reconstruct - these rows have no human send behind them - so it
+  // is the one place the stamp is load-bearing rather than a convenience.
+  const header = (
+    <>
+      <span className="sr-only">Received message</span>
+      <span className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-sm">
+        <span className="shrink-0 text-muted-foreground">from</span>
+        <A2APeerPicture botId={senderBotId} glyphClassName="text-primary" />
+        <AgentHeaderLink
+          name={senderChipName}
+          onOpen={sender !== null ? openSenderTab : null}
+        />
+        {expectReply ? <ReplyExpectedIcon /> : null}
+      </span>
+      <ChatMessageTimestamp
+        timestamp={sentAt}
+        separated={false}
+        instanceId={messageId}
+      />
+    </>
+  );
+
+  const preview = (
+    <p className="m-0 line-clamp-2 text-ui-sm leading-6 text-foreground/85">
+      {/* Uncapped: `line-clamp-2` cuts it at two lines of the card's width. */}
+      {collapseToSingleLine(messageText)}
+    </p>
+  );
+
+  const body = open ? (
+    <div className="flex flex-col gap-2">
+      {expectReply ? <ReplyExpectedNote /> : null}
+      <AgentMessageBody
+        value={messageText}
+        bodyFindUnitId={bodyFindUnitId}
+        isStreaming={false}
+      />
+    </div>
+  ) : null;
+
+  return (
+    <div className="w-full">
+      <SegmentCard
+        footer={null}
+        open={open}
+        onOpenChange={handleOpenChange}
+        header={header}
+        headerAction={null}
+        collapsedPreview={preview}
+        body={body}
+        tone="primary"
+        headerPosition="normal"
+        bodyOverflow="hidden"
+        expandable
+        headerFindUnitId={null}
+        bodyFindUnitId={null}
+        className={undefined}
+      />
+    </div>
+  );
+}
+
+/**
+ * Display variant for a Slack message delivered to a bot's session: who wrote
+ * it in Slack, when, its text, and the files it did not carry. The images it
+ * did carry sit above it like any user row's.
+ */
+function SlackMessageDisplayView({
+  messageId,
+  messageText,
+  slackMessage,
+  sentAt,
+}: {
+  messageId: string;
+  messageText: string;
+  slackMessage: NonNullable<ChatMessageModel["slackMessage"]>;
+  sentAt: number;
+}): ReactNode {
+  const displayName = slackMessage.author.displayName?.trim() ?? "";
+  const name = displayName.length > 0 ? displayName : "Slack user";
+  return (
+    <div className="flex w-full flex-col gap-1.5 rounded-lg border border-border/40 px-4 py-3">
+      <div className="flex min-w-0 items-center gap-1.5 text-ui-sm">
+        <SlackMark className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="sr-only">Slack message from</span>
+        <span className="min-w-0 flex-1 truncate font-medium text-foreground">
+          {name}
+        </span>
+        <ChatMessageTimestamp
+          timestamp={sentAt}
+          separated={false}
+          instanceId={messageId}
+        />
+      </div>
+      {messageText.length > 0 ? (
+        <div
+          data-chat-find-unit={chatFindMessageContentUnitId(messageId)}
+          className="text-ui leading-7 break-words whitespace-pre-wrap"
+        >
+          {messageText}
+        </div>
+      ) : null}
+      {slackMessage.omitted.length > 0 ? (
+        <p className="m-0 text-ui-sm text-muted-foreground">
+          Not carried:{" "}
+          {slackMessage.omitted.map((file) => file.fileName).join(", ")}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function UserMessageDisplayView({
+  message,
+  actions,
+}: {
+  message: ChatMessageModel;
+  actions: ChatMessageUserActions | null;
+}): ReactNode {
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = contentRef.current;
+    if (el === null) return;
+    const check = (): void => {
+      const next = el.scrollHeight > DISPLAY_MAX_HEIGHT_PX;
+      setIsOverflowing((prev) => (prev === next ? prev : next));
+    };
+    const observer = new ResizeObserver(check);
+    observer.observe(el);
+    check();
+    return () => observer.disconnect();
+  }, []);
+
+  const toggleExpanded = useCallback(() => {
+    setExpanded((prev) => !prev);
+  }, []);
+
+  const displayContent = useMemo(
+    () => userMessageDisplayContent(message),
+    [message],
+  );
+  const body =
+    displayContent !== null ? (
+      <ComposerContentRenderer
+        content={displayContent}
+        variant={undefined}
+        className={undefined}
+        testId={undefined}
+      />
+    ) : (
+      <ChatUserMessageContent
+        content={message.content}
+        attachments={message.attachments}
+      />
+    );
+
+  const profileProvenance = useTombstonedProfileLabel(message.sessionAnchor);
+  // Present whenever `profileProvenance` is (the resolver only returns a
+  // verdict for an anchor with a non-null `profileId`) - re-derived separately
+  // since the hook's return doesn't narrow `sessionAnchor` for TypeScript.
+  const tombstoneIdentity = tombstoneFooterIdentity(message.sessionAnchor);
+  const confirmingDelete = actions?.confirmingDelete ?? false;
+  const visibleSteerBadge = visibleUserSteerBadge(message);
+  // Only clamp while collapsed; expanding drops both the height cap and the
+  // bottom fade so the full prompt is readable in place. The overflow probe
+  // keeps measuring the (now uncapped) content, so the toggle stays visible.
+  const clamped = isOverflowing && !expanded;
+  const findUnitId = chatFindMessageContentUnitId(message.id);
+  const copyText = useMemo(
+    () =>
+      message.structuredContent === null
+        ? message.content
+        : composerClipboardPlainText(message.structuredContent),
+    [message.content, message.structuredContent],
+  );
+
+  return (
+    <div
+      className="group/user-message flex min-w-0 w-full flex-col items-end"
+      data-user-message-display=""
+    >
+      {visibleSteerBadge !== null ? (
+        <div className="mb-1.5">
+          <UserMessageSteerBadge badge={visibleSteerBadge} />
+        </div>
+      ) : null}
+      <div className="relative min-w-0 max-w-full">
+        <UserMessageBubble>
+          <UserMessageAttachmentGallery
+            attachments={message.attachments}
+            browserAnnotations={message.browserAnnotations}
+            align="start"
+          />
+          <BrowserReferenceChips
+            annotations={message.browserAnnotations ?? []}
+          />
+          <div
+            ref={contentRef}
+            data-chat-find-unit={findUnitId}
+            style={clamped ? { maxHeight: DISPLAY_MAX_HEIGHT_PX } : undefined}
+            className={cn(
+              "min-w-0",
+              clamped && [
+                "overflow-hidden",
+                "[mask-image:linear-gradient(to_bottom,black_calc(100%-3rem),transparent)]",
+              ],
+            )}
+          >
+            {body}
+          </div>
+          {isOverflowing ? (
+            <ShowMoreToggle expanded={expanded} onToggle={toggleExpanded} />
+          ) : null}
+        </UserMessageBubble>
+        {/* The action chip floats over the bubble's bottom-right border instead
+            of reserving a row beneath it, so the assistant reply sits close
+            under the user message rather than after a tall hover gap. The copy
+            button is rendered independently of `actions` so it stays available
+            on hover even while a turn is streaming (when edit/delete are gated
+            off and `actions` is null). */}
+        <UserMessageActionOverlay
+          confirmingDelete={confirmingDelete}
+          actions={actions}
+          copyText={copyText}
+          structuredContent={message.structuredContent}
+        />
+        <UserMessageTouchMenu
+          confirmingDelete={confirmingDelete}
+          actions={actions}
+          copyText={copyText}
+          structuredContent={message.structuredContent}
+        />
+      </div>
+      <MessageDeliveryFooter actions={actions} />
+      {profileProvenance !== null && tombstoneIdentity !== null ? (
+        <UserMessageTombstonedProfileFooter
+          profileId={tombstoneIdentity.profileId}
+          harnessId={tombstoneIdentity.harnessId}
+          accentColor={tombstoneIdentity.accentColor}
+          label={profileProvenance.label}
+          removed={profileProvenance.removedOnThisHost}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Where the host is with a row it has not started yet - the chat's opening
+ * prompt while its worktree and session are set up. Nothing to act on: once it
+ * starts it is an ordinary message, and a withdrawn row has left the
+ * transcript with its text back in the composer.
+ */
+function MessageDeliveryFooter({
+  actions,
+}: {
+  readonly actions: ChatMessageUserActions | null;
+}): ReactNode {
+  const phase = actions?.deliveryPhase ?? null;
+  if (phase === null) return null;
+  return (
+    <div
+      className="mt-2 flex flex-wrap items-center justify-end gap-2 text-ui-xs text-muted-foreground"
+      role="status"
+    >
+      <span>{phase === "pending" ? "Sending" : "Setting up"}</span>
+      <AgentSpinningDots
+        className={undefined}
+        testId={undefined}
+        variant={undefined}
+      />
+    </div>
+  );
+}
+
+function UserMessageActionOverlay({
+  confirmingDelete,
+  actions,
+  copyText,
+  structuredContent,
+}: {
+  readonly confirmingDelete: boolean;
+  readonly actions: ChatMessageUserActions | null;
+  readonly copyText: string;
+  readonly structuredContent: JsonContent | null;
+}): ReactNode {
+  return (
+    <div
+      className={cn(
+        "absolute right-3 top-full z-10 flex -translate-y-1/2 items-center gap-0.5 rounded-md border border-border/60 bg-background p-0.5 shadow-sm transition-opacity",
+        // The group-focus-within reveal is fine-pointer-only: on coarse
+        // pointers the touch "…" menu (UserMessageTouchMenu) replaces this
+        // chip, and Radix returning focus to that trigger on menu close would
+        // otherwise reveal the chip on top of it. The chip's own
+        // focus-within reveal stays unscoped so tabbing into its buttons with
+        // a hardware keyboard still shows them on any device.
+        confirmingDelete
+          ? "pointer-events-auto opacity-100"
+          : "pointer-events-none opacity-0 group-hover/user-message:pointer-events-auto group-hover/user-message:opacity-100 pointer-fine:group-focus-within/user-message:pointer-events-auto pointer-fine:group-focus-within/user-message:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100",
+      )}
+    >
+      {actions !== null ? <MessageActionBar actions={actions} /> : null}
+      {!confirmingDelete && copyText.trim().length > 0 ? (
+        <MessageCopyButton
+          text={copyText}
+          structuredContent={structuredContent}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+// `message.sessionAnchor?.profileId ?? null` doesn't narrow the anchor's
+// discriminated-union type for TypeScript, so the footer's other identity
+// fields (harnessId, accentColor) need their own re-derivation - pulled into
+// one helper instead of three inline optional chains in the render body.
+function tombstoneFooterIdentity(
+  sessionAnchor: ChatMessageModel["sessionAnchor"],
+): {
+  readonly profileId: string;
+  readonly harnessId: ProviderId;
+  readonly accentColor: string | null;
+} | null {
+  if (sessionAnchor === null) return null;
+  if (sessionAnchor.profileId === null) return null;
+  return {
+    profileId: sessionAnchor.profileId,
+    harnessId: sessionAnchor.harnessId,
+    accentColor: sessionAnchor.accentColor,
+  };
+}
+
+/**
+ * `removed` is the ONLY thing separating a genuine local deletion from a turn
+ * that simply ran on another machine: profile ids are host-local, so an anchor
+ * carried here by a fork/clone can never match this host's list and claiming
+ * "(removed)" for it would be a false accusation about a profile that is alive
+ * and well elsewhere. The provenance itself is kept either way.
+ */
+function UserMessageTombstonedProfileFooter({
+  profileId,
+  harnessId,
+  accentColor,
+  label,
+  removed,
+}: {
+  readonly profileId: string;
+  readonly harnessId: ProviderId;
+  readonly accentColor: string | null;
+  readonly label: string;
+  readonly removed: boolean;
+}): ReactNode {
+  return (
+    <span className="mt-1 flex items-center gap-1.5 text-ui-xs text-muted-foreground">
+      <HarnessIcon harnessId={harnessId} />
+      <AccentDot
+        profileId={profileId}
+        accentColor={accentColor}
+        label={null}
+        variant="inline"
+        size="default"
+        className={undefined}
+      />
+      {removed ? `Ran on ${label} (removed)` : `Ran on ${label}`}
+    </span>
+  );
+}
+
+/**
+ * Bottom-anchored disclosure toggle for an overflowing user prompt. Only
+ * mounts when the bubble was clamped, so the label flips between expanding the
+ * full prompt and collapsing it back to the masked preview height.
+ */
+function ShowMoreToggle({
+  expanded,
+  onToggle,
+}: {
+  readonly expanded: boolean;
+  readonly onToggle: () => void;
+}): ReactNode {
+  return (
+    <div className="mt-1 flex justify-center">
+      <Button
+        type="button"
+        variant="muted"
+        size="xs"
+        aria-expanded={expanded}
+        onMouseDown={(event) => {
+          event.preventDefault();
+        }}
+        onClick={onToggle}
+      >
+        {expanded ? (
+          <ChevronUp className="size-3" aria-hidden />
+        ) : (
+          <ChevronDown className="size-3" aria-hidden />
+        )}
+        {expanded ? "Show less" : "Show more"}
+      </Button>
+    </div>
+  );
+}
+
+function UserMessageSteerBadge({
+  badge,
+}: {
+  readonly badge: ChatMessageSteerBadge;
+}): ReactNode {
+  const label = userMessageSteerBadgeLabel(badge);
+
+  return (
+    <div className="flex items-center gap-1 self-start px-1 text-overline font-medium uppercase text-muted-foreground/65">
+      {badge.status === "steering" ? (
+        <LivePulse
+          size="xs"
+          tone="active"
+          ariaLabel="Steering queued message"
+          className={undefined}
+        />
+      ) : (
+        <SendHorizontal className="size-3" aria-hidden />
+      )}
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function userMessageSteerBadgeLabel(badge: ChatMessageSteerBadge): string {
+  if (badge.status === "requested") return "Steer requested";
+  if (badge.status === "steering") return "Steering";
+  return "Steered";
+}
+
+function InlineUserMessageEditor({
+  editing,
+}: {
+  editing: ChatMessageEditing;
+}): ReactNode {
+  const [pickerStore] = useState(() => createComposerPickerStore());
+  const hostClient = useTabHostClient();
+  const tabHostId = useTabHostId();
+  const resolvedMentionRoots = useWorkspaceMentionRoots(
+    editing.mentionRoots,
+    editing.fallbackToGlobalMentionRoots,
+    tabHostId,
+  );
+  const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
+  const epicImagePresence = useEpicAttachmentBytesPresence();
+  // Local partition OR epic replica. The epic map answers for a SENT image
+  // only, so on its own it strips a pasted hash-only node whose bytes are
+  // sitting in this very window's image store - reading "the epic does not
+  // hold it" as "these bytes do not exist". It is partial availability, never
+  // provenance.
+  //
+  // `null` before the snapshot loads is preserved rather than collapsed into a
+  // permissive predicate: that is the paste handler's own "do not filter at
+  // all" signal, and it is what this surface has always passed while the
+  // replica is unknown.
+  const hasPastedImageBytes = useMemo(
+    () =>
+      epicImagePresence === null
+        ? null
+        : (hash: string) =>
+            hasLandingImageBytes(hash) || epicImagePresence(hash),
+    [epicImagePresence],
+  );
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const focusFrameRef = useRef<number | null>(null);
+  const visibilityFrameRef = useRef<number | null>(null);
+  const runnerHost = useRunnerHost();
+  const pathsReachTarget = useTypedPathsReach(tabHostId);
+  const {
+    onPaste,
+    onDrop,
+    onDragOver,
+    attachImageFiles,
+    isIngestingImages,
+    isResolvingFilePaths,
+    isAttachingFiles,
+    runPendingImageJob,
+  } = useComposerHashPaste(editorRef, {
+    fileDrops: runnerHost.fileDrops,
+    mentionRoots: resolvedMentionRoots,
+    // An edit keeps the files its message already carries; it attaches none.
+    fileRoute: null,
+    pathsReachTarget,
+  });
+  const {
+    ingestPastedComposerImages,
+    reingestPendingImages,
+    noteContentImages,
+  } = useComposerPendingImageIngest({
+    editorRef,
+    runPendingImageJob,
+    draftId: null,
+  });
+  // An edit attaches no files, but the message it edits can carry one that a
+  // rich paste brought in unconfirmed; it holds the send as on any composer.
+  const attachmentPending = composerAttachmentsHoldSend(
+    { isIngestingImages, isResolvingFilePaths, isAttachingFiles },
+    containsPendingFileAttachment(editing.currentContent),
+  );
+
+  // Without this, the picker opens empty - nothing writes items into the store.
+  useComposerPickerItems({
+    pickerStore,
+    hostClient,
+    harnessId: editing.slashProviderId,
+    profileId: editing.slashProfileId,
+    mentionRoots: resolvedMentionRoots,
+    currentEpicId: editing.currentEpicId,
+    // The inline editor mounts only while a message is being edited - active.
+    isActive: true,
+    // An edited message is re-sent to THIS chat; there is no fork to offer.
+    localSlashCommands: NO_LOCAL_SLASH_COMMANDS,
+  });
+
+  const submit = useCallback(() => {
+    if (!editing.canSubmit || editing.pending || attachmentPending) {
+      return;
+    }
+    editing.onSubmit();
+  }, [attachmentPending, editing]);
+
+  const cancel = useCallback(() => {
+    if (editing.pending) return;
+    editing.onCancel();
+  }, [editing]);
+
+  const removeImageAttachment = useCallback((id: string) => {
+    editorRef.current?.removeImageAttachmentById(id);
+  }, []);
+
+  const openImagePicker = useCallback(() => {
+    const input = imageInputRef.current;
+    if (input === null) return;
+    input.value = "";
+    input.click();
+  }, []);
+
+  const handleImageChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(event.currentTarget.files ?? []);
+      event.currentTarget.value = "";
+      attachImageFiles(files);
+    },
+    [attachImageFiles],
+  );
+
+  const scheduleVisibilityCheck = useCallback(() => {
+    if (visibilityFrameRef.current !== null) {
+      cancelAnimationFrame(visibilityFrameRef.current);
+    }
+    visibilityFrameRef.current = requestAnimationFrame(() => {
+      visibilityFrameRef.current = null;
+      scrollIntoViewOnlyIfNeeded(containerRef.current);
+    });
+  }, []);
+
+  const onDocumentChange = useCallback(
+    (content: JsonContent, selection: { from: number; to: number }) => {
+      editing.onSnapshot(content, selection);
+      // See `chat-composer.tsx` for why an on-change caller is needed at all:
+      // a b64 node can enter long after mount without going through a paste.
+      noteContentImages(content);
+      scheduleVisibilityCheck();
+    },
+    [editing, noteContentImages, scheduleVisibilityCheck],
+  );
+
+  // Inline message editing tracks no persisted selection of its own (unlike
+  // the chat/landing/modal composer drafts) - a caret move only needs the
+  // same visibility nudge a real edit gets, never a content dispatch.
+  const onSelectionChange = useCallback(() => {
+    scheduleVisibilityCheck();
+  }, [scheduleVisibilityCheck]);
+
+  useLayoutEffect(() => {
+    const focusFrame = focusFrameRef;
+    const visibilityFrame = visibilityFrameRef;
+    // ComposerMenu is now caret-anchored (portal'd to body, positioned by
+    // floating-ui), so it picks the best direction at open-time on its own.
+    // No headroom-reserving scroll needed.
+    const scrollSnapshot = captureScrollSnapshot(containerRef.current);
+    let attempt = 0;
+    const focusWhenReady = (): void => {
+      editorRef.current?.focusAtEnd("hold-view");
+      restoreScrollSnapshot(scrollSnapshot);
+      attempt += 1;
+      if (attempt >= 4) {
+        focusFrameRef.current = null;
+        return;
+      }
+      focusFrameRef.current = requestAnimationFrame(focusWhenReady);
+    };
+    focusWhenReady();
+    return () => {
+      if (focusFrame.current !== null) {
+        cancelAnimationFrame(focusFrame.current);
+      }
+      if (visibilityFrame.current !== null) {
+        cancelAnimationFrame(visibilityFrame.current);
+      }
+    };
+  }, []);
+  const handleEditorKeyDown = useCallback(
+    (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      cancel();
+    },
+    [cancel],
+  );
+  const editor = useMemo(
+    () => (
+      <ComposerPromptEditor
+        ref={editorRef}
+        pickerStore={pickerStore}
+        initialContent={editing.initialContent}
+        initialSelection={null}
+        slashProviderId={editing.slashProviderId}
+        hasPastedImageBytes={hasPastedImageBytes}
+        ingestPastedComposerImages={ingestPastedComposerImages}
+        isActive
+        disabled={editing.pending}
+        placeholder="Edit message"
+        editorClassName="max-h-[min(60vh,18rem)] min-h-9 overflow-y-auto text-ui leading-7 text-foreground"
+        stabilizeImageAttachmentCaret={false}
+        onDocumentChange={onDocumentChange}
+        onSelectionChange={onSelectionChange}
+        onSubmit={submit}
+        onPaste={onPaste}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
+        onKeyDown={handleEditorKeyDown}
+        interceptKeyDown={null}
+        onFocus={NOOP}
+        onBlur={NOOP}
+        onEditorReady={reingestPendingImages}
+      />
+    ),
+    [
+      editing,
+      handleEditorKeyDown,
+      ingestPastedComposerImages,
+      onDragOver,
+      onDrop,
+      onPaste,
+      onDocumentChange,
+      onSelectionChange,
+      pickerStore,
+      hasPastedImageBytes,
+      reingestPendingImages,
+      submit,
+    ],
+  );
+  const editorSlot = useMemo(
+    () => (
+      <>
+        <ChatComposerAttachmentsStrip
+          taskId={null}
+          content={editing.currentContent}
+          editingQueueItemId={null}
+          onCancelQueueEdit={null}
+          onRemoveImage={removeImageAttachment}
+        />
+        {editor}
+      </>
+    ),
+    [editing.currentContent, editor, removeImageAttachment],
+  );
+  const toolbar = useMemo(
+    () => (
+      <div className="flex items-center gap-1 px-4 pb-3 pt-2">
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          tabIndex={-1}
+          aria-hidden="true"
+          className="hidden"
+          onChange={handleImageChange}
+        />
+        <MessageActionButton
+          label="Attach image"
+          variant="muted"
+          size="icon-sm"
+          tooltip
+          disabled={editing.pending}
+          className="mr-auto"
+          onClick={openImagePicker}
+        >
+          <ImagePlus className="size-4" aria-hidden />
+        </MessageActionButton>
+        <MessageActionButton
+          label="Cancel edit"
+          variant="secondary"
+          size="default"
+          tooltip
+          disabled={editing.pending}
+          className={undefined}
+          onClick={cancel}
+        >
+          Cancel
+        </MessageActionButton>
+        <MessageActionButton
+          label="Send edit"
+          variant="default"
+          size="default"
+          tooltip
+          disabled={!editing.canSubmit || editing.pending || attachmentPending}
+          className={undefined}
+          onClick={submit}
+        >
+          {attachmentPending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId="edit-attachment-pending"
+              variant={undefined}
+            />
+          ) : null}
+          Send
+        </MessageActionButton>
+      </div>
+    ),
+    [
+      cancel,
+      editing.canSubmit,
+      editing.pending,
+      handleImageChange,
+      openImagePicker,
+      attachmentPending,
+      submit,
+    ],
+  );
+
+  return (
+    <div ref={containerRef} className="w-full" {...REFUSING_DROP_ZONE_PROPS}>
+      <ComposerArea
+        pickerStore={pickerStore}
+        overlay={null}
+        utilityRail={null}
+        attachmentsStrip={null}
+        editor={editorSlot}
+        toolbar={toolbar}
+        // An edit in place stays in place: the message it replaces is the
+        // context for it.
+        expansion={null}
+      />
+    </div>
+  );
+}
+
+function MessageActionBar({
+  actions,
+}: {
+  actions: ChatMessageUserActions;
+}): ReactNode {
+  if (!actions.enabled && actions.editing === null) return null;
+
+  if (actions.confirmingDelete) {
+    return (
+      <>
+        <MessageActionButton
+          label="Confirm delete"
+          variant="success-ghost"
+          size="icon-sm"
+          tooltip={false}
+          disabled={!actions.enabled}
+          className={undefined}
+          onClick={actions.onDeleteConfirm}
+        >
+          <Check className="size-3.5" aria-hidden />
+        </MessageActionButton>
+        <MessageActionButton
+          label="Cancel delete"
+          variant="destructive-ghost"
+          size="icon-sm"
+          tooltip={false}
+          disabled={!actions.enabled}
+          className={undefined}
+          onClick={actions.onDeleteCancel}
+        >
+          <X className="size-3.5" aria-hidden />
+        </MessageActionButton>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <MessageActionButton
+        label="Edit message"
+        variant="ghost"
+        size="icon-sm"
+        tooltip={false}
+        disabled={!actions.enabled}
+        className={undefined}
+        onClick={actions.onEdit}
+      >
+        <Pencil className="size-3.5" aria-hidden />
+      </MessageActionButton>
+      <MessageActionButton
+        label="Delete message"
+        variant="destructive-ghost"
+        size="icon-sm"
+        tooltip={false}
+        disabled={!actions.enabled}
+        className={undefined}
+        onClick={actions.onDeleteRequest}
+      >
+        <Trash2 className="size-3.5" aria-hidden />
+      </MessageActionButton>
+    </>
+  );
+}
+
+function MessageActionButton(props: {
+  readonly label: string;
+  readonly variant:
+    | "default"
+    | "ghost"
+    | "muted"
+    | "secondary"
+    | "destructive-ghost"
+    | "success-ghost";
+  readonly size: "default" | "icon-sm";
+  readonly tooltip: boolean;
+  readonly disabled: boolean;
+  readonly className: string | undefined;
+  readonly onClick: () => void;
+  readonly children: ReactNode;
+}) {
+  const button = (
+    <Button
+      type="button"
+      variant={props.variant}
+      size={props.size}
+      disabled={props.disabled}
+      aria-label={props.label}
+      className={props.className}
+      onMouseDown={(event) => {
+        event.preventDefault();
+      }}
+      onClick={props.onClick}
+    >
+      {props.children}
+    </Button>
+  );
+  // The pencil/trash glyphs are self-explanatory, so the action chip skips the
+  // hover tooltip; text buttons (editor Cancel/Send) keep theirs.
+  if (!props.tooltip) return button;
+  return (
+    <TooltipWrapper
+      label={props.label}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      {button}
+    </TooltipWrapper>
+  );
+}
+
+/**
+ * Rewrite each hash-only `imageAttachment` node to carry inline `b64content`
+ * (resolved from the epic's attachments store) so the copied clipboard payload
+ * is self-contained. A hash whose bytes are unresolvable (a dangling ref) is
+ * left hash-only — the destination composer's paste validation strips it.
+ */
+async function inlineCopiedImageBytes(
+  content: JsonContent,
+  resolveBytes: (hash: string) => Promise<Uint8Array | null>,
+): Promise<JsonContent> {
+  const hashes = hashOnlyImageHashes(content);
+  if (hashes.length === 0) return content;
+  const base64ByHash = new Map<string, string>();
+  await Promise.all(
+    hashes.map(async (hash) => {
+      const bytes = await resolveBytes(hash);
+      if (bytes !== null) base64ByHash.set(hash, bytesToBase64(bytes));
+    }),
+  );
+  return inlineHashOnlyImageBytes(content, base64ByHash);
+}
+
+/**
+ * Copy behavior shared by the hover chip's copy button and the coarse-pointer
+ * "…" menu's Copy item, so both entry points write the identical clipboard
+ * payload (rich composer content with re-inlined image bytes when the message
+ * is structured, plain text otherwise).
+ */
+function useUserMessageCopy(
+  text: string,
+  structuredContent: JsonContent | null,
+): { readonly copied: boolean; readonly onCopy: () => void } {
+  const { copied, copy, copyWith } = useClipboardCopy({
+    resetMs: COPIED_RESET_MS,
+    onSuccess: null,
+    onError: handleCopyError,
+  });
+  // Chat-plane read with the reader's own bound. This replaces a
+  // `hasAttachmentBytes` pre-check that existed purely to stop
+  // `readAttachmentBytes` from waiting indefinitely and hanging the clipboard
+  // write; the bytes are no longer answerable synchronously, so the same
+  // guarantee now comes from the timeout. A hash that does not resolve stays
+  // hash-only, exactly as before, and downstream paste validation drops it.
+  const readChatAttachmentBytes = useChatAttachmentByteReader();
+  // The tab's host, read through the context directly rather than
+  // `useTabHostId()`: a copy button is not a tile-only affordance, and the
+  // right answer outside one is "no host to ask", not a thrown render.
+  const tabHostId = use(TabHostContext);
+  // Chat plane first, draft custody behind it. The chat reader answers for a
+  // SENT image; a hash the message carries that a composer is still holding -
+  // one copied out of a draft, or re-copied before its send settled - is in
+  // neither the chat plane nor the epic doc, and a bare hash pasted elsewhere
+  // resolves nowhere. Purely additive: this leg only runs where the chat
+  // reader already answered `null`.
+  const resolveAttachmentBytes = useCallback(
+    async (hash: string): Promise<Uint8Array | null> => {
+      const fromChat = await readChatAttachmentBytes(hash);
+      if (fromChat !== null) return fromChat;
+      return resolveDraftImageBytes(
+        hash,
+        draftImageByteTargetForHost(tabHostId),
+      );
+    },
+    [readChatAttachmentBytes, tabHostId],
+  );
+  const onCopy = useCallback(() => {
+    if (structuredContent === null) {
+      copy(text);
+      return;
+    }
+    // Re-inline each hash-only image node's bytes as `b64content` before writing
+    // to the clipboard, so a paste onto the start page (or into another epic's
+    // chat) carries real bytes instead of a bare hash that resolves nowhere.
+    copyWith(async () => {
+      const content = await inlineCopiedImageBytes(
+        structuredContent,
+        resolveAttachmentBytes,
+      );
+      const result = await copyComposerContentToClipboard({
+        content,
+        plainText: text,
+      });
+      // Image atoms serialize to no plain text, so a rich-write failure that
+      // silently degrades to plain text would drop every image while still
+      // resolving "copied". Surface that instead of a clean-looking success.
+      if (!result.richContentWritten && containsImageAtoms(content)) {
+        reportableErrorToast(
+          "Images weren't copied",
+          {
+            description:
+              "The text was copied, but this device couldn't place the images on the clipboard.",
+          },
+          {
+            title: "Images were not copied",
+            message: null,
+            code: null,
+            source: "Chat message",
+          },
+        );
+      }
+    });
+  }, [copy, copyWith, resolveAttachmentBytes, structuredContent, text]);
+
+  return { copied, onCopy };
+}
+
+/**
+ * Copy-to-clipboard button for the user message action chip. Sits alongside
+ * edit/delete but stays available even while a turn is streaming (when those
+ * two are gated off), so a user can always grab their own prompt text.
+ */
+function MessageCopyButton({
+  text,
+  structuredContent,
+}: {
+  text: string;
+  structuredContent: JsonContent | null;
+}): ReactNode {
+  const { copied, onCopy } = useUserMessageCopy(text, structuredContent);
+
+  return (
+    <MessageActionButton
+      label={copied ? "Copied" : "Copy message"}
+      variant="ghost"
+      size="icon-sm"
+      tooltip={false}
+      disabled={false}
+      className={undefined}
+      onClick={onCopy}
+    >
+      {copied ? (
+        <Check className="size-3.5" aria-hidden />
+      ) : (
+        <Copy className="size-3.5" aria-hidden />
+      )}
+    </MessageActionButton>
+  );
+}
+
+/**
+ * Coarse-pointer replacement for the hover action chip: a single muted "…"
+ * trigger straddling the bubble's bottom-right border (the chip's exact spot)
+ * opening a menu with Edit / Copy / Delete wired to the same handlers the chip
+ * uses. Hidden on fine pointers via `hidden pointer-coarse:flex`, so
+ * hover-capable desktops keep today's chip untouched; hover reveals never
+ * apply on coarse pointers (Tailwind gates `hover:` behind
+ * `@media (hover: hover)`), which is exactly the gap this menu fills.
+ *
+ * Delete hands off to the existing confirm flow: `onDeleteRequest` sets the
+ * chip's `confirmingDelete` state, which force-reveals the inline check/cross
+ * confirm on every pointer type - so this trigger unmounts while that confirm
+ * occupies the same corner, and no second confirm surface is introduced.
+ *
+ * Mirrors the chip's gating: Edit/Delete only while `actions` is present and
+ * enabled (`canModifyMessages`, not pending); Copy whenever there is text,
+ * including mid-stream when `actions` is null.
+ */
+function UserMessageTouchMenu({
+  confirmingDelete,
+  actions,
+  copyText,
+  structuredContent,
+}: {
+  readonly confirmingDelete: boolean;
+  readonly actions: ChatMessageUserActions | null;
+  readonly copyText: string;
+  readonly structuredContent: JsonContent | null;
+}): ReactNode {
+  const { onCopy } = useUserMessageCopy(copyText, structuredContent);
+  const canModify = actions !== null && actions.enabled;
+  const canCopy = copyText.trim().length > 0;
+  if (confirmingDelete || (!canModify && !canCopy)) return null;
+
+  return (
+    // Tucked onto the bubble's bottom-right corner, straddling the border
+    // (`top-full -translate-y-1/2`): the glyph's upper half only ever covers
+    // the bubble's bottom padding, so it can't collide with message text on
+    // short or multi-line bubbles, and it reads as attached to the bubble
+    // edge rather than floating beneath it. The confirming-delete chip takes
+    // this same corner region while this trigger is unmounted.
+    <div className="absolute right-1 top-full z-10 hidden -translate-y-1/2 pointer-coarse:flex">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="muted"
+            size="icon-xs"
+            aria-label="Message actions"
+            // Resting bg-muted matches ghost's aria-expanded open surface,
+            // so the glyph reads as a button before it is tapped. The
+            // invisible ::after slop widens the 24px visual control to the
+            // 44px touch-target guideline without painting anything (Button
+            // renders no ::after of its own, so nothing merges with it).
+            // muted-fill-ok: transcript row renders on bg-background/canvas
+            className="relative bg-muted after:absolute after:-inset-2.5 after:content-[''] opacity-70"
+          >
+            <MoreHorizontal className="size-3.5" aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {canModify ? (
+            <DropdownMenuItem onSelect={actions.onEdit}>
+              <Pencil className="size-3.5" />
+              Edit
+            </DropdownMenuItem>
+          ) : null}
+          {canCopy ? (
+            <DropdownMenuItem onSelect={onCopy}>
+              <Copy className="size-3.5" />
+              Copy
+            </DropdownMenuItem>
+          ) : null}
+          {canModify ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                onSelect={actions.onDeleteRequest}
+              >
+                <Trash2 className="size-3.5" />
+                Delete
+              </DropdownMenuItem>
+            </>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
+function scrollIntoViewOnlyIfNeeded(element: HTMLElement | null): void {
+  if (element === null) return;
+  const rect = element.getBoundingClientRect();
+  const scrollContainer = nearestScrollContainer(element);
+  const containerRect = scrollContainer?.getBoundingClientRect() ?? null;
+  const viewportBottom =
+    containerRect?.bottom ??
+    window.visualViewport?.height ??
+    document.documentElement.clientHeight;
+  const viewportTop = containerRect?.top ?? 0;
+  const padding = 16;
+  if (rect.bottom > viewportBottom - padding) {
+    scrollByAmount(scrollContainer, rect.bottom - viewportBottom + padding);
+    return;
+  }
+  if (rect.top < viewportTop + padding) {
+    scrollByAmount(scrollContainer, rect.top - viewportTop - padding);
+  }
+}
+
+type ScrollSnapshot = {
+  readonly container: HTMLElement | null;
+  readonly left: number;
+  readonly top: number;
+};
+
+function captureScrollSnapshot(element: HTMLElement | null): ScrollSnapshot {
+  const scrollContainer =
+    element === null ? null : nearestScrollContainer(element);
+  if (scrollContainer === null) {
+    return { container: null, left: window.scrollX, top: window.scrollY };
+  }
+  return {
+    container: scrollContainer,
+    left: scrollContainer.scrollLeft,
+    top: scrollContainer.scrollTop,
+  };
+}
+
+function restoreScrollSnapshot(snapshot: ScrollSnapshot): void {
+  if (snapshot.container === null) {
+    window.scrollTo(snapshot.left, snapshot.top);
+    return;
+  }
+  const { container } = snapshot;
+  moveChatTimelineScroller(container, snapshot.top, () => {
+    container.scrollLeft = snapshot.left;
+    container.scrollTop = snapshot.top;
+  });
+}
+
+function nearestScrollContainer(element: HTMLElement): HTMLElement | null {
+  let parent = element.parentElement;
+  while (parent !== null) {
+    const overflowY = window.getComputedStyle(parent).overflowY;
+    if (
+      overflowY === "auto" ||
+      overflowY === "scroll" ||
+      overflowY === "overlay"
+    ) {
+      return parent;
+    }
+    parent = parent.parentElement;
+  }
+  return null;
+}
+
+/**
+ * Written as an absolute target rather than a relative `scrollBy`: iOS WebKit
+ * applies a relative scroll twice (the synchronous move, then the same delta
+ * again on the next scroll event), so the reveal overshot by double on the
+ * phone. An absolute `scrollTo` lands once on every engine.
+ */
+function scrollByAmount(element: HTMLElement | null, top: number): void {
+  if (element === null) {
+    window.scrollTo({ top: window.scrollY + top, behavior: "auto" });
+    return;
+  }
+  const target = element.scrollTop + top;
+  moveChatTimelineScroller(element, target, () => {
+    element.scrollTo({ top: target, behavior: "auto" });
+  });
+}

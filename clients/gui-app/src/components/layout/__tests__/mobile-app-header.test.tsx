@@ -1,0 +1,603 @@
+import "../../../../__tests__/test-browser-apis";
+import {
+  Outlet,
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ArtifactSyncReading } from "@/lib/epic-sync-pill-state";
+import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  epicTabRightActionsKey,
+  landingTerminalRightActionsKey,
+  useMobileHeaderStore,
+} from "@/stores/layout/mobile-header-store";
+import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
+import { emptySystemTabs, tabItemId } from "@/stores/tabs/layout";
+import type { SystemTabs } from "@/stores/tabs/layout";
+import { useTabsStore } from "@/stores/tabs/store";
+import type { TabRef } from "@/stores/tabs/types";
+import { KEYBOARD_FOCUS_OWNER_PROPS } from "@/hooks/ui/use-keyboard-focus-layout";
+import {
+  holdScreenLandscape,
+  IPHONE_17,
+  lowerNativeKeyboard,
+  raiseNativeKeyboard,
+  restoreKeyboardEnvironment,
+} from "../../../../__tests__/short-keyboard-viewport-harness";
+
+// The real rate-limit / resource-monitor controls pull host + stream
+// providers; stub them to their accessible trigger so the header renders in
+// this minimal harness while the switch on the resource-monitor toggle stays
+// observable.
+vi.mock("@/providers/use-resolved-theme", () => ({
+  useResolvedTheme: () => ({ resolvedTheme: "light", themePreset: "default" }),
+}));
+vi.mock("@/components/layout/header/rate-limit-icon", () => ({
+  RateLimitIconButton: () => <button type="button" aria-label="Usage limits" />,
+}));
+vi.mock("@/components/resources/resource-monitor-popover", () => ({
+  ResourceMonitorPopover: () => (
+    <button type="button" aria-label="Resource monitor" />
+  ),
+}));
+vi.mock("@/components/notifications/mobile-notifications-button", () => ({
+  MobileNotificationsButton: () => (
+    <button type="button" aria-label="Notifications" />
+  ),
+}));
+
+// On the epic route the title slot renders `MobileEpicHeaderTitle`, which
+// pulls a host mutation (`useEpicUpdateTitle`) and the registered-epic
+// permission role. Neither host runtime nor a registered epic exist in this
+// bare harness, so stub both.
+// `mobile-app-header-cold-restore.test.tsx` drives these registry accessors for
+// real; here they are stubbed so the surface-resolution cases stay readable.
+const headerTitleState = vi.hoisted(() => ({
+  role: "owner",
+  liveTitle: null as string | null,
+  reading: null as ArtifactSyncReading | null,
+}));
+const updateTitleMutateSpy = vi.hoisted(() => vi.fn());
+vi.mock("@/hooks/epic/use-epic-title-mutation", () => ({
+  useEpicUpdateTitle: () => ({
+    mutate: updateTitleMutateSpy,
+    isPending: false,
+  }),
+}));
+vi.mock("@/lib/epic-selectors", () => ({
+  useRegisteredEpicPermissionRole: () => headerTitleState.role,
+  useRegisteredEpicTitle: () => headerTitleState.liveTitle,
+  // Cloud-homed throughout: the title's editability then follows the cloud
+  // verdict, which `beforeEach` grants. The local-home exemption and the
+  // unverified refusals are pinned in `epic-mobile-header-actions.test.tsx`.
+  useRegisteredEpicLocalHome: () => false,
+  useRegisteredEpicArtifactSyncReading: () => headerTitleState.reading,
+}));
+
+function renderAt(path: string) {
+  const rootRoute = createRootRoute({
+    component: () => (
+      <>
+        <MobileAppHeader />
+        <Outlet />
+      </>
+    ),
+  });
+  const nullComponent = () => null;
+  const routeTree = rootRoute.addChildren([
+    createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/",
+      component: nullComponent,
+    }),
+    createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/epics",
+      component: nullComponent,
+    }),
+    createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/epics/$epicId/$tabId",
+      component: nullComponent,
+    }),
+    createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/settings",
+      component: nullComponent,
+    }),
+    createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/draft/new",
+      component: nullComponent,
+    }),
+  ]);
+  const router = createRouter({
+    routeTree,
+    history: createMemoryHistory({ initialEntries: [path] }),
+  });
+  // `MobileEpicHeaderTitle` reads `useQueryClient()` for the session-host
+  // success arm's cloud-cache patch; the mocked mutation hook used to hide
+  // that dependency.
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
+}
+
+/**
+ * Focuses one tab in the layout the header reads.
+ *
+ * The layout is what a restored session actually restores - so every titled
+ * case here seeds it, INCLUDING the ones that also put the router on the
+ * matching route. A case that only set the route would be testing a state the
+ * phone never reaches.
+ */
+function focusTab(ref: TabRef, systemTabs: SystemTabs): void {
+  const itemId = tabItemId(ref);
+  useTabsStore.setState({
+    items: [{ kind: "tab", id: itemId, ref }],
+    activeItemId: itemId,
+    systemTabs,
+  });
+}
+
+function presentEpicTab(tabId: string, epicId: string, name: string): void {
+  focusTab({ kind: "epic", id: tabId }, emptySystemTabs());
+  useEpicCanvasStore.setState({
+    tabsById: { [tabId]: { tabId, epicId, name } },
+  });
+}
+
+function presentHistoryTab(): void {
+  focusTab(
+    { kind: "history", id: "history" },
+    {
+      ...emptySystemTabs(),
+      history: {
+        id: "history",
+        kind: "history",
+        name: "History",
+        lastPath: "/epics",
+      },
+    },
+  );
+}
+
+function presentSettingsTab(lastPath: string): void {
+  focusTab(
+    { kind: "settings", id: "settings" },
+    {
+      ...emptySystemTabs(),
+      settings: {
+        id: "settings",
+        kind: "settings",
+        name: "Settings",
+        lastPath,
+      },
+    },
+  );
+}
+
+function presentNoTab(): void {
+  useTabsStore.setState({
+    items: [],
+    activeItemId: null,
+    systemTabs: emptySystemTabs(),
+  });
+  useEpicCanvasStore.setState({ tabsById: {} });
+}
+
+// The header only ever renders on a phone, and whether the footer is on
+// screen is a viewport-dependent answer (`useStatusBarVisible`), so every case
+// runs at a phone's width rather than at jsdom's desktop default.
+const DESKTOP_VIEWPORT_WIDTH = window.innerWidth;
+const PHONE_VIEWPORT_WIDTH = 390;
+
+function setMobileFooter(on: boolean): void {
+  const layout = useLayoutStore.getState();
+  layout.setArrangement({ ...layout.arrangement, mobileFooter: on });
+}
+
+function setViewportWidth(width: number): void {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    value: width,
+  });
+}
+
+describe("MobileAppHeader", () => {
+  beforeEach(() => {
+    setViewportWidth(PHONE_VIEWPORT_WIDTH);
+    useMobileNavStore.setState({ open: false });
+    useMobileHeaderStore.setState({ rightActionEntries: new Map() });
+    presentNoTab();
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+    useLayoutStore
+      .getState()
+      .setRegionValues("resourceMonitor", { shown: "hidden" });
+    // A cloud-homed epic's rename follows the live cloud verdict; the store
+    // is module-scope Zustand defaulting to `signed-out`.
+    useAuthStore.setState({ status: "signed-in" });
+    headerTitleState.role = "owner";
+    headerTitleState.liveTitle = null;
+    headerTitleState.reading = null;
+    updateTitleMutateSpy.mockClear();
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    setViewportWidth(DESKTOP_VIEWPORT_WIDTH);
+    useAuthStore.setState({ status: "signed-out" });
+    useMobileNavStore.setState({ open: false });
+    useMobileHeaderStore.setState({ rightActionEntries: new Map() });
+    presentNoTab();
+  });
+
+  it("starts a fresh artifact warning grace when switching tasks", async () => {
+    presentEpicTab("t0", "e0", "First");
+    renderAt("/");
+    await screen.findByRole("button", { name: "Open menu" });
+    vi.useFakeTimers();
+    headerTitleState.reading = {
+      rooms: "stopped",
+      waitingNewArtifacts: 0,
+      pillState: "hostPending",
+    };
+    act(() => {
+      presentEpicTab("t1", "e1", "One");
+    });
+    act(() => {
+      vi.advanceTimersByTime(15_000);
+    });
+    const stoppedSentence =
+      "Artifacts not syncing. Your changes are saved on this computer. Your other devices and teammates won’t see them yet.";
+    fireEvent.click(screen.getByRole("button", { name: stoppedSentence }));
+    expect(screen.getByRole("dialog")).not.toBeNull();
+    act(() => {
+      presentEpicTab("t2", "e2", "Two");
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("button", { name: stoppedSentence })).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(14_999);
+    });
+    expect(screen.queryByRole("button", { name: stoppedSentence })).toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(
+      screen.getByRole("button", { name: stoppedSentence }),
+    ).not.toBeNull();
+  });
+
+  it("renders the hamburger menu trigger", async () => {
+    renderAt("/");
+    expect(
+      await screen.findByRole("button", { name: "Open menu" }),
+    ).not.toBeNull();
+  });
+
+  it("opens the navigation drawer store when the hamburger is tapped", async () => {
+    renderAt("/");
+    fireEvent.click(await screen.findByTestId("mobile-nav-trigger"));
+    expect(useMobileNavStore.getState().open).toBe(true);
+  });
+
+  it("titles the History and Settings surfaces", async () => {
+    presentHistoryTab();
+    renderAt("/epics");
+    expect((await screen.findByTestId("mobile-header-title")).textContent).toBe(
+      "History",
+    );
+    cleanup();
+    presentSettingsTab("/settings");
+    renderAt("/settings");
+    expect((await screen.findByTestId("mobile-header-title")).textContent).toBe(
+      "Settings",
+    );
+  });
+
+  // Same cold-restore path as the epic case below: the system tabs are restored
+  // into the layout while the router is still on the landing route it booted
+  // at, so neither surface has a route to be titled from.
+  it("titles the History and Settings surfaces restored under the landing route", async () => {
+    presentHistoryTab();
+    renderAt("/");
+    expect((await screen.findByTestId("mobile-header-title")).textContent).toBe(
+      "History",
+    );
+    cleanup();
+    presentSettingsTab("/settings");
+    renderAt("/");
+    expect((await screen.findByTestId("mobile-header-title")).textContent).toBe(
+      "Settings",
+    );
+  });
+
+  it("crumbs a restored settings section under the landing route", async () => {
+    presentSettingsTab("/settings/appearance");
+    renderAt("/");
+    expect((await screen.findByTestId("mobile-header-title")).textContent).toBe(
+      "SettingsAppearance",
+    );
+    expect(screen.getByTestId("mobile-header-settings-crumb")).not.toBeNull();
+  });
+
+  // Composer surfaces are where you already are, and each opens with a hero
+  // greeting - so neither the app name nor "New task" earns a header row.
+  it("renders no title on the composer surfaces", async () => {
+    renderAt("/");
+    await screen.findByRole("button", { name: "Open menu" });
+
+    expect(screen.queryByTestId("mobile-header-title")).toBeNull();
+    expect(screen.queryByText("Traycer")).toBeNull();
+    // The spacer still has to hold the right cluster against the right edge.
+    expect(screen.getByRole("button", { name: "Usage limits" })).not.toBeNull();
+
+    cleanup();
+    renderAt("/draft/new");
+    await screen.findByRole("button", { name: "Open menu" });
+
+    expect(screen.queryByTestId("mobile-header-title")).toBeNull();
+    expect(screen.queryByText("New task")).toBeNull();
+  });
+
+  it("titles the epic surface with the open epic's name", async () => {
+    presentEpicTab("t1", "e1", "Wire up billing");
+    renderAt("/epics/e1/t1");
+    expect((await screen.findByTestId("mobile-header-title")).textContent).toBe(
+      "Wire up billing",
+    );
+  });
+
+  // The phone shell has no route persistence: its WebView boots at `/` and the
+  // restored epic tab is painted from the tab layout alone, with the router
+  // still on the landing route. The header has to name that tab anyway - this
+  // is the cold-restore path, and seeding the epic ROUTE here (as a suite that
+  // renders at `/epics/e1/t1` does) would hide the whole failure.
+  it("titles the epic surface restored under the landing route", async () => {
+    presentEpicTab("t1", "e1", "Wire up billing");
+    renderAt("/");
+    expect((await screen.findByTestId("mobile-header-title")).textContent).toBe(
+      "Wire up billing",
+    );
+  });
+
+  it("renders the epic title as an editable control for an editor and plain text for a viewer", async () => {
+    presentEpicTab("t1", "e1", "Wire up billing");
+    headerTitleState.role = "owner";
+    renderAt("/epics/e1/t1");
+    expect(
+      (await screen.findByTestId("mobile-epic-header-title")).tagName,
+    ).toBe("BUTTON");
+    cleanup();
+
+    headerTitleState.role = "viewer";
+    renderAt("/epics/e1/t1");
+    expect(
+      (await screen.findByTestId("mobile-epic-header-title")).tagName,
+    ).toBe("SPAN");
+  });
+
+  it("always renders the rate-limit control", async () => {
+    renderAt("/");
+    expect(
+      await screen.findByRole("button", { name: "Usage limits" }),
+    ).not.toBeNull();
+  });
+
+  // Notifications moved out of the hamburger drawer into this cluster; the
+  // drawer no longer carries a bell at all.
+  it("always renders the notifications control", async () => {
+    renderAt("/");
+    expect(
+      await screen.findByRole("button", { name: "Notifications" }),
+    ).not.toBeNull();
+  });
+
+  // The phone header drew the usage glyph whatever the switch said, the
+  // same bug class the resource-monitor gate never had.
+  it.each([
+    ["resourceMonitor", "Resource monitor"],
+    ["usageLimits", "Usage limits"],
+  ] as const)(
+    "shows the %s control only when its toggle is on",
+    async (region, name) => {
+      useLayoutStore.getState().setRegionValues(region, { shown: "shown" });
+      renderAt("/");
+      expect(await screen.findByRole("button", { name })).not.toBeNull();
+
+      cleanup();
+      useLayoutStore.getState().setRegionValues(region, { shown: "hidden" });
+      renderAt("/");
+      await screen.findByRole("button", { name: "Open menu" });
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    },
+  );
+
+  // Either/or with the footer: with it switched on the footer carries both
+  // readings, so the header draws neither - whatever their own switches say.
+  it("gives both readings up to the footer while the footer is switched on", async () => {
+    const layout = useLayoutStore.getState();
+    layout.setRegionValues("resourceMonitor", { shown: "shown" });
+    layout.setRegionValues("usageLimits", { shown: "shown" });
+    setMobileFooter(true);
+    renderAt("/");
+    await screen.findByRole("button", { name: "Open menu" });
+    expect(screen.queryByRole("button", { name: "Usage limits" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Resource monitor" }),
+    ).toBeNull();
+
+    cleanup();
+    setMobileFooter(false);
+    renderAt("/");
+    expect(
+      await screen.findByRole("button", { name: "Usage limits" }),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Resource monitor" }),
+    ).not.toBeNull();
+  });
+
+  it("renders the presented epic tab's registered right actions", async () => {
+    useMobileHeaderStore
+      .getState()
+      .registerRightActions(
+        epicTabRightActionsKey("t1"),
+        <button type="button">epic action</button>,
+      );
+    presentEpicTab("t1", "e1", "Wire up billing");
+    renderAt("/epics/e1/t1");
+    expect(
+      await screen.findByRole("button", { name: "epic action" }),
+    ).not.toBeNull();
+  });
+
+  // The registry outlives presentation on purpose: surfaces stay registered
+  // while merely retained. What keeps their controls out of another surface's
+  // header is resolution, so these two pin the header end of it.
+  it("shows no registered actions on the History and Settings surfaces", async () => {
+    useMobileHeaderStore
+      .getState()
+      .registerRightActions(
+        landingTerminalRightActionsKey("page-1"),
+        <button type="button">terminal toggle</button>,
+      );
+    presentHistoryTab();
+    renderAt("/");
+    await screen.findByRole("button", { name: "Open menu" });
+    expect(
+      screen.queryByRole("button", { name: "terminal toggle" }),
+    ).toBeNull();
+
+    cleanup();
+    presentSettingsTab("/settings");
+    renderAt("/");
+    await screen.findByRole("button", { name: "Open menu" });
+    expect(
+      screen.queryByRole("button", { name: "terminal toggle" }),
+    ).toBeNull();
+  });
+
+  // The return leg of a launch round-trip: the same start page is presented
+  // again and its long-lived registration simply resolves - no surface had to
+  // observe the switch and re-publish.
+  it("shows the landing terminal entry again when its start page returns", async () => {
+    useMobileHeaderStore
+      .getState()
+      .registerRightActions(
+        landingTerminalRightActionsKey("page-1"),
+        <button type="button">terminal toggle</button>,
+      );
+    presentEpicTab("t1", "e1", "Wire up billing");
+    renderAt("/");
+    await screen.findByRole("button", { name: "Open menu" });
+    expect(
+      screen.queryByRole("button", { name: "terminal toggle" }),
+    ).toBeNull();
+
+    focusTab({ kind: "draft", id: "page-1" }, emptySystemTabs());
+    expect(
+      await screen.findByRole("button", { name: "terminal toggle" }),
+    ).not.toBeNull();
+  });
+
+  // Keyed per hosting page: a focus move between two start pages must not
+  // resolve the departing page's toggle across the switch.
+  it("ignores a landing entry registered for another start page", async () => {
+    useMobileHeaderStore
+      .getState()
+      .registerRightActions(
+        landingTerminalRightActionsKey("page-1"),
+        <button type="button">terminal toggle</button>,
+      );
+    focusTab({ kind: "draft", id: "page-2" }, emptySystemTabs());
+    renderAt("/");
+    await screen.findByRole("button", { name: "Open menu" });
+    expect(
+      screen.queryByRole("button", { name: "terminal toggle" }),
+    ).toBeNull();
+  });
+
+  // A departing epic tab's entry may outlive its focus by a commit; a stale
+  // entry must resolve to nothing rather than to another tab's header.
+  it("ignores a registered entry for an epic tab that is not presented", async () => {
+    useMobileHeaderStore
+      .getState()
+      .registerRightActions(
+        epicTabRightActionsKey("t-stale"),
+        <button type="button">stale epic action</button>,
+      );
+    presentEpicTab("t1", "e1", "Wire up billing");
+    renderAt("/epics/e1/t1");
+    await screen.findByRole("button", { name: "Open menu" });
+    expect(
+      screen.queryByRole("button", { name: "stale epic action" }),
+    ).toBeNull();
+  });
+
+  describe("on a short viewport under the keyboard", () => {
+    beforeEach(() => {
+      holdScreenLandscape();
+      raiseNativeKeyboard(IPHONE_17);
+    });
+    afterEach(() => {
+      restoreKeyboardEnvironment();
+    });
+
+    function renderComposer(): void {
+      render(
+        <div {...KEYBOARD_FOCUS_OWNER_PROPS}>
+          <textarea aria-label="Reply" />
+        </div>,
+      );
+    }
+
+    function appHeader(): HTMLElement {
+      return screen.getByTestId("app-header");
+    }
+
+    it("hides while a composer holds the focus, and comes back with the keyboard down", async () => {
+      renderAt("/");
+      await screen.findByRole("button", { name: "Open menu" });
+      renderComposer();
+      expect(appHeader().hidden).toBe(false);
+
+      act(() => screen.getByLabelText("Reply").focus());
+      expect(appHeader().hidden).toBe(true);
+
+      lowerNativeKeyboard();
+      expect(appHeader().hidden).toBe(false);
+    });
+
+    it("stays while its own title field holds the focus", async () => {
+      presentEpicTab("t1", "e1", "Wire up billing");
+      renderAt("/epics/e1/t1");
+      const title = await screen.findByTestId("mobile-epic-header-title");
+      renderComposer();
+      fireEvent.keyDown(title, { key: "Enter" });
+      expect(document.activeElement).toBe(screen.getByLabelText("Epic title"));
+      expect(appHeader().hidden).toBe(false);
+    });
+  });
+});

@@ -1,0 +1,222 @@
+import {
+  useCallback,
+  useRef,
+  type ClipboardEventHandler,
+  type DragEventHandler,
+  type Ref,
+} from "react";
+import { PHONE_COMPOSER_EDITOR_CAP_CLASSNAME } from "@/components/home/composer/composer-editor-classnames";
+import { cn } from "@/lib/utils";
+import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
+
+import type { ChatComposerSubmitSource } from "@/lib/chats/resolve-steer-submit";
+import { isMac, modLabel } from "@/lib/keybindings/platform";
+import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
+import { useIsComposerNarrow } from "@/components/home/composer/composer-narrow-hooks";
+
+import {
+  ComposerPromptEditor,
+  type ComposerPromptEditorHandle,
+} from "./composer-prompt-editor";
+import type {
+  PastedComposerImage,
+  PastedComposerImageOutcome,
+} from "./editor/extensions/chat-paste-handler";
+import { useBindingForAction } from "@/stores/settings/keybinding-store";
+import type { ComposerPickerStore } from "./picker/composer-picker-store";
+import { isPromptSuggestionAcceptEvent } from "./prompt-suggestion";
+import {
+  PROMPT_SUGGESTION_SWIPE_EDITOR_CLASSNAME,
+  usePromptSuggestionSwipe,
+} from "./use-prompt-suggestion-swipe";
+
+const PLACEHOLDER =
+  "Ask anything, @tag files/folder, or use / to show available commands";
+const NARROW_PLACEHOLDER = "Ask anything…";
+// Mid-turn steer discovery hint (decision 8): shown as the empty-composer
+// placeholder while a steer-capable turn runs, naming both keys.
+const STEER_HINT_PLACEHOLDER = isMac()
+  ? "Enter to queue · ⌘Enter to steer this turn"
+  : "Enter to queue · Ctrl+Enter to steer this turn";
+const NARROW_STEER_HINT_PLACEHOLDER = `${modLabel()}+Enter to steer`;
+const NOOP = (): void => undefined;
+interface ChatComposerEditorSlotProps {
+  readonly ref: Ref<ComposerPromptEditorHandle>;
+  readonly pickerStore: ComposerPickerStore;
+  readonly initialContent: JsonContent;
+  readonly initialSelection: { from: number; to: number } | null;
+  readonly slashProviderId: GuiHarnessId;
+  readonly hasPastedImageBytes: ((hash: string) => boolean) | null;
+  readonly ingestPastedComposerImages:
+    | ((
+        images: ReadonlyArray<PastedComposerImage>,
+      ) => ReadonlyArray<PastedComposerImageOutcome>)
+    | null;
+  readonly isActive: boolean;
+  readonly disabled: boolean;
+  readonly onUserInput?: (wasEmpty: boolean) => void;
+  readonly onDocumentChange: (
+    content: JsonContent,
+    selection: { from: number; to: number },
+  ) => void;
+  readonly onSelectionChange: (selection: { from: number; to: number }) => void;
+  readonly onSubmit: (source: ChatComposerSubmitSource) => void;
+  /** True while a Cmd+Enter here would steer the running turn (decision 8 hint). */
+  readonly steerHintActive: boolean;
+  /**
+   * The provider's predicted next prompt, already gated by
+   * `promptSuggestionAllowed` (so the draft is empty); `null` offers nothing.
+   * Shown as the placeholder; the "Accept suggested reply" key (→ unless
+   * rebound) or a rightward swipe on a touch device accepts it.
+   */
+  readonly suggestedPrompt: string | null;
+  /**
+   * Fills and focuses the composer with the suggestion. Must never send.
+   * Returns whether it filled: the live draft can stop being empty before this
+   * prop re-renders, and a declined fill must leave the key its ordinary job.
+   */
+  readonly onAcceptSuggestion: (suggestion: string) => boolean;
+  readonly onPaste: ClipboardEventHandler<HTMLElement>;
+  readonly onDragOver: DragEventHandler<HTMLElement>;
+  readonly onDrop: DragEventHandler<HTMLElement>;
+  readonly onEditorReady: (() => void) | null;
+  /** Fired when the user focuses this composer. */
+  readonly onFocus: () => void;
+}
+
+/**
+ * Bound to the narrow context exposed by `<ComposerShell>` so the chat
+ * composer can swap placeholders without ChatComposer re-rendering on
+ * width changes.
+ */
+export function ChatComposerEditorSlot(props: ChatComposerEditorSlotProps) {
+  const {
+    ref,
+    pickerStore,
+    initialContent,
+    initialSelection,
+    slashProviderId,
+    hasPastedImageBytes,
+    ingestPastedComposerImages,
+    isActive,
+    disabled,
+    onDocumentChange,
+    onUserInput,
+    onSelectionChange,
+    onSubmit,
+    steerHintActive,
+    suggestedPrompt,
+    onAcceptSuggestion,
+    onPaste,
+    onDragOver,
+    onDrop,
+    onEditorReady,
+    onFocus,
+  } = props;
+  const isNarrow = useIsComposerNarrow();
+  const basePlaceholder = isNarrow ? NARROW_PLACEHOLDER : PLACEHOLDER;
+  let placeholder = basePlaceholder;
+  // The steer hint is entirely a naming of two keys, so where shortcut hints
+  // are suppressed there is nothing left of it to show - the composer keeps
+  // its ordinary placeholder rather than a hint stripped of its chord.
+  if (steerHintActive && shortcutHintsVisible()) {
+    placeholder = isNarrow
+      ? NARROW_STEER_HINT_PLACEHOLDER
+      : STEER_HINT_PLACEHOLDER;
+  }
+  // A suggestion only stands between turns (the provider predicts it at a
+  // turn's end), so it outranks the steer hint, which only stands mid-turn.
+  if (suggestedPrompt !== null) {
+    placeholder = suggestedPrompt;
+  }
+
+  // The accept key is the person's own binding, read live so a rebind in
+  // Settings applies to the next keystroke. It is matched inside the editor,
+  // ahead of its keymaps, so a binding the editor would otherwise act on
+  // first (Enter submits; the picker commits on Tab) can still accept - and so
+  // the picker, when open, is yielded to explicitly rather than by luck.
+  const acceptBinding = useBindingForAction("composer.suggestion.accept");
+  // A fill made by a held key: its OS repeats keep arriving after the fill,
+  // and with the draft no longer empty they would fall through to the key's
+  // ordinary job - on an Enter binding, submitting the text just filled. The
+  // repeats of THAT physical key are taken until it is pressed afresh. Keyed
+  // by code, not a flag: a modifier tapped while the key is still held is a
+  // fresh keydown of another key, and must not hand the held key back.
+  const swallowRepeatsOfCodeRef = useRef<string | null>(null);
+  const interceptKeyDown = useCallback(
+    (event: KeyboardEvent): boolean => {
+      if (swallowRepeatsOfCodeRef.current === event.code) {
+        if (event.repeat) return true;
+        swallowRepeatsOfCodeRef.current = null;
+      }
+      if (suggestedPrompt === null) return false;
+      if (
+        !isPromptSuggestionAcceptEvent({
+          binding: acceptBinding,
+          event,
+          pickerOpen: pickerStore.getState().open,
+        })
+      ) {
+        return false;
+      }
+      const filled = onAcceptSuggestion(suggestedPrompt);
+      if (filled) swallowRepeatsOfCodeRef.current = event.code;
+      return filled;
+    },
+    [acceptBinding, onAcceptSuggestion, pickerStore, suggestedPrompt],
+  );
+
+  // Touch has no accept key, so a rightward swipe over the composer accepts
+  // instead. A tap is left alone: it is how the user starts typing.
+  const swipeHandlers = usePromptSuggestionSwipe(
+    suggestedPrompt,
+    onAcceptSuggestion,
+  );
+
+  return (
+    // `contents` keeps the wrapper out of layout; it only observes the swipe.
+    <div
+      className="contents"
+      onPointerDown={swipeHandlers.onPointerDown}
+      onPointerMove={swipeHandlers.onPointerMove}
+      onPointerUp={swipeHandlers.onPointerUp}
+      onPointerCancel={swipeHandlers.onPointerCancel}
+    >
+      <ComposerPromptEditor
+        ref={ref}
+        pickerStore={pickerStore}
+        initialContent={initialContent}
+        initialSelection={initialSelection}
+        slashProviderId={slashProviderId}
+        hasPastedImageBytes={hasPastedImageBytes}
+        ingestPastedComposerImages={ingestPastedComposerImages}
+        isActive={isActive}
+        disabled={disabled}
+        placeholder={placeholder}
+        // Desktop keeps the chat editor compact; a phone lets it grow to the
+        // same cap as the landing composer.
+        editorClassName={cn(
+          "max-h-[3.5lh] min-h-9",
+          PHONE_COMPOSER_EDITOR_CAP_CLASSNAME,
+          // Only while there is a suggestion to swipe: a draft keeps the
+          // browser's own handling of a sideways drag through its text.
+          suggestedPrompt !== null && PROMPT_SUGGESTION_SWIPE_EDITOR_CLASSNAME,
+        )}
+        stabilizeImageAttachmentCaret
+        onDocumentChange={onDocumentChange}
+        onUserInput={onUserInput}
+        onSelectionChange={onSelectionChange}
+        onSubmit={onSubmit}
+        onPaste={onPaste}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
+        onKeyDown={undefined}
+        interceptKeyDown={interceptKeyDown}
+        onFocus={onFocus}
+        onBlur={NOOP}
+        onEditorReady={onEditorReady}
+      />
+    </div>
+  );
+}

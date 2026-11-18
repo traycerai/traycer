@@ -1,0 +1,728 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createElement, type ReactNode } from "react";
+import { hostQueryKeys } from "@/lib/query-keys";
+import type { WorktreeWorkspaceSummaryV14 } from "@traycer/protocol/host/worktree-schemas";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  WorktreeBinding,
+  WorktreeBindingEntry,
+  WorktreeIntent,
+} from "@traycer/protocol/host/worktree-schemas";
+import {
+  runDirectoryFromWorktreeBindingAndIntent,
+  mentionRootsFromWorktreeIntent,
+  mentionRootsFromWorktreeBinding,
+  mentionRootsFromWorktreeBindingAndIntent,
+  useLandingComposerMentionRoots,
+  useLandingRunWorkingDirectory,
+  useWorkspaceMentionRoots,
+} from "../use-workspace-mention-roots";
+import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useWorktreeIntentStagingStore } from "@/stores/worktree/worktree-intent-staging-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+
+const HOST_A = "host-a";
+
+// `useLandingComposerMentionRoots` resolves the landing composer's surface
+// pin (pin ?? effective) to scope its global-folders fallback. No pin store
+// or authority is mounted in this suite, so left unmocked it always resolves
+// `null` (empty global folders). Mock the narrow leaf hook module so the
+// landing composer suite below can seed and read the SAME host's bucket the
+// hook resolves against.
+vi.mock("@/hooks/host/use-composer-surface-host-pin", () => ({
+  useComposerSurfaceHostPin: () => ({
+    selection: null,
+    honoredSelection: null,
+    setSelection: () => undefined,
+    resolvedHostId: "host-a",
+    isPinned: false,
+    latchOnFirstUse: () => undefined,
+  }),
+}));
+
+// `useLandingDraftStore.createDraft` separately snapshots the workspace of the
+// app-wide host, resolved imperatively rather than through a hook (see
+// `landing-draft-store.ts`). That read is `activeHostIdOrNull` -> the
+// authority projection, which `resetStores` seeds; the spine override below
+// survives only for the other imperative callers this suite's tree reaches.
+// Both are pinned to the SAME host id as the reactive hook above, or a draft
+// created here would seed an empty workspace. Every other export is preserved
+// via the `importOriginal` spread.
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return {
+    ...actual,
+    getHostBindingSnapshot: () => ({
+      hostClient: { getActiveHostId: () => "host-a" },
+    }),
+  };
+});
+
+function setGlobalFolders(folders: ReadonlyArray<string>): void {
+  useWorkspaceFoldersStore.setState({
+    byHost: {
+      [HOST_A]: {
+        folders,
+        folderInfoByPath: {},
+        primaryPath: folders[0] ?? null,
+      },
+    },
+  });
+}
+
+function resetStores(): void {
+  useWorkspaceFoldersStore.setState({ byHost: {} });
+  useLandingDraftStore.setState({
+    drafts: [],
+    activeDraftId: null,
+  });
+  useWorktreeIntentStagingStore.setState({ intentByKey: {} });
+  // The draft's workspace bucket resolves through the authority projection now
+  // (P4.2/D17 retired the spine's active slot). SEEDED rather than stubbed -
+  // this mock spreads `importOriginal`, so the production read runs for real
+  // and an unseeded store would silently select the unresolved-host bucket.
+  // Same host the spine override above pins.
+  useSelectionAuthorityStore.setState({
+    attached: true,
+    effectiveHostId: "host-a",
+  });
+}
+
+function bindingEntry(
+  overrides: Partial<WorktreeBindingEntry>,
+): WorktreeBindingEntry {
+  return {
+    workspacePath: "/repo",
+    mode: "local",
+    repoIdentifier: null,
+    worktreePath: null,
+    branch: null,
+    isPrimary: true,
+    isImported: false,
+    setupState: "not_required",
+    setupTerminalSessionId: null,
+    setupExitCode: null,
+    setupFailedAt: null,
+    createdAt: 0,
+    ownedSubmodules: [],
+    ...overrides,
+  };
+}
+
+function binding(
+  entries: ReadonlyArray<WorktreeBindingEntry>,
+): WorktreeBinding {
+  return { entries: [...entries] };
+}
+
+function worktreeIntent(
+  workspacePath: string,
+  intent: "local" | "create" | "import",
+  worktreePath: string | null,
+): WorktreeIntent {
+  const base = {
+    workspacePath,
+    isPrimary: true,
+    repoIdentifier: null,
+  } as const;
+  if (intent === "local") {
+    return { entries: [{ kind: "local", ...base }] };
+  }
+  if (intent === "import") {
+    return {
+      entries: [{ kind: "import", ...base, worktreePath: worktreePath ?? "" }],
+    };
+  }
+  return {
+    entries: [
+      {
+        kind: "worktree",
+        scripts: null,
+        ...base,
+        branch: {
+          type: "new",
+          name: "feature/test",
+          source: "main",
+          carryUncommittedChanges: false,
+        },
+      },
+    ],
+  };
+}
+
+describe("useWorkspaceMentionRoots", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+  afterEach(() => {
+    cleanup();
+    resetStores();
+  });
+
+  it("uses the preferred roots when they are non-empty", () => {
+    setGlobalFolders(["/global/a"]);
+    const { result } = renderHook(() =>
+      useWorkspaceMentionRoots(["/epic/x", "/epic/y"], true, HOST_A),
+    );
+    expect(result.current).toEqual(["/epic/x", "/epic/y"]);
+  });
+
+  it("falls back to the global folders when preferred roots are null (landing composer)", () => {
+    setGlobalFolders(["/global/a", "/global/b"]);
+    const { result } = renderHook(() =>
+      useWorkspaceMentionRoots(null, true, HOST_A),
+    );
+    expect(result.current).toEqual(["/global/a", "/global/b"]);
+  });
+
+  it("falls back to the global folders when preferred roots are empty (binding not loaded yet)", () => {
+    setGlobalFolders(["/global/a"]);
+    const { result } = renderHook(() =>
+      useWorkspaceMentionRoots([], true, HOST_A),
+    );
+    expect(result.current).toEqual(["/global/a"]);
+  });
+
+  it("does not fall back to global folders when an empty source is explicit", () => {
+    setGlobalFolders(["/global/a"]);
+    const { result } = renderHook(() =>
+      useWorkspaceMentionRoots([], false, HOST_A),
+    );
+    expect(result.current).toEqual([]);
+  });
+
+  it("returns an empty list when neither preferred nor global folders exist", () => {
+    const { result } = renderHook(() =>
+      useWorkspaceMentionRoots([], true, HOST_A),
+    );
+    expect(result.current).toEqual([]);
+  });
+
+  it("dedupes and trims the resolved roots", () => {
+    const { result } = renderHook(() =>
+      useWorkspaceMentionRoots([" /epic/x ", "/epic/x", ""], true, HOST_A),
+    );
+    expect(result.current).toEqual(["/epic/x"]);
+  });
+});
+
+describe("useLandingComposerMentionRoots", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+  afterEach(() => {
+    cleanup();
+    resetStores();
+  });
+
+  it("uses an imported global worktree path for the base landing composer", () => {
+    setGlobalFolders(["/repo"]);
+    useWorktreeIntentStagingStore
+      .getState()
+      .stageIntent(
+        { surface: "landing", hostId: "host-a", draftId: null },
+        worktreeIntent("/repo", "import", "/worktrees/repo-feature"),
+      );
+
+    const { result } = renderHook(() => useLandingComposerMentionRoots(null));
+
+    expect(result.current).toEqual(["/worktrees/repo-feature"]);
+  });
+
+  it("uses an imported draft worktree path for draft-scoped landing composers", () => {
+    setGlobalFolders(["/repo"]);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    useWorktreeIntentStagingStore
+      .getState()
+      .stageIntent(
+        { surface: "landing", hostId: "host-a", draftId },
+        worktreeIntent("/repo", "import", "/worktrees/repo-feature"),
+      );
+
+    const { result } = renderHook(() =>
+      useLandingComposerMentionRoots(draftId),
+    );
+
+    expect(result.current).toEqual(["/worktrees/repo-feature"]);
+  });
+});
+
+describe("mentionRootsFromWorktreeBinding", () => {
+  it("returns an empty list for a null binding", () => {
+    expect(mentionRootsFromWorktreeBinding(null)).toEqual([]);
+  });
+
+  it("uses the workspace path for local-mode entries", () => {
+    const roots = mentionRootsFromWorktreeBinding(
+      binding([
+        bindingEntry({
+          workspacePath: "/Users/me/Work/traycer",
+          mode: "local",
+        }),
+      ]),
+    );
+    expect(roots).toEqual(["/Users/me/Work/traycer"]);
+  });
+
+  it("uses the worktree path for worktree-mode entries", () => {
+    const roots = mentionRootsFromWorktreeBinding(
+      binding([
+        bindingEntry({
+          workspacePath: "/repo",
+          mode: "worktree",
+          worktreePath: "/repo-worktrees/feature",
+        }),
+      ]),
+    );
+    expect(roots).toEqual(["/repo-worktrees/feature"]);
+  });
+
+  it("falls back to the workspace path when a worktree-mode entry has no worktree path", () => {
+    const roots = mentionRootsFromWorktreeBinding(
+      binding([
+        bindingEntry({
+          workspacePath: "/repo",
+          mode: "worktree",
+          worktreePath: null,
+        }),
+      ]),
+    );
+    expect(roots).toEqual(["/repo"]);
+  });
+
+  it("collects and dedupes roots across multiple entries", () => {
+    const roots = mentionRootsFromWorktreeBinding(
+      binding([
+        bindingEntry({ workspacePath: "/repo-a", mode: "local" }),
+        bindingEntry({
+          workspacePath: "/repo-b",
+          mode: "worktree",
+          worktreePath: "/wt/b",
+        }),
+        bindingEntry({ workspacePath: "/repo-a", mode: "local" }),
+      ]),
+    );
+    expect(roots).toEqual(["/repo-a", "/wt/b"]);
+  });
+});
+
+describe("mentionRootsFromWorktreeIntent", () => {
+  it("uses the selected imported worktree path for matching workspace rows", () => {
+    expect(
+      mentionRootsFromWorktreeIntent(
+        ["/repo"],
+        worktreeIntent("/repo", "import", "/worktrees/repo-feature"),
+      ),
+    ).toEqual(["/worktrees/repo-feature"]);
+  });
+
+  it("keeps local and pending create rows rooted at the workspace path", () => {
+    expect(
+      mentionRootsFromWorktreeIntent(["/repo-local", "/repo-create"], {
+        entries: [
+          ...worktreeIntent("/repo-local", "local", null).entries,
+          ...worktreeIntent("/repo-create", "create", null).entries,
+        ],
+      }),
+    ).toEqual(["/repo-local", "/repo-create"]);
+  });
+});
+
+describe("mentionRootsFromWorktreeBindingAndIntent", () => {
+  it("matches the plain binding roots when no intent is staged", () => {
+    const bound = binding([
+      bindingEntry({
+        workspacePath: "/repo",
+        mode: "worktree",
+        worktreePath: "/wt/old",
+      }),
+    ]);
+    expect(mentionRootsFromWorktreeBindingAndIntent(bound, null)).toEqual([
+      "/wt/old",
+    ]);
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(bound, { entries: [] }),
+    ).toEqual(["/wt/old"]);
+  });
+
+  it("resolves a staged create over a bound (possibly deleted) worktree to the source checkout", () => {
+    // Regression: replacing a chat's dead worktree with "new worktree" from
+    // the composer must stop discovery from probing the superseded path -
+    // the source checkout stands in until the host materializes the worktree.
+    const bound = binding([
+      bindingEntry({
+        workspacePath: "/repo",
+        mode: "worktree",
+        worktreePath: "/wt/deleted-branch",
+      }),
+    ]);
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        bound,
+        worktreeIntent("/repo", "create", null),
+      ),
+    ).toEqual(["/repo"]);
+  });
+
+  it("resolves a staged import to its existing on-disk worktree", () => {
+    const bound = binding([
+      bindingEntry({ workspacePath: "/repo", mode: "local" }),
+    ]);
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        bound,
+        worktreeIntent("/repo", "import", "/wt/feature"),
+      ),
+    ).toEqual(["/wt/feature"]);
+  });
+
+  it("resolves a staged local pick back to the workspace path", () => {
+    const bound = binding([
+      bindingEntry({
+        workspacePath: "/repo",
+        mode: "worktree",
+        worktreePath: "/wt/old",
+      }),
+    ]);
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        bound,
+        worktreeIntent("/repo", "local", null),
+      ),
+    ).toEqual(["/repo"]);
+  });
+
+  it("keeps unstaged binding entries alongside a staged override", () => {
+    const bound = binding([
+      bindingEntry({
+        workspacePath: "/repo-a",
+        mode: "worktree",
+        worktreePath: "/wt/a",
+      }),
+      bindingEntry({ workspacePath: "/repo-b", mode: "local" }),
+    ]);
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        bound,
+        worktreeIntent("/repo-a", "create", null),
+      ),
+    ).toEqual(["/repo-a", "/repo-b"]);
+  });
+
+  it("appends staged entries for folders absent from the binding", () => {
+    const bound = binding([
+      bindingEntry({ workspacePath: "/repo-a", mode: "local" }),
+    ]);
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        bound,
+        worktreeIntent("/repo-b", "import", "/wt/b"),
+      ),
+    ).toEqual(["/repo-a", "/wt/b"]);
+  });
+
+  it("projects staged roots when the binding has not loaded yet", () => {
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        null,
+        worktreeIntent("/repo", "create", null),
+      ),
+    ).toEqual(["/repo"]);
+  });
+
+  it("dedupes a staged root that collides with another binding root", () => {
+    const bound = binding([
+      bindingEntry({ workspacePath: "/repo", mode: "local" }),
+      bindingEntry({
+        workspacePath: "/repo-b",
+        mode: "worktree",
+        worktreePath: "/wt/old-b",
+      }),
+    ]);
+    // The staged import points /repo-b at the same directory /repo already
+    // contributes - the projection must not list it twice.
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        bound,
+        worktreeIntent("/repo-b", "import", "/repo"),
+      ),
+    ).toEqual(["/repo"]);
+  });
+
+  it("returns no roots for a folderless binding even with staged intent entries", () => {
+    // mentionRootsFromWorktreeBinding suppresses folderless unconditionally -
+    // the combined projection must preserve that invariant rather than
+    // leaking a staged-only root through as if the binding had no folders.
+    const folderless: WorktreeBinding = {
+      entries: [],
+      workspaceMode: "folderless",
+    };
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        folderless,
+        worktreeIntent("/repo", "create", null),
+      ),
+    ).toEqual([]);
+    expect(
+      mentionRootsFromWorktreeBindingAndIntent(
+        folderless,
+        worktreeIntent("/repo", "import", "/wt/feature"),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("runDirectoryFromWorktreeBindingAndIntent", () => {
+  it("uses the primary binding and overlays staged intent", () => {
+    const local = binding([
+      bindingEntry({ workspacePath: "/other", isPrimary: false }),
+      bindingEntry({ workspacePath: "/repo" }),
+    ]);
+    const worktree = binding([bindingEntry({ worktreePath: "/checkout" })]);
+    expect(runDirectoryFromWorktreeBindingAndIntent(local, null)).toBe("/repo");
+    expect(runDirectoryFromWorktreeBindingAndIntent(worktree, null)).toBe(
+      "/checkout",
+    );
+    expect(
+      runDirectoryFromWorktreeBindingAndIntent(
+        worktree,
+        worktreeIntent("/repo", "local", null),
+      ),
+    ).toBe("/repo");
+    expect(
+      runDirectoryFromWorktreeBindingAndIntent(
+        local,
+        worktreeIntent("/repo", "import", "/imported"),
+      ),
+    ).toBe("/imported");
+    expect(
+      runDirectoryFromWorktreeBindingAndIntent(
+        local,
+        worktreeIntent("/repo", "create", null),
+      ),
+    ).toBeNull();
+  });
+
+  it("cannot determine a directory for empty or folderless bindings", () => {
+    expect(runDirectoryFromWorktreeBindingAndIntent(null, null)).toBeNull();
+    expect(
+      runDirectoryFromWorktreeBindingAndIntent(binding([]), null),
+    ).toBeNull();
+    expect(
+      runDirectoryFromWorktreeBindingAndIntent(
+        { ...binding([bindingEntry({})]), workspaceMode: "folderless" },
+        null,
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("useLandingRunWorkingDirectory", () => {
+  let queryClient: QueryClient;
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    createElement(QueryClientProvider, { client: queryClient }, children);
+  const cacheKey = (hostId: string, folders: string[]) =>
+    hostQueryKeys.method(hostId, "worktree.listByWorkspacePaths", {
+      workspacePaths: folders,
+      scriptRefs: [],
+      forceRefresh: false,
+    });
+  const gitSummary = (path: string): WorktreeWorkspaceSummaryV14 => ({
+    workspacePath: path,
+    isGitRepo: true,
+    repoIdentifier: { owner: "acme", repo: "app" },
+    mainBranch: "main",
+    worktrees: [
+      {
+        worktreePath: path,
+        branch: "main",
+        head: null,
+        isMain: true,
+        isLocked: false,
+      },
+    ],
+    scripts: null,
+    repoBranchPrefix: { status: "absent" },
+    resolvedAt: 1,
+  });
+  beforeEach(() => {
+    resetStores();
+    queryClient = new QueryClient();
+  });
+  afterEach(() => {
+    cleanup();
+    queryClient.clear();
+    resetStores();
+  });
+
+  it.each(["global", "draft"] as const)(
+    "uses the %s primary folder and its staged intent",
+    (scope) => {
+      setGlobalFolders(["/first", "/primary"]);
+      useWorkspaceFoldersStore.setState({
+        byHost: {
+          [HOST_A]: {
+            folders: ["/first", "/primary"],
+            folderInfoByPath: {},
+            primaryPath: "/primary",
+          },
+        },
+      });
+      const draftId =
+        scope === "draft"
+          ? useLandingDraftStore.getState().createDraft(null)
+          : null;
+      if (draftId !== null) setGlobalFolders(["/other"]);
+      const key = { surface: "landing" as const, hostId: HOST_A, draftId };
+      const hook = renderHook(() => useLandingRunWorkingDirectory(draftId), {
+        wrapper,
+      });
+      expect(hook.result.current).toBe("/primary");
+      act(() =>
+        useWorktreeIntentStagingStore
+          .getState()
+          .stageIntent(key, worktreeIntent("/primary", "import", "/checkout")),
+      );
+      expect(hook.result.current).toBe("/checkout");
+      act(() =>
+        useWorktreeIntentStagingStore
+          .getState()
+          .stageIntent(key, worktreeIntent("/primary", "create", null)),
+      );
+      expect(hook.result.current).toBeNull();
+    },
+  );
+  it("reacts to cached git defaults arriving and being removed, with staged choices taking precedence", async () => {
+    setGlobalFolders(["/repo"]);
+    const key = cacheKey(HOST_A, ["/repo"]);
+    const stagingKey = {
+      surface: "landing" as const,
+      hostId: HOST_A,
+      draftId: null,
+    };
+    const hook = renderHook(() => useLandingRunWorkingDirectory(null), {
+      wrapper,
+    });
+    expect(hook.result.current).toBe("/repo");
+    act(() => {
+      queryClient.setQueryData(key, { workspaces: [gitSummary("/repo")] });
+    });
+    await waitFor(() => expect(hook.result.current).toBeNull());
+    act(() =>
+      useWorktreeIntentStagingStore
+        .getState()
+        .stageIntent(stagingKey, worktreeIntent("/repo", "local", null)),
+    );
+    expect(hook.result.current).toBe("/repo");
+    act(() =>
+      useWorktreeIntentStagingStore
+        .getState()
+        .stageIntent(
+          stagingKey,
+          worktreeIntent("/repo", "import", "/checkout"),
+        ),
+    );
+    expect(hook.result.current).toBe("/checkout");
+    act(() => queryClient.removeQueries({ queryKey: key, exact: true }));
+    await waitFor(() => expect(queryClient.getQueryData(key)).toBeUndefined());
+    expect(hook.result.current).toBe("/checkout");
+  });
+  it("returns to local cwd when an unstaged cached default is removed", async () => {
+    setGlobalFolders(["/repo"]);
+    const key = cacheKey(HOST_A, ["/repo"]);
+    queryClient.setQueryData(key, { workspaces: [gitSummary("/repo")] });
+    const hook = renderHook(() => useLandingRunWorkingDirectory(null), {
+      wrapper,
+    });
+    expect(hook.result.current).toBeNull();
+    act(() => queryClient.removeQueries({ queryKey: key, exact: true }));
+    await waitFor(() => expect(hook.result.current).toBe("/repo"));
+  });
+  it("preserves the primary non-git or staged-only choice when another folder has a git default", () => {
+    setGlobalFolders(["/primary", "/git"]);
+    queryClient.setQueryData(cacheKey(HOST_A, ["/primary", "/git"]), {
+      workspaces: [gitSummary("/git")],
+    });
+    const stagingKey = {
+      surface: "landing" as const,
+      hostId: HOST_A,
+      draftId: null,
+    };
+    const hook = renderHook(() => useLandingRunWorkingDirectory(null), {
+      wrapper,
+    });
+    expect(hook.result.current).toBe("/primary");
+    act(() =>
+      useWorktreeIntentStagingStore
+        .getState()
+        .stageIntent(
+          stagingKey,
+          worktreeIntent("/primary", "import", "/primary-checkout"),
+        ),
+    );
+    expect(hook.result.current).toBe("/primary-checkout");
+  });
+  it("does not borrow cached defaults from another host or workspace", () => {
+    setGlobalFolders(["/repo"]);
+    queryClient.setQueryData(cacheKey("host-b", ["/repo"]), {
+      workspaces: [gitSummary("/repo")],
+    });
+    queryClient.setQueryData(cacheKey(HOST_A, ["/other"]), {
+      workspaces: [gitSummary("/other")],
+    });
+    const hook = renderHook(() => useLandingRunWorkingDirectory(null), {
+      wrapper,
+    });
+    expect(hook.result.current).toBe("/repo");
+  });
+  it("uses the draft workspace cache even when global folders change", async () => {
+    setGlobalFolders(["/draft-repo"]);
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    setGlobalFolders(["/global-repo"]);
+    const hook = renderHook(() => useLandingRunWorkingDirectory(draftId), {
+      wrapper,
+    });
+    expect(hook.result.current).toBe("/draft-repo");
+    act(() => {
+      queryClient.setQueryData(cacheKey(HOST_A, ["/global-repo"]), {
+        workspaces: [gitSummary("/global-repo")],
+      });
+    });
+    expect(hook.result.current).toBe("/draft-repo");
+    act(() => {
+      queryClient.setQueryData(cacheKey(HOST_A, ["/draft-repo"]), {
+        workspaces: [gitSummary("/draft-repo")],
+      });
+    });
+    await waitFor(() => expect(hook.result.current).toBeNull());
+  });
+  it("keeps the primary local while its cached git summary is unresolved", () => {
+    setGlobalFolders(["/repo"]);
+    queryClient.setQueryData(cacheKey(HOST_A, ["/repo"]), {
+      workspaces: [{ ...gitSummary("/repo"), resolvedAt: null }],
+    });
+    const hook = renderHook(() => useLandingRunWorkingDirectory(null), {
+      wrapper,
+    });
+    expect(hook.result.current).toBe("/repo");
+  });
+
+  it("keeps the cached primary create default when only a sibling is staged", () => {
+    setGlobalFolders(["/primary", "/sibling"]);
+    queryClient.setQueryData(cacheKey(HOST_A, ["/primary", "/sibling"]), {
+      workspaces: [gitSummary("/primary")],
+    });
+    useWorktreeIntentStagingStore
+      .getState()
+      .stageIntent(
+        { surface: "landing", hostId: HOST_A, draftId: null },
+        worktreeIntent("/sibling", "local", null),
+      );
+    const hook = renderHook(() => useLandingRunWorkingDirectory(null), {
+      wrapper,
+    });
+    expect(hook.result.current).toBeNull();
+  });
+});

@@ -1,0 +1,428 @@
+import {
+  alwaysAvailable,
+  isZoomRowAvailable,
+} from "@/lib/settings/settings-availability";
+import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
+
+export const APPEARANCE = defineSettingsSection("appearance", {
+  page: {
+    availableWhen: alwaysAvailable,
+    label: "Appearance",
+    description: "Themes, fonts, and display preferences.",
+    keywords: [
+      "look",
+      "style",
+      "visual",
+      "ui",
+      // Controls without search anchors land on the Appearance page, which
+      // opens on Themes. So only what Themes holds is named here: a control
+      // in another area is found through its own row, or through its group
+      // (`contributesTo`) when it has no row to land on.
+      "theme",
+      "dark mode",
+      "light mode",
+      "color scheme",
+      "theme mode",
+      "follow device",
+      "palette",
+      "preset",
+      "gruvbox",
+      "nord",
+      "tokyo night",
+      "everforest",
+      "github",
+    ],
+  },
+  themes: {
+    kind: "group",
+    search: { anchor: "appearance-themes" },
+    label: "Themes",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["palette", "preset", "color scheme"],
+  },
+  themeMode: {
+    kind: "row",
+    group: "themes",
+    search: { anchor: "appearance-theme-mode" },
+    label: "Theme mode",
+    description:
+      "Choose separate light and dark themes below. Follow device switches between them with your device’s appearance.",
+    availableWhen: alwaysAvailable,
+    keywords: ["follow device", "system", "appearance"],
+  },
+  lightTheme: {
+    kind: "row",
+    group: "themes",
+    search: { anchor: "appearance-light-theme" },
+    label: "Light theme",
+    description: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["palette", "preset"],
+  },
+  darkTheme: {
+    kind: "row",
+    group: "themes",
+    search: { anchor: "appearance-dark-theme" },
+    label: "Dark theme",
+    description: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["palette", "preset"],
+  },
+  startPage: {
+    kind: "group",
+    search: { anchor: "appearance-start-page" },
+    label: "Start page",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["home", "landing", "backdrop"],
+  },
+  wallpaper: {
+    kind: "row",
+    group: "startPage",
+    search: { anchor: "appearance-wallpaper" },
+    label: "Wallpaper",
+    // The chosen image's name is live copy, rendered as the row's status.
+    description: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["background image", "backdrop", "photo"],
+  },
+  curatedWallpapers: {
+    kind: "row",
+    group: "startPage",
+    search: { anchor: "appearance-start-page-curated" },
+    label: "Traycer team curated wallpapers",
+    description: "Downloads when you apply one.",
+    availableWhen: alwaysAvailable,
+    keywords: ["gallery", "preset", "built in", "download", "art"],
+  },
+  // The effect rows exist only once a wallpaper is chosen, and Tint only for
+  // the effect it adjusts. Strength applies to all three.
+  // With no row of their own to land on, their names are found through the
+  // Start page group rather than the page: a page result opens Appearance on
+  // Themes, where none of these is.
+  wallpaperEffect: {
+    kind: "row",
+    group: "startPage",
+    search: { contributesTo: "startPage" },
+    label: "Wallpaper effect",
+    description:
+      "Keep the original photo, turn it into a dot pattern, or add film grain.",
+    availableWhen: alwaysAvailable,
+    keywords: [],
+  },
+  effectStrength: {
+    kind: "row",
+    group: "startPage",
+    search: { contributesTo: "startPage" },
+    label: "Effect strength",
+    description: "Adjust how strongly the effect changes the photo.",
+    availableWhen: alwaysAvailable,
+    keywords: [],
+  },
+  tintWallpaper: {
+    kind: "row",
+    group: "startPage",
+    search: { contributesTo: "startPage" },
+    label: "Tint wallpaper with theme accent color",
+    description: null,
+    availableWhen: alwaysAvailable,
+    keywords: [],
+  },
+  showGreeting: {
+    kind: "row",
+    group: "startPage",
+    search: { anchor: "appearance-show-greeting" },
+    label: "Show greeting",
+    description: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["welcome", "hello", "home"],
+  },
+  showRecentTasks: {
+    kind: "row",
+    group: "startPage",
+    search: { anchor: "appearance-show-recent-tasks" },
+    label: "Show tasks on the start page",
+    description: null,
+    availableWhen: alwaysAvailable,
+    keywords: [
+      "history",
+      "current tasks",
+      "pinned",
+      "in progress",
+      "open tabs",
+      "home",
+    ],
+  },
+  // App-wide chrome: zoom, the pointer cursor, and how panels move and read.
+  // Motion and readability used to be a group of its own beside this one; the
+  // two are one area of the page now, so its vocabulary folds in here.
+  interface: {
+    kind: "group",
+    search: { anchor: "appearance-interface" },
+    label: "Interface",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: [
+      "layout",
+      "chrome",
+      "controls",
+      "motion",
+      "readability",
+      "animation",
+      "accessibility",
+      "reduce motion",
+    ],
+  },
+  zoom: {
+    kind: "row",
+    group: "interface",
+    search: { anchor: "appearance-zoom" },
+    label: "Zoom",
+    description: "Scales the whole app; font sizes only adjust typography.",
+    availableWhen: isZoomRowAvailable,
+    keywords: ["scale", "size", "bigger", "smaller", "magnify", "display"],
+  },
+  pointerCursors: {
+    kind: "row",
+    group: "interface",
+    search: { anchor: "appearance-pointer-cursors" },
+    label: "Show a hand cursor over clickable controls",
+    description:
+      "Use a hand cursor over buttons, links, and other clickable controls.",
+    availableWhen: alwaysAvailable,
+    keywords: ["cursor", "mouse", "hand", "hover"],
+  },
+  typography: {
+    kind: "group",
+    search: { anchor: "appearance-typography" },
+    label: "Fonts and text",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["font", "text", "size", "typeface", "typography"],
+  },
+  uiFont: {
+    kind: "row",
+    group: "typography",
+    search: { anchor: "appearance-ui-font" },
+    label: "Interface font",
+    description: "Font and size used across the Traycer interface.",
+    availableWhen: alwaysAvailable,
+    keywords: ["font", "typeface", "text size", "interface"],
+  },
+  codeFont: {
+    kind: "row",
+    group: "typography",
+    search: { anchor: "appearance-code-font" },
+    label: "Code font",
+    description: "Font and size used for code blocks and diffs.",
+    availableWhen: alwaysAvailable,
+    keywords: ["font", "monospace", "mono", "diff", "editor"],
+  },
+  promptFont: {
+    kind: "row",
+    group: "typography",
+    search: { anchor: "appearance-prompt-font" },
+    label: "Prompt font",
+    description: "The font used where you write prompts.",
+    availableWhen: alwaysAvailable,
+    keywords: ["composer", "input", "typeface"],
+  },
+  fontLigatures: {
+    kind: "row",
+    group: "typography",
+    search: { anchor: "appearance-font-ligatures" },
+    label: "Use font ligatures",
+    description:
+      "Join characters such as != into a single symbol in prompts and code, when supported by the font. The underlying text stays the same.",
+    availableWhen: alwaysAvailable,
+    keywords: ["glyphs", "symbols", "arrows"],
+  },
+  panelAnimations: {
+    kind: "row",
+    group: "interface",
+    search: { anchor: "appearance-panel-animations" },
+    label: "Panel animations",
+    description: "Animate sidebars, menus, and dialogs as they open and close.",
+    availableWhen: alwaysAvailable,
+    keywords: ["motion", "transitions", "reduce motion"],
+  },
+  panelAnimationDuration: {
+    kind: "row",
+    group: "interface",
+    search: { anchor: "appearance-animation-duration" },
+    label: "Animation duration",
+    description:
+      "Lower values are faster; 0 ms is instant. Applies when panel animations are on.",
+    availableWhen: alwaysAvailable,
+    keywords: ["speed", "motion", "transition"],
+  },
+  contrast: {
+    kind: "row",
+    group: "interface",
+    search: { anchor: "appearance-contrast" },
+    label: "Text and border contrast",
+    description:
+      "100% uses the theme’s original colors. Increase it to make text and borders stand out more.",
+    availableWhen: alwaysAvailable,
+    keywords: ["accessibility", "readability", "legibility"],
+  },
+  terminal: {
+    kind: "group",
+    search: { anchor: "appearance-terminal-group" },
+    label: "Terminal",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["shell", "console", "xterm"],
+  },
+  terminalFont: {
+    kind: "row",
+    group: "terminal",
+    search: { anchor: "appearance-terminal-font" },
+    label: "Terminal font",
+    description:
+      "Font and size used in the terminal. Follows the code font until you set them.",
+    availableWhen: alwaysAvailable,
+    keywords: ["font", "monospace", "mono", "console", "xterm"],
+  },
+  terminalCursor: {
+    kind: "row",
+    group: "terminal",
+    search: { anchor: "appearance-terminal-cursor" },
+    label: "Terminal cursor",
+    description: "Shape of the cursor in the terminal.",
+    availableWhen: alwaysAvailable,
+    keywords: ["cursor", "block", "bar", "underline", "caret"],
+  },
+  blinkCursor: {
+    kind: "row",
+    group: "terminal",
+    search: { anchor: "appearance-blink-cursor" },
+    label: "Blink cursor",
+    description: "Blink the terminal cursor while the terminal is focused.",
+    availableWhen: alwaysAvailable,
+    keywords: ["blink", "flash", "cursor", "caret"],
+  },
+  // One surface's own settings, like Terminal. The diff tile's settings
+  // popover edits the same preferences in context.
+  diffViewer: {
+    kind: "group",
+    search: { anchor: "appearance-diff-viewer" },
+    label: "Diff viewer",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["diff", "changes", "git", "review", "patch", "file edit"],
+  },
+  // A contributor, not an entry: the row is withheld in a narrow window
+  // (`DiffViewerSettingsSection`), so a search hit lands on the always-rendered
+  // group instead of waiting for an element that is not there.
+  diffLayout: {
+    kind: "row",
+    group: "diffViewer",
+    search: { contributesTo: "diffViewer" },
+    label: "Layout",
+    description:
+      "Old and new side by side, or in one column. File edits in chat always use one column.",
+    availableWhen: alwaysAvailable,
+    keywords: ["split", "unified", "side by side", "inline", "view"],
+  },
+  diffLineNumbers: {
+    kind: "row",
+    group: "diffViewer",
+    search: { anchor: "appearance-diff-line-numbers" },
+    label: "Line numbers",
+    description:
+      "Line numbers, backgrounds and gutter marks also apply to file edits in chat.",
+    availableWhen: alwaysAvailable,
+    keywords: ["line numbers", "gutter"],
+  },
+  diffBackgrounds: {
+    kind: "row",
+    group: "diffViewer",
+    search: { anchor: "appearance-diff-backgrounds" },
+    label: "Backgrounds",
+    description: "Tint added and removed lines.",
+    availableWhen: alwaysAvailable,
+    keywords: ["highlight", "color", "tint", "added", "removed"],
+  },
+  diffGutterMarks: {
+    kind: "row",
+    group: "diffViewer",
+    search: { anchor: "appearance-diff-gutter-marks" },
+    label: "Gutter marks",
+    description: "How each changed line is marked at its edge.",
+    availableWhen: alwaysAvailable,
+    keywords: ["indicator", "bars", "plus", "minus", "gutter"],
+  },
+  diffWordWrap: {
+    kind: "row",
+    group: "diffViewer",
+    search: { anchor: "appearance-diff-word-wrap" },
+    label: "Word wrap",
+    description: "Wrap long lines instead of scrolling sideways.",
+    availableWhen: alwaysAvailable,
+    keywords: ["wrap", "long lines", "soft wrap"],
+  },
+  diffIgnoreWhitespace: {
+    kind: "row",
+    group: "diffViewer",
+    search: { anchor: "appearance-diff-ignore-whitespace" },
+    label: "Ignore whitespace",
+    description: "Skip changes that only touch spaces and indentation.",
+    availableWhen: alwaysAvailable,
+    keywords: ["whitespace", "spaces", "indentation"],
+  },
+  // What sits inside a task: which agent office view a task opens in, and how
+  // its chats, agents, terminals and artifacts are colored. Its OWN area
+  // rather than rows under Interface: Interface is app-wide chrome - zoom, the
+  // pointer cursor, how panels move - and a default that only a task's
+  // comm-graph tile reads would be misfiled there. Agent office and Icon
+  // colors were each a heading over one row.
+  tasks: {
+    kind: "group",
+    search: { anchor: "appearance-tasks" },
+    label: "Tasks",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: [
+      "office",
+      "agents",
+      "comm graph",
+      "epic canvas",
+      "tile",
+      "icons",
+      "artifacts",
+      "files",
+      "color",
+    ],
+  },
+  agentOfficeDefaultView: {
+    kind: "row",
+    group: "tasks",
+    search: { anchor: "appearance-agent-office-default-view" },
+    label: "Agent office default view",
+    description: "For tasks you have not chosen a view in.",
+    availableWhen: alwaysAvailable,
+    // The view NAMES are deliberately not listed: they come from the office
+    // view registry, and a second copy here would drift from it the moment a
+    // view is added or renamed. "Auto" is the choice, not a view.
+    keywords: ["office", "view", "auto", "floor", "layout", "default"],
+  },
+  artifactIconColors: {
+    kind: "row",
+    group: "tasks",
+    search: { anchor: "appearance-artifact-icon-colors" },
+    label: "Color icons by type",
+    description:
+      "Give chats, agents, terminals, and artifacts distinct icon colors. Turn off to use neutral icons.",
+    availableWhen: alwaysAvailable,
+    keywords: ["icons", "color", "file type", "monochrome", "neutral"],
+  },
+});

@@ -1,0 +1,1434 @@
+/**
+ * Viewport-parity twin of `use-switcher-rename.test.tsx`: the wide-viewport
+ * (desktop) tab-strip rename must stamp + retire the same optimistic overlay
+ * as the mobile switcher does, so a resize never changes what feedback a
+ * rename gets. See the module doc on `use-rename-canvas-tab.ts`.
+ *
+ * Mocks ONLY the network layer (the three rename mutation hooks);
+ * `useOpenEpicHandle` is backed by a REAL `createOpenEpicStore` session and
+ * `useEpicCanvasStore` is the real Zustand canvas store.
+ *
+ * Call sites use `void mutateAsync(vars).then(landed, failed)`, and
+ * `retirePendingMutation` takes a required `outcome` argument. Mocks below
+ * expose `mutateAsync` returning a controllable Promise instead of a
+ * synchronous `mutate`.
+ */
+import { act, renderHook } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
+import {
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import { dispatchEpicWriteCommand } from "@/stores/epics/open-epic/runtime/epic-write-command-dispatch";
+import { createArtifactInDocForTests } from "@/stores/epics/open-epic/__tests__/projection-helpers-test-shims";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  MockHostMessenger,
+  type MockHandlerMap,
+} from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type {
+  EpicArtifactRef,
+  EpicTerminalRef,
+} from "@/stores/epics/canvas/types";
+
+const mocks = vi.hoisted(() => ({
+  handle: { current: null as OpenedStoreForTest | null },
+  chatCalls: [] as {
+    readonly chatId: string;
+    readonly title: string;
+    readonly hostId: string | null;
+  }[],
+  tuiCalls: [] as {
+    readonly tuiAgentId: string;
+    readonly title: string;
+    readonly hostId: string | null;
+  }[],
+  artifactCalls: [] as {
+    readonly artifactId: string;
+    readonly title: string;
+  }[],
+  settleAs: "success",
+  /**
+   * One settle function per `mutateAsync` call, in call order - a queue
+   * rather than a single slot, so a test firing two consecutive renames can
+   * settle each independently and assert BOTH stamps retire.
+   */
+  pendingSettles: [] as (() => void)[],
+}));
+
+/** Await two microtask turns - enough for `resolve()`/`reject()` to run the
+ * chained `.then(landed, failed)` handler in the hook under test. */
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+function makeMutateAsync<TVariables>(
+  onCall: (variables: TVariables) => void,
+): (variables: TVariables) => Promise<void> {
+  return (variables: TVariables) => {
+    onCall(variables);
+    return new Promise<void>((resolve, reject) => {
+      mocks.pendingSettles.push(() => {
+        if (mocks.settleAs === "success") {
+          resolve();
+        } else {
+          reject(new Error("mock mutation failure"));
+        }
+      });
+    });
+  };
+}
+
+vi.mock("@/providers/use-open-epic-handle", () => ({
+  useOpenEpicHandle: () => {
+    if (mocks.handle.current === null) throw new Error("no handle seeded");
+    return mocks.handle.current;
+  },
+}));
+
+vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
+  useEpicRenameChat: () => ({
+    mutateAsync: makeMutateAsync(
+      (variables: {
+        readonly chatId: string;
+        readonly title: string;
+        readonly hostId: string | null;
+      }) => {
+        mocks.chatCalls.push({
+          chatId: variables.chatId,
+          title: variables.title,
+          hostId: variables.hostId,
+        });
+      },
+    ),
+  }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-tui-agent-mutations", () => ({
+  useEpicRenameTuiAgent: () => ({
+    mutateAsync: makeMutateAsync(
+      (variables: {
+        readonly tuiAgentId: string;
+        readonly title: string;
+        readonly hostId: string | null;
+      }) => {
+        mocks.tuiCalls.push({
+          tuiAgentId: variables.tuiAgentId,
+          title: variables.title,
+          hostId: variables.hostId,
+        });
+      },
+    ),
+  }),
+}));
+
+import { useRenameCanvasTab } from "@/components/epic-canvas/canvas/use-rename-canvas-tab";
+
+const EPIC_ID = "epic-1";
+const VIEW_TAB_ID = "tab-1";
+const HOST_ID = "host-1";
+/** A same-id clone's host, distinct from the session's own `HOST_ID`. */
+const OTHER_HOST_ID = "host-2";
+
+function encodeBase64(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes));
+}
+
+function makeMeta(): SnapshotMetaEpic {
+  return {
+    schemaVersion: "1.0",
+    epicLight: {
+      id: EPIC_ID,
+      title: "Epic test",
+      initialUserPrompt: "",
+      ticketCount: 0,
+      specCount: 0,
+      storyCount: 0,
+      reviewCount: 0,
+      status: "open",
+      createdAt: 0,
+      updatedAt: 0,
+      createdBy: "u",
+      version: "1",
+    },
+    permissionRole: "editor",
+    repos: [],
+    workspaces: [],
+    repoMapping: [],
+    workspaceFolders: [],
+    unresolvedRepos: [],
+    hostStateVectorBase64: encodeBase64(Y.encodeStateVector(new Y.Doc())),
+  };
+}
+
+/**
+ * A real `HostRequester` wired to an in-memory `MockHostMessenger`, in place
+ * of the `mutateAsync` control the retired `use-epic-node-mutations` mock
+ * used to hand tests. `epic.renameArtifact` is the one handler these suites
+ * drive - `pendingSettles` and `artifactCalls` are the SAME hoisted queues
+ * the chat/tui-agent mocks still push into, so a test that mixes tile types
+ * sees one call-order queue regardless of which path produced each entry.
+ */
+function buildCommandRequester(): HostRequester<HostRpcRegistry> {
+  const entry: HostDirectoryEntry = {
+    hostId: HOST_ID,
+    label: HOST_ID,
+    kind: "local",
+    websocketUrl: "ws://127.0.0.1:0",
+    version: "1.5.0",
+    transportDialability: "dialable",
+  };
+  const handlers: MockHandlerMap<HostRpcRegistry> = {
+    "epic.renameArtifact": (params) => {
+      mocks.artifactCalls.push({
+        artifactId: params.artifactId,
+        title: params.title,
+      });
+      return new Promise((resolve, reject) => {
+        mocks.pendingSettles.push(() => {
+          if (mocks.settleAs === "success") {
+            resolve({ updated: true });
+          } else {
+            reject(new Error("mock mutation failure"));
+          }
+        });
+      });
+    },
+  };
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (candidateHostId) =>
+      candidateHostId === entry.hostId ? entry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `req-${entry.hostId}`,
+      handlers,
+    }),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  return spine.createRequester(entry);
+}
+
+function newSession(): OpenedStoreForTest {
+  const captured: { value: EpicStreamCallbacks | null } = { value: null };
+  const factory: EpicStreamClientFactory = (_id, callbacks) => {
+    captured.value = callbacks;
+    return {
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    };
+  };
+  // The write command is dispatched on MAIN now - the queue is worker-side and
+  // the requester is the session's, so `main/write-command` crosses between
+  // them. The mock requester still drives the REAL dispatcher rather than a
+  // hand-rolled stub, so this suite keeps exercising the production mapping
+  // from intent to `epic.*` RPC.
+  const requester = buildCommandRequester();
+  const handle = openStoreForTest({
+    epicId: EPIC_ID,
+    userId: null,
+    factories: {
+      streamClientFactory: factory,
+      // No lane stream clients in this suite - the legacy @1 arm, which is
+      // what these tests drive.
+      laneSelection: null,
+    },
+    writeCommand: (commandId, intent) =>
+      dispatchEpicWriteCommand(
+        { epicId: EPIC_ID, requester: () => requester },
+        commandId,
+        intent,
+      ),
+  });
+  if (captured.value === null) throw new Error("factory not invoked");
+  // Transport must reach "open" BEFORE the root snapshot lands: the control
+  // replica clears `hasFreshRootSnapshotForOpenCycle` on every transport-status
+  // transition, including into "open" - so opening AFTER the snapshot would
+  // wipe the freshness the snapshot just set, and every enqueued write command
+  // would stall in "queued" behind `EpicWriteCommandTransportUnavailableError`.
+  captured.value.onConnectionStatus("open", null, false, null);
+  captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
+  return handle;
+}
+
+/** A REGISTRY row (docResident: false) - the shape that routes to the RPC. */
+function agentRecord(
+  tuiAgentId: string,
+): Extract<TuiAgentRecordSummaryV13, { origin: "registry" }> {
+  return {
+    tuiAgentId,
+    ownerUserId: "user-1",
+    hostId: HOST_ID,
+    harnessId: "claude",
+    harnessSessionId: null,
+    parentId: null,
+    title: "An agent",
+    isTitleEditedByUser: false,
+    createdAt: 1,
+    updatedAt: 2,
+    archived: false,
+    archivedAt: null,
+    workspaceFolders: [],
+    workspaceMode: null,
+    model: null,
+    reasoningEffort: null,
+    agentMode: "regular",
+    profileId: null,
+    terminalAgentArgs: null,
+    terminalShellCommand: null,
+    terminalShellArgs: null,
+    revision: 1,
+    docResident: false,
+    origin: "registry",
+    // `@1.3`'s session facet. `null` is what a host that cannot say answers,
+    // and nothing in this file is about the facet.
+    sessionState: null,
+    lastExit: null,
+  };
+}
+
+/** A REGISTRY chat row, bound to `HOST_ID` unless overridden. */
+function chatRecord(
+  overrides: Partial<ChatRecordSummaryV11>,
+): ChatRecordSummaryV11 {
+  return {
+    chatId: "chat-1",
+    ownerUserId: "user-a",
+    originHostId: HOST_ID,
+    title: "A chat",
+    isTitleEditedByUser: false,
+    parentChatId: null,
+    createdAt: 1,
+    updatedAt: 2,
+    archived: false,
+    archivedAt: null,
+    runSettingsSummary: "claude",
+    revision: 1,
+    visibility: "private",
+    origin: "own",
+    docResident: false,
+    ...overrides,
+  };
+}
+
+/** A DOC-RESIDENT agent: a `tuiAgents` Y.Map entry, no registry row. */
+function createTerminalAgentInDocForTests(doc: Y.Doc): string {
+  const id = "doc-agent-1";
+  const agent = new Y.Map<unknown>();
+  agent.set("id", id);
+  agent.set("harnessId", "codex");
+  agent.set("title", "Doc agent");
+  agent.set("parentId", null);
+  agent.set("createdAt", 1);
+  agent.set("updatedAt", 1);
+  agent.set("hostId", HOST_ID);
+  agent.set("workspaceFolders", ["/repo"]);
+  agent.set("model", null);
+  agent.set("reasoningEffort", null);
+  agent.set("agentMode", "regular");
+  agent.set("harnessSessionId", null);
+  agent.set("terminalShellCommand", null);
+  agent.set("terminalShellArgs", null);
+  const tuiAgents = new Y.Map<unknown>();
+  tuiAgents.set(id, agent);
+  doc.getMap("epic").set("tuiAgents", tuiAgents);
+  return id;
+}
+
+function artifactTile(id: string): EpicArtifactRef {
+  return {
+    id,
+    instanceId: "inst-1",
+    type: "spec",
+    name: "Spec",
+    hostId: HOST_ID,
+  };
+}
+
+function chatTile(id: string): EpicArtifactRef {
+  return {
+    id,
+    instanceId: "inst-2",
+    type: "chat",
+    name: "Chat",
+    hostId: HOST_ID,
+  };
+}
+
+function terminalAgentTile(id: string): EpicArtifactRef {
+  return {
+    id,
+    instanceId: "inst-3",
+    type: "terminal-agent",
+    name: "Agent",
+    hostId: HOST_ID,
+  };
+}
+
+function terminalTile(id: string): EpicTerminalRef {
+  return {
+    id,
+    instanceId: "inst-4",
+    type: "terminal",
+    name: "Terminal",
+    hostId: HOST_ID,
+    titleSource: "default",
+    cwd: "/repo",
+  };
+}
+
+describe("useRenameCanvasTab", () => {
+  afterEach(() => {
+    mocks.chatCalls = [];
+    mocks.tuiCalls = [];
+    mocks.artifactCalls = [];
+    mocks.pendingSettles = [];
+    mocks.settleAs = "success";
+    mocks.handle.current?.dispose();
+    mocks.handle.current = null;
+  });
+
+  it("stamps a trimmed optimistic rename before the RPC fires, and marks it landed (not deleted) once the RPC settles OK", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "  Trimmed title  ");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+
+    // The mutation call carries the hook's own TRIMMED title.
+    expect(mocks.artifactCalls).toEqual([
+      { artifactId: id, title: "Trimmed title" },
+    ]);
+    // Optimistic value is visible BEFORE the RPC has settled.
+    expect(handle.store.getState().artifacts.byId[id].title).toBe(
+      "Trimmed title",
+    );
+    const rawArtifactsMap = handle.doc.getMap("epic").get("artifacts");
+    if (!(rawArtifactsMap instanceof Y.Map)) throw new Error("expected map");
+    const artifactsMap: Y.Map<unknown> = rawArtifactsMap;
+    const rawEntry = artifactsMap.get(id);
+    if (!(rawEntry instanceof Y.Map)) throw new Error("expected entry");
+    const entry: Y.Map<unknown> = rawEntry;
+    // No doc write at any point - only the in-memory overlay changed.
+    expect(entry.get("title")).toBe("New spec");
+
+    await act(async () => {
+      mocks.pendingSettles[0]?.();
+      await flushMicrotasks();
+    });
+
+    // A "landed" retire is NOT a deletion (item 8 of the contract): the
+    // entry survives until the doc visibly echoes the ack, so the row keeps
+    // showing the optimistic value here. If the hook wired success to
+    // `retirePendingMutation(id, "failed")` instead of `"landed"` by
+    // mistake, this would immediately revert to "New spec" and fail.
+    expect(handle.store.getState().artifacts.byId[id].title).toBe(
+      "Trimmed title",
+    );
+    unmount();
+  });
+
+  it("retires the pending mutation on a FAILED settle too", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    mocks.settleAs = "error";
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "Failed rename");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+    expect(handle.store.getState().artifacts.byId[id].title).toBe(
+      "Failed rename",
+    );
+
+    await act(async () => {
+      mocks.pendingSettles[0]?.();
+      await flushMicrotasks();
+    });
+
+    expect(handle.store.getState().artifacts.byId[id].title).toBe("New spec");
+    unmount();
+  });
+
+  it("retire still fires after the hook's component UNMOUNTS before settle", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    // An ERROR settle is used here (not the default success) because only
+    // a failed retire is immediately OBSERVABLE through the store (it
+    // deletes the entry outright) - a landed retire keeps the row showing
+    // the optimistic value either way, which would prove nothing about
+    // whether retire actually ran post-unmount.
+    mocks.settleAs = "error";
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "Unmount-race rename");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+    expect(handle.store.getState().artifacts.byId[id].title).toBe(
+      "Unmount-race rename",
+    );
+
+    unmount();
+
+    await act(async () => {
+      mocks.pendingSettles[0]?.();
+      await flushMicrotasks();
+    });
+
+    expect(handle.store.getState().artifacts.byId[id].title).toBe("New spec");
+  });
+
+  // This replaces a stamp-order assertion (two RPCs genuinely concurrent,
+  // settling out of order). The write-command queue serializes sends on a
+  // single `sendingCommandId` (`command-overlay.ts:295`) - "the queue
+  // serializes calls in issue order" per `CommandQueueOptions.send`'s own
+  // doc, and `retryPending`'s comment spells out why: "two renames of one
+  // row applied out of order leave the wrong title." So the ordering hazard
+  // the old guard policed no longer needs a guard - the queue prevents two
+  // renames of one row from ever being IN FLIGHT together, by construction.
+  // What's left to pin is that guarantee itself: the second stamp lands
+  // immediately (so the user sees instant feedback for BOTH renames), but
+  // its RPC is not attempted until the first settles, and both stamps still
+  // retire once each is actually sent and answered.
+  it("a second rename enqueued while the first is still in flight is stamped immediately but not SENT until the first settles, and both stamps still retire", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    // ERROR settles for the same observability reason as the unmount test
+    // above: a failed retire deletes immediately, so reaching "New spec"
+    // after both settle proves BOTH stamps were retired, not just one.
+    mocks.settleAs = "error";
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "First");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "Second");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+    // Both stamps land synchronously (`onEnqueued` fires on every enqueue),
+    // so the overlay already shows the SECOND rename...
+    expect(handle.store.getState().artifacts.byId[id].title).toBe("Second");
+    // ...but only the FIRST command has actually been sent. The second is
+    // stamped and queued, not yet attempted.
+    expect(mocks.artifactCalls).toEqual([{ artifactId: id, title: "First" }]);
+    expect(mocks.pendingSettles).toHaveLength(1);
+
+    // Settling the FIRST (failure) retires its stamp and lets the queue
+    // advance to the second, now-queued command - which is sent only now.
+    await act(async () => {
+      mocks.pendingSettles[0]?.();
+      await flushMicrotasks();
+    });
+    expect(mocks.artifactCalls).toEqual([
+      { artifactId: id, title: "First" },
+      { artifactId: id, title: "Second" },
+    ]);
+    expect(mocks.pendingSettles).toHaveLength(2);
+    // The first's stamp retired; only the second's still-pending stamp
+    // remains, so the overlay is unchanged.
+    expect(handle.store.getState().artifacts.byId[id].title).toBe("Second");
+
+    await act(async () => {
+      mocks.pendingSettles[1]?.();
+      await flushMicrotasks();
+    });
+
+    expect(handle.store.getState().artifacts.byId[id].title).toBe("New spec");
+    unmount();
+  });
+
+  it("routes a chat tab rename through beginRenameMutation and the chat mutation", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const chatId = createArtifactInDocForTests(handle.doc, "chat", null);
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(chatTile(chatId), "New chat name");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+
+    expect(mocks.chatCalls).toEqual([
+      { chatId, title: "New chat name", hostId: HOST_ID },
+    ]);
+    expect(mocks.artifactCalls).toEqual([]);
+    unmount();
+  });
+
+  // Projection A: the local session's OWN registry row for this chat id,
+  // bound to `HOST_ID`. Tile B: a canvas tile for the SAME chat id, bound to
+  // a DIFFERENT host (`OTHER_HOST_ID`) - a same-id clone. `matchesProjection`
+  // is false for every rename of tile B, so the optimistic overlay is never
+  // stamped for it (there is no local row on `OTHER_HOST_ID` to overlay) and
+  // projection A's own row must stay untouched throughout. With no overlay
+  // stamp to order settlement by, correctness for two in-flight B renames
+  // falls to the per-(epic,host,id) `snapshotRenames` token map: only the
+  // LATEST-SUBMITTED rename may write the persisted tab snapshot, even when
+  // an earlier submission settles after it.
+  it("a cross-host same-id tile (B) never touches the local projection (A), and the snapshot keeps the LATEST-SUBMITTED B rename even when it settles AFTER an earlier one", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const chatId = "chat-cross-host";
+    handle.store
+      .getState()
+      .applyChatRecords(
+        [chatRecord({ chatId, originHostId: HOST_ID, title: "Projection A" })],
+        null,
+      );
+    await handle.flush();
+    expect(handle.store.getState().chats.byId[chatId]?.title).toBe(
+      "Projection A",
+    );
+    const renameArtifactInTabSpy = vi.spyOn(
+      useEpicCanvasStore.getState(),
+      "renameArtifactInTab",
+    );
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+    const crossHostTile: EpicArtifactRef = {
+      id: chatId,
+      instanceId: "inst-cross-host",
+      type: "chat",
+      name: "Chat (other host)",
+      hostId: OTHER_HOST_ID,
+    };
+
+    // Both renames are submitted back-to-back. Neither takes the
+    // `beginRenameMutation` branch (no `await` on that path when the
+    // projection does not match), so both `mutateAsync` calls fire
+    // synchronously within this `act`.
+    act(() => {
+      result.current(crossHostTile, "First");
+      result.current(crossHostTile, "Second");
+    });
+
+    expect(mocks.chatCalls).toEqual([
+      { chatId, title: "First", hostId: OTHER_HOST_ID },
+      { chatId, title: "Second", hostId: OTHER_HOST_ID },
+    ]);
+    // No overlay stamp ever touched projection A's own row.
+    expect(handle.store.getState().chats.byId[chatId]?.title).toBe(
+      "Projection A",
+    );
+
+    // Resolve the SECOND (latest-submitted) rename first.
+    await act(async () => {
+      mocks.pendingSettles[1]?.();
+      await flushMicrotasks();
+    });
+    expect(renameArtifactInTabSpy).toHaveBeenCalledExactlyOnceWith(
+      VIEW_TAB_ID,
+      chatId,
+      "Second",
+      OTHER_HOST_ID,
+    );
+
+    // Then the FIRST (stale) submission resolves - it must not overwrite the
+    // snapshot with the older title, since "Second" was submitted after it.
+    await act(async () => {
+      mocks.pendingSettles[0]?.();
+      await flushMicrotasks();
+    });
+    expect(renameArtifactInTabSpy).toHaveBeenCalledTimes(1);
+
+    // Projection A was never touched by either B rename, throughout.
+    expect(handle.store.getState().chats.byId[chatId]?.title).toBe(
+      "Projection A",
+    );
+
+    renameArtifactInTabSpy.mockRestore();
+    unmount();
+  });
+
+  it("routes a REGISTRY-backed terminal-agent tab rename through beginRenameMutation and the tui-agent mutation", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    // A registry row (docResident: false) is what routes to the RPC; an
+    // agent absent from the union - or doc-resident - takes the doc-write
+    // branch instead, which the next test pins.
+    handle.store
+      .getState()
+      .applyTuiAgentRecords([agentRecord("agent-1")], null);
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(terminalAgentTile("agent-1"), "New agent name");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+
+    expect(mocks.tuiCalls).toEqual([
+      { tuiAgentId: "agent-1", title: "New agent name", hostId: HOST_ID },
+    ]);
+    unmount();
+  });
+
+  it("routes a DOC-RESIDENT terminal agent through the doc write, never epic.renameTuiAgent", async () => {
+    // An agent whose title still lives in the epic Y.Doc (bound to an
+    // un-upgraded peer host) has no registry row on the serving host -
+    // `epic.renameTuiAgent` would refuse it (E_AGENT_NOT_LOCAL) and the
+    // overlay would only ever roll back. The hook routes it to the direct
+    // doc write instead, exactly as the reparent commit does.
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const agentId = createTerminalAgentInDocForTests(handle.doc);
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(terminalAgentTile(agentId), "Doc agent name");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+
+    expect(mocks.tuiCalls).toEqual([]);
+    expect(handle.store.getState().tuiAgents.byId[agentId].title).toBe(
+      "Doc agent name",
+    );
+    unmount();
+  });
+
+  it("a raw terminal tab is a no-op: no overlay stamp, no RPC", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(terminalTile("session-1"), "New terminal name");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+
+    expect(mocks.artifactCalls).toEqual([]);
+    expect(mocks.chatCalls).toEqual([]);
+    expect(mocks.tuiCalls).toEqual([]);
+    unmount();
+  });
+
+  it("calls renameArtifactInTab (the persisted tab snapshot) only on the RPC's SUCCESS arm - not before settle, not on failure", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    const renameArtifactInTabSpy = vi.spyOn(
+      useEpicCanvasStore.getState(),
+      "renameArtifactInTab",
+    );
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "New spec title");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+    // Not called before the mutateAsync promise settles - the overlay is the
+    // live feedback, this is the persisted fallback.
+    expect(renameArtifactInTabSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      mocks.pendingSettles[0]?.();
+      await flushMicrotasks();
+    });
+    expect(renameArtifactInTabSpy).toHaveBeenCalledWith(
+      VIEW_TAB_ID,
+      id,
+      "New spec title",
+      null,
+    );
+
+    renameArtifactInTabSpy.mockClear();
+    mocks.settleAs = "error";
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "Rejected title");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+    await act(async () => {
+      mocks.pendingSettles[1]?.();
+      await flushMicrotasks();
+    });
+    // A failed RPC never writes the persisted snapshot - it has no rollback
+    // path, so writing it speculatively would strand a rejected title.
+    expect(renameArtifactInTabSpy).not.toHaveBeenCalled();
+
+    renameArtifactInTabSpy.mockRestore();
+    unmount();
+  });
+
+  // Replaces the old "race between two in-flight renames" test. That test's
+  // premise - two RPCs for the same node genuinely in flight together,
+  // settling in whichever order the network happens to deliver - is no
+  // longer reachable: the queue serializes sends on a single
+  // `sendingCommandId` (`command-overlay.ts:295`), so "C" cannot even be
+  // SENT while "B" is still outstanding. What replaces the race is strict
+  // sequencing: "B" completes (send AND settle) before "C" is attempted at
+  // all, so both writes happen, in issue order, and the final title is the
+  // last one issued.
+  it("two renames fired back-to-back both SUCCEED and both write, strictly in issue order - the queue never lets them race", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    const renameArtifactInTabSpy = vi.spyOn(
+      useEpicCanvasStore.getState(),
+      "renameArtifactInTab",
+    );
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "B");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "C");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+    // Only "B" has been sent - "C" is stamped but queued behind it.
+    expect(mocks.pendingSettles).toHaveLength(1);
+
+    await act(async () => {
+      mocks.pendingSettles[0]?.();
+      await flushMicrotasks();
+    });
+    // "B"'s own success arm writes unconditionally - there is nothing to
+    // suppress it against, since "C" has not been sent yet at this point.
+    expect(renameArtifactInTabSpy).toHaveBeenCalledTimes(1);
+    expect(renameArtifactInTabSpy).toHaveBeenNthCalledWith(
+      1,
+      VIEW_TAB_ID,
+      id,
+      "B",
+      null,
+    );
+    // "B" settling is what lets the queue advance and finally SEND "C".
+    expect(mocks.pendingSettles).toHaveLength(2);
+
+    await act(async () => {
+      mocks.pendingSettles[1]?.();
+      await flushMicrotasks();
+    });
+    expect(renameArtifactInTabSpy).toHaveBeenCalledTimes(2);
+    expect(renameArtifactInTabSpy).toHaveBeenNthCalledWith(
+      2,
+      VIEW_TAB_ID,
+      id,
+      "C",
+      null,
+    );
+
+    renameArtifactInTabSpy.mockRestore();
+    unmount();
+  });
+
+  // Replaces the old "resolving in STAMP order" test - the literal reverse
+  // ordering that test existed to rule out is likewise unreachable now (see
+  // the test above). What is still worth pinning under the new queue is a
+  // MIXED outcome: an older rename's OWN failure must not corrupt or block a
+  // newer rename issued right behind it - the newer one still sends (once
+  // the queue advances past the failed one) and still lands.
+  it("an older rename's FAILURE does not block or corrupt a newer rename issued right behind it", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    const renameArtifactInTabSpy = vi.spyOn(
+      useEpicCanvasStore.getState(),
+      "renameArtifactInTab",
+    );
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    mocks.settleAs = "error";
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "B");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "C");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+    expect(mocks.pendingSettles).toHaveLength(1);
+
+    await act(async () => {
+      mocks.pendingSettles[0]?.();
+      await flushMicrotasks();
+    });
+    // "B" failed - its failure arm reads the row, which still shows the
+    // pre-rename baseline ("New spec", never touched by either rename), so
+    // it correctly does not write.
+    expect(renameArtifactInTabSpy).not.toHaveBeenCalled();
+    expect(mocks.pendingSettles).toHaveLength(2);
+
+    mocks.settleAs = "success";
+    await act(async () => {
+      mocks.pendingSettles[1]?.();
+      await flushMicrotasks();
+    });
+    expect(renameArtifactInTabSpy).toHaveBeenCalledTimes(1);
+    expect(renameArtifactInTabSpy).toHaveBeenCalledWith(
+      VIEW_TAB_ID,
+      id,
+      "C",
+      null,
+    );
+    expect(handle.store.getState().artifacts.byId[id].title).toBe("C");
+
+    renameArtifactInTabSpy.mockRestore();
+    unmount();
+  });
+
+  it("two SEQUENTIAL (non-overlapping) renames of one node both write - the guard must not suppress an ordinary, non-racing rename", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    const renameArtifactInTabSpy = vi.spyOn(
+      useEpicCanvasStore.getState(),
+      "renameArtifactInTab",
+    );
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "B");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+    await act(async () => {
+      mocks.pendingSettles[0]?.();
+      await flushMicrotasks();
+    });
+    expect(renameArtifactInTabSpy).toHaveBeenCalledTimes(1);
+    expect(renameArtifactInTabSpy).toHaveBeenNthCalledWith(
+      1,
+      VIEW_TAB_ID,
+      id,
+      "B",
+      null,
+    );
+
+    // Fired only AFTER the first fully settled, so the two chains never
+    // overlap - the second is trivially the only (and therefore latest)
+    // pending rename by the time it settles.
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "C");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+    await act(async () => {
+      mocks.pendingSettles[1]?.();
+      await flushMicrotasks();
+    });
+    expect(renameArtifactInTabSpy).toHaveBeenCalledTimes(2);
+    expect(renameArtifactInTabSpy).toHaveBeenNthCalledWith(
+      2,
+      VIEW_TAB_ID,
+      id,
+      "C",
+      null,
+    );
+
+    renameArtifactInTabSpy.mockRestore();
+    unmount();
+  });
+
+  it("still writes the persisted snapshot when the authoritative echo lands BEFORE the RPC settles and kills the chain - the stamp TOMBSTONE survives the dead sweep", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    const renameArtifactInTabSpy = vi.spyOn(
+      useEpicCanvasStore.getState(),
+      "renameArtifactInTab",
+    );
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "B");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+    // The artifact path stamps through `stampWriteCommand` (the queue's
+    // `onEnqueued` hook), not the exported `beginRenameMutation` the
+    // chat/terminal-agent paths call - so the stamp's request id is the
+    // QUEUE's own `commandId`, read off the pending write-command record
+    // rather than captured from a `beginRenameMutation` spy.
+    const pendingCommand = handle.store
+      .getState()
+      .writeCommands.find(
+        (command) =>
+          command.state === "pending" &&
+          command.intent.kind === "rename-artifact" &&
+          command.intent.artifactId === id,
+      );
+    if (pendingCommand === undefined) {
+      throw new Error("expected a pending rename-artifact write command");
+    }
+    const requestId = pendingCommand.commandId;
+
+    // The authoritative row echoes "B" - our own target - BEFORE the RPC
+    // promise settles. The chain has no landed member yet, so the row
+    // reaching our own target reads as off-anchor supersession (row-wins,
+    // not "our echo") and the dead sweep kills it.
+    const rawArtifactsMap = handle.doc.getMap("epic").get("artifacts");
+    if (!(rawArtifactsMap instanceof Y.Map)) throw new Error("expected map");
+    const artifactsMap: Y.Map<unknown> = rawArtifactsMap;
+    const rawEntry = artifactsMap.get(id);
+    if (!(rawEntry instanceof Y.Map)) throw new Error("expected entry");
+    const entry: Y.Map<unknown> = rawEntry;
+    act(() => {
+      handle.doc.transact(() => {
+        entry.set("title", "B");
+        entry.set("updatedAt", 123);
+      });
+    });
+
+    // Confirms the chain actually died: nothing left to retire.
+    //
+    // AWAITED: `retirePendingMutation` is a bridge round trip now, so the bare
+    // call is a `Promise` - and a promise is not `false`, which is exactly what
+    // this read asserts. Left unawaited the assertion compares a Promise to
+    // `false` and can only fail.
+    expect(
+      await handle.store.getState().retirePendingMutation(requestId, "landed"),
+    ).toBe(false);
+
+    // The RPC's own success arm runs now. Under the old CHAIN-based guard
+    // (`isLatestPendingRename`), a dead chain answered "not latest" here and
+    // the persisted-tab write - the only one a successful rename ever gets -
+    // was skipped. The tombstone (`isLatestRenameStamp`) survives the sweep,
+    // so the write goes through - even though the artifact hook path never
+    // reads `isLatestRenameStamp` itself, because there is only ONE command
+    // in this chain and the queue's own resolution is what carries the write.
+    await act(async () => {
+      mocks.pendingSettles[0]?.();
+      await flushMicrotasks();
+    });
+    expect(renameArtifactInTabSpy).toHaveBeenCalledWith(
+      VIEW_TAB_ID,
+      id,
+      "B",
+      null,
+    );
+
+    renameArtifactInTabSpy.mockRestore();
+    unmount();
+  });
+
+  it("a PEER's different-titled write kills the chain and must NOT persist our title over theirs", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    const renameArtifactInTabSpy = vi.spyOn(
+      useEpicCanvasStore.getState(),
+      "renameArtifactInTab",
+    );
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "B");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+    const pendingCommand = handle.store
+      .getState()
+      .writeCommands.find(
+        (command) =>
+          command.state === "pending" &&
+          command.intent.kind === "rename-artifact" &&
+          command.intent.artifactId === id,
+      );
+    if (pendingCommand === undefined) {
+      throw new Error("expected a pending rename-artifact write command");
+    }
+    const requestId = pendingCommand.commandId;
+
+    // A PEER's write lands before our own RPC settles - a different title,
+    // so this is unambiguously not our echo. The dead sweep still kills the
+    // chain the same way it does for our own echo (the resolution alone
+    // cannot tell the two apart), but the row now carries the peer's title,
+    // not ours.
+    const rawArtifactsMap = handle.doc.getMap("epic").get("artifacts");
+    if (!(rawArtifactsMap instanceof Y.Map)) throw new Error("expected map");
+    const artifactsMap: Y.Map<unknown> = rawArtifactsMap;
+    const rawEntry = artifactsMap.get(id);
+    if (!(rawEntry instanceof Y.Map)) throw new Error("expected entry");
+    const entry: Y.Map<unknown> = rawEntry;
+    act(() => {
+      handle.doc.transact(() => {
+        entry.set("title", "Peer title");
+        entry.set("updatedAt", 123);
+      });
+    });
+
+    // Confirms the chain actually died: nothing left to retire.
+    //
+    // AWAITED: `retirePendingMutation` is a bridge round trip now, so the bare
+    // call is a `Promise` - and a promise is not `false`, which is exactly what
+    // this read asserts. Left unawaited the assertion compares a Promise to
+    // `false` and can only fail.
+    expect(
+      await handle.store.getState().retirePendingMutation(requestId, "landed"),
+    ).toBe(false);
+
+    await act(async () => {
+      mocks.pendingSettles[0]?.();
+      await flushMicrotasks();
+    });
+    // The row now says "Peer title" but we sent "B" - the failure arm's own
+    // read of `artifacts.byId[id].title` disagrees with the trimmed title we
+    // asked for, so it must refuse to persist a snapshot that would silently
+    // overwrite a remote user's edit the moment a cold render reads it back.
+    expect(renameArtifactInTabSpy).not.toHaveBeenCalled();
+
+    renameArtifactInTabSpy.mockRestore();
+    unmount();
+  });
+
+  it("a REJECTED rename must not write the persisted snapshot - the failure arm's read depends on the overlay stamp being retired BEFORE it runs", async () => {
+    const handle = newSession();
+    mocks.handle.current = handle;
+    // The fake commandRequester's handler rejects with a plain Error, which
+    // `MockHostMessenger.request` re-wraps as a `HostRpcError` before it ever
+    // reaches the write-command sender - the same shape a real host RPC
+    // failure takes, and what `classifyEpicWriteCommandFailure` classifies as
+    // "rejected" (its final, unconditional fallback arm).
+    mocks.settleAs = "error";
+    const id = createArtifactInDocForTests(handle.doc, "spec", null);
+    const renameArtifactInTabSpy = vi.spyOn(
+      useEpicCanvasStore.getState(),
+      "renameArtifactInTab",
+    );
+    const { result, unmount } = renderHook(() =>
+      useRenameCanvasTab(EPIC_ID, VIEW_TAB_ID),
+    );
+
+    // The commit is a ROUND TRIP now: the overlay stamp is minted by the
+    // worker's queue and the doc write's verdict comes back over the
+    // bridge. Asserting straight after the call reads state still in
+    // flight.
+    await act(async () => {
+      // NOT awaited: the hook's callback is DECLARED void-returning, so
+      // awaiting it is awaiting a non-promise. The work it starts is
+      // driven by the pipe below instead.
+      result.current(artifactTile(id), "B");
+      await handle.flush();
+    });
+    // The write command travels store -> worker queue ->
+    // `main/write-command` -> the dispatcher, so the RPC lands a few
+    // hops after the commit resolves.
+    await act(async () => {
+      await handle.flush();
+    });
+    // The REAL overlay store genuinely holds our optimistic title before the
+    // RPC settles - proof this exercises the retirement ordering the failure
+    // arm depends on, not a fixture that never populated the overlay.
+    expect(handle.store.getState().artifacts.byId[id].title).toBe("B");
+
+    await act(async () => {
+      mocks.pendingSettles[0]?.();
+      await flushMicrotasks();
+    });
+
+    // The stamp is retired (rolled back, deleted from the overlay) BEFORE
+    // the failure arm's microtask reads `artifacts.byId[id].title` - so it
+    // reads the pre-rename baseline, not "B", and the equality check against
+    // our own trimmed title correctly fails. Were the retirement ever
+    // deferred past this read, the failure arm would read back its OWN
+    // optimistic "B" and persist a title the host explicitly rejected.
+    expect(handle.store.getState().artifacts.byId[id].title).toBe("New spec");
+    expect(renameArtifactInTabSpy).not.toHaveBeenCalled();
+
+    renameArtifactInTabSpy.mockRestore();
+    unmount();
+  });
+});

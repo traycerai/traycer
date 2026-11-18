@@ -1,0 +1,1540 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, renderHook } from "@testing-library/react";
+import * as Y from "yjs";
+import type {
+  HostNotificationEntry,
+  HostNotificationsCloudFeedRow,
+  HostNotificationsSummary,
+} from "@traycer/protocol/host/notifications/contracts";
+import {
+  type NotificationEntry,
+  NOTIFICATION_EVENT_TYPES,
+} from "@traycer/protocol/notifications/notification-entry";
+import {
+  createNotificationRoomEntryMap,
+  NOTIFICATIONS_ARRAY_KEY,
+  type NotificationRoomEntryMap,
+} from "@traycer/protocol/notifications/notification-room";
+import type { NotificationsStreamCallbacks } from "@traycer-clients/shared/host-transport/notifications-stream-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { createHostReconnectEngine } from "@traycer-clients/shared/host-client/host-connection-reconnect-engine";
+import {
+  ALL_NOTIFICATION_CATEGORIES,
+  type NotificationCategory,
+} from "@/lib/notifications/notification-category";
+import {
+  __resetAppLocalNotificationsStoreForTests,
+  useAppLocalNotificationsStore,
+  type AppLocalNotificationEntry,
+} from "@/stores/notifications/app-local-notifications-store";
+import {
+  __resetHostNotificationsStoreForTests,
+  useHostNotificationsStore,
+  type HostNotificationFeedEntry,
+} from "@/stores/notifications/host-notifications-store";
+import {
+  cloudNotificationFeedId,
+  useCloudNotificationsStore,
+} from "@/stores/notifications/cloud-notifications-store";
+import {
+  appLocalFeedId,
+  globalFeedId,
+  hostFeedId,
+  notificationBellAccessibleLabel,
+  useAttentionNotificationIds,
+  useMergedNotificationIds,
+  useMergedNotificationRow,
+  useMergedNotificationUnreadCount,
+  useNotificationBellState,
+  useBlockingAttentionCount,
+  useNotificationCenterHostState,
+  useRecentNotificationIds,
+  type NotificationBellState,
+} from "@/stores/notifications/merged-notifications";
+import { useNotificationsPopoverStore } from "@/stores/notifications/notifications-popover-store";
+import {
+  __resetNotificationsStoreForTests,
+  openNotificationsStream,
+  useNotificationsStore,
+} from "@/stores/notifications/notifications-store";
+
+const reconnectEngine = createHostReconnectEngine();
+
+const notificationFeedModeRef = vi.hoisted(() => ({
+  value: "local",
+}));
+
+vi.mock("@/lib/notifications/notification-feed-mode", async (importActual) => {
+  // Spread the real module: production reads the PARTITIONED_* floor constants
+  // from here, and a factory that returns only the two hooks makes every one of
+  // them a missing export - which surfaces as a failed RPC, not as a mock error.
+  const actual =
+    await importActual<
+      typeof import("@/lib/notifications/notification-feed-mode")
+    >();
+  return {
+    ...actual,
+    useNotificationFeedMode: () => notificationFeedModeRef.value,
+    useNotificationFeedModeSettling: () => false,
+  };
+});
+
+const activeHostIdRef = vi.hoisted(() => ({
+  value: null as string | null,
+}));
+
+const directoryRef = vi.hoisted(() => ({
+  value: null as {
+    findById: (hostId: string) => typeof mockLocalHostEntry | null;
+  } | null,
+}));
+
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => activeHostIdRef.value,
+}));
+
+// The notification centre reads its host from `useNotificationResolveHost` (the local
+// host that owns the streams), not from the app-wide active host. Projected
+// from this suite's existing host ref so the scenario it was already
+// describing is unchanged.
+vi.mock("@/hooks/notifications/use-notification-host", () => ({
+  useNotificationResolveHostId: () => activeHostIdRef.value,
+  useNotificationResolveHost: () => ({
+    hostId: activeHostIdRef.value,
+    client: null,
+  }),
+}));
+
+vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/host/use-host-directory-entry")
+    >();
+  return {
+    ...actual,
+    useHostDirectoryEntry: (hostId: string) => {
+      if (hostId.length === 0 || directoryRef.value === null) return null;
+      return directoryRef.value.findById(hostId);
+    },
+  };
+});
+
+function hostPrompt(
+  id: string,
+  updatedAt: number,
+  resolvedAt: number | null,
+): HostNotificationEntry {
+  return {
+    id,
+    updatedAt,
+    readAt: null,
+    kind: "approval.requested",
+    sourceRef: id,
+    severity: "needs_action",
+    outcome: null,
+    resolvedAt,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    payload: {
+      kind: "approval",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      chatTitle: "Deploy checkout fix",
+      taskTitle: "Checkout notifications",
+      approvalId: id,
+    },
+  };
+}
+
+function hostInterview(
+  id: string,
+  updatedAt: number,
+  resolvedAt: number | null,
+  readAt: number | null,
+): HostNotificationEntry {
+  return {
+    id,
+    updatedAt,
+    readAt,
+    kind: "interview.requested",
+    sourceRef: id,
+    severity: "needs_action",
+    outcome: null,
+    resolvedAt,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    payload: {
+      kind: "interview",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      chatTitle: "Deploy checkout fix",
+      taskTitle: "Checkout notifications",
+      interviewBlockId: "block-1",
+    },
+  };
+}
+
+function hostFailure(
+  id: string,
+  updatedAt: number,
+  readAt: number | null,
+): HostNotificationEntry {
+  return {
+    id,
+    updatedAt,
+    readAt,
+    kind: "agent.stopped",
+    sourceRef: id,
+    severity: "failure",
+    outcome: "errored",
+    epicId: "epic-1",
+    chatId: "chat-1",
+    payload: {
+      kind: "chat",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      agentName: "Deploy checkout fix",
+      taskTitle: "Checkout notifications",
+      outcome: "errored",
+      code: "RATE_LIMIT",
+    },
+  };
+}
+
+function hostDone(
+  id: string,
+  updatedAt: number,
+  readAt: number | null,
+): HostNotificationEntry {
+  return {
+    id,
+    updatedAt,
+    readAt,
+    kind: "agent.stopped",
+    sourceRef: id,
+    severity: "done",
+    outcome: "completed",
+    epicId: "epic-1",
+    chatId: "chat-1",
+    payload: {
+      kind: "chat",
+      epicId: "epic-1",
+      chatId: "chat-1",
+      agentName: "Deploy checkout fix",
+      taskTitle: "Checkout notifications",
+      outcome: "completed",
+    },
+  };
+}
+
+function hostBotAnswer(
+  id: string,
+  updatedAt: number,
+  readAt: number | null,
+): HostNotificationFeedEntry {
+  return {
+    id,
+    updatedAt,
+    readAt,
+    kind: "host.operation.finished",
+    sourceRef: id,
+    severity: "done",
+    outcome: "completed",
+    epicId: "bot-1",
+    chatId: "thread-1",
+    payload: {
+      kind: "bot_thread_verdict",
+      operation: "bot.thread.verdict",
+      title: "Tracy answered",
+      message: "Your question about the release",
+      botId: "bot-1",
+      threadId: "thread-1",
+      replyMessageId: id,
+    },
+  };
+}
+
+function hostBotConversation(
+  id: string,
+  updatedAt: number,
+  authorUserId: string,
+): HostNotificationFeedEntry {
+  return {
+    id,
+    updatedAt,
+    readAt: null,
+    kind: "host.operation.finished",
+    sourceRef: id,
+    severity: "done",
+    outcome: "completed",
+    epicId: "bot-1",
+    chatId: "thread-1",
+    payload: {
+      kind: "bot_conversation",
+      event: "bot.conversation.post",
+      operation: "bot.conversation.post",
+      title: "Tracy",
+      message: "A question for Tracy",
+      botId: "bot-1",
+      conversationId: "conversation-1",
+      threadId: "thread-1",
+      messageId: id,
+      authorUserId,
+      mention: false,
+    },
+  };
+}
+
+function cloudDone(
+  entryId: string,
+  createdAt: number,
+  readAt: number | null,
+): HostNotificationsCloudFeedRow {
+  return {
+    entryId,
+    originHostId: "host-cloud",
+    coalesceKey: "agent.stopped:chat-cloud",
+    entry: {
+      id: entryId,
+      updatedAt: createdAt,
+      readAt,
+      kind: "agent.stopped",
+      sourceRef: entryId,
+      severity: "done",
+      outcome: "completed",
+      epicId: "epic-cloud",
+      chatId: "chat-cloud",
+      payload: {
+        kind: "chat",
+        epicId: "epic-cloud",
+        chatId: "chat-cloud",
+        outcome: "completed",
+      },
+    },
+    presentation: { epicTitle: "Cloud epic", chatTitle: "Cloud chat" },
+  };
+}
+
+function cloudFailure(
+  entryId: string,
+  createdAt: number,
+  readAt: number | null,
+): HostNotificationsCloudFeedRow {
+  return {
+    entryId,
+    originHostId: "host-cloud",
+    coalesceKey: "agent.stopped:chat-cloud",
+    entry: {
+      id: entryId,
+      updatedAt: createdAt,
+      readAt,
+      kind: "agent.stopped",
+      sourceRef: entryId,
+      severity: "failure",
+      outcome: "errored",
+      epicId: "epic-cloud",
+      chatId: "chat-cloud",
+      payload: {
+        kind: "chat",
+        epicId: "epic-cloud",
+        chatId: "chat-cloud",
+        outcome: "errored",
+      },
+    },
+    presentation: { epicTitle: "Cloud epic", chatTitle: "Cloud chat" },
+  };
+}
+
+function appLocalEntry(
+  id: string,
+  updatedAt: number,
+  readAt: number | null,
+): AppLocalNotificationEntry {
+  return {
+    id,
+    updatedAt,
+    readAt,
+    kind: "stream.transport.error",
+    sourceRef: id,
+    payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
+    message: `Message ${id}`,
+    detail: null,
+    displayedUpdatedAt: null,
+  };
+}
+
+/** An informational collaboration row: news about a task the person has. */
+function globalEntry(
+  id: string,
+  createdAt: number,
+  readAt: number | null,
+): NotificationEntry {
+  return {
+    id,
+    createdAt,
+    readAt,
+    event: {
+      kind: NOTIFICATION_EVENT_TYPES.COMMENT_ADDED,
+      epicId: "epic-1",
+      artifactType: "spec",
+      artifactId: "artifact-1",
+      threadId: "thread-1",
+      actorName: "Alice",
+    },
+  };
+}
+
+/** The collaboration row that counts on the bell: a task shared with them. */
+function invitedEntry(
+  id: string,
+  createdAt: number,
+  readAt: number | null,
+): NotificationEntry {
+  return {
+    id,
+    createdAt,
+    readAt,
+    event: {
+      kind: NOTIFICATION_EVENT_TYPES.INVITED,
+      epicId: "epic-1",
+      actorName: "Alice",
+    },
+  };
+}
+
+function buildSnapshot(entries: ReadonlyArray<NotificationEntry>): Uint8Array {
+  const donor = new Y.Doc();
+  const arr = donor.getArray<NotificationRoomEntryMap>(NOTIFICATIONS_ARRAY_KEY);
+  donor.transact(() => {
+    for (const entry of entries) {
+      arr.push([createNotificationRoomEntryMap(entry)]);
+    }
+  });
+  return Y.encodeStateAsUpdate(donor);
+}
+
+function openGlobalStream(): {
+  readonly seed: (entries: ReadonlyArray<NotificationEntry>) => void;
+} {
+  let current: NotificationsStreamCallbacks | null = null;
+  openNotificationsStream(
+    reconnectEngine,
+    (callbacks) => {
+      current = callbacks;
+      return {
+        applyUpdate: () => {},
+        close: () => {},
+      };
+    },
+    null,
+  );
+  return {
+    seed: (entries) => {
+      if (current === null) throw new Error("stream factory not invoked");
+      current.onSnapshot({ schemaVersion: "2" }, buildSnapshot(entries));
+    },
+  };
+}
+
+function seedGlobal(entries: ReadonlyArray<NotificationEntry>): void {
+  openGlobalStream().seed(entries);
+}
+
+function applyHostSnapshot(
+  entries: ReadonlyArray<HostNotificationEntry | HostNotificationFeedEntry>,
+  summary: HostNotificationsSummary,
+): void {
+  useHostNotificationsStore.getState().applySnapshot({
+    attention: {
+      entries: entries.filter(
+        (item) =>
+          item.readAt === null &&
+          (item.severity === "needs_action" || item.severity === "failure"),
+      ),
+      nextCursor: null,
+    },
+    recent: { entries, nextCursor: null },
+    summary,
+  });
+}
+
+function seedAppLocal(entries: ReadonlyArray<AppLocalNotificationEntry>): void {
+  const store = useAppLocalNotificationsStore.getState();
+  store.activateIdentity("user-test");
+  for (const entry of entries) {
+    store.upsert(entry);
+  }
+}
+
+function resetPopoverFilters(): void {
+  useNotificationsPopoverStore.setState({
+    open: false,
+    unreadOnly: false,
+    categories: ALL_NOTIFICATION_CATEGORIES,
+  });
+}
+
+function partitionIds(
+  attention: ReadonlyArray<string>,
+  recent: ReadonlyArray<string>,
+): {
+  readonly attentionSet: Set<string>;
+  readonly recentSet: Set<string>;
+} {
+  return {
+    attentionSet: new Set(attention),
+    recentSet: new Set(recent),
+  };
+}
+
+describe("merged notification projection (Attention / Recent)", () => {
+  beforeEach(() => {
+    __resetHostNotificationsStoreForTests();
+    __resetAppLocalNotificationsStoreForTests();
+    __resetNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
+    notificationFeedModeRef.value = "local";
+    resetPopoverFilters();
+    activeHostIdRef.value = mockLocalHostEntry.hostId;
+    directoryRef.value = {
+      findById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    };
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  // Equal timestamps must tie-break feedId ASC (matches SQLite id ASC); pre-fix DESC would reverse these.
+  it("breaks equal-createdAt ties by ascending feedId", () => {
+    applyHostSnapshot(
+      [hostDone("zebra", 100, null), hostDone("alpha", 100, null)],
+      { unreadCount: 2, attentionCount: 0 },
+    );
+    seedAppLocal([appLocalEntry("mid", 100, null)]);
+    seedGlobal([globalEntry("beta", 100, null)]);
+
+    const { result: all } = renderHook(() => useMergedNotificationIds());
+    expect(all.current).toEqual([
+      appLocalFeedId("mid"),
+      globalFeedId("beta"),
+      hostFeedId("alpha"),
+      hostFeedId("zebra"),
+    ]);
+  });
+
+  it("stamps local interactive rows with their connected host origin", () => {
+    applyHostSnapshot([hostPrompt("prompt-origin", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+
+    const { result } = renderHook(() =>
+      useMergedNotificationRow(hostFeedId("prompt-origin")),
+    );
+
+    expect(result.current?.originHostId).toBe(mockLocalHostEntry.hostId);
+  });
+
+  it("places each row in exactly one of Attention or Recent", () => {
+    applyHostSnapshot(
+      [
+        hostPrompt("prompt", 100, null),
+        hostFailure("failure", 90, null),
+        hostDone("done", 80, null),
+      ],
+      { unreadCount: 3, attentionCount: 2 },
+    );
+    seedAppLocal([appLocalEntry("app-fail", 70, null)]);
+    seedGlobal([globalEntry("global-1", 60, null)]);
+
+    const { result: attention } = renderHook(() =>
+      useAttentionNotificationIds(),
+    );
+    const { result: recent } = renderHook(() => useRecentNotificationIds());
+    const { result: all } = renderHook(() => useMergedNotificationIds());
+
+    const expected = [
+      hostFeedId("prompt"),
+      hostFeedId("failure"),
+      hostFeedId("done"),
+      appLocalFeedId("app-fail"),
+      globalFeedId("global-1"),
+    ];
+    expect(new Set(all.current)).toEqual(new Set(expected));
+
+    const { attentionSet, recentSet } = partitionIds(
+      attention.current,
+      recent.current,
+    );
+    for (const id of expected) {
+      const inAttention = attentionSet.has(id);
+      const inRecent = recentSet.has(id);
+      expect(inAttention || inRecent).toBe(true);
+      expect(inAttention && inRecent).toBe(false);
+    }
+
+    expect(attention.current).toEqual([
+      hostFeedId("prompt"),
+      hostFeedId("failure"),
+      appLocalFeedId("app-fail"),
+    ]);
+    expect(recent.current).toEqual([
+      hostFeedId("done"),
+      globalFeedId("global-1"),
+    ]);
+  });
+
+  it("keeps informational collaboration rows in Recent only", () => {
+    seedGlobal([
+      globalEntry("g-unread", 50, null),
+      globalEntry("g-read", 40, 10),
+    ]);
+
+    const { result: attention } = renderHook(() =>
+      useAttentionNotificationIds(),
+    );
+    const { result: recent } = renderHook(() => useRecentNotificationIds());
+
+    expect(attention.current).toEqual([]);
+    expect(recent.current).toEqual([
+      globalFeedId("g-unread"),
+      globalFeedId("g-read"),
+    ]);
+  });
+
+  it("places an unread task invitation in Attention and moves it to Recent once read", () => {
+    seedGlobal([
+      invitedEntry("invite-unread", 50, null),
+      invitedEntry("invite-read", 40, 10),
+    ]);
+
+    const { result: attention } = renderHook(() =>
+      useAttentionNotificationIds(),
+    );
+    const { result: recent } = renderHook(() => useRecentNotificationIds());
+
+    expect(attention.current).toEqual([globalFeedId("invite-unread")]);
+    expect(recent.current).toEqual([globalFeedId("invite-read")]);
+  });
+
+  it("keeps an unread task invitation out of the blocking count: no agent is waiting", () => {
+    applyHostSnapshot([hostPrompt("prompt", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+    seedGlobal([invitedEntry("invite", 50, null)]);
+
+    const { result } = renderHook(() => ({
+      attention: useAttentionNotificationIds(),
+      blocking: useBlockingAttentionCount(),
+    }));
+
+    expect(result.current.attention).toEqual([
+      hostFeedId("prompt"),
+      globalFeedId("invite"),
+    ]);
+    expect(result.current.blocking).toBe(1);
+  });
+
+  it("keeps resolved prompts in Attention until their notification is read", () => {
+    applyHostSnapshot([hostInterview("interview", 100, null, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+
+    const { result: attention } = renderHook(() =>
+      useAttentionNotificationIds(),
+    );
+    const { result: recent } = renderHook(() => useRecentNotificationIds());
+    const { result: row } = renderHook(() =>
+      useMergedNotificationRow(hostFeedId("interview")),
+    );
+
+    expect(attention.current).toEqual([hostFeedId("interview")]);
+    expect(recent.current).toEqual([]);
+    expect(row.current?.createdAt).toBe(100);
+    expect(row.current?.resolvedAt).toBeNull();
+
+    act(() => {
+      applyHostSnapshot([hostInterview("interview", 100, 500, null)], {
+        unreadCount: 1,
+        attentionCount: 1,
+      });
+    });
+
+    expect(attention.current).toEqual([hostFeedId("interview")]);
+    expect(recent.current).toEqual([]);
+    expect(row.current?.createdAt).toBe(100);
+    expect(row.current?.resolvedAt).toBe(500);
+
+    act(() => {
+      applyHostSnapshot([hostInterview("interview", 100, 500, 600)], {
+        unreadCount: 0,
+        attentionCount: 0,
+      });
+    });
+
+    expect(attention.current).toEqual([]);
+    expect(recent.current).toEqual([hostFeedId("interview")]);
+  });
+
+  it("moves unread failures to Recent when readAt is set (original timestamps preserved)", () => {
+    applyHostSnapshot([hostFailure("fail", 42, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+    seedAppLocal([appLocalEntry("app-fail", 33, null)]);
+
+    const { result: attention } = renderHook(() =>
+      useAttentionNotificationIds(),
+    );
+    const { result: recent } = renderHook(() => useRecentNotificationIds());
+    const { result: hostRow } = renderHook(() =>
+      useMergedNotificationRow(hostFeedId("fail")),
+    );
+    const { result: appRow } = renderHook(() =>
+      useMergedNotificationRow(appLocalFeedId("app-fail")),
+    );
+
+    expect(attention.current).toEqual([
+      hostFeedId("fail"),
+      appLocalFeedId("app-fail"),
+    ]);
+    expect(recent.current).toEqual([]);
+    expect(hostRow.current?.createdAt).toBe(42);
+    expect(appRow.current?.createdAt).toBe(33);
+
+    act(() => {
+      applyHostSnapshot([hostFailure("fail", 42, 999)], {
+        unreadCount: 0,
+        attentionCount: 0,
+      });
+      useAppLocalNotificationsStore.getState().markAsRead("app-fail", 888);
+    });
+
+    expect(attention.current).toEqual([]);
+    expect(recent.current).toEqual([
+      hostFeedId("fail"),
+      appLocalFeedId("app-fail"),
+    ]);
+    expect(hostRow.current?.createdAt).toBe(42);
+    expect(hostRow.current?.readAt).toBe(999);
+    expect(appRow.current?.createdAt).toBe(33);
+    expect(appRow.current?.readAt).toBe(888);
+  });
+
+  it("orders Attention blocking-first regardless of relative timestamps", () => {
+    applyHostSnapshot(
+      [
+        hostFailure("newer-failure", 1_000, null),
+        hostPrompt("older-prompt", 10, null),
+        hostFailure("mid-failure", 500, null),
+        hostInterview("mid-prompt", 200, null, null),
+      ],
+      { unreadCount: 4, attentionCount: 4 },
+    );
+    seedAppLocal([appLocalEntry("app-fail", 2_000, null)]);
+
+    const { result } = renderHook(() => useAttentionNotificationIds());
+
+    expect(result.current).toEqual([
+      hostFeedId("mid-prompt"),
+      hostFeedId("older-prompt"),
+      appLocalFeedId("app-fail"),
+      hostFeedId("newer-failure"),
+      hostFeedId("mid-failure"),
+    ]);
+  });
+
+  it("lists an unread bot answer after the prompts and failures however new it is, and drops it to Recent once read", () => {
+    applyHostSnapshot(
+      [
+        hostBotAnswer("newest-answer", 3_000, null),
+        hostFailure("failure", 200, null),
+        hostPrompt("prompt", 100, null),
+        hostBotAnswer("read-answer", 4_000, 1),
+      ],
+      { unreadCount: 3, attentionCount: 3 },
+    );
+
+    const { result } = renderHook(() => ({
+      attention: useAttentionNotificationIds(),
+      recent: useRecentNotificationIds(),
+    }));
+
+    expect(result.current.attention).toEqual([
+      hostFeedId("prompt"),
+      hostFeedId("failure"),
+      hostFeedId("newest-answer"),
+    ]);
+    expect(result.current.recent).toEqual([hostFeedId("read-answer")]);
+  });
+
+  it("lists an unread bot answer that only the attention page carries, with an empty recent page", () => {
+    useHostNotificationsStore.getState().applySnapshot({
+      attention: {
+        entries: [hostBotAnswer("attention-only-answer", 3_000, null)],
+        nextCursor: null,
+      },
+      recent: { entries: [], nextCursor: null },
+      summary: { unreadCount: 1, attentionCount: 1 },
+    });
+
+    const { result } = renderHook(() => ({
+      attention: useAttentionNotificationIds(),
+      recent: useRecentNotificationIds(),
+    }));
+
+    expect(result.current.attention).toEqual([
+      hostFeedId("attention-only-answer"),
+    ]);
+    expect(result.current.recent).toEqual([]);
+  });
+});
+
+describe("cloud feed projection authority", () => {
+  beforeEach(() => {
+    __resetHostNotificationsStoreForTests();
+    __resetAppLocalNotificationsStoreForTests();
+    __resetNotificationsStoreForTests();
+    useCloudNotificationsStore.getState().reset();
+    notificationFeedModeRef.value = "cloud";
+    activeHostIdRef.value = mockLocalHostEntry.hostId;
+    directoryRef.value = {
+      findById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    };
+  });
+
+  afterEach(() => {
+    cleanup();
+    notificationFeedModeRef.value = "local";
+    useCloudNotificationsStore.getState().reset();
+  });
+
+  it("interleaves the local lane - host local-home rows, renderer-local failures, collaboration rows - with the cloud partition by recency", () => {
+    // Mixed mode keeps the host feed as the exact local durable-home
+    // partition and the cloud relay as the complementary partition. App-local
+    // failures and Notifications-room collaboration rows are this machine's
+    // client-side state no feed can reproduce, so they ride in the LOCAL lane
+    // beside the partition rows; but the merged list is ONE newest-first order
+    // across both planes - `createdAt` is the origin clock in each lane, so a
+    // fresher cloud row lands ahead of a staler local-lane row and vice versa.
+    // The protocol home order (`local` before `cloud`) only breaks a tie at
+    // the exact same `createdAt`, and ascending `feedId` breaks whatever tie
+    // is left. The cloud row's `createdAt` (95) sits strictly between the
+    // host row's (100) and the app-local row's (90) below, so this only
+    // passes if the merge genuinely interleaves by date rather than grouping
+    // all local-lane rows ahead of the cloud partition.
+    applyHostSnapshot([hostDone("local-host", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    seedAppLocal([appLocalEntry("local-app", 90, null)]);
+    seedGlobal([globalEntry("local-global", 80, null)]);
+    const cloud = cloudDone("entry-cloud", 95, null);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloud],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 7,
+    });
+
+    const { result } = renderHook(() => ({
+      ids: useMergedNotificationIds(),
+      hostRow: useMergedNotificationRow(hostFeedId("local-host")),
+      cloudRow: useMergedNotificationRow(
+        cloudNotificationFeedId(cloud.entryId),
+      ),
+      unreadCount: useMergedNotificationUnreadCount(),
+      bell: useNotificationBellState(),
+      hostState: useNotificationCenterHostState(),
+    }));
+
+    expect(result.current.ids).toEqual([
+      hostFeedId("local-host"),
+      cloudNotificationFeedId(cloud.entryId),
+      appLocalFeedId("local-app"),
+      globalFeedId("local-global"),
+    ]);
+    expect(result.current.hostRow?.source).toBe("host");
+    expect(result.current.cloudRow?.sourceId).toBe("entry-cloud");
+    expect(result.current.unreadCount).toBe(4);
+    // The unread app-local failure counts as attention, exactly as it does in
+    // local mode.
+    expect(result.current.bell).toEqual({ kind: "attention", count: 1 });
+    expect(result.current.hostState.isPartial).toBe(false);
+  });
+
+  it("sums exact mixed unread and attention from both partition summaries without double counting", () => {
+    applyHostSnapshot(
+      [
+        hostPrompt("local-prompt", 200, null),
+        hostDone("local-done", 150, null),
+      ],
+      { unreadCount: 2, attentionCount: 1 },
+    );
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [
+        cloudDone("cloud-done", 9, null),
+        {
+          ...cloudDone("cloud-prompt", 10, null),
+          entry: {
+            ...cloudDone("cloud-prompt", 10, null).entry,
+            kind: "approval.requested",
+            severity: "needs_action",
+            outcome: null,
+            resolvedAt: null,
+            readAt: null,
+          },
+          coalesceKey: "approval.requested:cloud-prompt",
+        },
+      ],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 1 },
+      version: 12,
+    });
+
+    const { result } = renderHook(() => ({
+      ids: useMergedNotificationIds(),
+      unreadCount: useMergedNotificationUnreadCount(),
+      bell: useNotificationBellState(),
+      attention: useAttentionNotificationIds(),
+    }));
+
+    // Newest-first by createdAt across both planes - this fixture's local
+    // rows (200, 150) simply happen to be newer than the cloud rows (10, 9),
+    // so this order falls out of recency, not out of the local plane being
+    // listed first.
+    expect(result.current.ids).toEqual([
+      hostFeedId("local-prompt"),
+      hostFeedId("local-done"),
+      cloudNotificationFeedId("cloud-prompt"),
+      cloudNotificationFeedId("cloud-done"),
+    ]);
+    expect(result.current.unreadCount).toBe(4);
+    expect(result.current.bell).toEqual({ kind: "attention", count: 2 });
+    expect(result.current.attention).toEqual([
+      hostFeedId("local-prompt"),
+      cloudNotificationFeedId("cloud-prompt"),
+    ]);
+  });
+
+  it("treats a null host or cloud summary as partial rather than understating the mixed total", () => {
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-cloud", 7, null)],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 7,
+    });
+
+    const { result } = renderHook(() => ({
+      unreadCount: useMergedNotificationUnreadCount(),
+      bell: useNotificationBellState(),
+      hostState: useNotificationCenterHostState(),
+    }));
+
+    // Host summary is still null (no local partition snapshot landed).
+    expect(result.current.unreadCount).toBe(0);
+    expect(result.current.bell).toEqual({ kind: "unknown" });
+    expect(result.current.hostState.isPartial).toBe(true);
+  });
+
+  it("never keeps the attention bell after optimistically marking every cloud failure read", () => {
+    // An EMPTY host snapshot, not an absent one. Mixed mode now reports
+    // `unknown` while either partition's summary is missing rather than
+    // understating the total from the one it has, so a cloud-only arrangement
+    // would assert the partial state instead of this test's subject.
+    applyHostSnapshot([], { unreadCount: 0, attentionCount: 0 });
+    const failure = cloudFailure("entry-failure", 7, null);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [failure],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 1 },
+      version: 7,
+    });
+    const { result } = renderHook(() => useNotificationBellState());
+    expect(result.current).toEqual({ kind: "attention", count: 1 });
+
+    act(() => {
+      useCloudNotificationsStore.getState().markAllReadLocally(8);
+    });
+
+    expect(result.current).toEqual({ kind: "clear" });
+  });
+
+  it("keys a row by entryId alone - originHostId is display metadata, not identity", () => {
+    const cloud = cloudDone("entry-cloud", 7, null);
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloud],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+      version: 7,
+    });
+
+    const { result } = renderHook(() =>
+      useMergedNotificationRow(cloudNotificationFeedId("entry-cloud")),
+    );
+
+    // The feed id embeds no host, so the same entry resolves whichever host
+    // relays it - and a mutation for it addresses the entry, never the host.
+    expect(result.current?.feedId).toBe("cloud:entry-cloud");
+    expect(result.current?.originHostId).toBe("host-cloud");
+  });
+
+  it("surfaces a reopened entry as its own unread row while the entry it superseded disappears", () => {
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudDone("entry-a", 1, 500)],
+      summary: { totalCount: 1, unreadCount: 0, attentionCount: 0 },
+      version: 7,
+    });
+    const { result } = renderHook(() => ({
+      ids: useMergedNotificationIds(),
+      superseded: useMergedNotificationRow(cloudNotificationFeedId("entry-a")),
+      reopened: useMergedNotificationRow(cloudNotificationFeedId("entry-b")),
+    }));
+    expect(result.current.superseded?.readAt).toBe(500);
+
+    act(() => {
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [cloudDone("entry-b", 2, null)],
+        summary: { totalCount: 1, unreadCount: 1, attentionCount: 0 },
+        version: 8,
+      });
+    });
+
+    // Nothing was un-read: the read marker still belongs to `entry-a`, which
+    // is simply no longer visible. The reopen is a different entry with its
+    // own null markers, so it is unread by construction.
+    expect(result.current.ids).toEqual([cloudNotificationFeedId("entry-b")]);
+    expect(result.current.reopened?.readAt).toBeNull();
+    expect(result.current.superseded).toBeNull();
+  });
+
+  it("orders Recent by recency across planes, not by plane - a fresh cloud row beats a stale local row and vice versa", () => {
+    const now = Date.now();
+    const oneDayMs = 24 * 60 * 60 * 1_000;
+    applyHostSnapshot(
+      [
+        hostDone("host-week-old", now - 7 * oneDayMs, null),
+        hostDone("host-today", now - 1_000, null),
+      ],
+      { unreadCount: 2, attentionCount: 0 },
+    );
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [
+        cloudDone("cloud-today", now, null),
+        cloudDone("cloud-yesterday", now - oneDayMs, null),
+      ],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 0 },
+      version: 9,
+    });
+
+    const { result } = renderHook(() => useRecentNotificationIds());
+
+    // Newest first purely by createdAt across planes: today's cloud row beats
+    // last week's local row (cloud-over-local), and today's local row beats
+    // yesterday's cloud row (local-over-cloud) - both driven by recency alone,
+    // never by which plane a row belongs to.
+    expect(result.current).toEqual([
+      cloudNotificationFeedId("cloud-today"),
+      hostFeedId("host-today"),
+      cloudNotificationFeedId("cloud-yesterday"),
+      hostFeedId("host-week-old"),
+    ]);
+  });
+
+  it("orders Attention within the same severity tier by recency across planes - a newer cloud row precedes an older local row", () => {
+    applyHostSnapshot([hostPrompt("local-prompt-old", 100, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+    const cloudPromptRowBase = cloudDone("cloud-prompt-new", 200, null);
+    const cloudPromptRow: HostNotificationsCloudFeedRow = {
+      ...cloudPromptRowBase,
+      entry: {
+        ...cloudPromptRowBase.entry,
+        kind: "approval.requested",
+        severity: "needs_action",
+        outcome: null,
+        resolvedAt: null,
+        readAt: null,
+      },
+      coalesceKey: "approval.requested:cloud-prompt-new",
+    };
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [cloudPromptRow],
+      summary: { totalCount: 1, unreadCount: 1, attentionCount: 1 },
+      version: 11,
+    });
+
+    const { result } = renderHook(() => useAttentionNotificationIds());
+
+    // Both rows land in the same "blocking" tier (needs_action). Severity
+    // tier is still the outer sort key, but within a tier the newer cloud row
+    // precedes the older local row purely by `createdAt` - plane only breaks
+    // an exact tie, it is never the primary order.
+    expect(result.current).toEqual([
+      cloudNotificationFeedId("cloud-prompt-new"),
+      hostFeedId("local-prompt-old"),
+    ]);
+  });
+});
+
+describe("Recent filters leave Attention invariant", () => {
+  beforeEach(() => {
+    __resetHostNotificationsStoreForTests();
+    __resetAppLocalNotificationsStoreForTests();
+    __resetNotificationsStoreForTests();
+    resetPopoverFilters();
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("keeps Attention stable while unreadOnly and categories change Recent", () => {
+    applyHostSnapshot(
+      [
+        hostPrompt("prompt", 100, null),
+        hostDone("done-unread", 90, null),
+        hostDone("done-read", 80, 10),
+      ],
+      { unreadCount: 2, attentionCount: 1 },
+    );
+    seedAppLocal([appLocalEntry("app-read", 70, 5)]);
+    seedGlobal([globalEntry("collab", 60, null)]);
+
+    const { result: attention } = renderHook(() =>
+      useAttentionNotificationIds(),
+    );
+    const { result: recent } = renderHook(() => useRecentNotificationIds());
+
+    const attentionBefore = [...attention.current];
+    expect(attentionBefore).toEqual([hostFeedId("prompt")]);
+    expect(recent.current).toEqual([
+      hostFeedId("done-unread"),
+      hostFeedId("done-read"),
+      appLocalFeedId("app-read"),
+      globalFeedId("collab"),
+    ]);
+
+    act(() => {
+      useNotificationsPopoverStore.getState().setUnreadOnly(true);
+    });
+    expect(attention.current).toEqual(attentionBefore);
+    expect(recent.current).toEqual([
+      hostFeedId("done-unread"),
+      globalFeedId("collab"),
+    ]);
+
+    act(() => {
+      useNotificationsPopoverStore.getState().setUnreadOnly(false);
+      useNotificationsPopoverStore.getState().toggleCategory("task");
+    });
+    expect(attention.current).toEqual(attentionBefore);
+    expect(recent.current).toEqual([
+      appLocalFeedId("app-read"),
+      globalFeedId("collab"),
+    ]);
+
+    act(() => {
+      useNotificationsPopoverStore.getState().toggleCategory("system");
+      useNotificationsPopoverStore.getState().toggleCategory("collaboration");
+    });
+    expect(attention.current).toEqual(attentionBefore);
+    expect(recent.current).toEqual([]);
+  });
+
+  it("keeps unreadOnly and categories across open and close - the filters are durable", () => {
+    act(() => {
+      useNotificationsPopoverStore.getState().setUnreadOnly(true);
+      useNotificationsPopoverStore.getState().toggleCategory("task");
+      useNotificationsPopoverStore.getState().toggleCategory("system");
+    });
+
+    expect(useNotificationsPopoverStore.getState().unreadOnly).toBe(true);
+    expect(useNotificationsPopoverStore.getState().categories.has("task")).toBe(
+      false,
+    );
+    expect(
+      useNotificationsPopoverStore.getState().categories.has("system"),
+    ).toBe(false);
+
+    act(() => {
+      useNotificationsPopoverStore.getState().setOpen(true);
+    });
+
+    // Opening no longer resets: the center reopens the way the user last
+    // filtered it. `resetFilters` is the explicit way back to the default.
+    expect(useNotificationsPopoverStore.getState().open).toBe(true);
+    expect(useNotificationsPopoverStore.getState().unreadOnly).toBe(true);
+    expect(useNotificationsPopoverStore.getState().categories.has("task")).toBe(
+      false,
+    );
+
+    act(() => {
+      useNotificationsPopoverStore.getState().resetFilters();
+    });
+    expect(useNotificationsPopoverStore.getState().unreadOnly).toBe(false);
+    expect(
+      [...useNotificationsPopoverStore.getState().categories].sort(),
+    ).toEqual([...ALL_NOTIFICATION_CATEGORIES].sort());
+
+    act(() => {
+      useNotificationsPopoverStore.getState().setUnreadOnly(true);
+      useNotificationsPopoverStore.getState().toggleCategory("collaboration");
+      useNotificationsPopoverStore.getState().setOpen(false);
+    });
+
+    // Closing leaves filters alone too - durable in both directions.
+    expect(useNotificationsPopoverStore.getState().unreadOnly).toBe(true);
+    expect(
+      useNotificationsPopoverStore.getState().categories.has("collaboration"),
+    ).toBe(false);
+  });
+
+  it("drops a global row from Recent immediately after store markAsRead while unreadOnly is active", () => {
+    // Regression: reading global entries via the store
+    // must invalidate the filtered Recent projection. Going through
+    // useMergedNotificationsActions would mask a missing entries dep.
+    seedGlobal([globalEntry("collab-unread", 60, null)]);
+
+    act(() => {
+      useNotificationsPopoverStore.getState().setUnreadOnly(true);
+    });
+
+    const { result: recent } = renderHook(() => useRecentNotificationIds());
+    expect(recent.current).toEqual([globalFeedId("collab-unread")]);
+
+    act(() => {
+      useNotificationsStore.getState().markAsRead("collab-unread");
+    });
+
+    expect(recent.current).toEqual([]);
+  });
+});
+
+describe("useNotificationBellState", () => {
+  beforeEach(() => {
+    __resetHostNotificationsStoreForTests();
+    __resetAppLocalNotificationsStoreForTests();
+    __resetNotificationsStoreForTests();
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("sums host attentionCount with app-local unread for exact attention", () => {
+    applyHostSnapshot([], { unreadCount: 0, attentionCount: 3 });
+    seedAppLocal([
+      appLocalEntry("a1", 10, null),
+      appLocalEntry("a2", 20, null),
+    ]);
+
+    const { result } = renderHook(() => useNotificationBellState());
+    expect(result.current).toEqual({ kind: "attention", count: 5 });
+  });
+
+  it("renders large attention counts without capping", () => {
+    applyHostSnapshot([], { unreadCount: 0, attentionCount: 140 });
+    seedAppLocal([
+      appLocalEntry("a1", 1, null),
+      appLocalEntry("a2", 2, null),
+      appLocalEntry("a3", 3, null),
+      appLocalEntry("a4", 4, null),
+      appLocalEntry("a5", 5, null),
+      appLocalEntry("a6", 6, null),
+      appLocalEntry("a7", 7, null),
+      appLocalEntry("a8", 8, null),
+      appLocalEntry("a9", 9, null),
+      appLocalEntry("a10", 10, null),
+    ]);
+
+    const { result } = renderHook(() => useNotificationBellState());
+    expect(result.current).toEqual({ kind: "attention", count: 150 });
+  });
+
+  it("counts an unread task invitation as attention until it is read", () => {
+    applyHostSnapshot([], { unreadCount: 0, attentionCount: 0 });
+    seedGlobal([
+      invitedEntry("invite", 20, null),
+      globalEntry("comment", 10, null),
+    ]);
+
+    const { result } = renderHook(() => useNotificationBellState());
+    expect(result.current).toEqual({ kind: "attention", count: 1 });
+
+    act(() => {
+      useNotificationsStore.getState().markAsRead("invite");
+    });
+    // The comment is still unread: activity, not attention.
+    expect(result.current).toEqual({ kind: "quietDot" });
+  });
+
+  it("adds an unread task invitation to both partitions' attention in mixed mode", () => {
+    notificationFeedModeRef.value = "cloud";
+    try {
+      applyHostSnapshot([], { unreadCount: 0, attentionCount: 1 });
+      useCloudNotificationsStore.getState().applySnapshot({
+        rows: [],
+        summary: { totalCount: 0, unreadCount: 0, attentionCount: 1 },
+        version: 1,
+      });
+      seedGlobal([invitedEntry("invite", 20, null)]);
+
+      const { result } = renderHook(() => useNotificationBellState());
+      expect(result.current).toEqual({ kind: "attention", count: 3 });
+    } finally {
+      notificationFeedModeRef.value = "local";
+      useCloudNotificationsStore.getState().reset();
+    }
+  });
+
+  it("draws a bot's unread answer as attention once the host's summary counts it", () => {
+    applyHostSnapshot([hostBotAnswer("answer", 10, null)], {
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+
+    const { result } = renderHook(() => ({
+      bell: useNotificationBellState(),
+      attention: useAttentionNotificationIds(),
+    }));
+
+    expect(result.current.bell).toEqual({ kind: "attention", count: 1 });
+    expect(result.current.attention).toEqual([hostFeedId("answer")]);
+  });
+
+  it("returns quietDot when there is unread activity but no attention", () => {
+    applyHostSnapshot([hostDone("done", 10, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    seedGlobal([globalEntry("g1", 5, null)]);
+
+    const { result } = renderHook(() => useNotificationBellState());
+    expect(result.current).toEqual({ kind: "quietDot" });
+  });
+
+  it("returns clear when host summary is exact and every source is fully read", () => {
+    applyHostSnapshot([hostDone("done", 10, 1)], {
+      unreadCount: 0,
+      attentionCount: 0,
+    });
+    seedAppLocal([appLocalEntry("app", 5, 1)]);
+    seedGlobal([globalEntry("g1", 3, 1)]);
+
+    const { result } = renderHook(() => useNotificationBellState());
+    expect(result.current).toEqual({ kind: "clear" });
+  });
+
+  it("returns unknown whenever host summary is null, even with exact app/global unreads", () => {
+    // Host store starts with summary null; leave it that way.
+    seedAppLocal([appLocalEntry("app", 10, null)]);
+    seedGlobal([globalEntry("g1", 5, null)]);
+
+    const { result } = renderHook(() => useNotificationBellState());
+    expect(result.current).toEqual({ kind: "unknown" });
+    expect(useHostNotificationsStore.getState().summary).toBeNull();
+  });
+
+  it("produces an accessible label per bell state kind", () => {
+    const cases: ReadonlyArray<{
+      readonly state: NotificationBellState;
+      readonly expected: string;
+    }> = [
+      // A THIRD sibling of the flipped false-clear assertion (`s5-parity-gaps`
+      // gap 3): unknown used to share clear's label because both rendered a
+      // plain bell with no indicator. It renders its own indicator now, so a
+      // shared label would be the same false-clear for a screen-reader user.
+      {
+        state: { kind: "unknown" },
+        expected: "Notifications, status unavailable",
+      },
+      { state: { kind: "clear" }, expected: "Notifications" },
+      {
+        state: { kind: "quietDot" },
+        expected: "Notifications, unread activity",
+      },
+      {
+        state: { kind: "attention", count: 1 },
+        expected: "Notifications, 1 notification needs attention",
+      },
+      {
+        state: { kind: "attention", count: 150 },
+        expected: "Notifications, 150 notifications need attention",
+      },
+    ];
+
+    for (const { state, expected } of cases) {
+      const label = notificationBellAccessibleLabel(state);
+      expect(label).toBe(expected);
+      if (state.kind === "attention") {
+        expect(label).toContain("attention");
+        expect(label).toContain(String(state.count));
+      } else {
+        // Non-attention states must not expose a bare count with no context.
+        expect(/\b\d+\b/.test(label)).toBe(false);
+      }
+    }
+  });
+});
+
+describe("host unavailable / partial center state", () => {
+  beforeEach(() => {
+    __resetHostNotificationsStoreForTests();
+    __resetAppLocalNotificationsStoreForTests();
+    __resetNotificationsStoreForTests();
+    resetPopoverFilters();
+    window.localStorage.clear();
+    activeHostIdRef.value = null;
+    directoryRef.value = {
+      findById: () => null,
+    };
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("still surfaces app-local and global rows when host summary is null", () => {
+    seedAppLocal([appLocalEntry("app", 20, null)]);
+    seedGlobal([globalEntry("collab", 10, null)]);
+
+    const { result: recent } = renderHook(() => useRecentNotificationIds());
+    const { result: all } = renderHook(() => useMergedNotificationIds());
+    const { result: attention } = renderHook(() =>
+      useAttentionNotificationIds(),
+    );
+
+    expect(all.current).toEqual([
+      appLocalFeedId("app"),
+      globalFeedId("collab"),
+    ]);
+    // Unread app-local failure is still attention-eligible without a host.
+    expect(attention.current).toEqual([appLocalFeedId("app")]);
+    expect(recent.current).toEqual([globalFeedId("collab")]);
+  });
+
+  it("marks center host state partial when active host id is null", () => {
+    const { result } = renderHook(() => useNotificationCenterHostState());
+    expect(result.current).toEqual({
+      hostLabel: null,
+      isPartial: true,
+    });
+  });
+
+  it("marks center host state partial when summary is null even with an active host", () => {
+    activeHostIdRef.value = mockLocalHostEntry.hostId;
+    directoryRef.value = {
+      findById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    };
+
+    const { result } = renderHook(() => useNotificationCenterHostState());
+    expect(result.current.isPartial).toBe(true);
+    expect(result.current.hostLabel).toBe(mockLocalHostEntry.label);
+  });
+
+  it("clears partial when host is active and summary has landed", () => {
+    activeHostIdRef.value = mockLocalHostEntry.hostId;
+    directoryRef.value = {
+      findById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    };
+    applyHostSnapshot([], { unreadCount: 0, attentionCount: 0 });
+
+    const { result } = renderHook(() => useNotificationCenterHostState());
+    expect(result.current).toEqual({
+      hostLabel: mockLocalHostEntry.label,
+      isPartial: false,
+    });
+  });
+});
+
+describe("row category and resolvedAt projection fields", () => {
+  beforeEach(() => {
+    notificationFeedModeRef.value = "local";
+    __resetHostNotificationsStoreForTests();
+    __resetAppLocalNotificationsStoreForTests();
+    __resetNotificationsStoreForTests();
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("projects category and resolvedAt from each source", () => {
+    applyHostSnapshot(
+      [hostPrompt("prompt", 30, null), hostFailure("fail", 20, null)],
+      { unreadCount: 2, attentionCount: 2 },
+    );
+    seedAppLocal([appLocalEntry("app", 15, null)]);
+    seedGlobal([globalEntry("g", 10, null)]);
+
+    const { result: prompt } = renderHook(() =>
+      useMergedNotificationRow(hostFeedId("prompt")),
+    );
+    const { result: fail } = renderHook(() =>
+      useMergedNotificationRow(hostFeedId("fail")),
+    );
+    const { result: app } = renderHook(() =>
+      useMergedNotificationRow(appLocalFeedId("app")),
+    );
+    const { result: global } = renderHook(() =>
+      useMergedNotificationRow(globalFeedId("g")),
+    );
+
+    const expected: ReadonlyArray<{
+      readonly row: typeof prompt.current;
+      readonly category: NotificationCategory;
+      readonly resolvedAt: number | null;
+    }> = [
+      { row: prompt.current, category: "task", resolvedAt: null },
+      { row: fail.current, category: "task", resolvedAt: null },
+      { row: app.current, category: "system", resolvedAt: null },
+      { row: global.current, category: "collaboration", resolvedAt: null },
+    ];
+
+    for (const item of expected) {
+      expect(item.row?.category).toBe(item.category);
+      expect(item.row?.resolvedAt).toBe(item.resolvedAt);
+    }
+  });
+
+  it("projects the member who wrote a bot conversation row, and none on the bot's own verdict", () => {
+    applyHostSnapshot(
+      [
+        hostBotConversation("post", 30, "user-2"),
+        hostBotAnswer("verdict", 20, null),
+      ],
+      { unreadCount: 2, attentionCount: 0 },
+    );
+
+    const { result: post } = renderHook(() =>
+      useMergedNotificationRow(hostFeedId("post")),
+    );
+    const { result: verdict } = renderHook(() =>
+      useMergedNotificationRow(hostFeedId("verdict")),
+    );
+
+    expect(post.current?.botAuthorUserId).toBe("user-2");
+    expect(verdict.current?.botAuthorUserId).toBeNull();
+  });
+
+  it("hides all seeded local sources while upgrade is required", () => {
+    notificationFeedModeRef.value = "upgrade-required";
+    applyHostSnapshot([hostFailure("host", 30, null)], {
+      unreadCount: 1,
+      attentionCount: 0,
+    });
+    seedAppLocal([appLocalEntry("app", 20, null)]);
+    seedGlobal([globalEntry("global", 10, null)]);
+
+    const { result } = renderHook(() => useMergedNotificationIds());
+    expect(result.current).toEqual([]);
+  });
+});

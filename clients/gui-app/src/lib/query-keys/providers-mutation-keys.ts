@@ -1,0 +1,73 @@
+export const providersMutationKeys = {
+  profileRecordAction: (action: "sign-out" | "remove", hostId: string | null) =>
+    ["providers.profileRecordAction", action, hostId] as const,
+  commitProfileMove: () => ["providers.commitProfileMove"] as const,
+  signOutProfile: () => ["providers.signOutProfile"] as const,
+  setSelection: () => ["providers.setSelection"] as const,
+  addCustomPath: () => ["providers.addCustomPath"] as const,
+  removeCustomPath: () => ["providers.removeCustomPath"] as const,
+  setEnabled: () => ["providers.setEnabled"] as const,
+  promoteToPersonal: () =>
+    ["providers.nativeMutate", "promoteToPersonal"] as const,
+  // One Update press on a provider's out-of-date command-line tool (T71).
+  updateProvider: (hostId: string | null) =>
+    ["providers.update", hostId] as const,
+  setProfileEnabled: (hostId: string | null, providerId: string | null) =>
+    ["providers.setProfileEnabled", hostId, providerId] as const,
+  setApiKey: () => ["providers.setApiKey"] as const,
+  clearApiKey: () => ["providers.clearApiKey"] as const,
+  // Distinct from `setApiKey`/`clearApiKey` above, which are the PROVIDER-wide
+  // store. The per-profile methods are separate RPCs precisely because a
+  // profile scope cannot ride the released provider-wide request (it would be
+  // projected away and widen the write to every profile), so their mutation
+  // keys must not collide either - a shared key would make one profile's paste
+  // read as pending on another.
+  setProfileApiKey: () => ["providers.setProfileApiKey"] as const,
+  clearProfileApiKey: () => ["providers.clearProfileApiKey"] as const,
+  setTerminalAgentArgs: () => ["providers.setTerminalAgentArgs"] as const,
+  setAutoJudge: () => ["providers.setAutoJudge"] as const,
+  setNativeSubagents: () => ["providers.setNativeSubagents"] as const,
+  setNativeMemory: () => ["providers.setNativeMemory"] as const,
+  setModelProviderHidden: () => ["providers.setModelProviderHidden"] as const,
+  resetSettingsFile: () => ["providers.settingsFile.reset"] as const,
+  resetProviderSettings: () =>
+    ["providers.settingsFile.resetProvider"] as const,
+  setEnvOverride: () => ["providers.setEnvOverride"] as const,
+  deleteEnvOverride: () => ["providers.deleteEnvOverride"] as const,
+  startLogin: () => ["providers.startLogin"] as const,
+  awaitLogin: () => ["providers.awaitLogin"] as const,
+  cancelLogin: () => ["providers.cancelLogin"] as const,
+  submitLoginCode: () => ["providers.submitLoginCode"] as const,
+  touchLogin: () => ["providers.touchLogin"] as const,
+  startTerminalLogin: () => ["providers.startTerminalLogin"] as const,
+  ensurePack: () => ["providers.ensurePack"] as const,
+  installPackVersion: () => ["providers.installPackVersion"] as const,
+  removePackVersion: () => ["providers.removePackVersion"] as const,
+  usePackVersion: () => ["providers.usePackVersion"] as const,
+  setPackPolicy: () => ["providers.setPackPolicy"] as const,
+  refreshPackDiscovery: () => ["providers.refreshPackDiscovery"] as const,
+  renameProfile: () => ["providers.renameProfile"] as const,
+  answerProfileName: () => ["providers.answerProfileName"] as const,
+  recolorProfile: () => ["providers.recolorProfile"] as const,
+  removeProfile: () => ["providers.removeProfile"] as const,
+  refresh: () => ["providers.refresh"] as const,
+  mcpMutate: () => ["providers.mcpMutate"] as const,
+  mcpDiscover: () => ["providers.mcpDiscover"] as const,
+  mcpAuth: () => ["providers.mcpAuth"] as const,
+  modelProviderAuth: () => ["providers.modelProviderAuth"] as const,
+  awaitModelProviderAuth: () => ["providers.awaitModelProviderAuth"] as const,
+  cancelModelProviderAuth: () => ["providers.cancelModelProviderAuth"] as const,
+  pluginsMutate: () => ["providers.pluginsMutate"] as const,
+  skillsMutate: () => ["providers.skillsMutate"] as const,
+  consumeRateLimitResetCredit: () =>
+    ["providers.consumeRateLimitResetCredit"] as const,
+  refreshProfileStatus: (hostId: string | null) =>
+    ["providers.refreshProfileStatus", hostId] as const,
+  // The three fallback-policy writes are separate keys, not one, because the
+  // settings panel disables a different control for each: an ordinary save
+  // must not make "Reset all" look busy, and vice versa.
+  setFallbackPolicy: () => ["providers.fallbackPolicy.set"] as const,
+  restoreFallbackTierGroups: () =>
+    ["providers.fallbackPolicy.restoreTierGroups"] as const,
+  resetFallbackPolicy: () => ["providers.fallbackPolicy.reset"] as const,
+};

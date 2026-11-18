@@ -1,0 +1,650 @@
+import { createElement, useEffect, type ReactNode } from "react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import type {
+  HostNotificationsIndicatorState,
+  HostNotificationsIndicatorStateResponse,
+} from "@traycer/protocol/host/notifications/contracts";
+import { HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP } from "@traycer/protocol/host/notifications/contracts";
+import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
+import {
+  indicatorRequests,
+  useHostNotificationIndicators,
+} from "@/hooks/notifications/use-host-notification-indicators-query";
+import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
+import { createAppQueryClient } from "@/lib/query-client";
+import { useAuthStore } from "@/stores/auth/auth-store";
+
+let hostClient: HostClient<HostRpcRegistry>;
+
+// The indicator hook resolves its own client from a host id (so the surfaces
+// that mount it need no host plumbing of their own). This suite builds the
+// `HostClient` itself, so the resolver is pointed straight at it.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => hostClient,
+}));
+
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => hostClient,
+  };
+});
+
+// The indicator query addresses the NOTIFICATION host - the machine whose feed
+// the centre renders - rather than the app-wide active host, so a `home:
+// local` partition question is not asked of some other host's local partition.
+vi.mock("@/hooks/notifications/use-notification-host", () => ({
+  useNotificationResolveHostId: () => hostClient.getActiveHostId(),
+  useNotificationResolveHost: () => ({
+    hostId: hostClient.getActiveHostId(),
+    client: hostClient,
+  }),
+}));
+
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+  useAuthStore.setState(useAuthStore.getInitialState(), true);
+});
+
+describe("indicatorRequests", () => {
+  it("deduplicates, sorts, and chunks visible surface ids at the host cap", () => {
+    const epicIds = Array.from(
+      { length: HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP + 1 },
+      (_value, index) => `epic-${String(index).padStart(3, "0")}`,
+    );
+    const requests = indicatorRequests(
+      [...epicIds, "epic-000"],
+      ["chat-b", "chat-a"],
+      {},
+      undefined,
+    );
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0].epicIds).toHaveLength(
+      HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP,
+    );
+    expect(requests[1].epicIds).toEqual([
+      `epic-${String(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP).padStart(3, "0")}`,
+    ]);
+    // EVERY epic chunk carries the complete live-chat whitelist: a task
+    // aggregate computed against a partial whitelist would silently narrow
+    // that epic's aggregate to the chats that happened to share its page.
+    expect(requests[0].chatIds).toEqual(["chat-a", "chat-b"]);
+    expect(requests[1].chatIds).toEqual(["chat-a", "chat-b"]);
+  });
+
+  it("crosses epic chunks with chat chunks so every aggregate sees the whole whitelist", () => {
+    const epicIds = Array.from(
+      { length: HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP + 1 },
+      (_value, index) => `epic-${index}`,
+    );
+    const chatIds = Array.from(
+      { length: HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP + 1 },
+      (_value, index) => `chat-${index}`,
+    );
+
+    const requests = indicatorRequests(epicIds, chatIds, {}, undefined);
+
+    const sortedEpicIds = [...epicIds].sort((left, right) =>
+      left.localeCompare(right),
+    );
+    const sortedChatIds = [...chatIds].sort((left, right) =>
+      left.localeCompare(right),
+    );
+    const epicChunks = [
+      sortedEpicIds.slice(0, HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+      sortedEpicIds.slice(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+    ];
+    const chatChunks = [
+      sortedChatIds.slice(0, HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+      sortedChatIds.slice(HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP),
+    ];
+
+    // Crossed rather than paired index-wise: a chat id landing in a request
+    // without its epic would drop it from that epic's aggregate entirely.
+    expect(requests).toEqual(
+      epicChunks.flatMap((epicChunk) =>
+        chatChunks.map((chatChunk) => ({
+          epicIds: epicChunk,
+          chatIds: chatChunk,
+        })),
+      ),
+    );
+  });
+
+  it("scopes chatEpicIds to the chat ids known to have a parent epic", () => {
+    // `chat-b` has no entry in the map, so `Object.hasOwn` must keep it out
+    // of `chatEpicIds` even though it is still in the request's `chatIds`.
+    const requests = indicatorRequests(
+      [],
+      ["chat-a", "chat-b"],
+      { "chat-a": "epic-x" },
+      undefined,
+    );
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0].chatIds).toEqual(["chat-a", "chat-b"]);
+    expect(requests[0].chatEpicIds).toEqual({ "chat-a": "epic-x" });
+  });
+});
+
+describe("useHostNotificationIndicators recovery", () => {
+  it("carries a dispatch floor on a partitioned indicator read and none on a whole-origin one", async () => {
+    const queryClient = createAppQueryClient();
+    queryClient.setDefaultOptions({
+      queries: { ...queryClient.getDefaultOptions().queries, retry: false },
+    });
+    const partitionedIndicatorArrived = Promise.withResolvers<void>();
+    const wholeOriginIndicatorArrived = Promise.withResolvers<void>();
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "request-floor",
+      handlers: {
+        "host.notifications.indicatorState": ({ epicIds }) => {
+          if (epicIds.includes("epic-a")) {
+            partitionedIndicatorArrived.resolve();
+          }
+          if (epicIds.includes("epic-b")) {
+            wholeOriginIndicatorArrived.resolve();
+          }
+          return {
+            epics: {},
+            chats: {},
+            complete: true,
+          };
+        },
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
+    );
+    hostClient = spine.createRequester(mockLocalHostEntry);
+    useAuthStore.setState({
+      contextMetadata: { userId: "user-a", username: "user-a" },
+    });
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        props.children,
+      );
+
+    // A partitioned read: `home` is on the request, so an older peer would
+    // STRIP it and answer 200 with whole-origin flags. The floor rides the
+    // frame so that peer refuses instead.
+    renderHook(
+      () =>
+        useHostNotificationIndicators({
+          freshnessMode: "base",
+          hostId: mockLocalHostEntry.hostId,
+          epicIds: ["epic-a"],
+          chatIds: [],
+          enabled: true,
+          home: "local",
+        }),
+      { wrapper },
+    );
+    await act(async () => {
+      await partitionedIndicatorArrived.promise;
+    });
+    expect(messenger.calls).toHaveLength(1);
+    expect(messenger.calls[0]?.requiredHostMethodVersion).toEqual({
+      method: "host.notifications.indicatorState",
+      version: { major: 1, minor: 1 },
+    });
+
+    // The control, differing in exactly one variable: no `home`, so there is
+    // no selector for an older peer to strip and no floor is owed. Without
+    // this, "a floor is attached" could equally be an unconditional floor that
+    // breaks the indicator against every host that never needed the minor.
+    cleanup();
+    const wholeOriginQueryClient = createAppQueryClient();
+    wholeOriginQueryClient.setDefaultOptions({
+      queries: {
+        ...wholeOriginQueryClient.getDefaultOptions().queries,
+        retry: false,
+      },
+    });
+    const wholeOriginWrapper = (props: {
+      readonly children: ReactNode;
+    }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: wholeOriginQueryClient },
+        props.children,
+      );
+    renderHook(
+      () =>
+        useHostNotificationIndicators({
+          freshnessMode: "base",
+          hostId: mockLocalHostEntry.hostId,
+          epicIds: ["epic-b"],
+          chatIds: [],
+          enabled: true,
+        }),
+      { wrapper: wholeOriginWrapper },
+    );
+    await act(async () => {
+      await wholeOriginIndicatorArrived.promise;
+    });
+    expect(messenger.calls).toHaveLength(2);
+    expect(messenger.calls[1]?.requiredHostMethodVersion).toBeNull();
+  });
+
+  it("self-heals stale indicator data after a transport-exhausted refetch", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const queryClient = createAppQueryClient();
+    queryClient.setDefaultOptions({
+      queries: {
+        ...queryClient.getDefaultOptions().queries,
+        retry: false,
+      },
+    });
+    const requestCount = { value: 0 };
+    const responseMode: { value: "done" | "error" | "clear" } = {
+      value: "done",
+    };
+    const doneResponse: HostNotificationsIndicatorStateResponse = {
+      epics: {
+        "epic-a": {
+          unreadFailure: false,
+          pendingFork: false,
+          pendingApproval: false,
+          pendingInterview: false,
+          unreadDone: true,
+          unreadCount: 1,
+        },
+      },
+      chats: {},
+      complete: true,
+    };
+    const clearResponse: HostNotificationsIndicatorStateResponse = {
+      epics: {},
+      chats: {},
+      complete: true,
+    };
+    const initialSuccessProjected = Promise.withResolvers<void>();
+    const refetchErrorProjected = Promise.withResolvers<void>();
+    const retryErrorProjected = Promise.withResolvers<void>();
+    const clearedResponseProjected = Promise.withResolvers<void>();
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => `request-${requestCount.value}`,
+        handlers: {
+          "host.notifications.indicatorState": () => {
+            requestCount.value += 1;
+            if (responseMode.value === "error") {
+              return Promise.reject(
+                new RetryableTransportError({
+                  replaySafetyFromKey: false,
+                  code: "RPC_ERROR",
+                  message: "WebSocket dial timed out after 10000ms",
+                  requestId: `request-${requestCount.value}`,
+                  method: "host.notifications.indicatorState",
+                  fatalDetails: null,
+                }),
+              );
+            }
+            return responseMode.value === "done" ? doneResponse : clearResponse;
+          },
+        },
+      }),
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "token",
+      }),
+    );
+    hostClient = spine.createRequester(mockLocalHostEntry);
+    useAuthStore.setState({
+      contextMetadata: { userId: "user-a", username: "user-a" },
+    });
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        props.children,
+      );
+
+    const useObservedIndicators = () => {
+      const projection = useHostNotificationIndicators({
+        freshnessMode: "base",
+        hostId: mockLocalHostEntry.hostId,
+        epicIds: ["epic-a"],
+        chatIds: [],
+        enabled: true,
+      });
+      const { data, error, isFetching } = projection;
+      useEffect(() => {
+        if (
+          requestCount.value === 1 &&
+          !isFetching &&
+          data.epics["epic-a"]?.unreadDone &&
+          data.complete === true
+        ) {
+          initialSuccessProjected.resolve();
+        }
+        if (requestCount.value === 2 && !isFetching && error !== null) {
+          refetchErrorProjected.resolve();
+        }
+        if (requestCount.value === 3 && !isFetching && error !== null) {
+          retryErrorProjected.resolve();
+        }
+        if (
+          requestCount.value === 4 &&
+          !isFetching &&
+          error === null &&
+          Object.keys(data.epics).length === 0
+        ) {
+          clearedResponseProjected.resolve();
+        }
+      }, [data, error, isFetching]);
+      return projection;
+    };
+    const { result } = renderHook(useObservedIndicators, { wrapper });
+
+    await waitFor(() => initialSuccessProjected.promise);
+    expect(requestCount.value).toBe(1);
+    expect(result.current.data.epics["epic-a"].unreadDone).toBe(true);
+    expect(result.current.data.complete).toBe(true);
+
+    responseMode.value = "error";
+    await act(async () => {
+      await result.current.refetch();
+    });
+    expect(requestCount.value).toBe(2);
+    await waitFor(() => refetchErrorProjected.promise);
+    expect(result.current.error).not.toBeNull();
+    expect(result.current.data.epics["epic-a"].unreadDone).toBe(true);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await waitFor(() => retryErrorProjected.promise);
+    expect(requestCount.value).toBe(3);
+    expect(result.current.error).not.toBeNull();
+    expect(result.current.data.epics["epic-a"].unreadDone).toBe(true);
+
+    responseMode.value = "clear";
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    await waitFor(() => clearedResponseProjected.promise);
+    expect(requestCount.value).toBe(4);
+    expect(result.current.error).toBeNull();
+    expect(result.current.data.epics).toEqual({});
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(requestCount.value).toBe(4);
+  });
+});
+
+describe("useHostNotificationIndicators across crossed chunks", () => {
+  it("counts an entity once when two requests about it answer with the same rows", async () => {
+    const queryClient = createAppQueryClient();
+    queryClient.setDefaultOptions({
+      queries: { ...queryClient.getDefaultOptions().queries, retry: false },
+    });
+    const counted = (unreadCount: number): HostNotificationsIndicatorState => ({
+      unreadFailure: false,
+      pendingFork: false,
+      pendingApproval: false,
+      pendingInterview: false,
+      unreadDone: true,
+      unreadCount,
+    });
+    const requests: Array<{
+      readonly epicIds: ReadonlyArray<string>;
+      readonly chatIds: ReadonlyArray<string>;
+    }> = [];
+    let issuedRequestIds = 0;
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => `request-${issuedRequestIds++}`,
+        handlers: {
+          "host.notifications.indicatorState": (params) => {
+            requests.push({
+              epicIds: params.epicIds,
+              chatIds: params.chatIds,
+            });
+            // The epic's rows do not depend on which chats rode along. The
+            // first chunk answers its whole origin, the second the empty
+            // partition.
+            return {
+              epics: { "epic-a": counted(2) },
+              chats: Object.fromEntries(
+                params.chatIds.map((chatId) => [chatId, counted(1)]),
+              ),
+              complete: requests.length === 1,
+            };
+          },
+        },
+      }),
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
+    );
+    hostClient = spine.createRequester(mockLocalHostEntry);
+    useAuthStore.setState({
+      contextMetadata: { userId: "user-a", username: "user-a" },
+    });
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        props.children,
+      );
+    const chatIds = Array.from(
+      { length: HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP + 1 },
+      (_value, index) => `chat-${String(index).padStart(4, "0")}`,
+    );
+
+    const { result } = renderHook(
+      () =>
+        useHostNotificationIndicators({
+          freshnessMode: "base",
+          hostId: mockLocalHostEntry.hostId,
+          epicIds: ["epic-a"],
+          chatIds,
+          enabled: true,
+        }),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current.isPending).toBe(false);
+      expect(Object.keys(result.current.data.chats)).toHaveLength(
+        chatIds.length,
+      );
+    });
+
+    expect(requests).toHaveLength(2);
+    // A partition among the chunks makes the combined answer a partition.
+    expect(result.current.data.complete).toBe(false);
+    expect(result.current.data.epics["epic-a"].unreadCount).toBe(2);
+    expect(Object.keys(result.current.data.chats)).toHaveLength(chatIds.length);
+    expect(
+      Object.values(result.current.data.chats).every(
+        (state) => state.unreadCount === 1,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not call the answered chunks the whole origin while another chunk has not answered", async () => {
+    const queryClient = createAppQueryClient();
+    queryClient.setDefaultOptions({
+      queries: { ...queryClient.getDefaultOptions().queries, retry: false },
+    });
+    const chatIds = Array.from(
+      { length: HOST_NOTIFICATIONS_INDICATOR_BATCH_CAP + 1 },
+      (_value, index) => `chat-${String(index).padStart(4, "0")}`,
+    );
+    const lastChatId = chatIds[chatIds.length - 1];
+    const answeredChatId = chatIds[0];
+    const answeredState: HostNotificationsIndicatorState = {
+      unreadFailure: false,
+      pendingFork: false,
+      pendingApproval: false,
+      pendingInterview: false,
+      unreadDone: true,
+      unreadCount: 3,
+    };
+    let issuedRequestIds = 0;
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => `request-${issuedRequestIds++}`,
+        handlers: {
+          "host.notifications.indicatorState": (params) =>
+            // The chunk holding the last id never answers.
+            params.chatIds.includes(lastChatId)
+              ? new Promise<HostNotificationsIndicatorStateResponse>(
+                  () => undefined,
+                )
+              : {
+                  epics: {},
+                  chats: { [answeredChatId]: answeredState },
+                  complete: true,
+                },
+        },
+      }),
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
+    );
+    hostClient = spine.createRequester(mockLocalHostEntry);
+    useAuthStore.setState({
+      contextMetadata: { userId: "user-a", username: "user-a" },
+    });
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        props.children,
+      );
+
+    const { result } = renderHook(
+      () =>
+        useHostNotificationIndicators({
+          freshnessMode: "base",
+          hostId: mockLocalHostEntry.hostId,
+          epicIds: [],
+          chatIds,
+          enabled: true,
+        }),
+      { wrapper },
+    );
+    // The answering chunk's indicator reaching the combined result shows its
+    // answer was combined before the other chunk is judged to be missing.
+    await waitFor(() => {
+      expect(result.current.data.chats[answeredChatId]).toEqual(answeredState);
+    });
+
+    // One chunk said "my origin, whole" and the other has said nothing: the
+    // ids in the silent chunk must not read as known zeros of a whole origin.
+    expect(result.current.isPending).toBe(true);
+    expect(result.current.data.complete).toBeNull();
+  });
+});
+
+describe("useHostNotificationIndicators freshness modes over one key", () => {
+  it("keeps an answered, un-invalidated read fresh for the Activity observer after 61 s while the ordinary observer of the same key goes stale, with no new read", async () => {
+    vi.useFakeTimers();
+    const queryClient = createAppQueryClient();
+    queryClient.setDefaultOptions({
+      queries: { ...queryClient.getDefaultOptions().queries, retry: false },
+    });
+    const requestCount = { value: 0 };
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => "request-modes",
+        handlers: {
+          "host.notifications.indicatorState": () => {
+            requestCount.value += 1;
+            return { epics: {}, chats: {}, complete: true };
+          },
+        },
+      }),
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
+    );
+    hostClient = spine.createRequester(mockLocalHostEntry);
+    useAuthStore.setState({
+      contextMetadata: { userId: "user-a", username: "user-a" },
+    });
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        props.children,
+      );
+    const observe = (freshnessMode: "base" | "activity") =>
+      renderHook(
+        () =>
+          useHostNotificationIndicators({
+            freshnessMode,
+            hostId: mockLocalHostEntry.hostId,
+            epicIds: ["epic-a"],
+            chatIds: [],
+            enabled: true,
+          }),
+        { wrapper },
+      );
+
+    const activity = observe("activity");
+    await vi.waitFor(() => {
+      expect(activity.result.current.hasAnswer).toBe(true);
+    });
+    const base = observe("base");
+    await vi.waitFor(() => {
+      expect(base.result.current.hasAnswer).toBe(true);
+    });
+    expect(requestCount.value).toBe(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(61_000);
+    });
+
+    expect(activity.result.current.hasAnswer).toBe(true);
+    expect(base.result.current.hasAnswer).toBe(false);
+    expect(requestCount.value).toBe(1);
+  });
+});

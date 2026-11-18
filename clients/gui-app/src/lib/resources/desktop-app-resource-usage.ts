@@ -1,0 +1,212 @@
+/** Electron-native machine shares, kept distinct from host per-core values. */
+export interface DesktopAppProcessGroupUsage {
+  readonly cpuSharePercent: number;
+  readonly rssBytes: number;
+  readonly processCount: number;
+}
+
+export interface DesktopAppResourceUsage {
+  readonly sampledAt: number;
+  readonly cpuSharePercent: number;
+  readonly rssBytes: number;
+  readonly processCount: number;
+  readonly main: DesktopAppProcessGroupUsage;
+  readonly renderer: DesktopAppProcessGroupUsage;
+  readonly other: DesktopAppProcessGroupUsage;
+}
+
+export interface DesktopProcessMetric {
+  readonly pid: number;
+  readonly type: string;
+  readonly cpu: { readonly cpuSharePercent: number };
+  readonly memory: { readonly workingSetSize: number };
+}
+
+export interface DesktopProcessMetricsSnapshot {
+  readonly appMetrics: readonly DesktopProcessMetric[];
+}
+
+export interface DesktopDiagnosticsBridge {
+  readonly getMetrics: () => Promise<DesktopProcessMetricsSnapshot>;
+}
+
+export interface DesktopHeapSnapshotBridge {
+  readonly takeHeapSnapshot: () => Promise<string | null>;
+}
+
+/**
+ * One V8 isolate in this renderer - the page, or a dedicated worker started
+ * from `url`. Mirrors the desktop's `RendererJsHeapIsolate`; the GUI reads it
+ * structurally off the runner host like every other desktop bridge here.
+ */
+export interface DesktopJsHeapIsolate {
+  readonly kind: "page" | "worker";
+  readonly url: string;
+  readonly usedBytes: number;
+  readonly totalBytes: number;
+  /** Blink-held memory for this isolate; `null` when the build omits it. */
+  readonly embedderBytes: number | null;
+  /** `ArrayBuffer` / WebAssembly backing stores, outside the JS heap. */
+  readonly backingStorageBytes: number | null;
+}
+
+export interface DesktopJsHeapBreakdown {
+  readonly capturedAt: number;
+  readonly workingSetBytes: number | null;
+  readonly isolates: ReadonlyArray<DesktopJsHeapIsolate>;
+}
+
+export interface DesktopJsHeapBridge {
+  readonly measureJsHeaps: () => Promise<DesktopJsHeapBreakdown | null>;
+}
+
+interface RunnerHostWindowShape {
+  readonly platform:
+    | {
+        readonly diagnostics:
+          | {
+              readonly getMetrics:
+                | (() => Promise<DesktopProcessMetricsSnapshot>)
+                | undefined;
+              readonly takeHeapSnapshot:
+                | (() => Promise<string | null>)
+                | undefined;
+              readonly measureJsHeaps:
+                | (() => Promise<DesktopJsHeapBreakdown | null>)
+                | undefined;
+            }
+          | undefined;
+      }
+    | undefined;
+}
+
+const EMPTY_GROUP: DesktopAppProcessGroupUsage = {
+  cpuSharePercent: 0,
+  rssBytes: 0,
+  processCount: 0,
+};
+
+export function getDesktopDiagnosticsBridge(): DesktopDiagnosticsBridge | null {
+  const host = (globalThis as { runnerHost?: RunnerHostWindowShape })
+    .runnerHost;
+  const getMetrics = host?.platform?.diagnostics?.getMetrics;
+  return getMetrics === undefined ? null : { getMetrics };
+}
+
+/**
+ * Separate resolver from `getDesktopDiagnosticsBridge` because the two are
+ * independently available: metrics are cheap and polled, while a heap snapshot
+ * is an explicit, expensive, user-initiated capture.
+ */
+export function getDesktopHeapSnapshotBridge(): DesktopHeapSnapshotBridge | null {
+  const host = (globalThis as { runnerHost?: RunnerHostWindowShape })
+    .runnerHost;
+  const takeHeapSnapshot = host?.platform?.diagnostics?.takeHeapSnapshot;
+  return takeHeapSnapshot === undefined ? null : { takeHeapSnapshot };
+}
+
+/**
+ * Its own resolver for the same reason as the heap snapshot's: an older shell
+ * can carry the snapshot capability without this one, and the Memory group
+ * offers each button on its own bridge.
+ */
+export function getDesktopJsHeapBridge(): DesktopJsHeapBridge | null {
+  const host = (globalThis as { runnerHost?: RunnerHostWindowShape })
+    .runnerHost;
+  const measureJsHeaps = host?.platform?.diagnostics?.measureJsHeaps;
+  return measureJsHeaps === undefined ? null : { measureJsHeaps };
+}
+
+/**
+ * A human label for an isolate row. The worker's script URL is a hashed Vite
+ * chunk name, so the label reads the chunk's stem, which is stable across
+ * builds: `epic-runtime-worker-entry-<hash>.js` is the per-epic runtime,
+ * `worker-<hash>.js` is `@pierre/diffs`' highlighter (the only worker the app
+ * starts from a bare `worker` chunk), `pdf.worker.min-<hash>.mjs` is pdf.js.
+ */
+export function describeDesktopJsHeapIsolate(
+  isolate: DesktopJsHeapIsolate,
+): string {
+  if (isolate.kind === "page") return "This window";
+  const file = isolate.url.slice(isolate.url.lastIndexOf("/") + 1);
+  if (file.startsWith("epic-runtime-worker")) return "Epic runtime worker";
+  if (file.startsWith("pdf.worker")) return "PDF worker";
+  if (file.startsWith("worker-")) return "Diff highlighter worker";
+  return file === "" ? "Worker" : `Worker (${file})`;
+}
+
+export function desktopAppResourceUsageFromMetrics(
+  snapshot: DesktopProcessMetricsSnapshot,
+  sampledAt: number,
+): DesktopAppResourceUsage {
+  const groups = snapshot.appMetrics.reduce(
+    (current, metric) => {
+      const usage = processMetricUsage(metric);
+      if (metric.type === "Browser") {
+        return {
+          ...current,
+          main: addProcessGroupUsage(current.main, usage),
+        };
+      }
+      if (isRendererProcessType(metric.type)) {
+        return {
+          ...current,
+          renderer: addProcessGroupUsage(current.renderer, usage),
+        };
+      }
+      return {
+        ...current,
+        other: addProcessGroupUsage(current.other, usage),
+      };
+    },
+    { main: EMPTY_GROUP, renderer: EMPTY_GROUP, other: EMPTY_GROUP },
+  );
+
+  return {
+    sampledAt,
+    cpuSharePercent:
+      groups.main.cpuSharePercent +
+      groups.renderer.cpuSharePercent +
+      groups.other.cpuSharePercent,
+    rssBytes:
+      groups.main.rssBytes + groups.renderer.rssBytes + groups.other.rssBytes,
+    processCount:
+      groups.main.processCount +
+      groups.renderer.processCount +
+      groups.other.processCount,
+    main: groups.main,
+    renderer: groups.renderer,
+    other: groups.other,
+  };
+}
+
+function isRendererProcessType(type: string): boolean {
+  const normalized = type.toLowerCase();
+  return normalized === "renderer" || normalized === "tab";
+}
+
+function processMetricUsage(
+  metric: DesktopProcessMetric,
+): DesktopAppProcessGroupUsage {
+  return {
+    cpuSharePercent: normalizeFiniteNumber(metric.cpu.cpuSharePercent),
+    rssBytes: normalizeFiniteNumber(metric.memory.workingSetSize) * 1024,
+    processCount: metric.pid > 0 ? 1 : 0,
+  };
+}
+
+function addProcessGroupUsage(
+  current: DesktopAppProcessGroupUsage,
+  next: DesktopAppProcessGroupUsage,
+): DesktopAppProcessGroupUsage {
+  return {
+    cpuSharePercent: current.cpuSharePercent + next.cpuSharePercent,
+    rssBytes: current.rssBytes + next.rssBytes,
+    processCount: current.processCount + next.processCount,
+  };
+}
+
+function normalizeFiniteNumber(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, value);
+}

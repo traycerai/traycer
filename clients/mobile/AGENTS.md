@@ -1,0 +1,174 @@
+# AGENTS.md
+
+Read with the repo root guide and `clients/gui-app/AGENTS.md`.
+
+## Purpose and boundary
+
+Thin Capacitor shell around the shared `gui-app` (iOS + Android). Dev loop is
+Simulator/emulator against a Mac dev slot; shipped builds
+(`TRAYCER_MOBILE_ENV=staging|production`) use remote-host discovery and go out
+through TestFlight (internal repo `release-mobile-ios.yaml`; runbook in the
+internal `docs/mobile/AGENTS.md`).
+
+May: mount `<TraycerApp />` with a mobile `IRunnerHost`; bridge
+browser/secure-storage/native-HTTP; adapt the shared GUI for safe areas and
+touch in mobile-only CSS. Must not: change or duplicate the RPC protocol, host
+lifecycle, authn, cloud UI, or the dev-slot allocator.
+
+## Layout invariants
+
+**One layout, every device — in the installed app.** The installed app is a
+phone-layout product on iPad as much as iPhone — by product decision, not by
+measurement. This same entry is also served to a plain browser tab (the
+launcher's `gui-app` stream), and that tab is **not** phone-only: it decides
+by width like any other window, so `make dev-gui-app` still shows the desktop
+layout in a wide browser. Two pieces hold the native side, and both have to
+move together or the app half-changes shell:
+
+- `src/web/main.tsx` calls `setPhoneLayoutOnly(Capacitor.isNativePlatform())`,
+  and `useIsMobileViewport()` reads that before it consults a media query. It
+  is set from the same check as `isMobileApp()` but is deliberately a separate
+  flag: `isMobileApp()` stays product-only (store copy, the single-composer
+  draft model) and decides no layout anywhere.
+- `main.tsx` loads one of two stylesheets off that same check, before the
+  first render. `src/web/index.css` is the shared entry with the real
+  breakpoints, and is what the browser tab gets. `src/web/index.native.css`
+  imports it and pushes every Tailwind breakpoint out of reach, so `md:` and
+  `lg:` utilities cannot paint desktop controls over the phone shell at tablet
+  widths. The comment there explains why it is a sentinel value and not
+  `--breakpoint-*: initial`. Raw `@media` rules outside Tailwind are reached
+  by `scripts/phone-tier-css.ts`: it repeats a line-anchored
+  `@media (max-width: 767px)` or `@media (pointer: coarse)` block under
+  `.traycer-phone-layout-only`, the class `main.tsx` puts on `<html>`, so
+  those tiers apply at every width. Any other raw query is not reached: key it
+  on the resolved layout, or override it in `index.native.css`.
+
+The phone shell is the same at every width; what the width earns is read by
+one rule, `lib/layout/mobile-layout-form.ts`: level 1 (the tasks and Tracy) as
+the drawer, the desktop strip's rail or the expanded strip; level 2 (a task's
+tiles, Tracy's bots) as the bottom sheet, a menu under the current item's name
+or a column beside the content; and one or two content tiles. Where a task's
+column fits, the person can fold it into the menu and back
+(`mobile-tile-column-store.ts`), as they collapse the strip. Text and page
+width caps from the desktop layout are lifted in `index.native.css`. A touch
+stylus makes the emulator and pen phones report `(pointer: fine)`, so the
+installed app treats its pointer as coarse by decision (`use-coarse-pointer.ts`,
+the `pointer-*` variants in `index.native.css`).
+
+A window under 560px tall in landscape has room for little else, so the
+`max-md:short-landscape:` variant keeps the chat transcript and the home composer
+visible there: the composer draws its one-row form at rest and the stacked
+surfaces above it give way.
+
+Both platforms rotate freely, tablets as well as phones. iOS lists all four
+orientations in **both** `Info.plist` and `Info-Dev.plist` (Debug builds use the
+latter), and omits `UIRequiresFullScreen`, so an iPad can also give the app a
+Split View or Stage Manager window: layout reads the width it gets, never a
+device. Android sets no `android:screenOrientation`.
+
+## Host and auth invariants
+
+- No bundled local host — `onLocalHostChange` emits `null`, never transitions.
+  `vite.config.ts` injects exactly one `kind: "remote"` directory entry from
+  the selected dev slot; never hard-code ports.
+- Sign-in is the OAuth device flow. The approval page opens in the in-app
+  auth sheet (`src/auth-sheet.ts`: ASWebAuthenticationSession / a Custom Tab,
+  sharing the browser's cookies; sign-in only, every other link goes to the
+  browser app). The return signal is payload-free (the foreground-resume edge,
+  the sheet's completion, or the return link's `appUrlOpen`, all via
+  `IRunnerHost.onAuthCallback`); polling must complete sign-in even with no
+  signal. The return scheme comes from the
+  baked config (`returnScheme`): `traycer://` as checked into both native
+  projects, re-stamped to `traycer-staging://` (with bundle id
+  `ai.traycer.app.ios.staging`) by the iOS staging release lane so the two
+  lanes coexist on one device.
+- Native HTTP (CapacitorHttp) keeps auth requests out of WKWebView CORS — and
+  replaces the transport User-Agent, so anything identifying the device must be
+  self-reported in a request body, not read from headers.
+- Signs in as the `"mobile"` client kind (`DEVICE_FLOW_CLIENT_ID` in
+  `src/mobile-runner-host.ts`), which labels the session, keys the approval
+  page's copy, and gates push-token registration. Requires an authn deployment
+  that accepts `"mobile"` — a production app release must trail the production
+  authn deploy (release checklist carries the probe).
+- Push tokens bind to the login session (`/api/v3/user/push-tokens`); sign-out
+  unregisters via `.../remove` — plain sign-out is local-only and revokes
+  nothing server-side.
+
+## Key files
+
+- `src/mobile-runner-host.ts` — `IRunnerHost`, device flow, secure token store.
+- `src/push-registration.ts` — push permission/registration/tap-relay,
+  platform-agnostic; platform only picks `pushRegistrationTarget`. Also backs
+  the `IRunnerHost.pushPermission` capability the Settings row reads.
+- `src/web/main.tsx` — mounts the shared GUI.
+- `src/sentry.ts` — crash-reporting options; `main.tsx` inits `@sentry/browser`
+  with them first thing. The DSN is `TRAYCER_MOBILE_SENTRY_DSN` at build time
+  (`""` = off, the local default); sourcemaps are emitted only when
+  `SENTRY_ORG` / `SENTRY_PROJECT` / `SENTRY_AUTH_TOKEN` are all exported, and
+  the upload plugin deletes them before `cap sync` copies `dist/web` into the
+  app. Every event and breadcrumb passes the shared scrub
+  (`clients/shared/platform/sentry-scrub.ts`, the same hooks the desktop
+  renderer installs) - not optional, the link-login code rides in a query
+  string. `@sentry/browser` and NOT `@sentry/capacitor`, deliberately - the
+  header comment in `src/sentry.ts` has the version-carrier reason. WebView
+  layer only; native crashes are not reported yet.
+- `src/web/index.css` — its `@source` for `gui-app` is required or shared
+  utility classes vanish from the bundle. `mobile.css` — mobile-only overrides.
+- `scripts/dev-run.ts` + `dev-ios.ts` / `dev-android.ts` — slot-consuming
+  live-reload launchers (Android adds `adb reverse` tunnels).
+- `ios/`, `android/` — generated Capacitor projects: keep the generated
+  structure authoritative; reapply only small reviewed native deltas.
+- Quote from the selection menu — `ios/App/App/QuoteEditMenuWebView.swift`
+  (the edit menu, iOS 16+) and
+  `android/.../QuoteActionModeWebView.java` (the selection action mode,
+  installed by the app's override of `capacitor_bridge_layout_main.xml`).
+  Both raise the `traycerQuoteSelection` window event; gui-app's
+  `use-native-quote-request.ts` reads the selection and quotes it under the
+  desktop button's rules. The native side never sees the selected text.
+
+## Commands
+
+```bash
+bun run --cwd clients/mobile compile | test | build:web | sync:ios | sync:android
+bun run --cwd clients/mobile dev:ios -- --slot <slot>      # dev:android
+```
+
+`compile` and `test` are whole-project runs. The commit hook compiles, and CI
+tests; run one yourself only to diagnose its failure (see the root
+`AGENTS.md`).
+
+Normal entry points live in the internal repo: `make dev-gui-app` then
+`make dev-ios` / `make dev-android` (resolve the worktree's slot, install,
+connect live reload). React/CSS hot-reloads; native/config changes need a
+rebuild. Run `sync:android` before invoking `./gradlew` directly — tracked
+Gradle files embed install-layout hashes that go stale.
+
+## Android notes
+
+- `adb reverse` gives the emulator the Mac's `localhost` ports — no `10.0.2.2`
+  anywhere in app code; re-run the launcher after a host restart.
+- `androidScheme` is `http` for iOS parity; changing it after installs exist
+  wipes origin-scoped storage.
+- `google-services.json` is gitignored ops config; its absence is the supported
+  default (build succeeds, push registration rejects and is swallowed).
+- `POST_NOTIFICATIONS` must stay declared in the app manifest or Android 13+
+  denies without ever prompting.
+- Below WebView 140 Capacitor's `SystemBars` pads the WebView's parent view
+  natively, so the system-bar bands show that view, not the page.
+  `src/window-background.ts` reads the colour at the page's top and bottom
+  edges, paints the status bar's band and the others through
+  `WindowBackgroundPlugin.java`, and sets the bar icon style from the top one.
+  From WebView 140 the page runs edge to edge and `#root` pads for the bars, so
+  the same read paints `#root`'s side strips instead.
+- `proguard-rules.pro` strips `Activity.setRequestedOrientation` so no plugin
+  activity can lock the rotation Play checks for. A new orientation lock in
+  native code is removed in release builds the same way.
+
+## Working rules
+
+- Import shared contracts; never redefine them. Unsupported capabilities are
+  explicit no-ops/nulls on `IRunnerHost`.
+- Platform differences live in the native projects, launcher scripts, or
+  `pushRegistrationTarget` — never as branches inside the shared GUI.
+- Root type-safety rules apply. Tests under `__tests__/`, native plugins mocked
+  at the package boundary.

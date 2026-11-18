@@ -1,0 +1,448 @@
+import { useCallback, useContext, type ReactNode } from "react";
+import { AlertTriangle } from "lucide-react";
+import { ENV_CREDENTIAL_AUTH_ERROR_CODE } from "@traycer/protocol/host/agent/gui/agent-runtime";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type {
+  AgentFailure,
+  AgentFailureReason,
+} from "@traycer/protocol/persistence/epic/content-blocks";
+import { FallbackManualRungActions } from "@/components/chat/fallback/fallback-manual-rungs";
+import { ChatStatusReadOnlyContext } from "@/components/chat/chat-status-capabilities";
+import {
+  RoutingSettledCard,
+  type RoutingSettledNotice,
+} from "@/components/chat/fallback/routing-settled-card";
+import { routingSettledReportText } from "@/components/chat/fallback/routing-receipt";
+import {
+  isSandboxFrozenRefusal,
+  sandboxRefusalCopyFor,
+  teamFrozenRefusalCopy,
+  unknownPayerFrozenRefusalCopy,
+  type SandboxRefusalCopy,
+} from "@/components/chat/segments/sandbox-refusal-copy";
+import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
+import { useSandboxHostPayer } from "@/hooks/sandboxes/use-on-team-sandbox";
+import { useTeamBillingAdmin } from "@/hooks/sandboxes/use-team-billing-admin";
+import { ProviderUpdateAction } from "@/components/chat/segments/provider-update-action";
+import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
+import { Button } from "@/components/ui/button";
+import {
+  agentFailureHeadline,
+  agentFailurePresentation,
+  presentationForUntypedCode,
+  type AgentFailurePresentation,
+} from "@/components/chat/segments/agent-failure-presentation";
+import { cn } from "@/lib/utils";
+import { createReportIssueContext } from "@/lib/report-issue-context";
+import { buildReportIssueDraftContext } from "@/lib/report-issue-draft-context";
+import { capturePersistedAgentError } from "@/lib/report-issue-error-capture";
+import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
+import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+
+/**
+ * The remedy for an env-credential auth failure, next to the row that names it.
+ *
+ * The message says which variable authenticated the turn; this is where the user
+ * goes to stop it. The destination is the provider's **Env** tab, where an
+ * explicit "Unset" row for that variable drops it from the harness spawn without
+ * touching the user's shell - the one fix that actually works, and the one no
+ * amount of re-signing-in could substitute for.
+ *
+ * The deep link rides the existing providers-focus intent (the same mechanism
+ * the re-auth banner and the "Add API key" CTA use), so this adds no navigation
+ * plumbing of its own. Without a known harness the intent is skipped and the
+ * user lands on the Providers section root rather than an arbitrary provider's
+ * settings - a shorter trip to the right place beats a confident wrong one.
+ */
+function EnvCredentialSettingsAction({
+  harnessId,
+}: {
+  readonly harnessId: GuiHarnessId | null;
+}) {
+  const { openSettings } = useSystemTabModalActions();
+  const onClick = useCallback(() => {
+    if (harnessId !== null) {
+      const focus = useProvidersFocusStore.getState();
+      focus.setFocusHarnessId(harnessId);
+      focus.setFocusTab("env");
+    }
+    openSettings({
+      section: "providers",
+      resetToGeneral: false,
+      tab: null,
+      draft: null,
+      hostId: null,
+    });
+  }, [harnessId, openSettings]);
+  return (
+    <div className="mt-1 flex">
+      <Button size="sm" variant="secondary" onClick={onClick}>
+        Manage variables
+      </Button>
+    </div>
+  );
+}
+
+interface ErrorSegmentProps {
+  message: string;
+  code: string | null;
+  recoverable: boolean;
+  findUnitId: string | null;
+  /** Harness that ran the turn, so a provider-scoped remedy can deep-link to
+   *  the right provider. `null` on legacy rows with no turn metadata. */
+  harnessId: GuiHarnessId | null;
+  /**
+   * The host's typed description of why the turn died, or `null` on a row from
+   * before the payload existed (or one no turn produced).
+   *
+   * What it decides here is how the row presents, and which action leads on
+   * the failed-turn card: Switch after a rate limit or billing stop, Retry
+   * after anything else, a sign-out included.
+   */
+  failure: AgentFailure | null;
+  /**
+   * The host turn this row belongs to, or `null` where the row has no turn
+   * identity. The manual-rung affordances render only on the row whose turn id
+   * matches the one the host named, so a transcript holding three failed
+   * attempts offers them once rather than three times.
+   */
+  turnId: string | null;
+  /**
+   * When the failure happened, in the Host's clock (the segment's
+   * `hostTimestamp`), or `null` where the row has no Host time of its own.
+   */
+  hostTimestamp: number | null;
+  /**
+   * The Host turn this row belongs to, for a report filed from it - set on
+   * every row of the turn, unlike {@link turnId}, which only the manual-rung
+   * anchor gets. `null` where the row has no turn identity.
+   */
+  reportTurnId: string | null;
+  /**
+   * The settled routing notice this row absorbs, or `null` - set only on the
+   * anchor error of a row the projection paired with a receipt-carrying notice
+   * (`ChatMessage.routingSettledNoticeId`). The row then renders the settled
+   * card instead of the plain failed-turn card.
+   */
+  settledNotice: RoutingSettledNotice | null;
+  /** The absorbed notice's own find unit, painted by the settled card. */
+  settledNoticeFindUnitId: string | null;
+}
+
+/**
+ * How the row presents, and its headline when it is an interruption.
+ *
+ * A typed reason decides it; a row with none is red unless its CODE is one the
+ * client can vouch for (`presentationForUntypedCode` - a torn-down session is
+ * "Session ended", not an error).
+ */
+function errorRowPresentation(
+  reason: AgentFailureReason | null,
+  code: string | null,
+): {
+  readonly presentation: AgentFailurePresentation;
+  readonly headline: string | null;
+} {
+  if (reason === null) {
+    const untyped = presentationForUntypedCode(code);
+    if (untyped !== null) return untyped;
+  }
+  return {
+    presentation: agentFailurePresentation(reason),
+    headline: agentFailureHeadline(reason),
+  };
+}
+
+/**
+ * The row's first line: either the failure's own name, or the ERROR overline.
+ *
+ * `headline` non-null is the INTERRUPTED row and carries the reason in the same
+ * words every other routing surface uses for it - "Rate limit reached" is what
+ * the countdown card's chip says, what the per-error settings row is called,
+ * and what the transcript notice says afterwards. Sentence case, in the warning
+ * foreground, because nothing is broken.
+ *
+ * `null` keeps what the row always had. The uppercase overline and the raw code
+ * chip belong to a turn that genuinely died, where the code is the most useful
+ * thing on screen for whoever ends up reading the bug report. On the
+ * interrupted row that same chip put `rate_limit` in red monospace as the
+ * loudest element on a card about an account being out of quota - a raw reason
+ * code in front of a user, which the routing vocabulary bans everywhere else.
+ * The report-issue action still captures the code either way.
+ */
+function ErrorSegmentHeading({
+  headline,
+  harnessId,
+  code,
+}: {
+  readonly headline: string | null;
+  readonly harnessId: GuiHarnessId | null;
+  readonly code: string | null;
+}) {
+  if (headline !== null) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="font-medium text-warning-foreground">{headline}</span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-overline font-semibold uppercase text-destructive">
+        {harnessId === "codex" ? "Codex turn failed" : "Error"}
+      </span>
+      {code !== null && code.length > 0 ? (
+        <span className="rounded border border-destructive/30 bg-destructive/10 px-1 font-mono text-code-xs text-destructive">
+          {code}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+// Static error row. Auth errors (`code: "auth"`) render here like any other
+// error - the durable transcript row is what keeps a headless (A2A-triggered)
+// auth failure visible after the composer's re-auth banner clears.
+//
+// Draws whatever error it is handed, the queue-pause notice included. Whether
+// the transcript hands that notice over is the transcript's call
+// (`hidden-transcript-notices.ts`): only the chat's session knows whether its
+// host publishes the pause reason the notice would repeat.
+export function ErrorSegment({
+  code,
+  findUnitId,
+  message,
+  recoverable,
+  harnessId,
+  failure,
+  turnId,
+  hostTimestamp,
+  reportTurnId,
+  settledNotice,
+  settledNoticeFindUnitId,
+}: ErrorSegmentProps) {
+  const readOnly = useContext(ChatStatusReadOnlyContext);
+  // While whose sandbox it is is unknown, no remedy is told as the reader's.
+  const payer = useSandboxHostPayer(
+    useMaybeChatTranscript()?.payerHostId ?? null,
+  );
+  // Built at CLICK time, never at render. This row is durable transcript: it
+  // mounts whenever the chat is opened, which is one or more commits BEFORE
+  // `SupportContextRegistryBridge`'s effects publish that chat's own
+  // id/harness/model (chat state arrives through a store subscription, so it
+  // trails a route change by two commits). Both `buildReportIssueDraftContext`
+  // and `capturePersistedAgentError` snapshot that registry, and the harness
+  // id doubles as the fingerprint's `causalProvider` - so building at render
+  // would file the report under the PREVIOUSLY open chat and cluster it under
+  // the wrong provider. Report time is the only moment the registry is known
+  // to describe this row's chat. Deferring also keeps the draft honest when
+  // the runtime accumulator replaces a same-blockId error under a MOUNTED row
+  // (blockId is this row's React key) - the click reads today's props.
+  //
+  // The real message/code reach ONLY the private diagnostics branch - the
+  // public prefill stays null-bodied because both fields are host/harness-
+  // supplied free text and the public context does no redaction (see the
+  // hostile transcript-code test).
+  //
+  // On a settled row the routing record rides the same private message: the
+  // settled card draws none of it, so the report is the only place the raw
+  // hops and detail rows still go. Appended to the message rather than given
+  // a field of its own because `PrivateErrorCause` is the fixed shape desktop
+  // main forwards.
+  //
+  // The row's own identity - the Host's time on it and its turn - rides the
+  // private cause beside the click time, so the report can be found in the
+  // Host log however long after the failure it was filed. Neither reaches the
+  // public prefill.
+  const buildReportContext = useCallback(
+    () =>
+      buildReportIssueDraftContext(
+        createReportIssueContext({
+          title: "Agent error",
+          message: null,
+          code: null,
+          source: "Chat",
+        }),
+        capturePersistedAgentError({
+          message:
+            settledNotice === null
+              ? message
+              : `${message}\n\n${routingSettledReportText(settledNotice)}`,
+          code,
+          recoverable,
+          hostTimestamp,
+          turnId: reportTurnId,
+        }),
+      ),
+    [code, hostTimestamp, message, recoverable, reportTurnId, settledNotice],
+  );
+  const reportAction = readOnly ? null : (
+    <ReportIssueAction
+      context={buildReportContext}
+      presentation="icon"
+      className="-mt-1 -mr-1 shrink-0"
+    />
+  );
+  const actions =
+    turnId === null ? null : <FallbackManualRungActions turnId={turnId} />;
+  // Routing tried everything on this turn and settled: ONE card carrying the
+  // routing account and this row's actions, where this error was. The notice
+  // itself renders nothing beside it (`AssistantMessageBody`).
+  if (settledNotice !== null) {
+    return (
+      <RoutingSettledCard
+        notice={settledNotice}
+        noticeFindUnitId={settledNoticeFindUnitId}
+        reportAction={reportAction}
+        actions={actions}
+      />
+    );
+  }
+  // Which of the two rows this is. A provider refusing a turn is not a crash,
+  // and rendering it as one - red rule, uppercase ERROR, the raw reason code in
+  // a red monospace chip - made the commonest thing that happens to a working
+  // setup look like something broke. See `agent-failure-presentation.ts` for
+  // why this classification is its own question rather than routing eligibility
+  // reused for colour.
+  //
+  // A turn a sandbox refused or paused (frozen for lack of credits, and the
+  // secrets track's codes) is an interruption with its own words from
+  // `sandbox-refusal-copy.ts`, in place of the host's message; the report
+  // still carries the raw message and code.
+  const sandboxRefusal = sandboxRefusalCopyFor(code, message);
+  const row = {
+    findUnitId,
+    message,
+    harnessId,
+    failure,
+    code,
+    actions,
+    reportAction,
+  };
+  if (
+    sandboxRefusal !== null &&
+    payer?.kind === "team" &&
+    payer.teamName.length > 0 &&
+    isSandboxFrozenRefusal(code, message)
+  ) {
+    return (
+      <TeamFrozenErrorSegmentRow
+        {...row}
+        copy={sandboxRefusal}
+        teamId={payer.teamId}
+        teamName={payer.teamName}
+      />
+    );
+  }
+  if (
+    sandboxRefusal !== null &&
+    payer === null &&
+    isSandboxFrozenRefusal(code, message)
+  ) {
+    return (
+      <ErrorSegmentRow
+        {...row}
+        sandboxRefusal={unknownPayerFrozenRefusalCopy(sandboxRefusal)}
+      />
+    );
+  }
+  return <ErrorSegmentRow {...row} sandboxRefusal={sandboxRefusal} />;
+}
+
+interface ErrorSegmentRowProps {
+  readonly findUnitId: string | null;
+  readonly message: string;
+  readonly harnessId: GuiHarnessId | null;
+  readonly failure: AgentFailure | null;
+  readonly code: string | null;
+  readonly actions: ReactNode;
+  readonly reportAction: ReactNode;
+}
+
+function TeamFrozenErrorSegmentRow(
+  props: ErrorSegmentRowProps & {
+    readonly copy: SandboxRefusalCopy;
+    readonly teamId: string;
+    readonly teamName: string;
+  },
+): ReactNode {
+  const { copy, teamId, teamName, ...row } = props;
+  const buysTeamCredits = useTeamBillingAdmin(teamId);
+  return (
+    <ErrorSegmentRow
+      {...row}
+      sandboxRefusal={teamFrozenRefusalCopy(copy, teamName, buysTeamCredits)}
+    />
+  );
+}
+
+function ErrorSegmentRow({
+  findUnitId,
+  message,
+  harnessId,
+  failure,
+  code,
+  actions,
+  reportAction,
+  sandboxRefusal,
+}: ErrorSegmentRowProps & {
+  readonly sandboxRefusal: SandboxRefusalCopy | null;
+}): ReactNode {
+  const { presentation, headline } =
+    sandboxRefusal === null
+      ? errorRowPresentation(failure?.reason ?? null, code)
+      : {
+          presentation: "interrupted" as const,
+          headline: sandboxRefusal.headline,
+        };
+  const interrupted = presentation === "interrupted";
+  return (
+    <div
+      data-chat-find-unit={findUnitId ?? undefined}
+      data-failure-presentation={presentation}
+      data-sandbox-refusal={sandboxRefusal === null ? undefined : "true"}
+      className={cn(
+        "flex w-full flex-col gap-2 rounded-md border px-3 py-2 text-ui-sm",
+        // The status recipe (AGENTS.md "Status colors"), one class per role.
+        interrupted
+          ? "border-warning/30 bg-warning/10"
+          : "border-destructive/30 bg-destructive/5",
+      )}
+    >
+      <div className="flex items-start gap-2">
+        <AlertTriangle
+          className={cn(
+            "mt-0.5 size-3.5 shrink-0",
+            interrupted ? "text-warning-foreground" : "text-destructive",
+          )}
+          aria-hidden
+        />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <ErrorSegmentHeading
+            headline={interrupted ? headline : null}
+            harnessId={harnessId}
+            code={code}
+          />
+          <span className="whitespace-pre-wrap break-words text-foreground/90">
+            {sandboxRefusal === null ? message : sandboxRefusal.description}
+          </span>
+          {sandboxRefusal === null ||
+          sandboxRefusal.hostDetail === null ? null : (
+            <span
+              data-testid="sandbox-refusal-host-detail"
+              className="whitespace-pre-wrap break-words text-muted-foreground"
+            >
+              Last setup status: {sandboxRefusal.hostDetail}
+            </span>
+          )}
+          {code === ENV_CREDENTIAL_AUTH_ERROR_CODE ? (
+            <EnvCredentialSettingsAction harnessId={harnessId} />
+          ) : null}
+          <ProviderUpdateAction code={code} harnessId={harnessId} />
+          {actions}
+        </div>
+        {reportAction}
+      </div>
+    </div>
+  );
+}

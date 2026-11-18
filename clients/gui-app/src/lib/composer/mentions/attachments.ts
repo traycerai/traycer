@@ -1,0 +1,280 @@
+import type {
+  BotMentionEntry,
+  BrowserTabMentionAttachment,
+  BrowserTabMentionEntry,
+  EntityMentionAttachment,
+  GitMentionAttachment,
+  MentionAttachment,
+  MentionSuggestionEntry,
+  WorkspaceEntry,
+  WorktreeMentionAttachment,
+} from "@/lib/composer/types";
+import { artifactMentionContextType } from "@traycer/protocol/common/composer-mention-attrs";
+import { createLegacyMentionAttachment, inferPathKind } from "./legacy";
+
+export { createLegacyMentionAttachment, inferPathKind };
+
+export function mentionAttachmentFromSuggestion(
+  entry: MentionSuggestionEntry,
+): MentionAttachment | null {
+  if (entry.kind === "git") return gitMentionAttachmentFromSuggestion(entry);
+  if (entry.kind === "worktree") {
+    return worktreeMentionAttachmentFromSuggestion(entry);
+  }
+  if (entry.kind === "browser-tab") {
+    return browserTabMentionAttachmentFromSuggestion(entry);
+  }
+  if (entry.kind === "bot") return botMentionAttachmentFromSuggestion(entry);
+  if (
+    entry.kind === "epic" ||
+    entry.kind === "epic-artifact" ||
+    entry.kind === "epic-chat" ||
+    entry.kind === "epic-terminal-agent" ||
+    entry.kind === "epic-terminal"
+  ) {
+    return entityMentionAttachmentFromSuggestion(entry);
+  }
+  return {
+    kind: "mention",
+    contextType: entry.kind,
+    path: entry.relPath,
+    pathKind: entry.kind,
+    relPath: entry.relPath,
+    absolutePath: entry.absolutePath,
+    workspacePath: entry.workspacePath,
+    label: entry.label,
+    description: entry.description,
+  };
+}
+
+function entityMentionAttachmentFromSuggestion(
+  entry: Extract<
+    MentionSuggestionEntry,
+    {
+      kind:
+        | "epic"
+        | "epic-artifact"
+        | "epic-chat"
+        | "epic-terminal-agent"
+        | "epic-terminal";
+    }
+  >,
+): EntityMentionAttachment {
+  if (entry.kind === "epic") {
+    return {
+      kind: "mention",
+      contextType: "epic",
+      path: entry.token,
+      pathKind: null,
+      relPath: null,
+      absolutePath: null,
+      workspacePath: null,
+      label: entry.label,
+      description: entry.description,
+      epicId: entry.epicId,
+      artifactId: null,
+      artifactType: null,
+      chatId: null,
+      terminalAgentId: null,
+      terminalId: null,
+      botId: null,
+      botTrunkChatId: null,
+      status: entry.status,
+    };
+  }
+
+  if (entry.kind === "epic-chat") {
+    return {
+      kind: "mention",
+      contextType: "chat",
+      path: entry.token,
+      pathKind: null,
+      relPath: null,
+      absolutePath: null,
+      workspacePath: null,
+      label: entry.label,
+      description: entry.description,
+      epicId: entry.epicId,
+      artifactId: null,
+      artifactType: null,
+      chatId: entry.chatId,
+      terminalAgentId: null,
+      terminalId: null,
+      botId: null,
+      botTrunkChatId: null,
+      status: null,
+    };
+  }
+
+  if (entry.kind === "epic-terminal-agent") {
+    return {
+      kind: "mention",
+      contextType: "terminal-agent",
+      path: entry.token,
+      pathKind: null,
+      relPath: null,
+      absolutePath: null,
+      workspacePath: null,
+      label: entry.label,
+      description: entry.description,
+      epicId: entry.epicId,
+      artifactId: null,
+      artifactType: null,
+      chatId: null,
+      terminalAgentId: entry.terminalAgentId,
+      terminalId: null,
+      botId: null,
+      botTrunkChatId: null,
+      status: null,
+    };
+  }
+
+  if (entry.kind === "epic-terminal") {
+    return {
+      kind: "mention",
+      contextType: "terminal",
+      path: entry.token,
+      pathKind: null,
+      relPath: null,
+      absolutePath: null,
+      workspacePath: null,
+      label: entry.label,
+      description: entry.description,
+      epicId: entry.epicId,
+      artifactId: null,
+      artifactType: null,
+      chatId: null,
+      terminalAgentId: null,
+      terminalId: entry.terminalId,
+      botId: null,
+      botTrunkChatId: null,
+      status: null,
+    };
+  }
+
+  return {
+    kind: "mention",
+    contextType: artifactMentionContextType(entry.artifactType),
+    path: entry.token,
+    pathKind: null,
+    relPath: null,
+    absolutePath: null,
+    workspacePath: null,
+    label: entry.label,
+    description: entry.description,
+    epicId: entry.epicId,
+    artifactId: entry.artifactId,
+    artifactType: entry.artifactType,
+    chatId: null,
+    terminalAgentId: null,
+    terminalId: null,
+    botId: null,
+    botTrunkChatId: null,
+    status: entry.status,
+  };
+}
+
+/** A bot's id is its task id, so it is the chip's `epicId` too. */
+function botMentionAttachmentFromSuggestion(
+  entry: BotMentionEntry,
+): EntityMentionAttachment {
+  return {
+    kind: "mention",
+    contextType: "bot",
+    path: `bot:${entry.botId}`,
+    pathKind: null,
+    relPath: null,
+    absolutePath: null,
+    workspacePath: null,
+    label: entry.label,
+    description: entry.description,
+    epicId: entry.botId,
+    artifactId: null,
+    artifactType: null,
+    chatId: null,
+    terminalAgentId: null,
+    terminalId: null,
+    botId: entry.botId,
+    botTrunkChatId: entry.trunkChatId,
+    status: null,
+  };
+}
+
+function worktreeMentionAttachmentFromSuggestion(
+  entry: Extract<WorkspaceEntry, { kind: "worktree" }>,
+): WorktreeMentionAttachment {
+  return {
+    kind: "mention",
+    contextType: "worktree",
+    path: entry.worktreePath,
+    pathKind: null,
+    relPath: null,
+    absolutePath: entry.worktreePath,
+    workspacePath: entry.workspacePath,
+    label: entry.label,
+    description: entry.description,
+    worktreePath: entry.worktreePath,
+    branch: entry.branch,
+    isMain: entry.isMain,
+  };
+}
+
+/**
+ * `null` for a tab on ANOTHER host. The serializer renders a tab mention's
+ * `tabId` unconditionally (`json-content-serializer.ts:514-519`), so a
+ * cross-host pick routed through here would hand the agent a `browser-tab:`
+ * token naming a tab it can never attach to. Those picks are attached as
+ * snapshot context instead (see `browser-tab-preview.ts`);
+ * this null is the backstop for any other path that reaches a cross-host
+ * entry.
+ */
+function browserTabMentionAttachmentFromSuggestion(
+  entry: BrowserTabMentionEntry,
+): BrowserTabMentionAttachment | null {
+  if (entry.contextOnly) return null;
+  return {
+    kind: "mention",
+    contextType: "browser-tab",
+    path: `browser-tab:${entry.tabId}`,
+    pathKind: null,
+    relPath: null,
+    absolutePath: null,
+    workspacePath: null,
+    label: entry.label,
+    description: entry.url,
+    tabId: entry.tabId,
+    sessionId: entry.sessionId,
+    url: entry.url,
+  };
+}
+
+function gitMentionAttachmentFromSuggestion(
+  entry: Extract<WorkspaceEntry, { kind: "git" }>,
+): GitMentionAttachment {
+  return {
+    kind: "mention",
+    contextType: "git",
+    path: gitMentionPath(entry),
+    pathKind: null,
+    relPath: null,
+    absolutePath: null,
+    workspacePath: entry.workspacePath,
+    label: entry.label,
+    description: entry.description,
+    gitType: entry.gitType,
+    branchName: entry.branchName,
+    commitHash: entry.commitHash,
+  };
+}
+
+function gitMentionPath(
+  entry: Extract<WorkspaceEntry, { kind: "git" }>,
+): string {
+  if (entry.gitType === "against_uncommitted_changes") {
+    return "git:working-tree";
+  }
+  if (entry.gitType === "against_commit") {
+    return `git:commit:${entry.commitHash}`;
+  }
+  return `git:branch:${entry.branchName}`;
+}

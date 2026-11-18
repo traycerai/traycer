@@ -1,0 +1,1487 @@
+import { act } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isPresentationLossBlur } from "@/components/epic-tabs/pane-visibility-context";
+import {
+  HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
+  HOSTED_TILE_PANE_ID_ATTRIBUTE,
+  HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE,
+} from "@/components/epic-canvas/surface-host/hosted-tile-dom";
+import type {
+  BrowserGuestActivate,
+  BrowserGuestActivateEvent,
+  BrowserGuestTilePlacement,
+} from "@/lib/browser-view/guest/persistent-browser-guest-host";
+import {
+  browserGuestCssAnchorName,
+  browserGuestCssSheetAnchorName,
+  clearBrowserGuestTilePlacement,
+  confirmBrowserGuestViewport,
+  readBrowserGuestViewport,
+  setBrowserGuestTilePlacement,
+  startPersistentBrowserGuestHost,
+} from "@/lib/browser-view/guest/persistent-browser-guest-host";
+import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
+import type { BrowserViewGuestMountRequested } from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserViewportState } from "@traycer/protocol/host/browser/viewport";
+
+/**
+ * jsdom can observe wrapper/webview node identity, attributes,
+ * subscriptions, and which activate handler fired. It cannot prove
+ * Chromium compositing, CSS anchor geometry (`anchor()` / `anchor-size()`
+ * values are dropped by the parser), overlay stacking, hidden painting,
+ * real Electron `<webview>` identity, `webContentsId`, `inert` subtrees,
+ * or Electron focus retention. `position-anchor` and `position: fixed`
+ * are asserted because jsdom stores those declarations.
+ */
+const HOST_TEST_ID = "persistent-browser-guest-host";
+const REGISTRATION_A = "reg-a";
+const REGISTRATION_B = "reg-b";
+const PARTITION_A = "persist:guest-a";
+const PARTITION_B = "persist:guest-b";
+const INSTANCE_A = "tile-1";
+const ANCHOR_A = `--traycer-bv-${REGISTRATION_A}`;
+
+const guestResizeObservers: ControllableGuestResizeObserver[] = [];
+
+class ControllableGuestResizeObserver implements ResizeObserver {
+  readonly callback: ResizeObserverCallback;
+
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+    guestResizeObservers.push(this);
+  }
+
+  observe(): void {}
+
+  unobserve(): void {}
+
+  disconnect(): void {}
+
+  trigger(): void {
+    this.callback([], this);
+  }
+}
+
+function triggerGuestResizeObservers(): void {
+  for (const observer of guestResizeObservers) observer.trigger();
+}
+
+async function waitForViewportRequest(): Promise<void> {
+  await act(async () => {
+    triggerGuestResizeObservers();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+function setMeasuredGuestSize(
+  webview: HTMLElement,
+  width: number,
+  height: number,
+): void {
+  Object.defineProperty(webview, "offsetWidth", {
+    configurable: true,
+    value: width,
+  });
+  Object.defineProperty(webview, "offsetHeight", {
+    configurable: true,
+    value: height,
+  });
+}
+
+interface RecordedActivation {
+  readonly viewTabId: string;
+  readonly paneId: string;
+  readonly event: BrowserGuestActivateEvent;
+}
+
+function mountRequest(
+  registrationId: string,
+  partition: string,
+): BrowserViewGuestMountRequested {
+  return {
+    registrationId,
+    partition,
+  };
+}
+
+function recordingActivate(): {
+  readonly pointerDowns: RecordedActivation[];
+  readonly focuses: RecordedActivation[];
+  readonly activate: BrowserGuestActivate;
+} {
+  const pointerDowns: RecordedActivation[] = [];
+  const focuses: RecordedActivation[] = [];
+  return {
+    pointerDowns,
+    focuses,
+    activate: {
+      pointerDown: (viewTabId, paneId, event) => {
+        pointerDowns.push({ viewTabId, paneId, event });
+      },
+      focus: (viewTabId, paneId, event) => {
+        focuses.push({ viewTabId, paneId, event });
+      },
+    },
+  };
+}
+
+const NOOP_ACTIVATE: BrowserGuestActivate = {
+  pointerDown: () => {},
+  focus: () => {},
+};
+
+let hostDisposers: Array<() => void> = [];
+
+beforeEach(() => {
+  guestResizeObservers.length = 0;
+  vi.stubGlobal("ResizeObserver", ControllableGuestResizeObserver);
+});
+
+function startHost(
+  bridge: FakeBrowserViewBridge,
+  activate: BrowserGuestActivate,
+): () => void {
+  const dispose = startPersistentBrowserGuestHost(bridge, activate);
+  hostDisposers.push(dispose);
+  return dispose;
+}
+
+function queryHost(): HTMLElement | null {
+  const host = document.querySelector(`[data-testid="${HOST_TEST_ID}"]`);
+  return host instanceof HTMLElement ? host : null;
+}
+
+function queryWrapper(registrationId: string): HTMLElement | null {
+  const wrapper = document.querySelector(
+    `[data-browser-guest-registration="${registrationId}"]`,
+  );
+  return wrapper instanceof HTMLElement ? wrapper : null;
+}
+
+function guestNodes(registrationId: string): {
+  readonly host: HTMLElement;
+  readonly sheetClipper: HTMLElement;
+  readonly clipper: HTMLElement;
+  readonly wrapper: HTMLElement;
+  readonly webview: HTMLElement;
+} {
+  const host = queryHost();
+  if (host === null) throw new Error("expected persistent browser guest host");
+  const wrapper = queryWrapper(registrationId);
+  if (wrapper === null) {
+    throw new Error(`expected guest wrapper ${registrationId}`);
+  }
+  const clipper = wrapper.parentElement;
+  if (clipper === null) {
+    throw new Error(`expected guest clipper ${registrationId}`);
+  }
+  // The outer sheet clipper rounds the guest to its owning epic tab's content
+  // sheet; the inner `clipper` keeps clipping to the tile's own stage rect.
+  const sheetClipper = clipper.parentElement;
+  if (sheetClipper === null) {
+    throw new Error(`expected guest sheet clipper ${registrationId}`);
+  }
+  const webview = wrapper.querySelector("webview");
+  if (!(webview instanceof HTMLElement)) {
+    throw new Error(`expected webview for ${registrationId}`);
+  }
+  return { host, sheetClipper, clipper, wrapper, webview };
+}
+
+function dispatchPointerDown(target: HTMLElement): void {
+  target.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+}
+
+function dispatchFocus(target: HTMLElement): void {
+  target.dispatchEvent(new Event("focus"));
+}
+
+/**
+ * Host stop no longer wipes placements. Track every owner this file
+ * publishes so a later test cannot inherit a live record.
+ */
+const ownedPlacements: Array<{
+  readonly owner: symbol;
+  readonly registrationId: string;
+}> = [];
+
+function setOwnedPlacement(
+  owner: symbol,
+  placement: BrowserGuestTilePlacement,
+): void {
+  setBrowserGuestTilePlacement(owner, placement);
+  ownedPlacements.push({
+    owner,
+    registrationId: placement.registrationId,
+  });
+}
+
+afterEach(() => {
+  for (const owned of ownedPlacements) {
+    clearBrowserGuestTilePlacement(owned.owner, owned.registrationId);
+  }
+  ownedPlacements.length = 0;
+  hostDisposers.forEach((dispose) => dispose());
+  hostDisposers = [];
+  guestResizeObservers.length = 0;
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+/**
+ * The parked posture: off screen and undrawn, so a parked page with an
+ * animation loop costs the compositor nothing.
+ */
+function expectParkedPosture(wrapper: HTMLElement): void {
+  expect(wrapper.style.position).toBe("fixed");
+  expect(wrapper.style.insetInlineStart).toBe("-10000px");
+  expect(wrapper.style.insetBlockStart).toBe("0px");
+  expect(wrapper.style.width).toBe("1280px");
+  expect(wrapper.style.height).toBe("800px");
+  expect(wrapper.style.opacity).toBe("0");
+  expect(wrapper.style.transform).toBe("");
+  expect(wrapper.style.filter).toBe("");
+  expect(wrapper.style.pointerEvents).toBe("none");
+  expect(wrapper.style.display).toBe("block");
+}
+
+/**
+ * The posture of an unshown guest main is reading: at the window's origin
+ * at full size, shrunk to a speck by a transform and made invisible by a
+ * filter. The plain `opacity` stays unset because opacity:0 stops the
+ * compositor drawing the guest, and a capture completes only on a drawn
+ * frame.
+ */
+function expectDrawHeldPosture(wrapper: HTMLElement): void {
+  expect(wrapper.style.position).toBe("fixed");
+  expect(wrapper.style.insetInlineStart).toBe("0px");
+  expect(wrapper.style.insetBlockStart).toBe("0px");
+  expect(wrapper.style.width).toBe("1280px");
+  expect(wrapper.style.height).toBe("800px");
+  expect(wrapper.style.transform).toBe("scale(0.02)");
+  expect(wrapper.style.transformOrigin).toBe("top left");
+  expect(wrapper.style.filter).toBe("opacity(0)");
+  expect(wrapper.style.opacity).toBe("");
+  expect(wrapper.style.pointerEvents).toBe("none");
+  expect(wrapper.style.display).toBe("block");
+}
+
+describe("browserGuestCssAnchorName", () => {
+  it("prefixes the registration id as a dashed-ident", () => {
+    expect(browserGuestCssAnchorName(REGISTRATION_A)).toBe(ANCHOR_A);
+    expect(
+      browserGuestCssAnchorName("550e8400-e29b-41d4-a716-446655440000"),
+    ).toBe("--traycer-bv-550e8400-e29b-41d4-a716-446655440000");
+  });
+});
+
+describe("browserGuestCssSheetAnchorName", () => {
+  it("prefixes the view tab id as a dashed-ident, distinct from the registration anchor", () => {
+    expect(browserGuestCssSheetAnchorName("view-1")).toBe(
+      "--traycer-sheet-view-1",
+    );
+    expect(browserGuestCssSheetAnchorName(REGISTRATION_A)).not.toBe(
+      browserGuestCssAnchorName(REGISTRATION_A),
+    );
+  });
+});
+
+// Browser-tile risk (sheet-shell): a guest's outer `sheetClipper`
+// rounds it to the content sheet of the epic TAB it is presented on, so two
+// guests on two different tabs must never share - or cross-clip to - the
+// wrong sheet, and a guest dragged to a different tab must follow.
+describe("the outer sheet clipper anchors to the owning view tab", () => {
+  it("gives each of two presented guests its own view tab's sheet anchor", () => {
+    const bridge = new FakeBrowserViewBridge({});
+    startHost(bridge, NOOP_ACTIVATE);
+    bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+    bridge.emitGuestMountRequested(mountRequest(REGISTRATION_B, PARTITION_B));
+    const ownerA = Symbol("tile-a");
+    const ownerB = Symbol("tile-b");
+    setOwnedPlacement(ownerA, {
+      registrationId: REGISTRATION_A,
+      instanceId: INSTANCE_A,
+      viewTabId: "view-1",
+      paneId: "pane-1",
+      presented: true,
+      viewport: null,
+    });
+    setOwnedPlacement(ownerB, {
+      registrationId: REGISTRATION_B,
+      instanceId: "tile-2",
+      viewTabId: "view-2",
+      paneId: "pane-1",
+      presented: true,
+      viewport: null,
+    });
+
+    const sheetA = guestNodes(REGISTRATION_A).sheetClipper;
+    const sheetB = guestNodes(REGISTRATION_B).sheetClipper;
+    expect(sheetA).not.toBe(sheetB);
+    expect(sheetA.style.getPropertyValue("position-anchor")).toBe(
+      browserGuestCssSheetAnchorName("view-1"),
+    );
+    expect(sheetB.style.getPropertyValue("position-anchor")).toBe(
+      browserGuestCssSheetAnchorName("view-2"),
+    );
+    expect(sheetA.dataset.browserGuestSheet).toBe("view-1");
+    expect(sheetB.dataset.browserGuestSheet).toBe("view-2");
+  });
+
+  it("re-anchors the same sheet clipper when a guest's placement moves to a different view tab", () => {
+    const bridge = new FakeBrowserViewBridge({});
+    startHost(bridge, NOOP_ACTIVATE);
+    bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+    const owner = Symbol("tile");
+    setOwnedPlacement(owner, {
+      registrationId: REGISTRATION_A,
+      instanceId: INSTANCE_A,
+      viewTabId: "view-1",
+      paneId: "pane-1",
+      presented: true,
+      viewport: null,
+    });
+    const before = guestNodes(REGISTRATION_A).sheetClipper;
+    expect(before.dataset.browserGuestSheet).toBe("view-1");
+
+    // Same registration - its tile dragged into a different epic tab's split
+    // slot, exactly like `paneId` already does in the sibling test above.
+    setOwnedPlacement(owner, {
+      registrationId: REGISTRATION_A,
+      instanceId: INSTANCE_A,
+      viewTabId: "view-2",
+      paneId: "pane-1",
+      presented: true,
+      viewport: null,
+    });
+    const after = guestNodes(REGISTRATION_A).sheetClipper;
+    expect(after).toBe(before); // re-anchored in place, never remounted
+    expect(after.dataset.browserGuestSheet).toBe("view-2");
+    expect(after.style.getPropertyValue("position-anchor")).toBe(
+      browserGuestCssSheetAnchorName("view-2"),
+    );
+    expect(before.style.getPropertyValue("position-anchor")).not.toBe(
+      browserGuestCssSheetAnchorName("view-1"),
+    );
+  });
+});
+
+describe("persistent browser guest host", () => {
+  describe("guest identity", () => {
+    it("keeps the guest identity while applying fixed scale and reset acknowledgements", async () => {
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const owner = Symbol("tile");
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: {
+          width: 640,
+          height: 480,
+          scale: 0.5,
+          autoFit: true,
+          requestId: null,
+        },
+      });
+      const first = guestNodes(REGISTRATION_A);
+
+      bridge.emitGuestViewportRequested({
+        requestId: "viewport-1",
+        registrationId: REGISTRATION_A,
+        revision: 1,
+        width: 800,
+        height: 600,
+        intent: { mode: "fixed", width: 800, height: 600 },
+        zoom: 1,
+      });
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: {
+          width: 800,
+          height: 600,
+          scale: 0.5,
+          autoFit: true,
+          requestId: "viewport-1",
+        },
+      });
+      setMeasuredGuestSize(first.webview, 800, 600);
+      await waitForViewportRequest();
+      expect(bridge.guestViewportResultCalls).toEqual([
+        {
+          requestId: "viewport-1",
+          registrationId: REGISTRATION_A,
+          revision: 1,
+          applied: true,
+        },
+      ]);
+      expect(guestNodes(REGISTRATION_A).wrapper).toBe(first.wrapper);
+      expect(guestNodes(REGISTRATION_A).webview).toBe(first.webview);
+      expect(first.webview.style.width).toBe("800px");
+      expect(first.webview.style.height).toBe("600px");
+      expect(first.webview.style.transform).toBe("scale(0.5)");
+
+      bridge.emitGuestViewportRequested({
+        requestId: "viewport-reset",
+        registrationId: REGISTRATION_A,
+        revision: 2,
+        width: 1280,
+        height: 800,
+        intent: { mode: "fit" },
+        zoom: 1,
+      });
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: {
+          width: 1280,
+          height: 800,
+          scale: 1,
+          autoFit: true,
+          requestId: "viewport-reset",
+        },
+      });
+      setMeasuredGuestSize(first.webview, 1280, 800);
+      await waitForViewportRequest();
+      expect(bridge.guestViewportResultCalls.at(-1)).toEqual({
+        requestId: "viewport-reset",
+        registrationId: REGISTRATION_A,
+        revision: 2,
+        applied: true,
+      });
+      expect(guestNodes(REGISTRATION_A).webview).toBe(first.webview);
+      expect(first.webview.style.width).toBe("1280px");
+      expect(first.webview.style.height).toBe("800px");
+      expect(first.webview.style.transform).toBe("scale(1)");
+    });
+
+    it("keeps native viewport snapshots pending until the matching host state", async () => {
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const owner = Symbol("tile");
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: {
+          width: 640,
+          height: 480,
+          scale: 1,
+          autoFit: false,
+          requestId: null,
+        },
+      });
+      const guest = guestNodes(REGISTRATION_A);
+      bridge.emitGuestViewportRequested({
+        requestId: "snapshot-fixed",
+        registrationId: REGISTRATION_A,
+        revision: 7,
+        width: 801,
+        height: 601,
+        intent: { mode: "fixed", width: 801, height: 601 },
+        zoom: 1.25,
+      });
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: {
+          width: 801,
+          height: 601,
+          scale: 0.8,
+          autoFit: false,
+          requestId: "snapshot-fixed",
+        },
+      });
+      setMeasuredGuestSize(guest.webview, 801, 601);
+      await waitForViewportRequest();
+
+      const pending = readBrowserGuestViewport(REGISTRATION_A);
+      expect(pending).toMatchObject({
+        confirmed: false,
+        height: 601,
+        requestId: "snapshot-fixed",
+        width: 801,
+        zoom: 1.25,
+      });
+      const olderState: BrowserViewportState = {
+        sessionId: "session-1",
+        tabId: "tab-1",
+        intent: { mode: "fixed", width: 801, height: 601 },
+        applied: { width: 801, height: 601, dpr: 1 },
+        revision: 6,
+        source: "user",
+        fitOwnerId: null,
+      };
+      confirmBrowserGuestViewport({
+        registrationId: REGISTRATION_A,
+        state: olderState,
+        zoom: 1.25,
+      });
+      expect(readBrowserGuestViewport(REGISTRATION_A)?.confirmed).toBe(false);
+
+      confirmBrowserGuestViewport({
+        registrationId: REGISTRATION_A,
+        state: { ...olderState, revision: 7 },
+        zoom: 1.25,
+      });
+      expect(readBrowserGuestViewport(REGISTRATION_A)).toMatchObject({
+        confirmed: true,
+        height: 601,
+        width: 801,
+        zoom: 1.25,
+      });
+
+      confirmBrowserGuestViewport({
+        registrationId: REGISTRATION_A,
+        state: {
+          ...olderState,
+          applied: null,
+          intent: { mode: "fit" },
+          revision: 8,
+        },
+        zoom: 1.25,
+      });
+      expect(readBrowserGuestViewport(REGISTRATION_A)).toBeNull();
+    });
+
+    it("finishes a Fit the host kept unconfirmed once the guest lays it out", async () => {
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const guest = guestNodes(REGISTRATION_A);
+      bridge.emitGuestViewportRequested({
+        requestId: "viewport-fit",
+        registrationId: REGISTRATION_A,
+        revision: 1,
+        width: 800,
+        height: 600,
+        intent: { mode: "fit" },
+        zoom: 1,
+      });
+      // A window that draws no frames never reports an applied size, so the
+      // host keeps the Fit at the request's own revision. A new tab holds the
+      // same state before its first Fit lands.
+      const unconfirmedFit: BrowserViewportState = {
+        sessionId: "session-1",
+        tabId: "tab-1",
+        intent: { mode: "fit" },
+        applied: null,
+        revision: 1,
+        source: "user",
+        fitOwnerId: null,
+      };
+
+      confirmBrowserGuestViewport({
+        registrationId: REGISTRATION_A,
+        state: unconfirmedFit,
+        zoom: 1,
+      });
+      expect(readBrowserGuestViewport(REGISTRATION_A)).toMatchObject({
+        confirmed: false,
+        requestId: "viewport-fit",
+      });
+
+      setMeasuredGuestSize(guest.webview, 800, 600);
+      await waitForViewportRequest();
+      expect(bridge.guestViewportResultCalls).toEqual([
+        {
+          requestId: "viewport-fit",
+          registrationId: REGISTRATION_A,
+          revision: 1,
+          applied: true,
+        },
+      ]);
+
+      confirmBrowserGuestViewport({
+        registrationId: REGISTRATION_A,
+        state: unconfirmedFit,
+        zoom: 1,
+      });
+      expect(readBrowserGuestViewport(REGISTRATION_A)).toBeNull();
+    });
+
+    it("waits for the matching presented placement before applying native layout", async () => {
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const owner = Symbol("tile");
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: {
+          width: 640,
+          height: 480,
+          scale: 1,
+          autoFit: true,
+          requestId: null,
+        },
+      });
+      const guest = guestNodes(REGISTRATION_A);
+
+      bridge.emitGuestViewportRequested({
+        requestId: "viewport-layout",
+        registrationId: REGISTRATION_A,
+        revision: 1,
+        width: 800,
+        height: 600,
+        intent: { mode: "fixed", width: 800, height: 600 },
+        zoom: 1,
+      });
+      expect(bridge.guestViewportResultCalls).toHaveLength(0);
+      expect(guest.webview.style.width).toBe("640px");
+
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: {
+          width: 800,
+          height: 600,
+          scale: 1,
+          autoFit: true,
+          requestId: "viewport-layout",
+        },
+      });
+      setMeasuredGuestSize(guest.webview, 800, 600);
+      await waitForViewportRequest();
+      expect(guest.webview.style.width).toBe("800px");
+      expect(guest.webview.style.height).toBe("600px");
+    });
+
+    it("keeps a manual oversized scale while a native viewport request is pending", async () => {
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const owner = Symbol("tile");
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: {
+          width: 640,
+          height: 480,
+          scale: 2,
+          autoFit: false,
+          requestId: null,
+        },
+      });
+      const manual = guestNodes(REGISTRATION_A);
+      bridge.emitGuestViewportRequested({
+        requestId: "viewport-manual",
+        registrationId: REGISTRATION_A,
+        revision: 1,
+        width: 800,
+        height: 600,
+        intent: { mode: "fixed", width: 800, height: 600 },
+        zoom: 1,
+      });
+      expect(manual.webview.style.transform).toBe("scale(2)");
+
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: {
+          width: 800,
+          height: 600,
+          scale: 2,
+          autoFit: false,
+          requestId: "viewport-manual",
+        },
+      });
+      setMeasuredGuestSize(manual.webview, 800, 600);
+      await waitForViewportRequest();
+      Object.defineProperty(manual.wrapper, "clientWidth", {
+        configurable: true,
+        value: 640,
+      });
+      Object.defineProperty(manual.wrapper, "clientHeight", {
+        configurable: true,
+        value: 480,
+      });
+      bridge.emitGuestViewportRequested({
+        requestId: "viewport-auto-fit",
+        registrationId: REGISTRATION_A,
+        revision: 2,
+        width: 800,
+        height: 600,
+        intent: { mode: "fit" },
+        zoom: 1,
+      });
+      // A fit request cannot reuse the prior manual presentation. Until the
+      // matching React placement arrives, the stale scale remains in place.
+      expect(manual.webview.style.transform).toBe("scale(2)");
+
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: {
+          width: 800,
+          height: 600,
+          scale: 0.8,
+          autoFit: true,
+          requestId: "viewport-auto-fit",
+        },
+      });
+      await waitForViewportRequest();
+      expect(manual.webview.style.transform).toBe("scale(0.8)");
+    });
+
+    it("keeps the same wrapper parent, webview node, and partition across placement and pane changes", () => {
+      const bridge = new FakeBrowserViewBridge({});
+      const first = recordingActivate();
+      startHost(bridge, first.activate);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+
+      const created = guestNodes(REGISTRATION_A);
+      expect(created.sheetClipper.parentNode).toBe(created.host);
+      expect(created.clipper.parentNode).toBe(created.sheetClipper);
+      expect(created.wrapper.parentNode).toBe(created.clipper);
+      expect(created.webview.parentNode).toBe(created.wrapper);
+      expect(created.webview.tagName).toBe("WEBVIEW");
+      expect(created.webview.getAttribute("src")).toBe(
+        `about:blank#${REGISTRATION_A}`,
+      );
+      expect(created.webview.getAttribute("partition")).toBe(PARTITION_A);
+      expect(created.webview.style.display).toBe("flex");
+      expect(created.wrapper.getAttribute("data-browser-guest-state")).toBe(
+        "unbound",
+      );
+
+      const owner = Symbol("tile");
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: null,
+      });
+      const presented = guestNodes(REGISTRATION_A);
+      expect(presented.clipper).toBe(created.clipper);
+      expect(presented.sheetClipper).toBe(created.sheetClipper);
+      expect(presented.sheetClipper.parentNode).toBe(created.host);
+      expect(presented.clipper.parentNode).toBe(presented.sheetClipper);
+      expect(presented.wrapper).toBe(created.wrapper);
+      expect(presented.webview).toBe(created.webview);
+      expect(presented.wrapper.parentNode).toBe(presented.clipper);
+      expect(presented.webview.parentNode).toBe(created.wrapper);
+      expect(presented.wrapper.style.getPropertyValue("position-anchor")).toBe(
+        ANCHOR_A,
+      );
+      expect(
+        presented.sheetClipper.style.getPropertyValue("position-anchor"),
+      ).toBe(browserGuestCssSheetAnchorName("view-1"));
+      expect(presented.sheetClipper.dataset.browserGuestSheet).toBe("view-1");
+
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-2",
+        presented: true,
+        viewport: null,
+      });
+      const moved = guestNodes(REGISTRATION_A);
+      expect(moved.clipper).toBe(created.clipper);
+      expect(moved.sheetClipper).toBe(created.sheetClipper);
+      expect(moved.sheetClipper.parentNode).toBe(created.host);
+      expect(moved.clipper.parentNode).toBe(moved.sheetClipper);
+      expect(moved.wrapper).toBe(created.wrapper);
+      expect(moved.webview).toBe(created.webview);
+      expect(moved.wrapper.parentNode).toBe(moved.clipper);
+      expect(moved.webview.parentNode).toBe(created.wrapper);
+      expect(moved.webview.getAttribute("partition")).toBe(PARTITION_A);
+      expect(moved.wrapper.style.getPropertyValue("position-anchor")).toBe(
+        ANCHOR_A,
+      );
+      expect(moved.wrapper.getAttribute(HOSTED_TILE_PANE_ID_ATTRIBUTE)).toBe(
+        "pane-2",
+      );
+
+      dispatchPointerDown(moved.wrapper);
+      expect(first.focuses).toEqual([]);
+      expect(first.pointerDowns).toHaveLength(1);
+      expect(first.pointerDowns[0]?.viewTabId).toBe("view-1");
+      expect(first.pointerDowns[0]?.paneId).toBe("pane-2");
+
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-2",
+        presented: false,
+        viewport: null,
+      });
+      const retained = guestNodes(REGISTRATION_A);
+      expect(retained.clipper).toBe(created.clipper);
+      expect(retained.sheetClipper).toBe(created.sheetClipper);
+      expect(retained.sheetClipper.parentNode).toBe(created.host);
+      expect(retained.clipper.parentNode).toBe(retained.sheetClipper);
+      expect(retained.wrapper).toBe(created.wrapper);
+      expect(retained.webview).toBe(created.webview);
+      expect(retained.wrapper.parentNode).toBe(retained.clipper);
+      // A guest leaving the presented state (still owned, just not on stage)
+      // relinquishes its sheet anchor - nothing should be clipping to a sheet
+      // it no longer belongs to.
+      expect(retained.sheetClipper.dataset.browserGuestSheet).toBeUndefined();
+    });
+
+    it("applies a placement that arrived before the matching mount without recreating later", () => {
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      const owner = Symbol("tile");
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: null,
+      });
+      expect(queryWrapper(REGISTRATION_A)).toBeNull();
+
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const first = guestNodes(REGISTRATION_A);
+      expect(first.wrapper.getAttribute("data-browser-guest-state")).toBe(
+        "presented",
+      );
+
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: null,
+      });
+      const again = guestNodes(REGISTRATION_A);
+      expect(again.wrapper).toBe(first.wrapper);
+      expect(again.webview).toBe(first.webview);
+    });
+  });
+
+  describe("mount and release incarnation", () => {
+    it("treats a duplicate mount of the same registrationId as a no-op", () => {
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const first = guestNodes(REGISTRATION_A);
+
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_B));
+      const again = guestNodes(REGISTRATION_A);
+      expect(again.wrapper).toBe(first.wrapper);
+      expect(again.webview).toBe(first.webview);
+      expect(again.webview.getAttribute("partition")).toBe(PARTITION_A);
+      expect(first.host.querySelectorAll("webview")).toHaveLength(1);
+    });
+
+    it("releases only the matching registration and ignores a stale unknown id", () => {
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_B, PARTITION_B));
+      const guestA = guestNodes(REGISTRATION_A);
+      const guestB = guestNodes(REGISTRATION_B);
+
+      bridge.emitGuestReleaseRequested({ registrationId: "unknown-reg" });
+      expect(queryWrapper(REGISTRATION_A)).toBe(guestA.wrapper);
+      expect(queryWrapper(REGISTRATION_B)).toBe(guestB.wrapper);
+      expect(guestA.webview.parentNode).toBe(guestA.wrapper);
+      expect(guestB.webview.parentNode).toBe(guestB.wrapper);
+
+      bridge.emitGuestReleaseRequested({ registrationId: REGISTRATION_A });
+      expect(queryWrapper(REGISTRATION_A)).toBeNull();
+      const remaining = guestNodes(REGISTRATION_B);
+      expect(remaining.wrapper).toBe(guestB.wrapper);
+      expect(remaining.webview).toBe(guestB.webview);
+      expect(remaining.webview.getAttribute("partition")).toBe(PARTITION_B);
+
+      bridge.emitGuestReleaseRequested({ registrationId: REGISTRATION_A });
+      expect(queryWrapper(REGISTRATION_A)).toBeNull();
+      expect(queryWrapper(REGISTRATION_B)).toBe(guestB.wrapper);
+    });
+
+    it("blurs a focused presented guest through presentation-loss on matching release", () => {
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const { webview } = guestNodes(REGISTRATION_A);
+      const owner = Symbol("tile");
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: null,
+      });
+
+      webview.tabIndex = 0;
+      webview.focus();
+      expect(document.activeElement).toBe(webview);
+
+      let usedPresentationLoss = false;
+      webview.addEventListener("blur", () => {
+        usedPresentationLoss = isPresentationLossBlur();
+      });
+
+      bridge.emitGuestReleaseRequested({ registrationId: REGISTRATION_A });
+      expect(queryWrapper(REGISTRATION_A)).toBeNull();
+      expect(document.activeElement).not.toBe(webview);
+      expect(usedPresentationLoss).toBe(true);
+    });
+
+    it("keeps a live placement across stop and start so remount is presented", () => {
+      const bridge = new FakeBrowserViewBridge({});
+      const stop = startHost(bridge, NOOP_ACTIVATE);
+      const owner = Symbol("tile");
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: null,
+      });
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const first = guestNodes(REGISTRATION_A);
+      expect(first.wrapper.getAttribute("data-browser-guest-state")).toBe(
+        "presented",
+      );
+
+      stop();
+      expect(queryHost()).toBeNull();
+      expect(queryWrapper(REGISTRATION_A)).toBeNull();
+
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const remounted = guestNodes(REGISTRATION_A);
+      expect(remounted.wrapper).not.toBe(first.wrapper);
+      expect(remounted.wrapper.getAttribute("data-browser-guest-state")).toBe(
+        "presented",
+      );
+    });
+
+    it("ignores a superseded host's disposer", () => {
+      const bridge = new FakeBrowserViewBridge({});
+      const stale = startHost(bridge, NOOP_ACTIVATE);
+      // The superseded host element is unreachable once replaced; drop it so
+      // `queryHost` names exactly the live one.
+      queryHost()?.remove();
+      startHost(bridge, NOOP_ACTIVATE);
+      const live = queryHost();
+
+      stale();
+
+      expect(queryHost()).toBe(live);
+    });
+  });
+
+  describe("presentation states", () => {
+    it("maps presented, retained, and unbound onto visibility and interactivity", () => {
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const { wrapper } = guestNodes(REGISTRATION_A);
+
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe("unbound");
+      expectParkedPosture(wrapper);
+      expect(wrapper.inert).toBe(true);
+      expect(wrapper.getAttribute("aria-hidden")).toBe("true");
+      expect(wrapper.hasAttribute(HOSTED_TILE_INSTANCE_ID_ATTRIBUTE)).toBe(
+        false,
+      );
+
+      const owner = Symbol("tile");
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: null,
+      });
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe(
+        "presented",
+      );
+      expect(wrapper.style.position).toBe("fixed");
+      expect(wrapper.style.getPropertyValue("position-anchor")).toBe(ANCHOR_A);
+      expect(wrapper.style.opacity).toBe("1");
+      expect(wrapper.style.transform).toBe("");
+      expect(wrapper.style.filter).toBe("");
+      expect(wrapper.style.pointerEvents).toBe("auto");
+      expect(wrapper.style.display).toBe("block");
+      expect(wrapper.inert).toBe(false);
+      expect(wrapper.hasAttribute("aria-hidden")).toBe(false);
+      expect(wrapper.getAttribute(HOSTED_TILE_INSTANCE_ID_ATTRIBUTE)).toBe(
+        INSTANCE_A,
+      );
+      expect(wrapper.getAttribute(HOSTED_TILE_PANE_ID_ATTRIBUTE)).toBe(
+        "pane-1",
+      );
+      expect(wrapper.getAttribute(HOSTED_TILE_VIEW_TAB_ID_ATTRIBUTE)).toBe(
+        "view-1",
+      );
+
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: false,
+        viewport: null,
+      });
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
+      // Retained keeps the unbound parked posture. A guest is captured only
+      // while the compositor draws it, and `display: none`, `opacity: 0` and
+      // an off-viewport box each stop that.
+      expectParkedPosture(wrapper);
+      expect(wrapper.style.getPropertyValue("position-anchor")).toBe("");
+      expect(wrapper.inert).toBe(true);
+      expect(wrapper.getAttribute("aria-hidden")).toBe("true");
+      expect(wrapper.hasAttribute(HOSTED_TILE_INSTANCE_ID_ATTRIBUTE)).toBe(
+        false,
+      );
+
+      clearBrowserGuestTilePlacement(Symbol("other-owner"), REGISTRATION_A);
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
+
+      clearBrowserGuestTilePlacement(owner, REGISTRATION_A);
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe("unbound");
+      expectParkedPosture(wrapper);
+      expect(wrapper.inert).toBe(true);
+      expect(wrapper.getAttribute("aria-hidden")).toBe("true");
+    });
+
+    it("blurs an active guest through presentation-loss before leaving presented", () => {
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const { wrapper, webview } = guestNodes(REGISTRATION_A);
+      const owner = Symbol("tile");
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: null,
+      });
+
+      webview.tabIndex = 0;
+      webview.focus();
+      expect(document.activeElement).toBe(webview);
+
+      let usedPresentationLoss = false;
+      webview.addEventListener("blur", () => {
+        usedPresentationLoss = isPresentationLossBlur();
+      });
+
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: false,
+        viewport: null,
+      });
+      expect(document.activeElement).not.toBe(webview);
+      expect(wrapper.contains(document.activeElement)).toBe(false);
+      expect(usedPresentationLoss).toBe(true);
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
+    });
+
+    it("keeps the size a presented guest was laid out at when its tile is hidden", () => {
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const { wrapper, webview } = guestNodes(REGISTRATION_A);
+      const owner = Symbol("tile");
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: null,
+      });
+
+      // The frame the guest was laid out in its tile, where the anchor resolves.
+      setMeasuredGuestSize(webview, 797, 877);
+      triggerGuestResizeObservers();
+
+      // React hides the tile before the host hears of it, so a read at the hide
+      // finds no anchor and measures the bare 300x150 webview.
+      setMeasuredGuestSize(webview, 300, 150);
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: false,
+        viewport: null,
+      });
+
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
+      expect(webview.style.width).toBe("797px");
+      expect(webview.style.height).toBe("877px");
+    });
+  });
+
+  describe("draw holds", () => {
+    function placement(presented: boolean): BrowserGuestTilePlacement {
+      return {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented,
+        viewport: null,
+      };
+    }
+
+    /** Frames run only when the test fires them, so the count is observable. */
+    function controlAnimationFrames(): { readonly fire: () => void } {
+      const queued: FrameRequestCallback[] = [];
+      vi.stubGlobal(
+        "requestAnimationFrame",
+        (callback: FrameRequestCallback) => {
+          queued.push(callback);
+          return queued.length;
+        },
+      );
+      return {
+        fire: () => {
+          const batch = queued.splice(0);
+          for (const callback of batch) callback(0);
+        },
+      };
+    }
+
+    /** Lets the host's promise chain deliver an acknowledgement. */
+    async function flushAcknowledgement(): Promise<void> {
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    }
+
+    it("parks an unbound and a retained guest off screen and undrawn", () => {
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const { wrapper } = guestNodes(REGISTRATION_A);
+      expectParkedPosture(wrapper);
+
+      setOwnedPlacement(Symbol("tile"), placement(false));
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
+      expectParkedPosture(wrapper);
+    });
+
+    it("draws an unbound guest for a hold, acknowledging only after two frames, and parks it on release", async () => {
+      const frames = controlAnimationFrames();
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const { wrapper } = guestNodes(REGISTRATION_A);
+
+      bridge.emitGuestDrawHoldRequested({
+        holdId: "hold-1",
+        registrationId: REGISTRATION_A,
+      });
+      expectDrawHeldPosture(wrapper);
+      await flushAcknowledgement();
+      expect(bridge.guestDrawHoldAppliedCalls).toEqual([]);
+
+      frames.fire();
+      await flushAcknowledgement();
+      expect(bridge.guestDrawHoldAppliedCalls).toEqual([]);
+
+      frames.fire();
+      await flushAcknowledgement();
+      expect(bridge.guestDrawHoldAppliedCalls).toEqual([
+        { holdId: "hold-1", registrationId: REGISTRATION_A, applied: true },
+      ]);
+
+      bridge.emitGuestDrawHoldReleased({
+        holdId: "hold-1",
+        registrationId: REGISTRATION_A,
+      });
+      expectParkedPosture(wrapper);
+    });
+
+    it("draws a retained guest for a hold and parks it on release", () => {
+      controlAnimationFrames();
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const { wrapper } = guestNodes(REGISTRATION_A);
+      setOwnedPlacement(Symbol("tile"), placement(false));
+
+      bridge.emitGuestDrawHoldRequested({
+        holdId: "hold-1",
+        registrationId: REGISTRATION_A,
+      });
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
+      expectDrawHeldPosture(wrapper);
+
+      bridge.emitGuestDrawHoldReleased({
+        holdId: "hold-1",
+        registrationId: REGISTRATION_A,
+      });
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
+      expectParkedPosture(wrapper);
+    });
+
+    it("ignores a release carrying a stale holdId", () => {
+      controlAnimationFrames();
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const { wrapper } = guestNodes(REGISTRATION_A);
+      bridge.emitGuestDrawHoldRequested({
+        holdId: "hold-2",
+        registrationId: REGISTRATION_A,
+      });
+
+      bridge.emitGuestDrawHoldReleased({
+        holdId: "hold-1",
+        registrationId: REGISTRATION_A,
+      });
+      expectDrawHeldPosture(wrapper);
+
+      bridge.emitGuestDrawHoldReleased({
+        holdId: "hold-2",
+        registrationId: REGISTRATION_A,
+      });
+      expectParkedPosture(wrapper);
+    });
+
+    it("acknowledges a hold for an unknown registration as not applied", async () => {
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+
+      bridge.emitGuestDrawHoldRequested({
+        holdId: "hold-1",
+        registrationId: "reg-unknown",
+      });
+      await flushAcknowledgement();
+
+      expect(bridge.guestDrawHoldAppliedCalls).toEqual([
+        { holdId: "hold-1", registrationId: "reg-unknown", applied: false },
+      ]);
+    });
+
+    it("keeps a presented guest presented under a hold, and draws it held once its tile goes away", () => {
+      controlAnimationFrames();
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const { wrapper } = guestNodes(REGISTRATION_A);
+      const owner = Symbol("tile");
+      setOwnedPlacement(owner, placement(true));
+
+      bridge.emitGuestDrawHoldRequested({
+        holdId: "hold-1",
+        registrationId: REGISTRATION_A,
+      });
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe(
+        "presented",
+      );
+      expect(wrapper.style.opacity).toBe("1");
+      expect(wrapper.style.transform).toBe("");
+
+      bridge.emitGuestDrawHoldReleased({
+        holdId: "hold-1",
+        registrationId: REGISTRATION_A,
+      });
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe(
+        "presented",
+      );
+      expect(wrapper.style.opacity).toBe("1");
+
+      bridge.emitGuestDrawHoldRequested({
+        holdId: "hold-2",
+        registrationId: REGISTRATION_A,
+      });
+      setOwnedPlacement(owner, placement(false));
+      expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
+      expectDrawHeldPosture(wrapper);
+
+      bridge.emitGuestDrawHoldReleased({
+        holdId: "hold-2",
+        registrationId: REGISTRATION_A,
+      });
+      expectParkedPosture(wrapper);
+    });
+
+    it("drops a held guest with its removal and treats a later release as a no-op", () => {
+      controlAnimationFrames();
+      const bridge = new FakeBrowserViewBridge({});
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      bridge.emitGuestDrawHoldRequested({
+        holdId: "hold-1",
+        registrationId: REGISTRATION_A,
+      });
+
+      bridge.emitGuestReleaseRequested({ registrationId: REGISTRATION_A });
+      expect(queryWrapper(REGISTRATION_A)).toBeNull();
+
+      bridge.emitGuestDrawHoldReleased({
+        holdId: "hold-1",
+        registrationId: REGISTRATION_A,
+      });
+      expect(queryWrapper(REGISTRATION_A)).toBeNull();
+    });
+  });
+
+  describe("pane activation", () => {
+    it("routes pointerdown only to pointerDown and capture-phase focus only to focus while presented", () => {
+      const bridge = new FakeBrowserViewBridge({});
+      const recorded = recordingActivate();
+      startHost(bridge, recorded.activate);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const { wrapper, webview } = guestNodes(REGISTRATION_A);
+
+      dispatchPointerDown(wrapper);
+      dispatchFocus(webview);
+      expect(recorded.pointerDowns).toEqual([]);
+      expect(recorded.focuses).toEqual([]);
+
+      const owner = Symbol("tile");
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: false,
+        viewport: null,
+      });
+      dispatchPointerDown(wrapper);
+      dispatchFocus(webview);
+      expect(recorded.pointerDowns).toEqual([]);
+      expect(recorded.focuses).toEqual([]);
+
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: null,
+      });
+      dispatchPointerDown(wrapper);
+      expect(recorded.pointerDowns).toHaveLength(1);
+      expect(recorded.focuses).toEqual([]);
+      expect(recorded.pointerDowns[0]?.viewTabId).toBe("view-1");
+      expect(recorded.pointerDowns[0]?.paneId).toBe("pane-1");
+      expect(recorded.pointerDowns[0]?.event.scope).toBe(wrapper);
+      expect(recorded.pointerDowns[0]?.event.target).toBe(wrapper);
+
+      dispatchFocus(webview);
+      expect(recorded.pointerDowns).toHaveLength(1);
+      expect(recorded.focuses).toHaveLength(1);
+      expect(recorded.focuses[0]?.viewTabId).toBe("view-1");
+      expect(recorded.focuses[0]?.paneId).toBe("pane-1");
+      expect(recorded.focuses[0]?.event.scope).toBe(wrapper);
+      expect(recorded.focuses[0]?.event.target).toBe(webview);
+    });
+  });
+});
+
+describe("the press relay on a guest", () => {
+  function recordPressesOn(target: Element): {
+    readonly seen: string[];
+    readonly stop: () => void;
+  } {
+    const seen: string[] = [];
+    const record = (event: Event): void => {
+      if (event.target === target) seen.push(event.type);
+    };
+    for (const type of ["pointerdown", "pointerup", "click"])
+      document.addEventListener(type, record);
+    return {
+      seen,
+      stop: () => {
+        for (const type of ["pointerdown", "pointerup", "click"])
+          document.removeEventListener(type, record);
+      },
+    };
+  }
+
+  /**
+   * Focus moved into the guest, as the staging Electron renderer reports it:
+   * the webview element receives `focus`, and the window blurs with the
+   * webview active and the document without focus (the guest is its own web
+   * contents).
+   */
+  function blurIntoGuest(webview: HTMLElement): void {
+    webview.setAttribute("tabindex", "-1");
+    webview.focus();
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    window.dispatchEvent(new Event("blur"));
+  }
+
+  it("a press into the guest reaches the document as one whole gesture on its webview", () => {
+    const bridge = new FakeBrowserViewBridge({});
+    startHost(bridge, NOOP_ACTIVATE);
+    bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+    const { webview } = guestNodes(REGISTRATION_A);
+    const presses = recordPressesOn(webview);
+
+    blurIntoGuest(webview);
+
+    // The pointerup settles what the pointerdown armed (the primary focus
+    // coordinator parks focus requests between the two).
+    expect(presses.seen).toEqual(["pointerdown", "pointerup", "click"]);
+    presses.stop();
+  });
+
+  it("a released guest relays nothing", () => {
+    const bridge = new FakeBrowserViewBridge({});
+    startHost(bridge, NOOP_ACTIVATE);
+    bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+    const { webview } = guestNodes(REGISTRATION_A);
+    const presses = recordPressesOn(webview);
+    bridge.emitGuestReleaseRequested({ registrationId: REGISTRATION_A });
+
+    document.body.appendChild(webview);
+    blurIntoGuest(webview);
+
+    expect(presses.seen).toEqual([]);
+    presses.stop();
+    webview.remove();
+  });
+});

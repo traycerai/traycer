@@ -1,0 +1,85 @@
+import { useEffect, useMemo } from "react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { GuiHarnessId } from "@traycer/protocol/host/index";
+
+import { useSlashCommands } from "@/hooks/composer/use-slash-commands";
+import type { HostRpcRegistry } from "@/lib/host";
+import type { SlashCommand } from "@/lib/composer/types";
+
+import type { ComposerPickerStore } from "./composer-picker-store";
+import { useMentionItems } from "./use-mention-items";
+import { useSlashItems } from "./use-slash-items";
+
+export interface UseComposerPickerItemsParams {
+  readonly pickerStore: ComposerPickerStore;
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+  readonly harnessId: GuiHarnessId;
+  readonly profileId: string | null;
+  readonly mentionRoots: ReadonlyArray<string>;
+  readonly currentEpicId: string | null;
+  // Whether this composer is the active/focused one. Gates the eager
+  // command-catalog fetch so inactive-but-mounted composers (e.g. hidden chat
+  // tiles) do not subscribe to `agent.gui.listCommands`.
+  readonly isActive: boolean;
+  /**
+   * Renderer-handled commands this surface can honor (today: the `/btw`
+   * side-chat command, offered only by a composer that can fork its chat).
+   * Listed in the picker and known to the raw-text converter exactly like the
+   * provider's rows - see `UseSlashCommandsParams.localCommands`.
+   */
+  readonly localSlashCommands: ReadonlyArray<SlashCommand>;
+}
+
+// Mount this on every composer surface; without it the picker menu opens empty.
+// The @-mention chat list is sourced inside `useMentionItems` (gated on the
+// picker being open), so it is no longer threaded in as a prop.
+export function useComposerPickerItems(
+  params: UseComposerPickerItemsParams,
+): void {
+  useMentionItems({
+    pickerStore: params.pickerStore,
+    hostClient: params.hostClient,
+    mentionRoots: params.mentionRoots,
+    currentEpicId: params.currentEpicId,
+  });
+  useSlashItems({
+    pickerStore: params.pickerStore,
+    hostClient: params.hostClient,
+    harnessId: params.harnessId,
+    profileId: params.profileId,
+    workingDirectories: params.mentionRoots,
+    localCommands: params.localSlashCommands,
+  });
+  useKnownSlashCommandNames(params);
+}
+
+// Eagerly loads the slash-command catalog for the *active* composer (independent
+// of the popover being open) and mirrors a lowercased name -> option map into the
+// picker store. The raw-text converters read this to turn a written `/command` or
+// `$skill` into a chip only when it is a real command, and to build that chip
+// from the same option the popover would have inserted. Gated on `isActive` so
+// inactive-but-mounted composers do not fetch `agent.gui.listCommands`; their
+// `knownSlashCommands` stays null (a composer you cannot focus cannot be typed
+// into). Shares the cached query with the popover, so it opens against warm data.
+function useKnownSlashCommandNames(params: UseComposerPickerItemsParams): void {
+  const { data: commands, isLoading } = useSlashCommands("", {
+    hostClient: params.hostClient,
+    harnessId: params.harnessId,
+    profileId: params.profileId,
+    workingDirectories: params.mentionRoots,
+    enabled: params.isActive,
+    localCommands: params.localSlashCommands,
+  });
+  const knownCommands = useMemo<ReadonlyMap<string, SlashCommand> | null>(
+    () =>
+      params.isActive && !isLoading
+        ? new Map(
+            commands.map((command) => [command.name.toLowerCase(), command]),
+          )
+        : null,
+    [params.isActive, commands, isLoading],
+  );
+  useEffect(() => {
+    params.pickerStore.getState().setKnownSlashCommands(knownCommands);
+  }, [knownCommands, params.pickerStore]);
+}

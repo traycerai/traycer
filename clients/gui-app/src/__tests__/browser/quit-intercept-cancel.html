@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Quit intercept - Cancel releases the window</title>
+    <style>
+      html,
+      body,
+      #root {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+      #probe-state {
+        display: none;
+      }
+      /* The stand-in for "the app behind the modal". Parked top-left, well
+         clear of a centred dialog, so a click on it is never ambiguous about
+         which surface it landed on. */
+      #app-button {
+        position: fixed;
+        top: 24px;
+        left: 24px;
+        width: 220px;
+        height: 44px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./quit-intercept-cancel.tsx"></script>
+  </body>
+</html>

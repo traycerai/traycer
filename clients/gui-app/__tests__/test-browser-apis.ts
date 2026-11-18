@@ -1,0 +1,636 @@
+import { configure } from "@testing-library/react";
+import { afterEach, vi } from "vitest";
+import { resetLandingBrowserOpenReservationsForTests } from "@/components/home/terminal-panel/landing-browser-open-reservations";
+import { createFakeBridgePair } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-bridge-pair";
+import { createFakeWorkerTarget } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-worker-target";
+import { startEpicRuntimeWorkerHost } from "@/stores/epics/open-epic/runtime/worker/epic-runtime-worker-host";
+import { __setEpicRuntimeWorkerFactoryForTests } from "@/lib/registries/epic-runtime-worker-factory-slot";
+
+// ── Landing browser open reservations, for every jsdom suite ───────────────
+//
+// ONE place, for the same reason as the worker below: the reservation set is
+// MODULE state, so an unanswered open outlives the test that made it and hands
+// the next suite a budget already partly spent. That is not hypothetical - it
+// is exactly how the openers hold a device across an unmount, which is the
+// behaviour they are supposed to have.
+//
+// Here rather than in the suites that happen to open a tab today, because the
+// property is "any suite that reaches either opener", and that set grows
+// silently: a suite that merely mounts the Start Page panel reaches them
+// without naming them. Listing files got it wrong once already.
+//
+// What makes this SAFE to reach from here is that the store is a leaf - `react`
+// and nothing else - and that is enforced by
+// `landing-browser-open-reservations-leaf.test.ts`, not by anyone remembering.
+// Whatever this file imports lands in the setup of every jsdom suite, and both
+// ways of getting that wrong cost a round each. STATIC, the graph below it is
+// evaluated before the test file, and every module in it keeps the REAL binding
+// for dependencies that file goes on to `vi.mock` - reaching the store through
+// the presentation module pulled in `use-landing-browser-reconciliation`, whose
+// suite's `desktop-window-id` mock then stopped applying. LAZY, from inside the
+// hook, the same graph is evaluated during TEARDOWN instead, where a suite's
+// partial `vi.mock` of anything in it throws for a missing export - which is how
+// a file-edit recovery suite started failing on a `@/lib/persist` constant it
+// has never heard of. A leaf has neither failure because it has nothing to
+// drag.
+afterEach(() => {
+  resetLandingBrowserOpenReservationsForTests();
+});
+
+// ── The epic runtime worker, for every jsdom suite ──────────────────────────
+//
+// ONE place, not a `beforeEach` in thirty files. jsdom has no `Worker`, and the
+// production factory is the only site that calls
+// `new Worker(new URL(...), { type: "module" })` - the literal form Vite must
+// see and jsdom cannot execute. Installing the in-process factory here means a
+// suite that mounts a session gets the REAL worker host, over a fake bridge
+// pair, on this thread, with no per-file wiring.
+//
+// The single opt-out is `__setEpicRuntimeWorkerFactoryForTests(null)` in a
+// suite that knows why - which today means only a suite deliberately reaching
+// for a real `Worker`, and no jsdom suite may do that.
+//
+// Constructed LAZILY, per call: each spawn gets its own pair and its own host,
+// because a shared pair would let two sessions' frames interleave on one
+// transport and a shared host would have `installCore` dispose the first
+// session's core when the second arrived (`epic-runtime-worker-host.ts:141`).
+//
+// CORELESS, and no longer "inert until the flip" - which is what this comment
+// said, and it stopped being true when `epic-runtime-worker-entry.ts` started
+// calling `installEpicRuntimeCore`. The entry composes a runtime now; what this
+// factory does not do is run the entry.
+//
+// So a host started HERE has no core and answers "not held" to everything,
+// while the same spawn in production carries a full runtime. That is deliberate
+// and it is the honest default: a suite that merely mounts a session must not
+// be handed a live replica it did not ask for, and the suites that DO want one
+// build it themselves (`open-store-for-test.ts` installs a core on its own
+// pair; `arm-b-accounting-equality.test.ts` installs one behind a spawned
+// worker's port, which is what makes the owed #4 pin's second arm exist at
+// all).
+//
+// The correction matters beyond this file: the argument that Arm B was not
+// constructible BECAUSE the entry did not compose expired
+// with this comment. A reader checking the claim would have found this text and
+// stopped.
+__setEpicRuntimeWorkerFactoryForTests(() => {
+  const pair = createFakeBridgePair("sync");
+  const host = startEpicRuntimeWorkerHost(pair.worker);
+  return {
+    ...createFakeWorkerTarget(pair),
+    terminate: () => {
+      host.shutdown();
+    },
+    // Unreachable here, and stated rather than left to a default: this host
+    // runs in THIS thread, so there is no module fetch to fail and no DOM
+    // event to report one. The real `Worker` is the only implementor that can
+    // ever call this listener.
+    onWorkerFault: () => {},
+  };
+});
+
+// ── The session's durable transport, for every jsdom suite ──────────────────
+//
+// The SAME shape as the worker default above, and here for the same reason: one
+// place, not a `beforeEach` in thirty files. A suite that merely mounts a
+// session must not be handed a live socket it did not ask for.
+//
+// WHY IT BECAME NECESSARY, since a reader will otherwise wonder why thirty
+// suites managed without it. `EpicSessionProvider` used to SKIP opening a
+// transport when a test had installed a stream-factory override
+// (`__setEpicStreamClientFactoryForTests`), so most suites reached
+// `openTransport` never, and the handful that stubbed it could safely stub it
+// with a THROW. That override is deleted: a stream factory built on MAIN cannot
+// cross `postMessage` to a runtime that lives in the worker, so overriding it
+// could not do what its name promised. With the branch gone the provider opens
+// UNCONDITIONALLY (`epic-session-provider.tsx`, the `openTransport` call in
+// `createHandle`), and every suite that mounts a session reaches the real hook -
+// which dials a real socket off `useHostClient()` and dies on the first member a
+// test's host stub does not implement. Five suites failed exactly that way,
+// through `createEpicSessionTestHarness`, none of them naming a transport
+// anywhere in their source.
+//
+// A suite that cares about the transport still mocks this module itself, and a
+// file-level `vi.mock` takes precedence over this one - twenty do. The suite
+// that exercises the real dialing path targets `durable-stream-transport.ts`,
+// a different module, and is untouched by this.
+vi.mock("@/lib/host/use-durable-stream-transport", async () => {
+  const { fakeDurableStreamTransports } =
+    await import("@/lib/host/test-support/fake-durable-stream-transport");
+  return {
+    useDurableStreamTransportFactory: () =>
+      fakeDurableStreamTransports().opener,
+  };
+});
+
+// CI stability net. A stray late async error - an `unhandledRejection` or
+// `uncaughtException` from a timer, socket, or microtask that fires AFTER a
+// test's teardown - otherwise takes down the whole vitest worker (exit 1 with
+// no failing test: the classic intermittent CI flake). Catch and LOG them so
+// the source stays visible/debuggable, but don't let them crash the run. Paired
+// with `dangerouslyIgnoreUnhandledErrors` in vitest.config.ts, which stops
+// vitest from converting these post-teardown escapes into a run failure.
+//
+// Registered idempotently (by handler name) because `setupFiles` re-runs per
+// test file and forks are reused, so a naive `process.on` would leak listeners.
+// `process` is reached through `globalThis` (this is a browser-typed package
+// with no `@types/node`), mirroring the existing `fetch` shim below.
+interface NodeProcessLike {
+  on(event: string, listener: (value: unknown) => void): void;
+  listeners(event: string): ReadonlyArray<{ readonly name: string }>;
+}
+function traycerTestUnhandledRejection(reason: unknown): void {
+  console.error("[test] ignored unhandledRejection after teardown:", reason);
+}
+function traycerTestUncaughtException(error: unknown): void {
+  console.error("[test] ignored uncaughtException after teardown:", error);
+}
+const nodeProcess = (globalThis as { process?: NodeProcessLike }).process;
+if (nodeProcess !== undefined) {
+  const isRegistered = (event: string, name: string): boolean =>
+    nodeProcess.listeners(event).some((listener) => listener.name === name);
+  if (!isRegistered("unhandledRejection", traycerTestUnhandledRejection.name)) {
+    nodeProcess.on("unhandledRejection", traycerTestUnhandledRejection);
+  }
+  if (!isRegistered("uncaughtException", traycerTestUncaughtException.name)) {
+    nodeProcess.on("uncaughtException", traycerTestUncaughtException);
+  }
+}
+
+// Vite's `?worker` import returns a Worker constructor at build time. jsdom has
+// no Worker; mock the @pierre/diffs worker module to a no-op constructor so
+// any test that mounts <DiffWorkerPoolProvider> doesn't crash.
+vi.mock("@pierre/diffs/worker/worker.js?worker", () => ({
+  default: class MockDiffsWorker {
+    postMessage(): void {}
+    terminate(): void {}
+    addEventListener(): void {}
+    removeEventListener(): void {}
+  },
+}));
+
+// ECharts (the usage charts' renderer) cannot run under jsdom: zrender
+// measures text through a real canvas context, which jsdom does not
+// implement (see the getContext stub below). Mock the tree-shaken entry
+// points globally so any test that mounts a usage surface gets a recording
+// fake instead of a crash; chart tests read the captured options back
+// through `getEChartsMockInstances`. Registered here rather than per test
+// file because the chart mounts transitively from several suites (settings
+// panel, epic dialog, summary panel).
+export interface EChartsMockInstance {
+  readonly dom: HTMLElement;
+  readonly options: unknown[];
+  /** Every `setOption` call's second argument, index-aligned with `options`. */
+  readonly setOptionOpts: unknown[];
+  disposed: boolean;
+}
+interface EChartsMockGlobal {
+  __traycerEChartsMockInstances?: EChartsMockInstance[];
+}
+/**
+ * LIVE chart instances only. The record list is append-only and shared
+ * across a file's tests, and every consumer reaches for `.at(-1)` - so
+ * without this filter a test could read an option belonging to a chart
+ * that a previous test already unmounted, and pass on stale data.
+ * {@link getAllEChartsMockInstances} keeps the unfiltered list for
+ * lifecycle assertions (e.g. "did unmount dispose it").
+ */
+export function getEChartsMockInstances(): readonly EChartsMockInstance[] {
+  return getAllEChartsMockInstances().filter((record) => !record.disposed);
+}
+export function getAllEChartsMockInstances(): readonly EChartsMockInstance[] {
+  return (globalThis as EChartsMockGlobal).__traycerEChartsMockInstances ?? [];
+}
+export function clearEChartsMockInstances(): void {
+  (globalThis as EChartsMockGlobal).__traycerEChartsMockInstances = [];
+}
+vi.mock("echarts/core", () => ({
+  use: (): void => undefined,
+  init: (dom: HTMLElement) => {
+    const record: EChartsMockInstance = {
+      dom,
+      options: [],
+      setOptionOpts: [],
+      disposed: false,
+    };
+    const target = globalThis as EChartsMockGlobal;
+    target.__traycerEChartsMockInstances = [
+      ...(target.__traycerEChartsMockInstances ?? []),
+      record,
+    ];
+    return {
+      setOption: (option: unknown, opts: unknown): void => {
+        record.options.push(option);
+        record.setOptionOpts.push(opts);
+      },
+      resize: (): void => undefined,
+      dispose: (): void => {
+        record.disposed = true;
+      },
+    };
+  },
+}));
+vi.mock("echarts/charts", () => ({ LineChart: {} }));
+vi.mock("echarts/components", () => ({
+  GridComponent: {},
+  TooltipComponent: {},
+}));
+vi.mock("echarts/renderers", () => ({ SVGRenderer: {} }));
+
+// Brand icons (@lobehub/icons) render a decorative SVG `<title>BrandName</title>`
+// for accessibility. Those titles aren't visible content, but they DO satisfy
+// `getByText`, which makes any text query near a provider icon ambiguous (the
+// provider's name label vs. its icon's title). Treat `<title>` like the
+// `<script>`/`<style>` elements Testing Library already ignores so text queries
+// match real content only.
+configure({ defaultIgnore: "script, style, title" });
+
+// ProseMirror probes once per module whether `focus` honours `preventScroll`,
+// by passing an options object whose getter flips a flag. jsdom's native focus
+// never reads its options, so the first editor focus in a worker would settle
+// the probe on "unsupported" for every file after it. A real browser reads them.
+// A file under `@vitest-environment node` has no DOM to patch.
+if (typeof HTMLElement !== "undefined") {
+  const jsdomFocus: unknown = Reflect.get(HTMLElement.prototype, "focus");
+  HTMLElement.prototype.focus = function (
+    this: HTMLElement,
+    options: FocusOptions | undefined,
+  ) {
+    void options?.preventScroll;
+    if (typeof jsdomFocus !== "function") throw new Error("jsdom has no focus");
+    Reflect.apply(jsdomFocus, this, [options]);
+  };
+}
+
+class MockResizeObserver implements ResizeObserver {
+  observe(): void {}
+
+  unobserve(): void {}
+
+  disconnect(): void {}
+}
+
+/** `(max-width: 767px)` / `(min-width: 768px)`, integers or decimals. */
+const PREFIXED_WIDTH_QUERY = /^\(\s*(max|min)-width:\s*(\d+(?:\.\d+)?)px\s*\)$/;
+/** `(orientation: landscape)` / `(orientation: portrait)`, from the viewport's shape. */
+const ORIENTATION_QUERY = /^\(\s*orientation:\s*(landscape|portrait)\s*\)$/;
+/** Media Queries Level 4 range syntax: `(width < 768px)`, `(width >= 768px)`. */
+const RANGE_WIDTH_QUERY = /^\(\s*width\s*(<=|>=|<|>)\s*(\d+(?:\.\d+)?)px\s*\)$/;
+
+/**
+ * Evaluates a single width feature against `window.innerWidth`.
+ *
+ * Both spellings, because the app uses both: Tailwind compiles its responsive
+ * variants to range syntax, while plenty of hand-written `@media` blocks are
+ * still prefixed. `(orientation: …)` is answered from the viewport's shape.
+ * Anything else - `prefers-*`, `hover`, a compound query - is answered
+ * `false`, the same flat answer this shim has always given.
+ */
+function matchesWidthQuery(query: string): boolean {
+  const orientation = ORIENTATION_QUERY.exec(query);
+  if (orientation !== null) {
+    const landscape = window.innerWidth >= window.innerHeight;
+    return orientation[1] === "landscape" ? landscape : !landscape;
+  }
+  const range = RANGE_WIDTH_QUERY.exec(query);
+  if (range !== null) {
+    const bound = Number(range[2]);
+    const width = window.innerWidth;
+    if (range[1] === "<") return width < bound;
+    if (range[1] === "<=") return width <= bound;
+    if (range[1] === ">") return width > bound;
+    return width >= bound;
+  }
+  const prefixed = PREFIXED_WIDTH_QUERY.exec(query);
+  if (prefixed === null) return false;
+  const bound = Number(prefixed[2]);
+  return prefixed[1] === "max"
+    ? window.innerWidth <= bound
+    : window.innerWidth >= bound;
+}
+
+function createMockStorage(): Storage {
+  const storage = new Map<string, string>();
+
+  return {
+    get length() {
+      return storage.size;
+    },
+    clear() {
+      storage.clear();
+    },
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    key(index: number) {
+      return Array.from(storage.keys())[index] ?? null;
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+  };
+}
+
+export function installMockLocalStorage(): Storage {
+  const storage = createMockStorage();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    writable: true,
+    value: storage,
+  });
+  return storage;
+}
+
+// Vitest reruns setup files for each test file while reusing fork processes.
+// Reset this global every time so a suite with a controllable observer cannot
+// leak it into the unrelated test file that happens to run next in the worker.
+Object.defineProperty(globalThis, "ResizeObserver", {
+  configurable: true,
+  writable: true,
+  value: MockResizeObserver,
+});
+
+if (typeof globalThis.IntersectionObserver === "undefined") {
+  class MockIntersectionObserver implements IntersectionObserver {
+    readonly root: Element | Document | null = null;
+    readonly rootMargin: string = "";
+    readonly scrollMargin: string = "";
+    readonly thresholds: ReadonlyArray<number> = [];
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+    takeRecords(): IntersectionObserverEntry[] {
+      return [];
+    }
+  }
+  Object.defineProperty(globalThis, "IntersectionObserver", {
+    configurable: true,
+    writable: true,
+    value: MockIntersectionObserver,
+  });
+}
+
+// jsdom implements no image decoder, so `createImageBitmap` (ADV-I4's
+// attach-time decodability check in use-report-issue-attachments.ts) is
+// absent. Default to a successful decode - tests exercising a genuine
+// decode failure stub their own rejecting/throwing implementation over
+// this default (see use-report-issue-attachments.test.ts); interaction
+// tests elsewhere just need attaching a well-formed fixture to work.
+if (typeof globalThis.createImageBitmap === "undefined") {
+  Object.defineProperty(globalThis, "createImageBitmap", {
+    configurable: true,
+    writable: true,
+    value: (): Promise<{ close: () => void }> =>
+      Promise.resolve({ close: () => undefined }),
+  });
+}
+
+// Radix-ui's DropdownMenu / Popover triggers route through Pointer Events
+// that jsdom does not implement. Stub the pointer-capture methods and
+// `scrollIntoView` so opening a menu in tests does not throw.
+if (typeof Element !== "undefined") {
+  const elementProto = Element.prototype as Element & {
+    hasPointerCapture?: (pointerId: number) => boolean;
+    setPointerCapture?: (pointerId: number) => void;
+    releasePointerCapture?: (pointerId: number) => void;
+    scrollIntoView?: () => void;
+    scrollBy?: () => void;
+  };
+  if (typeof elementProto.hasPointerCapture !== "function") {
+    elementProto.hasPointerCapture = (): boolean => false;
+  }
+  if (typeof elementProto.setPointerCapture !== "function") {
+    elementProto.setPointerCapture = (): void => undefined;
+  }
+  if (typeof elementProto.releasePointerCapture !== "function") {
+    elementProto.releasePointerCapture = (): void => undefined;
+  }
+  if (typeof elementProto.scrollIntoView !== "function") {
+    elementProto.scrollIntoView = (): void => undefined;
+  }
+  if (typeof elementProto.scrollBy !== "function") {
+    elementProto.scrollBy = (): void => undefined;
+  }
+}
+
+// jsdom throws "Not implemented" from HTMLCanvasElement.getContext (logged to
+// the virtual console before throwing). The SubagentAvatar canvas treats a null
+// context as "skip drawing", so stub getContext to return null - silences the
+// noise and lets avatar-bearing components mount without the canvas npm package.
+if (typeof HTMLCanvasElement !== "undefined") {
+  const canvasProto = HTMLCanvasElement.prototype as HTMLCanvasElement & {
+    getContext: () => null;
+  };
+  canvasProto.getContext = (): null => null;
+}
+
+// jsdom does not implement hit-testing. Tiptap 3.26's placeholder extension
+// tracks the viewport via ProseMirror's `posAtCoords`, which calls
+// `document.elementFromPoint`. Stub it (and `elementsFromPoint`) so mounting an
+// editor in tests does not throw; null / [] is the spec-valid "no element at
+// these coordinates" answer, which `posAtCoords` already handles.
+if (typeof Document !== "undefined") {
+  const documentProto = Document.prototype as Document & {
+    elementFromPoint?: (x: number, y: number) => Element | null;
+    elementsFromPoint?: (x: number, y: number) => Element[];
+  };
+  if (typeof documentProto.elementFromPoint !== "function") {
+    documentProto.elementFromPoint = (): Element | null => null;
+  }
+  if (typeof documentProto.elementsFromPoint !== "function") {
+    documentProto.elementsFromPoint = (): Element[] => [];
+  }
+}
+
+// jsdom does not implement layout, so ProseMirror's `coordsAtPos` path that
+// calls `getClientRects()` / `getBoundingClientRect()` on text nodes / ranges
+// throws. Stub zero-rect responses so Tiptap's auto-scroll-into-view after
+// dispatch is a no-op in tests.
+const ZERO_RECT_LIST: DOMRectList = Object.assign([], {
+  item: (_index: number): DOMRect | null => null,
+});
+const ZERO_RECT: DOMRect = {
+  x: 0,
+  y: 0,
+  width: 0,
+  height: 0,
+  top: 0,
+  right: 0,
+  bottom: 0,
+  left: 0,
+  toJSON: () => ({}),
+};
+if (typeof Range !== "undefined") {
+  const rangeProto = Range.prototype as Range & {
+    getClientRects?: () => DOMRectList;
+    getBoundingClientRect?: () => DOMRect;
+  };
+  if (typeof rangeProto.getClientRects !== "function") {
+    rangeProto.getClientRects = (): DOMRectList => ZERO_RECT_LIST;
+  }
+  if (typeof rangeProto.getBoundingClientRect !== "function") {
+    rangeProto.getBoundingClientRect = (): DOMRect => ZERO_RECT;
+  }
+}
+if (typeof Node !== "undefined") {
+  const nodeProto = Node.prototype as Node & {
+    getClientRects?: () => DOMRectList;
+    getBoundingClientRect?: () => DOMRect;
+  };
+  if (typeof nodeProto.getClientRects !== "function") {
+    nodeProto.getClientRects = (): DOMRectList => ZERO_RECT_LIST;
+  }
+  if (typeof nodeProto.getBoundingClientRect !== "function") {
+    nodeProto.getBoundingClientRect = (): DOMRect => ZERO_RECT;
+  }
+}
+
+if (typeof window !== "undefined") {
+  Object.defineProperty(globalThis, "Event", {
+    configurable: true,
+    writable: true,
+    value: window.Event,
+  });
+  Object.defineProperty(globalThis, "CustomEvent", {
+    configurable: true,
+    writable: true,
+    value: window.CustomEvent,
+  });
+  Object.defineProperty(window, "scrollTo", {
+    configurable: true,
+    writable: true,
+    value: () => undefined,
+  });
+  Object.defineProperty(window, "scrollBy", {
+    configurable: true,
+    writable: true,
+    value: () => undefined,
+  });
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      // A WIDTH query is answered from `window.innerWidth`; everything else
+      // keeps the old flat `false`.
+      //
+      // jsdom evaluates no media query at all, so this used to be false for
+      // every query - which was fine while `useIsMobileViewport` read
+      // `innerWidth` directly. It now reads `matches`, and roughly thirty
+      // suites drive the mobile layout by assigning `innerWidth`. Without
+      // this they would all silently answer "desktop" and keep passing, since
+      // a narrow-viewport assertion that never sees a narrow viewport mostly
+      // just tests the desktop path twice.
+      //
+      // A GETTER, not a value: the object is built once per `matchMedia`
+      // call, and tests assign `innerWidth` after that - often between
+      // renders. Snapshotting the answer here would freeze the width as of
+      // subscription time, which is the very defect this shim now exists to
+      // let us test for.
+      get matches(): boolean {
+        return matchesWidthQuery(query);
+      },
+      media: query,
+      onchange: null,
+      // Deliberately inert. Several suites depend on "assigning innerWidth
+      // notifies nobody" to assert a component re-reads on its own; a shim
+      // that dispatched would hide that.
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    }),
+  });
+  const storage = window.localStorage as Partial<Storage> | undefined;
+  if (
+    !storage ||
+    typeof storage.getItem !== "function" ||
+    typeof storage.setItem !== "function" ||
+    typeof storage.removeItem !== "function" ||
+    typeof storage.clear !== "function"
+  ) {
+    installMockLocalStorage();
+  }
+}
+
+/**
+ * Installs a fetch stub that satisfies AuthService's identity validation -
+ * `${authnBaseUrl}/api/v3/user/negotiated` (the negotiated route it now calls
+ * first) - with a 200 carrying a structured `AuthenticatedUser` body
+ * (identity nested under `user`) labelled major 2, and rejects every other
+ * URL. Used by tree-level integration tests so the post-T6 token validation
+ * path does not need a real network. The body mirrors the real AuthnV3 v3
+ * contract because AuthService now treats a 2xx response without a usable
+ * profile (parsed from the nested `user` object) as a session-expired-
+ * equivalent rejection. Returns a teardown function that restores the
+ * previous fetch.
+ */
+export function installAuthValidationFetch(): () => void {
+  const originalFetch: unknown = (globalThis as { fetch?: unknown }).fetch;
+  const stub = (input: unknown): Promise<Response> => {
+    const url = typeof input === "string" ? input : String(input);
+    if (url.endsWith("/api/v3/user/negotiated")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            user: {
+              id: "user-1",
+              name: "Test User",
+              providerId: "gh-1",
+              providerHandle: "test-user",
+              providerType: "GITHUB",
+              email: "test@example.com",
+              avatarUrl: null,
+              activatedAt: null,
+              createdAt: "2024-01-01T00:00:00.000Z",
+              updatedAt: "2024-01-01T00:00:00.000Z",
+              lastSeenAt: null,
+              privacyMode: false,
+              isLearningEnabled: true,
+            },
+            userSubscription: {
+              id: "sub-1",
+              userID: "user-1",
+              orgID: null,
+              teamID: null,
+              customerId: "cus-1",
+              createdAt: "2024-01-01T00:00:00.000Z",
+              updatedAt: "2024-01-01T00:00:00.000Z",
+              subscriptionExpiry: null,
+              trialEndsAt: null,
+              subscriptionStatus: "FREE",
+              hasPaymentMethod: false,
+              isInTrial: false,
+              rechargeRateSeconds: 0,
+            },
+            teamSubscriptions: [],
+            payAsYouGoUsage: { allowPayAsYouGo: false },
+          }),
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+              "x-traycer-user-record-version": "2.0",
+            },
+          },
+        ),
+      );
+    }
+    return Promise.reject(new Error(`fetch disabled in tests for ${url}`));
+  };
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    writable: true,
+    value: stub,
+  });
+  return () => {
+    Object.defineProperty(globalThis, "fetch", {
+      configurable: true,
+      writable: true,
+      value: originalFetch,
+    });
+  };
+}

@@ -1,0 +1,338 @@
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import type { StreamMethodSupport } from "@traycer/protocol/host-transport/stream-session";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { IHostStreamClient } from "../host-stream-client";
+import type {
+  IStreamSession,
+  ServerFrameHandler,
+  StatusChangeHandler,
+  StreamContinuity,
+  StreamCloseReason,
+  StreamFrameEnvelope,
+} from "../i-stream-session";
+
+type StreamStatus = "connecting" | "open" | "reconnecting" | "closed";
+
+/**
+ * One subscription on a drivable stand-in for a host stream, shared by every
+ * suite that needs to put frames in front of a REAL stream client.
+ *
+ * It sits under the production client rather than beside it, so a frame a test
+ * emits is parsed against the protocol schema before the code under test sees
+ * it, and a frame that code sends is the envelope that would have gone on the
+ * wire. Implemented in full against the transport interfaces rather than cast
+ * into place: a fake that has to lie about its shape is a fake that can drift
+ * from it.
+ */
+export class FakeStreamSession implements IStreamSession {
+  readonly sentFrames: StreamFrameEnvelope[] = [];
+  closed = false;
+  /**
+   * What the host would have negotiated. `null` (the default) is the "answer
+   * with your newest line" case; a suite that exercises a version-gated
+   * capability sets the line it wants before it opens the session.
+   */
+  negotiatedSchemaVersion: SchemaVersion | null = null;
+  /**
+   * {@link IStreamSession.hasSentOpenRequest}. Set by `open`, which a local
+   * transport reports right after it writes the subscribe frame; a suite
+   * modelling a request sent but never answered sets it itself.
+   */
+  openRequestSent = false;
+  private serverHandler: ServerFrameHandler | null = null;
+  private statusHandler: StatusChangeHandler | null = null;
+  private status: StreamStatus = "connecting";
+  /** A held stream queues sends for delivery after the resume, as the real session does. */
+  private held = false;
+
+  sendClientFrame(
+    frame: StreamFrameEnvelope,
+    _binaryPayload: Uint8Array | null,
+  ): void {
+    if (this.closed || (this.status !== "open" && !this.held)) return;
+    this.sentFrames.push(frame);
+  }
+
+  onServerFrame(handler: ServerFrameHandler): void {
+    this.serverHandler = handler;
+  }
+
+  /**
+   * Replays the CURRENT status to a late subscriber, which the real session
+   * effectively does by having transitioned before the consumer mounted. A
+   * fixture that only pushed transitions left a consumer that subscribes after
+   * `open` waiting forever for a status the socket had already reached.
+   */
+  onStatusChange(handler: StatusChangeHandler): void {
+    this.statusHandler = handler;
+    if (this.status === "open") handler("open", null, null, null);
+  }
+
+  requestReconnect(): void {}
+
+  getNegotiatedSchemaVersion(): SchemaVersion | null {
+    return this.negotiatedSchemaVersion;
+  }
+
+  hasSentOpenRequest(): boolean {
+    return this.openRequestSent;
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+
+  emitStatus(status: StreamStatus): void {
+    if (status === "open") this.openRequestSent = true;
+    this.status = status;
+    this.held = false;
+    this.statusHandler?.(status, null, null, null);
+  }
+
+  /** The transition a resumable stream reports while its host holds the subscription. */
+  emitContinuityStatus(
+    status: StreamStatus,
+    continuity: StreamContinuity,
+  ): void {
+    if (status === "open") this.openRequestSent = true;
+    this.status = status;
+    this.held = continuity === "held";
+    this.statusHandler?.(status, null, null, continuity);
+  }
+
+  /** The terminal close a host's bearer-expiry disconnect produces. */
+  emitFatal(reason: string): void {
+    this.emitFatalWithCode("UNAUTHORIZED", reason);
+  }
+
+  /** The close a host sends when it cannot serve `method` at all. */
+  emitIncompatible(method: string, reason: string): void {
+    this.status = "closed";
+    this.statusHandler?.(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code: "INCOMPATIBLE",
+          reason,
+          incompatibleMethods: [
+            {
+              method,
+              clientCanonical: null,
+              hostCanonical: null,
+              blocking: "host-missing-method",
+            },
+          ],
+          upgradeGuidance: null,
+        },
+      },
+      null,
+      null,
+    );
+  }
+
+  /** The terminal close a host sends with a specific code. */
+  emitFatalWithCode(code: string, reason: string): void {
+    this.status = "closed";
+    this.statusHandler?.(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code,
+          reason,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      },
+      null,
+      null,
+    );
+  }
+
+  emitClosed(reason: StreamCloseReason): void {
+    this.status = "closed";
+    this.statusHandler?.("closed", reason, null, null);
+  }
+
+  /**
+   * One server frame. The binary payload is explicit and required: a text
+   * frame passes `null`, and the screencast planes carry their JPEG in the
+   * second argument exactly as the socket does.
+   */
+  emit(frame: StreamFrameEnvelope, binaryPayload: Uint8Array | null): void {
+    this.serverHandler?.({ ...frame }, binaryPayload);
+  }
+
+  framesOfKind(kind: string): readonly StreamFrameEnvelope[] {
+    return this.sentFrames.filter((frame) => frame.kind === kind);
+  }
+}
+
+/**
+ * A client that answers `subscribe` with a drivable session and declines every
+ * other capability.
+ */
+export class FakeStreamClient implements IHostStreamClient<HostStreamRpcRegistry> {
+  readonly instanceId = "fake-stream-client";
+  readonly sessions: FakeStreamSession[] = [];
+  readonly subscribes: Array<{
+    readonly method: string;
+    readonly params: unknown;
+  }> = [];
+  /** Version-pinned opens only; each one also lands in {@link subscribes}. */
+  readonly subscribesAtVersion: Array<{
+    readonly method: string;
+    readonly schemaVersion: SchemaVersion;
+    readonly params: unknown;
+  }> = [];
+  private readonly autoOpen: boolean;
+  private closed = false;
+
+  /**
+   * `autoOpen` decides whether a subscription is born connected. A suite that
+   * drives the CONNECTION (an attach burst, a rotation, a terminal close)
+   * passes `false` and opens it itself; a suite that only cares what travels
+   * once the socket is up passes `true` and skips the ceremony. Explicit
+   * because "already open" is a real difference in what `sendClientFrame`
+   * does - it drops silently while the session is not open.
+   */
+  constructor(autoOpen: boolean) {
+    this.autoOpen = autoOpen;
+  }
+
+  subscribe(method: string, params: unknown): FakeStreamSession {
+    const session = new FakeStreamSession();
+    this.sessions.push(session);
+    this.subscribes.push({ method, params });
+    if (this.autoOpen) session.emitStatus("open");
+    return session;
+  }
+
+  subscribeWithParamsProvider(
+    method: string,
+    paramsProvider: (onWireVersion: SchemaVersion | null) => unknown,
+  ): FakeStreamSession {
+    // `null`: this double negotiates nothing, so it has no version to report -
+    // which is exactly the "answer with your newest line" case the seam
+    // documents.
+    return this.subscribe(method, paramsProvider(null));
+  }
+
+  /**
+   * Answered rather than omitted, even though this double pins nothing.
+   *
+   * The method is optional on `IStreamClient`, and a consumer that pins has to
+   * degrade when it is absent (see `subscribeAtScopeAddressedBrowserVersion`).
+   * A double that omits it therefore silently routes every such consumer down
+   * its FALLBACK path, so the suite stops testing what production runs - which
+   * is how `browser.sessions`' `independent` pin came to be exercised nowhere.
+   * The version is recorded on `subscribesAtVersion` for a test that cares
+   * which one was asked for.
+   */
+  subscribeAtVersion(
+    method: string,
+    schemaVersion: SchemaVersion,
+    params: unknown,
+  ): FakeStreamSession {
+    this.subscribesAtVersion.push({ method, schemaVersion, params });
+    return this.subscribe(method, params);
+  }
+
+  getMethodSchemaVersion(): SchemaVersion | null {
+    return null;
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+
+  isClosed(): boolean {
+    return this.closed;
+  }
+
+  getClosedReason(): string | null {
+    return null;
+  }
+
+  onClosed(): () => void {
+    return () => undefined;
+  }
+
+  /**
+   * Models what `WsStreamClient` does with a rotated bearer: push a
+   * `credentialUpdate` onto every open session, so an already-connected host
+   * stops holding a stale request context.
+   */
+  notifyBearerRotated(): void {
+    for (const session of this.sessions) {
+      session.sendClientFrame(
+        { kind: "credentialUpdate", hasBinaryPayload: false },
+        null,
+      );
+    }
+  }
+
+  /**
+   * The verdict counterpart of {@link notifyBearerRotated}: push a
+   * `cloudVerdictUpdate` onto every open session, so a test can observe that a
+   * verdict transition reached the wire rather than only the store.
+   *
+   * A DISTINCT frame kind from `credentialUpdate`, matching production. A fake
+   * that emitted one kind for both would make the two indistinguishable to any
+   * test asserting on what was sent - which is precisely the property the
+   * sibling-frame design exists to give, so collapsing it here would hide the
+   * thing under test.
+   */
+  notifyCloudVerdictChanged(): void {
+    for (const session of this.sessions) {
+      session.sendClientFrame(
+        { kind: "cloudVerdictUpdate", hasBinaryPayload: false },
+        null,
+      );
+    }
+  }
+
+  reconnectAll(): void {}
+
+  isReady(): boolean {
+    return true;
+  }
+
+  /**
+   * What {@link isSilentFor} answers. Mutable so a suite can drive BOTH arms of
+   * a silence gate off one fake - the escalation and the plain path - without
+   * a second client class.
+   */
+  silentFor = false;
+
+  isSilentFor(): boolean {
+    return this.silentFor;
+  }
+
+  /** What {@link getMethodSupport} answers; `"unknown"` until a suite says otherwise. */
+  methodSupport: StreamMethodSupport = "unknown";
+
+  getMethodSupport(): StreamMethodSupport {
+    return this.methodSupport;
+  }
+
+  private readonly methodSupportListeners = new Set<() => void>();
+
+  subscribeMethodSupport(listener: () => void): () => void {
+    this.methodSupportListeners.add(listener);
+    return () => {
+      this.methodSupportListeners.delete(listener);
+    };
+  }
+
+  /** Changes {@link methodSupport} the way a handshake does: then tells every subscriber. */
+  setMethodSupport(next: StreamMethodSupport): void {
+    this.methodSupport = next;
+    for (const listener of [...this.methodSupportListeners]) listener();
+  }
+
+  subscribeAvailabilityRecovered(): () => void {
+    return () => undefined;
+  }
+}

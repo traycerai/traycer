@@ -1,0 +1,990 @@
+import { useEffect, useState, type ReactNode } from "react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { LivePulse } from "@/components/ui/live-pulse";
+import {
+  useEpicArtifactSyncReading,
+  useEpicHasFreshCloudSyncStatus,
+  useEpicHostTransportStatus,
+  useEpicSyncPillState,
+  useEpicWriteCommandAlert,
+} from "@/lib/epic-selectors";
+import { useLinkDownTooLong } from "@/components/epic-canvas/panels/use-link-down-too-long";
+import { useCloudLinkGrace } from "@/components/epic-canvas/panels/use-cloud-link-grace";
+import {
+  useArtifactSyncStatus,
+  type ArtifactSyncStatus,
+} from "@/components/epic-canvas/panels/use-artifact-sync-status";
+import type { EpicDurabilityPlane } from "@/components/epic-canvas/panels/epic-durability-plane";
+import type {
+  EpicSyncPillState,
+  EpicWriteCommandAlert,
+} from "@/lib/epic-sync-pill-state";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import {
+  useEpicChatBackupStatus,
+  type EpicChatBackupStatus,
+} from "@/components/epic-canvas/panels/epic-chat-backup-status";
+import {
+  useCommGraphFeedHealth,
+  type CommGraphFeedHealth,
+} from "@/components/epic-canvas/comm-graph/use-comm-graph-feed-health";
+import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
+import { cn } from "@/lib/utils";
+import {
+  useAgentActivityPresenceDegraded,
+  type AgentActivityPresenceDegradedReason,
+} from "@/hooks/agent/use-agent-activity-presence-degraded";
+import { useHostPlainTerminalAuthority } from "@/hooks/terminal/use-plain-terminal-authority";
+import { useDelayedTerminalFleetWarning } from "@/hooks/terminal/use-delayed-terminal-fleet-warning";
+import { plainTerminalCapabilityTopology } from "@/lib/terminals/plain-terminal-authority";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+
+/**
+ * Small inline status pill that the active Epic header renders. It selects the
+ * highest-severity signal across artifact/Yjs durability, the host's routing
+ * truth for the epic (local, promoting, an offline mirror, a stale local copy
+ * - `epic-durability-plane.ts`), chat publication, remote-terminal
+ * discovery, the communication-graph feed, and agent-activity presence.
+ * Secondary-plane failures live here rather than only in the panel whose data
+ * happened to expose them - or, in the graph's case, captioned onto every
+ * agent node, and in presence's, nowhere at all. The routing plane used to be
+ * its own pill beside this one, saying everything inline; it is one dot now,
+ * and its sentence rides the hover like every other secondary plane.
+ *
+ * It is deliberately NOT a connection indicator. It used to be one - it read
+ * the renderer↔host stream status alone - and that is why it read "All changes
+ * synced" through the incident where an Epic's artifact bodies existed nowhere
+ * but the authoring host. Its durability claim now rests on the five inputs of
+ * wire-lane invariant 8, and resolves every ambiguous case toward "not
+ * synced": (i) the GUI↔host transport, (ii) the control lane's cloud-sync
+ * status and its per-cycle freshness, (iii) the control lane's aggregate dirty
+ * bit, (iv) runtime-local divergence, and (v) refused or superseded writes.
+ * Whether artifact rooms are behind is a sixth input that gates `synced`.
+ * Past its own grace the plane speaks for itself
+ * (`use-artifact-sync-status.ts`): still retrying, it is the same quiet
+ * saving dot as ordinary saving and takes that light only so the hover can
+ * say what is waiting; it never outranks a warning or a danger. When the
+ * host has stopped retrying, the dot is amber and still has no label.
+ *
+ * (i)-(iv) arrive as {@link EpicSyncPillState}; (v) arrives BESIDE it as
+ * {@link EpicWriteCommandAlert} and is weighed as its own plane here. Folding
+ * the two into one verdict is what `replica-runtime/freshness.ts` forbids -
+ * "an aggregate hides rejected writes, which is the one thing a green
+ * indicator must never do" - and keeping them apart is what lets this pill
+ * report a refused write and a down link at the same time.
+ *
+ * Transient disconnects keep edits buffered (in the host's durable store while
+ * only the cloud link is down, in the per-Epic store while the host itself is
+ * unreachable) and flush on reconnect; the pill is the only indicator - there
+ * is no banner during reconnect.
+ *
+ * A cloud-only drop is additionally held back for `CLOUD_LINK_GRACE_MS`
+ * (`use-cloud-link-grace.ts`) before it may read amber: the host re-dials the
+ * collab socket within seconds, the edits are durable on the host throughout,
+ * and naming every such drop taught users the product's connection was
+ * broken while it was working. A host-link drop gets no such grace - there,
+ * an unsent edit exists only in this window and the copy is the warning.
+ */
+export interface EpicConnectionPillProps {
+  readonly epicId: string;
+  /**
+   * The host's routing truth for the epic, or `null` when there is nothing
+   * to say (or before the snapshot that would say it has loaded - the status
+   * row gates it, because a not-yet-loaded epic must not read as "Storage
+   * status unknown" for the second it takes to load).
+   */
+  readonly durability: EpicDurabilityPlane | null;
+}
+
+export function EpicConnectionPill(props: EpicConnectionPillProps) {
+  const derived = useEpicSyncPillState();
+  const hostTransportStatus = useEpicHostTransportStatus();
+  // A cloud-only drop (host reachable, edits durable on the host) reads as
+  // neutral `syncing` until it has lasted `CLOUD_LINK_GRACE_MS`; a host-link
+  // drop is never held back. The escalation clock below still reads the RAW
+  // verdict, so the grace cannot delay or mask "Still reconnecting…".
+  const graced = useCloudLinkGrace(derived, hostTransportStatus);
+  const state = useSyncPillDisplayState(graced);
+  const hasFreshCloudSyncStatus = useEpicHasFreshCloudSyncStatus();
+  // The escalation clock reads the RAW verdict, not the settled display
+  // state: the settle hold renames a genuine `synced` to `syncing` until the
+  // claim has earned its interval - fed the settled state, a real recovery
+  // inside the hold window would be invisible to it. It also reads the
+  // per-cycle cloud-evidence bit directly, because `connected`/`syncing` are
+  // reachable both with and without evidence (legacy hosts never move
+  // `hostDirtyState` off `unknown`) and the label alone cannot end an outage.
+  const linkDownTooLong = useLinkDownTooLong(derived, hasFreshCloudSyncStatus);
+  const chatBackupStatus = useEpicChatBackupStatus(props.epicId);
+  const commGraphFeedHealth = useCommGraphFeedHealth(props.epicId);
+  const resolvedCanvasHostId = useCanvasHostId();
+  const canvasHostId = resolvedCanvasHostId ?? UNKNOWN_HOST_PLACEHOLDER;
+  const terminalAuthority = useHostPlainTerminalAuthority({
+    hostId: canvasHostId,
+    scope: { kind: "epic", epicId: props.epicId },
+  });
+  const terminalCatalogUnavailable = useDelayedTerminalFleetWarning(
+    plainTerminalCapabilityTopology(terminalAuthority.capability) === "fleet" &&
+      terminalAuthority.coverage === "partial-serving-host",
+    JSON.stringify([terminalAuthority.hostId, props.epicId]),
+  );
+  // No host argument: this reports on the DATA, not a machine. "Agent status
+  // may be stale" names no host, and the hook resolves the stream carrying
+  // this Epic's activity itself - passing the canvas host here would amber
+  // permanently on any remote-bound canvas.
+  const presenceDegraded = useAgentActivityPresenceDegraded();
+  // Input (v), read as its own plane. It bypasses `useSyncPillDisplayState`
+  // entirely: the settle hold exists to stop routine save churn from strobing,
+  // and a terminal write outcome is neither routine nor transient.
+  const writeCommandAlert = useEpicWriteCommandAlert();
+  const artifactSync = useArtifactSyncStatus(useEpicArtifactSyncReading());
+  // Visuals use the settled state to avoid strobing; the tooltip uses the raw
+  // verdict so it can truthfully say synced during the positive settle hold.
+  const secondarySignals = {
+    writeCommandAlert,
+    artifactSync,
+    durability: props.durability,
+    chatBackupStatus,
+    terminalCatalogUnavailable,
+    commGraphFeedHealth,
+    presenceDegraded,
+  };
+  const selected = highestSeverityIndicator({
+    artifactIndicator: indicatorFor(state, linkDownTooLong),
+    ...secondarySignals,
+  });
+  // The graced verdict, not the settled one: a cloud drop inside its grace
+  // must read as quiet on hover too, or the tooltip names an outage the dot
+  // is deliberately not showing.
+  const rawSelected = highestSeverityIndicator({
+    artifactIndicator: indicatorFor(graced, linkDownTooLong),
+    ...secondarySignals,
+  });
+  const { indicator } = selected;
+
+  return (
+    <>
+      {/*
+       * Below the pill, like every other control in this row. The status row
+       * is the topmost content row in the window, so a `top` tooltip has
+       * nowhere to go but up into the title bar, where it covers the
+       * minimize/maximize/close buttons. `end` alignment keeps the wider
+       * multi-plane copy from running off the right edge.
+       */}
+      <TooltipWrapper
+        label={tooltipFor(rawSelected)}
+        side="bottom"
+        sideOffset={undefined}
+        align="end"
+      >
+        <button
+          type="button"
+          data-testid="epic-connection-pill"
+          data-status={state}
+          data-source={selected.source}
+          aria-label={buttonNameFor(indicator.label, rawSelected)}
+          className={cn(
+            "inline-flex min-w-0 items-center gap-1 text-ui-xs font-medium text-current focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+            indicator.containerClassName,
+          )}
+        >
+          <ConnectionPillDot indicator={indicator} />
+          {/* What gives way in a short row, every other item being a control.
+              The tooltip and the button's name keep the whole of it. */}
+          {indicator.label === null ? null : (
+            <span className="truncate">{indicator.label}</span>
+          )}
+        </button>
+      </TooltipWrapper>
+      <span className="sr-only" role="status" aria-live="polite">
+        {warningAnnouncement(state, rawSelected, linkDownTooLong)}
+      </span>
+    </>
+  );
+}
+
+function warningAnnouncement(
+  state: EpicSyncPillState,
+  selected: SelectedIndicator,
+  linkDownTooLong: boolean,
+): string | null {
+  // Warning OR WORSE. Reading `=== "warning"` here meant a `danger` plane that
+  // is not the artifact leg - a refused write, most of all - fell through to
+  // the artifact switch below and was announced only if the LINK happened to
+  // be in a state worth announcing. A rejected write beside a healthy link
+  // said nothing at all.
+  if (
+    selected.source !== "artifact" &&
+    SEVERITY_RANK[selected.indicator.severity] >= SEVERITY_RANK.warning
+  ) {
+    return accessibleNameFor(selected);
+  }
+  // `unprotected` is the only sync-pill state here that reports a RISK rather
+  // than a stage, so it is the one that most needs the live region: the red
+  // pill appears while focus is elsewhere, and an `aria-label` swap on an
+  // unfocused button is not announced.
+  switch (state) {
+    case "offlineWithUnsavedChanges":
+    case "offlineWithHostPending":
+    case "offlineChangesSavedLocally":
+    case "unprotected":
+    case "offline":
+      return accessibleNameFor(selected);
+    // A routine reconnect stays silent - it announces nothing a sighted user
+    // would be interrupted by either. Once it has been down long enough to
+    // escalate, it is worth saying: the copy tells the user their unsent work
+    // depends on this window staying open.
+    case "connecting":
+    case "reconnecting":
+      return linkDownTooLong ? accessibleNameFor(selected) : null;
+    default:
+      return null;
+  }
+}
+
+/**
+ * How long the derived verdict must stay `synced` before the pill is allowed
+ * to say so.
+ *
+ * Without this the pill strobes on every keystroke. A local body edit sets the
+ * replica's dirty watermark, and the host answers each `artifactRoomApplyUpdate`
+ * with an ack frame carrying its post-apply state vector *specifically* so the
+ * watermark can clear (`epic-stream-resolver.ts`, "emit a `artifactRoomUpdate`
+ * ack back to the sender"). That round trip is milliseconds against a local
+ * host, so input 4 flips true→false once per edit.
+ *
+ * The delay only ever holds a NON-green verdict on screen for longer. It can
+ * never do the reverse, which is the direction that matters here.
+ */
+const SYNCED_SETTLE_MS = 750;
+
+/**
+ * Keeps routine saving quiet and holds the positive `synced` claim long enough
+ * to prevent strobing. Actionable connection and durability warnings bypass
+ * this settle behavior and render immediately.
+ */
+function useSyncPillDisplayState(
+  derived: EpicSyncPillState,
+): EpicSyncPillState {
+  // A first render may happen before the current subscription has established
+  // all of its durability facts. Start conservatively and make even an
+  // initially-derived `synced` verdict earn the same settle interval.
+  const [maySaySynced, setMaySaySynced] = useState(false);
+
+  // Render-phase adjustment rather than an effect: React re-runs the render
+  // before committing, so losing `synced` never paints even one frame of the
+  // stale green claim.
+  if (derived !== "synced" && maySaySynced) {
+    setMaySaySynced(false);
+  }
+
+  useEffect(() => {
+    if (derived !== "synced") return undefined;
+    const timer = setTimeout(() => {
+      setMaySaySynced(true);
+    }, SYNCED_SETTLE_MS);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [derived]);
+
+  if (derived !== "synced") return derived;
+  return maySaySynced ? "synced" : "syncing";
+}
+
+interface PillIndicator {
+  readonly severity: "steady" | "activity" | "warning" | "danger";
+  readonly containerClassName: string;
+  readonly dotClassName: string;
+  readonly label: string | null;
+  readonly showAgentSpinner: boolean;
+  readonly pulse: "active" | "idle" | null;
+  readonly tooltip: string | null;
+  readonly ariaLabel: string;
+}
+
+type PillSource =
+  | "artifact"
+  | "write-command"
+  | "artifact-sync"
+  | "durability"
+  | "chat-backup"
+  | "terminal-catalog"
+  | "comm-graph"
+  | "agent-activity";
+
+interface SelectedIndicator {
+  readonly source: PillSource;
+  readonly indicator: PillIndicator;
+  /**
+   * Every OTHER plane with something to report right now, in source order.
+   * The visible row stays the selected plane's alone - one light, at most one
+   * label - and these ride the hover and the accessible name, so a second
+   * outage is never hidden behind the first.
+   *
+   * "Something to report" is degraded (warning or worse), PLUS the durability
+   * plane at any severity: that plane already decides for itself whether it
+   * has anything to say (`deriveEpicDurabilityPlane` returns null when it does
+   * not), and the state that forced this exception is a calm one - a
+   * mirror-first cloud epic whose freshness is `local-copy` produces a steady
+   * "Local copy · never synced" that loses the light to `connected`'s
+   * activity. Dropping it left the pill saying only "Connected" over a
+   * document the protocol had just stated has never been checked against the
+   * cloud, which is the one distinction the plane was added to expose. The
+   * severity stays steady on purpose - a local copy of a cloud epic is not a
+   * fault, and pulsing the dot for an ordinary mirror-first open would be.
+   */
+  readonly alsoReported: ReadonlyArray<PillIndicator>;
+}
+
+/**
+ * The hover copy: the selected plane's sentence, then one line per other
+ * reported plane. A single-plane case stays a plain string so the tooltip
+ * reads exactly as it always has.
+ */
+function tooltipFor(selected: SelectedIndicator): ReactNode {
+  if (selected.alsoReported.length === 0) return selected.indicator.tooltip;
+  // A real list, winner first: one entry per reported plane, in the order
+  // the accessible name reads them.
+  return (
+    <ul className="flex flex-col gap-1">
+      <li>{selected.indicator.tooltip ?? selected.indicator.ariaLabel}</li>
+      {selected.alsoReported.map((other) => (
+        <li key={other.ariaLabel}>{other.tooltip ?? other.ariaLabel}</li>
+      ))}
+    </ul>
+  );
+}
+
+/** The accessible name and live announcement: every reported plane, selected first. */
+function accessibleNameFor(selected: SelectedIndicator): string {
+  return [
+    selected.indicator.ariaLabel,
+    ...selected.alsoReported.map((other) => other.ariaLabel),
+  ].join(" ");
+}
+
+/**
+ * The button's name starts with the label it shows, so a person can say the
+ * label they see to click the pill (WCAG 2.5.3, label in name).
+ */
+function buttonNameFor(
+  visibleLabel: string | null,
+  selected: SelectedIndicator,
+): string {
+  const name = accessibleNameFor(selected);
+  if (visibleLabel === null || name.startsWith(visibleLabel)) return name;
+  // "Syncing…" already ends its sentence; "Offline" does not.
+  const separator = visibleLabel.endsWith("…") ? " " : ". ";
+  return `${visibleLabel}${separator}${name}`;
+}
+
+function ConnectionPillDot(props: { indicator: PillIndicator }) {
+  const { indicator } = props;
+  if (indicator.showAgentSpinner) {
+    return (
+      <AgentSpinningDots
+        testId="epic-connection-pill-dot"
+        variant="dots"
+        className={cn("shrink-0", indicator.dotClassName)}
+      />
+    );
+  }
+  if (indicator.pulse !== null) {
+    return (
+      <LivePulse
+        size="xs"
+        tone={indicator.pulse}
+        ariaLabel={indicator.ariaLabel}
+        className={cn("shrink-0", indicator.dotClassName)}
+      />
+    );
+  }
+  return (
+    <span
+      data-testid="epic-connection-pill-dot"
+      className={cn("size-1.5 shrink-0 rounded-full", indicator.dotClassName)}
+      aria-hidden
+    />
+  );
+}
+
+const QUIET_CONTAINER_CLASS =
+  "h-5 px-1.5 py-0 text-overline italic leading-none text-muted-foreground";
+const AMBER_CONTAINER_CLASS =
+  "rounded-md bg-amber-500/10 px-2 py-0.5 text-amber-700 dark:text-amber-400";
+const RED_CONTAINER_CLASS =
+  "rounded-md bg-red-500/10 px-2 py-0.5 text-red-700 dark:text-red-400";
+
+/**
+ * The two link-down states, and how each reads before and after
+ * {@link LINK_DOWN_ESCALATION_MS}.
+ *
+ * The escalated copy says three things and no more: it is still trying, it
+ * will keep trying by itself, and unsent edits live in this window. The last
+ * is the load-bearing part - the same honesty the `offline` copy owes -
+ * because the retry may never converge and closing the window is what loses
+ * the work.
+ */
+const LINK_DOWN_COPY = {
+  connecting: {
+    label: "Connecting…",
+    stalledLabel: "Still connecting…",
+    message: "Connecting to server",
+    stalledMessage:
+      "Still connecting. This keeps retrying on its own — unsent changes stay in this window, so keep it open.",
+  },
+  reconnecting: {
+    label: "Reconnecting…",
+    stalledLabel: "Still reconnecting…",
+    message: "Reconnecting to server",
+    stalledMessage:
+      "Still reconnecting. This keeps retrying on its own — unsent changes stay in this window, so keep it open.",
+  },
+} as const;
+
+/**
+ * The amber "link is down" indicator, escalated by
+ * {@link useLinkDownTooLong}. Neither variant makes a durability claim: while
+ * the renderer↔host stream is down the only copy of an unsent edit is in this
+ * window's memory.
+ */
+function linkDownIndicator(
+  kind: "connecting" | "reconnecting",
+  linkDownTooLong: boolean,
+): PillIndicator {
+  const copy = LINK_DOWN_COPY[kind];
+  const message = linkDownTooLong ? copy.stalledMessage : copy.message;
+  return {
+    severity: "warning",
+    containerClassName: AMBER_CONTAINER_CLASS,
+    dotClassName: "text-amber-500",
+    label: linkDownTooLong ? copy.stalledLabel : copy.label,
+    showAgentSpinner: true,
+    pulse: null,
+    tooltip: message,
+    ariaLabel: message,
+  };
+}
+
+const SEVERITY_RANK: Record<PillIndicator["severity"], number> = {
+  steady: 0,
+  activity: 1,
+  warning: 2,
+  danger: 3,
+};
+
+/**
+ * The secondary planes weighed against the artifact/Yjs verdict. An object
+ * rather than a parameter list: there are seven of them now, and a positional
+ * call site stops being readable (and trips `max-params`) well before the
+ * pill runs out of planes to report.
+ */
+interface PillSignals {
+  readonly artifactIndicator: PillIndicator;
+  readonly writeCommandAlert: EpicWriteCommandAlert | null;
+  readonly artifactSync: ArtifactSyncStatus;
+  readonly durability: EpicDurabilityPlane | null;
+  readonly chatBackupStatus: EpicChatBackupStatus | null;
+  readonly terminalCatalogUnavailable: boolean;
+  readonly commGraphFeedHealth: CommGraphFeedHealth | null;
+  readonly presenceDegraded: AgentActivityPresenceDegradedReason | null;
+}
+
+interface PillCandidate {
+  readonly source: PillSource;
+  readonly indicator: PillIndicator;
+}
+
+function highestSeverityIndicator(signals: PillSignals): SelectedIndicator {
+  // Source order IS the tie-break order: ties stay with the earlier source.
+  // Artifact/Yjs warnings can mean the newest bytes exist only in this
+  // renderer; chat backup, catalog health, graph-feed health and presence
+  // health remain secondary when an equally severe durability warning is
+  // active. The read-only ones come last: the graph feed costs the canvas new
+  // rows and presence costs only the freshness of a spinner, not the user's
+  // data.
+  const artifact: PillCandidate = {
+    source: "artifact",
+    indicator: signals.artifactIndicator,
+  };
+  const secondary: PillCandidate[] = [];
+  // First among the secondaries, so it takes every tie below the artifact leg:
+  // a write the authority refused is the one signal here that names work the
+  // user believes happened and which did not.
+  if (signals.writeCommandAlert !== null) {
+    secondary.push({
+      source: "write-command",
+      indicator: indicatorForWriteCommandAlert(signals.writeCommandAlert),
+    });
+  }
+  if (signals.artifactSync.kind !== "calm") {
+    secondary.push({
+      source: "artifact-sync",
+      indicator: indicatorForArtifactSync(signals.artifactSync),
+    });
+  }
+  // Next: it is about the user's DATA (where the epic lives, whether this
+  // session's edits are held anywhere) where every plane below is about a
+  // feed that heals by itself.
+  if (signals.durability !== null) {
+    secondary.push({
+      source: "durability",
+      indicator: indicatorForDurability(signals.durability),
+    });
+  }
+  if (signals.chatBackupStatus !== null) {
+    secondary.push({
+      source: "chat-backup",
+      indicator: indicatorForChatBackup(signals.chatBackupStatus),
+    });
+  }
+  if (signals.terminalCatalogUnavailable) {
+    secondary.push({
+      source: "terminal-catalog",
+      indicator: indicatorForTerminalCatalogUnavailable(),
+    });
+  }
+  if (signals.commGraphFeedHealth !== null) {
+    secondary.push({
+      source: "comm-graph",
+      indicator: indicatorForCommGraphFeed(signals.commGraphFeedHealth),
+    });
+  }
+  if (signals.presenceDegraded !== null) {
+    secondary.push({
+      source: "agent-activity",
+      indicator: indicatorForPresenceDegraded(signals.presenceDegraded),
+    });
+  }
+  let selected = artifact;
+  for (const candidate of secondary) {
+    const candidateRank = SEVERITY_RANK[candidate.indicator.severity];
+    const selectedRank = SEVERITY_RANK[selected.indicator.severity];
+    // Rooms still retrying share ordinary saving's activity rank. They take
+    // that unlabeled light so the hover says what is waiting. A warning or
+    // danger artifact leg keeps the row, and so does every real warning.
+    const retryingTakesSavingLight =
+      candidate.source === "artifact-sync" &&
+      candidate.indicator.severity === "activity" &&
+      selected.source === "artifact" &&
+      selected.indicator.severity === "activity" &&
+      selected.indicator.label === null;
+    if (candidateRank > selectedRank || retryingTakesSavingLight) {
+      selected = candidate;
+    }
+  }
+  // One light, at most one label: the others are not dropped, they move to
+  // the hover and the accessible name (see `SelectedIndicator.alsoReported`).
+  // Degraded planes ride along - a plane that is merely busy ("Saving
+  // changes", "Backing up chats") is not a second outage to report - and so
+  // does the durability plane at any severity, for the reason given there.
+  const alsoReported = [artifact, ...secondary]
+    .filter(
+      (candidate) =>
+        candidate !== selected &&
+        (SEVERITY_RANK[candidate.indicator.severity] >= SEVERITY_RANK.warning ||
+          candidate.source === "durability"),
+    )
+    .map((candidate) => candidate.indicator);
+  return { ...selected, alsoReported };
+}
+
+/**
+ * Input (v), and the ambiguous arm of input (iv), as copy.
+ *
+ * All three carry a LABEL rather than a bare dot, which the other secondary
+ * planes do not: those describe a plane that is degraded but healing, while
+ * each of these describes one of the user's own edits that is not in the epic.
+ * None of them is discoverable by hovering a light the user has no reason to
+ * hover.
+ *
+ * A refused write is `danger` because it is terminal and no reconnect resolves
+ * it. The other two are `warning`: a superseded write lost a race it may win
+ * on a reapply, and an ambiguous delivery may still settle on its own.
+ */
+const WRITE_COMMAND_ALERT_COPY: Record<
+  EpicWriteCommandAlert,
+  {
+    readonly severity: PillIndicator["severity"];
+    readonly label: string;
+    readonly message: string;
+  }
+> = {
+  rejected: {
+    severity: "danger",
+    label: "Change not saved",
+    message:
+      "A recent change was refused and has not been applied. Make it again to retry.",
+  },
+  superseded: {
+    severity: "warning",
+    label: "Change replaced",
+    message:
+      "A newer change from another device replaced a recent change of yours. Make it again if you still want it.",
+  },
+  outcomeUnknown: {
+    severity: "warning",
+    label: "Change may not be saved",
+    message:
+      "A recent change was sent but its result is unknown, so it may not have been applied. It settles on its own once the server confirms.",
+  },
+};
+
+function indicatorForWriteCommandAlert(
+  alert: EpicWriteCommandAlert,
+): PillIndicator {
+  const copy = WRITE_COMMAND_ALERT_COPY[alert];
+  return {
+    severity: copy.severity,
+    containerClassName:
+      copy.severity === "danger" ? RED_CONTAINER_CLASS : AMBER_CONTAINER_CLASS,
+    dotClassName: copy.severity === "danger" ? "bg-red-500" : "bg-amber-500",
+    label: copy.label,
+    showAgentSpinner: false,
+    pulse: null,
+    tooltip: copy.message,
+    ariaLabel: copy.message,
+  };
+}
+
+/**
+ * Dot only. Rooms still catching up render as ordinary saving: the quiet
+ * container, the neutral dot, the idle pulse, severity `activity`. The
+ * sentence is the hover and the accessible name. There is no label, so text
+ * in the status row cannot read as a lasting fault. When the host has
+ * stopped retrying, the dot is amber and the severity is `warning`, still
+ * with no label. A real warning or danger keeps the row either way.
+ */
+function indicatorForArtifactSync(
+  status: Exclude<ArtifactSyncStatus, { readonly kind: "calm" }>,
+): PillIndicator {
+  if (status.kind === "retrying") {
+    return {
+      severity: "activity",
+      containerClassName: QUIET_CONTAINER_CLASS,
+      dotClassName: "",
+      label: null,
+      showAgentSpinner: false,
+      pulse: "idle",
+      tooltip: status.sentence,
+      ariaLabel: status.sentence,
+    };
+  }
+  return {
+    severity: "warning",
+    containerClassName: QUIET_CONTAINER_CLASS,
+    dotClassName: "bg-warning",
+    label: null,
+    showAgentSpinner: false,
+    pulse: null,
+    tooltip: status.sentence,
+    ariaLabel: status.sentence,
+  };
+}
+
+/**
+ * Dot-only, deliberately: the routing truth used to be its own pill beside
+ * this one and said its whole three-clause reading inline for the length of
+ * an outage. The sentence is the hover and the accessible name now, and the
+ * dot keeps the pill's palette - red for a stated loss, amber for doubt, the
+ * idle pulse for a promotion or reconciliation in flight. A steady reading
+ * ("Not synced yet") is never selected over the artifact leg's own steady
+ * verdict, which already says the same thing in its tooltip.
+ */
+const DURABILITY_DOT_CLASS: Readonly<
+  Record<EpicDurabilityPlane["severity"], string>
+> = {
+  steady: "",
+  activity: "",
+  warning: "bg-amber-500",
+  danger: "bg-red-500",
+};
+
+const DURABILITY_PULSE: Readonly<
+  Record<EpicDurabilityPlane["severity"], PillIndicator["pulse"]>
+> = {
+  steady: "active",
+  activity: "idle",
+  warning: null,
+  danger: null,
+};
+
+function indicatorForDurability(plane: EpicDurabilityPlane): PillIndicator {
+  return {
+    severity: plane.severity,
+    containerClassName: QUIET_CONTAINER_CLASS,
+    dotClassName: DURABILITY_DOT_CLASS[plane.severity],
+    label: null,
+    showAgentSpinner: false,
+    pulse: DURABILITY_PULSE[plane.severity],
+    tooltip: plane.sentence,
+    ariaLabel: plane.sentence,
+  };
+}
+
+/**
+ * Dot-only, like chat backup and the graph feed: remote discovery dropping out
+ * is worth an amber light and a sentence on hover, not a permanent label in
+ * the status row - the terminals this host serves stay fully usable, and the
+ * coverage gap heals by itself.
+ */
+function indicatorForTerminalCatalogUnavailable(): PillIndicator {
+  const message =
+    "Remote terminal discovery is unavailable. Showing terminals from this host only. It will recover automatically.";
+  return {
+    severity: "warning",
+    containerClassName: QUIET_CONTAINER_CLASS,
+    dotClassName: "bg-amber-500",
+    label: null,
+    showAgentSpinner: false,
+    pulse: null,
+    tooltip: message,
+    ariaLabel: message,
+  };
+}
+
+/**
+ * Amber = presence unavailable. Either the stream behind every working/turn
+ * spinner is down (`stream-down`: the status it last painted may be stale and
+ * a remote agent that is in fact running can read idle), or the host stamped
+ * the latest union with a cloud link it could not see through (`cloud-down`:
+ * agents on OTHER devices may read idle; this device's own agents stay live,
+ * because the local awareness entry is never removed on a socket close).
+ * Nothing is lost and both recover by themselves, which is what keeps this a
+ * warning rather than a danger.
+ */
+const PRESENCE_DEGRADED_COPY: Record<
+  AgentActivityPresenceDegradedReason,
+  { readonly label: string; readonly message: string }
+> = {
+  "stream-down": {
+    label: "Agent status may be stale",
+    message:
+      "Live agent activity is unavailable. Agent status may be stale or unknown until it reconnects.",
+  },
+  "cloud-down": {
+    label: "Remote agent status unavailable",
+    message:
+      "This device can’t reach the cloud right now, so agents on other devices may show as idle. Agents on this device are live.",
+  },
+};
+
+function indicatorForPresenceDegraded(
+  reason: AgentActivityPresenceDegradedReason,
+): PillIndicator {
+  const copy = PRESENCE_DEGRADED_COPY[reason];
+  return {
+    severity: "warning",
+    containerClassName: AMBER_CONTAINER_CLASS,
+    dotClassName: "bg-amber-500",
+    label: copy.label,
+    showAgentSpinner: false,
+    pulse: null,
+    tooltip: copy.message,
+    ariaLabel: copy.message,
+  };
+}
+
+function indicatorForChatBackup(status: EpicChatBackupStatus): PillIndicator {
+  return {
+    severity: status.severity,
+    containerClassName: QUIET_CONTAINER_CLASS,
+    dotClassName:
+      status.severity === "warning" ? "bg-amber-500" : "bg-muted-foreground",
+    label: null,
+    showAgentSpinner: false,
+    pulse: null,
+    tooltip: status.tooltip,
+    ariaLabel: status.ariaLabel,
+  };
+}
+
+/**
+ * Dot-only, like chat backup: the feed degrading is worth an amber light and a
+ * sentence on hover, not a permanent label in the status row - the canvas is
+ * still fully usable on the rows it already holds.
+ */
+function indicatorForCommGraphFeed(health: CommGraphFeedHealth): PillIndicator {
+  return {
+    severity: health.severity,
+    containerClassName: QUIET_CONTAINER_CLASS,
+    dotClassName: "bg-amber-500",
+    label: null,
+    showAgentSpinner: false,
+    pulse: null,
+    tooltip: health.tooltip,
+    ariaLabel: health.ariaLabel,
+  };
+}
+
+function indicatorFor(
+  state: EpicSyncPillState,
+  linkDownTooLong: boolean,
+): PillIndicator {
+  switch (state) {
+    // Icon-only: the steady state is the one users see ~always, so it earns no
+    // permanent copy in the status row - the pulse plus its tooltip say it.
+    // Every OTHER state keeps its label: they are transient or alerting, and
+    // the amber/red ones are precisely the ones that must not be reduced to a
+    // glyph the user has to hover to read.
+    case "synced":
+      return {
+        severity: "steady",
+        containerClassName: QUIET_CONTAINER_CLASS,
+        dotClassName: "",
+        label: null,
+        showAgentSpinner: false,
+        pulse: "active",
+        tooltip: "All changes synced",
+        ariaLabel: "All changes synced",
+      };
+    // Normal renderer→host and host→cloud churn stays icon-only. The neutral
+    // dot makes no durability claim and avoids a permanent spinner while an
+    // active agent continuously updates the Epic.
+    case "syncing":
+    case "hostPending":
+      return {
+        severity: "activity",
+        containerClassName: QUIET_CONTAINER_CLASS,
+        dotClassName: "",
+        label: null,
+        showAgentSpinner: false,
+        pulse: "idle",
+        tooltip: "Saving changes",
+        ariaLabel: "Saving changes",
+      };
+    case "offlineWithUnsavedChanges":
+      return {
+        severity: "warning",
+        containerClassName: AMBER_CONTAINER_CLASS,
+        dotClassName: "text-amber-500",
+        label: "Offline — saving changes…",
+        showAgentSpinner: true,
+        pulse: null,
+        tooltip:
+          "Offline, and some recent changes are still being saved. Keep this window open.",
+        ariaLabel:
+          "Offline. Some recent changes are still being saved. Keep this window open.",
+      };
+    case "offlineWithHostPending":
+      return {
+        severity: "warning",
+        containerClassName: AMBER_CONTAINER_CLASS,
+        dotClassName: "bg-amber-500",
+        label: "Offline — changes pending",
+        showAgentSpinner: false,
+        pulse: null,
+        // Names the SERVING HOST, not "Traycer": in this state the window is
+        // no longer the last holder and it is the host's flush that is still
+        // unknown (`use-cloud-link-grace.ts`), so from a phone or a browser
+        // attached to a remote host "keep Traycer running" pointed at the
+        // wrong process - a person could follow it and still shut down the
+        // one machine that must stay up.
+        tooltip:
+          "Offline. Pending changes are still being processed on the host serving this task; keep that host running.",
+        ariaLabel:
+          "Offline. Pending changes are still being processed on the host serving this task; keep that host running.",
+      };
+    // No spinner: nothing is in flight while the host's cloud link is down.
+    // The durability claim in this copy is load-bearing and true - the host
+    // persists the outstanding updates and replays them on reconnect.
+    case "offlineChangesSavedLocally":
+      return {
+        severity: "warning",
+        containerClassName: AMBER_CONTAINER_CLASS,
+        dotClassName: "bg-amber-500",
+        label: "Offline — changes saved",
+        showAgentSpinner: false,
+        pulse: null,
+        tooltip:
+          "Offline. Your changes are saved and sync when the connection is back.",
+        ariaLabel:
+          "Offline. Your changes are saved and sync when the connection is back.",
+      };
+    // The epic is not in the cloud at all. This used to render as `synced`
+    // — "All changes synced", beside the durability plane's "Not synced
+    // yet", about an epic no cloud has ever seen. The copy is now the true
+    // statement, and it agrees with the plane instead of contradicting it
+    // inches away. Like every clause on that plane it says what the person
+    // sees (saved, not synced), not where the bytes are.
+    case "storedLocally":
+      return {
+        severity: "steady",
+        containerClassName: QUIET_CONTAINER_CLASS,
+        dotClassName: "",
+        label: null,
+        showAgentSpinner: false,
+        pulse: "active",
+        tooltip: "Saved. Not synced yet.",
+        ariaLabel: "Saved. Not synced yet.",
+      };
+    // The one alerting state that is about RISK rather than progress: no
+    // local WAL and no cloud link, so an edit made now exists only in memory
+    // and does not survive a quit — graceful included. Red rather than
+    // amber, because unlike every other offline state nothing here is
+    // "pending"; there is nothing holding the work at all.
+    case "unprotected":
+      return {
+        severity: "danger",
+        containerClassName:
+          "rounded-md bg-destructive/10 px-2 py-0.5 text-destructive",
+        dotClassName: "bg-destructive",
+        // Prospective AND scoped to new edits in all three strings, on
+        // purpose. Prospective: this state is reached on protection alone
+        // (`epic-sync-pill-state.ts` consults no dirty bit for it), so a
+        // freshly opened task with nothing typed is in it, and "changes not
+        // saved" would be a data-loss alarm about edits that do not exist.
+        // Scoped: `cloudDownState` returns it for a cloud-durable task whose
+        // SESSION is unprotected, so an unqualified "not backed up" would
+        // claim the task's durable copy does not exist either.
+        label: "Offline — new edits not backed up",
+        showAgentSpinner: false,
+        pulse: null,
+        tooltip:
+          "Offline. Anything you edit now is not backed up and exists only in this window. Reconnect, or copy anything you cannot lose.",
+        ariaLabel:
+          "Offline. Anything you edit now is not backed up and exists only in this window; it is lost if the window closes.",
+      };
+    // The stream is up but this cycle has not supplied enough evidence for a
+    // cloud/durability claim. Keep the copy factual and intentionally avoid
+    // guessing why (old host, reconnect, or pending first status are all
+    // possible).
+    case "connected":
+      return {
+        severity: "activity",
+        containerClassName: QUIET_CONTAINER_CLASS,
+        dotClassName: "bg-muted-foreground",
+        label: "Connected",
+        showAgentSpinner: false,
+        pulse: null,
+        tooltip: "Connected",
+        ariaLabel: "Connected",
+      };
+    // The three link states below make NO durability claim. While the
+    // renderer↔host stream is down the only copy of an unsent edit is in this
+    // window's memory, so "saved locally" would be a lie. The first two carry
+    // an escalated variant once the link has been down long enough that
+    // "…ing" stops being an honest description - see `linkDownIndicator`.
+    case "connecting":
+      return linkDownIndicator("connecting", linkDownTooLong);
+    case "reconnecting":
+      return linkDownIndicator("reconnecting", linkDownTooLong);
+    case "offline":
+      return {
+        severity: "danger",
+        containerClassName: RED_CONTAINER_CLASS,
+        dotClassName: "bg-red-500",
+        label: "Offline",
+        showAgentSpinner: false,
+        pulse: null,
+        // No "changes will sync when reconnected" here. This is the one state
+        // where an unsent edit exists only in this window's memory, so a
+        // durability promise is exactly backwards: closing the window is what
+        // loses it. Say where the edits are and what keeps them.
+        tooltip:
+          "Disconnected. Unsent changes stay in this window until it reconnects — keep it open.",
+        ariaLabel:
+          "Disconnected. Unsent changes stay in this window until it reconnects — keep it open.",
+      };
+  }
+}

@@ -1,0 +1,551 @@
+// `useLocalHostUpdateOperation` is the LANDING BANNER's whole data source: it
+// resolves this machine's host id, reads the LIVE `host.status` leg over a
+// real client, reads the DURABLE-RECORD leg off `useRunnerHostControllerStatusQuery()`
+// via `recordObservationFromLocalAttempt`, and combines the two through
+// `preferLiveOverRecord` into one `FleetUpdateView` (the
+// host-down window).
+//
+// This is a PRODUCTION-WIRING witness, not a pure-module test: it drives the
+// REAL hook, over a REAL `HostClient` (in-memory messenger, mirroring
+// `host-update-banner-bound.test.tsx`'s harness) for the live leg, and a real
+// `RunnerHostProvider` + `IHostManagement.getHostControllerStatus()` for the
+// record leg. Only `useHostBinding` and `useHostClientForHostId` are mocked —
+// the same two seams `host-update-banner-bound.test.tsx` mocks, and for the
+// same reason: this suite is not about the directory/selection machinery
+// behind them.
+interface HostBindingFixture {
+  readonly directory: {
+    readonly getLocalHostId: () => string | null;
+    readonly onChange: (cb: () => void) => { dispose: () => void };
+  };
+}
+const hostBindingMock = vi.hoisted(
+  (): { current: HostBindingFixture | null } => ({ current: null }),
+);
+vi.mock("@/lib/host/runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host/runtime")>();
+  return { ...actual, useHostBinding: () => hostBindingMock.current };
+});
+
+const clientForHostIdMock = vi.hoisted(
+  (): { current: (hostId: string | null) => unknown } => ({
+    current: () => null,
+  }),
+);
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) =>
+    clientForHostIdMock.current(hostId),
+}));
+
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type {
+  HostControllerStatus,
+  IHostManagement,
+  LocalAttemptFacts,
+} from "@traycer-clients/shared/platform/runner-host";
+import type { HostStatusUpdateOperationV2 } from "@traycer/protocol/host/status/index";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { HostRpcRegistry } from "@/lib/host";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { buildOverviewHostFixture } from "@/components/settings/panels/__tests__/host-overview-test-support";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
+import { useLocalHostUpdateOperation } from "../use-local-host-update-operation";
+import {
+  LOCAL_LIVENESS_PROOF_MS,
+  holdsLifecycleGate,
+} from "@/lib/host/fleet-update/fleet-update-view";
+
+const LOCAL_HOST_ID = "local-1";
+
+function localAttempt(
+  overrides: Partial<LocalAttemptFacts>,
+): LocalAttemptFacts {
+  return {
+    attemptId: "attempt-preparing-1",
+    generation: 1,
+    sequence: 1,
+    targetVersion: "2.5.0",
+    phase: "preparing",
+    continuation: null,
+    updatedAt: "2026-08-27T00:00:00.000Z",
+    error: null,
+    // Desktop's probed liveness (D13); `unknown` unless a case is about it.
+    liveness: "unknown",
+    livenessObservedAtMs: null,
+    ...overrides,
+  };
+}
+
+const CONTROLLER_STATUS_BASE: HostControllerStatus = {
+  download: null,
+  mutation: null,
+  installedVersion: "1.4.1",
+  latestVersion: "2.5.0",
+  stagedVersion: null,
+  installedRuntimeVersion: null,
+  runningRuntimeVersion: null,
+  updateReady: false,
+  activation: "activated",
+  reachable: false,
+  localAttempt: null,
+  removedByUser: false,
+  checkedAt: "2026-08-27T00:00:00.000Z",
+  lastEnsureFailure: null,
+  updateDeferral: null,
+};
+
+function notImplementedManagement(
+  controllerStatus: HostControllerStatus,
+): IHostManagement {
+  const notImplemented = (method: string) => (): Promise<never> =>
+    Promise.reject(new Error(`${method} not implemented`));
+  return {
+    getHostControllerStatus: vi.fn(() => Promise.resolve(controllerStatus)),
+    convergeReady: vi.fn(notImplemented("convergeReady")),
+    applyStaged: vi.fn(notImplemented("applyStaged")),
+    activateInstalled: vi.fn(notImplemented("activateInstalled")),
+    installVersion: vi.fn(notImplemented("installVersion")),
+    uninstallHost: vi.fn(notImplemented("uninstallHost")),
+    restartHost: vi.fn(notImplemented("restartHost")),
+    uninstallTraycer: vi.fn(notImplemented("uninstallTraycer")),
+    getRemovalState: vi.fn(() => Promise.resolve({ removedByUser: false })),
+    clearRemoval: vi.fn(() => Promise.resolve()),
+    getHostLogs: vi.fn(() => Promise.resolve({ path: null, tail: "" })),
+    runDoctor: vi.fn(() => Promise.resolve({ issues: [], ranAt: "" })),
+    availableVersions: vi.fn(notImplemented("availableVersions")),
+    installedRecord: vi.fn(() => Promise.resolve(null)),
+    registerService: vi.fn(notImplemented("registerService")),
+    deregisterService: vi.fn(notImplemented("deregisterService")),
+    registryCheck: vi.fn(notImplemented("registryCheck")),
+    freePortAndRestart: vi.fn((input) =>
+      Promise.resolve({ kind: "applied" as const, ...input }),
+    ),
+    runDoctorRepairQueued: vi.fn(() =>
+      Promise.resolve({ kind: "applied" as const }),
+    ),
+    freePortAndRestartIfIdle: vi.fn(() =>
+      Promise.resolve({
+        kind: "dispatched" as const,
+        outcome: { kind: "ok" as const, value: null },
+      }),
+    ),
+    cliManifest: vi.fn(() => Promise.resolve(null)),
+    maintenanceUpdateCheck: vi.fn(notImplemented("maintenanceUpdateCheck")),
+    maintenanceDoctor: vi.fn(notImplemented("maintenanceDoctor")),
+    maintenanceInstallationInfo: vi.fn(
+      notImplemented("maintenanceInstallationInfo"),
+    ),
+    maintenanceInstallVersion: vi.fn(
+      notImplemented("maintenanceInstallVersion"),
+    ),
+    restartHostIfIdle: vi.fn(notImplemented("restartHostIfIdle")),
+    restartHostServiceIfHostIdle: vi.fn(
+      notImplemented("restartHostServiceIfHostIdle"),
+    ),
+    runDoctorRepairIfIdle: vi.fn(notImplemented("runDoctorRepairIfIdle")),
+    getHostName: vi.fn(() =>
+      Promise.resolve({
+        systemName: "test-host",
+        customName: null,
+        effectiveName: "test-host",
+      }),
+    ),
+    setHostName: vi.fn((input: { readonly customName: string | null }) =>
+      Promise.resolve({
+        systemName: "test-host",
+        customName: input.customName,
+        effectiveName: input.customName ?? "test-host",
+      }),
+    ),
+  };
+}
+
+/**
+ * Binds the local host id and a real `HostClient` whose `host.status`
+ * handler always REJECTS — the live leg never resolves a fresh read, so
+ * `statusQuery.data` stays `undefined` forever. This is what "the host is
+ * unreachable / the wire read is stale or absent" looks like at this seam:
+ * `preferLiveOverRecord` then has no fresh wire observation to prefer, and
+ * the durable-record leg is what the projector falls through to.
+ */
+function bindUnreachableLocalHost(): HostClient<HostRpcRegistry> {
+  const fixture = buildOverviewHostFixture({
+    hostId: LOCAL_HOST_ID,
+    isLocalMachine: true,
+    overrideHandlers: {
+      "host.status": () => {
+        throw new Error("host unreachable — no live route in this fixture");
+      },
+    },
+  });
+  hostBindingMock.current = {
+    directory: {
+      getLocalHostId: () => LOCAL_HOST_ID,
+      onChange: () => ({ dispose: () => undefined }),
+    },
+  };
+  clientForHostIdMock.current = (hostId) =>
+    hostId === LOCAL_HOST_ID ? fixture.client : null;
+  return fixture.client;
+}
+
+/**
+ * The other half of the same seam: a REACHABLE local host whose `host.status`
+ * answers, with the handler supplied by the caller so a test can control how
+ * long an individual poll takes to come back.
+ */
+function bindReachableLocalHost(
+  status: () => Promise<ResponseOfMethod<HostRpcRegistry, "host.status">>,
+): HostClient<HostRpcRegistry> {
+  const fixture = buildOverviewHostFixture({
+    hostId: LOCAL_HOST_ID,
+    isLocalMachine: true,
+    overrideHandlers: { "host.status": status },
+  });
+  hostBindingMock.current = {
+    directory: {
+      getLocalHostId: () => LOCAL_HOST_ID,
+      onChange: () => ({ dispose: () => undefined }),
+    },
+  };
+  clientForHostIdMock.current = (hostId) =>
+    hostId === LOCAL_HOST_ID ? fixture.client : null;
+  return fixture.client;
+}
+
+function attemptOperation(
+  overrides: Partial<Extract<HostStatusUpdateOperationV2, { kind: "attempt" }>>,
+): HostStatusUpdateOperationV2 {
+  return {
+    kind: "attempt",
+    attemptId: "attempt-1",
+    generation: 1,
+    sequence: 1,
+    targetVersion: "2.5.0",
+    trigger: "manual",
+    phase: "downloading",
+    execution: "active",
+    continuation: null,
+    progress: null,
+    liveness: "active",
+    livenessCause: null,
+    busySessionCount: null,
+    busyBreakdown: null,
+    error: null,
+    ...overrides,
+  };
+}
+
+function statusWith(
+  operation: HostStatusUpdateOperationV2,
+): ResponseOfMethod<HostRpcRegistry, "host.status"> {
+  return {
+    ready: true,
+    hostVersion: "1.5.0",
+    protocolVersion: { major: 1, minor: 3 },
+    busy: false,
+    busySessionCount: 0,
+    updateProgress: null,
+    busyBreakdown: null,
+    updateOperation: operation,
+    updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
+    storeFormats: null,
+    install: null,
+    processMemory: null,
+    crossHostMessaging: null,
+    sessions: null,
+    updatesExternallyManaged: null,
+    previousExit: null,
+  };
+}
+
+function renderOperation(management: IHostManagement) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return renderHook(() => useLocalHostUpdateOperation(), {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={queryClient}>
+        <RunnerHostProvider
+          runnerHost={createFakeRunnerHost({ hostManagement: management })}
+        >
+          {children}
+        </RunnerHostProvider>
+      </QueryClientProvider>
+    ),
+  });
+}
+
+afterEach(() => {
+  hostBindingMock.current = null;
+  clientForHostIdMock.current = () => null;
+});
+
+/**
+ * The instant the CONTROLLER query resolves, frozen so the record's observation
+ * time can be asserted EXACTLY rather than as `> 0`.
+ *
+ * Only `Date` is faked. `setTimeout` stays real because `waitFor` schedules on
+ * it, and faking it would hang the poll rather than test it.
+ */
+const CONTROLLER_READ_AT_MS = 1_774_000_000_000;
+
+describe("useLocalHostUpdateOperation — F1 host-down window (Ticket 07 §5.2.7)", () => {
+  it("a non-terminal local attempt, with the host unreachable, projects a QUALIFIED unknown carrying the retained phase and attempt identity", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(CONTROLLER_READ_AT_MS);
+    try {
+      bindUnreachableLocalHost();
+      const management = notImplementedManagement({
+        ...CONTROLLER_STATUS_BASE,
+        localAttempt: localAttempt({ phase: "preparing" }),
+      });
+
+      const { result } = renderOperation(management);
+
+      await waitFor(() => {
+        expect(result.current.view.lastKnownKind).toBe("preparing");
+      });
+      // `kind` MUST be `unknown`: every gate and cadence decision reads `kind`,
+      // and a host we cannot reach must hold no gate and earn no active poll.
+      expect(result.current.view.kind).toBe("unknown");
+      expect(result.current.view.attemptId).toBe("attempt-preparing-1");
+      expect(result.current.view.targetVersion).toBe("2.5.0");
+      expect(result.current.hostId).toBe(LOCAL_HOST_ID);
+
+      // The record's observation time must be stamped by
+      // the CONTROLLER query that actually read it, never by the live
+      // `host.status` query. In this fixture `host.status` throws and never
+      // succeeds, so its `dataUpdatedAt` is `0` — the previous source, which
+      // reported a record freshly read from disk as observed at the Unix epoch.
+      //
+      // Asserted EXACTLY against the frozen controller-read instant rather than
+      // as `> 0`: `> 0` would also pass if someone later routed this through
+      // some other non-zero clock, and the property being pinned is WHICH read
+      // this timestamp describes, not merely that it is non-empty.
+      expect(result.current.view.lastObservedAtMs).toBe(CONTROLLER_READ_AT_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * ABLATION-RESISTANCE CHECK, actually run (not merely reasoned about):
+   * verified by mocking `recordObservationFromLocalAttempt` to always return
+   * `null` — the exact downstream effect of deleting the `localAttempt` read
+   * in `useLocalHostUpdateOperation` (its own real implementation already
+   * returns `null` whenever `facts === null`) — in a throwaway copy of the
+   * test above. Chose a mocked leaf over editing the production hook file
+   * directly: this worktree is shared with the agent doing the
+   * production wiring, and it was mid-edit on this exact file during this
+   * session, so a live on-disk ablation risked colliding with that work.
+   * The throwaway file was deleted immediately after confirming the result;
+   * it is not part of this suite.
+   *
+   * Result: RED, as expected. With the leg forced `null`, the live leg is
+   * also unreachable (per this fixture), so `preferLiveOverRecord(null,
+   * null, …)` returns `null` and the view collapses to
+   * `UNKNOWN_FLEET_UPDATE_VIEW` — `lastKnownKind: null`, `attemptId: null`,
+   * `targetVersion: null` — failing every assertion in the test above.
+   */
+  it("positive control — with NO local attempt on the record, the same unreachable host projects a BARE unknown (no retained phase)", async () => {
+    bindUnreachableLocalHost();
+    const management = notImplementedManagement(CONTROLLER_STATUS_BASE);
+    // `localAttempt: null` on the controller status — the base fixture carries
+    // it explicitly. Proves the test above is discriminating on the attempt's
+    // presence, not merely on the host being unreachable.
+    const { result } = renderOperation(management);
+
+    await waitFor(() => {
+      expect(result.current.hostId).toBe(LOCAL_HOST_ID);
+    });
+    expect(result.current.view.kind).toBe("unknown");
+    expect(result.current.view.lastKnownKind).toBeNull();
+    expect(result.current.view.attemptId).toBeNull();
+  });
+});
+
+/**
+ * The 1s renderer-tick clock (D13), exercised on the REAL hook. The
+ * suite above fakes only `Date` (`toFake: ["Date"]`) because it never needs to
+ * drive a timer; this pin needs the 1s `useNowMs` interval to actually fire on
+ * a deadline it controls, so it fakes every timer instead
+ * (`shouldAdvanceTime: true` so `waitFor`'s own real-timer-shaped polling
+ * still makes progress against the fake clock).
+ *
+ * Falsifies: feeding `useLocalHostUpdateOperation`'s `nowMs` from
+ * `statusQuery.dataUpdatedAt` again instead of `useNowMs` — the pure
+ * `fleet-update-view.test.ts` suite cannot see this regression because it
+ * supplies `nowMs` directly; only a real mounted hook, with a real 1s tick
+ * racing a real (frozen) `dataUpdatedAt` that never advances because
+ * `host.status` never resolves, can catch it.
+ */
+describe("useLocalHostUpdateOperation — the 1s renderer tick ages the live-restarting proof out (Ticket 06 D13)", () => {
+  // Mirrors the hook's own private `LOCAL_RECORD_TICK_MS`, which is not
+  // exported — the tick interval is an implementation detail the hook is free
+  // to change; this test only needs a duration long enough for at least one
+  // tick to land.
+  const LOCAL_RECORD_TICK_MS = 1_000;
+
+  it("flips restarting -> unknown on the first 1s tick after the 5s deadline, and a backward clock step does not revive it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // The WALL clock is driven separately from the timer clock, and that
+    // separation is load-bearing for the backward-step half below.
+    //
+    // Sinon (and so vitest) runs both off one counter: `vi.setSystemTime` moves
+    // `Date.now()` AND the scheduler's notion of the present, so a backward
+    // step also pushes every pending interval's `callAt` out of reach and the
+    // 1s tick never fires again. The assertion would then pass because nothing
+    // re-rendered — vacuously, and identically whether or not
+    // `localLivenessProofHolds` still has its lower bound.
+    //
+    // A real backward clock step behaves the opposite way: browser timers are
+    // scheduled monotonically, so the interval keeps firing on time and hands
+    // the projector a `Date.now()` that has moved BACKWARD past the stamp. That
+    // is the state the lower bound exists for, so the test has to reproduce it
+    // — spying on `Date.now` over the fake timers is what decouples the two.
+    let wallClockMs = CONTROLLER_READ_AT_MS;
+    vi.spyOn(Date, "now").mockImplementation(() => wallClockMs);
+    try {
+      bindUnreachableLocalHost();
+      const livenessObservedAtMs = CONTROLLER_READ_AT_MS;
+      const management = notImplementedManagement({
+        ...CONTROLLER_STATUS_BASE,
+        localAttempt: localAttempt({
+          phase: "restarting",
+          liveness: "live",
+          livenessObservedAtMs,
+        }),
+      });
+
+      const { result } = renderOperation(management);
+
+      // First projection: the proof is fresh, so the live `restarting` kind
+      // holds the lifecycle gate — exactly as a live wire `restarting` would.
+      await waitFor(() => {
+        expect(result.current.view.kind).toBe("restarting");
+      });
+      expect(holdsLifecycleGate(result.current.view)).toBe(true);
+
+      // No new publication lands — `getHostControllerStatus` is called once
+      // and the query's `staleTime: Infinity` means it is event-sourced, not
+      // re-read — and `host.status` keeps failing throughout. Advancing the
+      // clock past the 5s deadline is the ONLY thing that changes.
+      wallClockMs =
+        livenessObservedAtMs + LOCAL_LIVENESS_PROOF_MS + LOCAL_RECORD_TICK_MS;
+      await vi.advanceTimersByTimeAsync(LOCAL_RECORD_TICK_MS * 2);
+
+      await waitFor(() => {
+        expect(result.current.view.kind).toBe("unknown");
+      });
+      expect(holdsLifecycleGate(result.current.view)).toBe(false);
+      // The retained phase, not a bare unknown — the record is still on disk
+      // even though its liveness proof has expired.
+      expect(result.current.view.lastKnownKind).toBe("reconnecting");
+
+      // A wall-clock step BACKWARD, well past both the deadline that just
+      // fired and `LOCAL_LIVENESS_CLOCK_SLACK_MS`, must not make the stamp look
+      // fresh again. Falsifies: dropping the lower bound from
+      // `localLivenessProofHolds` — with only `ageMs <= LOCAL_LIVENESS_PROOF_MS`
+      // left a negative age reads as "even fresher than new", and this revives
+      // to `restarting` with the gate re-held.
+      // `act`, not a bare advance: the tick fires either way, but without a
+      // commit boundary `result.current` is still the PREVIOUS render and the
+      // negative assertion below passes vacuously — it would read "unknown"
+      // whether or not the lower bound survived. The forward step above gets
+      // this for free from `waitFor`.
+      await act(async () => {
+        wallClockMs = livenessObservedAtMs - 20_000;
+        await vi.advanceTimersByTimeAsync(LOCAL_RECORD_TICK_MS * 2);
+      });
+
+      expect(result.current.view.kind).not.toBe("restarting");
+      expect(holdsLifecycleGate(result.current.view)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * The WIRE half of the same clock, at THIS call site (C-H3, banner leg).
+ *
+ * `projectLocalUpdate` is a shared seam, so the pure suite already pins what
+ * the projector DOES with each instant. What no projector pin can see is which
+ * value a call site drops into which slot: the projector is handed a
+ * `LocalUpdateClock` already filled in, and a consumer that fills both slots
+ * from the tick is a perfectly well-typed call it will honour. That mistake has
+ * to be caught where it is made, so each of the two consumers needs its own
+ * mounted mirror — the Overview's lives in
+ * `host-overview-lifecycle-gate.test.tsx`, and the banner's are here.
+ *
+ * The RECORD slot's mirror is the D13 tick suite above, and it is a mirror in
+ * both directions: feeding `recordNowMs` from `statusQuery.dataUpdatedAt`
+ * (verified) fails its very first assertion, because in that fixture
+ * `host.status` never resolves and `dataUpdatedAt` is `0` — the proof's age
+ * comes out hugely negative and the lower bound rejects it, so the live
+ * `restarting` never appears at all.
+ *
+ * This is the WIRE slot's, and it needs the opposite fixture: a host that
+ * ANSWERS, slowly. Falsifies `clock: { wireNowMs: nowMs, … }` here — the same defect
+ * re-introduced one file over from where it was found.
+ */
+describe("useLocalHostUpdateOperation — the WIRE leg's freshness is its own read's instant (C-H3)", () => {
+  it("a slow host.status round trip inside the poll window neither demotes the live attempt nor drops the lifecycle gate", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let statusCalls = 0;
+      // The second poll HANGS past the fresh window and then answers normally.
+      // Deferred rather than delayed so the pending window is exact and the
+      // answer is the same live attempt — nothing about the DATA changes across
+      // this test, only how long the wire took to say it.
+      let releaseSlowPoll: () => void = () => undefined;
+      const slowPoll = new Promise<void>((resolve) => {
+        releaseSlowPoll = resolve;
+      });
+      bindReachableLocalHost(async () => {
+        statusCalls += 1;
+        if (statusCalls === 2) await slowPoll;
+        return statusWith(attemptOperation({ phase: "downloading" }));
+      });
+      // NO durable record on the controller status. The record leg is not what
+      // this pin is about, and leaving it out means the wire arm's own
+      // staleness is the only thing that can move the view — under the
+      // mutation there is nothing else for `preferLiveOverRecord` to fall to,
+      // so a red here is unambiguously the wire clock.
+      const management = notImplementedManagement(CONTROLLER_STATUS_BASE);
+
+      const { result } = renderOperation(management);
+
+      // Baseline: the attempt is live and holds the gate.
+      await waitFor(() => {
+        expect(result.current.view.kind).toBe("downloading");
+      });
+      expect(holdsLifecycleGate(result.current.view)).toBe(true);
+
+      // Let the accelerated poll fire and hang, then push the wall clock well
+      // past the fresh window (`dataUpdatedAt` + 2.5 × the 2 s accelerated
+      // poll delay = 5 s) while that request is still outstanding.
+      await vi.advanceTimersByTimeAsync(2_500);
+      await waitFor(() => expect(statusCalls).toBeGreaterThan(1));
+      await vi.advanceTimersByTimeAsync(8_000);
+
+      // THE PIN. The read has not failed and nothing newer has landed — the
+      // request is simply still in flight — so the last frame is still the best
+      // evidence there is and must still be treated as live.
+      expect(result.current.view.kind).toBe("downloading");
+      expect(holdsLifecycleGate(result.current.view)).toBe(true);
+
+      // And it recovers normally once the slow answer lands, so the pin is
+      // about the window rather than about wedging the fixture.
+      releaseSlowPoll();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(result.current.view.kind).toBe("downloading");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

@@ -1,0 +1,1703 @@
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import {
+  POOL_HOST_ID,
+  type HostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
+import {
+  hostListItemToDirectoryEntry,
+  type RemoteHostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/remote-fetcher";
+import type {
+  HostConnectivity,
+  HostListItem,
+} from "@traycer/protocol/host/host-status";
+import type {
+  IStreamSession,
+  StreamCloseReason,
+} from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import {
+  hostRpcRegistry,
+  type HostRpcRegistry,
+} from "@traycer/protocol/host/index";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
+import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
+import {
+  poolEntry,
+  teamSandboxEntry,
+} from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import { PoolChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
+import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
+import { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import { assistantRowId } from "@traycer/protocol/persistence/chat-transcript/row-projection";
+import { claudeChatSessionAnchorSchema } from "@traycer/protocol/persistence/epic/senders";
+import {
+  providersPreviewProfileMoveRequestSchema,
+  providersPreviewProfileMoveResponseSchema,
+  type ProvidersPreviewProfileMoveRequest,
+} from "@traycer/protocol/host/profile-move-schemas";
+import {
+  chatAccountWaitSchema,
+  type LastFailedAttempt,
+} from "@traycer/protocol/host/agent/gui/subscribe";
+import {
+  providersListResponseSchema,
+  type ProvidersListResponse,
+} from "@traycer/protocol/host/provider-schemas";
+import { AccountWaitSurface } from "@/components/chat/fallback/account-wait-card";
+import { useChatAccountWait } from "@/components/chat/fallback/use-chat-account-wait";
+import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
+import { createComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import {
+  pinProfile,
+  providerState,
+  removedEntry,
+} from "@/components/providers/__tests__/profile-pin-fixtures";
+import type {
+  ChatSessionState,
+  ChatStreamClientHandle,
+} from "@/stores/chats/chat-session-store";
+
+// `useChatSessionHandle`'s own module state (the process-wide registry) is
+// exercised for real below - only its collaborators are mocked, so the
+// rotation drives the REAL `remoteAwareOwnerIdentityKey` computation, not
+// the `__setChatStreamClientFactoryForTests` test seam (which collapses BOTH
+// `transportKey` and `ownerIdentityKey` to one hardcoded string, structurally
+// unable to prove this discriminator - see `chat-tile.test.tsx`).
+vi.mock("@/lib/epic-selectors", () => ({
+  useOpenEpicId: () => "epic-1",
+}));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/host-rpc-routing",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-rpc-routing")
+      >();
+    return {
+      ...actual,
+      readProcessHostRpcTierPlan: () => actual.createHostRpcTierPlan(poolEntry),
+    };
+  },
+);
+
+vi.mock("@/hooks/environment/use-environment-arms", () => ({
+  useEnvironmentArmChats: () => [],
+}));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "2.0.0" };
+  },
+);
+
+const hostEntryRef = vi.hoisted((): { value: HostDirectoryEntry | null } => ({
+  value: null,
+}));
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: (hostId: string) =>
+    hostId === POOL_HOST_ID ? poolEntry : hostEntryRef.value,
+}));
+
+// `hostTransportKey` (reached through `hostStreamTransportKeyFor`, exercised
+// for real below) asks this for live-session evidence. Unmocked, no test in
+// this file ever registers a real remote session, so it would always answer
+// `false` - fine for the "no ready session" direction, but unable to prove
+// the "a ready session survives a confirmed refusal" direction the single
+// transport-survival rule also requires.
+const readySessionHosts = vi.hoisted(() => ({ value: new Set<string>() }));
+vi.mock(
+  "@traycer-clients/shared/host-transport/remote/index",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-transport/remote/index")
+      >();
+    return {
+      ...actual,
+      hasReadyRemoteSession: (hostId: string) =>
+        readySessionHosts.value.has(hostId),
+    };
+  },
+);
+
+const globalClientRef = vi.hoisted(
+  (): { value: HostClient<HostRpcRegistry> | null } => ({ value: null }),
+);
+const authServiceStub = vi.hoisted(() => ({
+  revalidateCurrentContext: vi.fn(() =>
+    Promise.resolve({ kind: "valid" as const }),
+  ),
+}));
+vi.mock("@/lib/host", () => ({
+  useHostClient: () => {
+    if (globalClientRef.value === null) {
+      throw new Error("test: globalClientRef not configured");
+    }
+    return globalClientRef.value;
+  },
+  useAuthService: () => authServiceStub,
+}));
+
+// The real `useDurableStreamTransportFactory` returns a referentially-STABLE
+// opener (a `useCallback` with an empty dep array) - the acquire effect below
+// depends on it, so a mock returning a FRESH closure on every render would
+// re-run that effect every commit and loop forever (confirmed while building
+// the sibling terminal-registry rotation test). `stableOpenTransport` is
+// defined once, here, and indirects through the mutable ref so tests can
+// still swap behavior per-case.
+const openTransportRef = vi.hoisted(
+  (): { fn: ((hostId: string) => DurableStreamTransport) | null } => ({
+    fn: null,
+  }),
+);
+let servingWitness: PoolChatServingWitness | null = null;
+const stableOpenTransport = vi.hoisted(() => {
+  return (hostId: string) => {
+    if (openTransportRef.fn === null) {
+      throw new Error("test: openTransportRef not configured");
+    }
+    return openTransportRef.fn(hostId);
+  };
+});
+vi.mock("@/lib/host/use-durable-stream-transport", () => ({
+  useDurableStreamTransportFactory: () => stableOpenTransport,
+}));
+
+const skeletonResumeCacheHooks = vi.hoisted(() => ({
+  shouldLoad: null as (() => boolean) | null,
+  hydrate: null as (() => Promise<void>) | null,
+  prewarmUsers: [] as string[],
+}));
+vi.mock("@/stores/chats/skeleton-resume-cache", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/stores/chats/skeleton-resume-cache")
+    >();
+  return {
+    ...actual,
+    shouldLoadDurableSkeletonForResume: (
+      key: Parameters<typeof actual.shouldLoadDurableSkeletonForResume>[0],
+    ) =>
+      skeletonResumeCacheHooks.shouldLoad?.() ??
+      actual.shouldLoadDurableSkeletonForResume(key),
+    hydrateSkeletonForResume: (
+      key: Parameters<typeof actual.hydrateSkeletonForResume>[0],
+    ) =>
+      skeletonResumeCacheHooks.hydrate?.() ??
+      actual.hydrateSkeletonForResume(key),
+    primeDurableSkeletonsForResume: (userId: string) => {
+      skeletonResumeCacheHooks.prewarmUsers.push(userId);
+      actual.primeDurableSkeletonsForResume(userId);
+    },
+  };
+});
+
+import {
+  disposeAllChatSessions,
+  getChatSessionRegistry,
+  useChatSessionHandle,
+} from "@/lib/registries/chat-session-registry";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostSupportsMethod: (): boolean => true,
+}));
+vi.mock("@/hooks/providers/use-profile-move-computer-names", () => ({
+  useProfileMoveComputerNames:
+    () =>
+    (hostId: string | null): string =>
+      hostId === null ? "" : `Computer ${hostId}`,
+}));
+vi.mock("@/hooks/home-focus/use-focus-actions", () => ({
+  useFocusActions: () => ({ openAgent: () => undefined }),
+}));
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({ openSettings: () => undefined }),
+}));
+vi.mock("@/lib/layout-overrides", () => ({
+  useReadingWidthStyle: () => ({ className: "", maxWidth: undefined }),
+}));
+
+afterAll(() => {
+  vi.doUnmock("@/lib/epic-selectors");
+  vi.doUnmock("@/hooks/host/use-host-directory-entry");
+  vi.doUnmock("@traycer-clients/shared/host-transport/remote/index");
+  vi.doUnmock("@/lib/host");
+  vi.doUnmock("@/lib/host/use-durable-stream-transport");
+  vi.doUnmock("@/stores/chats/skeleton-resume-cache");
+  vi.doUnmock("@/hooks/host/use-host-supports-method");
+  vi.doUnmock("@/hooks/providers/use-profile-move-computer-names");
+  vi.doUnmock("@/hooks/home-focus/use-focus-actions");
+  vi.doUnmock("@/stores/tabs/use-system-tab-modal");
+  vi.doUnmock("@/lib/layout-overrides");
+});
+
+/** Matches `createRequestContextFixture`'s default identity. */
+const FIXTURE_USER_ID = "user-fixture-1";
+const RELAY_URL = "wss://relay.test/attach";
+const REMOTE_HOST_ID = "chat-registry-remote-host";
+const CHAT_PROFILE_USER_ID = "chat-test-user";
+
+function remoteTarget(publicKey: string): RemoteHostDirectoryEntry {
+  return {
+    hostId: REMOTE_HOST_ID,
+    label: REMOTE_HOST_ID,
+    kind: "remote",
+    // Every remote host shares one fixed relay attach URL - a rotation is a
+    // same-URL event by construction, so this stays identical across A/B.
+    websocketUrl: RELAY_URL,
+    version: "1.0.0",
+    transportDialability: "dialable",
+    publicKey,
+    relayFuseGrace: false,
+    sandbox: null,
+    owner: null,
+    remoteStatus: {
+      connectivity: "connectable",
+      viewerReachability: "ok",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: null,
+      lastSeenAt: null,
+    },
+  };
+}
+
+function buildGlobalClient(): HostClient<HostRpcRegistry> {
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-1",
+      handlers: {},
+    }),
+  });
+  client.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "tok-1",
+    }),
+  );
+  return client;
+}
+
+function fakeStreamSession(): IStreamSession {
+  return {
+    sendClientFrame: () => undefined,
+    onServerFrame: () => undefined,
+    onStatusChange: () => undefined,
+    // Never negotiates: this fake exercises no version-dependent path.
+    getNegotiatedSchemaVersion: () => null,
+    hasSentOpenRequest: () => false,
+    requestReconnect: () => undefined,
+    close: () => undefined,
+  };
+}
+
+function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
+  return {
+    subscribe: () => fakeStreamSession(),
+    // The path a chat session opens through: `ChatStreamClient` re-reads its
+    // skeleton-resume claim on every wire subscribe.
+    subscribeWithParamsProvider: () => fakeStreamSession(),
+    close: () => undefined,
+    isClosed: () => false,
+    notifyBearerRotated: () => undefined,
+    notifyCloudVerdictChanged: () => undefined,
+    reconnectAll: () => undefined,
+    isReady: () => true,
+    getMethodSupport: () => "unknown",
+    subscribeMethodSupport: () => () => undefined,
+    getMethodSchemaVersion: () => null,
+    subscribeAvailabilityRecovered: () => () => undefined,
+    getClosedReason: () => null,
+    onClosed: () => () => undefined,
+    instanceId: "fake-stream-client",
+  };
+}
+
+interface TrackedTransportRecord {
+  readonly hostId: string;
+  closeCount: number;
+}
+
+function createTrackedOpenTransport(): {
+  readonly openTransport: (hostId: string) => DurableStreamTransport;
+  readonly records: () => ReadonlyArray<TrackedTransportRecord>;
+} {
+  const records: TrackedTransportRecord[] = [];
+  const openTransport = (hostId: string): DurableStreamTransport => {
+    const record: TrackedTransportRecord = { hostId, closeCount: 0 };
+    records.push(record);
+    return {
+      wsStreamClient: fakeWsStreamClient(),
+      close: () => {
+        record.closeCount += 1;
+      },
+    };
+  };
+  return { openTransport, records: () => records };
+}
+
+function wrapper(props: { readonly children: ReactNode }): ReactNode {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return (
+    <QueryClientProvider client={queryClient}>
+      <ChatServingWitnessContext.Provider value={servingWitness}>
+        {props.children}
+      </ChatServingWitnessContext.Provider>
+    </QueryClientProvider>
+  );
+}
+
+const LOCAL_HOST_ID = "chat-registry-local-host";
+const ACCOUNT_WAIT_CHAT_ID = "chat-account-wait-removed-source";
+const ACCOUNT_WAIT_SOURCE: ProvidersPreviewProfileMoveRequest["source"] = {
+  providerId: "claude-code",
+  profileId: "removed-source",
+};
+const ACCOUNT_WAIT_REMOVED = chatAccountWaitSchema.parse({
+  reason: "removed",
+  source: ACCOUNT_WAIT_SOURCE,
+});
+const ACCOUNT_WAIT_LIST: ProvidersListResponse =
+  providersListResponseSchema.parse({
+    providers: [
+      providerState({
+        providerId: "claude-code",
+        authStatus: "authenticated",
+        profiles: [
+          pinProfile({
+            profileId: "destination-profile",
+            label: "Destination profile",
+            kind: "managed",
+            enabled: true,
+            authStatus: "authenticated",
+            aliases: [],
+            personNotice: null,
+            terminalOnThisComputer: false,
+            otherNames: [],
+          }),
+        ],
+      }),
+    ],
+    native: null,
+    removedProfiles: [
+      removedEntry({
+        providerId: "claude-code",
+        profileId: ACCOUNT_WAIT_SOURCE.profileId,
+        aliases: ["legacy-source-alias"],
+      }),
+    ],
+    offersSignIns: true,
+  });
+const ACCOUNT_WAIT_PREVIEW = providersPreviewProfileMoveResponseSchema.parse({
+  extent: "fleet",
+  mode: "waiting",
+  targets: [
+    {
+      kind: "agent",
+      epicId: "epic-waiting",
+      agentId: "agent-waiting",
+      hostId: LOCAL_HOST_ID,
+      title: "Waiting agent",
+      standing: "waiting",
+    },
+  ],
+  terminals: [],
+  pendingComputers: [],
+});
+const ACCOUNT_WAIT_FAILURE: LastFailedAttempt = {
+  userMessageId: "user-account-wait",
+  turnId: "turn-account-wait",
+  failure: { reason: "rate_limit" },
+  eligibleRungs: ["retry"],
+  waitDisposition: "no_verified_reset",
+  switchDisposition: "unknown",
+  failedTuple: null,
+};
+
+/**
+ * This machine's host as the directory lists it: dialable at `websocketUrl`,
+ * or, with a null URL, the booting twin `HostDirectoryService.snapshot()`
+ * substitutes while the local snapshot is absent.
+ */
+function localEntry(
+  websocketUrl: string | null,
+  version: string,
+): HostDirectoryEntry {
+  return {
+    hostId: LOCAL_HOST_ID,
+    label: "This Mac",
+    kind: "local",
+    websocketUrl,
+    version,
+    transportDialability: websocketUrl === null ? "not-dialable" : "dialable",
+  };
+}
+
+function accountWaitClient(): {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly previewRequests: ProvidersPreviewProfileMoveRequest[];
+} {
+  const previewRequests: ProvidersPreviewProfileMoveRequest[] = [];
+  const hostEntry = localEntry("ws://127.0.0.1:55300/rpc", "2.0.0");
+  const client = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (hostId) => (hostId === LOCAL_HOST_ID ? hostEntry : null),
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "account-wait-preview",
+      handlers: {
+        "providers.previewProfileMove": (params) => {
+          previewRequests.push(
+            providersPreviewProfileMoveRequestSchema.parse(params),
+          );
+          return ACCOUNT_WAIT_PREVIEW;
+        },
+      },
+    }),
+  });
+  client.setRequestContext(
+    createRequestContextFixture({
+      origin: "renderer",
+      bearerToken: "tok-account-wait",
+    }),
+  );
+  return {
+    client: client.createRequester(hostEntry),
+    previewRequests,
+  };
+}
+
+function RegisteredAccountWaitScene(props: {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly chatId: string;
+  readonly toolbarStore: ComposerToolbarStore;
+  readonly providersList: ProvidersListResponse;
+}): ReactNode {
+  const wait = useChatAccountWait({
+    fallbackCardVisible: false,
+    providersList: props.providersList,
+    epicId: "epic-1",
+    chatId: props.chatId,
+    hostId: LOCAL_HOST_ID,
+  });
+  return (
+    <ChatComposerBannerPortalProvider hidden={false}>
+      <AccountWaitSurface
+        epicId="epic-1"
+        chatId={props.chatId}
+        providersList={props.providersList}
+        wait={wait}
+        client={props.client}
+        hostId={LOCAL_HOST_ID}
+        toolbarStore={props.toolbarStore}
+        canAct
+      >
+        {null}
+      </AccountWaitSurface>
+    </ChatComposerBannerPortalProvider>
+  );
+}
+
+/** Publishes one host's lease the way the selection bridge does. */
+function publishLease(lease: HostLeaseSnapshot): void {
+  useSelectionAuthorityStore.getState().applyKernelSnapshot({
+    attached: true,
+    preferredHostId: lease.hostId,
+    targetHostId: lease.hostId,
+    effectiveHostId: lease.hostId,
+    leases: [lease],
+    selectionRevision: 1,
+  });
+}
+
+function signIn(): void {
+  useAuthStore.setState({
+    status: "signed-in",
+    profile: {
+      userId: CHAT_PROFILE_USER_ID,
+      userName: CHAT_PROFILE_USER_ID,
+      email: `${CHAT_PROFILE_USER_ID}@example.com`,
+    },
+  });
+}
+
+function unauthorizedClose(doorReason: string | null): StreamCloseReason {
+  return {
+    kind: "fatalError",
+    details: {
+      code: "UNAUTHORIZED",
+      reason: "test host refusal",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      ...(doorReason === null ? {} : { doorReason }),
+    },
+  };
+}
+
+/**
+ * Flushes effects and microtasks before a survival assertion: a release is
+ * asynchronous, so a synchronous read would stay green even if a regression
+ * released the handle one microtask after the rerender.
+ */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
+describe("useChatSessionHandle owner identity (R-1)", () => {
+  afterEach(() => {
+    cleanup();
+    disposeAllChatSessions();
+    servingWitness?.dispose();
+    servingWitness = null;
+    hostEntryRef.value = null;
+    globalClientRef.value = null;
+    openTransportRef.fn = null;
+    readySessionHosts.value = new Set();
+    skeletonResumeCacheHooks.shouldLoad = null;
+    skeletonResumeCacheHooks.hydrate = null;
+    skeletonResumeCacheHooks.prewarmUsers.length = 0;
+    useAuthStore.setState({ profile: null, status: "signed-out" });
+  });
+
+  it("forces a release + reacquire on a same-host remote public-key rotation, isolated from every other field", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CHAT_PROFILE_USER_ID,
+        userName: CHAT_PROFILE_USER_ID,
+        email: `${CHAT_PROFILE_USER_ID}@example.com`,
+      },
+    });
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    const globalClient = buildGlobalClient();
+    expect(globalClient.getRequestContextUserId()).toBe(FIXTURE_USER_ID);
+    globalClientRef.value = globalClient;
+    hostEntryRef.value = remoteTarget("pubkey-a");
+
+    const { result, rerender } = renderHook(
+      () => useChatSessionHandle("chat-1", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const firstHandle = result.current;
+    if (firstHandle === null) {
+      throw new Error("expected initial handle");
+    }
+    expect(tracked.records()).toHaveLength(1);
+    expect(tracked.records()[0].closeCount).toBe(0);
+
+    // Same chatId/epicId/hostId, same signed-in user, same
+    // websocketUrl/version/status - ONLY the remote host's public key rotates
+    // (re-enrollment / corruption recovery). A pass proves `ownerIdentityKey`
+    // alone (folded into `chatSessionScopeKey`) forces the registry's own
+    // scope-key mismatch teardown, not a coincident host/user churn.
+    hostEntryRef.value = remoteTarget("pubkey-b");
+    rerender();
+
+    await waitFor(() => {
+      expect(result.current).not.toBe(firstHandle);
+    });
+
+    expect(tracked.records()).toHaveLength(2);
+    expect(tracked.records()[0].closeCount).toBe(1);
+    expect(tracked.records()[1].closeCount).toBe(0);
+  });
+
+  it("acquires while a hinted durable skeleton load is still pending", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CHAT_PROFILE_USER_ID,
+        userName: CHAT_PROFILE_USER_ID,
+        email: `${CHAT_PROFILE_USER_ID}@example.com`,
+      },
+    });
+    skeletonResumeCacheHooks.shouldLoad = () => true;
+    let hydrationStarted = false;
+    skeletonResumeCacheHooks.hydrate = () => {
+      hydrationStarted = true;
+      return new Promise<void>(() => {});
+    };
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = remoteTarget("resume-prewarm-key");
+
+    const { result } = renderHook(
+      () => useChatSessionHandle("chat-resume-pending", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    expect(hydrationStarted).toBe(true);
+    expect(tracked.records()).toHaveLength(1);
+    expect(skeletonResumeCacheHooks.prewarmUsers).toContain(
+      CHAT_PROFILE_USER_ID,
+    );
+  });
+
+  // Control: the scope dropped the websocket URL, but only for a LOCAL
+  // host. A remote host's relay attach URL is part of its owner identity, so
+  // a move there still rebuilds, exactly as the public-key rotation above does.
+  it("still rebuilds when a remote host's relay attach URL changes", async () => {
+    signIn();
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = remoteTarget("pubkey-a");
+
+    const { result, rerender } = renderHook(
+      () => useChatSessionHandle("chat-relay-1", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const firstHandle = result.current;
+
+    hostEntryRef.value = {
+      ...remoteTarget("pubkey-a"),
+      websocketUrl: "wss://relay-2.test/attach",
+    };
+    rerender();
+
+    await waitFor(() => {
+      expect(result.current).not.toBe(firstHandle);
+    });
+    expect(tracked.records()).toHaveLength(2);
+    expect(tracked.records()[0].closeCount).toBe(1);
+  });
+
+  it("builds the session that replaces an evicted one for the same chat with a later sessionGeneration, so a card's baseline tells the two apart", async () => {
+    signIn();
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = remoteTarget("pubkey-a");
+
+    const { result, rerender } = renderHook(
+      () => useChatSessionHandle("chat-generation-1", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const evicted = result.current;
+    if (evicted === null) {
+      throw new Error("expected initial handle");
+    }
+
+    hostEntryRef.value = remoteTarget("pubkey-b");
+    rerender();
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+      expect(result.current).not.toBe(evicted);
+    });
+    const replacement = result.current;
+    if (replacement === null) {
+      throw new Error("expected the replacement handle");
+    }
+
+    expect(tracked.records()[0].closeCount).toBe(1);
+    expect([replacement.epicId, replacement.chatId]).toEqual([
+      evicted.epicId,
+      evicted.chatId,
+    ]);
+    expect(replacement.sessionGeneration).toBeGreaterThan(
+      evicted.sessionGeneration,
+    );
+  });
+});
+
+/**
+ * The actual user-visible failure, composed end to end.
+ *
+ * The isolated tests all passed while this was broken, which is the point of
+ * putting it here: the mapper collapsed `unknown` into a non-dialable entry,
+ * `hostTransportKey` refused anything non-dialable, THIS registry released the
+ * handle on the changed key, and `chat-tile` rendered its loading state
+ * forever — while `useHostReachability` one layer up had just decided the same
+ * host was reachable. Every layer was individually defensible.
+ *
+ * So the entry is built by the REAL mapper from a REAL registry row, and the
+ * only thing that changes between the two renders is the cloud's connectivity
+ * verdict. A synthetic literal would not do: it carries no `remoteStatus`, so
+ * `hostUnavailability` falls to "offline" and the case under test cannot be
+ * reached.
+ */
+describe("a live chat session survives a degraded liveness read", () => {
+  afterEach(() => {
+    cleanup();
+    disposeAllChatSessions();
+    hostEntryRef.value = null;
+    globalClientRef.value = null;
+    openTransportRef.fn = null;
+    readySessionHosts.value = new Set();
+    useAuthStore.setState({ profile: null, status: "signed-out" });
+    useSelectionAuthorityStore.getState().reset();
+  });
+
+  function mappedEntry(connectivity: HostConnectivity): HostDirectoryEntry {
+    const item: HostListItem = {
+      hostId: REMOTE_HOST_ID,
+      displayName: REMOTE_HOST_ID,
+      platform: "Ubuntu",
+      kind: "personal",
+      publicKey: "pubkey-a",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatePolicy: "manual",
+      status: {
+        connectivity,
+        viewerReachability: "unknown",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: "2.0.0",
+        lastSeenAt: "2026-08-01T00:00:00.000Z",
+      },
+    };
+    return hostListItemToDirectoryEntry(item, RELAY_URL);
+  }
+
+  it("keeps the same handle and never closes the transport when connectivity goes `unknown`", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CHAT_PROFILE_USER_ID,
+        userName: CHAT_PROFILE_USER_ID,
+        email: `${CHAT_PROFILE_USER_ID}@example.com`,
+      },
+    });
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = mappedEntry("connectable");
+
+    const { result, rerender } = renderHook(
+      () => useChatSessionHandle("chat-unknown-1", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const liveHandle = result.current;
+    expect(tracked.records()).toHaveLength(1);
+
+    // Redis liveness reads go degraded on the cloud side. Nothing about this
+    // machine, this socket, or this chat changed.
+    hostEntryRef.value = mappedEntry("unknown");
+    rerender();
+
+    // Flush effects and microtasks before asserting survival: release is
+    // asynchronous (the release test above needs `waitFor`), so a synchronous
+    // read here would stay green even if a regression released the handle one
+    // microtask after the rerender.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current).toBe(liveHandle);
+    expect(tracked.records()).toHaveLength(1);
+    expect(tracked.records()[0].closeCount).toBe(0);
+  });
+
+  it("still releases the handle when the cloud CONFIRMS the host is offline, and no ready session is open", async () => {
+    // The other direction, so the test above cannot pass by the registry
+    // having simply stopped reacting to the directory at all. `readySessionHosts`
+    // is empty (default) here - see the counterpart below for the same
+    // transition WITH a ready session open, which must survive instead.
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CHAT_PROFILE_USER_ID,
+        userName: CHAT_PROFILE_USER_ID,
+        email: `${CHAT_PROFILE_USER_ID}@example.com`,
+      },
+    });
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = mappedEntry("connectable");
+
+    const { result, rerender } = renderHook(
+      () => useChatSessionHandle("chat-offline-1", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+
+    hostEntryRef.value = mappedEntry("offline");
+    rerender();
+
+    // The handle is released. The transport itself is not asserted here: the
+    // registry lingers it deliberately, so a close count is a statement about
+    // the eviction timer rather than about this decision.
+    await waitFor(() => {
+      expect(result.current).toBeNull();
+    });
+  });
+
+  it("keeps the handle when the cloud CONFIRMS the host is offline but a ready session is open", async () => {
+    // The single transport-survival rule, from the registry's side: a ready
+    // live session keeps the transport alive under ANY verdict, including a
+    // confirmed `offline` refusal - confirmed refusals gate NEW dials only.
+    // Without this the registry released the very handle the session was
+    // still using (`use-host-reachability.test.tsx` pins the hook's side of
+    // the same rule).
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CHAT_PROFILE_USER_ID,
+        userName: CHAT_PROFILE_USER_ID,
+        email: `${CHAT_PROFILE_USER_ID}@example.com`,
+      },
+    });
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = mappedEntry("connectable");
+    readySessionHosts.value = new Set([REMOTE_HOST_ID]);
+
+    const { result, rerender } = renderHook(
+      () => useChatSessionHandle("chat-offline-live-1", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const liveHandle = result.current;
+
+    hostEntryRef.value = mappedEntry("offline");
+    rerender();
+
+    // Flush effects and microtasks before asserting survival: release is
+    // asynchronous (the release test above needs `waitFor`), so a synchronous
+    // read here would stay green even if a regression released the handle one
+    // microtask after the rerender.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current).toBe(liveHandle);
+    expect(tracked.records()).toHaveLength(1);
+    expect(tracked.records()[0].closeCount).toBe(0);
+  });
+
+  // A remote host has no booting shape: what changes when it
+  // restarts is the cloud's verdict, and a confirmed `offline` nulls the
+  // transport key. The lease is what knows the restart was announced. The
+  // control is the test above that still releases on the same verdict with no
+  // lease vouching.
+  it("keeps the handle through a confirmed offline while the lease says the restart is expected, and the same store revives", async () => {
+    signIn();
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = mappedEntry("connectable");
+
+    const { result, rerender } = renderHook(
+      () => useChatSessionHandle("chat-restart-1", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const liveHandle = result.current;
+
+    // The host announced its restart, then went down.
+    act(() => {
+      publishLease({
+        hostId: REMOTE_HOST_ID,
+        status: "restarting-expected",
+        dead: null,
+      });
+    });
+    hostEntryRef.value = mappedEntry("offline");
+    rerender();
+    await settle();
+    expect(result.current).toBe(liveHandle);
+
+    // And it is back.
+    act(() => {
+      publishLease({ hostId: REMOTE_HOST_ID, status: "ready", dead: null });
+    });
+    hostEntryRef.value = mappedEntry("connectable");
+    rerender();
+    await settle();
+    expect(result.current).toBe(liveHandle);
+    expect(tracked.records()).toHaveLength(1);
+    expect(tracked.records()[0].closeCount).toBe(0);
+  });
+
+  it("releases the held handle once the lease stops vouching and the host is still offline", async () => {
+    signIn();
+    openTransportRef.fn = createTrackedOpenTransport().openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = mappedEntry("connectable");
+
+    const { result, rerender } = renderHook(
+      () => useChatSessionHandle("chat-restart-2", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    act(() => {
+      publishLease({
+        hostId: REMOTE_HOST_ID,
+        status: "restarting-expected",
+        dead: null,
+      });
+    });
+    hostEntryRef.value = mappedEntry("offline");
+    rerender();
+    await settle();
+    expect(result.current).not.toBeNull();
+
+    // The episode ran out with the host still down.
+    act(() => {
+      publishLease({
+        hostId: REMOTE_HOST_ID,
+        status: "dead",
+        dead: { reason: "offline" },
+      });
+    });
+    await waitFor(() => {
+      expect(result.current).toBeNull();
+    });
+  });
+});
+
+/**
+ * A local host restart keeps the chat's store. The scope is the chat's
+ * identity (host id, kind and owner identity), so neither the websocket URL
+ * nor the host version is part of it, and the handle is held while the host is
+ * coming back. Before this, every restart disposed the store and its
+ * transcript: the scope moved with the port, and the booting entry's null URL
+ * released the handle outright.
+ */
+describe("useChatSessionHandle through a local host restart (G1)", () => {
+  afterEach(() => {
+    cleanup();
+    disposeAllChatSessions();
+    hostEntryRef.value = null;
+    globalClientRef.value = null;
+    openTransportRef.fn = null;
+    readySessionHosts.value = new Set();
+    useAuthStore.setState({ profile: null, status: "signed-out" });
+    useSelectionAuthorityStore.getState().reset();
+  });
+
+  const FIRST_URL = "ws://127.0.0.1:55300/rpc";
+  const RESPAWN_URL = "ws://127.0.0.1:61234/rpc";
+
+  async function openRegisteredAccountWaitSession() {
+    signIn();
+    openTransportRef.fn = createTrackedOpenTransport().openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = localEntry(FIRST_URL, "2.0.0");
+    const { result } = renderHook(
+      () => useChatSessionHandle(ACCOUNT_WAIT_CHAT_ID, LOCAL_HOST_ID, true),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const handle = result.current;
+    if (handle === null) throw new Error("expected a registered chat handle");
+    return handle;
+  }
+
+  function accountWaitToolbarStore() {
+    return createComposerToolbarStore({
+      purpose: "run",
+      reasoningFallback: "model-default",
+      seedKey: "account-wait-registered-session",
+      values: {
+        ultracode: false,
+        permission: "supervised",
+        selection: {
+          harnessId: "claude",
+          modelSlug: "claude-sonnet-4",
+          profileId: "destination-profile",
+        },
+        reasoning: "high",
+        serviceTier: "",
+      },
+      onSettingsChange: () => undefined,
+      tuiOnly: false,
+      chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
+      hostId: LOCAL_HOST_ID,
+    });
+  }
+
+  it.each([
+    ["the websocket URL", localEntry(RESPAWN_URL, "2.0.0")],
+    ["the host version", localEntry(FIRST_URL, "2.1.0")],
+  ] as const)(
+    "keeps the same store when %s changes, and never reopens the transport",
+    async (_label, changed) => {
+      signIn();
+      const tracked = createTrackedOpenTransport();
+      openTransportRef.fn = tracked.openTransport;
+      globalClientRef.value = buildGlobalClient();
+      hostEntryRef.value = localEntry(FIRST_URL, "2.0.0");
+
+      const { result, rerender } = renderHook(
+        () => useChatSessionHandle("chat-local-1", LOCAL_HOST_ID, true),
+        { wrapper },
+      );
+      await waitFor(() => {
+        expect(result.current).not.toBeNull();
+      });
+      const liveHandle = result.current;
+
+      hostEntryRef.value = changed;
+      rerender();
+      await settle();
+
+      // The same handle is the same store, so the same transcript. The owned
+      // transport stays open and follows the endpoint itself: its re-dial on
+      // an endpoint move is pinned in `durable-stream-transport.test.ts`.
+      expect(result.current).toBe(liveHandle);
+      expect(tracked.records()).toHaveLength(1);
+      expect(tracked.records()[0].closeCount).toBe(0);
+    },
+  );
+
+  it("keeps an at-floor owner while the host boots, and the URL returning revives the same store", async () => {
+    signIn();
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = localEntry(FIRST_URL, "2.0.0");
+
+    const { result, rerender } = renderHook(
+      () => useChatSessionHandle("chat-boot-1", LOCAL_HOST_ID, true),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const liveHandle = result.current;
+
+    // The restart: the directory swaps in the booting twin.
+    hostEntryRef.value = localEntry(null, "2.0.0");
+    rerender();
+    await settle();
+    expect(result.current).toBe(liveHandle);
+
+    // The host publishes again, on a new port and a new build.
+    hostEntryRef.value = localEntry(RESPAWN_URL, "2.1.0");
+    rerender();
+    await settle();
+    expect(result.current).toBe(liveHandle);
+    expect(tracked.records()).toHaveLength(1);
+    expect(tracked.records()[0].closeCount).toBe(0);
+  });
+
+  it("uses the failed turn's registered removed-profile snapshot to name and open the bulk count", async () => {
+    const user = userEvent.setup();
+    const handle = await openRegisteredAccountWaitSession();
+    const anchor = claudeChatSessionAnchorSchema.parse({
+      harnessId: "claude",
+      hostId: LOCAL_HOST_ID,
+      sessionId: "account-wait-session",
+      sessionWorkspaceSnapshot: {
+        workspaceKind: "session-snapshot",
+        primaryWorkspace: "/repo",
+        secondaryWorkspaces: [],
+      },
+      claudeMessageUuid: "account-wait-message",
+      createdAt: 1,
+      profileId: "legacy-source-alias",
+      labelSnapshot: "Source profile",
+      accountUuid: null,
+      accentColor: null,
+      turnTailUuid: null,
+      coveredUntilMessageId: null,
+    });
+    act(() => {
+      handle.store.setState({
+        accountWait: ACCOUNT_WAIT_REMOVED,
+        lastFailedAttempt: ACCOUNT_WAIT_FAILURE,
+        transcriptRowContext: {
+          [assistantRowId(ACCOUNT_WAIT_FAILURE.turnId)]: {
+            sessionAnchor: anchor,
+          },
+        },
+      });
+    });
+
+    const { client, previewRequests } = accountWaitClient();
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RegisteredAccountWaitScene
+          client={client}
+          chatId={ACCOUNT_WAIT_CHAT_ID}
+          toolbarStore={accountWaitToolbarStore()}
+          providersList={ACCOUNT_WAIT_LIST}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("Source profile")).toBeTruthy();
+    expect(screen.getByText("Was removed")).toBeTruthy();
+    await user.click(
+      screen.getByRole("button", { name: "Move all waiting agents" }),
+    );
+    expect(
+      await screen.findByText("1 agent is waiting on Source profile."),
+    ).toBeTruthy();
+    expect(previewRequests).toEqual([
+      {
+        extent: "fleet",
+        mode: "waiting",
+        source: ACCOUNT_WAIT_SOURCE,
+      },
+    ]);
+  });
+
+  it("shows only Was removed and Choose when the registered session has no name snapshot", async () => {
+    const handle = await openRegisteredAccountWaitSession();
+    act(() => {
+      handle.store.setState({
+        accountWait: ACCOUNT_WAIT_REMOVED,
+        lastFailedAttempt: undefined,
+        transcriptRowContext: {},
+      });
+    });
+    const { client, previewRequests } = accountWaitClient();
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RegisteredAccountWaitScene
+          client={client}
+          chatId={ACCOUNT_WAIT_CHAT_ID}
+          toolbarStore={accountWaitToolbarStore()}
+          providersList={ACCOUNT_WAIT_LIST}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("Was removed")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Choose another profile" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Sign in again" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Move all waiting agents" }),
+    ).toBeNull();
+    expect(screen.queryByText("removed-source")).toBeNull();
+    expect(screen.queryByText("legacy-source-alias")).toBeNull();
+    expect(previewRequests).toEqual([]);
+  });
+
+  const losses: ReadonlyArray<
+    readonly [string, (client: HostClient<HostRpcRegistry>) => void]
+  > = [
+    [
+      "the request context is cleared",
+      (client) => {
+        client.setRequestContext(null);
+      },
+    ],
+    [
+      "the directory entry goes missing",
+      () => {
+        hostEntryRef.value = null;
+      },
+    ],
+  ];
+
+  it.each(losses)(
+    "still releases the booting host's handle when %s",
+    async (_label, loseIt) => {
+      signIn();
+      openTransportRef.fn = createTrackedOpenTransport().openTransport;
+      const globalClient = buildGlobalClient();
+      globalClientRef.value = globalClient;
+      hostEntryRef.value = localEntry(FIRST_URL, "2.0.0");
+
+      const { result, rerender } = renderHook(
+        () => useChatSessionHandle("chat-boot-lost-1", LOCAL_HOST_ID, true),
+        { wrapper },
+      );
+      await waitFor(() => {
+        expect(result.current).not.toBeNull();
+      });
+      hostEntryRef.value = localEntry(null, "2.0.0");
+      rerender();
+      await settle();
+      // Held by the booting shape, so the release below is the loss's doing.
+      expect(result.current).not.toBeNull();
+
+      loseIt(globalClient);
+      rerender();
+      await waitFor(() => {
+        expect(result.current).toBeNull();
+      });
+    },
+  );
+  it("does not acquire an owner for a below-floor host in the local booting shape", () => {
+    signIn();
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = localEntry(null, "1.5.4");
+
+    const { result } = renderHook(
+      () => useChatSessionHandle("chat-boot-below-floor", LOCAL_HOST_ID, true),
+      { wrapper },
+    );
+
+    expect(result.current).toBeNull();
+    expect(tracked.records()).toHaveLength(0);
+  });
+
+  it("releases an at-floor remote owner when appVersion falls below floor during restarting-expected", async () => {
+    signIn();
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    const remote = remoteTarget("pubkey-a");
+    const remoteAtFloor: RemoteHostDirectoryEntry = {
+      ...remote,
+      websocketUrl: null,
+      transportDialability: "not-dialable",
+      version: "9.9.9",
+      remoteStatus: { ...remote.remoteStatus, appVersion: "2.0.0" },
+    };
+    hostEntryRef.value = remoteAtFloor;
+    publishLease({
+      hostId: REMOTE_HOST_ID,
+      status: "restarting-expected",
+      dead: null,
+    });
+
+    const registry = getChatSessionRegistry();
+    const releaseHandle = vi.spyOn(registry, "releaseHandle");
+    try {
+      const { result, rerender } = renderHook(
+        () =>
+          useChatSessionHandle(
+            "chat-remote-restart-below-floor",
+            REMOTE_HOST_ID,
+            true,
+          ),
+        { wrapper },
+      );
+      await waitFor(() => {
+        expect(result.current).not.toBeNull();
+      });
+      expect(tracked.records()).toHaveLength(1);
+      const owner = result.current;
+      if (owner === null) throw new Error("remote chat owner was not acquired");
+
+      const remoteBelowFloor: RemoteHostDirectoryEntry = {
+        ...remoteAtFloor,
+        remoteStatus: { ...remoteAtFloor.remoteStatus, appVersion: "1.5.4" },
+      };
+      hostEntryRef.value = remoteBelowFloor;
+      rerender();
+      await waitFor(() => {
+        expect(result.current).toBeNull();
+      });
+      await waitFor(() => {
+        expect(releaseHandle).toHaveBeenCalledWith(
+          "epic-1",
+          "chat-remote-restart-below-floor",
+          REMOTE_HOST_ID,
+          owner,
+        );
+      });
+      expect(
+        registry.peek(
+          "epic-1",
+          "chat-remote-restart-below-floor",
+          REMOTE_HOST_ID,
+        ),
+      ).toBe(owner);
+    } finally {
+      releaseHandle.mockRestore();
+    }
+  });
+
+  it("keeps an at-floor remote owner when its absent endpoint is covered by restarting-expected", async () => {
+    signIn();
+    const tracked = createTrackedOpenTransport();
+    openTransportRef.fn = tracked.openTransport;
+    globalClientRef.value = buildGlobalClient();
+    const remote = remoteTarget("pubkey-a");
+    const remoteAtFloor: RemoteHostDirectoryEntry = {
+      ...remote,
+      websocketUrl: null,
+      transportDialability: "not-dialable",
+      remoteStatus: { ...remote.remoteStatus, appVersion: "2.0.0" },
+    };
+    hostEntryRef.value = remoteAtFloor;
+    publishLease({
+      hostId: REMOTE_HOST_ID,
+      status: "restarting-expected",
+      dead: null,
+    });
+
+    const { result } = renderHook(
+      () =>
+        useChatSessionHandle(
+          "chat-remote-restart-at-floor",
+          REMOTE_HOST_ID,
+          true,
+        ),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+
+    expect(tracked.records()).toHaveLength(1);
+    expect(tracked.records()[0].closeCount).toBe(0);
+  });
+});
+
+describe("useChatSessionHandle retryFromUser silence gate", () => {
+  afterEach(() => {
+    cleanup();
+    disposeAllChatSessions();
+    hostEntryRef.value = null;
+    globalClientRef.value = null;
+    openTransportRef.fn = null;
+    readySessionHosts.value = new Set();
+    useAuthStore.setState({ profile: null, status: "signed-out" });
+  });
+
+  function signInAndBind(fake: FakeStreamClient): void {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CHAT_PROFILE_USER_ID,
+        userName: CHAT_PROFILE_USER_ID,
+        email: `${CHAT_PROFILE_USER_ID}@example.com`,
+      },
+    });
+    openTransportRef.fn = () => ({
+      wsStreamClient: fake,
+      close: () => {
+        fake.close();
+      },
+    });
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = remoteTarget("pubkey-a");
+  }
+
+  it("wakes the bound FakeStreamClient when silentFor is true, and only re-subscribes when it is false", async () => {
+    const fake = new FakeStreamClient(false);
+    const reconnectAll = vi.spyOn(fake, "reconnectAll");
+    signInAndBind(fake);
+
+    const { result } = renderHook(
+      () => useChatSessionHandle("chat-silence-1", REMOTE_HOST_ID, true),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const handle = result.current;
+    if (handle === null) {
+      throw new Error("expected a chat session handle");
+    }
+
+    fake.silentFor = true;
+    handle.store.getState().retryFromUser();
+    expect(reconnectAll).toHaveBeenCalledWith("user-retry", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
+
+    reconnectAll.mockClear();
+    fake.silentFor = false;
+    handle.store.getState().retryFromUser();
+    expect(reconnectAll).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The production `streamClientFactory` wraps the real `ChatStreamClient` in a
+ * hand-written handle. A probe it forgets to forward reads as absent in the
+ * store (the optional ones collapse to `false`/`null`), and a double that
+ * implements the probe itself can never see that.
+ */
+type HandleProbe = Extract<keyof ChatStreamClientHandle, `${string}Supported`>;
+
+const PROBE_NAMES = [
+  "sameTurnSteeringProtocolSupported",
+  "draftBlobBridgeSupported",
+  "interviewSettlementActionsProtocolSupported",
+  "autoPermissionModeProtocolSupported",
+  "ultracodeProtocolSupported",
+  "queuePauseReasonProtocolSupported",
+  "queuedSteerRestartConfirmationSupported",
+] as const satisfies readonly HandleProbe[];
+
+// A `...Supported` member the handle gains and this list lacks resolves the
+// type to `never`, so the assignment stops compiling.
+type EveryHandleProbe<T extends readonly HandleProbe[]> = [
+  Exclude<HandleProbe, T[number]>,
+] extends [never]
+  ? T
+  : never;
+const FORWARDED_PROBES: EveryHandleProbe<typeof PROBE_NAMES> = PROBE_NAMES;
+
+/** What the store derives from each probe once the connection opens. */
+const STORE_READS: Record<
+  (typeof FORWARDED_PROBES)[number],
+  (state: ChatSessionState) => unknown
+> = {
+  sameTurnSteeringProtocolSupported: (s) => s.steerProtocolSupported,
+  draftBlobBridgeSupported: (s) => s.draftBlobBridgeSupported,
+  interviewSettlementActionsProtocolSupported: (s) =>
+    s.interviewDeliveryRetryProtocolSupported,
+  autoPermissionModeProtocolSupported: (s) =>
+    s.autoPermissionModeProtocolSupported,
+  ultracodeProtocolSupported: (s) => s.ultracodeProtocolSupported,
+  queuePauseReasonProtocolSupported: (s) => s.queuePauseReasonProtocolSupported,
+  queuedSteerRestartConfirmationSupported: (s) =>
+    s.queuedSteerRestartConfirmationSupported(),
+};
+
+describe("the production chat stream client factory forwards every probe", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    cleanup();
+    disposeAllChatSessions();
+    servingWitness?.dispose();
+    servingWitness = null;
+    hostEntryRef.value = null;
+    globalClientRef.value = null;
+    openTransportRef.fn = null;
+    readySessionHosts.value = new Set();
+    useAuthStore.setState({ profile: null, status: "signed-out" });
+  });
+
+  async function openChatAtHost(
+    chatId: string,
+    hostId: string,
+    fake: FakeStreamClient,
+  ) {
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CHAT_PROFILE_USER_ID,
+        userName: CHAT_PROFILE_USER_ID,
+        email: `${CHAT_PROFILE_USER_ID}@example.com`,
+      },
+    });
+    openTransportRef.fn = () => ({
+      wsStreamClient: fake,
+      close: () => {
+        fake.close();
+      },
+    });
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value =
+      hostId === POOL_HOST_ID
+        ? poolEntry
+        : { ...remoteTarget("pubkey-a"), hostId };
+    const { result } = renderHook(
+      () => useChatSessionHandle(chatId, hostId, true),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current).not.toBeNull();
+    });
+    const handle = result.current;
+    if (handle === null) {
+      throw new Error("expected a chat session handle");
+    }
+    return handle;
+  }
+
+  async function openChat(chatId: string, fake: FakeStreamClient) {
+    return openChatAtHost(chatId, REMOTE_HOST_ID, fake);
+  }
+
+  it.each(["enrolment_broken", "host_claimed", null] as const)(
+    "does not revalidate sign-in for a host-token stream close (%s)",
+    async (doorReason) => {
+      const fake = new FakeStreamClient(true);
+      authServiceStub.revalidateCurrentContext.mockClear();
+      await openChatAtHost("chat-host-token-close", REMOTE_HOST_ID, fake);
+      await waitFor(() => expect(fake.sessions).toHaveLength(1));
+
+      act(() => {
+        fake.sessions[0]?.emitClosed(unauthorizedClose(doorReason));
+      });
+
+      expect(authServiceStub.revalidateCurrentContext).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still revalidates sign-in for the pool stream", async () => {
+    const fake = new FakeStreamClient(true);
+    authServiceStub.revalidateCurrentContext.mockClear();
+    await openChatAtHost("chat-pool-close", POOL_HOST_ID, fake);
+    await waitFor(() => expect(fake.sessions).toHaveLength(1));
+
+    act(() => {
+      fake.sessions[0]?.emitClosed(unauthorizedClose(null));
+    });
+
+    expect(authServiceStub.revalidateCurrentContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("revalidates sign-in when a team sandbox at rest is served by the pool", async () => {
+    const ownerHostId = teamSandboxEntry.hostId;
+    const servingClient = new FakeStreamClient(true);
+    const chatClient = new FakeStreamClient(true);
+    const openedHostIds: string[] = [];
+    servingWitness = new PoolChatServingWitness();
+    servingWitness.setStreamClient(servingClient);
+    useAuthStore.setState({
+      status: "signed-in",
+      profile: {
+        userId: CHAT_PROFILE_USER_ID,
+        userName: CHAT_PROFILE_USER_ID,
+        email: `${CHAT_PROFILE_USER_ID}@example.com`,
+      },
+    });
+    authServiceStub.revalidateCurrentContext.mockClear();
+    openTransportRef.fn = (servingHostId) => {
+      openedHostIds.push(servingHostId);
+      return {
+        wsStreamClient: chatClient,
+        close: () => chatClient.close(),
+      };
+    };
+    globalClientRef.value = buildGlobalClient();
+    hostEntryRef.value = teamSandboxEntry;
+
+    const { result } = renderHook(
+      () => useChatSessionHandle("chat-at-rest-on-pool", ownerHostId, true),
+      { wrapper },
+    );
+    await waitFor(() => expect(servingClient.subscribes).toHaveLength(1));
+    act(() => {
+      servingClient.sessions[0]?.emit(
+        {
+          kind: "serving",
+          hasBinaryPayload: false,
+          serving: {
+            ownerHostId,
+            state: "at-rest",
+            catchingUp: null,
+          },
+        },
+        null,
+      );
+    });
+    await waitFor(() => expect(openedHostIds).toEqual([POOL_HOST_ID]));
+    await waitFor(() => expect(result.current).not.toBeNull());
+    await waitFor(() => expect(chatClient.sessions).toHaveLength(1));
+
+    act(() => {
+      chatClient.sessions[0]?.emitClosed(unauthorizedClose(null));
+    });
+
+    expect(authServiceStub.revalidateCurrentContext).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(FORWARDED_PROBES)(
+    "%s reaches the store from the real ChatStreamClient",
+    async (probe) => {
+      // A fresh, never-negotiated session answers `false`/`null` on its own,
+      // so a `true` in the store can only have come through the spy.
+      const spy = vi
+        .spyOn(ChatStreamClient.prototype, probe)
+        .mockReturnValue(true);
+      const fake = new FakeStreamClient(true);
+      const handle = await openChat(`chat-probe-${probe}`, fake);
+
+      await waitFor(() => {
+        expect(handle.store.getState().connectionStatus).toBe("open");
+      });
+      expect(STORE_READS[probe](handle.store.getState())).toBe(true);
+      expect(spy).toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    [40, true],
+    [39, false],
+  ] as const)(
+    "chat.subscribe 1.%i answers queuedSteerRestartConfirmationSupported with %s through the store",
+    async (minor, expected) => {
+      const fake = new FakeStreamClient(false);
+      const handle = await openChat(`chat-steer-confirm-${minor}`, fake);
+      const session = fake.sessions[0];
+      session.negotiatedSchemaVersion = { major: 1, minor };
+      session.emitStatus("open");
+
+      await waitFor(() => {
+        expect(handle.store.getState().connectionStatus).toBe("open");
+      });
+      expect(
+        handle.store.getState().queuedSteerRestartConfirmationSupported(),
+      ).toBe(expected);
+    },
+  );
+});

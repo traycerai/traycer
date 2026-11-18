@@ -1,0 +1,22 @@
+/**
+ * Mutation keys for the `bot.*` host methods (Tracy Bots).
+ * One builder per write so a surface's pending state can be read back by key
+ * (`useIsMutating`) rather than by a flag of its own.
+ */
+export const botMutationKeys = {
+  create: () => ["bot.create"] as const,
+  updateTitle: () => ["bot.updateTitle"] as const,
+  updateRunSettings: () => ["bot.updateRunSettings"] as const,
+  updateReplyMode: () => ["bot.updateReplyMode"] as const,
+  updateAppearance: () => ["bot.updateAppearance"] as const,
+  setNotificationLevel: () => ["bot.notificationLevel.set"] as const,
+  setThreadFollow: () => ["bot.threadFollow.set"] as const,
+  advanceReadCursor: () => ["bot.readCursor.advance"] as const,
+  delete: () => ["bot.delete"] as const,
+  open: () => ["bot.open"] as const,
+  conversationSend: () => ["bot.conversation.send"] as const,
+  surfaceAct: () => ["bot.surface.act"] as const,
+  taskRunNow: () => ["bot.task.runNow"] as const,
+  taskSetPaused: () => ["bot.task.setPaused"] as const,
+  taskStop: () => ["bot.task.stop"] as const,
+};

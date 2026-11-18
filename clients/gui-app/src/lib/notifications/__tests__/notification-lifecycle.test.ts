@@ -1,0 +1,182 @@
+import { describe, expect, it } from "vitest";
+import {
+  classifyNotificationLifecycle,
+  compareAttentionOrder,
+  type NotificationLifecycleInput,
+} from "@/lib/notifications/notification-lifecycle";
+
+function input(
+  overrides: Partial<NotificationLifecycleInput> &
+    Pick<NotificationLifecycleInput, "source" | "severity">,
+): NotificationLifecycleInput {
+  return {
+    readAt: null,
+    ...overrides,
+  };
+}
+
+describe("classifyNotificationLifecycle", () => {
+  it("places unresolved host needs_action rows in attention as blocking", () => {
+    expect(
+      classifyNotificationLifecycle(
+        input({ source: "host", severity: "needs_action" }),
+      ),
+    ).toEqual({ section: "attention", tier: "blocking" });
+  });
+
+  it("places an unread global needs_action row in attention as an invitation, never blocking", () => {
+    expect(
+      classifyNotificationLifecycle(
+        input({ source: "global", severity: "needs_action" }),
+      ),
+    ).toEqual({ section: "attention", tier: "invitation" });
+    expect(
+      classifyNotificationLifecycle(
+        input({ source: "global", severity: "needs_action", readAt: 7 }),
+      ),
+    ).toEqual({ section: "recent" });
+  });
+
+  it("places unread host failures in attention as failure tier", () => {
+    expect(
+      classifyNotificationLifecycle(
+        input({ source: "host", severity: "failure", readAt: null }),
+      ),
+    ).toEqual({ section: "attention", tier: "failure" });
+  });
+
+  it("moves read host failures to recent immediately", () => {
+    expect(
+      classifyNotificationLifecycle(
+        input({ source: "host", severity: "failure", readAt: 50 }),
+      ),
+    ).toEqual({ section: "recent" });
+  });
+
+  it("places unread app-local failures in attention as failure tier", () => {
+    expect(
+      classifyNotificationLifecycle(
+        input({ source: "app-local", severity: "failure", readAt: null }),
+      ),
+    ).toEqual({ section: "attention", tier: "failure" });
+  });
+
+  it("moves read app-local failures to recent", () => {
+    expect(
+      classifyNotificationLifecycle(
+        input({ source: "app-local", severity: "failure", readAt: 99 }),
+      ),
+    ).toEqual({ section: "recent" });
+  });
+
+  it("keeps host done/info rows in recent even when unread", () => {
+    expect(
+      classifyNotificationLifecycle(
+        input({ source: "host", severity: "done", readAt: null }),
+      ),
+    ).toEqual({ section: "recent" });
+    expect(
+      classifyNotificationLifecycle(
+        input({ source: "host", severity: "info", readAt: null }),
+      ),
+    ).toEqual({ section: "recent" });
+  });
+
+  it("moves read unresolved prompts to recent", () => {
+    expect(
+      classifyNotificationLifecycle(
+        input({ source: "host", severity: "needs_action", readAt: 10 }),
+      ),
+    ).toEqual({ section: "recent" });
+  });
+
+  it("places an unread bot answer in attention as its own, last tier, and a read one in recent", () => {
+    expect(
+      classifyNotificationLifecycle(
+        input({
+          source: "host",
+          severity: "done",
+          readAt: null,
+          botAnswer: true,
+        }),
+      ),
+    ).toEqual({ section: "attention", tier: "answer" });
+    expect(
+      classifyNotificationLifecycle(
+        input({
+          source: "host",
+          severity: "done",
+          readAt: 50,
+          botAnswer: true,
+        }),
+      ),
+    ).toEqual({ section: "recent" });
+  });
+});
+
+describe("compareAttentionOrder", () => {
+  it("orders blocking before failure regardless of timestamps", () => {
+    const olderBlocking = {
+      tier: "blocking" as const,
+      createdAt: 10,
+      feedId: "host:old-prompt",
+    };
+    const newerFailure = {
+      tier: "failure" as const,
+      createdAt: 1_000,
+      feedId: "host:new-failure",
+    };
+    expect(compareAttentionOrder(olderBlocking, newerFailure)).toBeLessThan(0);
+    expect(compareAttentionOrder(newerFailure, olderBlocking)).toBeGreaterThan(
+      0,
+    );
+  });
+
+  it("orders blocking, then failure, then answer, then invitation, whatever the timestamps", () => {
+    const rows = [
+      {
+        tier: "invitation" as const,
+        createdAt: 4_000,
+        feedId: "global:invite",
+      },
+      { tier: "answer" as const, createdAt: 3_000, feedId: "host:answer" },
+      { tier: "failure" as const, createdAt: 2_000, feedId: "host:failure" },
+      { tier: "blocking" as const, createdAt: 1_000, feedId: "host:prompt" },
+    ];
+
+    expect(
+      rows.toSorted(compareAttentionOrder).map((row) => row.feedId),
+    ).toEqual(["host:prompt", "host:failure", "host:answer", "global:invite"]);
+  });
+
+  it("orders newest createdAt first within the same tier", () => {
+    const older = {
+      tier: "failure" as const,
+      createdAt: 10,
+      feedId: "host:a",
+    };
+    const newer = {
+      tier: "failure" as const,
+      createdAt: 20,
+      feedId: "host:b",
+    };
+    expect(compareAttentionOrder(newer, older)).toBeLessThan(0);
+    expect(compareAttentionOrder(older, newer)).toBeGreaterThan(0);
+  });
+
+  it("breaks equal-timestamp ties by ascending feedId", () => {
+    const a = {
+      tier: "blocking" as const,
+      createdAt: 50,
+      feedId: "host:aaa",
+    };
+    const b = {
+      tier: "blocking" as const,
+      createdAt: 50,
+      feedId: "host:zzz",
+    };
+    expect(compareAttentionOrder(a, b)).toBeLessThan(0);
+    expect(compareAttentionOrder(b, a)).toBeGreaterThan(0);
+    expect(compareAttentionOrder(a, a)).toBe(0);
+  });
+});

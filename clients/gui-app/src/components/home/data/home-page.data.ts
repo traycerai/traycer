@@ -1,0 +1,827 @@
+import {
+  taskOrganizationSchema,
+  type TaskOrganization,
+} from "@traycer/protocol/host/organization/schemas";
+import type {
+  PermissionRole,
+  ListTaskLight,
+  TaskOwnershipScope,
+  TaskWorkspaceIdentifier,
+} from "@traycer/protocol/host/epic/unary-schemas";
+import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
+import { formatDistanceToNow } from "date-fns";
+import { displayTitle } from "@/lib/display-title";
+import { taskOwningTeamId } from "@/lib/epics/team-task-owner";
+import { isEditableRole } from "@/lib/epic-permissions";
+import { grantedRole } from "@traycer/protocol/common/permission-role";
+
+export type HistoryRecencyBucket = "today" | "yesterday" | "earlier";
+export type HistoryItemTaskType = "epic" | "phase";
+export type HistoryMatchMode = "any" | "all";
+export type HistoryOwnershipScope = TaskOwnershipScope;
+export type HistoryWorkspaceRef = TaskWorkspaceIdentifier;
+export type HistorySortOption =
+  | "recent"
+  | "last-viewed"
+  | "created-desc"
+  | "oldest"
+  | "title-asc"
+  | "title-desc"
+  | "relevance";
+
+export const DEFAULT_SORT: HistorySortOption = "recent";
+
+const BUCKET_ORDER: Record<HistoryRecencyBucket, number> = {
+  today: 0,
+  yesterday: 1,
+  earlier: 2,
+};
+
+export interface HistoryItem {
+  organization?: TaskOrganization;
+  id: string;
+  epicId: string;
+  taskType: HistoryItemTaskType;
+  title: string;
+  // Raw user prompt (empty for phases); render sites derive the display-title
+  // fallback from it via `epicDisplayTitle`.
+  initialUserPrompt: string;
+  createdAtMs: number;
+  updatedAtMs: number;
+  updatedLabel: string;
+  updatedBucket: HistoryRecencyBucket;
+  /** Viewer-scoped task edit or own-chat activity; absent before listTasks@1.7. */
+  recentAtMs?: number;
+  recentLabel?: string;
+  recentBucket?: HistoryRecencyBucket;
+  linkedRepos: ReadonlyArray<string>;
+  linkedWorkspaces: ReadonlyArray<HistoryWorkspaceRef>;
+  /**
+   * Hosts owning the signed-in user's OWN chats in this task, or `null` when
+   * the serving peer predates the field.
+   *
+   * `null` is not `[]`. An empty array truthfully says "none of my chats live
+   * on any host", which a host filter acts on by excluding the row; `null`
+   * says the row cannot answer at all.
+   */
+  chatHostIds: ReadonlyArray<string> | null;
+  /**
+   * The team that owns the task, from the viewer's permission row; `null` (or
+   * absent, in a hand-built item) for a task no team owns.
+   */
+  teamId?: string | null;
+  pullRequestNumbers: ReadonlyArray<string>;
+  worktreeBranches: ReadonlyArray<string>;
+  worktreePaths: ReadonlyArray<string>;
+  ownership: HistoryOwnershipScope;
+  permissionRole: PermissionRole | null;
+  isPinned: boolean;
+  /** True only for a host-synthesized local-home task row. Missing legacy
+   *  fixtures and callers are cloud-backed. */
+  isLocalHome?: boolean;
+  /** Owning host for a local row read outside the surface's default host. */
+  hostId?: string;
+  /**
+   * True for a cloud-homed epic the host re-admitted to discovery because its
+   * delete was refused to protect never-uploaded bytes
+   * (`s5-orphaned-epic-recovery`). The server no longer lists this epic at
+   * all, so without the marker the row would read as an ordinary task and the
+   * one thing the user needs to know about it - that the cloud copy is gone
+   * and only this device's edits remain - would be invisible again.
+   */
+  isPreservedOrphan?: boolean;
+}
+
+/** The row's timestamp describes the key used by its time-based sort. */
+export function historyRowTimeLabel(
+  item: HistoryItem,
+  sort: HistorySortOption,
+): string {
+  if (sort === "oldest") return `updated ${item.updatedLabel}`;
+  if (sort === "created-desc") {
+    return `created ${formatUpdatedLabel(item.createdAtMs)}`;
+  }
+  return `activity ${item.recentLabel ?? item.updatedLabel}`;
+}
+
+/** The instant {@link historyRowTimeLabel} describes, for compact formatters. */
+export function historyRowTimeMs(
+  item: HistoryItem,
+  sort: HistorySortOption,
+): number {
+  if (sort === "oldest") return item.updatedAtMs;
+  if (sort === "created-desc") return item.createdAtMs;
+  return item.recentAtMs ?? item.updatedAtMs;
+}
+
+export interface HistoryFilters {
+  repoNames: ReadonlyArray<string>;
+  repoMatchMode: HistoryMatchMode;
+  workspaces: ReadonlyArray<HistoryWorkspaceRef>;
+  workspaceMatchMode: HistoryMatchMode;
+  chatHosts: ReadonlyArray<string>;
+  chatHostMatchMode: HistoryMatchMode;
+  ownershipScopes: ReadonlyArray<HistoryOwnershipScope>;
+}
+
+export interface HistoryGroup {
+  bucket: HistoryRecencyBucket;
+  label: string;
+  items: ReadonlyArray<HistoryItem>;
+}
+
+const HISTORY_GROUP_LABELS: Record<HistoryRecencyBucket, string> = {
+  today: "Today",
+  yesterday: "Yesterday",
+  earlier: "Earlier",
+};
+
+/** "No host-supplied home markers" - stated once so a call site cannot be
+ * read as having forgotten the argument. */
+export const EMPTY_LOCAL_HOMED_TASK_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * Local home, from EITHER carrier.
+ *
+ * `epic.listTasks@1.4` puts `home` on the row; `epic.getTaskContexts@1.3` had
+ * to put it in a response-level sibling list, because its `tasks` is a
+ * `z.record` whose value schema the additivity gate treats as opaque. A row
+ * reached through the second path carries no `home` at all, so checking only
+ * the row would read every context-only search hit as cloud-backed.
+ */
+function isLocalHomedRow(
+  task: ListTaskLight,
+  epicId: string,
+  localHomedTaskIds: ReadonlySet<string>,
+): boolean {
+  if ("home" in task && task.home === "local") return true;
+  return localHomedTaskIds.has(epicId);
+}
+
+/** `@1.5`'s row-level preservation marker: the cloud task is already deleted
+ * and the row exists only so this device's edits stay reachable. */
+function isPreservedOrphanRow(task: ListTaskLight): boolean {
+  return "preservation" in task && task.preservation === "orphaned-local-edits";
+}
+
+/**
+ * `localHomedTaskIds` is a REQUIRED argument, not an optional one: the two
+ * response shapes that feed this projection carry the home marker in two
+ * different places. `epic.listTasks@1.4` puts `home` on the row; a `z.record`
+ * forced `epic.getTaskContexts@1.3` to put it in a sibling id list instead.
+ * A caller with the sibling in hand and no parameter to pass it through
+ * silently projects every context row as cloud-backed, which is exactly what
+ * happened to worktree/branch/PR search hits. Callers with no id list pass
+ * `EMPTY_LOCAL_HOMED_TASK_IDS` and say so.
+ */
+export function buildHistoryItemsFromTasks(
+  tasks: ReadonlyArray<ListTaskLight>,
+  nowMs: number,
+  userId: string | null,
+  localHomedTaskIds: ReadonlySet<string>,
+): ReadonlyArray<HistoryItem> {
+  return tasks.flatMap((task, index): HistoryItem[] => {
+    const epic = task.epic?.light;
+    if (epic !== null && epic !== undefined) {
+      return [
+        buildHistoryItem({
+          light: epic,
+          taskType: "epic",
+          initialUserPrompt: epic.initialUserPrompt,
+          task,
+          index,
+          userId,
+          nowMs,
+          role: grantedRole(task.epic?.permission?.role ?? null),
+          isPinned: task.pinned ?? false,
+          isLocalHome: isLocalHomedRow(task, epic.id, localHomedTaskIds),
+          isPreservedOrphan: isPreservedOrphanRow(task),
+        }),
+      ];
+    }
+
+    const phase = task.phase?.light;
+    if (phase === null || phase === undefined) {
+      return [];
+    }
+
+    return [
+      buildHistoryItem({
+        light: phase,
+        taskType: "phase",
+        // Phases have no user prompt; epic-only field stays empty.
+        initialUserPrompt: "",
+        task,
+        index,
+        userId,
+        nowMs,
+        role: grantedRole(task.phase?.permission?.role ?? null),
+        isPinned: false,
+        isLocalHome: false,
+        isPreservedOrphan: false,
+      }),
+    ];
+  });
+}
+
+// date-fns' under-a-minute phrase is the longest label it produces, and the
+// History row reserves its timestamp column at the longest label a row can
+// show. "just now" keeps a phrase that lives for seconds from setting the
+// width of every row.
+const UNDER_A_MINUTE_LABELS = new Set([
+  "less than a minute ago",
+  "in less than a minute",
+]);
+
+export function formatUpdatedLabel(updatedAtMs: number): string {
+  const label = formatDistanceToNow(updatedAtMs, { addSuffix: true });
+  return UNDER_A_MINUTE_LABELS.has(label) ? "just now" : label;
+}
+
+function buildHistoryItem(args: {
+  light: {
+    id: string;
+    title: string;
+    createdAt: number;
+    updatedAt: number;
+    createdBy: string;
+  };
+  taskType: "epic" | "phase";
+  initialUserPrompt: string;
+  task: ListTaskLight;
+  index: number;
+  userId: string | null;
+  nowMs: number;
+  role: PermissionRole | null;
+  isPinned: boolean;
+  isLocalHome: boolean;
+  isPreservedOrphan: boolean;
+}): HistoryItem {
+  const {
+    light,
+    taskType,
+    initialUserPrompt,
+    task,
+    index,
+    userId,
+    nowMs,
+    role,
+    isPinned,
+    isLocalHome,
+    isPreservedOrphan,
+  } = args;
+  const ownership = light.createdBy === userId ? "mine" : "shared";
+  const recentAt = Math.max(light.updatedAt, task.recentAt ?? light.updatedAt);
+  return {
+    organization:
+      "organization" in task
+        ? taskOrganizationSchema.safeParse(task.organization).data
+        : undefined,
+    id: itemId(light.id, taskType, index),
+    epicId: light.id,
+    taskType,
+    // Epics keep the RAW title - it flows into tab-store mutations via
+    // `openEpicFromList` -> `resolveTargetTabForEpic`, so the empty-title
+    // fallback must be applied at the render site only. Phases render verbatim
+    // downstream, so the fallback is baked here (single-sourced via
+    // `displayTitle`).
+    title:
+      taskType === "epic" ? light.title : displayTitle(light.title, "phase"),
+    initialUserPrompt,
+    createdAtMs: light.createdAt,
+    updatedAtMs: light.updatedAt,
+    updatedLabel: formatUpdatedLabel(light.updatedAt),
+    updatedBucket: toHistoryRecencyBucket(light.updatedAt, nowMs),
+    recentAtMs: task.recentAt === undefined ? undefined : recentAt,
+    recentLabel: formatUpdatedLabel(recentAt),
+    recentBucket: toHistoryRecencyBucket(recentAt, nowMs),
+    linkedRepos: readTaskRepos(task),
+    linkedWorkspaces: readTaskWorkspaces(task),
+    chatHostIds: task.chatHostIds ?? null,
+    teamId:
+      taskType === "epic" ? taskOwningTeamId(task.epic?.permission) : null,
+    pullRequestNumbers: [],
+    worktreeBranches: [],
+    worktreePaths: [],
+    ownership,
+    permissionRole: historyPermissionRole(ownership, role),
+    isPinned,
+    isLocalHome,
+    isPreservedOrphan,
+  };
+}
+
+/**
+ * Adds the PR numbers, branch names, and worktree paths discovered from the
+ * task's local worktrees to history items. Worktree activity is deliberately
+ * fetched separately from cloud task history, so this stays a pure projection
+ * that can update as probes finish.
+ */
+export function withHistoryItemWorktreeMetadata(
+  items: ReadonlyArray<HistoryItem>,
+  worktreesByEpicId: ReadonlyMap<string, readonly WorktreeHostEntryV12[]>,
+): ReadonlyArray<HistoryItem> {
+  return items.map((item) => {
+    const worktrees = worktreesByEpicId.get(item.epicId) ?? [];
+    return {
+      ...item,
+      pullRequestNumbers: historyPullRequestNumbers(worktrees),
+      worktreeBranches: historyWorktreeBranches(worktrees),
+      worktreePaths: Array.from(
+        new Set(worktrees.map((worktree) => worktree.worktreePath)),
+      ),
+    };
+  });
+}
+
+function historyWorktreeBranches(
+  worktrees: readonly WorktreeHostEntryV12[],
+): ReadonlyArray<string> {
+  return Array.from(
+    new Set(
+      worktrees
+        .flatMap((worktree) => [
+          worktree.branch,
+          ...worktree.submodules.map((submodule) => submodule.branch),
+        ])
+        .filter((branch): branch is string => branch !== null),
+    ),
+  );
+}
+
+/**
+ * Epic ids of tasks whose local worktrees match the query as a superproject
+ * branch name or worktree-directory string. Those strings live only in local
+ * worktree metadata, never in the cloud task index, so matching tasks are
+ * fetched by id (`epic.getTaskContexts`) and unioned into the search results -
+ * a cloud text search for them would return nothing. Matching is deliberately
+ * narrow (the branch name, the worktree's leaf directory name, and - for
+ * path-shaped queries - the full path): matching anywhere in the full path
+ * would trip on common ancestors like the user's home directory and union
+ * unrelated tasks into ordinary title searches.
+ *
+ * Expects entries from the cheap (non-activity) host index; see the filter
+ * body for why owned-submodule branches are deliberately not matched here.
+ */
+export function historyWorktreeSearchEpicIds(
+  query: string,
+  worktrees: readonly WorktreeHostEntryV12[],
+): ReadonlyArray<string> {
+  const normalized = query.trim().toLowerCase();
+  if (normalized.length < 2) return [];
+  return ownerEpicIds(
+    worktrees.filter((worktree) => {
+      // Superproject branch only. Callers feed this the CHEAP host index,
+      // whose `submodules` is contractually `[]` (populated only under
+      // `includeActivity`), so reading submodule branches here would match
+      // nothing in production however the fixtures are written. Enriching
+      // this path instead would fire host-wide `gh` probes on every
+      // keystroke; owned-submodule branches still reach search through
+      // `worktreeBranches` on rows whose enriched metadata is loaded.
+      if (
+        worktree.branch !== null &&
+        worktree.branch.toLowerCase().includes(normalized)
+      ) {
+        return true;
+      }
+      const path = worktree.worktreePath.toLowerCase();
+      if (normalized.includes("/")) return path.includes(normalized);
+      return worktreePathBasename(path).includes(normalized);
+    }),
+  );
+}
+
+/** The PR number of a PR-shaped query (`84`, `#84`, `PR #84`), else null. */
+export function historyPullRequestQueryNumber(query: string): number | null {
+  const match = /^(?:pr\s*)?#?(\d+)$/i.exec(query.trim());
+  if (match === null) return null;
+  const prNumber = Number.parseInt(match[1], 10);
+  return Number.isNaN(prNumber) ? null : prNumber;
+}
+
+/**
+ * Epic ids of tasks whose local worktrees (superproject or an owned
+ * submodule) carry the PR number. Requires activity-enriched worktree entries
+ * - `prNumber`/`submodules` are null/empty on the cheap base index.
+ */
+export function historyPullRequestSearchEpicIds(
+  prNumber: number,
+  worktrees: readonly WorktreeHostEntryV12[],
+): ReadonlyArray<string> {
+  return ownerEpicIds(
+    worktrees.filter(
+      (worktree) =>
+        worktree.prNumber === prNumber ||
+        worktree.submodules.some(
+          (submodule) => submodule.prNumber === prNumber,
+        ),
+    ),
+  );
+}
+
+function ownerEpicIds(
+  worktrees: readonly WorktreeHostEntryV12[],
+): ReadonlyArray<string> {
+  return Array.from(
+    new Set(
+      worktrees.flatMap((worktree) =>
+        worktree.owners.map((owner) => owner.epicId),
+      ),
+    ),
+  );
+}
+
+function worktreePathBasename(path: string): string {
+  const segments = path.split(/[\\/]/).filter((segment) => segment.length > 0);
+  return segments[segments.length - 1] ?? "";
+}
+
+function historyPullRequestNumbers(
+  worktrees: readonly WorktreeHostEntryV12[],
+): ReadonlyArray<string> {
+  return Array.from(
+    new Set(
+      worktrees
+        .flatMap((worktree) => [
+          worktree.prNumber,
+          ...worktree.submodules.map((submodule) => submodule.prNumber),
+        ])
+        .filter((prNumber): prNumber is number => prNumber !== null)
+        .flatMap((prNumber) => [
+          String(prNumber),
+          `#${prNumber}`,
+          `PR #${prNumber}`,
+        ]),
+    ),
+  );
+}
+
+/**
+ * Renaming is a CLOUD write for every row but a local-home one -
+ * `epic.updateTitle` carries the CloudData `epic.update` contract - so it is
+ * gated on the same verdict as deletion. A local-home row renames on this
+ * machine's own disk and spends nothing, so it stays editable while the
+ * session is `unverified`.
+ */
+export function canEditHistoryItemTitle(
+  item: HistoryItem,
+  cloudAuthorized: boolean,
+): boolean {
+  if (item.taskType !== "epic") return false;
+  if (item.isLocalHome !== true && !cloudAuthorized) return false;
+  return isEditableRole(item.permissionRole);
+}
+
+/**
+ * Deletion is a CLOUD-backed action, so a preserved orphan is excluded however
+ * editable its role looks.
+ *
+ * `@1.5`'s `orphaned-local-edits` row exists precisely because its cloud task
+ * is already gone; the row is a pointer to this device's surviving edits.
+ * `epic.batchDelete` mirrors the delete to the cloud arm and then asks the
+ * preservation guard before reclaiming locally, and that guard refuses while
+ * branch rows survive - so confirming the dialog on one of these rows can only
+ * ever produce a failed deletion. Refusing it up front is the honest answer;
+ * discarding the local edits is a genuinely destructive operation and needs its
+ * own explicit affordance, not a fallback through the cloud delete.
+ *
+ * Deliberately in this ONE helper rather than at the controls: the desktop row
+ * action, desktop bulk selection, and the mobile tray all admit through here,
+ * so a rule added at a control would be a rule two surfaces do not have.
+ *
+ * ## `cloudAuthorized`, and why a LOCAL-HOME row is exempt from it
+ *
+ * `authorizesCloudCapability(status)`, required for the same reason
+ * {@link historyPinUnavailableReason} takes it: History stays readable under
+ * `unverified`, so every settled cloud row is still on screen with a role that
+ * still reads `owner`, and a role test alone would let a session with no
+ * `/api/v3/user` verdict dispatch `epic.batchDelete` against the account.
+ *
+ * The exemption is not a softening of that rule, it is the rule applied
+ * honestly. A `isLocalHome` row IS this machine's disk: `epic.batchDelete`
+ * reclaims it locally without a cloud arm to mirror to, so refusing it would
+ * withhold an operation that spends nothing and lock the user out of deleting
+ * their own local epics for the whole of an authn outage - which is precisely
+ * the local plane `admitsLocalPlane` exists to keep serving.
+ *
+ * Required rather than defaulted: a permissive default is how a second surface
+ * inherits an answer nobody made for it, and this predicate is the only thing
+ * standing between three delete controls and a destructive dispatch.
+ */
+export function canDeleteHistoryItem(
+  item: HistoryItem,
+  cloudAuthorized: boolean,
+): boolean {
+  if (item.isPreservedOrphan === true) return false;
+  if (item.isLocalHome !== true && !cloudAuthorized) return false;
+  return isEditableRole(item.permissionRole);
+}
+
+function historyPermissionRole(
+  ownership: HistoryOwnershipScope,
+  role: PermissionRole | null,
+): PermissionRole | null {
+  if (ownership === "mine") return "owner";
+  return role;
+}
+
+export function collectHistoryRepos(
+  items: ReadonlyArray<HistoryItem>,
+): ReadonlyArray<string> {
+  return Array.from(new Set(items.flatMap((item) => item.linkedRepos))).sort(
+    (left, right) => left.localeCompare(right),
+  );
+}
+
+function matchesRepoFilter(
+  item: HistoryItem,
+  repoNames: ReadonlyArray<string>,
+  repoMatchMode: HistoryMatchMode,
+): boolean {
+  if (repoNames.length === 0) {
+    return true;
+  }
+
+  if (repoMatchMode === "all") {
+    return repoNames.every((repoName) => item.linkedRepos.includes(repoName));
+  }
+
+  return repoNames.some((repoName) => item.linkedRepos.includes(repoName));
+}
+
+/**
+ * Whether a row satisfies the chat-host filter.
+ *
+ * A row whose `chatHostIds` is `null` is EXCLUDED while a host is selected,
+ * because nothing about that row has been checked against the filter. This
+ * predicate runs on rows from three sources and only one of them is
+ * pre-filtered by the server: settled `epic.listTasks` pages. The other two -
+ * tasks fetched by id for a branch/worktree/PR match, and cached rows still
+ * showing while a new request is in flight - never passed through it, so
+ * keeping an unverifiable row there renders an unfiltered result as a
+ * filtered one.
+ *
+ * Abstaining was the earlier choice, on the reasoning that excluding would
+ * silently empty the list against an older peer. That case cannot reach here:
+ * a peer too old to report the field is caught by the version gate in
+ * `useHistoryQuery`, which withholds every row behind an explicit
+ * "can't filter by host here" state. A settled row from a peer that CAN report
+ * always carries the field - `[]` at minimum. So the only rows this exclusion
+ * can reach are the unverified ones, which is exactly the intent.
+ */
+function matchesChatHostFilter(
+  item: HistoryItem,
+  chatHosts: ReadonlyArray<string>,
+  chatHostMatchMode: HistoryMatchMode,
+): boolean {
+  if (chatHosts.length === 0) {
+    return true;
+  }
+  if (item.chatHostIds === null) {
+    return false;
+  }
+
+  const itemHostIds = new Set(item.chatHostIds);
+  if (chatHostMatchMode === "all") {
+    return chatHosts.every((hostId) => itemHostIds.has(hostId));
+  }
+
+  return chatHosts.some((hostId) => itemHostIds.has(hostId));
+}
+
+function matchesWorkspaceFilter(
+  item: HistoryItem,
+  workspaces: ReadonlyArray<HistoryWorkspaceRef>,
+  workspaceMatchMode: HistoryMatchMode,
+): boolean {
+  if (workspaces.length === 0) {
+    return true;
+  }
+
+  const itemWorkspaceKeys = new Set(item.linkedWorkspaces.map(workspaceKey));
+  if (workspaceMatchMode === "all") {
+    return workspaces.every((workspace) =>
+      itemWorkspaceKeys.has(workspaceKey(workspace)),
+    );
+  }
+
+  return workspaces.some((workspace) =>
+    itemWorkspaceKeys.has(workspaceKey(workspace)),
+  );
+}
+
+export function filterHistoryItems(
+  items: ReadonlyArray<HistoryItem>,
+  filters: HistoryFilters,
+): ReadonlyArray<HistoryItem> {
+  return items.filter((item) => {
+    if (
+      filters.ownershipScopes.length > 0 &&
+      !filters.ownershipScopes.includes(item.ownership)
+    ) {
+      return false;
+    }
+    if (!matchesRepoFilter(item, filters.repoNames, filters.repoMatchMode)) {
+      return false;
+    }
+    if (
+      !matchesChatHostFilter(item, filters.chatHosts, filters.chatHostMatchMode)
+    ) {
+      return false;
+    }
+    return matchesWorkspaceFilter(
+      item,
+      filters.workspaces,
+      filters.workspaceMatchMode,
+    );
+  });
+}
+
+export function sortHistoryItems(
+  items: ReadonlyArray<HistoryItem>,
+  sort: HistorySortOption,
+): ReadonlyArray<HistoryItem> {
+  switch (sort) {
+    case "recent":
+      return items
+        .slice()
+        .sort(
+          (left, right) =>
+            comparePinnedHistoryItems(left, right) ||
+            (right.recentAtMs ?? right.updatedAtMs) -
+              (left.recentAtMs ?? left.updatedAtMs) ||
+            compareRecentEpicIds(left.epicId, right.epicId),
+        );
+    case "last-viewed":
+      // The central list endpoint already returns the complete eligible set in
+      // last-viewed order. Preserve that order while still projecting an
+      // optimistic pin bit into its pinned-first partition.
+      return prioritizePinnedHistoryItems(items);
+    case "created-desc":
+      return items
+        .slice()
+        .sort(
+          (left, right) =>
+            comparePinnedHistoryItems(left, right) ||
+            right.createdAtMs - left.createdAtMs ||
+            compareRecentEpicIds(left.epicId, right.epicId),
+        );
+    case "oldest":
+      return items
+        .slice()
+        .sort(
+          (left, right) =>
+            comparePinnedHistoryItems(left, right) ||
+            left.updatedAtMs - right.updatedAtMs ||
+            BUCKET_ORDER[right.updatedBucket] -
+              BUCKET_ORDER[left.updatedBucket],
+        );
+    case "title-asc":
+      return items
+        .slice()
+        .sort(
+          (left, right) =>
+            comparePinnedHistoryItems(left, right) ||
+            left.title.localeCompare(right.title),
+        );
+    case "title-desc":
+      return items
+        .slice()
+        .sort(
+          (left, right) =>
+            comparePinnedHistoryItems(left, right) ||
+            right.title.localeCompare(left.title),
+        );
+    case "relevance":
+      return sortHistoryItems(items, "recent");
+  }
+}
+
+function compareRecentEpicIds(left: string, right: string): number {
+  if (left < right) return 1;
+  if (left > right) return -1;
+  return 0;
+}
+
+/** Stable pinned-first partition for relevance-ranked search results. */
+export function prioritizePinnedHistoryItems(
+  items: ReadonlyArray<HistoryItem>,
+): ReadonlyArray<HistoryItem> {
+  return items
+    .slice()
+    .sort((left, right) => comparePinnedHistoryItems(left, right));
+}
+
+function comparePinnedHistoryItems(
+  left: HistoryItem,
+  right: HistoryItem,
+): number {
+  if (left.isPinned === right.isPinned) return 0;
+  return left.isPinned ? -1 : 1;
+}
+
+export function groupHistoryItems(
+  items: ReadonlyArray<HistoryItem>,
+): ReadonlyArray<HistoryGroup> {
+  const groups = new Map<HistoryRecencyBucket, HistoryItem[]>();
+
+  for (const item of items) {
+    const bucket = item.recentBucket ?? item.updatedBucket;
+    const current = groups.get(bucket) ?? [];
+    current.push(item);
+    groups.set(bucket, current);
+  }
+
+  return (["today", "yesterday", "earlier"] as const).flatMap((bucket) => {
+    const items = groups.get(bucket) ?? [];
+    return items.length > 0
+      ? [{ bucket, label: HISTORY_GROUP_LABELS[bucket], items }]
+      : [];
+  });
+}
+
+export function toHistoryRecencyBucket(
+  updatedAtMs: number,
+  nowMs: number,
+): HistoryRecencyBucket {
+  const startOfToday = toStartOfDay(nowMs);
+  if (updatedAtMs >= startOfToday) {
+    return "today";
+  }
+
+  const startOfYesterday = startOfToday - 24 * 60 * 60 * 1000;
+  if (updatedAtMs >= startOfYesterday) {
+    return "yesterday";
+  }
+
+  return "earlier";
+}
+
+function toStartOfDay(timestamp: number): number {
+  const date = new Date(timestamp);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+function readTaskRepos(task: ListTaskLight): ReadonlyArray<string> {
+  const repos = task.epic?.repos ?? task.phase?.repos ?? [];
+  return Array.from(
+    new Set(
+      repos.flatMap((repo) => {
+        const identifier = repo.repoIdentifier;
+        if (identifier === null) {
+          return [];
+        }
+        if (identifier.owner.length === 0 || identifier.repo.length === 0) {
+          return [];
+        }
+        return [`${identifier.owner}/${identifier.repo}`];
+      }),
+    ),
+  ).sort((left, right) => left.localeCompare(right));
+}
+
+function readTaskWorkspaces(
+  task: ListTaskLight,
+): ReadonlyArray<HistoryWorkspaceRef> {
+  const workspaces = task.epic?.workspaces ?? task.phase?.workspaces ?? [];
+  const unique = new Map<string, HistoryWorkspaceRef>();
+  for (const workspace of workspaces) {
+    unique.set(workspaceKey(workspace), {
+      hostId: workspace.hostId,
+      workspacePath: workspace.workspacePath,
+    });
+  }
+  return Array.from(unique.values()).sort((left, right) =>
+    workspaceKey(left).localeCompare(workspaceKey(right)),
+  );
+}
+
+export function workspaceKey(workspace: HistoryWorkspaceRef): string {
+  return `${workspace.hostId}\0${workspace.workspacePath}`;
+}
+
+export function dedupSortWorkspaces(
+  ...groups: ReadonlyArray<ReadonlyArray<HistoryWorkspaceRef>>
+): ReadonlyArray<HistoryWorkspaceRef> {
+  const unique = new Map<string, HistoryWorkspaceRef>();
+  for (const group of groups) {
+    for (const workspace of group) {
+      unique.set(workspaceKey(workspace), workspace);
+    }
+  }
+  return Array.from(unique.values()).sort((left, right) =>
+    workspaceKey(left).localeCompare(workspaceKey(right)),
+  );
+}
+
+function itemId(
+  taskId: string,
+  taskType: HistoryItemTaskType,
+  index: number,
+): string {
+  if (taskType === "epic") {
+    return taskId.length > 0 ? taskId : `epic-${index}`;
+  }
+  return taskId.length > 0 ? `${taskType}-${taskId}` : `${taskType}-${index}`;
+}

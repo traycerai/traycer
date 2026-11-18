@@ -1,0 +1,203 @@
+import {
+  isDocumentVisible,
+  subscribeDocumentVisibility,
+} from "@/lib/dom/document-visibility";
+import { EMPTY_CANVAS } from "@/stores/epics/canvas/canvas-state";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  WORKSPACE_FILE_TAB_KIND,
+  type EpicCanvasState,
+} from "@/stores/epics/canvas/types";
+import { isDiffTileRef } from "@/stores/epics/canvas/types";
+import { findPaneById } from "@/stores/epics/canvas/tile-tree";
+import type {
+  HostNotificationsPresenceEntity,
+  HostNotificationsSubscribeClientFrame,
+} from "@traycer/protocol/host/notifications/contracts";
+
+export interface HostNotificationPresenceInput {
+  readonly windowId: string;
+  readonly now: () => number;
+}
+
+export type HostNotificationPresenceFrame = Extract<
+  HostNotificationsSubscribeClientFrame,
+  { readonly kind: "presence" }
+>;
+
+export interface FocusedHostNotificationPresence {
+  readonly originHostId: string | null;
+  readonly entity: HostNotificationsPresenceEntity;
+}
+
+let botSurfaceFocused = false;
+let presentedBotConversation: HostNotificationsPresenceEntity | null = null;
+let appSuspended = false;
+const presenceListeners = new Set<() => void>();
+
+/**
+ * Whether this window's focused pane is the bot surface. The canvas keeps its
+ * active tab while the bot surface is in front, so until the surface names a
+ * conversation it stands for no entity rather than the canvas's unseen tile.
+ */
+export function setBotSurfaceFocused(focused: boolean): void {
+  botSurfaceFocused = focused;
+  notifyPresenceListeners();
+}
+
+/**
+ * Names the bot conversation this window's focused pane is showing, or `null`
+ * when it shows none. A bot surface has no canvas tile to read, so a named
+ * conversation wins over the canvas.
+ */
+export function setPresentedBotConversation(
+  entity: HostNotificationsPresenceEntity | null,
+): void {
+  presentedBotConversation = entity;
+  notifyPresenceListeners();
+}
+
+/**
+ * Whether the shell reports the person away from the app: it went to the
+ * background, or the machine locked or went to sleep. The OS may suspend the
+ * window before the document ever reports itself hidden or blurred, so this
+ * window stops counting as focused from the edge itself, and the presence
+ * frame saying so goes out at once.
+ */
+export function setAppSuspended(suspended: boolean): void {
+  if (appSuspended === suspended) return;
+  appSuspended = suspended;
+  notifyPresenceListeners();
+}
+
+function notifyPresenceListeners(): void {
+  for (const listener of presenceListeners) listener();
+}
+
+export function readHostNotificationPresenceFrame(
+  input: HostNotificationPresenceInput,
+): HostNotificationPresenceFrame {
+  return {
+    kind: "presence",
+    hasBinaryPayload: false,
+    windowId: input.windowId,
+    focused: isDocumentFocused(),
+    entity: readActiveHostNotificationPresenceEntity(),
+    at: input.now(),
+  };
+}
+
+export function subscribeHostNotificationPresence(
+  sendPresence: () => void,
+): () => void {
+  presenceListeners.add(sendPresence);
+  const unsubscribeCanvas = useEpicCanvasStore.subscribe((state, previous) => {
+    if (
+      state.activeTabId !== previous.activeTabId ||
+      state.canvasByTabId !== previous.canvasByTabId ||
+      state.tabsById !== previous.tabsById
+    ) {
+      sendPresence();
+    }
+  });
+  const unsubscribeVisibility = subscribeDocumentVisibility(sendPresence);
+  const unsubscribeSources = (): void => {
+    presenceListeners.delete(sendPresence);
+    unsubscribeCanvas();
+    unsubscribeVisibility();
+  };
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return unsubscribeSources;
+  }
+  window.addEventListener("focus", sendPresence);
+  window.addEventListener("blur", sendPresence);
+  return () => {
+    unsubscribeSources();
+    window.removeEventListener("focus", sendPresence);
+    window.removeEventListener("blur", sendPresence);
+  };
+}
+
+/**
+ * The entity this window is actively looking at, or `null` when the window is
+ * blurred, hidden or suspended, the bot surface is focused without a
+ * conversation, or neither a bot conversation nor an epic/chat tile is active.
+ * Read live (bot surface + canvas store + document focus) so display-time
+ * gates see the current state rather than the last presence frame that
+ * happened to be sent.
+ */
+export function readFocusedHostNotificationPresenceEntity(): HostNotificationsPresenceEntity | null {
+  return readFocusedHostNotificationPresence()?.entity ?? null;
+}
+
+/**
+ * The focused entity together with the host-bound tile that owns it. Epic-only
+ * surfaces and bot conversations have no unambiguous host and therefore return
+ * a `null` origin.
+ */
+export function readFocusedHostNotificationPresence(): FocusedHostNotificationPresence | null {
+  if (!isDocumentFocused()) return null;
+  const active = readActiveHostNotificationPresence();
+  if (active === null) return null;
+  return {
+    originHostId: active.originHostId,
+    entity: active.entity,
+  };
+}
+
+/**
+ * Whether the person is looking at this window: it has focus, it is visible,
+ * and the app is not suspended. A hidden window can keep
+ * `hasFocus()`, and a claim of focus from it would stamp the person's
+ * notifications read while they are elsewhere.
+ */
+export function isDocumentFocused(): boolean {
+  return (
+    !appSuspended &&
+    typeof document !== "undefined" &&
+    isDocumentVisible() &&
+    document.hasFocus()
+  );
+}
+
+function readActiveHostNotificationPresenceEntity(): HostNotificationsPresenceEntity | null {
+  return readActiveHostNotificationPresence()?.entity ?? null;
+}
+
+function readActiveHostNotificationPresence(): FocusedHostNotificationPresence | null {
+  if (presentedBotConversation !== null) {
+    return { originHostId: null, entity: presentedBotConversation };
+  }
+  if (botSurfaceFocused) return null;
+  const state = useEpicCanvasStore.getState();
+  const activeTab =
+    state.activeTabId === null ? null : state.tabsById[state.activeTabId];
+  if (activeTab === null || activeTab === undefined) return null;
+  const canvas = state.canvasByTabId[activeTab.tabId] ?? EMPTY_CANVAS;
+  const active = activeCanvasTile(canvas);
+  if (
+    active?.type === "chat" ||
+    active?.type === "terminal" ||
+    active?.type === "terminal-agent"
+  ) {
+    return {
+      originHostId: active.hostId,
+      entity: { epicId: activeTab.epicId, chatId: active.id },
+    };
+  }
+  return {
+    originHostId: null,
+    entity: { epicId: activeTab.epicId },
+  };
+}
+
+function activeCanvasTile(canvas: EpicCanvasState) {
+  if (canvas.activePaneId === null) return null;
+  const pane = findPaneById(canvas.root, canvas.activePaneId);
+  if (pane === null || pane.activeTabId === null) return null;
+  const active = canvas.tilesByInstanceId[pane.activeTabId];
+  if (active === undefined) return null;
+  if (active.type === WORKSPACE_FILE_TAB_KIND) return null;
+  if (isDiffTileRef(active)) return null;
+  return active;
+}

@@ -1,0 +1,1813 @@
+/**
+ * Intermediate-state tests for the tab command coordinator.
+ *
+ * Every affected store and the transaction ledger are subscribed during
+ * commands. Each subscription-visible snapshot must keep visible refs unique
+ * and cover every temporarily unplaced source ref with the reservation ledger
+ * (including depth-0 notifications after deferred repair). Ordinary outer
+ * commands finalize with exactly one normalize + one project; nested dirty
+ * repair is an in-boundary deferred pass before projection/clear.
+ */
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import {
+  __resetTabSyncCoordinatorForTesting,
+  installTabSyncCoordinator,
+} from "@/lib/tab-sync/tab-sync-coordinator";
+import {
+  browserTabId,
+  resetBrowserTabIdentityForTesting,
+} from "@/lib/browser-tab-identity";
+import { setMobileApp } from "@/lib/mobile-app";
+import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
+import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import {
+  EMPTY_LANDING_DRAFT_CONTENT,
+  emptyLandingDraftWorkspaceSnapshot,
+  setLandingDraftDesktopProjectionBridge,
+  useLandingDraftStore,
+  type LandingDraftTab,
+} from "@/stores/home/landing-draft-store";
+import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import {
+  composerSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
+import {
+  selectWorkspaceFoldersBucket,
+  useWorkspaceFoldersStore,
+  type WorkspaceFolderInfo,
+} from "@/stores/workspace/workspace-folders-store";
+import {
+  flattenLayoutRefs,
+  tabRefKey,
+  type PersistedTabStripLayout,
+} from "@/stores/tabs/layout";
+import {
+  getTabCommandCoordinatorDiagnostics,
+  getTabCommandLedger,
+  subscribeToTabCommandLedger,
+  tabCommandCoordinator,
+  type CoordinatedTabActivation,
+  type TabCommandCoordinatorDiagnostics,
+} from "@/stores/tabs/tab-command-coordinator";
+import { useTabsStore } from "@/stores/tabs/store";
+import type { TabRef } from "@/stores/tabs/types";
+import {
+  landingDraftIsRetired,
+  retireLandingDraft,
+} from "@/lib/drafts/landing-draft-retirement";
+
+interface IntermediateSnapshot {
+  readonly source: "tabs" | "canvas" | "drafts" | "ledger";
+  readonly placedKeys: ReadonlyArray<string>;
+  readonly stripKeys: ReadonlyArray<string>;
+  readonly sourceKeys: ReadonlyArray<string>;
+  readonly reservedKeys: ReadonlyArray<string>;
+  readonly pendingKeys: ReadonlyArray<string>;
+  readonly suppressionDepth: number;
+  readonly reconciliationDirty: boolean;
+}
+
+interface CaptureSession {
+  readonly snapshots: IntermediateSnapshot[];
+  readonly dispose: () => void;
+  readonly assertAllSafe: () => void;
+  readonly diagnosticsDelta: () => TabCommandCoordinatorDiagnostics;
+}
+
+function layoutFromTabsState(): PersistedTabStripLayout {
+  const state = useTabsStore.getState();
+  return {
+    version: 2,
+    items: state.items,
+    activeItemId: state.activeItemId,
+    systemTabs: state.systemTabs,
+  };
+}
+
+function currentSourceKeys(): string[] {
+  const canvas = useEpicCanvasStore.getState();
+  const epicKeys = canvas.openTabOrder.flatMap((tabId) =>
+    canvas.tabsById[tabId] === undefined ? [] : [`epic:${tabId}`],
+  );
+  const draftKeys = useLandingDraftStore
+    .getState()
+    .drafts.map((draft) => `draft:${draft.id}`);
+  return [...epicKeys, ...draftKeys];
+}
+
+function uniqueOrThrow(keys: ReadonlyArray<string>, label: string): void {
+  const seen = new Set<string>();
+  for (const key of keys) {
+    expect(seen.has(key), `${label} duplicated ${key}`).toBe(false);
+    seen.add(key);
+  }
+}
+
+function assertLedgerSafeSnapshot(snapshot: IntermediateSnapshot): void {
+  uniqueOrThrow(snapshot.placedKeys, "layout items");
+  uniqueOrThrow(snapshot.stripKeys, "stripOrder");
+
+  // Coverage is required at every subscription-visible depth, including the
+  // EMPTY_LEDGER notify after deferred in-boundary repair. Skipping depth 0
+  // hid the pre-reconcile clear gap.
+  for (const key of snapshot.sourceKeys) {
+    const placed = snapshot.placedKeys.includes(key);
+    const reserved = snapshot.reservedKeys.includes(key);
+    const pending = snapshot.pendingKeys.includes(key);
+    expect(
+      placed || reserved || pending,
+      `unplaced source ${key} missing from layout/ledger (depth=${snapshot.suppressionDepth})`,
+    ).toBe(true);
+  }
+}
+
+function captureSession(): CaptureSession {
+  const snapshots: IntermediateSnapshot[] = [];
+  const start = getTabCommandCoordinatorDiagnostics();
+
+  const push = (source: IntermediateSnapshot["source"]): void => {
+    const layout = layoutFromTabsState();
+    const ledger = getTabCommandLedger();
+    snapshots.push({
+      source,
+      placedKeys: flattenLayoutRefs(layout).map(tabRefKey),
+      stripKeys: useTabsStore.getState().stripOrder.map(tabRefKey),
+      sourceKeys: currentSourceKeys(),
+      reservedKeys: [...ledger.reservedAdditions.keys()],
+      pendingKeys: [...ledger.pendingRemovals.keys()],
+      suppressionDepth: ledger.suppressionDepth,
+      reconciliationDirty: ledger.reconciliationDirty,
+    });
+  };
+
+  const unsubs = [
+    useTabsStore.subscribe(() => push("tabs")),
+    useEpicCanvasStore.subscribe(() => push("canvas")),
+    useLandingDraftStore.subscribe(() => push("drafts")),
+    subscribeToTabCommandLedger(() => push("ledger")),
+  ];
+
+  return {
+    snapshots,
+    dispose: () => {
+      unsubs.forEach((unsubscribe) => unsubscribe());
+    },
+    assertAllSafe: () => {
+      expect(snapshots.length).toBeGreaterThan(0);
+      snapshots.forEach(assertLedgerSafeSnapshot);
+    },
+    diagnosticsDelta: () => {
+      const end = getTabCommandCoordinatorDiagnostics();
+      return {
+        normalizationCount: end.normalizationCount - start.normalizationCount,
+        compatibilityProjectionCount:
+          end.compatibilityProjectionCount - start.compatibilityProjectionCount,
+        deferredReconciliationCount:
+          end.deferredReconciliationCount - start.deferredReconciliationCount,
+      };
+    },
+  };
+}
+
+function resetStores(): void {
+  useTabsStore.setState({
+    version: 2,
+    items: [],
+    activeItemId: null,
+    stripOrder: [],
+    systemTabs: { history: null, settings: null },
+  });
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  useLandingDraftStore.setState({
+    drafts: [],
+    activeDraftId: null,
+    resumeDraftId: null,
+  });
+  __resetTabSyncCoordinatorForTesting();
+}
+
+function seedCommittedLayout(layout: PersistedTabStripLayout): void {
+  useTabsStore.setState({
+    ...layout,
+    stripOrder: flattenLayoutRefs(layout),
+  });
+}
+
+function openEpicSource(
+  epicId: string,
+  name: string,
+): { readonly tabId: string; readonly ref: TabRef } {
+  const tabId = useEpicCanvasStore.getState().openEpicTab(epicId, name);
+  return { tabId, ref: { kind: "epic", id: tabId } };
+}
+
+function openDraftSource(): TabRef {
+  const draftId = useLandingDraftStore.getState().createDraft(null);
+  return { kind: "draft", id: draftId };
+}
+
+function readyLease(hostId: string): HostLeaseSnapshot {
+  return { hostId, status: "ready", dead: null };
+}
+
+function deadLease(hostId: string): HostLeaseSnapshot {
+  return { hostId, status: "dead", dead: { reason: "offline" } };
+}
+
+function expectFinalizedOnce(session: CaptureSession): void {
+  expect(session.diagnosticsDelta()).toEqual({
+    normalizationCount: 1,
+    compatibilityProjectionCount: 1,
+    deferredReconciliationCount: 0,
+  });
+  expect(getTabCommandLedger().suppressionDepth).toBe(0);
+  expect(getTabCommandLedger().reservedAdditions.size).toBe(0);
+  expect(getTabCommandLedger().pendingRemovals.size).toBe(0);
+}
+
+function expectSuppressedSnapshotWith(
+  session: CaptureSession,
+  predicate: (snapshot: IntermediateSnapshot) => boolean,
+): IntermediateSnapshot {
+  const match = session.snapshots.find(
+    (snapshot) => snapshot.suppressionDepth > 0 && predicate(snapshot),
+  );
+  expect(match, "expected a suppressed intermediate snapshot").toBeDefined();
+  return match as IntermediateSnapshot;
+}
+
+describe("tab command coordinator transactions", () => {
+  beforeEach(async () => {
+    resetStores();
+    installTabSyncCoordinator({ readyPromise: Promise.resolve() });
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  afterEach(() => {
+    resetStores();
+  });
+
+  it("createEmptySplit finalizes once without duplicate visible refs", () => {
+    const { ref } = openEpicSource("epic-a", "A");
+    expect(flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey)).toEqual([
+      tabRefKey(ref),
+    ]);
+
+    const session = captureSession();
+    const created = tabCommandCoordinator.createEmptySplit({
+      ref,
+      splitId: "split-empty",
+      populatedSide: "left",
+      focusedSide: "right",
+      leftRatio: 0.5,
+    });
+    session.dispose();
+
+    expect(created).toBe(true);
+    session.assertAllSafe();
+    expectFinalizedOnce(session);
+
+    const item = useTabsStore.getState().items[0];
+    expect(item).toMatchObject({
+      kind: "split",
+      id: "split-empty",
+      left: { kind: "tab", ref },
+      right: { kind: "empty" },
+    });
+  });
+
+  it("createDraftForSplit reserves the new draft until layout consumes it", () => {
+    const { ref: epicRef } = openEpicSource("epic-a", "A");
+    expect(
+      tabCommandCoordinator.createEmptySplit({
+        ref: epicRef,
+        splitId: "split-draft",
+        populatedSide: "left",
+        focusedSide: "right",
+        leftRatio: 0.5,
+      }),
+    ).toBe(true);
+
+    const before = getTabCommandCoordinatorDiagnostics();
+    const session = captureSession();
+    const draftRef = tabCommandCoordinator.createDraftForSplit({
+      splitId: "split-draft",
+      side: "right",
+    });
+    session.dispose();
+
+    expect(draftRef).not.toBeNull();
+    if (draftRef === null) return;
+
+    session.assertAllSafe();
+    expectSuppressedSnapshotWith(
+      session,
+      (snapshot) =>
+        snapshot.reservedKeys.includes(tabRefKey(draftRef)) ||
+        snapshot.placedKeys.includes(tabRefKey(draftRef)),
+    );
+    expect(session.diagnosticsDelta()).toEqual({
+      normalizationCount: 1,
+      compatibilityProjectionCount: 1,
+      deferredReconciliationCount: 0,
+    });
+    expect(getTabCommandCoordinatorDiagnostics()).toEqual({
+      normalizationCount: before.normalizationCount + 1,
+      compatibilityProjectionCount: before.compatibilityProjectionCount + 1,
+      deferredReconciliationCount: before.deferredReconciliationCount,
+    });
+
+    const split = useTabsStore.getState().items[0];
+    expect(split.kind).toBe("split");
+    if (split.kind === "split") {
+      expect(split.right).toEqual({ kind: "tab", ref: draftRef });
+    }
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === draftRef.id),
+    ).toBe(true);
+  });
+
+  it("fillSplitSide covers a pre-existing unplaced source via reservation", async () => {
+    // Keep reconciliation gated so an open source can exist without strip placement.
+    let resolveReady: () => void = () => undefined;
+    const readyPromise = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
+    resetStores();
+    installTabSyncCoordinator({ readyPromise });
+
+    const tabA = useEpicCanvasStore.getState().openEpicTab("epic-a", "A");
+    const tabB = useEpicCanvasStore.getState().openEpicTab("epic-b", "B");
+    const refA: TabRef = { kind: "epic", id: tabA };
+    const refB: TabRef = { kind: "epic", id: tabB };
+
+    seedCommittedLayout({
+      version: 2,
+      items: [
+        {
+          kind: "split",
+          id: "split-fill",
+          left: { kind: "tab", ref: refA },
+          right: { kind: "empty" },
+          focusedSide: "right",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+      ],
+      activeItemId: "split-fill",
+      systemTabs: { history: null, settings: null },
+    });
+
+    const session = captureSession();
+    const filled = tabCommandCoordinator.fillSplitSide({
+      splitId: "split-fill",
+      side: "right",
+      ref: refB,
+    });
+    session.dispose();
+
+    expect(filled).toBe(true);
+    session.assertAllSafe();
+    expectSuppressedSnapshotWith(
+      session,
+      (snapshot) =>
+        snapshot.reservedKeys.includes(tabRefKey(refB)) ||
+        snapshot.placedKeys.includes(tabRefKey(refB)),
+    );
+    expectFinalizedOnce(session);
+
+    const split = useTabsStore.getState().items[0];
+    expect(split.kind).toBe("split");
+    if (split.kind === "split") {
+      expect(split.right).toEqual({ kind: "tab", ref: refB });
+    }
+
+    resolveReady();
+    await readyPromise;
+    await Promise.resolve();
+  });
+
+  it("replaceDraftWithEpic keeps draft pending-removal and epic reserved mid-command", () => {
+    const draftRef = openDraftSource();
+    expect(flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey)).toContain(
+      tabRefKey(draftRef),
+    );
+
+    const epicTabId = "epic-tab-from-draft";
+    const session = captureSession();
+    const nextRef = tabCommandCoordinator.replaceDraftWithEpic({
+      draftId: draftRef.id,
+      epicId: "epic-created",
+      epicTabId,
+      epicName: "Created",
+    });
+    session.dispose();
+
+    expect(nextRef).toEqual({ kind: "epic", id: epicTabId });
+    session.assertAllSafe();
+
+    expectSuppressedSnapshotWith(session, (snapshot) =>
+      snapshot.pendingKeys.includes(tabRefKey(draftRef)),
+    );
+    expectSuppressedSnapshotWith(
+      session,
+      (snapshot) =>
+        snapshot.reservedKeys.includes(`epic:${epicTabId}`) ||
+        snapshot.placedKeys.includes(`epic:${epicTabId}`),
+    );
+    expectFinalizedOnce(session);
+
+    expect(flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey)).toEqual([
+      `epic:${epicTabId}`,
+    ]);
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(useEpicCanvasStore.getState().openTabOrder).toContain(epicTabId);
+  });
+
+  it("replaceDraftWithEpic re-reveals an epic tab that was closed but preserved", () => {
+    // Opening an epic from the history list resolves the epic's PRESERVED tab
+    // id (`closeTab` keeps the record and points `mostRecentTabIdByEpicId` at
+    // it), so the swap target is routinely a record that already exists while
+    // being absent from `openTabOrder`. If the source is not re-revealed here,
+    // reconciliation deletes the just-placed epic ref as unbacked and the
+    // draft's strip slot collapses instead of becoming the epic.
+    const { tabId, ref } = openEpicSource("epic-reopened", "Reopened");
+    expect(tabCommandCoordinator.closeRef(ref)).toBe(true);
+    expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(tabId);
+    expect(useEpicCanvasStore.getState().tabsById[tabId]).toBeDefined();
+
+    const draftRef = openDraftSource();
+    const nextRef = tabCommandCoordinator.replaceDraftWithEpic({
+      draftId: draftRef.id,
+      epicId: "epic-reopened",
+      epicTabId: tabId,
+      epicName: "Reopened",
+    });
+
+    expect(nextRef).toEqual(ref);
+    expect(useEpicCanvasStore.getState().openTabOrder).toContain(tabId);
+    expect(flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey)).toEqual([
+      tabRefKey(ref),
+    ]);
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+  });
+
+  it("replaceDraftWithDraft re-keys the strip item onto a fresh copy, keeping position and retiring the previous draft", () => {
+    const draftRef = openDraftSource();
+    const content = {
+      type: "doc" as const,
+      content: [{ type: "paragraph", content: [{ type: "text", text: "hi" }] }],
+    };
+    useLandingDraftStore.getState().setDraftContent(draftRef.id, content, null);
+    expect(flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey)).toContain(
+      tabRefKey(draftRef),
+    );
+
+    const nextDraftId = "forked-from-strip";
+    const nextRef = tabCommandCoordinator.replaceDraftWithDraft({
+      previousDraftId: draftRef.id,
+      nextDraftId,
+    });
+
+    expect(nextRef).toEqual({ kind: "draft", id: nextDraftId });
+    expect(flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey)).toEqual([
+      tabRefKey({ kind: "draft", id: nextDraftId }),
+    ]);
+    expect(landingDraftIsRetired(draftRef.id)).toBe(true);
+    const next = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === nextDraftId);
+    expect(next).toBeDefined();
+    expect(next?.content).toEqual(content);
+  });
+
+  it("replaceDraftWithDraft returns null when the previous draft has no strip item", () => {
+    const nextRef = tabCommandCoordinator.replaceDraftWithDraft({
+      previousDraftId: "not-in-strip",
+      nextDraftId: "unused-next",
+    });
+
+    expect(nextRef).toBeNull();
+  });
+
+  it("replaceDraftWithDraft returns null and retires nothing when nextDraftId already exists in the landing store", () => {
+    const draftRef = openDraftSource();
+    // A second draft already occupying the id we would fork into - the
+    // command must refuse rather than clobber it.
+    useLandingDraftStore.getState().createDraftWithId("already-exists", null);
+
+    const nextRef = tabCommandCoordinator.replaceDraftWithDraft({
+      previousDraftId: draftRef.id,
+      nextDraftId: "already-exists",
+    });
+
+    expect(nextRef).toBeNull();
+    // Nothing retired, nothing re-keyed: the previous draft's strip item and
+    // store row are both untouched.
+    expect(flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey)).toContain(
+      tabRefKey(draftRef),
+    );
+    expect(landingDraftIsRetired(draftRef.id)).toBe(false);
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === draftRef.id),
+    ).toBe(true);
+  });
+
+  it("replaceDraftWithDraft throws and leaves layout and store untouched when a listener makes the fork refuse during notify", () => {
+    const draftRef = openDraftSource();
+    const content = {
+      type: "doc" as const,
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "source" }] },
+      ],
+    };
+    useLandingDraftStore.getState().setDraftContent(draftRef.id, content, null);
+
+    const previousDraftId = draftRef.id;
+    const nextDraftId = "fork-refused-by-listener";
+    let fired = false;
+    const unsubscribe = tabCommandCoordinator.subscribe(() => {
+      if (fired) return;
+      if (getTabCommandLedger().suppressionDepth === 0) return;
+      fired = true;
+      // The pre-checks in `replaceDraftWithDraft` ran before this, the
+      // transaction's first notify - only this re-entrant path can make the
+      // successor id taken in time to refuse the fork.
+      useLandingDraftStore.getState().createDraftWithId(nextDraftId, null);
+    });
+
+    expect(() =>
+      tabCommandCoordinator.replaceDraftWithDraft({
+        previousDraftId,
+        nextDraftId,
+      }),
+    ).toThrow();
+
+    unsubscribe();
+
+    expect(flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey)).toContain(
+      tabRefKey(draftRef),
+    );
+    expect(landingDraftIsRetired(previousDraftId)).toBe(false);
+    const previous = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === previousDraftId);
+    expect(previous?.content).toEqual(content);
+    const successor = useLandingDraftStore
+      .getState()
+      .drafts.find((draft) => draft.id === nextDraftId);
+    expect(successor).toBeDefined();
+    expect(successor?.content).not.toEqual(content);
+  });
+
+  it("replaceDraftWithDocument re-keys the strip item onto a host-supplied successor, runs installNext, and retires the previous draft", () => {
+    const draftRef = openDraftSource();
+    expect(flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey)).toContain(
+      tabRefKey(draftRef),
+    );
+
+    const nextDraftId = "rekeyed-from-document";
+    let installNextRan = false;
+    const nextRef = tabCommandCoordinator.replaceDraftWithDocument({
+      previousDraftId: draftRef.id,
+      nextDraftId,
+      installNext: () => {
+        installNextRan = true;
+        useLandingDraftStore.getState().createDraftWithId(nextDraftId, null);
+        return true;
+      },
+    });
+
+    expect(nextRef).toEqual({ kind: "draft", id: nextDraftId });
+    expect(installNextRan).toBe(true);
+    expect(flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey)).toEqual([
+      tabRefKey({ kind: "draft", id: nextDraftId }),
+    ]);
+    expect(landingDraftIsRetired(draftRef.id)).toBe(true);
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === nextDraftId),
+    ).toBe(true);
+  });
+
+  it("replaceDraftWithDocument returns null and never runs installNext when the previous draft has no strip item", () => {
+    let installNextRan = false;
+    const nextRef = tabCommandCoordinator.replaceDraftWithDocument({
+      previousDraftId: "document-not-in-strip",
+      nextDraftId: "document-unused-next",
+      installNext: () => {
+        installNextRan = true;
+        return true;
+      },
+    });
+
+    expect(nextRef).toBeNull();
+    expect(installNextRan).toBe(false);
+  });
+
+  it("replaceDraftWithDocument returns null and never runs installNext when nextDraftId already exists in the landing store", () => {
+    const draftRef = openDraftSource();
+    useLandingDraftStore
+      .getState()
+      .createDraftWithId("document-already-exists", null);
+    let installNextRan = false;
+
+    const nextRef = tabCommandCoordinator.replaceDraftWithDocument({
+      previousDraftId: draftRef.id,
+      nextDraftId: "document-already-exists",
+      installNext: () => {
+        installNextRan = true;
+        return true;
+      },
+    });
+
+    expect(nextRef).toBeNull();
+    expect(installNextRan).toBe(false);
+    expect(flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey)).toContain(
+      tabRefKey(draftRef),
+    );
+    expect(landingDraftIsRetired(draftRef.id)).toBe(false);
+  });
+
+  it("replaceDraftWithDocument returns null and never runs installNext when nextDraftId is retired", () => {
+    const draftRef = openDraftSource();
+    retireLandingDraft("document-retired-next", null);
+    let installNextRan = false;
+
+    const nextRef = tabCommandCoordinator.replaceDraftWithDocument({
+      previousDraftId: draftRef.id,
+      nextDraftId: "document-retired-next",
+      installNext: () => {
+        installNextRan = true;
+        return true;
+      },
+    });
+
+    expect(nextRef).toBeNull();
+    expect(installNextRan).toBe(false);
+    expect(flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey)).toContain(
+      tabRefKey(draftRef),
+    );
+    expect(landingDraftIsRetired(draftRef.id)).toBe(false);
+  });
+
+  it("replaceDraftWithDocument throws and leaves layout and store untouched when installNext returns false", () => {
+    const draftRef = openDraftSource();
+    const previousDraftId = draftRef.id;
+    const nextDraftId = "document-install-refused";
+
+    expect(() =>
+      tabCommandCoordinator.replaceDraftWithDocument({
+        previousDraftId,
+        nextDraftId,
+        installNext: () => false,
+      }),
+    ).toThrow();
+
+    const layoutKeys = flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey);
+    expect(layoutKeys).toContain(tabRefKey(draftRef));
+    expect(layoutKeys).not.toContain(
+      tabRefKey({ kind: "draft", id: nextDraftId }),
+    );
+    expect(landingDraftIsRetired(previousDraftId)).toBe(false);
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === nextDraftId),
+    ).toBe(false);
+  });
+
+  it("closeRef keeps the closed source under pendingRemovals until removal settles", () => {
+    const { ref } = openEpicSource("epic-close", "Close me");
+    const session = captureSession();
+    const closed = tabCommandCoordinator.closeRef(ref);
+    session.dispose();
+
+    expect(closed).toBe(true);
+    session.assertAllSafe();
+    expectSuppressedSnapshotWith(session, (snapshot) =>
+      snapshot.pendingKeys.includes(tabRefKey(ref)),
+    );
+    expectFinalizedOnce(session);
+
+    expect(flattenLayoutRefs(layoutFromTabsState())).toEqual([]);
+    expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(ref.id);
+  });
+
+  it("closeRefAfterConfirmed is a single outer finalize (same critical section)", () => {
+    const draftRef = openDraftSource();
+    const session = captureSession();
+    const closed = tabCommandCoordinator.closeRefAfterConfirmed(draftRef);
+    session.dispose();
+
+    expect(closed).toBe(true);
+    session.assertAllSafe();
+    expectSuppressedSnapshotWith(session, (snapshot) =>
+      snapshot.pendingKeys.includes(tabRefKey(draftRef)),
+    );
+    expectFinalizedOnce(session);
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+  });
+
+  it("createSourceRefAtStripIndex rolls back the source createSource() minted when placement fails", () => {
+    const collidingRef: TabRef = { kind: "epic", id: "collide-id" };
+    // collidingRef lives only inside a split side here (not yet an open
+    // tab) - a stale layout entry that reconciliation itself would prune,
+    // orthogonal to what this test exercises. It stands in for createSource()
+    // minting a ref that collides with one already occupying a split side,
+    // which is the only way createLayoutItem's placement can reject a ref.
+    seedCommittedLayout({
+      version: 2,
+      items: [
+        {
+          kind: "split",
+          id: "split-existing",
+          left: { kind: "empty" },
+          right: { kind: "tab", ref: collidingRef },
+          focusedSide: "right",
+          routeBackingSide: "right",
+          leftRatio: 0.5,
+        },
+      ],
+      activeItemId: "split-existing",
+      systemTabs: { history: null, settings: null },
+    });
+
+    const session = captureSession();
+    const placed = tabCommandCoordinator.createSourceRefAtStripIndex(0, () => {
+      // A split side is not a top-level strip position, so placing
+      // collidingRef at a strip index fails - this mimics createSource()
+      // minting a ref that collides with one already living inside a split.
+      useEpicCanvasStore.setState((state) => ({
+        tabsById: {
+          ...state.tabsById,
+          [collidingRef.id]: {
+            tabId: collidingRef.id,
+            epicId: "epic-b",
+            name: "B",
+          },
+        },
+        canvasByTabId: {
+          ...state.canvasByTabId,
+          [collidingRef.id]: createEmptyCanvas(),
+        },
+        openTabOrder: [...state.openTabOrder, collidingRef.id],
+        activeTabId: collidingRef.id,
+      }));
+      return collidingRef;
+    });
+    session.dispose();
+
+    expect(placed).toBeNull();
+    session.assertAllSafe();
+    // The source rolled back - createSource()'s mint never survives as a
+    // known source, so a later reconciliation pass has nothing left to
+    // re-adopt as an orphaned, active top-level tab.
+    expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(
+      collidingRef.id,
+    );
+    expect(flattenLayoutRefs(layoutFromTabsState())).not.toContainEqual(
+      collidingRef,
+    );
+  });
+
+  it("createSourceRefAtStripIndex does not close a pre-existing tab createSource() resolves to on failure", () => {
+    const { ref: existingRef } = openEpicSource("epic-b", "B");
+    seedCommittedLayout({
+      version: 2,
+      items: [
+        {
+          kind: "split",
+          id: "split-existing",
+          left: { kind: "empty" },
+          right: { kind: "tab", ref: existingRef },
+          focusedSide: "right",
+          routeBackingSide: "right",
+          leftRatio: 0.5,
+        },
+      ],
+      activeItemId: "split-existing",
+      systemTabs: { history: null, settings: null },
+    });
+    const layoutBefore = layoutFromTabsState();
+
+    const session = captureSession();
+    const placed = tabCommandCoordinator.createSourceRefAtStripIndex(
+      0,
+      () => existingRef,
+    );
+    session.dispose();
+
+    expect(placed).toBeNull();
+    session.assertAllSafe();
+    expect(useEpicCanvasStore.getState().openTabOrder).toContain(
+      existingRef.id,
+    );
+    expect(layoutFromTabsState()).toEqual(layoutBefore);
+  });
+
+  it("nested source write during applySources stays reserved, marks dirty, and defers placement", () => {
+    const { ref: epicRef } = openEpicSource("epic-a", "A");
+    expect(
+      tabCommandCoordinator.createEmptySplit({
+        ref: epicRef,
+        splitId: "split-nested",
+        populatedSide: "left",
+        focusedSide: "right",
+        leftRatio: 0.5,
+      }),
+    ).toBe(true);
+
+    // Fire the unexpected nested write specifically during applySources: when
+    // createDraftForSplit creates the draft source, synchronously open another
+    // epic. Production reclassifies by membership so the nested ref lands in
+    // reservedAdditions, dirty is set, and layout commit only drops reserved
+    // keys that were actually placed — nested stays covered until deferred reconcile.
+    const nestedEpicTabIds: string[] = [];
+    const unsubscribeNested = useLandingDraftStore.subscribe((next, prev) => {
+      if (next.drafts === prev.drafts || nestedEpicTabIds.length > 0) return;
+      if (getTabCommandLedger().suppressionDepth === 0) return;
+      nestedEpicTabIds.push(
+        useEpicCanvasStore.getState().openEpicTab("epic-nested", "Nested"),
+      );
+    });
+
+    const session = captureSession();
+    const draftRef = tabCommandCoordinator.createDraftForSplit({
+      splitId: "split-nested",
+      side: "right",
+    });
+    unsubscribeNested();
+    session.dispose();
+
+    expect(draftRef).not.toBeNull();
+    if (draftRef === null) {
+      throw new Error("expected createDraftForSplit to return a draft ref");
+    }
+    expect(nestedEpicTabIds).toHaveLength(1);
+    const nestedId = nestedEpicTabIds[0];
+    expect(typeof nestedId).toBe("string");
+    const nestedKey = `epic:${nestedId}`;
+
+    // At least one mid-transaction snapshot must show the nested ref reserved
+    // and dirty *while still unplaced* (proves applySources-phase coverage,
+    // not only post-clear re-reservation).
+    expectSuppressedSnapshotWith(
+      session,
+      (snapshot) =>
+        snapshot.reconciliationDirty &&
+        snapshot.reservedKeys.includes(nestedKey) &&
+        !snapshot.placedKeys.includes(nestedKey) &&
+        snapshot.sourceKeys.includes(nestedKey),
+    );
+
+    session.assertAllSafe();
+
+    const delta = session.diagnosticsDelta();
+    // Dirty repair is in-boundary (before projection / EMPTY clear), so the
+    // outer command still finalizes once: one normalize, one deferred, one
+    // explicit compatibility projection.
+    expect(delta.deferredReconciliationCount).toBe(1);
+    expect(delta.normalizationCount).toBe(1);
+    expect(delta.compatibilityProjectionCount).toBe(1);
+
+    const placed = flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey);
+    expect(placed).toContain(tabRefKey(draftRef));
+    expect(placed).toContain(nestedKey);
+    uniqueOrThrow(placed, "final layout");
+    expect(getTabCommandLedger().suppressionDepth).toBe(0);
+    expect(getTabCommandLedger().reservedAdditions.size).toBe(0);
+  });
+
+  it("source create persistence throw still places the draft via deferred repair", () => {
+    // Ensure local draft persistence is active (desktop bridge disables it).
+    setLandingDraftDesktopProjectionBridge(null);
+
+    const { ref: epicRef } = openEpicSource("epic-a", "A");
+    expect(
+      tabCommandCoordinator.createEmptySplit({
+        ref: epicRef,
+        splitId: "split-persist-fail",
+        populatedSide: "left",
+        focusedSide: "right",
+        leftRatio: 0.5,
+      }),
+    ).toBe(true);
+
+    const draftsBefore = useLandingDraftStore
+      .getState()
+      .drafts.map((d) => d.id);
+
+    // Simulate the failure mode: Zustand draft state is committed, then
+    // the synchronous persistence write throws before layout apply. Wrapping
+    // createDraftWithId is more reliable than localStorage spies under the
+    // test env (and matches "in-memory source exists, applySources throws").
+    const originalCreateDraftWithId =
+      useLandingDraftStore.getState().createDraftWithId;
+    let threwOnce = false;
+    useLandingDraftStore.setState({
+      createDraftWithId: (id, settings) => {
+        const createdId = originalCreateDraftWithId(id, settings);
+        if (!threwOnce) {
+          threwOnce = true;
+          const error = new Error("The quota has been exceeded.");
+          error.name = "QuotaExceededError";
+          throw error;
+        }
+        return createdId;
+      },
+    });
+
+    const session = captureSession();
+    let thrown: unknown = null;
+    try {
+      try {
+        tabCommandCoordinator.createDraftForSplit({
+          splitId: "split-persist-fail",
+          side: "right",
+        });
+      } catch (error) {
+        thrown = error;
+      }
+    } finally {
+      session.dispose();
+      useLandingDraftStore.setState({
+        createDraftWithId: originalCreateDraftWithId,
+      });
+    }
+
+    expect(threwOnce).toBe(true);
+    expect(thrown).toBeInstanceOf(Error);
+    if (!(thrown instanceof Error)) {
+      throw new Error("expected createDraftForSplit to throw");
+    }
+    expect(
+      thrown.name === "QuotaExceededError" || /quota/i.test(thrown.message),
+    ).toBe(true);
+
+    session.assertAllSafe();
+    expect(getTabCommandLedger().suppressionDepth).toBe(0);
+    expect(getTabCommandLedger().reservedAdditions.size).toBe(0);
+
+    const draftsAfter = useLandingDraftStore.getState().drafts;
+    const created = draftsAfter.filter((d) => !draftsBefore.includes(d.id));
+    expect(created.length).toBeGreaterThanOrEqual(1);
+    const placed = flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey);
+    for (const draft of created) {
+      expect(placed).toContain(`draft:${draft.id}`);
+    }
+    const delta = session.diagnosticsDelta();
+    expect(delta.deferredReconciliationCount).toBe(1);
+    expect(delta.normalizationCount).toBe(1);
+    // Failure path still projects when the outer command requested it.
+    expect(delta.compatibilityProjectionCount).toBe(1);
+  });
+
+  it("nested closeTab during applySources is not restored by compatibility projection", () => {
+    const a = openEpicSource("epic-a", "A");
+    const b = openEpicSource("epic-b", "B");
+    expect(
+      tabCommandCoordinator.createEmptySplit({
+        ref: a.ref,
+        splitId: "split-close-nested",
+        populatedSide: "left",
+        focusedSide: "right",
+        leftRatio: 0.5,
+      }),
+    ).toBe(true);
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual(
+      expect.arrayContaining([a.tabId, b.tabId]),
+    );
+    expect(flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey)).toEqual(
+      expect.arrayContaining([tabRefKey(a.ref), tabRefKey(b.ref)]),
+    );
+
+    let closedB = false;
+    const unsubscribeNested = useLandingDraftStore.subscribe((next, prev) => {
+      if (next.drafts === prev.drafts || closedB) return;
+      if (getTabCommandLedger().suppressionDepth === 0) return;
+      closedB = true;
+      // Canvas close keeps tabsById (the exact bug path): projection used to
+      // rebuild openTabOrder from layout refs still present in tabsById.
+      useEpicCanvasStore.getState().closeTab(b.tabId);
+    });
+
+    const session = captureSession();
+    const draftRef = tabCommandCoordinator.createDraftForSplit({
+      splitId: "split-close-nested",
+      side: "right",
+    });
+    unsubscribeNested();
+    session.dispose();
+
+    expect(closedB).toBe(true);
+    expect(draftRef).not.toBeNull();
+    if (draftRef === null) {
+      throw new Error("expected createDraftForSplit to return a draft ref");
+    }
+
+    session.assertAllSafe();
+    const delta = session.diagnosticsDelta();
+    expect(delta.deferredReconciliationCount).toBe(1);
+    expect(delta.normalizationCount).toBe(1);
+    expect(delta.compatibilityProjectionCount).toBe(1);
+
+    expect(useEpicCanvasStore.getState().openTabOrder).not.toContain(b.tabId);
+    expect(useEpicCanvasStore.getState().tabsById[b.tabId]).toBeDefined();
+    const placed = flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey);
+    expect(placed).not.toContain(tabRefKey(b.ref));
+    expect(placed).toContain(tabRefKey(a.ref));
+    expect(placed).toContain(tabRefKey(draftRef));
+  });
+
+  it("persistent quota including fallback persistence releases a coherent coordinator", () => {
+    // Round-3 hazard: the recovery fallback writes all layout fields atomically,
+    // but public `useTabsStore.setState` is persist-wrapped too. Its own
+    // post-commit persistence failure used to escape finalization and retain
+    // the depth-one ledger forever.
+    setLandingDraftDesktopProjectionBridge(null);
+
+    const { ref: epicRef } = openEpicSource("epic-a", "A");
+    expect(
+      tabCommandCoordinator.createEmptySplit({
+        ref: epicRef,
+        splitId: "split-persist-quota",
+        populatedSide: "left",
+        focusedSide: "right",
+        leftRatio: 0.5,
+      }),
+    ).toBe(true);
+
+    const draftsBefore = useLandingDraftStore
+      .getState()
+      .drafts.map((d) => d.id);
+
+    const originalCreateDraftWithId =
+      useLandingDraftStore.getState().createDraftWithId;
+    const originalReplaceLayoutForTransaction =
+      useTabsStore.getState().replaceLayoutForTransaction;
+    const originalTabsSetState = useTabsStore.setState.bind(useTabsStore);
+    let sourceCreateThrows = 0;
+    let recoveryLayoutThrows = 0;
+    let fallbackSetStateThrows = 0;
+
+    useLandingDraftStore.setState({
+      createDraftWithId: (id, settings) => {
+        // Commit source state, then fail like a persistent quota write.
+        originalCreateDraftWithId(id, settings);
+        sourceCreateThrows += 1;
+        const error = new Error("The quota has been exceeded.");
+        error.name = "QuotaExceededError";
+        throw error;
+      },
+    });
+    useTabsStore.setState({
+      replaceLayoutForTransaction: (layout) => {
+        originalReplaceLayoutForTransaction(layout);
+        recoveryLayoutThrows += 1;
+        const error = new Error("The quota has been exceeded.");
+        error.name = "QuotaExceededError";
+        throw error;
+      },
+    });
+    useTabsStore.setState = (partial) => {
+      originalTabsSetState(partial);
+      fallbackSetStateThrows += 1;
+      const error = new Error("The quota has been exceeded.");
+      error.name = "QuotaExceededError";
+      throw error;
+    };
+
+    const session = captureSession();
+    let thrown: unknown = null;
+    try {
+      try {
+        tabCommandCoordinator.createDraftForSplit({
+          splitId: "split-persist-quota",
+          side: "right",
+        });
+      } catch (error) {
+        thrown = error;
+      }
+    } finally {
+      session.dispose();
+      useTabsStore.setState = originalTabsSetState;
+      useLandingDraftStore.setState({
+        createDraftWithId: originalCreateDraftWithId,
+      });
+      useTabsStore.setState({
+        replaceLayoutForTransaction: originalReplaceLayoutForTransaction,
+      });
+    }
+
+    expect(sourceCreateThrows).toBeGreaterThanOrEqual(1);
+    expect(recoveryLayoutThrows).toBeGreaterThanOrEqual(1);
+    expect(fallbackSetStateThrows).toBeGreaterThanOrEqual(1);
+    expect(thrown).toBeInstanceOf(Error);
+    if (!(thrown instanceof Error)) {
+      throw new Error("expected createDraftForSplit to throw");
+    }
+    expect(
+      thrown.name === "QuotaExceededError" || /quota/i.test(thrown.message),
+    ).toBe(true);
+
+    session.assertAllSafe();
+    expect(getTabCommandLedger().suppressionDepth).toBe(0);
+    expect(getTabCommandLedger().reservedAdditions.size).toBe(0);
+
+    const tabsState = useTabsStore.getState();
+    const projectedKeys = flattenLayoutRefs({
+      version: 2,
+      items: tabsState.items,
+      activeItemId: tabsState.activeItemId,
+      systemTabs: tabsState.systemTabs,
+    }).map(tabRefKey);
+    // Coherent means stripOrder matches the items tree; mismatch is the
+    // orphan path that makes currentLayout() discard the recovered placement.
+    expect(tabsState.stripOrder.map(tabRefKey)).toEqual(projectedKeys);
+
+    const draftsAfter = useLandingDraftStore.getState().drafts;
+    const created = draftsAfter.filter((d) => !draftsBefore.includes(d.id));
+    expect(created).toHaveLength(1);
+    const draftRef: TabRef = { kind: "draft", id: created[0].id };
+    expect(projectedKeys).toContain(tabRefKey(draftRef));
+
+    // A later command must still see the draft as a placeable source ref.
+    expect(
+      tabCommandCoordinator.createEmptySplit({
+        ref: draftRef,
+        splitId: "split-after-quota",
+        populatedSide: "left",
+        focusedSide: "right",
+        leftRatio: 0.5,
+      }),
+    ).toBe(true);
+    const afterKeys = flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey);
+    expect(afterKeys).toContain(tabRefKey(draftRef));
+    uniqueOrThrow(afterKeys, "post-quota layout");
+  });
+
+  it("source background-open during projection reprojects final layout compatibility", () => {
+    // Round-3 hazard: membership repair after the first projection can make X
+    // the final active layout item, while source activeTabId remains the stale
+    // null written before the repair.
+    const a = openEpicSource("epic-a", "A");
+    expect(useEpicCanvasStore.getState().activeTabId).toBe(a.tabId);
+
+    const nestedEpicTabIds: string[] = [];
+    const unsubscribeNested = useEpicCanvasStore.subscribe((next, prev) => {
+      if (nestedEpicTabIds.length > 0) return;
+      if (getTabCommandLedger().suppressionDepth === 0) return;
+      // Compatibility projection clears activeTabId when the focused side is
+      // empty (no epic ref selected). React only to that projection write.
+      if (next.activeTabId === prev.activeTabId) return;
+      if (next.activeTabId !== null) return;
+      nestedEpicTabIds.push(
+        useEpicCanvasStore.getState().openEpicTabInBackground("epic-x", "X"),
+      );
+    });
+
+    const session = captureSession();
+    const created = tabCommandCoordinator.createEmptySplit({
+      ref: a.ref,
+      splitId: "split-proj-nested-x",
+      populatedSide: "left",
+      focusedSide: "right",
+      leftRatio: 0.5,
+    });
+    unsubscribeNested();
+    session.dispose();
+
+    expect(created).toBe(true);
+    expect(nestedEpicTabIds).toHaveLength(1);
+    const xId = nestedEpicTabIds[0];
+    expect(typeof xId).toBe("string");
+    const xKey = `epic:${xId}`;
+
+    // Every subscription-visible snapshot must cover X (including the
+    // EMPTY_LEDGER notify after release).
+    session.assertAllSafe();
+    expect(getTabCommandLedger().suppressionDepth).toBe(0);
+    expect(getTabCommandLedger().reservedAdditions.size).toBe(0);
+
+    const canvas = useEpicCanvasStore.getState();
+    expect(canvas.openTabOrder).toContain(xId);
+    expect(canvas.tabsById[xId]).toBeDefined();
+    const layout = layoutFromTabsState();
+    const placed = flattenLayoutRefs(layout).map(tabRefKey);
+    expect(placed).toContain(tabRefKey(a.ref));
+    expect(placed).toContain(xKey);
+    uniqueOrThrow(placed, "final layout with X");
+    const layoutEpicIds = flattenLayoutRefs(layout).flatMap((ref) =>
+      ref.kind === "epic" ? [ref.id] : [],
+    );
+    expect(canvas.openTabOrder).toEqual(layoutEpicIds);
+    // X was opened in the background while the command left the split's
+    // right side focused but empty. The split remains the active layout item;
+    // compatibility has no selected epic to project back to the canvas.
+    expect(layout.activeItemId).toBe("split-proj-nested-x");
+    expect(canvas.activeTabId).toBeNull();
+  });
+
+  it("one-shot projection listener error still releases the ledger and permits another command", () => {
+    const a = openEpicSource("epic-a", "A");
+    const b = openEpicSource("epic-b", "B");
+    const primaryError = new Error("projection listener failed once");
+    let projectionThrows = 0;
+    const unsubscribeThrowing = useEpicCanvasStore.subscribe((next, prev) => {
+      if (projectionThrows > 0) return;
+      if (next.activeTabId === prev.activeTabId || next.activeTabId !== null) {
+        return;
+      }
+      projectionThrows += 1;
+      throw primaryError;
+    });
+
+    let thrown: unknown = null;
+    try {
+      tabCommandCoordinator.createEmptySplit({
+        ref: a.ref,
+        splitId: "split-projection-error",
+        populatedSide: "left",
+        focusedSide: "right",
+        leftRatio: 0.5,
+      });
+    } catch (error) {
+      thrown = error;
+    } finally {
+      unsubscribeThrowing();
+    }
+
+    expect(projectionThrows).toBe(1);
+    expect(thrown).toBe(primaryError);
+    expect(getTabCommandLedger().suppressionDepth).toBe(0);
+    expect(getTabCommandLedger().reconciliationDirty).toBe(false);
+    expect(
+      tabCommandCoordinator.createEmptySplit({
+        ref: b.ref,
+        splitId: "split-after-projection-error",
+        populatedSide: "left",
+        focusedSide: "right",
+        leftRatio: 0.5,
+      }),
+    ).toBe(true);
+  });
+
+  it("primary layout error remains primary when fallback persistence also fails", () => {
+    const { ref } = openEpicSource("epic-a", "A");
+    const primaryError = new Error("primary layout listener failure");
+    const fallbackError = new Error("fallback quota failure");
+    fallbackError.name = "QuotaExceededError";
+    const originalReplaceLayoutForTransaction =
+      useTabsStore.getState().replaceLayoutForTransaction;
+    const originalTabsSetState = useTabsStore.setState.bind(useTabsStore);
+    let primaryThrows = 0;
+    let fallbackThrows = 0;
+
+    useTabsStore.setState({
+      replaceLayoutForTransaction: (layout) => {
+        originalReplaceLayoutForTransaction(layout);
+        if (primaryThrows > 0) return;
+        primaryThrows += 1;
+        throw primaryError;
+      },
+    });
+    useTabsStore.setState = (partial) => {
+      originalTabsSetState(partial);
+      fallbackThrows += 1;
+      throw fallbackError;
+    };
+
+    let thrown: unknown = null;
+    try {
+      tabCommandCoordinator.createEmptySplit({
+        ref,
+        splitId: "split-primary-error",
+        populatedSide: "left",
+        focusedSide: "right",
+        leftRatio: 0.5,
+      });
+    } catch (error) {
+      thrown = error;
+    } finally {
+      useTabsStore.setState = originalTabsSetState;
+      useTabsStore.setState({
+        replaceLayoutForTransaction: originalReplaceLayoutForTransaction,
+      });
+    }
+
+    expect(primaryThrows).toBe(1);
+    expect(fallbackThrows).toBe(1);
+    expect(thrown).toBe(primaryError);
+    if (!(thrown instanceof Error)) {
+      throw new Error("expected a primary error");
+    }
+    expect(thrown.cause).toBe(fallbackError);
+    expect(getTabCommandLedger().suppressionDepth).toBe(0);
+    expect(getTabCommandLedger().reconciliationDirty).toBe(false);
+  });
+
+  it("forbids nested outer commands during a transaction", () => {
+    const { ref } = openEpicSource("epic-a", "A");
+    const unsub = subscribeToTabCommandLedger(() => {
+      if (getTabCommandLedger().suppressionDepth === 0) return;
+      expect(() => tabCommandCoordinator.closeRef(ref)).toThrow(
+        /cannot be re-entered/i,
+      );
+    });
+
+    const session = captureSession();
+    expect(
+      tabCommandCoordinator.createEmptySplit({
+        ref,
+        splitId: "split-reenter",
+        populatedSide: "left",
+        focusedSide: "right",
+        leftRatio: 0.5,
+      }),
+    ).toBe(true);
+    unsub();
+    session.dispose();
+    session.assertAllSafe();
+    expectFinalizedOnce(session);
+  });
+
+  it("handleEpicAccessLoss covers every affected ref in pendingRemovals for one finalize", () => {
+    const a = openEpicSource("shared-epic", "A");
+    const b = openEpicSource("shared-epic", "B");
+    // openEpicTab reuses? Actually openEpicTab always creates a new tab id for
+    // the same epicId. Ensure both tabs share epicId for access loss.
+    // openEpicTab(epicId) creates distinct tabIds - good.
+    useAuthStore.getState().setSignedIn(
+      {
+        userId: "user-1",
+        userName: "Test User",
+        email: "test@example.com",
+        avatarUrl: null,
+      },
+      { userId: "user-1", username: "test-user" },
+      [],
+    );
+    const session = captureSession();
+    try {
+      tabCommandCoordinator.handleEpicAccessLoss(["shared-epic"], "user-1");
+    } finally {
+      useAuthStore.getState().setSignedOut();
+    }
+    session.dispose();
+
+    session.assertAllSafe();
+    expectSuppressedSnapshotWith(
+      session,
+      (snapshot) =>
+        snapshot.pendingKeys.includes(tabRefKey(a.ref)) &&
+        snapshot.pendingKeys.includes(tabRefKey(b.ref)),
+    );
+    expectFinalizedOnce(session);
+    expect(flattenLayoutRefs(layoutFromTabsState())).toEqual([]);
+  });
+
+  it("separateBeforeMove and removeMovedRef are separate outer transactions", () => {
+    const left = openEpicSource("epic-left", "Left");
+    const right = openEpicSource("epic-right", "Right");
+
+    useTabsStore.getState().pair({
+      left: left.ref,
+      right: right.ref,
+      splitId: "split-move",
+      leftRatio: 0.5,
+    });
+    expect(useTabsStore.getState().items[0]?.kind).toBe("split");
+
+    const separateSession = captureSession();
+    const separateResult = tabCommandCoordinator.separateBeforeMove(left.ref);
+    separateSession.dispose();
+
+    expect(separateResult).toEqual({
+      separated: true,
+      splitId: "split-move",
+    });
+    separateSession.assertAllSafe();
+    expectFinalizedOnce(separateSession);
+    expect(
+      useTabsStore.getState().items.every((item) => item.kind === "tab"),
+    ).toBe(true);
+
+    const removeSession = captureSession();
+    const removed = tabCommandCoordinator.removeMovedRef(left.ref);
+    removeSession.dispose();
+
+    expect(removed).toBe(true);
+    removeSession.assertAllSafe();
+    expectSuppressedSnapshotWith(removeSession, (snapshot) =>
+      snapshot.pendingKeys.includes(tabRefKey(left.ref)),
+    );
+    expectFinalizedOnce(removeSession);
+
+    expect(flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey)).toEqual([
+      tabRefKey(right.ref),
+    ]);
+    expect(useEpicCanvasStore.getState().tabsById[left.tabId]).toBeUndefined();
+  });
+
+  it("reconcileFromSourceStores places unplaced sources with one finalize", async () => {
+    let resolveReady: () => void = () => undefined;
+    const readyPromise = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
+    resetStores();
+    installTabSyncCoordinator({ readyPromise });
+
+    const tabId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-hydrate", "H");
+    expect(useTabsStore.getState().items).toEqual([]);
+
+    const session = captureSession();
+    resolveReady();
+    await readyPromise;
+    await Promise.resolve();
+    await Promise.resolve();
+    session.dispose();
+
+    session.assertAllSafe();
+    const delta = session.diagnosticsDelta();
+    expect(delta.normalizationCount).toBe(1);
+    // Passive hydration must not claim a source compatibility projection.
+    expect(delta.compatibilityProjectionCount).toBe(0);
+    expect(delta.deferredReconciliationCount).toBe(0);
+    expect(flattenLayoutRefs(layoutFromTabsState()).map(tabRefKey)).toEqual([
+      `epic:${tabId}`,
+    ]);
+  });
+
+  it("pair via store remains operational; coordinator close still ledger-safe", () => {
+    const left = openEpicSource("epic-l", "L");
+    const right = openEpicSource("epic-r", "R");
+    useTabsStore.getState().pair({
+      left: left.ref,
+      right: right.ref,
+      splitId: "split-pair",
+      leftRatio: 0.4,
+    });
+
+    const session = captureSession();
+    expect(tabCommandCoordinator.closeRef(right.ref)).toBe(true);
+    session.dispose();
+
+    session.assertAllSafe();
+    expectFinalizedOnce(session);
+    const remaining = flattenLayoutRefs(layoutFromTabsState());
+    expect(remaining.map(tabRefKey)).toEqual([tabRefKey(left.ref)]);
+  });
+
+  // Regression coverage for the fix: `resolveDraftActivation` (via
+  // `createDraftWithId`) now resolves a new draft's workspace AND default
+  // settings through `readComposerHostIdSnapshot()` - the composer's real
+  // resolved placement host (pin, or the app-wide effective host when
+  // unpinned or the pin is dead) - instead of the app-wide host alone.
+  // `createDraftForSplit` shares the same creation path and is fixed the
+  // same way. Every store here is real: `useWorkspaceFoldersStore`,
+  // `useComposerRunSettingsStore`, `useSelectionAuthorityStore`, and the
+  // actual per-WINDOW pin in `useSurfaceHostSelectionStore`, keyed by the
+  // real `browserTabId()` (no desktop bridge is set in this suite, so
+  // `readComposerHostIdSnapshot()` falls through to it exactly as
+  // production does outside Electron).
+  describe("resolveDraftActivation resolves the composer's placement host (regression)", () => {
+    const HOST_LOCAL = "host-local";
+    const HOST_REMOTE = "host-remote";
+    const HOST_OTHER = "host-other";
+    const REPO_IDENTIFIER = { owner: "traycerai", repo: "traycer-internal" };
+
+    const LOCAL_FOLDER: WorkspaceFolderInfo = {
+      path: "/local/traycer-internal",
+      name: "traycer-internal",
+      repoIdentifier: REPO_IDENTIFIER,
+      hostId: HOST_LOCAL,
+    };
+    const REMOTE_FOLDER: WorkspaceFolderInfo = {
+      path: "/remote/traycer-internal",
+      name: "traycer-internal",
+      repoIdentifier: REPO_IDENTIFIER,
+      hostId: HOST_REMOTE,
+    };
+
+    const LOCAL_SETTINGS: ChatRunSettings = {
+      ultracode: false,
+      harnessId: "claude",
+      model: "local-model",
+      permissionMode: "supervised",
+      reasoningEffort: null,
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: null,
+    };
+    const REMOTE_SETTINGS: ChatRunSettings = {
+      ultracode: false,
+      harnessId: "codex",
+      model: "remote-model",
+      permissionMode: "supervised",
+      reasoningEffort: null,
+      serviceTier: null,
+      agentMode: "epic",
+      profileId: null,
+    };
+    const EXPLICIT_SETTINGS: ChatRunSettings = {
+      ultracode: false,
+      harnessId: "claude",
+      model: "explicit-model",
+      permissionMode: "supervised",
+      reasoningEffort: "high",
+      serviceTier: null,
+      agentMode: "regular",
+      profileId: null,
+    };
+
+    let composerKey: string;
+
+    function pinComposerTo(hostId: string | null): void {
+      useSurfaceHostSelectionStore.getState().setSelection(composerKey, hostId);
+    }
+
+    function mintedDraft(
+      activation: CoordinatedTabActivation | null,
+    ): LandingDraftTab {
+      if (activation === null) {
+        throw new Error("expected activateTab to mint a draft");
+      }
+      const draft = useLandingDraftStore
+        .getState()
+        .drafts.find((d) => d.id === activation.ref.id);
+      if (draft === undefined) {
+        throw new Error("expected the minted draft to exist");
+      }
+      return draft;
+    }
+
+    beforeEach(() => {
+      composerKey = composerSurfaceKey(browserTabId());
+      useWorkspaceFoldersStore.setState({ byHost: {} });
+      useWorkspaceFoldersStore
+        .getState()
+        .addResolvedFolders(HOST_LOCAL, [LOCAL_FOLDER]);
+      useWorkspaceFoldersStore
+        .getState()
+        .addResolvedFolders(HOST_REMOTE, [REMOTE_FOLDER]);
+      useComposerRunSettingsStore.getState().resetForTests();
+      useComposerRunSettingsStore
+        .getState()
+        .setGlobalRunSettings(HOST_LOCAL, LOCAL_SETTINGS, Date.now());
+      useComposerRunSettingsStore
+        .getState()
+        .setGlobalRunSettings(HOST_REMOTE, REMOTE_SETTINGS, Date.now());
+      useSelectionAuthorityStore.setState({
+        attached: true,
+        effectiveHostId: HOST_LOCAL,
+        leases: [readyLease(HOST_LOCAL), readyLease(HOST_REMOTE)],
+      });
+      useSurfaceHostSelectionStore.getState().resetForTests();
+    });
+
+    afterEach(() => {
+      useWorkspaceFoldersStore.setState({ byHost: {} });
+      useComposerRunSettingsStore.getState().resetForTests();
+      useSelectionAuthorityStore.setState({
+        attached: false,
+        effectiveHostId: null,
+        leases: [],
+      });
+      useSurfaceHostSelectionStore.getState().resetForTests();
+      resetBrowserTabIdentityForTesting();
+    });
+
+    it("a new draft pinned to the remote host resolves workspace + default settings from the remote host, not the app-wide local host", () => {
+      pinComposerTo(HOST_REMOTE);
+
+      // The REAL command-palette entry point, not a hardcoded `settings:
+      // null` - this is what actually catches `new-epic.ts` regressing to
+      // an eager `getGlobalRunSettings(activeHostIdOrNull())` read: that
+      // would hand this test a non-null LOCAL_SETTINGS intent, and the
+      // draft would then resolve LOCAL_SETTINGS instead of REMOTE_SETTINGS
+      // below, failing the assertion even though the coordinator itself is
+      // untouched.
+      const intent = openNewEpicIntent();
+
+      const activation = tabCommandCoordinator.activateTab({
+        kind: "draft",
+        draftId: null,
+        settings: intent.settings,
+        create: true,
+      });
+      const draft = mintedDraft(activation);
+
+      expect(draft.workspace.primaryPath).toBe(REMOTE_FOLDER.path);
+      expect(draft.workspace.folders).toEqual([REMOTE_FOLDER.path]);
+      expect(draft.settings).toEqual(REMOTE_SETTINGS);
+    });
+
+    it("createDraftForSplit resolves the same pinned remote host", () => {
+      pinComposerTo(HOST_REMOTE);
+      const { ref: epicRef } = openEpicSource("epic-host-pin", "Pinned");
+      expect(
+        tabCommandCoordinator.createEmptySplit({
+          ref: epicRef,
+          splitId: "split-host-pin",
+          populatedSide: "left",
+          focusedSide: "right",
+          leftRatio: 0.5,
+        }),
+      ).toBe(true);
+
+      const draftRef = tabCommandCoordinator.createDraftForSplit({
+        splitId: "split-host-pin",
+        side: "right",
+      });
+      expect(draftRef).not.toBeNull();
+      if (draftRef === null) {
+        throw new Error("expected createDraftForSplit to mint a draft");
+      }
+      const draft = useLandingDraftStore
+        .getState()
+        .drafts.find((d) => d.id === draftRef.id);
+      expect(draft?.workspace.primaryPath).toBe(REMOTE_FOLDER.path);
+      expect(draft?.settings).toEqual(REMOTE_SETTINGS);
+    });
+
+    it("explicit settings passed to activateTab are preserved verbatim; workspace still resolves to the pinned host", () => {
+      pinComposerTo(HOST_REMOTE);
+
+      const activation = tabCommandCoordinator.activateTab({
+        kind: "draft",
+        draftId: null,
+        settings: EXPLICIT_SETTINGS,
+        create: true,
+      });
+      const draft = mintedDraft(activation);
+
+      expect(draft.settings).toEqual(EXPLICIT_SETTINGS);
+      expect(draft.workspace.primaryPath).toBe(REMOTE_FOLDER.path);
+    });
+
+    it("reactivating an existing draft does not reseed its workspace or settings from the current pin", () => {
+      pinComposerTo(HOST_REMOTE);
+      const created = tabCommandCoordinator.activateTab({
+        kind: "draft",
+        draftId: null,
+        settings: null,
+        create: true,
+      });
+      const draftId = mintedDraft(created).id;
+      const before = useLandingDraftStore
+        .getState()
+        .drafts.find((d) => d.id === draftId);
+      expect(before?.workspace.primaryPath).toBe(REMOTE_FOLDER.path);
+
+      // The pin moves to a THIRD host after the draft already exists.
+      pinComposerTo(HOST_OTHER);
+      const reactivated = tabCommandCoordinator.activateTab({
+        kind: "draft",
+        draftId,
+        settings: null,
+        create: false,
+      });
+
+      expect(reactivated?.ref).toEqual({ kind: "draft", id: draftId });
+      const after = useLandingDraftStore
+        .getState()
+        .drafts.find((d) => d.id === draftId);
+      expect(after?.workspace).toEqual(before?.workspace);
+      expect(after?.settings).toEqual(before?.settings);
+    });
+
+    it("a DEAD pinned host falls through to the app-wide effective host, exactly as the reactive pin resolver does", () => {
+      pinComposerTo(HOST_REMOTE);
+      useSelectionAuthorityStore.setState({
+        attached: true,
+        effectiveHostId: HOST_LOCAL,
+        leases: [readyLease(HOST_LOCAL), deadLease(HOST_REMOTE)],
+      });
+
+      const activation = tabCommandCoordinator.activateTab({
+        kind: "draft",
+        draftId: null,
+        settings: null,
+        create: true,
+      });
+      const draft = mintedDraft(activation);
+
+      expect(draft.workspace.primaryPath).toBe(LOCAL_FOLDER.path);
+      expect(draft.settings).toEqual(LOCAL_SETTINGS);
+      // The pin itself is untouched by the fallback - only its RESOLUTION
+      // moved (selection model: death never clears a pin).
+      expect(
+        useSurfaceHostSelectionStore.getState().selections[composerKey],
+      ).toBe(HOST_REMOTE);
+    });
+
+    it("an empty remote bucket/settings never falls back to the local host's non-empty bucket", () => {
+      // Re-seed with the remote host having NOTHING - a real "just added
+      // this machine" state, not a mismatch that could resolve to the wrong
+      // data.
+      useWorkspaceFoldersStore.setState({ byHost: {} });
+      useWorkspaceFoldersStore
+        .getState()
+        .addResolvedFolders(HOST_LOCAL, [LOCAL_FOLDER]);
+      useComposerRunSettingsStore.getState().resetForTests();
+      useComposerRunSettingsStore
+        .getState()
+        .setGlobalRunSettings(HOST_LOCAL, LOCAL_SETTINGS, Date.now());
+      pinComposerTo(HOST_REMOTE);
+
+      const activation = tabCommandCoordinator.activateTab({
+        kind: "draft",
+        draftId: null,
+        settings: null,
+        create: true,
+      });
+      const draft = mintedDraft(activation);
+
+      expect(draft.workspace.folders).toEqual([]);
+      expect(draft.workspace.primaryPath).toBeNull();
+      expect(draft.settings).toBeNull();
+      // The local bucket is untouched and still resolvable directly - the
+      // empty remote read did not consume or clobber it.
+      expect(
+        selectWorkspaceFoldersBucket(
+          useWorkspaceFoldersStore.getState(),
+          HOST_LOCAL,
+        ).primaryPath,
+      ).toBe(LOCAL_FOLDER.path);
+    });
+  });
+
+  describe("the installed mobile app's id-less new-draft activation", () => {
+    afterEach(() => {
+      setMobileApp(false);
+    });
+
+    function newTask(): string {
+      const activation = tabCommandCoordinator.activateTab({
+        kind: "draft",
+        draftId: null,
+        settings: null,
+        create: true,
+      });
+      if (activation === null) {
+        throw new Error("expected the new-task activation to land on a draft");
+      }
+      return activation.ref.id;
+    }
+
+    it("mints its own draft instead of landing on one mirrored from another device, and mints again once that draft is gone", () => {
+      setMobileApp(true);
+      useLandingDraftStore.getState().installLandingDraft({
+        id: "mirrored",
+        content: {
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "typed on the other device" }],
+            },
+          ],
+        },
+        selection: null,
+        lastTouchedAt: Date.now() + 60_000,
+        settings: null,
+        composerMode: "chat",
+        workspace: emptyLandingDraftWorkspaceSnapshot(),
+        closed: false,
+        returnedSandbox: null,
+        namedHostId: null,
+        durability: "saved",
+      });
+
+      const first = newTask();
+
+      expect(first).not.toBe("mirrored");
+      const minted = useLandingDraftStore
+        .getState()
+        .drafts.find((draft) => draft.id === first);
+      expect(minted?.content).toEqual(EMPTY_LANDING_DRAFT_CONTENT);
+      expect(newTask()).toBe(first);
+
+      useLandingDraftStore.getState().deleteDraft(first);
+
+      const next = newTask();
+      expect(next).not.toBe(first);
+      expect(next).not.toBe("mirrored");
+    });
+  });
+});

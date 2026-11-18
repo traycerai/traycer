@@ -1,0 +1,456 @@
+import { UpdateHostHomeUnusableError } from "@traycer-clients/shared/host-update/host-home-unusable";
+import { HOST_STORE_FORMAT_FLOOR_CODE } from "@traycer/protocol/config/host-update-attempt";
+
+// Machine-readable error codes the runner emits in NDJSON `error` events
+// and on the human stderr line. The codebase should always raise CliError
+// with one of these so downstream consumers (Desktop, CI, scripts) can
+// switch on `code` rather than parsing free-form messages.
+//
+// Keep this list authoritative: add new codes here as new failure modes
+// surface in CLI commands. Don't reuse codes for unrelated meanings.
+export const CLI_ERROR_CODES = {
+  // --- Generic ---
+  UNEXPECTED: "E_UNEXPECTED",
+  INVALID_ARGUMENT: "E_INVALID_ARGUMENT",
+  NOT_FOUND: "E_NOT_FOUND",
+  // Authenticated but not authorized - the caller is signed in but lacks
+  // access to the requested resource (e.g. the host's 403 "does not have
+  // required permission for task"). Distinct from NOT_FOUND ("doesn't
+  // exist") and AUTH_REJECTED ("not signed in / bad token").
+  FORBIDDEN: "E_FORBIDDEN",
+  // The data-migration startup gate refused this invocation: a migration is
+  // in progress, or the data location record and its migration journal
+  // disagree. Nothing was written; the message says what to run.
+  DATA_MIGRATION_BLOCKED: "E_DATA_MIGRATION_BLOCKED",
+  // `traycer data init` / `data migrate` is not offered by this build on this
+  // platform yet (`data-availability.ts`). Nothing was written.
+  DATA_OPERATION_UNAVAILABLE: "E_DATA_OPERATION_UNAVAILABLE",
+  // A data migration stopped to show its session impact report; re-run with
+  // `--accept-session-impact <digest>` naming exactly the reported digest.
+  DATA_ACCEPTANCE_REQUIRED: "E_DATA_ACCEPTANCE_REQUIRED",
+
+  // --- Agent roles (mirror the host's typed role-surface wire codes 1:1) ---
+  // Absent and foreign-account agents share ONE code and template - no
+  // existence oracle across the account boundary.
+  AGENT_NOT_FOUND: "E_AGENT_NOT_FOUND",
+  // The caller's own agent lives on another host; the message names it.
+  AGENT_NOT_LOCAL: "E_AGENT_NOT_LOCAL",
+  // A claim held by another of the caller's own agents - role-specific copy,
+  // NOT the generic epic-access denial (whose "check Task access" guidance
+  // would mislead here).
+  ROLE_FORBIDDEN: "E_ROLE_FORBIDDEN",
+
+  // --- Agent archive (`epic.setChatArchived`) ---
+  // The host folds both conditions below into a generic `RPC_ERROR` with a
+  // reason prefix on the message (`AGENT_BUSY:` / `RECORD_NOT_FOUND:`) rather
+  // than a typed wire code - see `epic-set-chat-archived-resolver.ts`. The CLI
+  // detects those prefixes and remaps them to these codes so callers can
+  // switch on `code` instead of parsing message text.
+  AGENT_ARCHIVE_BUSY: "E_AGENT_ARCHIVE_BUSY",
+  AGENT_RECORD_NOT_FOUND: "E_AGENT_RECORD_NOT_FOUND",
+
+  // --- Host refusals of the caller's own environment (mirror the host's
+  // typed wire codes 1:1) ---
+  // Each is the host answering, with a typed code, that something about the
+  // machine or the workspace the person set up stops the request: a bound
+  // folder deleted from disk, an agent with no workspace chosen, a full disk
+  // on the host machine. The message names the remedy. None is a CLI defect,
+  // and before these codes each one fell through to UNEXPECTED and was
+  // captured.
+  WORKTREE_MISSING: "E_WORKTREE_MISSING",
+  // The host refused a `worktree delete` because an agent session or the
+  // background work it owns still holds the worktree (the typed
+  // `WORKTREE_BUSY` code on the delete frames). The person's own worktree is in
+  // use; stopping that work, or re-running with the owners stopped, is the
+  // remedy.
+  WORKTREE_BUSY: "E_WORKTREE_BUSY",
+  WORKSPACE_BINDING_REQUIRED: "E_WORKSPACE_BINDING_REQUIRED",
+  HOST_STORAGE_FULL: "E_HOST_STORAGE_FULL",
+  ENVIRONMENT_NOT_A_MEMBER: "E_ENVIRONMENT_NOT_A_MEMBER",
+  ENVIRONMENT_SEAT_NOT_ACCEPTED: "E_ENVIRONMENT_SEAT_NOT_ACCEPTED",
+  ENVIRONMENT_SEAT_WITHOUT_WRITE: "E_ENVIRONMENT_SEAT_WITHOUT_WRITE",
+  HOST_IS_SANDBOX: "E_HOST_IS_SANDBOX",
+  HOST_IN_ANOTHER_TEAM: "E_HOST_IN_ANOTHER_TEAM",
+  // The host refused a run or launch on a provider the person turned off in
+  // Settings -> Providers (HTTP 403, typed `PROVIDER_DISABLED`). Their own
+  // setting stops the request and the message names the remedy.
+  PROVIDER_DISABLED: "E_PROVIDER_DISABLED",
+
+  // --- Auth ---
+  AUTH_NO_CREDENTIALS: "E_AUTH_NO_CREDENTIALS",
+  AUTH_REJECTED: "E_AUTH_REJECTED",
+  TEAM_MEMBERSHIP_REQUIRED: "E_TEAM_MEMBERSHIP_REQUIRED",
+  TEAM_MEMBERSHIP_UNAVAILABLE: "E_TEAM_MEMBERSHIP_UNAVAILABLE",
+  AUTH_NETWORK: "E_AUTH_NETWORK",
+
+  // --- Config ---
+  CONFIG_INVALID: "E_CONFIG_INVALID",
+  CONFIG_INVALID_VALUE: "E_CONFIG_INVALID_VALUE",
+  CONFIG_MISSING_KEY: "E_CONFIG_MISSING_KEY",
+
+  // --- Host supervisor + lifecycle ---
+  HOST_NOT_RUNNING: "E_HOST_NOT_RUNNING",
+  // The host's process is there and its endpoint is published, but the
+  // connection to it failed before the request went out: the dial timed out,
+  // the socket errored, or it closed before a frame. Distinct from
+  // HOST_NOT_RUNNING (nothing to dial) and from every code the host itself
+  // answers with - here nothing answered and nothing was carried out, so
+  // running the command again is safe. A post-send failure the transport
+  // marked replayable lands here too, for the same reason: the host is
+  // deduplicating the retry.
+  HOST_UNREACHABLE: "E_HOST_UNREACHABLE",
+  // The request WAS sent and no answer came back, so the host may have
+  // carried it out: its response did not arrive inside the deadline, or the
+  // connection was lost after the send with nothing to prove the host never
+  // acted. The one code that must NOT be read as "nothing happened" - running
+  // the command again can repeat whatever it did, such as delivering the same
+  // message to an agent twice. The message says to check before re-sending.
+  HOST_REQUEST_OUTCOME_UNKNOWN: "E_HOST_REQUEST_OUTCOME_UNKNOWN",
+  // The host answered, but the call needed the cloud and the cloud gave the
+  // host no verdict (mirrors the host's typed `E_CLOUD_UNREACHABLE`). Says
+  // nothing about the target; running the command again once the network is
+  // back is safe.
+  CLOUD_UNREACHABLE: "E_CLOUD_UNREACHABLE",
+  // A running host reported (or, fail-safe, was assumed to have) work in
+  // progress, so the CLI refused to reinstall/restart it. The desktop maps
+  // this to its "host busy" flow (surface the host, run the renderer's
+  // compat probe) rather than treating it as a hard failure. Cleared with
+  // `--force`. Also used when the host refuses an RPC during shutdown; that
+  // refusal keeps its shutdown message and is not retried.
+  HOST_BUSY: "E_HOST_BUSY",
+  // A durable schema-v2 update attempt owns the mutation boundary. This is
+  // deliberately NOT HOST_BUSY: retrying with --force can override a live
+  // workload's cooperative stop, but it can never override attempt
+  // admission. Desktop uses this distinction to attach/yield rather than
+  // offering an ineffective force action.
+  HOST_UPDATE_ATTEMPT_ACTIVE: "E_HOST_UPDATE_ATTEMPT_ACTIVE",
+  // The host is reachable but its RPC protocol is incompatible with this
+  // CLI (version skew): the host answered with INCOMPATIBLE /
+  // DOWNGRADE_UNSUPPORTED, or returned a response shape this CLI could not
+  // parse. Distinct from HOST_NOT_RUNNING - the host *answered*.
+  // Actionable via `traycer host restart` or updating the CLI.
+  HOST_INCOMPATIBLE: "E_HOST_INCOMPATIBLE",
+  // The host is reachable and compatible on the floor protocol, but it does
+  // not support the specific feature/method this CLI tried to use.
+  HOST_UNSUPPORTED: "E_HOST_UNSUPPORTED",
+  HOST_BUNDLE_MISSING: "E_HOST_BUNDLE_MISSING",
+  HOST_SHELL_MISSING: "E_HOST_SHELL_MISSING",
+  HOST_SPAWN_FAILED: "E_HOST_SPAWN_FAILED",
+  // A stop/restart/uninstall could not record its intent on disk, on a
+  // platform where that record is the ONLY thing telling the host supervisor
+  // the death was deliberate (win32: `schtasks /End` never signals the
+  // orphaned supervisor). The operation is REFUSED rather than performed,
+  // because performing it would kill a host the supervisor then relaunches
+  // while the command reports success. Retryable once the directory is
+  // writable.
+  HOST_STOP_INTENT_UNWRITABLE: "E_HOST_STOP_INTENT_UNWRITABLE",
+  // A regular file sits where the host folder (or a folder above it in the
+  // data folder) belongs, so the update lock cannot be taken. Only the person
+  // can clear it; the message names the remedy.
+  HOST_HOME_UNUSABLE: "E_HOST_HOME_UNUSABLE",
+  // A plain or `--if-idle` stop asked the service manager to stop the host,
+  // and the host running is not the service's: `traycer host start` in a
+  // terminal (a `foreground` run). The service stop reached nothing, so the
+  // command refuses rather than report a stop the host outlived, and names
+  // the two ways that do end it (Ctrl-C there, or `--force`). Expected: it
+  // describes where the host came from, not a broken machine.
+  HOST_NOT_SERVICE_RUN: "E_HOST_NOT_SERVICE_RUN",
+  // `host uninstall --all` asked the host to stop and it is still running (a
+  // host whose event loop is wedged ignores the request). The install is kept,
+  // because deleting it would leave that host running from removed bytes and
+  // still holding the lock every reinstall waits on. `--force` stops it anyway
+  // and removes the install.
+  HOST_UNINSTALL_HOST_RUNNING: "E_HOST_UNINSTALL_HOST_RUNNING",
+  // A `host restart` bound to one host process (`--expect-host-pid` with
+  // `--expect-host-start-identity`, Desktop's force restart of a host that
+  // stopped answering) found, once it held the lifecycle lock, that `pid.json`
+  // names another process that is or may be running, or cannot be read. The
+  // restart was confirmed for the first host, so nothing was stopped.
+  HOST_RESTART_TARGET_CHANGED: "E_HOST_RESTART_TARGET_CHANGED",
+
+  // --- Port-conflict repair (`host free-port`, `host free-port-and-restart`)
+  // All three replace what used to be an `exitCode: 0` result carrying a
+  // `killError` string (audit finding CLI-011). A port-conflict repair that
+  // did not free the port is a failed repair, and the restart variant used to
+  // restart the host anyway - so Doctor and Desktop reported success over an
+  // unresolved conflict, and the user was told to look elsewhere.
+  //
+  // The confirmed owner could not be signalled at all: EPERM (another user's
+  // process), or ESRCH (it exited between the identity check and the signal).
+  HOST_PORT_KILL_FAILED: "E_HOST_PORT_KILL_FAILED",
+  // SIGTERM was delivered and the process is STILL the listener at the
+  // verification deadline - it traps or ignores the signal. Nothing escalates
+  // to SIGKILL: the user confirmed terminating this process, not force-killing
+  // it, so the remedy stays theirs.
+  HOST_PORT_STILL_HELD: "E_HOST_PORT_STILL_HELD",
+  // SIGTERM was delivered but the ownership probe could not say whether the
+  // port was released (`lsof`/`netstat` missing, hung, or over its output
+  // budget). Deliberately NOT folded into the two above: "we could not check"
+  // is not "it failed", and it is emphatically not "it worked" - the same
+  // refuse-to-act-blind rule that guards the pre-kill identity check.
+  HOST_PORT_RELEASE_UNVERIFIED: "E_HOST_PORT_RELEASE_UNVERIFIED",
+
+  // --- Host install + registry (NP-2 / NP-4) ---
+  HOST_NOT_INSTALLED: "E_HOST_NOT_INSTALLED",
+  HOST_INSTALL_RECORD_INVALID: "E_HOST_INSTALL_RECORD_INVALID",
+  HOST_INSTALL_FAILED: "E_HOST_INSTALL_FAILED",
+  HOST_VERIFY_FAILED: "E_HOST_VERIFY_FAILED",
+  HOST_SOURCE_MISSING: "E_HOST_SOURCE_MISSING",
+  HOST_ALREADY_RUNNING: "E_HOST_ALREADY_RUNNING",
+  // `host update`'s post-swap local health probe (service/health-probe.ts)
+  // exhausted its retry budget - the new host never proved itself alive on
+  // its own loopback port. Distinct from HOST_INSTALL_FAILED (a
+  // stage/verify/extract/swap failure with the OLD host untouched): this
+  // fires AFTER a successful swap, so the command has already attempted a
+  // rollback to the previous version (or, with nothing to roll back to on
+  // a first-ever install, left the marker as `failed` without one).
+  HOST_UPDATE_HEALTH_CHECK_FAILED: "E_HOST_UPDATE_HEALTH_CHECK_FAILED",
+  /**
+   * The update WORKED and the bookkeeping did not: the host verified healthy at
+   * the new version, and the record's completion write was then refused.
+   *
+   * Deliberately not `..._HEALTH_CHECK_FAILED`, which is what this used to
+   * report. No health check failed - the verify loop passed, which is the only
+   * way to reach it - and a client routing this to a failure card tells the
+   * operator their update failed while their host runs the new version.
+   */
+  HOST_UPDATE_RECORD_NOT_CONCLUDED: "E_HOST_UPDATE_RECORD_NOT_CONCLUDED",
+  HOST_UPDATE_NOT_NEWER: "E_HOST_UPDATE_NOT_NEWER",
+  HOST_UPDATE_CONCURRENT_LEGACY_UPDATER:
+    "E_HOST_UPDATE_CONCURRENT_LEGACY_UPDATER",
+  // The selected host version declares a `requiredCliVersion` this CLI does
+  // not meet (or one it cannot parse). Distinct from HOST_INCOMPATIBLE, which
+  // is a RUNNING host answering a handshake: this fires before anything is
+  // downloaded, and the remedy is to update Traycer rather than the host.
+  HOST_CLIENT_FLOOR_UNMET: "E_HOST_CLIENT_FLOOR_UNMET",
+  // The target host build reads an on-disk store format OLDER than one this
+  // machine's host data is already written in, so landing it would make those
+  // chats unreadable - and a host that meets a store it cannot open crash-
+  // loops instead of reporting it. Raised before anything is stopped or
+  // swapped, before anything is downloaded wherever the target can already be
+  // placed, and equally when the target's format cannot be established at
+  // all: an unprovable move is refused, not assumed safe.
+  //
+  // Deliberately NOT HOST_CLIENT_FLOOR_UNMET, which is the other refusal of a
+  // target host: that one is about the CLI being too old for the host, and its
+  // remedy is to update Traycer. This one is about DATA, the target is
+  // typically older on purpose, and the only remedies are to update forward or
+  // to accept the loss explicitly with `--accept-store-format-loss`.
+  // `--force` never reaches it - see `host/store-format-floor.ts`.
+  HOST_STORE_FORMAT_FLOOR: HOST_STORE_FORMAT_FLOOR_CODE,
+  REGISTRY_UNAVAILABLE: "E_REGISTRY_UNAVAILABLE",
+  REGISTRY_VERSION_NOT_FOUND: "E_REGISTRY_VERSION_NOT_FOUND",
+  REGISTRY_NOT_IMPLEMENTED: "E_REGISTRY_NOT_IMPLEMENTED",
+  RELEASE_AUTHENTICATION_REQUIRED: "E_RELEASE_AUTHENTICATION_REQUIRED",
+
+  // --- OS service registration (NP-2) ---
+  SERVICE_UNSUPPORTED_PLATFORM: "E_SERVICE_UNSUPPORTED_PLATFORM",
+  SERVICE_INSTALL_FAILED: "E_SERVICE_INSTALL_FAILED",
+  SERVICE_UNINSTALL_FAILED: "E_SERVICE_UNINSTALL_FAILED",
+  SERVICE_CONTROL_FAILED: "E_SERVICE_CONTROL_FAILED",
+  SERVICE_CLI_PATH_UNRESOLVED: "E_SERVICE_CLI_PATH_UNRESOLVED",
+  // The registered definition could not be brought to the current launcher
+  // form (`host service refresh`, or the lifecycle mode change that runs it).
+  // Nothing was started or stopped; the message names the repair.
+  SERVICE_DEFINITION_REFRESH_FAILED: "E_SERVICE_DEFINITION_REFRESH_FAILED",
+  // A start found the service's own supervisor alive and relaunching its
+  // host, so it started nothing, and the relaunch did not bring the host back
+  // within the supervisor's longest backoff plus a boot allowance. Nothing
+  // was changed; the supervisor may still succeed, or exhaust its budget and
+  // exit, after which a start takes the ordinary path. Deliberately not
+  // expected: a host its supervisor cannot bring back is a real failure.
+  SERVICE_SUPERVISOR_RELAUNCHING: "E_SERVICE_SUPERVISOR_RELAUNCHING",
+  // The registration exists but its owner turned it off (Windows: the Task
+  // Scheduler task is disabled), so a start was refused and the CLI did not
+  // re-register over that choice. Nothing was changed; the message names the
+  // two repairs. Expected: it is the user's setting, not a defect.
+  SERVICE_REGISTRATION_DISABLED: "E_SERVICE_REGISTRATION_DISABLED",
+  // The service registration is another account's (Windows: the machine-
+  // global Scheduled Task carries another user's principal, or its owner
+  // could not be confirmed), so a write on it was refused and nothing was
+  // changed. Expected: a second user on a shared PC, not a defect.
+  SERVICE_TASK_NOT_OWNED: "E_SERVICE_TASK_NOT_OWNED",
+
+  // --- CLI install lifecycle (foundation only in NP-1) ---
+  CLI_LOCK_BUSY: "E_CLI_LOCK_BUSY",
+  CLI_MANIFEST_INVALID: "E_CLI_MANIFEST_INVALID",
+
+  // --- CLI self-upgrade (NP-7) ---
+  CLI_UPGRADE_PACKAGE_MANAGER_OWNED: "E_CLI_UPGRADE_PACKAGE_MANAGER_OWNED",
+  CLI_UPGRADE_NO_MANIFEST: "E_CLI_UPGRADE_NO_MANIFEST",
+  CLI_UPGRADE_TARGET_UNAVAILABLE: "E_CLI_UPGRADE_TARGET_UNAVAILABLE",
+  // The CLI-side twin of HOST_UPDATE_NOT_NEWER, deliberately the same
+  // shape: an EXPLICITLY requested version below the installed one, with
+  // no downgrade consent. Both name `--allow-downgrade` as the way
+  // through, so the two updaters refuse a backwards move identically.
+  CLI_UPGRADE_NOT_NEWER: "E_CLI_UPGRADE_NOT_NEWER",
+  CLI_UPGRADE_DOWNLOAD_FAILED: "E_CLI_UPGRADE_DOWNLOAD_FAILED",
+  CLI_UPGRADE_REPLACE_FAILED: "E_CLI_UPGRADE_REPLACE_FAILED",
+  CLI_UPGRADE_FINALIZE_HELPER_FAILED: "E_CLI_UPGRADE_FINALIZE_HELPER_FAILED",
+} as const;
+
+export type CliErrorCode =
+  (typeof CLI_ERROR_CODES)[keyof typeof CLI_ERROR_CODES];
+
+// Codes the runner does NOT report to Sentry. A code belongs here when it
+// reports a user, input, auth, access or environment state the CLI already
+// handles with a typed result - an expired token, a missing argument, a host
+// that is busy or not running. Those are outcomes, not defects, and they
+// arrive in the hundreds of thousands.
+//
+// The default is captured: a code absent from this set is reported, so a newly
+// added failure mode reaches Sentry until someone deliberately opts it out.
+// Anything that means something on the machine is broken - install, verify,
+// spawn, service, port-repair, packaging, and UNEXPECTED itself - stays off
+// this list on purpose.
+export const EXPECTED_CLI_ERROR_CODES: ReadonlySet<CliErrorCode> =
+  new Set<CliErrorCode>([
+    CLI_ERROR_CODES.INVALID_ARGUMENT,
+    CLI_ERROR_CODES.NOT_FOUND,
+    CLI_ERROR_CODES.FORBIDDEN,
+    CLI_ERROR_CODES.AUTH_NO_CREDENTIALS,
+    CLI_ERROR_CODES.AUTH_REJECTED,
+    CLI_ERROR_CODES.TEAM_MEMBERSHIP_REQUIRED,
+    CLI_ERROR_CODES.TEAM_MEMBERSHIP_UNAVAILABLE,
+    CLI_ERROR_CODES.AUTH_NETWORK,
+    CLI_ERROR_CODES.HOST_NOT_RUNNING,
+    CLI_ERROR_CODES.HOST_UNREACHABLE,
+    CLI_ERROR_CODES.HOST_REQUEST_OUTCOME_UNKNOWN,
+    CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+    CLI_ERROR_CODES.HOST_BUSY,
+    CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
+    CLI_ERROR_CODES.HOST_NOT_SERVICE_RUN,
+    CLI_ERROR_CODES.HOST_HOME_UNUSABLE,
+    CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
+    CLI_ERROR_CODES.HOST_RESTART_TARGET_CHANGED,
+    CLI_ERROR_CODES.HOST_ALREADY_RUNNING,
+    CLI_ERROR_CODES.HOST_NOT_INSTALLED,
+    CLI_ERROR_CODES.HOST_INCOMPATIBLE,
+    CLI_ERROR_CODES.HOST_UNSUPPORTED,
+    CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+    // Beside its host twin for the same reason: refusing a backwards move
+    // the caller asked for is a typed outcome the command answers for, and
+    // the person resolves it by re-running with `--allow-downgrade`.
+    CLI_ERROR_CODES.CLI_UPGRADE_NOT_NEWER,
+    // The rest of `cli upgrade`'s refusals that report a state of the
+    // INSTALL or of the caller's request, each with a remedy the person
+    // carries out. What stays captured is every arm where the feed or the
+    // installer is the thing that failed: DOWNLOAD_FAILED (the transfer) and
+    // REPLACE_FAILED (publication over the live binary).
+    //
+    // The rolling feed serves exactly one build, so `--target` naming any
+    // other version is an assertion that was simply wrong - the feed is
+    // healthy and still publishing.
+    CLI_ERROR_CODES.CLI_UPGRADE_TARGET_UNAVAILABLE,
+    // No recorded install to upgrade. An environment state, and the message
+    // already names `cli re-anchor` as the way out.
+    CLI_ERROR_CODES.CLI_UPGRADE_NO_MANIFEST,
+    // A package manager owns this binary, so self-upgrade is refused by
+    // design and the message names that manager's own upgrade command.
+    // Nothing is broken; the ownership contract is being honoured.
+    CLI_ERROR_CODES.CLI_UPGRADE_PACKAGE_MANAGER_OWNED,
+    // Another updater already owns the work - the legacy-updater twin of
+    // HOST_UPDATE_ATTEMPT_ACTIVE above. Contention is a schedule, not a
+    // fault.
+    CLI_ERROR_CODES.HOST_UPDATE_CONCURRENT_LEGACY_UPDATER,
+    // NOT here, and deliberately: HOST_UPDATE_RECORD_NOT_CONCLUDED. The run
+    // did deliver the update, so classifying it expected looks right from the
+    // message - but one code carries BOTH refusal kinds that arm reports
+    // (`update-run.ts`), and `durability-unverified` is the medium itself
+    // being broken: a symlinked record path, a roundtrip mismatch. That is a
+    // machine fault and has to reach Sentry. Quieting the `rejected` half
+    // needs the two kinds to carry two codes, which is a change to that arm
+    // rather than to this set.
+    CLI_ERROR_CODES.HOST_CLIENT_FLOOR_UNMET,
+    CLI_ERROR_CODES.HOST_STORE_FORMAT_FLOOR,
+    CLI_ERROR_CODES.AGENT_NOT_FOUND,
+    CLI_ERROR_CODES.AGENT_NOT_LOCAL,
+    CLI_ERROR_CODES.ROLE_FORBIDDEN,
+    CLI_ERROR_CODES.AGENT_ARCHIVE_BUSY,
+    CLI_ERROR_CODES.AGENT_RECORD_NOT_FOUND,
+    CLI_ERROR_CODES.WORKTREE_MISSING,
+    CLI_ERROR_CODES.WORKTREE_BUSY,
+    CLI_ERROR_CODES.WORKSPACE_BINDING_REQUIRED,
+    CLI_ERROR_CODES.HOST_STORAGE_FULL,
+    CLI_ERROR_CODES.ENVIRONMENT_NOT_A_MEMBER,
+    CLI_ERROR_CODES.ENVIRONMENT_SEAT_NOT_ACCEPTED,
+    CLI_ERROR_CODES.ENVIRONMENT_SEAT_WITHOUT_WRITE,
+    CLI_ERROR_CODES.HOST_IS_SANDBOX,
+    CLI_ERROR_CODES.HOST_IN_ANOTHER_TEAM,
+    CLI_ERROR_CODES.PROVIDER_DISABLED,
+    CLI_ERROR_CODES.CONFIG_INVALID,
+    CLI_ERROR_CODES.CONFIG_INVALID_VALUE,
+    CLI_ERROR_CODES.CONFIG_MISSING_KEY,
+    CLI_ERROR_CODES.CLI_LOCK_BUSY,
+    CLI_ERROR_CODES.SERVICE_REGISTRATION_DISABLED,
+    CLI_ERROR_CODES.SERVICE_TASK_NOT_OWNED,
+    CLI_ERROR_CODES.REGISTRY_UNAVAILABLE,
+    CLI_ERROR_CODES.RELEASE_AUTHENTICATION_REQUIRED,
+  ]);
+
+export interface CliErrorInit {
+  readonly code: CliErrorCode;
+  readonly message: string;
+  readonly details: Record<string, unknown> | null;
+  readonly exitCode: number;
+}
+
+// A CLI-layer error carrying a stable machine-readable code, a human
+// message, optional structured details (surfaced as `details` on the
+// NDJSON error event), and the process exit code to use.
+export class CliError extends Error {
+  readonly code: CliErrorCode;
+  readonly details: Record<string, unknown> | null;
+  readonly exitCode: number;
+
+  constructor(init: CliErrorInit) {
+    super(init.message);
+    this.name = "CliError";
+    this.code = init.code;
+    this.details = init.details;
+    this.exitCode = init.exitCode;
+  }
+}
+
+export function cliError(init: CliErrorInit): CliError {
+  return new CliError(init);
+}
+
+// Narrow an unknown thrown value to a NodeJS.ErrnoException. Centralised
+// here so the dozen platform/store/installer files that need to branch on
+// `err.code` don't each define their own copy.
+export function isErrnoException(
+  value: unknown,
+): value is NodeJS.ErrnoException {
+  return value instanceof Error && "code" in value;
+}
+
+// Coerce an unknown thrown value into a CliError so the runner has a
+// uniform shape to emit. Preserves a CliError as-is; wraps Errors with
+// their message and a generic UNEXPECTED code; falls back to String().
+export function toCliError(err: unknown): CliError {
+  if (err instanceof CliError) return err;
+  if (err instanceof UpdateHostHomeUnusableError) {
+    return new CliError({
+      code: CLI_ERROR_CODES.HOST_HOME_UNUSABLE,
+      message:
+        "Traycer cannot create its host folder because a file is in the way. Rename or remove that file (by default ~/.traycer or ~/.traycer/host), then run this command again.",
+      details: null,
+      exitCode: 1,
+    });
+  }
+  if (err instanceof Error) {
+    return new CliError({
+      code: CLI_ERROR_CODES.UNEXPECTED,
+      message: err.message,
+      details: { name: err.name, stack: err.stack ?? null },
+      exitCode: 1,
+    });
+  }
+  return new CliError({
+    code: CLI_ERROR_CODES.UNEXPECTED,
+    message: String(err),
+    details: null,
+    exitCode: 1,
+  });
+}

@@ -1,0 +1,86 @@
+/* The tour's device pill.
+   Imported by `onboarding-host-picker.tsx` rather than by either act's
+   stylesheet: the providers act and the import act both render this bar, so
+   neither may depend on the other's sheet being in the module graph. */
+
+.onboarding-host-control {
+  position: relative;
+  min-height: 2.25rem;
+  /* Both acts place this bar flush against `.onboarding-stage-scroll`'s own
+     left edge, one padded container up from where `.onboarding-panel` puts
+     its inset. A `overflow-y: auto` box with no `overflow-x` of its own
+     computes `overflow-x: auto` too, so that inner edge clips - and the 1px
+     ring below bleeds a pixel past the border box on every side. Nudged in
+     so the ring is inside the scroll box, never clipped by it (same fix as
+     the card scroller's own padding, just sized to a 1px ring). */
+  margin-inline-start: 0.125rem;
+  border-radius: 0.625rem;
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 8%, transparent);
+  transition:
+    background-color 150ms ease,
+    box-shadow 150ms ease;
+}
+.onboarding-host-control > div {
+  border-radius: inherit;
+}
+.onboarding-host-control [data-testid="settings-host-switcher"] {
+  width: 100%;
+  min-height: 2.25rem;
+  padding: 0.375rem 0.625rem 0.375rem 2rem;
+  border-radius: inherit;
+  color: var(--foreground);
+}
+.onboarding-host-control
+  [data-testid="settings-host-switcher"]
+  > span:first-child {
+  color: inherit;
+  font-size: 0.8125rem;
+}
+.onboarding-host-control
+  [data-testid="settings-host-switcher"][data-state="open"] {
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+@media (hover: hover) and (pointer: fine) {
+  .onboarding-host-control:has(
+    [data-testid="settings-host-switcher"]:not([aria-disabled="true"]):hover
+  ) {
+    background: color-mix(in srgb, var(--foreground) 6%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 16%, transparent);
+  }
+}
+
+/* Placement inside the providers act's toolbar row. The track it names is
+   declared by `.onboarding-provider-panel` in `onboarding-agents.css`; this
+   rule is inert anywhere else the bar is rendered. */
+.onboarding-provider-panel > .onboarding-device-picker {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  justify-self: start;
+  width: max-content;
+  max-width: 100%;
+}
+/* Phone: the bar is one 44pt row shared with the act's counts, and the panel
+   around it is full-bleed, so the pill carries the act's 16pt leading gutter
+   itself instead of the 2px nudge that kept its ring inside a padded scroll
+   box. `max-width` has to account for that inset or the pill overflows the
+   grid track by exactly the margin. */
+@media (max-width: 767px) {
+  .onboarding-host-control {
+    min-height: 2.75rem;
+  }
+  .onboarding-host-control [data-testid="settings-host-switcher"] {
+    min-height: 2.75rem;
+  }
+  .onboarding-provider-panel > .onboarding-device-picker {
+    margin-inline-start: 1rem;
+    max-width: calc(100% - 1rem);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-host-control {
+    transition: none;
+  }
+}

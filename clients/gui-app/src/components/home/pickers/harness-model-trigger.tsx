@@ -1,0 +1,297 @@
+import type { ButtonHTMLAttributes, Ref } from "react";
+import { ChevronDown, Network, Zap } from "lucide-react";
+import { ToolbarPillButton } from "@/components/home/toolbar/toolbar-buttons";
+import { HarnessIcon } from "@/components/home/pickers/harness-icon";
+import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { AccentDot } from "@/components/providers/accent-dot";
+import type { HarnessModelSelection } from "@/components/home/data/landing-options";
+import {
+  formatReasoningPosition,
+  type ReasoningStep,
+} from "@/components/home/pickers/harness-model-picker-presentation";
+import { ReasoningBarsGlyph } from "@/components/home/pickers/reasoning-bars-glyph";
+import type { ProfileAccentDotInput } from "@/components/providers/provider-profile-model";
+import type { ModelStyle, UltracodeStyle } from "@/lib/layout/layout-values";
+import { cn } from "@/lib/utils";
+
+interface HarnessModelTriggerProps extends Omit<
+  ButtonHTMLAttributes<HTMLButtonElement>,
+  "children"
+> {
+  selection: HarnessModelSelection;
+  label: string;
+  reasoningLabel: string | null;
+  /** The current level's position on the model's ladder, for the bars glyph.
+   *  `null` when there is no ladder to draw, which falls back to the name. */
+  reasoningStep: ReasoningStep | null;
+  /**
+   * Layout ▸ Composer ▸ Reasoning level. `text` is the level's name after the
+   * model, `bars` the signal glyph in its place, `bars-text` both. A position
+   * the glyph cannot draw (the value names none of the model's levels) shows
+   * the name in every mode, so the chip never reads as "no effort".
+   */
+  reasoningIndicator: ModelStyle;
+  serviceTierLabel: string | null;
+  serviceTierActive: boolean;
+  /**
+   * How the chip draws the chat's Ultracode request (Layout ▸ Model ▸
+   * Ultracode), or `null` when there is no request the model offers.
+   */
+  ultracode: UltracodeStyle | null;
+  maxModeRequired?: boolean;
+  profileLabel: string | null;
+  /** Bottom-right corner dot on the harness icon (`AccentDot`).
+   *  `null` unless the provider has multiple profiles and the selection's
+   *  profileId matches a known profile. */
+  profileAccentDot: ProfileAccentDotInput | null;
+  isLoading: boolean;
+  disabled: boolean;
+  /**
+   * `"responsive"` is the desktop toolbar: the full pill (model, thinking
+   * effort, chevron), collapsing to the harness glyph alone in a narrow
+   * container. `"model-only"` is the phone toolbar: the model name and nothing
+   * else, at any width - the thinking effort is noise on a row that narrow, and
+   * an unlabelled glyph would be worse. Both keep the same accessible name, so
+   * the effort is still announced either way.
+   */
+  labelDisplay: "responsive" | "model-only";
+  ref?: Ref<HTMLButtonElement>;
+}
+
+function triggerSummary(input: {
+  readonly label: string;
+  readonly reasoningLabel: string | null;
+  readonly serviceTierLabel: string | null;
+  readonly serviceTierActive: boolean;
+  readonly ultracode: UltracodeStyle | null;
+  readonly maxModeRequired: boolean | undefined;
+  readonly profileLabel: string | null;
+}): string {
+  const serviceTierSummary =
+    input.serviceTierLabel === null || !input.serviceTierActive
+      ? null
+      : `${input.serviceTierLabel} on`;
+  return [
+    input.label,
+    input.reasoningLabel === null ? null : `Thinking ${input.reasoningLabel}`,
+    serviceTierSummary,
+    input.ultracode === null ? null : "Ultracode requested",
+    input.maxModeRequired ? "Max Mode" : null,
+    input.profileLabel,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(", ");
+}
+
+export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
+  const {
+    selection,
+    label,
+    reasoningLabel,
+    reasoningStep,
+    reasoningIndicator,
+    serviceTierLabel,
+    serviceTierActive,
+    ultracode,
+    maxModeRequired,
+    profileLabel,
+    profileAccentDot,
+    isLoading,
+    disabled,
+    labelDisplay,
+    ref,
+    ...rest
+  } = props;
+  // Applied to the label and the chevron together: the pill either shows its
+  // content or shrinks to the harness glyph.
+  const collapseWhenNarrow = labelDisplay === "responsive";
+  const narrowHidden = cn(collapseWhenNarrow && "@max-lg:hidden");
+  const showsReasoning = collapseWhenNarrow && reasoningLabel !== null;
+  const reasoningParts = reasoningChipParts(
+    showsReasoning,
+    reasoningIndicator,
+    reasoningLabel,
+    reasoningStep,
+  );
+  const summary = triggerSummary({
+    label,
+    reasoningLabel,
+    serviceTierLabel,
+    serviceTierActive,
+    ultracode,
+    maxModeRequired,
+    profileLabel,
+  });
+
+  return (
+    <ToolbarPillButton
+      ref={ref}
+      aria-label={summary}
+      disabled={disabled}
+      // The narrow collapse is a SQUARE of the chip's own height, so the
+      // harness glyph sits in the same box attach and the access shield do.
+      // It is a different axis from `reasoningIndicator`: "this tile is
+      // narrow" versus "the user asked for bars", and both survive.
+      className={cn(
+        "max-w-[min(50cqw,18rem)] min-w-0 justify-start",
+        collapseWhenNarrow &&
+          ultracode === null &&
+          "@max-lg:size-7 @max-lg:justify-center @max-lg:px-0",
+      )}
+      {...rest}
+    >
+      {serviceTierLabel === null ? null : (
+        <Zap
+          aria-label={serviceTierLabel}
+          className={cn(
+            "size-4 shrink-0 text-muted-foreground",
+            serviceTierActive && "fill-current text-warning-foreground",
+          )}
+          strokeWidth={2}
+        />
+      )}
+      {maxModeRequired ? (
+        <span
+          className={cn(
+            "shrink-0 rounded border border-foreground/30 px-1 text-ui-xs",
+            narrowHidden,
+          )}
+        >
+          Max
+        </span>
+      ) : null}
+      <span className="relative shrink-0">
+        {isLoading ? (
+          <MutedAgentSpinner />
+        ) : (
+          <HarnessIcon harnessId={selection.harnessId} />
+        )}
+        {profileAccentDot === null ? null : (
+          <AccentDot
+            profileId={profileAccentDot.profileId}
+            accentColor={profileAccentDot.accentColor}
+            label={profileAccentDot.label}
+            variant="corner"
+            size="compact"
+            className={undefined}
+          />
+        )}
+      </span>
+      <span className={cn("min-w-0 truncate whitespace-nowrap", narrowHidden)}>
+        {label}
+      </span>
+      {!showsReasoning ? null : (
+        <span
+          aria-hidden="true"
+          className={cn("shrink-0 text-muted-foreground/70", narrowHidden)}
+        >
+          ·
+        </span>
+      )}
+      {reasoningParts.glyph === null ? null : (
+        <ReasoningBarsGlyph
+          count={reasoningParts.glyph.count}
+          filled={reasoningParts.glyph.filled}
+          label={reasoningParts.glyph.label}
+          className={narrowHidden}
+        />
+      )}
+      {!reasoningParts.text ? null : (
+        <span
+          className={cn(
+            "shrink-0 whitespace-nowrap text-muted-foreground",
+            narrowHidden,
+          )}
+        >
+          {reasoningLabel}
+        </span>
+      )}
+      {ultracode === null ? null : (
+        <UltracodeMark variant={ultracode} narrowHidden={narrowHidden} />
+      )}
+      <ChevronDown
+        className={cn("size-3.5 shrink-0 text-muted-foreground", narrowHidden)}
+      />
+    </ToolbarPillButton>
+  );
+}
+
+/**
+ * The request after the effort, as Claude Code's own status line writes it,
+ * drawn as the word, an icon, or both. It stays when the rest of the label
+ * collapses, so a narrow chip still shows the request; only the separator
+ * goes with the label.
+ */
+function UltracodeMark(props: {
+  readonly variant: UltracodeStyle;
+  readonly narrowHidden: string;
+}) {
+  const { variant, narrowHidden } = props;
+  return (
+    <>
+      <span
+        aria-hidden="true"
+        className={cn("shrink-0 text-muted-foreground/70", narrowHidden)}
+      >
+        ·
+      </span>
+      {variant === "text" ? null : (
+        <Network
+          aria-hidden="true"
+          data-testid="model-ultracode-icon"
+          className="size-3.5 shrink-0 text-muted-foreground"
+        />
+      )}
+      {variant === "icon" ? null : (
+        <span className="shrink-0 whitespace-nowrap text-muted-foreground">
+          Ultracode
+        </span>
+      )}
+    </>
+  );
+}
+
+interface ReasoningGlyphInput {
+  readonly count: number;
+  readonly filled: number;
+  readonly label: string;
+}
+
+interface ReasoningChipParts {
+  readonly glyph: ReasoningGlyphInput | null;
+  /** Whether the level's name is written out after the model. */
+  readonly text: boolean;
+}
+
+/**
+ * What the pill shows for the thinking effort under each indicator mode. An
+ * unknown position (`index` null) still draws in the bars modes - every bar
+ * empty, named without a position - and keeps the name beside it, so the chip
+ * never reads as "no effort" over a glyph that says nothing.
+ */
+function reasoningChipParts(
+  showsReasoning: boolean,
+  reasoningIndicator: ModelStyle,
+  reasoningLabel: string | null,
+  reasoningStep: ReasoningStep | null,
+): ReasoningChipParts {
+  if (!showsReasoning || reasoningLabel === null) {
+    return { glyph: null, text: false };
+  }
+  if (reasoningIndicator === "text" || reasoningStep === null) {
+    return { glyph: null, text: true };
+  }
+  const position = formatReasoningPosition(reasoningStep);
+  const glyph: ReasoningGlyphInput = {
+    count: reasoningStep.count,
+    filled: reasoningStep.index === null ? 0 : reasoningStep.index + 1,
+    label:
+      position === null
+        ? `Thinking: ${reasoningLabel}`
+        : `Thinking: ${reasoningLabel} (${position})`,
+  };
+  return {
+    glyph,
+    text: reasoningIndicator === "bars-text" || position === null,
+  };
+}

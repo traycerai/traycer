@@ -1,0 +1,125 @@
+import type { CSSProperties } from "react";
+
+// `@pierre/trees` exposes a parameterized theme through CSS custom
+// properties. These values pass into the library's internal row layout and
+// match the File Tree panel's compact sidebar treatment.
+export const PIERRE_FILE_TREE_THEME_STYLE = {
+  height: "100%",
+  "--trees-font-size-override": "var(--text-ui-sm)",
+  "--trees-font-family-override": "inherit",
+  "--trees-item-padding-x-override": "0.5rem",
+  "--trees-padding-inline-override": "0px",
+  "--trees-border-radius-override": "0.375rem",
+  "--trees-icon-width-override": "14px",
+  "--trees-scrollbar-gutter-override": "0px",
+  // Pierre paints this on the list container, on every row, and on the sticky
+  // overlay - so it must be the surface the tree is actually sitting on, not a
+  // fixed token. The desktop sidebar is `bg-background`, which is why the
+  // fallback is `--background` and desktop renders identically; a host on any
+  // other surface (the mobile switcher sheet is `bg-popover`) declares
+  // `--pierre-tree-surface` and the tree stops painting a slab of the wrong
+  // colour over it. Not `transparent`: the sticky-header overlay and the rows
+  // repainted while scrolling are opaque on purpose, to mask the content
+  // passing underneath them.
+  "--trees-bg-override": "var(--pierre-tree-surface, var(--background))",
+  "--trees-fg-override":
+    "color-mix(in oklab, var(--foreground) 75%, transparent)",
+  "--trees-fg-muted-override": "var(--muted-foreground)",
+  "--trees-accent-override": "var(--accent)",
+  "--trees-selected-bg-override": "var(--accent)",
+  "--trees-selected-fg-override": "var(--accent-foreground)",
+  "--trees-selected-focused-border-color-override": "transparent",
+  "--trees-border-color-override": "var(--border)",
+} as CSSProperties;
+
+export const GIT_PANEL_PIERRE_FILE_TREE_THEME_STYLE = {
+  ...PIERRE_FILE_TREE_THEME_STYLE,
+  "--trees-item-padding-x-override": "0.75rem",
+  "--trees-border-radius-override": "0px",
+  "--trees-icon-width-override": "14px",
+  // Selection mirrors the canvas's focused diff tile; solid accent keeps it
+  // visually identical to the flat list's active row.
+  "--trees-selected-bg-override": "var(--accent)",
+  "--trees-selected-fg-override": "var(--accent-foreground)",
+} as CSSProperties;
+
+/**
+ * Pierre detects middle-truncation by asking whether a hidden measurement
+ * container is taller than one line. At fractional browser zoom levels that
+ * measurement can exceed `1lh` by a subpixel even when the name fits, which
+ * makes the library paint both ellipsis markers over otherwise roomy rows.
+ *
+ * Keep the workaround at the library boundary: `unsafeCSS` is injected after
+ * Pierre's own styles, so this repeats its marker rule with a one-physical-px
+ * rounding allowance. A genuinely wrapped name is taller by a full line and
+ * still clears the threshold.
+ */
+export const PIERRE_FILE_TREE_TRUNCATION_TOLERANCE_CSS = `
+[data-truncate-marker] {
+  opacity: 0;
+}
+
+@container measure (height > calc(1lh + 1px)) {
+  [data-truncate-marker] {
+    opacity: 1;
+  }
+}
+`;
+
+export const PIERRE_FILE_TREE_REVEAL_HIGHLIGHT_CSS = `
+:host([data-sidebar-reveal-highlighted="true"]) [data-item-selected="true"] {
+  background: color-mix(in oklab, var(--primary) 15%, transparent) !important;
+  box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--primary) 80%, transparent);
+  animation: sidebar-reveal-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes sidebar-reveal-pulse {
+  50% { opacity: 0.5; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :host([data-sidebar-reveal-highlighted="true"]) [data-item-selected="true"] {
+    animation: none;
+  }
+}
+`;
+
+export const GIT_PANEL_PIERRE_FILE_TREE_UNSAFE_CSS = `
+${PIERRE_FILE_TREE_TRUNCATION_TOLERANCE_CSS}
+${PIERRE_FILE_TREE_REVEAL_HIGHLIGHT_CSS}
+
+[data-item-type="file"] [data-item-section="icon"] {
+  opacity: 0.9;
+}
+
+[data-item-type="file"] [data-item-section="content"] {
+  color: color-mix(in oklab, var(--foreground) 90%, transparent);
+  font-weight: 400;
+}
+
+[data-item-type="directory"] [data-item-section="icon"] {
+  opacity: 0.55;
+}
+
+[data-item-type="directory"] [data-item-section="content"] {
+  color: color-mix(in oklab, var(--muted-foreground) 70%, transparent);
+  font-size: var(--text-ui-xs);
+  font-weight: 400;
+}
+
+[data-item-section="decoration"] {
+  color: var(--muted-foreground);
+  font-size: var(--text-ui-xs);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+[data-item-section="git"] {
+  min-width: 1.25rem;
+}
+
+button[data-type="item"]:hover,
+[data-item-selected="true"] {
+  background: color-mix(in oklab, var(--accent) 50%, transparent) !important;
+}
+`;

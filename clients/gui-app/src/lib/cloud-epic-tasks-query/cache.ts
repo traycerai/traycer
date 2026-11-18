@@ -1,0 +1,898 @@
+import type {
+  Query,
+  QueryCacheNotifyEvent,
+  QueryClient,
+} from "@tanstack/react-query";
+import type {
+  GetTaskContextsResponse,
+  ListTaskLight,
+  ListTasksResponse,
+  TaskContextResult,
+} from "@traycer/protocol/host/epic/unary-schemas";
+import { isFoundTaskContext } from "@traycer/protocol/host/epic/unary-schemas";
+import {
+  deletedCloudEpicTasksPageEpicIdsForScope,
+  invalidateCloudEpicTasksPagesForDeletedEpics,
+} from "@/stores/epics/cloud-epic-tasks-pages-store";
+import {
+  isCloudEpicTasksQueryKey,
+  isCurrentTasksPinTailQueryKey,
+  isEpicPinReadingQueryKey,
+  isEpicTaskContextsQueryKey,
+  queryKeys,
+} from "@/lib/query-keys";
+import { taskReferenceLookupTaskId } from "@/lib/query-keys/host-query-keys";
+import { recordTaskLoss } from "@/stores/epics/task-loss-register-store";
+import {
+  removeDeletedEpicsFromCloudTasksResponse,
+  setEpicLocalHomeInCloudTasksResponse,
+  setEpicPinnedInCloudTasksResponse,
+} from "@/lib/cloud-epic-tasks-query/response-patches";
+import {
+  taskOwningTeamId,
+  tasksIncludeTeamTask,
+} from "@/lib/epics/team-task-owner";
+
+export {
+  removeDeletedEpicsFromCloudTasksResponse,
+  setEpicLocalHomeInCloudTasksResponse,
+  setEpicPinnedInCloudTasksResponse,
+} from "@/lib/cloud-epic-tasks-query/response-patches";
+
+export interface CloudEpicTasksCacheScope {
+  readonly hostId: string | null;
+  readonly userId: string;
+}
+
+export async function restartCurrentTasksPinReads(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+): Promise<void> {
+  const matchesScope = (query: Query): boolean =>
+    currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope) ||
+    epicPinReadingQueryKeyMatchesScope(query.queryKey, scope);
+  await queryClient.cancelQueries(
+    { predicate: matchesScope },
+    { revert: false },
+  );
+  await queryClient.invalidateQueries({ predicate: matchesScope });
+}
+
+export function removeDeletedEpicsFromCloudTaskCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  epicIds: ReadonlyArray<string>,
+): void {
+  const deletedEpicIds = new Set(epicIds);
+  if (deletedEpicIds.size === 0) return;
+  // The retained-page store owns both cursor generations and the durable
+  // session tombstones that it applies inside `appendPage`. This one call
+  // removes already-retained rows, rejects requests that started before this
+  // delete, and filters cursor requests that start after it.
+  invalidateCloudEpicTasksPagesForDeletedEpics(
+    scope.hostId,
+    scope.userId,
+    epicIds,
+  );
+  for (const [
+    queryKey,
+    response,
+  ] of queryClient.getQueriesData<ListTasksResponse>({
+    predicate: (query) =>
+      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+      cloudEpicTasksLastKnownQueryKeyMatchesScope(query.queryKey, scope) ||
+      epicPinReadingQueryKeyMatchesScope(query.queryKey, scope) ||
+      currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope),
+  })) {
+    if (response === undefined) continue;
+    const next = removeDeletedEpicsFromCloudTasksResponse(
+      response,
+      deletedEpicIds,
+      scope.userId,
+    );
+    if (next === response) continue;
+    queryClient.setQueryData<ListTasksResponse>(queryKey, next);
+  }
+  // Title lookups name the same tasks: the tombstone outlives every cached
+  // answer, so neither one read before the delete nor one still in flight
+  // keeps a deleted task resolvable.
+  recordTaskLoss(scope, epicIds, "gone");
+  void queryClient.cancelQueries({
+    predicate: (query) =>
+      taskReferenceLookupReadsAny(query, scope, deletedEpicIds),
+  });
+  patchMatchingQueries(
+    queryClient,
+    (query) => epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope),
+    (response: GetTaskContextsResponse) =>
+      replaceTaskContexts(response, deletedEpicIds, {
+        status: "confirmed-absent",
+      }),
+  );
+}
+
+/**
+ * A signal that the person may have lost a task (an open task's session
+ * losing access, which a moved room or a failed sign-in also raise): every
+ * cached title lookup in `scope` forgets what it said about `taskIds` and is
+ * read again, and a task chip asks afresh even where a title is held. Only
+ * that answer settles whether the task is still reachable.
+ */
+export function recheckTaskContextAnswers(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  taskIds: ReadonlyArray<string>,
+): void {
+  if (taskIds.length === 0) return;
+  const lost = new Set(taskIds);
+  recordTaskLoss(scope, taskIds, "recheck");
+  const holding = (query: Query): boolean =>
+    epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope) &&
+    taskIds.some((taskId) =>
+      Object.hasOwn(
+        queryClient.getQueryData<GetTaskContextsResponse>(query.queryKey)
+          ?.tasks ?? {},
+        taskId,
+      ),
+    );
+  // A chip's lookup still waiting for its first answer holds nothing yet:
+  // it is cancelled and read again too, so the answer that counts is sent
+  // after the signal (invalidating alone keeps a first read in flight).
+  const ownLookups = queryClient.getQueryCache().findAll({
+    predicate: (query) => taskReferenceLookupReadsAny(query, scope, lost),
+  });
+  const affected = [
+    ...queryClient.getQueryCache().findAll({ predicate: holding }),
+    ...ownLookups,
+  ];
+  patchMatchingQueries(
+    queryClient,
+    holding,
+    (response: GetTaskContextsResponse) =>
+      replaceTaskContexts(response, lost, null),
+  );
+  void (async (): Promise<void> => {
+    await queryClient.cancelQueries({
+      predicate: (query) => ownLookups.includes(query),
+    });
+    await queryClient.invalidateQueries({
+      predicate: (query) => affected.includes(query),
+    });
+  })();
+}
+
+/**
+ * `response` with each of `taskIds` it holds answered `outcome`, or left out
+ * when `outcome` is `null`.
+ */
+function replaceTaskContexts(
+  response: GetTaskContextsResponse,
+  taskIds: ReadonlySet<string>,
+  outcome: TaskContextResult | null,
+): GetTaskContextsResponse {
+  const held = Object.keys(response.tasks).filter((taskId) =>
+    taskIds.has(taskId),
+  );
+  if (held.length === 0) return response;
+  if (outcome === null) {
+    return {
+      ...response,
+      tasks: Object.fromEntries(
+        Object.entries(response.tasks).filter(
+          ([taskId]) => !taskIds.has(taskId),
+        ),
+      ),
+    };
+  }
+  const tasks = { ...response.tasks };
+  for (const taskId of held) tasks[taskId] = outcome;
+  return { ...response, tasks };
+}
+
+function taskReferenceLookupReadsAny(
+  query: Query,
+  scope: CloudEpicTasksCacheScope,
+  taskIds: ReadonlySet<string>,
+): boolean {
+  const taskId = taskReferenceLookupTaskId(query.queryKey);
+  return (
+    taskId !== null &&
+    taskIds.has(taskId) &&
+    epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope)
+  );
+}
+
+/**
+ * Admission for list-specific History first-page deliveries and the settled
+ * fallback writer. The primary Query repeats this ledger at TanStack's cache
+ * write boundary so a delete landing after early delivery cannot resurrect a
+ * row. Generic host RPC APIs are intentionally outside this module's scope;
+ * production callers of this History delivery path use the admitted helpers.
+ */
+export function admitCloudEpicTasksFirstPage(
+  response: ListTasksResponse,
+  scope: CloudEpicTasksCacheScope,
+): ListTasksResponse {
+  return removeDeletedEpicsFromCloudTasksResponse(
+    response,
+    deletedCloudEpicTasksPageEpicIdsForScope(scope.hostId, scope.userId),
+    scope.userId,
+  );
+}
+
+/** Writes a settled fallback through the same first-page admission boundary. */
+export function writeCloudEpicTasksLastKnown(
+  queryClient: QueryClient,
+  scope: { readonly hostId: string; readonly userId: string },
+  response: ListTasksResponse,
+): void {
+  queryClient.setQueryData<ListTasksResponse>(
+    queryKeys.cloudEpicTasksLastKnown(scope.hostId, scope.userId),
+    admitCloudEpicTasksFirstPage(response, scope),
+  );
+}
+
+export function readEpicTitlesFromCloudTaskCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  epicIds: ReadonlyArray<string>,
+): Record<string, string> {
+  const targetEpicIds = new Set(epicIds);
+  if (targetEpicIds.size === 0) return {};
+  const titles: Record<string, string> = {};
+  for (const [, response] of queryClient.getQueriesData<ListTasksResponse>({
+    predicate: (query) =>
+      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+      epicPinReadingQueryKeyMatchesScope(query.queryKey, scope) ||
+      currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope),
+  })) {
+    if (response === undefined) continue;
+    for (const task of response.tasks) {
+      const light = task.epic?.light;
+      if (light === null || light === undefined) continue;
+      if (!targetEpicIds.has(light.id)) continue;
+      if (Object.hasOwn(titles, light.id)) continue;
+      const title = normalizeEpicTitle(light.title);
+      if (title === null) continue;
+      titles[light.id] = title;
+    }
+  }
+  return titles;
+}
+
+/**
+ * Calls `onChange` for a cache event on a task list
+ * `readEpicTitlesFromCloudTaskCaches` reads for `scope`, and for no other: a
+ * render reading that scan through `useSyncExternalStore` re-runs it only when
+ * one of its own sources moved, not on every query in the app.
+ */
+export function subscribeToCloudTaskListCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  onChange: () => void,
+): () => void {
+  return queryClient.getQueryCache().subscribe((event) => {
+    if (!movesQueryState(event)) return;
+    const queryKey: unknown = event.query.queryKey;
+    if (!Array.isArray(queryKey)) return;
+    if (
+      cloudEpicTasksQueryKeyMatchesScope(queryKey, scope) ||
+      epicPinReadingQueryKeyMatchesScope(queryKey, scope) ||
+      currentTasksPinTailQueryKeyMatchesScope(queryKey, scope)
+    ) {
+      onChange();
+    }
+  });
+}
+
+/**
+ * The team that owns `epicId` as the cached task lists read it: the first
+ * cached row's `taskOwningTeamId`. `null` when no cached row names the epic, or
+ * the row names no team.
+ */
+export function readEpicOwningTeamIdFromCloudTaskCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  epicId: string,
+): string | null {
+  for (const [, response] of queryClient.getQueriesData<ListTasksResponse>({
+    predicate: (query) =>
+      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+      epicPinReadingQueryKeyMatchesScope(query.queryKey, scope) ||
+      currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope),
+  })) {
+    if (response === undefined) continue;
+    const task = response.tasks.find(
+      (candidate) => candidate.epic?.light?.id === epicId,
+    );
+    if (task !== undefined) return taskOwningTeamId(task.epic?.permission);
+  }
+  return null;
+}
+
+/**
+ * Whether any cached task row for the person is owned by `teamId`. `false` when
+ * nothing cached says so.
+ */
+export function cloudTaskCachesIncludeTeamTask(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  teamId: string,
+): boolean {
+  return queryClient
+    .getQueriesData<ListTasksResponse>({
+      predicate: (query) =>
+        cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+        epicPinReadingQueryKeyMatchesScope(query.queryKey, scope) ||
+        currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope),
+    })
+    .some(
+      ([, response]) =>
+        response !== undefined && tasksIncludeTeamTask(response.tasks, teamId),
+    );
+}
+
+export function updateEpicTitleInCloudTaskCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  epicId: string,
+  title: string,
+): void {
+  const normalizedTitle = normalizeEpicTitle(title);
+  if (normalizedTitle === null) return;
+  for (const [
+    queryKey,
+    response,
+  ] of queryClient.getQueriesData<ListTasksResponse>({
+    predicate: (query) =>
+      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+      epicPinReadingQueryKeyMatchesScope(query.queryKey, scope) ||
+      currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope),
+  })) {
+    if (response === undefined) continue;
+    const next = updateEpicTitleInCloudTasksResponse(
+      response,
+      epicId,
+      normalizedTitle,
+    );
+    if (next === response) continue;
+    queryClient.setQueryData<ListTasksResponse>(queryKey, next);
+  }
+  // Batch-title entries (`epic.getTaskContexts`) are a second copy of the same
+  // ListTaskLight rows. Patch them in the same write so rename never leaves a
+  // stale owner chip in Settings ▸ Worktrees.
+  updateEpicTitleInTaskContextsCaches(
+    queryClient,
+    scope,
+    epicId,
+    normalizedTitle,
+  );
+}
+
+export function reconcileAuthoritativeEpicTitleInCloudTaskCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  epicId: string,
+  title: string,
+): void {
+  if (normalizeEpicTitle(title) === null) return;
+  updateEpicTitleInCloudTaskCaches(queryClient, scope, epicId, title);
+  void restartCurrentTasksPinReads(queryClient, scope);
+}
+
+/**
+ * Patches every matching `epic.getTaskContexts` cache entry for `epicId`.
+ * Invoked from `updateEpicTitleInCloudTaskCaches` so all rename call sites
+ * keep both cache families coherent without a second call.
+ */
+export function updateEpicTitleInTaskContextsCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  epicId: string,
+  title: string,
+): void {
+  const normalizedTitle = normalizeEpicTitle(title);
+  if (normalizedTitle === null) return;
+  for (const [
+    queryKey,
+    response,
+  ] of queryClient.getQueriesData<GetTaskContextsResponse>({
+    predicate: (query) =>
+      epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope),
+  })) {
+    if (response === undefined) continue;
+    const next = updateEpicTitleInTaskContextsResponse(
+      response,
+      epicId,
+      normalizedTitle,
+    );
+    if (next === response) continue;
+    queryClient.setQueryData<GetTaskContextsResponse>(queryKey, next);
+  }
+}
+
+export interface CachedTaskContext {
+  readonly task: ListTaskLight;
+  readonly localHomed: boolean;
+}
+
+/**
+ * A task's context from whichever cached `epic.getTaskContexts` batch already
+ * resolved it. Several surfaces batch the same lookup under different id sets
+ * (the tab strip asks for every open tab at once), so a single-task reader
+ * can start from their answer instead of waiting on its own round trip.
+ */
+export function findCachedTaskContext(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  taskId: string,
+): CachedTaskContext | null {
+  const cachedBatches = queryClient.getQueriesData<GetTaskContextsResponse>({
+    predicate: (query) =>
+      epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope),
+  });
+  for (const [, response] of cachedBatches) {
+    const resolution = response?.tasks[taskId];
+    if (response === undefined || !isFoundTaskContext(resolution)) continue;
+    return {
+      task: resolution.task,
+      localHomed: response.localHomedTaskIds?.includes(taskId) === true,
+    };
+  }
+  return null;
+}
+
+/**
+ * The ids of the tasks the person's cached task lists and found
+ * `epic.getTaskContexts` answers hold (across every host), lower-cased and
+ * sorted, with the id as cached beside each. Built once and shared by every
+ * reader for that person, and rebuilt on the first read after a cache event on
+ * one of those queries: a transcript holding many id-shaped tokens resolves
+ * each against this, instead of walking the query cache once per token.
+ */
+interface HeldTaskIds {
+  entries: ReadonlyArray<readonly [lowerCased: string, taskId: string]> | null;
+  readonly listeners: Set<() => void>;
+}
+
+const heldTaskIdsByClient = new WeakMap<
+  QueryClient,
+  Map<string, HeldTaskIds>
+>();
+
+/**
+ * One query-cache listener per client, installed with its first index and
+ * kept for the client's life, so no reader ever sees an index built before a
+ * change it did not hear about: the listener drops the index (and notifies its
+ * readers) inside the cache event itself, before anything can read again.
+ */
+function heldTaskIdsFor(queryClient: QueryClient, userId: string): HeldTaskIds {
+  let byUserId = heldTaskIdsByClient.get(queryClient);
+  if (byUserId === undefined) {
+    const created = new Map<string, HeldTaskIds>();
+    queryClient.getQueryCache().subscribe((event) => {
+      if (!movesQueryState(event)) return;
+      const queryKey: unknown = event.query.queryKey;
+      if (!Array.isArray(queryKey)) return;
+      for (const [heldUserId, held] of created) {
+        if (!holdsTaskIds(queryKey, { hostId: null, userId: heldUserId })) {
+          continue;
+        }
+        held.entries = null;
+        for (const listener of held.listeners) listener();
+      }
+    });
+    heldTaskIdsByClient.set(queryClient, created);
+    byUserId = created;
+  }
+  let held = byUserId.get(userId);
+  if (held === undefined) {
+    held = { entries: null, listeners: new Set() };
+    byUserId.set(userId, held);
+  }
+  return held;
+}
+
+function holdsTaskIds(
+  queryKey: readonly unknown[],
+  scope: CloudEpicTasksCacheScope,
+): boolean {
+  return (
+    cloudEpicTasksQueryKeyMatchesScope(queryKey, scope) ||
+    epicPinReadingQueryKeyMatchesScope(queryKey, scope) ||
+    currentTasksPinTailQueryKeyMatchesScope(queryKey, scope) ||
+    epicTaskContextsQueryKeyMatchesScope(queryKey, scope)
+  );
+}
+
+function scanHeldTaskIds(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+): ReadonlyArray<readonly [string, string]> {
+  const taskIds = new Set<string>();
+  for (const [, response] of queryClient.getQueriesData<ListTasksResponse>({
+    predicate: (query) =>
+      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+      epicPinReadingQueryKeyMatchesScope(query.queryKey, scope) ||
+      currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope),
+  })) {
+    if (response === undefined) continue;
+    for (const task of response.tasks) {
+      const taskId = task.epic?.light?.id;
+      if (taskId !== undefined) taskIds.add(taskId);
+    }
+  }
+  for (const [
+    ,
+    response,
+  ] of queryClient.getQueriesData<GetTaskContextsResponse>({
+    predicate: (query) =>
+      epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope),
+  })) {
+    if (response === undefined) continue;
+    for (const [taskId, resolution] of Object.entries(response.tasks)) {
+      // An answer that did not find its task (gone, out of reach, unknown)
+      // names no task the person can open.
+      if (isFoundTaskContext(resolution)) taskIds.add(taskId);
+    }
+  }
+  return [...taskIds]
+    .map((taskId): readonly [string, string] => [taskId.toLowerCase(), taskId])
+    .sort(([a], [b]) => compareCodeUnits(a, b));
+}
+
+/** The order `<` reads strings in, which the prefix search below relies on. */
+function compareCodeUnits(a: string, b: string): number {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+}
+
+/**
+ * Up to two ids `prefix` begins (ignoring case) among the tasks the person's
+ * cached task lists and cached `epic.getTaskContexts` batches found: two is
+ * enough to tell one task from several.
+ */
+export function findCachedTaskIdsByPrefix(
+  queryClient: QueryClient,
+  userId: string,
+  prefix: string,
+): ReadonlySet<string> {
+  const held = heldTaskIdsFor(queryClient, userId);
+  held.entries ??= scanHeldTaskIds(queryClient, { hostId: null, userId });
+  const entries = held.entries;
+  const normalizedPrefix = prefix.toLowerCase();
+  let low = 0;
+  let high = entries.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (entries[middle][0] < normalizedPrefix) low = middle + 1;
+    else high = middle;
+  }
+  const matches = new Set<string>();
+  for (
+    let index = low;
+    index < entries.length && matches.size < 2;
+    index += 1
+  ) {
+    const [lowerCased, taskId] = entries[index];
+    if (!lowerCased.startsWith(normalizedPrefix)) break;
+    matches.add(taskId);
+  }
+  return matches;
+}
+
+/**
+ * Calls `onChange` when what {@link findCachedTaskIdsByPrefix} reads for
+ * `userId` may have moved, and for no other cache event.
+ */
+export function subscribeToCachedTaskIds(
+  queryClient: QueryClient,
+  userId: string,
+  onChange: () => void,
+): () => void {
+  const held = heldTaskIdsFor(queryClient, userId);
+  const listener = (): void => {
+    onChange();
+  };
+  held.listeners.add(listener);
+  return () => {
+    held.listeners.delete(listener);
+  };
+}
+
+/**
+ * Calls `onChange` for a cache event on an `epic.getTaskContexts` batch
+ * `findCachedTaskContext` reads for `scope`, and for no other.
+ */
+export function subscribeToTaskContextsCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  onChange: () => void,
+): () => void {
+  return queryClient.getQueryCache().subscribe((event) => {
+    if (!movesQueryState(event)) return;
+    const queryKey: unknown = event.query.queryKey;
+    if (!Array.isArray(queryKey)) return;
+    if (epicTaskContextsQueryKeyMatchesScope(queryKey, scope)) onChange();
+  });
+}
+
+/**
+ * A query added, removed or updated. Observer events (an observer mounting,
+ * its options or result moving) fire on ordinary renders and never change
+ * what a cache scan reads.
+ */
+function movesQueryState(event: QueryCacheNotifyEvent): boolean {
+  return (
+    event.type === "added" ||
+    event.type === "removed" ||
+    event.type === "updated"
+  );
+}
+
+export function setEpicPinnedInCloudTaskCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  epicId: string,
+  pinned: boolean,
+): void {
+  patchMatchingQueries(
+    queryClient,
+    // The pin READING cache is enrolled here, which covers the optimistic patch
+    // and its rollback in one place - `onError` inverts the bit through this
+    // same function. Without it a local-homed row's rendered pin came from a
+    // cache no write ever touched: the glyph kept the pre-click state after a
+    // SUCCESSFUL write, and `staleTime: Infinity` meant nothing refetched it.
+    (query) =>
+      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+      epicPinReadingQueryKeyMatchesScope(query.queryKey, scope) ||
+      currentTasksPinTailQueryKeyMatchesScope(query.queryKey, scope),
+    (response: ListTasksResponse) =>
+      setEpicPinnedInCloudTasksResponse(response, epicId, pinned),
+  );
+  setEpicPinnedInTaskContextsCaches(queryClient, scope, epicId, pinned);
+}
+
+export function setEpicPinnedInTaskContextsCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  epicId: string,
+  pinned: boolean,
+): void {
+  patchMatchingQueries(
+    queryClient,
+    (query) => epicTaskContextsQueryKeyMatchesScope(query.queryKey, scope),
+    (response: GetTaskContextsResponse) =>
+      setEpicPinnedInTaskContextsResponse(response, epicId, pinned),
+  );
+}
+
+/**
+ * Keeps the cached `home` marker in step with what the epic's own stream says
+ * - `s4-promotion-task-list-invalidation`.
+ *
+ * `epic.listTasks` is `staleTime: Infinity` and manual-refresh-only, so a row's
+ * `home` is frozen at whatever the page said when it loaded. Two writes made
+ * that stale on purpose:
+ *
+ *  - `epic.create` patches its returned `TaskLight` straight into the cache,
+ *    and that type has nowhere to carry `home` - so a local-first epic entered
+ *    the list looking cloud-backed from the instant it was created.
+ *  - promotion completing flips the epic to cloud-durable, and nothing told
+ *    the list; the row kept `home: "local"`.
+ *
+ * Both surface the same way: History offers (or withholds) the cloud-only pin
+ * action for a row whose real home is the opposite, and pin is one of the
+ * mutations that patches this cache - so using it cannot self-heal the marker.
+ * The open epic's `cloudSyncStatus` frames are the authority the list lacks.
+ */
+export function setEpicLocalHomeInCloudTaskCaches(
+  queryClient: QueryClient,
+  scope: CloudEpicTasksCacheScope,
+  epicId: string,
+  localHome: boolean,
+): void {
+  patchMatchingQueries(
+    queryClient,
+    (query) =>
+      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+      cloudEpicTasksLastKnownQueryKeyMatchesScope(query.queryKey, scope),
+    (response: ListTasksResponse) =>
+      setEpicLocalHomeInCloudTasksResponse(response, epicId, localHome),
+  );
+}
+
+function patchMatchingQueries<TResponse>(
+  queryClient: QueryClient,
+  predicate: (query: Query) => boolean,
+  patch: (response: TResponse) => TResponse,
+): void {
+  for (const [queryKey, response] of queryClient.getQueriesData<TResponse>({
+    predicate,
+  })) {
+    if (response === undefined) continue;
+    const next = patch(response);
+    if (next === response) continue;
+    queryClient.setQueryData<TResponse>(queryKey, next);
+  }
+}
+
+function setEpicPinnedInTaskContextsResponse(
+  response: GetTaskContextsResponse,
+  epicId: string,
+  pinned: boolean,
+): GetTaskContextsResponse {
+  const entry = Object.entries(response.tasks).find(
+    ([, resolution]) =>
+      isFoundTaskContext(resolution) &&
+      resolution.task.epic?.light?.id === epicId,
+  );
+  if (entry === undefined) return response;
+  const [taskId, resolution] = entry;
+  if (
+    !isFoundTaskContext(resolution) ||
+    (resolution.task.pinned ?? false) === pinned
+  ) {
+    return response;
+  }
+  return {
+    ...response,
+    tasks: {
+      ...response.tasks,
+      [taskId]: {
+        ...resolution,
+        task: { ...resolution.task, pinned },
+      },
+    },
+  };
+}
+
+/**
+ * Local pin readings also supply Current tasks rows. Enroll them in title and
+ * delete patches as well as pin writes; authoritative renames cancel and
+ * restart in-flight reads so a delayed initial page cannot undo the write.
+ * New local epics re-key the owning host's population instead of fabricating
+ * a pin reading from a create response. Home changes likewise re-key that
+ * population. History pagination and last-viewed ordering do not apply here.
+ */
+export function epicPinReadingQueryKeyMatchesScope(
+  queryKey: readonly unknown[],
+  scope: CloudEpicTasksCacheScope,
+): boolean {
+  return (
+    isEpicPinReadingQueryKey(queryKey) &&
+    (scope.hostId === null || queryKey[1] === scope.hostId) &&
+    queryKey[4] === scope.userId
+  );
+}
+
+export function cloudEpicTasksQueryKeyMatchesScope(
+  queryKey: readonly unknown[],
+  scope: CloudEpicTasksCacheScope,
+): boolean {
+  return (
+    isCloudEpicTasksQueryKey(queryKey) &&
+    queryKey[0] === "host" &&
+    (scope.hostId === null || queryKey[1] === scope.hostId) &&
+    queryKey[5] === scope.userId
+  );
+}
+
+export function currentTasksPinTailQueryKeyMatchesScope(
+  queryKey: readonly unknown[],
+  scope: CloudEpicTasksCacheScope,
+): boolean {
+  return (
+    isCurrentTasksPinTailQueryKey(queryKey) &&
+    (scope.hostId === null || queryKey[1] === scope.hostId) &&
+    queryKey[3] === scope.userId
+  );
+}
+
+function cloudEpicTasksLastKnownQueryKeyMatchesScope(
+  queryKey: readonly unknown[],
+  scope: CloudEpicTasksCacheScope,
+): boolean {
+  return (
+    queryKey[0] === "host" &&
+    (scope.hostId === null || queryKey[1] === scope.hostId) &&
+    queryKey[2] === "cloud.listTasks.lastKnown" &&
+    queryKey[3] === scope.userId
+  );
+}
+
+export function cloudEpicTasksLastViewedQueryKeyMatchesScope(
+  queryKey: readonly unknown[],
+  scope: CloudEpicTasksCacheScope,
+): boolean {
+  if (!cloudEpicTasksQueryKeyMatchesScope(queryKey, scope)) return false;
+  const request = queryKey[3];
+  return (
+    request !== null &&
+    typeof request === "object" &&
+    "sort" in request &&
+    request.sort === "last-viewed"
+  );
+}
+
+/**
+ * Scope match for `epic.getTaskContexts` keys:
+ * `["host", hostId, "epic.getTaskContexts", { taskIds }, userId]`.
+ */
+export function epicTaskContextsQueryKeyMatchesScope(
+  queryKey: readonly unknown[],
+  scope: CloudEpicTasksCacheScope,
+): boolean {
+  return (
+    isEpicTaskContextsQueryKey(queryKey) &&
+    (scope.hostId === null || queryKey[1] === scope.hostId) &&
+    queryKey[4] === scope.userId
+  );
+}
+
+function updateEpicTitleInCloudTasksResponse(
+  response: ListTasksResponse,
+  epicId: string,
+  title: string,
+): ListTasksResponse {
+  const tasks = response.tasks.map((task) => {
+    const next = updateEpicTitleInListTaskLight(task, epicId, title);
+    return next ?? task;
+  });
+  const changed = tasks.some((task, index) => task !== response.tasks[index]);
+  return changed ? { ...response, tasks } : response;
+}
+
+function updateEpicTitleInTaskContextsResponse(
+  response: GetTaskContextsResponse,
+  epicId: string,
+  title: string,
+): GetTaskContextsResponse {
+  let changed = false;
+  const tasks: Record<string, TaskContextResult> = {};
+  for (const [taskId, resolution] of Object.entries(response.tasks)) {
+    if (!isFoundTaskContext(resolution)) {
+      tasks[taskId] = resolution;
+      continue;
+    }
+    const next = updateEpicTitleInListTaskLight(resolution.task, epicId, title);
+    if (next === null) {
+      tasks[taskId] = resolution;
+      continue;
+    }
+    changed = true;
+    tasks[taskId] = { ...resolution, task: next };
+  }
+  return changed ? { ...response, tasks } : response;
+}
+
+/**
+ * Returns a new row with the epic title updated, or `null` when the row does
+ * not carry `epicId` / already has `title` (identity-preserving skip).
+ */
+function updateEpicTitleInListTaskLight(
+  task: ListTaskLight,
+  epicId: string,
+  title: string,
+): ListTaskLight | null {
+  const epic = task.epic;
+  const light = epic?.light;
+  if (epic === null || epic === undefined) return null;
+  if (light === null || light === undefined) return null;
+  if (light.id !== epicId || light.title === title) return null;
+  return {
+    ...task,
+    epic: {
+      ...epic,
+      light: {
+        ...light,
+        title,
+      },
+    },
+  };
+}
+
+function normalizeEpicTitle(title: string): string | null {
+  const trimmed = title.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}

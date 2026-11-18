@@ -1,0 +1,119 @@
+import { ipcRenderer } from "electron";
+import {
+  RunnerHostEvent,
+  RunnerHostInvoke,
+} from "../ipc-contracts/ipc-channels";
+import type {
+  OpenDraftInNewWindowResult,
+  OpenEpicInNewWindowResult,
+  WindowSummary,
+} from "../ipc-contracts/window-types";
+import { subscribe, type Disposable, type Listener } from "./subscribe";
+import {
+  buildAuthSessionBridge,
+  type AuthSessionBridgeSurface,
+} from "./auth-bridge";
+import {
+  buildOwnershipBridge,
+  type OwnershipBridgeSurface,
+} from "./ownership-bridge";
+import {
+  buildEpicVisibilityBridge,
+  type EpicVisibilityBridgeSurface,
+} from "./epic-visibility-bridge";
+import {
+  buildWindowVisibilityBridge,
+  type WindowVisibilityBridgeSurface,
+} from "./window-visibility-bridge";
+import {
+  buildPerWindowStateBridge,
+  type PerWindowStateBridgeSurface,
+} from "./per-window-state-bridge";
+
+export interface WindowsBridgeSurface {
+  windows: {
+    readonly windowId: string;
+    list(): Promise<readonly WindowSummary[]>;
+    onChange(handler: Listener<readonly WindowSummary[]>): Disposable;
+    requestNew(initialRoute: string | null): Promise<void>;
+    requestFocus(windowId: string): Promise<void>;
+    requestClose(windowId: string): Promise<void>;
+    requestOpenEpicInNewWindow(
+      epicId: string,
+      title: string,
+      tabId: string,
+    ): Promise<OpenEpicInNewWindowResult>;
+    requestOpenDraftInNewWindow(
+      draftId: string,
+    ): Promise<OpenDraftInNewWindowResult>;
+    ownership: OwnershipBridgeSurface;
+    epicVisibility: EpicVisibilityBridgeSurface;
+    windowVisibility: WindowVisibilityBridgeSurface;
+    /**
+     * Turns background throttling off for THIS window while a browser tile's
+     * WebRTC video plane needs it (`electron-main/windows/background-rendering.ts`).
+     */
+    backgroundRendering: {
+      setRequired(required: boolean): Promise<void>;
+    };
+    perWindowState: PerWindowStateBridgeSurface;
+    authSession: AuthSessionBridgeSurface;
+  };
+}
+
+export function buildWindowsBridge(windowId: string): WindowsBridgeSurface {
+  return {
+    windows: {
+      windowId,
+      list: () =>
+        ipcRenderer.invoke(RunnerHostInvoke.windowsList) as Promise<
+          readonly WindowSummary[]
+        >,
+      onChange: (handler) =>
+        subscribe<readonly WindowSummary[]>(
+          RunnerHostEvent.windowsChange,
+          handler,
+        ),
+      requestNew: (initialRoute) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.windowsRequestNew,
+          initialRoute,
+        ) as Promise<void>,
+      requestFocus: (targetWindowId) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.windowsRequestFocus,
+          targetWindowId,
+        ) as Promise<void>,
+      requestClose: (targetWindowId) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.windowsRequestClose,
+          targetWindowId,
+        ) as Promise<void>,
+      requestOpenEpicInNewWindow: (epicId, title, tabId) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.windowsRequestOpenEpicInNewWindow,
+          epicId,
+          title,
+          tabId,
+        ) as Promise<OpenEpicInNewWindowResult>,
+      requestOpenDraftInNewWindow: (draftId) =>
+        ipcRenderer.invoke(
+          RunnerHostInvoke.windowsRequestOpenDraftInNewWindow,
+          draftId,
+        ) as Promise<OpenDraftInNewWindowResult>,
+      ownership: buildOwnershipBridge(),
+      epicVisibility: buildEpicVisibilityBridge(),
+      windowVisibility: buildWindowVisibilityBridge(),
+      backgroundRendering: {
+        setRequired: async (required) => {
+          await ipcRenderer.invoke(
+            RunnerHostInvoke.backgroundRenderingSet,
+            required,
+          );
+        },
+      },
+      perWindowState: buildPerWindowStateBridge(),
+      authSession: buildAuthSessionBridge(),
+    },
+  };
+}

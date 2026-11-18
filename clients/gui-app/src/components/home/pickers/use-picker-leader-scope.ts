@@ -1,0 +1,241 @@
+import { use, useEffect, useRef } from "react";
+import { KeyboardOwnerContext } from "@/hooks/use-primary-action-shortcut";
+import type { ProviderId } from "@/components/home/data/landing-options";
+import {
+  harnessAvailabilityUnsettled,
+  type RailEntry,
+} from "@/components/home/pickers/harness-rail-providers";
+import {
+  eligibleProfilesForShortcut,
+  profileCommitId,
+  profileDropdownMinimumRows,
+  type ProfileRowAdmission,
+} from "@/components/providers/provider-profile-model";
+import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
+import {
+  LEADER_SCOPE_MODEL_PICKER,
+  notifyLeaderScopesChanged,
+  registerLeaderScope,
+} from "@/lib/keybindings/leader-scope";
+import type {
+  ReasoningFooterConfig,
+  ServiceTierFooterConfig,
+} from "@/components/home/pickers/harness-model-picker-footers";
+import { stepServiceTier } from "@/components/home/pickers/model-service-tier";
+import { PICKER_REASONING_LEADER_INDEX_LIMIT } from "@/providers/keybinding-context";
+import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
+
+interface PickerLeaderScopeInput {
+  /** While true, the picker owns ⌘ (rail), ⌥ (model settings), and
+   *  ⌘⇧ (profile dropdown, while it is drawn for the active provider). */
+  readonly open: boolean;
+  /** Ordered visible rail entries, mirroring what the rail renders. */
+  readonly railEntries: ReadonlyArray<RailEntry>;
+  readonly onEntryChange: (providerId: ProviderId) => void;
+  readonly reasoning: ReasoningFooterConfig | null;
+  readonly reasoningActionable: boolean;
+  readonly serviceTier: ServiceTierFooterConfig | null;
+  /** The provider the profile dropdown is scoped to - always the locked
+   *  provider while a fork lock is active (the rail can't browse away from it). */
+  readonly activeProviderId: ProviderId;
+  /** Ordered profiles the dropdown renders, mirroring what it displays - fewer
+   *  than `profileDropdownMinimumRows` means no dropdown, hence no ⌘⇧-digit
+   *  action. */
+  readonly activeProviderProfiles: ReadonlyArray<ProviderProfile>;
+  /** Same admission override the dropdown renders rows with (`profile-
+   *  dropdown.tsx`'s `admissionByProfileId`) - `null` for every caller outside
+   *  the TUI continue-under-another-profile dialog. A disabled row must
+   *  refuse the digit dispatch the same way it refuses a click; without this
+   *  the shortcut bypasses the exact admission gate the row itself enforces. */
+  readonly activeProviderProfileAdmission: ReadonlyMap<
+    string | null,
+    ProfileRowAdmission
+  > | null;
+  readonly profileEnablementPending: (profileId: string | null) => boolean;
+  /** Same commit path the dropdown's row clicks use - `handleProfileChange` -
+   *  so the lock rule and memory-aware funnel apply identically here. */
+  readonly onProfileChange: (
+    providerId: ProviderId,
+    profileId: string | null,
+  ) => void;
+}
+
+/**
+ * Registers the model picker's leader-key scope while it's open: ⌘+digit
+ * switches the browsed provider rail, ⌥+1–9 sets thinking, ⌥+0 toggles Fast, and
+ * ⌘⇧+digit switches the active provider's profile dropdown. All three
+ * dispatches are pure state writes through the supplied callbacks (no DOM
+ * focus move), so the search box keeps focus. A latest-value ref lets the
+ * scope's dispatch closures—registered once per open—read fresh state every
+ * keypress.
+ */
+export function usePickerLeaderScope(input: PickerLeaderScopeInput): void {
+  // A picker left open in a surface kept mounted while not shown holds no
+  // leader keys.
+  const open = use(KeyboardOwnerContext) && input.open;
+  const {
+    railEntries,
+    onEntryChange,
+    reasoning,
+    reasoningActionable,
+    serviceTier,
+    activeProviderId,
+    activeProviderProfiles,
+    activeProviderProfileAdmission,
+    profileEnablementPending,
+    onProfileChange,
+  } = input;
+  const eligibleProfileCount = eligibleProfilesForShortcut(
+    activeProviderProfiles,
+    profileEnablementPending,
+  ).length;
+  const stateRef = useRef({
+    railEntries,
+    onEntryChange,
+    reasoning,
+    reasoningActionable,
+    serviceTier,
+    activeProviderId,
+    activeProviderProfiles,
+    activeProviderProfileAdmission,
+    profileEnablementPending,
+    onProfileChange,
+  });
+  useEffect(() => {
+    stateRef.current = {
+      railEntries,
+      onEntryChange,
+      reasoning,
+      reasoningActionable,
+      serviceTier,
+      activeProviderId,
+      activeProviderProfiles,
+      activeProviderProfileAdmission,
+      profileEnablementPending,
+      onProfileChange,
+    };
+  }, [
+    railEntries,
+    onEntryChange,
+    reasoning,
+    reasoningActionable,
+    serviceTier,
+    activeProviderId,
+    activeProviderProfiles,
+    activeProviderProfileAdmission,
+    profileEnablementPending,
+    onProfileChange,
+  ]);
+
+  useEffect(() => {
+    if (!open) return;
+    notifyLeaderScopesChanged();
+  }, [open, reasoningActionable, eligibleProfileCount]);
+
+  useEffect(() => {
+    if (!open) return;
+    return registerLeaderScope({
+      id: LEADER_SCOPE_MODEL_PICKER,
+      actions: [
+        {
+          actionId: "model.provider.byDigit",
+          isActive: () => true,
+          dispatch: (digit) => {
+            const list = stateRef.current.railEntries;
+            const index = digit === 0 ? 9 : digit - 1;
+            if (index < 0 || index >= list.length) return false;
+            const target = list[index];
+            // Mirror the rail button's disabled state: a provider with no
+            // settled availability verdict yet can't be selected by click, so
+            // the ⌘-digit shortcut must not select it either. Its digit badge is
+            // hidden in that state, so dispatching here would be a silent no-op
+            // the picker resolves away. A provider merely revalidating a known
+            // verdict stays selectable, like its rail button.
+            if (harnessAvailabilityUnsettled(target.harness)) return false;
+            stateRef.current.onEntryChange(target.harness.id);
+            return true;
+          },
+          dispatchSequence: null,
+          sequenceState: null,
+        },
+        {
+          actionId: "model.reasoning.byDigit",
+          // Own the modifier even without model settings so an unavailable
+          // digit cannot switch a tab behind the picker. Zero steps the speed tier.
+          isActive: () => true,
+          dispatch: (digit) => {
+            if (digit === 0) {
+              return stepServiceTier(stateRef.current.serviceTier);
+            }
+            const reasoningConfig = stateRef.current.reasoning;
+            if (
+              !stateRef.current.reasoningActionable ||
+              reasoningConfig === null ||
+              reasoningConfig.disabled
+            ) {
+              return false;
+            }
+            const index = digit - 1;
+            if (
+              index < 0 ||
+              index >= PICKER_REASONING_LEADER_INDEX_LIMIT ||
+              index >= reasoningConfig.options.length
+            ) {
+              return false;
+            }
+            reasoningConfig.onChange(reasoningConfig.options[index].id);
+            return true;
+          },
+          dispatchSequence: null,
+          sequenceState: null,
+        },
+        {
+          actionId: "model.profile.byDigit",
+          // Active while the dropdown is drawn with a row to pick
+          // (`profileDropdownMinimumRows`) - otherwise there is nothing to
+          // hint or dispatch to.
+          isActive: () =>
+            eligibleProfilesForShortcut(
+              stateRef.current.activeProviderProfiles,
+              stateRef.current.profileEnablementPending,
+            ).length >=
+            profileDropdownMinimumRows(
+              guiHarnessIdToProviderId(stateRef.current.activeProviderId),
+            ),
+          dispatch: (digit) => {
+            const profiles = eligibleProfilesForShortcut(
+              stateRef.current.activeProviderProfiles,
+              stateRef.current.profileEnablementPending,
+            );
+            // Beyond digit 9, profiles stay click-only - mirrors the provider
+            // rail's own overflow behavior above.
+            const index = digit === 0 ? 9 : digit - 1;
+            if (index < 0 || index >= profiles.length) return false;
+            const profile = profiles[index];
+            const commitId = profileCommitId(profile);
+            // An admission-disabled row refuses a click (`profile-
+            // dropdown.tsx`'s `disabled={rowDisabled}`); the digit shortcut
+            // must refuse the same way, or it bypasses the exact gate the
+            // row enforces.
+            if (
+              stateRef.current.activeProviderProfileAdmission?.get(commitId)
+                ?.disabled === true
+            ) {
+              return false;
+            }
+            // Routes through the SAME commit path the dropdown's row clicks
+            // use (`handleProfileChange`), which already carries the
+            // locked-fork guard - no second commit path to keep in sync.
+            stateRef.current.onProfileChange(
+              stateRef.current.activeProviderId,
+              commitId,
+            );
+            return true;
+          },
+          dispatchSequence: null,
+          sequenceState: null,
+        },
+      ],
+    });
+  }, [open]);
+}

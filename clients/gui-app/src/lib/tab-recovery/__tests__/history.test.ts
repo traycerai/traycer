@@ -1,0 +1,623 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as idbKeyval from "idb-keyval";
+import { createStore, get as idbGet, set } from "idb-keyval";
+import type { UseStore } from "idb-keyval";
+import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
+import type { EpicCanvasState, EpicViewTab } from "@/stores/epics/canvas/types";
+import {
+  SPEC_A,
+  SPEC_B,
+  pane,
+} from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
+import { persistKey, tabRecoveryKey } from "@/lib/persist/keys";
+import { tabItemId, type PersistedTabStripLayout } from "@/stores/tabs/layout";
+import type { TabRef } from "@/stores/tabs/types";
+import {
+  batchHeaderTabRecovery,
+  configureTabRecoveryHistory,
+  MAX_RECOVERY_ACTIONS,
+  pruneRecoveryDraft,
+  pruneRecoveryEpics,
+  pruneRecoveryTiles,
+  recordClosedHeaderTab,
+  flushTabRecoveryHistory,
+  resetTabRecoveryHistory,
+  useTabRecoveryHistory,
+  withoutTabRecovery,
+  type ClosedHeaderTab,
+  type TabRecoveryEntry,
+} from "../history";
+
+vi.mock("idb-keyval", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("idb-keyval")>();
+  return {
+    ...actual,
+    get: vi.fn(actual.get),
+    set: vi.fn(actual.set),
+  };
+});
+
+const WINDOW_ONE = "recovery-window-one";
+const WINDOW_TWO = "recovery-window-two";
+const ACCOUNT_ONE = "recovery-account-one";
+const ACCOUNT_TWO = "recovery-account-two";
+
+function setWindow(windowId: string): void {
+  Reflect.set(globalThis, "runnerHost", { windows: { windowId } });
+}
+
+function layoutForRefs(refs: ReadonlyArray<TabRef>): PersistedTabStripLayout {
+  const first = refs.at(0);
+  return {
+    version: 2,
+    items: refs.map((ref) => ({ kind: "tab", id: tabItemId(ref), ref })),
+    activeItemId: first === undefined ? null : tabItemId(first),
+    systemTabs: { history: null, settings: null },
+    activationHistory: [],
+  };
+}
+
+function draft(id: string): Extract<ClosedHeaderTab, { kind: "draft" }> {
+  return {
+    kind: "draft",
+    draftId: id,
+    hostId: null,
+    index: 0,
+  };
+}
+
+function epicTab(epicId: string, tabId: string): EpicViewTab {
+  return { epicId, tabId, name: epicId };
+}
+
+function canvasWithTwoTiles(): EpicCanvasState {
+  return {
+    root: pane("p1", [SPEC_A.instanceId, SPEC_B.instanceId]),
+    activePaneId: "p1",
+    tilesByInstanceId: {
+      [SPEC_A.instanceId]: SPEC_A,
+      [SPEC_B.instanceId]: SPEC_B,
+    },
+    sizesByGroupId: {},
+  };
+}
+
+function emptyCanvas(): EpicCanvasState {
+  return {
+    root: null,
+    activePaneId: null,
+    tilesByInstanceId: {},
+    sizesByGroupId: {},
+  };
+}
+
+async function seedPersistedEntries(
+  entries: readonly unknown[],
+): Promise<void> {
+  await configureTabRecoveryHistory(null);
+  await flushTabRecoveryHistory();
+  const store = createStore(persistKey("tab-recovery"), "history");
+  await set(
+    tabRecoveryKey(ACCOUNT_ONE, WINDOW_ONE),
+    { version: 2, entries },
+    store,
+  );
+  setWindow(WINDOW_ONE);
+  await configureTabRecoveryHistory(ACCOUNT_ONE);
+}
+
+async function prepareHistory(windowId: string): Promise<void> {
+  await resetTabRecoveryHistory();
+  installFreshIndexedDb();
+  setWindow(windowId);
+  await configureTabRecoveryHistory(null);
+  await configureTabRecoveryHistory(ACCOUNT_ONE);
+  useTabRecoveryHistory.setState({ entries: [], ready: true });
+}
+
+beforeEach(async () => {
+  await prepareHistory(WINDOW_ONE);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("tab recovery history", () => {
+  it("keeps the persisted journal intact across a failed same-identity hydration retry", async () => {
+    const persistedOne = draft("persisted-one");
+    const persistedTwo = draft("persisted-two");
+    recordClosedHeaderTab(persistedOne);
+    recordClosedHeaderTab(persistedTwo);
+    await flushTabRecoveryHistory();
+
+    const store = createStore(persistKey("tab-recovery"), "history");
+    const key = tabRecoveryKey(ACCOUNT_ONE, WINDOW_ONE);
+    const diskBeforeFailure = await idbGet<unknown>(key, store);
+    expect(diskBeforeFailure).toEqual(expect.objectContaining({ version: 2 }));
+
+    await resetTabRecoveryHistory();
+    setWindow(WINDOW_ONE);
+    vi.mocked(idbKeyval.get)
+      .mockRejectedValueOnce(new Error("temporary IndexedDB read failure"))
+      .mockRejectedValueOnce(new Error("temporary IndexedDB read failure"))
+      .mockRejectedValueOnce(new Error("temporary IndexedDB read failure"));
+    await configureTabRecoveryHistory(ACCOUNT_ONE);
+
+    expect(useTabRecoveryHistory.getState().ready).toBe(false);
+
+    const pending = draft("pending-after-failure");
+    recordClosedHeaderTab(pending);
+    pruneRecoveryDraft(persistedTwo.draftId);
+
+    // The failed restore must not persist the in-memory, incomplete view over
+    // the last good disk snapshot, even when a close and permanent prune land
+    // while the retry is waiting.
+    expect(await idbGet<unknown>(key, store)).toEqual(diskBeforeFailure);
+
+    await configureTabRecoveryHistory(ACCOUNT_ONE);
+    await flushTabRecoveryHistory();
+
+    const recoveredDraftIds = useTabRecoveryHistory
+      .getState()
+      .entries.flatMap((entry) =>
+        entry.items.flatMap((item) =>
+          item.kind === "draft" ? [item.draftId] : [],
+        ),
+      );
+    expect(recoveredDraftIds).toEqual([persistedOne.draftId, pending.draftId]);
+    expect(useTabRecoveryHistory.getState().ready).toBe(true);
+    const diskAfterRetry = await idbGet<unknown>(key, store);
+    expect(diskAfterRetry).toEqual(expect.objectContaining({ version: 2 }));
+    if (
+      typeof diskAfterRetry !== "object" ||
+      diskAfterRetry === null ||
+      !("entries" in diskAfterRetry) ||
+      !Array.isArray(diskAfterRetry.entries)
+    ) {
+      throw new Error("expected the retried journal to contain entries");
+    }
+    expect(diskAfterRetry.entries).toHaveLength(2);
+  });
+
+  it("automatically succeeds after one transient storage read failure", async () => {
+    const recovered = draft("automatic-retry");
+    const store = createStore(persistKey("tab-recovery"), "history");
+    await set(
+      tabRecoveryKey(ACCOUNT_ONE, WINDOW_ONE),
+      {
+        version: 2,
+        entries: [
+          { kind: "header", id: "automatic", bulk: false, items: [recovered] },
+        ],
+      },
+      store,
+    );
+
+    await resetTabRecoveryHistory();
+    setWindow(WINDOW_ONE);
+    const get = vi.mocked(idbKeyval.get);
+    get.mockClear();
+    get.mockRejectedValueOnce(new Error("temporary IndexedDB read failure"));
+
+    await configureTabRecoveryHistory(ACCOUNT_ONE);
+
+    expect(useTabRecoveryHistory.getState().ready).toBe(true);
+    expect(useTabRecoveryHistory.getState().entries).toHaveLength(1);
+    expect(useTabRecoveryHistory.getState().entries[0]).toMatchObject({
+      kind: "header",
+      items: [recovered],
+    });
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not publish a queued retry after switching accounts", async () => {
+    const oldEntry = draft("old-account-entry");
+    const store = createStore(persistKey("tab-recovery"), "history");
+    await set(
+      tabRecoveryKey(ACCOUNT_ONE, WINDOW_ONE),
+      {
+        version: 2,
+        entries: [
+          { kind: "header", id: "old", bulk: false, items: [oldEntry] },
+        ],
+      },
+      store,
+    );
+
+    await resetTabRecoveryHistory();
+    setWindow(WINDOW_ONE);
+    const get = vi.mocked(idbKeyval.get);
+    get.mockClear();
+    get.mockRejectedValueOnce(new Error("temporary IndexedDB read failure"));
+    const oldAccountHydration = configureTabRecoveryHistory(ACCOUNT_ONE);
+    await vi.waitFor(() => expect(get).toHaveBeenCalled());
+
+    await configureTabRecoveryHistory(ACCOUNT_TWO);
+    const newEntry = draft("new-account-entry");
+    recordClosedHeaderTab(newEntry);
+    await oldAccountHydration;
+
+    expect(useTabRecoveryHistory.getState().ready).toBe(true);
+    expect(useTabRecoveryHistory.getState().entries).toEqual([
+      expect.objectContaining({
+        kind: "header",
+        items: [newEntry],
+      }),
+    ]);
+  });
+
+  it("retains pending closes and prunes for an unread account across an account switch", async () => {
+    const deleted = draft("persisted-before-failure");
+    recordClosedHeaderTab(deleted);
+    await flushTabRecoveryHistory();
+
+    const store = createStore(persistKey("tab-recovery"), "history");
+    const key = tabRecoveryKey(ACCOUNT_ONE, WINDOW_ONE);
+    const diskBeforeFailure = await idbGet<unknown>(key, store);
+    expect(diskBeforeFailure).toEqual(expect.objectContaining({ version: 2 }));
+
+    await resetTabRecoveryHistory();
+    setWindow(WINDOW_ONE);
+    const get = vi.mocked(idbKeyval.get);
+    get.mockClear();
+    get
+      .mockRejectedValueOnce(new Error("temporary IndexedDB read failure"))
+      .mockRejectedValueOnce(new Error("temporary IndexedDB read failure"))
+      .mockRejectedValueOnce(new Error("temporary IndexedDB read failure"));
+    await configureTabRecoveryHistory(ACCOUNT_ONE);
+    expect(useTabRecoveryHistory.getState().ready).toBe(false);
+
+    const fresh = draft("pending-during-failure");
+    recordClosedHeaderTab(fresh);
+    pruneRecoveryDraft(deleted.draftId);
+    expect(await idbGet<unknown>(key, store)).toEqual(diskBeforeFailure);
+
+    await configureTabRecoveryHistory(ACCOUNT_TWO);
+    expect(useTabRecoveryHistory.getState().entries).toEqual([]);
+
+    await configureTabRecoveryHistory(ACCOUNT_ONE);
+    await flushTabRecoveryHistory();
+
+    const recoveredItems = useTabRecoveryHistory
+      .getState()
+      .entries.flatMap((entry) => entry.items);
+    expect(recoveredItems).toEqual([fresh]);
+    const diskAfterRecovery = await idbGet<unknown>(key, store);
+    if (
+      typeof diskAfterRecovery !== "object" ||
+      diskAfterRecovery === null ||
+      !("entries" in diskAfterRecovery) ||
+      !Array.isArray(diskAfterRecovery.entries)
+    ) {
+      throw new Error("expected the recovered journal to contain entries");
+    }
+    expect(diskAfterRecovery.entries).toHaveLength(1);
+    expect(diskAfterRecovery.entries[0]).toMatchObject({
+      kind: "header",
+      items: [fresh],
+    });
+  });
+
+  it("batches header closes into one bulk entry and suppresses internal closes", () => {
+    const one = draft("draft-one");
+    const two = draft("draft-two");
+    const three = draft("draft-three");
+    const oneRef: TabRef = { kind: "draft", id: one.draftId };
+    const twoRef: TabRef = { kind: "draft", id: two.draftId };
+    const threeRef: TabRef = { kind: "draft", id: three.draftId };
+
+    recordClosedHeaderTab(one);
+    withoutTabRecovery(() => recordClosedHeaderTab(two));
+    batchHeaderTabRecovery(
+      () => {
+        recordClosedHeaderTab(two);
+        withoutTabRecovery(() => recordClosedHeaderTab(three));
+      },
+      layoutForRefs([oneRef, twoRef, threeRef]),
+    );
+
+    const entries = useTabRecoveryHistory.getState().entries;
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({ kind: "header", bulk: false });
+    expect(entries[1]).toMatchObject({
+      kind: "header",
+      bulk: true,
+      items: [{ ...two, index: 1 }],
+    });
+  });
+
+  it("prunes deleted epics from mixed header entries", () => {
+    const draftItem = draft("draft-survivor");
+    const deletedTab = epicTab("epic-deleted", "tab-epic-deleted");
+    const deletedRef: TabRef = { kind: "epic", id: deletedTab.tabId };
+    const draftRef: TabRef = { kind: "draft", id: draftItem.draftId };
+    batchHeaderTabRecovery(
+      () => {
+        recordClosedHeaderTab({
+          kind: "epic",
+          tab: deletedTab,
+          canvas: canvasWithTwoTiles(),
+          index: 0,
+        });
+        recordClosedHeaderTab(draftItem);
+      },
+      layoutForRefs([deletedRef, draftRef]),
+    );
+
+    const beforePrune = useTabRecoveryHistory.getState().entries.at(0);
+    if (beforePrune === undefined) {
+      throw new Error("expected the mixed header entry before pruning");
+    }
+    const survivorItem = beforePrune.items.find(
+      (item) => item.kind === "draft",
+    );
+    if (survivorItem === undefined) {
+      throw new Error("expected a surviving draft item");
+    }
+
+    pruneRecoveryEpics(["epic-deleted"]);
+
+    const entries = useTabRecoveryHistory.getState().entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      kind: "header",
+      items: [{ ...draftItem, index: 1 }],
+    });
+    expect(entries[0].items[0]).toBe(survivorItem);
+  });
+
+  it("prunes deleted tiles from a closed task's canvas and keeps the task", () => {
+    recordClosedHeaderTab({
+      kind: "epic",
+      tab: epicTab("epic-tiles", "tab-epic-tiles"),
+      canvas: canvasWithTwoTiles(),
+      index: 0,
+    });
+
+    pruneRecoveryTiles((tile) => tile.id === SPEC_A.id);
+
+    const entries = useTabRecoveryHistory.getState().entries;
+    expect(entries).toHaveLength(1);
+    const item = entries[0].items[0];
+    if (item.kind !== "epic") throw new Error("expected a closed task item");
+    expect(Object.keys(item.canvas.tilesByInstanceId)).toEqual([
+      SPEC_B.instanceId,
+    ]);
+  });
+
+  it("records saved drafts as references without an editor snapshot", () => {
+    const item = draft("saved-draft");
+    recordClosedHeaderTab(item);
+
+    const entry = useTabRecoveryHistory.getState().entries.at(0);
+    if (entry === undefined) {
+      throw new Error("expected a draft recovery entry");
+    }
+    expect(entry.items).toEqual([item]);
+    expect(entry.items[0]).not.toHaveProperty("draft");
+    expect(entry.items[0]).not.toHaveProperty("content");
+  });
+
+  it("retains an empty task recovery entry in the v2 journal", async () => {
+    const task: TabRecoveryEntry = {
+      kind: "header",
+      id: "empty-task-header",
+      bulk: false,
+      items: [
+        {
+          kind: "epic",
+          tab: epicTab("empty-task", "empty-task-tab"),
+          canvas: emptyCanvas(),
+          index: 0,
+        },
+      ],
+    };
+
+    await seedPersistedEntries([task]);
+
+    expect(useTabRecoveryHistory.getState().entries).toEqual([task]);
+  });
+
+  it("drops inner-tab entries from journals written before they stopped being recorded", async () => {
+    const first: TabRecoveryEntry = {
+      kind: "header",
+      id: "first-header",
+      bulk: false,
+      items: [draft("first-draft")],
+    };
+    const second: TabRecoveryEntry = {
+      kind: "header",
+      id: "second-header",
+      bulk: false,
+      items: [draft("second-draft")],
+    };
+    const legacyInnerTab = {
+      kind: "canvas",
+      id: "legacy-inner-tab",
+      tab: epicTab("legacy-epic", "legacy-tab"),
+      before: canvasWithTwoTiles(),
+      after: emptyCanvas(),
+      instanceIds: [SPEC_A.instanceId],
+      bulk: false,
+    };
+
+    await seedPersistedEntries([first, legacyInnerTab, second]);
+    await flushTabRecoveryHistory();
+
+    expect(useTabRecoveryHistory.getState().entries).toEqual([first, second]);
+    const store = createStore(persistKey("tab-recovery"), "history");
+    expect(
+      await idbGet<unknown>(tabRecoveryKey(ACCOUNT_ONE, WINDOW_ONE), store),
+    ).toEqual({ version: 2, entries: [first, second] });
+  });
+
+  it("ignores version 1 snapshot journals", async () => {
+    await configureTabRecoveryHistory(null);
+    await flushTabRecoveryHistory();
+    const store = createStore(persistKey("tab-recovery"), "history");
+    await set(
+      tabRecoveryKey(ACCOUNT_ONE, WINDOW_ONE),
+      {
+        version: 1,
+        entries: [
+          {
+            kind: "header",
+            id: "old-snapshot",
+            bulk: false,
+            items: [
+              {
+                kind: "draft",
+                draftId: "old-snapshot-draft",
+                hostId: null,
+                index: 0,
+              },
+            ],
+          },
+        ],
+      },
+      store,
+    );
+    setWindow(WINDOW_ONE);
+
+    await configureTabRecoveryHistory(ACCOUNT_ONE);
+
+    expect(useTabRecoveryHistory.getState().ready).toBe(true);
+    expect(useTabRecoveryHistory.getState().entries).toEqual([]);
+  });
+
+  it("caps recovery actions at the newest 50 entries", () => {
+    for (let index = 0; index < MAX_RECOVERY_ACTIONS + 5; index += 1)
+      recordClosedHeaderTab(draft(`meaningful-${String(index)}`));
+
+    const entries = useTabRecoveryHistory.getState().entries;
+    expect(entries).toHaveLength(MAX_RECOVERY_ACTIONS);
+    const ids = entries.map((entry) => {
+      const item = entry.items.at(0);
+      if (item === undefined || item.kind !== "draft") return "task";
+      return item.draftId;
+    });
+    expect(ids).toEqual(
+      Array.from(
+        { length: MAX_RECOVERY_ACTIONS },
+        (_, index) => `meaningful-${String(index + 5)}`,
+      ),
+    );
+  });
+
+  it("persists separately by account and desktop window", async () => {
+    recordClosedHeaderTab(draft("window-one-draft"));
+
+    setWindow(WINDOW_TWO);
+    await configureTabRecoveryHistory(ACCOUNT_ONE);
+    expect(useTabRecoveryHistory.getState().entries).toEqual([]);
+    recordClosedHeaderTab(draft("window-two-draft"));
+
+    setWindow(WINDOW_ONE);
+    await configureTabRecoveryHistory(ACCOUNT_ONE);
+    expect(
+      useTabRecoveryHistory.getState().entries.flatMap((entry) => entry.items),
+    ).toHaveLength(1);
+
+    await configureTabRecoveryHistory(ACCOUNT_TWO);
+    expect(useTabRecoveryHistory.getState().entries).toEqual([]);
+  });
+
+  it("prunes a permanently deleted draft from recovery references", () => {
+    recordClosedHeaderTab(draft("draft-to-delete"));
+    recordClosedHeaderTab(draft("draft-to-keep"));
+
+    pruneRecoveryDraft("draft-to-delete");
+
+    const items = useTabRecoveryHistory
+      .getState()
+      .entries.flatMap((entry) => entry.items);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "draft", draftId: "draft-to-keep" });
+  });
+
+  it("closes peer connections on database deletion and drops stale queued writes", async () => {
+    await resetTabRecoveryHistory();
+    installFreshIndexedDb();
+
+    vi.resetModules();
+    const peerIdbKeyval = await import("idb-keyval");
+    const peerA = await import("../history");
+    vi.resetModules();
+    const peerB = await import("../history");
+    let verificationStore: UseStore | null = null;
+    try {
+      const account = "recovery-peer-account";
+      const windowId = "recovery-peer-window";
+      setWindow(windowId);
+
+      await peerA.configureTabRecoveryHistory(account);
+      peerA.useTabRecoveryHistory.setState({ entries: [], ready: true });
+      const persisted = draft("before-peer-delete");
+      peerA.recordClosedHeaderTab(persisted);
+      await peerA.flushTabRecoveryHistory();
+
+      await peerB.configureTabRecoveryHistory(account);
+      expect(peerB.useTabRecoveryHistory.getState().entries).toHaveLength(1);
+
+      const deferredSet = Promise.withResolvers<void>();
+      const setMock = vi.mocked(peerIdbKeyval.set);
+      setMock.mockImplementationOnce(() => deferredSet.promise);
+      peerA.recordClosedHeaderTab(draft("queued-before-peer-delete"));
+      const stale = draft("stale-after-peer-delete");
+      peerA.recordClosedHeaderTab(stale);
+
+      const deleteRequest = indexedDB.deleteDatabase(
+        persistKey("tab-recovery"),
+      );
+      const deletion = new Promise<void>((resolve, reject) => {
+        deleteRequest.onsuccess = () => resolve();
+        deleteRequest.onerror = () =>
+          reject(
+            deleteRequest.error ??
+              new Error("Recovery database deletion failed"),
+          );
+      });
+      await deletion;
+      deferredSet.resolve();
+      await peerA.flushTabRecoveryHistory();
+      await peerB.flushTabRecoveryHistory();
+
+      expect(peerA.useTabRecoveryHistory.getState().entries).toEqual([]);
+      expect(peerB.useTabRecoveryHistory.getState().entries).toEqual([]);
+      const store = createStore(persistKey("tab-recovery"), "history");
+      verificationStore = store;
+      expect(
+        await idbGet<unknown>(tabRecoveryKey(account, windowId), store),
+      ).toBe(undefined);
+
+      peerB.recordClosedHeaderTab(draft("fresh-after-peer-delete"));
+      await peerB.flushTabRecoveryHistory();
+      const fresh = await idbGet<unknown>(
+        tabRecoveryKey(account, windowId),
+        store,
+      );
+      expect(fresh).toEqual(
+        expect.objectContaining({
+          entries: [
+            expect.objectContaining({
+              items: [
+                expect.objectContaining({ draftId: "fresh-after-peer-delete" }),
+              ],
+            }),
+          ],
+        }),
+      );
+      expect(JSON.stringify(fresh)).not.toContain("stale-after-peer-delete");
+    } finally {
+      await peerA.resetTabRecoveryHistory();
+      await peerB.resetTabRecoveryHistory();
+      if (verificationStore !== null) {
+        await verificationStore("readonly", (transaction) => {
+          transaction.transaction.db.close();
+          return Promise.resolve();
+        });
+      }
+    }
+  });
+});

@@ -1,0 +1,3894 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
+import type { WirePermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
+import type { Awareness } from "y-protocols/awareness";
+import { NO_CLOUD_SYNC_DURABILITY } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import { isLocalHomedEpicHandle } from "@/lib/epic-selectors";
+import {
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import {
+  type EpicStreamClientFactory,
+  type OpenEpicStoreHandle,
+} from "@/stores/epics/open-epic/store";
+
+interface FakeStreamHandle {
+  readonly callbacks: EpicStreamCallbacks;
+  readonly applied: Uint8Array[];
+  readonly awarenessSent: Uint8Array[];
+  readonly artifactRoomApplied: Array<{
+    readonly artifactRoomId: string;
+    readonly bytes: Uint8Array;
+  }>;
+  readonly artifactRoomAwarenessSent: Array<{
+    readonly artifactRoomId: string;
+    readonly bytes: Uint8Array;
+  }>;
+  retryMigrationCount: number;
+  closeCount: number;
+}
+
+function fakeFactory(): {
+  factory: EpicStreamClientFactory;
+  handle: () => FakeStreamHandle;
+  handles: () => ReadonlyArray<FakeStreamHandle>;
+} {
+  let current: FakeStreamHandle | null = null;
+  const all: FakeStreamHandle[] = [];
+  const factory: EpicStreamClientFactory = (_epicId, callbacks) => {
+    const h: FakeStreamHandle = {
+      callbacks,
+      applied: [],
+      awarenessSent: [],
+      artifactRoomApplied: [],
+      artifactRoomAwarenessSent: [],
+      retryMigrationCount: 0,
+      closeCount: 0,
+    };
+    current = h;
+    all.push(h);
+    return {
+      applyUpdate: (bytes) => h.applied.push(bytes),
+      awareness: (bytes) => h.awarenessSent.push(bytes),
+      applyArtifactRoomUpdate: (artifactRoomId, bytes) => {
+        h.artifactRoomApplied.push({ artifactRoomId, bytes });
+      },
+      artifactRoomAwareness: (artifactRoomId, bytes) => {
+        h.artifactRoomAwarenessSent.push({ artifactRoomId, bytes });
+      },
+      retryMigration: () => {
+        h.retryMigrationCount += 1;
+      },
+      close: () => {
+        h.closeCount += 1;
+      },
+    };
+  };
+  return {
+    factory,
+    handle: () => {
+      if (current === null) throw new Error("factory not invoked");
+      return current;
+    },
+    handles: () => all,
+  };
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes));
+}
+
+function stateVectorBase64(doc: Y.Doc): string {
+  return encodeBase64(Y.encodeStateVector(doc));
+}
+
+function buildMeta(
+  role: WirePermissionRole | null,
+  hostDoc: Y.Doc | null,
+): SnapshotMetaEpic {
+  const nextHostDoc = hostDoc === null ? new Y.Doc() : hostDoc;
+  return {
+    schemaVersion: "1.0",
+    epicLight:
+      role === null
+        ? null
+        : {
+            id: "epic-a",
+            title: "Epic A",
+            initialUserPrompt: "",
+            ticketCount: 0,
+            specCount: 0,
+            storyCount: 0,
+            reviewCount: 0,
+            status: "open",
+            createdAt: 0,
+            updatedAt: 0,
+            createdBy: "u",
+            version: "1",
+          },
+    permissionRole: role,
+    repos: [],
+    workspaces: [],
+    repoMapping: [],
+    workspaceFolders: [],
+    unresolvedRepos: [],
+    hostStateVectorBase64: stateVectorBase64(nextHostDoc),
+  };
+}
+
+function emptySnapshot(): Uint8Array {
+  return Y.encodeStateAsUpdate(new Y.Doc());
+}
+
+/**
+ * Settle the worker pipe under FAKE timers.
+ *
+ * `flush()` waits a MACROTASK per round, and says so in its own comment: "The
+ * one thing it assumes is REAL timers. No suite driving this harness installs
+ * fake ones; one that did would hang here." These lease tests install fake
+ * ones - they have to, because the linger window they drive is a real timer
+ * inside the worker - so that assumption stopped holding the moment the
+ * runtime moved across the bridge.
+ *
+ * Rather than weaken the pipe (a shared harness that quietly special-cased
+ * vitest would hide the boundary from every other suite), the two regimes are
+ * interleaved HERE, where both are visible: start the flush, then be the thing
+ * that fires its macrotask.
+ *
+ * `advanceTimersByTimeAsync(0)` advances the clock by ZERO, so only
+ * already-due callbacks run - the linger window is milliseconds away and is
+ * not disturbed by settling the pipe. The loop is bounded by the pipe's own
+ * round cap, so a pipe that never settles fails as `flush()`'s explicit error
+ * rather than as a hang here.
+ */
+async function settle(opened: OpenedStoreForTest): Promise<void> {
+  // Real timers: the pipe's own assumption holds and `flush()` is sufficient.
+  // Branching on the REGIME rather than making every test declare which one it
+  // is in - the pipe's requirement is a fact about the clock, and asking each
+  // call site to restate it is how the two drift.
+  if (!vi.isFakeTimers()) {
+    await opened.flush();
+    return;
+  }
+  const flushed = opened.flush();
+  for (let round = 0; round < 24; round += 1) {
+    await vi.advanceTimersByTimeAsync(0);
+  }
+  await flushed;
+}
+
+function expectBytesEqual(actual: Uint8Array, expected: Uint8Array): void {
+  expect(Array.from(actual)).toEqual(Array.from(expected));
+}
+
+describe("createOpenEpicStore", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("projects the snapshot frame into store state", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    const donor = new Y.Doc();
+    donor.getMap("epic").set("title", "hello");
+    const snapshotBytes = Y.encodeStateAsUpdate(donor);
+
+    handle().callbacks.onSnapshot(buildMeta("editor", null), snapshotBytes);
+
+    const state = opened.store.getState();
+    expect(state.snapshotLoaded).toBe(true);
+    expect(state.permissionRole).toBe("editor");
+    expect(state.snapshotMeta).not.toBeNull();
+    expect(opened.doc.getMap("epic").get("title")).toBe("hello");
+
+    opened.dispose();
+  });
+
+  it("namespaces the persist key by identity and epicId", () => {
+    const { factory } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: "user-alice",
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    // Persisting a field flushes the slice to localStorage under the persist
+    // middleware's resolved name. With localStorage cleared in beforeEach, the
+    // single resulting key IS that resolved name. The expected value is a
+    // hand-written literal (not derived from openEpicKey/STORE_KEYS): it guards
+    // the full chain catalog leaf → builder → factory call site for the
+    // per-epic, per-identity bucket. Segment order is bucket-then-epicId.
+    opened.store.getState().setLastFocusedArtifactId("art-1");
+
+    expect(window.localStorage.length).toBe(1);
+    expect(window.localStorage.key(0)).toBe(
+      "traycer-gui-app:open-epic:user-alice:epic-a",
+    );
+
+    opened.dispose();
+  });
+
+  it("records epicDeleted with attribution on the onEpicDeleted frame", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handle().callbacks.onEpicDeleted({
+      deletedByDisplayName: "Alice",
+      deletedByTraycerUserId: "user-alice",
+    });
+
+    const state = opened.store.getState();
+    expect(state.epicDeleted).toEqual({
+      deletedByDisplayName: "Alice",
+      deletedByTraycerUserId: "user-alice",
+    });
+    // A delete is not a revoke - accessLost stays its default.
+    expect(state.accessLost).toBe(false);
+
+    opened.dispose();
+  });
+
+  it("sets accessLost (not epicDeleted) on a full revoke via onPermissionChanged(null)", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
+    handle().callbacks.onPermissionChanged(null);
+
+    const state = opened.store.getState();
+    expect(state.accessLost).toBe(true);
+    expect(state.permissionRole).toBeNull();
+    // Revoke and delete are distinct signals; a revoke must not look like a
+    // delete to the access coordinator.
+    expect(state.epicDeleted).toBeNull();
+
+    opened.dispose();
+  });
+
+  it("keeps access lost for retired early metadata until a granted role returns", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    try {
+      handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
+      handle().callbacks.onPermissionChanged(null);
+      handle().callbacks.onEarlyMeta(buildMeta("viewer", null));
+
+      expect(opened.store.getState().permissionRole).toBeNull();
+      expect(opened.store.getState().accessLost).toBe(true);
+
+      handle().callbacks.onEarlyMeta(buildMeta("editor", null));
+      expect(opened.store.getState().permissionRole).toBe("editor");
+      expect(opened.store.getState().accessLost).toBe(false);
+    } finally {
+      opened.dispose();
+    }
+  });
+
+  it("does not raise a close signal on a downgrade from owner to editor (downgrade != close)", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handle().callbacks.onSnapshot(buildMeta("owner", null), emptySnapshot());
+    handle().callbacks.onPermissionChanged("editor");
+
+    const state = opened.store.getState();
+    expect(state.permissionRole).toBe("editor");
+    // A downgrade keeps the tab open - neither terminal close signal the
+    // coordinator reacts to may be set.
+    expect(state.accessLost).toBe(false);
+    expect(state.epicDeleted).toBeNull();
+
+    opened.dispose();
+  });
+
+  it("applies subsequent update frames to the local Y.Doc", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
+
+    const donor = new Y.Doc();
+    donor.getMap("epic").set("title", "v1");
+    const update = Y.encodeStateAsUpdate(donor);
+    handle().callbacks.onUpdate(update);
+
+    expect(opened.doc.getMap("epic").get("title")).toBe("v1");
+
+    opened.dispose();
+  });
+
+  it("marks the session dirty on local edits while open even when the queue stays empty", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    const hostDoc = new Y.Doc();
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      emptySnapshot(),
+    );
+
+    opened.doc.getMap("epic").set("title", "Locally edited");
+
+    const state = opened.store.getState();
+    expect(handle().applied.length).toBe(1);
+    expect(state.isDirty).toBe(true);
+    expect(state.unsyncedQueueSize).toBe(0);
+    expect(state.dirtyWatermarkStateVectorBase64).toBe(
+      stateVectorBase64(opened.doc),
+    );
+    expect(state.latestHostStateVectorBase64).toBe(stateVectorBase64(hostDoc));
+
+    opened.dispose();
+  });
+
+  it("keeps the stream and local edits across a role move, then fails closed on a full revoke", () => {
+    const { factory, handle, handles } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(buildMeta("owner", null), emptySnapshot());
+    opened.doc.getMap("epic").set("title", "Locally renamed");
+
+    const stream = handles()[0];
+    expect(stream.applied.length).toBe(1);
+
+    // Both remaining roles write, so a move between them re-seeds nothing.
+    handle().callbacks.onPermissionChanged("editor");
+    expect(opened.store.getState().permissionRole).toBe("editor");
+    expect(opened.store.getState().snapshotLoaded).toBe(true);
+    expect(opened.store.getState().isDirty).toBe(true);
+    expect(opened.doc.getMap("epic").get("title")).toBe("Locally renamed");
+    expect(stream.closeCount).toBe(0);
+    expect(handles().length).toBe(1);
+
+    opened.doc.getMap("epic").set("title", "while-editor");
+    expect(stream.applied.length).toBe(2);
+
+    // Full revoke → accessLost flips true.
+    handle().callbacks.onPermissionChanged(null);
+    const after = opened.store.getState();
+    expect(after.accessLost).toBe(true);
+    expect(after.permissionRole).toBe(null);
+    expect(after.isDirty).toBe(false);
+
+    opened.dispose();
+  });
+
+  it("clears an editor's queued edits and stops writes when access is revoked", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    try {
+      handle().callbacks.onConnectionStatus("open", null, true, null);
+      handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
+      handle().callbacks.onConnectionStatus("reconnecting", null, true, "held");
+      opened.doc.getMap("epic").set("title", "Queued as editor");
+      expect(handle().applied).toHaveLength(0);
+      expect(opened.store.getState()).toMatchObject({
+        isDirty: true,
+        unsyncedQueueSize: 1,
+        dirtyWatermarkStateVectorBase64: stateVectorBase64(opened.doc),
+      });
+
+      handle().callbacks.onPermissionChanged(null);
+      expect(opened.store.getState()).toMatchObject({
+        permissionRole: null,
+        accessLost: true,
+        isDirty: false,
+        unsyncedQueueSize: 0,
+        dirtyWatermarkStateVectorBase64: null,
+      });
+
+      // A continued open keeps the snapshot; no new snapshot can mask the
+      // callback's revocation or discard the queued edit on its behalf.
+      handle().callbacks.onConnectionStatus("open", null, true, "continued");
+      opened.doc.getMap("epic").set("title", "Written after revocation");
+      expect(handle().applied).toHaveLength(0);
+      expect(opened.store.getState()).toMatchObject({
+        connectionStatus: "open",
+        snapshotLoaded: true,
+        unsyncedQueueSize: 0,
+      });
+    } finally {
+      opened.dispose();
+    }
+  });
+
+  it("holds no role for a snapshot naming the retired viewer role, and writes nothing until a role arrives", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(buildMeta("viewer", null), emptySnapshot());
+
+    expect(opened.store.getState().permissionRole).toBeNull();
+    // A local write with no role is dropped, never sent.
+    opened.doc.getMap("epic").set("title", "while-no-role");
+    expect(handle().applied.length).toBe(0);
+
+    handle().callbacks.onPermissionChanged("editor");
+    opened.doc.getMap("epic").set("title", "while-editor");
+    expect(handle().applied.length).toBe(1);
+
+    opened.dispose();
+  });
+
+  it("keeps offline bytes in the queue diagnostically but reconciles them as a single update on snapshot", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    const hostDoc = new Y.Doc();
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      emptySnapshot(),
+    );
+    // Immediately drop the connection.
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
+
+    opened.doc.getMap("epic").set("title", "Offline title");
+    opened.doc.getMap("epic").set("body", "Offline body");
+    expect(handle().applied.length).toBe(0);
+    expect(opened.store.getState().unsyncedQueueSize).toBe(2);
+    expect(opened.store.getState().isDirty).toBe(true);
+
+    const expectedReconcile = Y.encodeStateAsUpdate(
+      opened.doc,
+      Y.encodeStateVector(hostDoc),
+    );
+
+    // Reconnect → fresh snapshot clears the queue and ships one reconcile update.
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      emptySnapshot(),
+    );
+    expect(handle().applied.length).toBe(1);
+    expectBytesEqual(handle().applied[0], expectedReconcile);
+    expect(opened.store.getState().unsyncedQueueSize).toBe(0);
+
+    opened.dispose();
+  });
+
+  const CURRENT_FRESHNESS = {
+    kind: "lastCloudSyncAt",
+    reconciledAtEpochMs: 1_000,
+    state: "current",
+  } as const;
+
+  it("keeps the cycle's durability and root snapshot through a held reconnect, and flushes writes made while held once on the continued open", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    const hostDoc = new Y.Doc();
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      emptySnapshot(),
+    );
+    handle().callbacks.onCloudSyncStatus("connected", {
+      durability: "paused",
+      pauseReason: undefined,
+      promotionState: undefined,
+      localProtection: undefined,
+      freshness: CURRENT_FRESHNESS,
+      peerSpeaksDurabilityLegs: true,
+      artifactSync: undefined,
+    });
+
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, "held");
+    expect(opened.store.getState().connectionStatus).toBe("reconnecting");
+    expect(opened.store.getState().durabilityStatus).toBe("paused");
+    expect(opened.store.getState().cloudFreshness).toEqual(CURRENT_FRESHNESS);
+
+    opened.doc.getMap("epic").set("title", "Written while held");
+    expect(handle().applied.length).toBe(0);
+    expect(opened.store.getState().unsyncedQueueSize).toBe(1);
+
+    // No snapshot follows a continued open: the open itself drains the queue.
+    handle().callbacks.onConnectionStatus("open", null, true, "continued");
+    expect(opened.store.getState().connectionStatus).toBe("open");
+    expect(opened.store.getState().durabilityStatus).toBe("paused");
+    expect(opened.store.getState().cloudFreshness).toEqual(CURRENT_FRESHNESS);
+    expect(opened.store.getState().unsyncedQueueSize).toBe(0);
+    expect(handle().applied.length).toBe(1);
+
+    opened.dispose();
+  });
+
+  it("resets the cycle when a hold ends in a null reconnect: durability cleared, queued writes wait for the new snapshot", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    const hostDoc = new Y.Doc();
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      emptySnapshot(),
+    );
+    handle().callbacks.onCloudSyncStatus("connected", {
+      durability: "paused",
+      pauseReason: undefined,
+      promotionState: undefined,
+      localProtection: undefined,
+      freshness: CURRENT_FRESHNESS,
+      peerSpeaksDurabilityLegs: true,
+      artifactSync: undefined,
+    });
+
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, "held");
+    opened.doc.getMap("epic").set("title", "Written while held");
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+
+    expect(opened.store.getState().durabilityStatus).toBeNull();
+    expect(opened.store.getState().cloudFreshness).toBeNull();
+    expect(handle().applied.length).toBe(0);
+    expect(opened.store.getState().unsyncedQueueSize).toBe(1);
+
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      emptySnapshot(),
+    );
+    expect(handle().applied.length).toBe(1);
+    expect(opened.store.getState().unsyncedQueueSize).toBe(0);
+
+    opened.dispose();
+  });
+
+  it("collapses a long offline queue on flush without losing edits or under-reporting its size", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    const hostDoc = new Y.Doc();
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      emptySnapshot(),
+    );
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
+
+    // Past the 32-entry collapse threshold, so the buffer is merged at least
+    // once while the edits are still only in memory.
+    const EDIT_COUNT = 40;
+    for (let index = 0; index < EDIT_COUNT; index += 1) {
+      opened.doc.getMap("epic").set(`k${index}`, `v${index}`);
+    }
+    expect(handle().applied.length).toBe(0);
+    // Collapsing the buffer must not make the UI under-report unsynced work:
+    // the size is a count of edits, not of retained buffers.
+    expect(opened.store.getState().unsyncedQueueSize).toBe(EDIT_COUNT);
+
+    // Recovery runs through the snapshot reconcile, which is derived from the
+    // live doc - so collapsing the buffer cannot cost an edit.
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      emptySnapshot(),
+    );
+
+    expect(handle().applied.length).toBe(1);
+    const replayed = new Y.Doc();
+    Y.applyUpdate(replayed, handle().applied[0]);
+    for (let index = 0; index < EDIT_COUNT; index += 1) {
+      expect(replayed.getMap("epic").get(`k${index}`)).toBe(`v${index}`);
+    }
+    expect(opened.store.getState().unsyncedQueueSize).toBe(0);
+
+    opened.dispose();
+  });
+
+  it("shows reconnecting on cloud sync loss but keeps streaming edits to the local host (durable offline persistence is host-owned)", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    const hostDoc = new Y.Doc();
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    // Establish a genuine first connect (transport open + cloud caught up) so
+    // the later drop reads as a reconnect, not the bootstrap "connecting".
+    handle().callbacks.onCloudSyncStatus("connected", NO_CLOUD_SYNC_DURABILITY);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      emptySnapshot(),
+    );
+    handle().applied.length = 0;
+
+    // Host reports its cloud link dropped. The renderer↔host transport is
+    // still open, so the pill shows "reconnecting" ...
+    handle().callbacks.onCloudSyncStatus(
+      "disconnected",
+      NO_CLOUD_SYNC_DURABILITY,
+    );
+    expect(opened.store.getState().connectionStatus).toBe("reconnecting");
+
+    // ... but a local edit MUST still stream to the (healthy) local host, not
+    // sit in the renderer's in-memory queue. The host durably persists it
+    // (SQLite pending-update store) while its cloud link is down and replays it
+    // on restart; queuing it here would strand it in memory and lose it on
+    // restart - the pending-update-replay regression this guards.
+    opened.doc.getMap("epic").set("title", "Cloud offline title");
+    expect(handle().applied.length).toBe(1);
+    expect(opened.store.getState().unsyncedQueueSize).toBe(0);
+
+    // Cloud reconnect returns the pill to open with nothing left to flush
+    // (the edit already reached the host while the cloud was down).
+    handle().callbacks.onCloudSyncStatus("connected", NO_CLOUD_SYNC_DURABILITY);
+    expect(opened.store.getState().connectionStatus).toBe("open");
+    expect(opened.store.getState().unsyncedQueueSize).toBe(0);
+    expect(handle().applied.length).toBe(1);
+
+    opened.dispose();
+  });
+
+  it("keeps an unknown paused reason neutral instead of inventing an upgrade path", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    handle().callbacks.onCloudSyncStatus("connected", {
+      durability: "paused",
+      pauseReason: undefined,
+      promotionState: undefined,
+      localProtection: undefined,
+      freshness: undefined,
+      peerSpeaksDurabilityLegs: true,
+      artifactSync: undefined,
+    });
+    expect(opened.store.getState()).toMatchObject({
+      durabilityStatus: "paused",
+      durabilityPauseReason: null,
+    });
+    opened.dispose();
+  });
+
+  it("clears the retained local-home statement when a @1.4/@1.5 peer's fresh frame omits the durability key", () => {
+    // Through @1.5 the enum has no `cloud` member: the absent key IS such a
+    // peer's cloud statement, and a promotion that completes under it ends in
+    // exactly that frame. RED before the fix: `promoting` stayed retained
+    // across it, so `isLocalHomedEpicHandle` - the dispatch-time comment and
+    // attachment gates, the local-home registry - kept answering local-homed
+    // for an epic the host now serves from the cloud.
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onCloudSyncStatus("connected", {
+      durability: "promoting",
+      pauseReason: undefined,
+      promotionState: "active",
+      localProtection: undefined,
+      freshness: undefined,
+      peerSpeaksDurabilityLegs: false,
+      artifactSync: undefined,
+    });
+    expect(opened.store.getState().retainedDurabilityStatus).toBe("promoting");
+    expect(isLocalHomedEpicHandle(opened)).toBe(true);
+
+    handle().callbacks.onCloudSyncStatus("connected", NO_CLOUD_SYNC_DURABILITY);
+    expect(opened.store.getState()).toMatchObject({
+      durabilityStatus: null,
+      retainedDurabilityStatus: null,
+      retainedDurabilityPauseReason: null,
+      durabilityLegsNegotiated: false,
+      hasFreshCloudSyncStatus: true,
+    });
+    expect(isLocalHomedEpicHandle(opened)).toBe(false);
+
+    opened.dispose();
+  });
+
+  it("clears the retained local-home statement when a @1.6 peer's frame omits the key: unknown is not still-local", () => {
+    // This case used to assert the OPPOSITE, on the reading that a `@1.6`
+    // omission is the indeterminate state the widening exists to express and
+    // that the retained statement is what the structural gates fall back on
+    // while it is indeterminate. That is right about the datum and wrong about
+    // the fallback, because of what the retained statement is FOR: every gate
+    // that reads it (`isLocalHomedEpicHandle`, the dispatch-time comment read
+    // and write gates, the attachment fetcher, the local-home registry) grants
+    // the local-home EXEMPTION on it - permission to spend the retained host
+    // credential with no cloud verdict. Falling back to a stale `local` there
+    // is absence licensing a positive claim, which is the one inference this
+    // minor exists to end; it just happens to point the other way.
+    //
+    // `currentOrRetainedDurabilityStatement` says the fallback holds "only
+    // while this cycle is silent", and the window it means is the beat between
+    // a reconnect clearing the cycle's own status and the next frame arriving.
+    // A frame that arrived and omitted the key is not that window.
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onCloudSyncStatus("connected", {
+      durability: "promoting",
+      pauseReason: undefined,
+      promotionState: "active",
+      localProtection: undefined,
+      freshness: undefined,
+      peerSpeaksDurabilityLegs: true,
+      artifactSync: undefined,
+    });
+    // Non-vacuity: the exemption really was granted off the retained pair
+    // before the omitting frame, so the assertion below is a withdrawal and
+    // not a state that was never reached.
+    expect(isLocalHomedEpicHandle(opened)).toBe(true);
+
+    handle().callbacks.onCloudSyncStatus("connected", {
+      ...NO_CLOUD_SYNC_DURABILITY,
+      peerSpeaksDurabilityLegs: true,
+      artifactSync: undefined,
+    });
+    expect(opened.store.getState()).toMatchObject({
+      durabilityStatus: null,
+      retainedDurabilityStatus: null,
+      retainedDurabilityPauseReason: null,
+      durabilityLegsNegotiated: true,
+      hasFreshCloudSyncStatus: true,
+    });
+    expect(isLocalHomedEpicHandle(opened)).toBe(false);
+
+    opened.dispose();
+  });
+
+  it("keeps the retained local-home statement across a reconnect that has produced no frame yet", () => {
+    // The window the fallback exists for, and the control that keeps the case
+    // above from reading as "the retained pair is useless". A re-subscribe
+    // clears the cycle's own durability while deliberately keeping the
+    // retained pair, and no status frame has arrived to say anything: the
+    // gates hold the last positive statement through that beat, so a
+    // local-homed epic's comment surface does not blink shut on every
+    // reconnect.
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onCloudSyncStatus("connected", {
+      durability: "promoting",
+      pauseReason: undefined,
+      promotionState: "active",
+      localProtection: undefined,
+      freshness: undefined,
+      peerSpeaksDurabilityLegs: true,
+      artifactSync: undefined,
+    });
+    expect(isLocalHomedEpicHandle(opened)).toBe(true);
+
+    // Down and back up. The transition INTO `open` is what runs
+    // `startedSubscriptionCycle`; no status frame has arrived on the new cycle
+    // yet, so this is the silence the fallback is for.
+    handle().callbacks.onConnectionStatus("connecting", null, true, null);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    expect(opened.store.getState()).toMatchObject({
+      durabilityStatus: null,
+      retainedDurabilityStatus: "promoting",
+    });
+    expect(isLocalHomedEpicHandle(opened)).toBe(true);
+
+    opened.dispose();
+  });
+
+  it("stores the additive promotionState fourth field from cloudSyncStatus as real wire handling", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handle().callbacks.onCloudSyncStatus("connected", {
+      durability: "promoting",
+      pauseReason: undefined,
+      promotionState: "active",
+      localProtection: undefined,
+      freshness: undefined,
+      peerSpeaksDurabilityLegs: true,
+      artifactSync: undefined,
+    });
+    expect(opened.store.getState()).toMatchObject({
+      durabilityStatus: "promoting",
+      durabilityPromotionState: "active",
+    });
+
+    handle().callbacks.onCloudSyncStatus("connected", {
+      durability: "promoting",
+      pauseReason: undefined,
+      promotionState: "pending",
+      localProtection: undefined,
+      freshness: undefined,
+      peerSpeaksDurabilityLegs: true,
+      artifactSync: undefined,
+    });
+    expect(opened.store.getState()).toMatchObject({
+      durabilityStatus: "promoting",
+      durabilityPromotionState: "pending",
+    });
+
+    opened.dispose();
+  });
+
+  it("clears isDirty when a snapshot's host state vector covers the dirty watermark", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    const initialHostDoc = new Y.Doc();
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", initialHostDoc),
+      emptySnapshot(),
+    );
+
+    opened.doc.getMap("epic").set("title", "Locally edited");
+
+    const hostDoc = new Y.Doc();
+    Y.applyUpdate(hostDoc, handle().applied[0]);
+    handle().applied.length = 0;
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      Y.encodeStateAsUpdate(hostDoc),
+    );
+
+    const state = opened.store.getState();
+    expect(state.isDirty).toBe(false);
+    expect(state.dirtyWatermarkStateVectorBase64).toBeNull();
+    expect(state.latestHostStateVectorBase64).toBe(stateVectorBase64(hostDoc));
+    expect(handle().applied.length).toBe(0);
+
+    opened.dispose();
+  });
+
+  it("keeps isDirty true and emits a reconcile update when a snapshot does not cover the dirty watermark", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    const hostDoc = new Y.Doc();
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      emptySnapshot(),
+    );
+
+    opened.doc.getMap("epic").set("title", "Locally edited");
+    const expectedReconcile = Y.encodeStateAsUpdate(
+      opened.doc,
+      Y.encodeStateVector(hostDoc),
+    );
+
+    handle().applied.length = 0;
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      emptySnapshot(),
+    );
+
+    const state = opened.store.getState();
+    expect(state.isDirty).toBe(true);
+    expect(state.latestHostStateVectorBase64).toBe(stateVectorBase64(hostDoc));
+    expect(handle().applied.length).toBe(1);
+    expect(handle().applied[0].length).toBeGreaterThan(2);
+    expectBytesEqual(handle().applied[0], expectedReconcile);
+
+    opened.dispose();
+  });
+
+  it("treats snapshot reconcile as a no-op when local state is already a subset of the host state vector", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    const hostDoc = new Y.Doc();
+    hostDoc.getMap("epic").set("title", "Server truth");
+    const snapshotBytes = Y.encodeStateAsUpdate(hostDoc);
+
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(buildMeta("editor", hostDoc), snapshotBytes);
+    handle().applied.length = 0;
+
+    handle().callbacks.onSnapshot(buildMeta("editor", hostDoc), snapshotBytes);
+
+    expect(opened.store.getState().isDirty).toBe(false);
+    expect(handle().applied.length).toBe(0);
+
+    opened.dispose();
+  });
+
+  it("does not clear isDirty on host-origin updates without convergence proof", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
+
+    opened.doc.getMap("epic").set("title", "Locally edited");
+
+    const remoteHostDoc = new Y.Doc();
+    remoteHostDoc.getMap("epic").set("server", "remote-only");
+    const remoteUpdate = Y.encodeStateAsUpdate(remoteHostDoc);
+    handle().callbacks.onUpdate(remoteUpdate);
+
+    const state = opened.store.getState();
+    expect(state.isDirty).toBe(true);
+    expect(state.latestHostStateVectorBase64).toBe(
+      stateVectorBase64(remoteHostDoc),
+    );
+
+    opened.dispose();
+  });
+
+  it("clears isDirty when a host-origin update establishes convergence", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
+
+    opened.doc.getMap("epic").set("title", "Locally edited");
+    const localUpdate = handle().applied[0];
+    handle().callbacks.onUpdate(localUpdate);
+
+    const hostDoc = new Y.Doc();
+    Y.applyUpdate(hostDoc, localUpdate);
+    const state = opened.store.getState();
+    expect(state.isDirty).toBe(false);
+    expect(state.dirtyWatermarkStateVectorBase64).toBeNull();
+    expect(state.latestHostStateVectorBase64).toBe(stateVectorBase64(hostDoc));
+
+    opened.dispose();
+  });
+
+  it("persists lastFocusedArtifactId to localStorage and restores it on remount", () => {
+    const { factory } = fakeFactory();
+    const first = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    first.store.getState().setLastFocusedArtifactId("art-42");
+    first.dispose();
+
+    const { factory: factory2 } = fakeFactory();
+    const second = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory2,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    expect(second.store.getState().lastFocusedArtifactId).toBe("art-42");
+    second.dispose();
+  });
+
+  it("scopes lastFocusedArtifactId persistence per userId", () => {
+    const { factory: factoryA } = fakeFactory();
+    const userA = openStoreForTest({
+      epicId: "epic-shared",
+      userId: "alice@example.com",
+      factories: {
+        streamClientFactory: factoryA,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    userA.store.getState().setLastFocusedArtifactId("art-alice");
+    userA.dispose();
+
+    const { factory: factoryB } = fakeFactory();
+    const userB = openStoreForTest({
+      epicId: "epic-shared",
+      userId: "bob@example.com",
+      factories: {
+        streamClientFactory: factoryB,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    // Bob has never focused anything - he must NOT see Alice's focus state.
+    expect(userB.store.getState().lastFocusedArtifactId).toBeNull();
+    userB.store.getState().setLastFocusedArtifactId("art-bob");
+    userB.dispose();
+
+    // Round-trip: Alice still sees her own focus value, Bob still sees his.
+    const { factory: factoryA2 } = fakeFactory();
+    const userAAgain = openStoreForTest({
+      epicId: "epic-shared",
+      userId: "alice@example.com",
+      factories: {
+        streamClientFactory: factoryA2,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    expect(userAAgain.store.getState().lastFocusedArtifactId).toBe("art-alice");
+    userAAgain.dispose();
+
+    const { factory: factoryB2 } = fakeFactory();
+    const userBAgain = openStoreForTest({
+      epicId: "epic-shared",
+      userId: "bob@example.com",
+      factories: {
+        streamClientFactory: factoryB2,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    expect(userBAgain.store.getState().lastFocusedArtifactId).toBe("art-bob");
+    userBAgain.dispose();
+  });
+
+  it("applies inbound awareness updates to the local Awareness", async () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-aware",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
+
+    // Build a peer Awareness and encode its update for this doc.
+    const { Awareness, encodeAwarenessUpdate } =
+      await import("y-protocols/awareness");
+    const peerDoc = new Y.Doc();
+    const peer = new Awareness(peerDoc);
+    peer.setLocalState({ userName: "Peer" });
+    const peerUpdate = encodeAwarenessUpdate(peer, [peer.clientID]);
+
+    handle().callbacks.onAwareness(peerUpdate);
+    const states = opened.awareness.getStates();
+    let saw = false;
+    states.forEach((value: unknown) => {
+      if (
+        typeof value === "object" &&
+        value !== null &&
+        (value as { userName?: string }).userName === "Peer"
+      ) {
+        saw = true;
+      }
+    });
+    expect(saw).toBe(true);
+
+    opened.dispose();
+  });
+
+  it("emits outbound awareness on local Awareness state change", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-out",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
+
+    opened.awareness.setLocalState({ cursor: 7 });
+    expect(handle().awarenessSent.length).toBeGreaterThan(0);
+
+    opened.dispose();
+  });
+
+  it("does not re-emit inbound awareness back out through the stream (no-loop)", async () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-loop",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
+
+    const { Awareness, encodeAwarenessUpdate } =
+      await import("y-protocols/awareness");
+    const peerDoc = new Y.Doc();
+    const peer = new Awareness(peerDoc);
+    peer.setLocalState({ userName: "Remote" });
+    const peerUpdate = encodeAwarenessUpdate(peer, [peer.clientID]);
+
+    const before = handle().awarenessSent.length;
+    handle().callbacks.onAwareness(peerUpdate);
+    const after = handle().awarenessSent.length;
+    expect(after).toBe(before);
+
+    opened.dispose();
+  });
+
+  it("dispose closes the underlying stream client exactly once", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-dispose",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    expect(handle().closeCount).toBe(0);
+    opened.dispose();
+    expect(handle().closeCount).toBe(1);
+    // Idempotent.
+    opened.dispose();
+    expect(handle().closeCount).toBe(1);
+  });
+
+  it("requestFreshSnapshot rebinds the stream and clears unsynced local replica state", () => {
+    const { factory, handles } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-refresh",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handles()[0].callbacks.onConnectionStatus("open", null, true, null);
+    handles()[0].callbacks.onSnapshot(
+      buildMeta("editor", null),
+      emptySnapshot(),
+    );
+    opened.doc.getMap("epic").set("title", "Local only");
+
+    opened.requestFreshSnapshot();
+
+    expect(handles()[0].closeCount).toBe(1);
+    expect(handles().length).toBe(2);
+    expect(opened.store.getState().snapshotLoaded).toBe(false);
+    expect(opened.store.getState().connectionStatus).toBe("connecting");
+    expect(opened.store.getState().isDirty).toBe(false);
+    expect(opened.store.getState().dirtyWatermarkStateVectorBase64).toBeNull();
+    expect(opened.store.getState().latestHostStateVectorBase64).toBeNull();
+    expect(opened.doc.getMap("epic").get("title")).toBeUndefined();
+
+    const donor = new Y.Doc();
+    donor.getMap("epic").set("title", "Server truth");
+    const snapshot = Y.encodeStateAsUpdate(donor);
+    handles()[1].callbacks.onConnectionStatus("open", null, true, null);
+    handles()[1].callbacks.onSnapshot(buildMeta("editor", null), snapshot);
+
+    expect(opened.doc.getMap("epic").get("title")).toBe("Server truth");
+
+    opened.dispose();
+  });
+
+  it("stops forwarding awareness updates after dispose", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-awareness-dispose",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
+
+    opened.awareness.setLocalState({ cursor: 1 });
+    const beforeDispose = handle().awarenessSent.length;
+    opened.dispose();
+    opened.awareness.setLocalState({ cursor: 2 });
+
+    expect(handle().awarenessSent.length).toBe(beforeDispose);
+  });
+
+  it("invokes onAuthError and surfaces the error when the host closes the stream with UNAUTHORIZED", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-unauth",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handle().callbacks.onConnectionStatus(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code: "UNAUTHORIZED",
+          reason: "no token cached for user",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      },
+      true,
+      null,
+    );
+
+    expect(opened.store.getState().snapshotFetchError?.code).toBe(
+      "UNAUTHORIZED",
+    );
+    // A terminal closed/UNAUTHORIZED (the stream gave up after its own
+    // revalidation) surfaces an error rather than leaving a silent "closed".
+    expect(opened.store.getState().snapshotFetchError).toEqual({
+      code: "UNAUTHORIZED",
+      message: "no token cached for user",
+      upgradeGuidance: null,
+    });
+    opened.dispose();
+  });
+
+  it("does not invoke onAuthError on caller-initiated close or non-UNAUTHORIZED fatal errors", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-unauth-negative",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handle().callbacks.onConnectionStatus(
+      "closed",
+      { kind: "caller" },
+      true,
+      null,
+    );
+    handle().callbacks.onConnectionStatus(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code: "INCOMPATIBLE",
+          reason: "schema mismatch",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      },
+      true,
+      null,
+    );
+
+    expect(opened.store.getState().snapshotFetchError?.code).not.toBe(
+      "UNAUTHORIZED",
+    );
+    opened.dispose();
+  });
+
+  // `ROOM_UNINITIALIZED` carries a host-authored `reason` aimed at a log line.
+  // The renderer substitutes copy for exactly that one terminal code; the
+  // UNAUTHORIZED test above is the other half of this guard - it pins that an
+  // unmapped code still surfaces `reason` verbatim, so a mapping that swallowed
+  // every code would fail there rather than pass here.
+  it("renders copy instead of the raw host reason for a terminal ROOM_UNINITIALIZED close", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-room_uninitialized",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handle().callbacks.onConnectionStatus(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code: "ROOM_UNINITIALIZED",
+          reason: "tiptap room uninitialized for epic-room-1",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      },
+      true,
+      null,
+    );
+
+    const error = opened.store.getState().snapshotFetchError;
+    expect(error).toEqual({
+      code: "ROOM_UNINITIALIZED",
+      message:
+        "This epic cannot be opened because its collaboration room was never initialized.",
+      upgradeGuidance: null,
+    });
+    // Copy replaces the message, never the discriminant.
+    expect(error?.code).toBe("ROOM_UNINITIALIZED");
+    opened.dispose();
+  });
+
+  // Cloud sync is on every plan, so `ENTITLEMENT_REQUIRED` has no copy of its
+  // own: a host that still sends it gets the same verbatim `reason` as any
+  // other unmapped code, not a sentence about the account's plan.
+  it("surfaces the host's own reason for a terminal ENTITLEMENT_REQUIRED close", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-entitlement_required",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handle().callbacks.onConnectionStatus(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code: "ENTITLEMENT_REQUIRED",
+          reason: "free tier has no cloud sync",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      },
+      true,
+      null,
+    );
+
+    expect(opened.store.getState().snapshotFetchError).toEqual({
+      code: "ENTITLEMENT_REQUIRED",
+      message: "free tier has no cloud sync",
+      upgradeGuidance: null,
+    });
+    opened.dispose();
+  });
+
+  // ── B6: artifact-room-scoped frame handling ──────────────────────────────────────
+
+  function seedRootArtifactWithArtifactRoom(
+    targetDoc: Y.Doc,
+    artifactId: string,
+    artifactRoomId: string,
+  ): void {
+    const epicMap = targetDoc.getMap<unknown>("epic");
+    let artifacts = epicMap.get("artifacts");
+    if (!(artifacts instanceof Y.Map)) {
+      artifacts = new Y.Map<unknown>();
+      epicMap.set("artifacts", artifacts);
+    }
+    const entry = new Y.Map<unknown>();
+    entry.set("id", artifactId);
+    entry.set("kind", "spec");
+    entry.set("title", "Spec One");
+    entry.set("parentId", null);
+    entry.set("createdAt", 0);
+    entry.set("updatedAt", 0);
+    entry.set("artifactRoomId", artifactRoomId);
+    (artifacts as Y.Map<unknown>).set(artifactId, entry);
+  }
+
+  /**
+   * Take a lease and read the fragment once the body is RESIDENT.
+   *
+   * The `await` is the boundary, in one place. A lease now starts a
+   * `body/materialize` call across the bridge, so the doc is installed a few
+   * microtasks later. This suite runs on `openStoreForTest`, which spawns
+   * through `spawnEpicRuntimeWorker` over a `structuredClone`-ing pipe, so the
+   * boundary here is the REAL one - not a local port lifting a synchronous
+   * answer into a promise.
+   *
+   * That distinction is why this paragraph was corrected. It used to name
+   * `createInProcessRuntimePort` as what these leases resolve through. Its
+   * substance was right (a lease is async) and its subject was wrong, and it
+   * read - in the suite a reader is most likely to check - as evidence that the
+   * in-process port was live. That port has since been deleted, so the name
+   * pointed at nothing at all.
+   *
+   * Drained by POLLING microtasks rather than by `setTimeout` (suites running
+   * fake timers would never fire it) or a fixed number of `await`s (a guess
+   * about the promise chain's depth).
+   */
+  async function drainUntil<T>(read: () => T | null): Promise<T | null> {
+    for (let tick = 0; tick < 30; tick += 1) {
+      const value = read();
+      if (value !== null) return value;
+      await Promise.resolve();
+    }
+    return read();
+  }
+
+  /**
+   * Artifact-room docs are only materialized while something leases them, so
+   * every fragment reader in these tests stands in for a mounted editor. The
+   * lease is intentionally not released: the room must stay hot for the rest
+   * of the test, exactly as it would while the editor is on screen.
+   */
+  async function leasedFragment(
+    opened: OpenEpicStoreHandle,
+    artifactId: string,
+  ): Promise<Y.XmlFragment | null> {
+    opened.store.getState().acquireArtifactBodyLease(artifactId);
+    return drainUntil(() =>
+      opened.store.getState().getArtifactFragment(artifactId),
+    );
+  }
+
+  async function leasedAwareness(
+    opened: OpenEpicStoreHandle,
+    artifactId: string,
+  ): Promise<Awareness | null> {
+    opened.store.getState().acquireArtifactBodyLease(artifactId);
+    return drainUntil(() =>
+      opened.store.getState().getArtifactBodyAwareness(artifactId),
+    );
+  }
+
+  it("a room reported READY before the snapshot reaches its artifacts when they arrive, with no second room frame", () => {
+    // The ordering the publish-time fan-out exists for. A `@1` room reports its
+    // state INDEPENDENTLY of any snapshot - that is what `LeaseGrant`'s
+    // `"awaiting-seed"` arm is about - so a room frame legitimately lands before
+    // the snapshot that says which artifacts live in it. The host emits
+    // availability on TRANSITION, not on demand, so a client that dropped that
+    // frame would never be told again.
+    //
+    // Ablation: derive the artifact-keyed map only when a ROOM frame arrives
+    // (drop `republishAvailability` from the snapshot path) and this test is the
+    // one that fails - the artifact stays `unavailable` forever with a room the
+    // host has already called ready.
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    handle().callbacks.onConnectionStatus("open", null, false, null);
+
+    // ROOM FIRST. Nothing names it yet, so nothing is publishable.
+    handle().callbacks.onArtifactRoomState("artifact-room-0", "ready");
+    expect(opened.store.getState().artifactRooms.stateByArtifactId).toEqual({});
+
+    // SNAPSHOT SECOND, naming two artifacts in that one room - and one in a
+    // room the host has said nothing about.
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    seedRootArtifactWithArtifactRoom(donor, "art-2", "artifact-room-0");
+    seedRootArtifactWithArtifactRoom(donor, "art-3", "artifact-room-silent");
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+
+    // No further room frame. The retained value fans out one-to-MANY over every
+    // artifact that named the room.
+    const state = opened.store.getState();
+    expect(state.artifactRooms.stateByArtifactId["art-1"]).toBe("ready");
+    expect(state.artifactRooms.stateByArtifactId["art-2"]).toBe("ready");
+    expect(state.getArtifactBodyAvailability("art-1")).toBe("ready");
+    expect(state.getArtifactBodyAvailability("art-2")).toBe("ready");
+    // An artifact whose room the host has never mentioned stays unavailable -
+    // absence is not readiness.
+    expect(state.artifactRooms.stateByArtifactId["art-3"]).toBeUndefined();
+    expect(state.getArtifactBodyAvailability("art-3")).toBe("unavailable");
+
+    opened.dispose();
+  });
+
+  it("resolves an artifact body fragment from the artifact-room doc seeded by onArtifactRoomSnapshot", async () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    // Build a donor with one artifact pointing at artifact-room-0.
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+
+    // Fragment is unavailable until artifactRoomSnapshot lands.
+    expect(opened.store.getState().artifacts.byId["art-1"].artifactRoomId).toBe(
+      "artifact-room-0",
+    );
+    expect(opened.store.getState().getArtifactFragment("art-1")).toBeNull();
+    expect(opened.store.getState().getArtifactBodyAvailability("art-1")).toBe(
+      "unavailable",
+    );
+
+    // Host ships an empty artifact-room doc snapshot for artifact-room-0.
+    const artifactRoomDoc = new Y.Doc();
+    artifactRoomDoc.getXmlFragment("artifact-body:art-1").insert(0, []);
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      Y.encodeStateAsUpdate(artifactRoomDoc),
+      stateVectorBase64(artifactRoomDoc),
+    );
+
+    const state = opened.store.getState();
+    // Keyed by ARTIFACT, not by room: `art-1` lives in `artifact-room-0`, and
+    // the room id is a legacy-arm-private fact that no longer reaches the
+    // projection.
+    expect(state.artifactRooms.stateByArtifactId["art-1"]).toBe("ready");
+    expect(state.getArtifactBodyAvailability("art-1")).toBe("ready");
+    const fragment = await leasedFragment(opened, "art-1");
+    expect(fragment).not.toBeNull();
+    // The fragment must live in the artifact-room doc, not in the root Epic doc, so
+    // editor binding does not accidentally mutate root metadata.
+    expect(fragment?.doc).not.toBe(opened.doc);
+
+    opened.dispose();
+  });
+
+  it("surfaces unavailable / retrying artifactRoom states via onArtifactRoomState without losing root metadata", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    const donor = new Y.Doc();
+    donor.getMap("epic").set("title", "Stays");
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+
+    handle().callbacks.onArtifactRoomState("artifact-room-0", "unavailable");
+    expect(opened.store.getState().getArtifactBodyAvailability("art-1")).toBe(
+      "unavailable",
+    );
+    // Root metadata must remain stable even when the artifactRoom is unavailable.
+    expect(opened.doc.getMap("epic").get("title")).toBe("Stays");
+
+    handle().callbacks.onArtifactRoomState("artifact-room-0", "retrying");
+    expect(opened.store.getState().getArtifactBodyAvailability("art-1")).toBe(
+      "retrying",
+    );
+    expect(opened.store.getState().getArtifactFragment("art-1")).toBeNull();
+
+    opened.dispose();
+  });
+
+  it("resets host dirtiness to unknown until an automatic reconnect receives its atomic dirty snapshot", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onDirtySnapshot(false, [
+      { artifactRoomId: "artifact-room-0", dirty: true },
+    ]);
+    expect(opened.store.getState().artifactRoomDirtyByArtifactRoomId).toEqual({
+      "artifact-room-0": true,
+    });
+    expect(opened.store.getState().rootDirty).toBe(false);
+    expect(opened.store.getState().hasDirtySnapshotForOpenCycle).toBe(true);
+
+    // A reconnect must not carry the previous cycle's dirty state forward,
+    // but its empty map is unknown until the new atomic snapshot arrives.
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+
+    expect(opened.store.getState().artifactRoomDirtyByArtifactRoomId).toEqual(
+      {},
+    );
+    expect(opened.store.getState().rootDirty).toBeNull();
+    expect(opened.store.getState().hasDirtySnapshotForOpenCycle).toBe(false);
+
+    // The room became clean while the stream was down. The authoritative
+    // snapshot explicitly establishes that the empty map means clean.
+    handle().callbacks.onDirtySnapshot(false, []);
+    expect(opened.store.getState().rootDirty).toBe(false);
+    expect(opened.store.getState().hasDirtySnapshotForOpenCycle).toBe(true);
+
+    opened.dispose();
+  });
+
+  it("does not let a root-dirty delta stand in for the atomic snapshot", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-root-dirty-delta",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onRootDirty(false);
+
+    expect(opened.store.getState().rootDirty).toBe(false);
+    expect(opened.store.getState().hasDirtySnapshotForOpenCycle).toBe(false);
+
+    opened.dispose();
+  });
+
+  it("forwards artifact-room doc edits as outbound artifactRoomApplyUpdate frames keyed by artifactRoomId", async () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+    const artifactRoomDoc = new Y.Doc();
+    artifactRoomDoc.getXmlFragment("artifact-body:art-1").insert(0, []);
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      Y.encodeStateAsUpdate(artifactRoomDoc),
+      stateVectorBase64(artifactRoomDoc),
+    );
+
+    const fragment = await leasedFragment(opened, "art-1");
+    expect(fragment).not.toBeNull();
+    if (fragment === null) throw new Error("missing fragment");
+    const fragmentDoc = fragment.doc;
+    if (fragmentDoc === null) throw new Error("missing fragment doc");
+
+    // Mutate the artifactRoom's own doc so the store's update listener fires the
+    // outbound `artifactRoomApplyUpdate` route.
+    fragmentDoc.transact(() => {
+      fragmentDoc.getMap("touch").set("k", "v");
+    });
+    // The edit is on MAIN's doc; the lane that sends it is in the worker. The
+    // outbound frame is a `body/update` round trip away, not the next line.
+    await settle(opened);
+
+    expect(handle().artifactRoomApplied.length).toBeGreaterThan(0);
+    expect(handle().artifactRoomApplied[0].artifactRoomId).toBe(
+      "artifact-room-0",
+    );
+    // Host-origin artifactRoom updates from `onArtifactRoomUpdate` MUST NOT be echoed back.
+    handle().artifactRoomApplied.length = 0;
+    handle().callbacks.onArtifactRoomUpdate(
+      "artifact-room-0",
+      new Uint8Array([0, 0]),
+      stateVectorBase64(artifactRoomDoc),
+    );
+    expect(handle().artifactRoomApplied.length).toBe(0);
+
+    opened.dispose();
+  });
+
+  it("applies inbound artifactRoomAwareness to a artifact-room-scoped Awareness instance, not the root awareness", async () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+    const artifactRoomDoc = new Y.Doc();
+    artifactRoomDoc.getXmlFragment("artifact-body:art-1").insert(0, []);
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      Y.encodeStateAsUpdate(artifactRoomDoc),
+      stateVectorBase64(artifactRoomDoc),
+    );
+
+    const artifactRoomAwareness = await leasedAwareness(opened, "art-1");
+    expect(artifactRoomAwareness).not.toBeNull();
+    if (artifactRoomAwareness === null)
+      throw new Error("missing artifactRoom awareness");
+
+    // Build a synthetic awareness frame from a separate Awareness producer
+    // so we can assert it lands on the artifactRoom instance and not the root.
+    const { Awareness, encodeAwarenessUpdate } =
+      await import("y-protocols/awareness");
+    const producer = new Awareness(new Y.Doc());
+    producer.setLocalState({ user: { name: "remote-on-artifact-room" } });
+    const frame = encodeAwarenessUpdate(producer, [producer.clientID]);
+
+    handle().callbacks.onArtifactRoomAwareness("artifact-room-0", frame);
+
+    // ArtifactRoom awareness has the remote state.
+    const artifactRoomStates = Array.from(
+      artifactRoomAwareness.getStates().entries(),
+    );
+    expect(
+      artifactRoomStates.some(
+        ([, value]) =>
+          (value as { user?: { name?: string } }).user?.name ===
+          "remote-on-artifact-room",
+      ),
+    ).toBe(true);
+    // Root awareness was NOT touched by the artifactRoom frame.
+    const rootStates = Array.from(opened.awareness.getStates().entries());
+    expect(
+      rootStates.some(
+        ([, value]) =>
+          (value as { user?: { name?: string } }).user?.name ===
+          "remote-on-artifact-room",
+      ),
+    ).toBe(false);
+
+    opened.dispose();
+  });
+
+  it("emits outbound artifactRoom awareness keyed by artifactRoomId when the artifactRoom awareness changes locally", async () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      emptySnapshot(),
+      stateVectorBase64(new Y.Doc()),
+    );
+
+    const artifactRoomAwareness = await leasedAwareness(opened, "art-1");
+    expect(artifactRoomAwareness).not.toBeNull();
+    if (artifactRoomAwareness === null)
+      throw new Error("missing artifactRoom awareness");
+
+    // Reset the root awareness send buffer so the open-status emit on
+    // initial connection does not pollute the assertion: we want to know
+    // that the artifact-room-awareness setLocalState below routes ONLY through the
+    // artifactRoom channel, not the root.
+    handle().awarenessSent.length = 0;
+    handle().artifactRoomAwarenessSent.length = 0;
+
+    artifactRoomAwareness.setLocalState({ user: { name: "local-cursor" } });
+
+    expect(handle().artifactRoomAwarenessSent.length).toBeGreaterThan(0);
+    expect(handle().artifactRoomAwarenessSent[0].artifactRoomId).toBe(
+      "artifact-room-0",
+    );
+    // Same local change must NOT be sent on the root awareness channel.
+    expect(handle().awarenessSent.length).toBe(0);
+
+    opened.dispose();
+  });
+
+  it("queues artifact-room-body local edits during reconnect and replays them after the fresh root snapshot", async () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      emptySnapshot(),
+      stateVectorBase64(new Y.Doc()),
+    );
+
+    const fragment = await leasedFragment(opened, "art-1");
+    if (fragment === null) throw new Error("missing fragment");
+    const fragmentDoc = fragment.doc;
+    if (fragmentDoc === null) throw new Error("missing fragment doc");
+
+    // Drop into a non-open state and edit locally - the update must be
+    // queued, not silently lost.
+    handle().callbacks.onConnectionStatus("connecting", null, true, null);
+    handle().artifactRoomApplied.length = 0;
+    fragmentDoc.transact(() => {
+      fragmentDoc.getMap("offline").set("k", "v");
+    });
+    expect(handle().artifactRoomApplied.length).toBe(0);
+
+    // Raw reconnect open is only transport readiness; it must not replay
+    // artifactRoom writes until the fresh root snapshot confirms write permission.
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    expect(handle().artifactRoomApplied.length).toBe(0);
+
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", donor),
+      Y.encodeStateAsUpdate(donor),
+    );
+    expect(handle().artifactRoomApplied.length).toBeGreaterThan(0);
+    expect(handle().artifactRoomApplied[0].artifactRoomId).toBe(
+      "artifact-room-0",
+    );
+
+    opened.dispose();
+  });
+
+  it("does not flush queued artifact-room-body edits with a stale editor role when the reconnect snapshot names the retired viewer role", async () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      emptySnapshot(),
+      stateVectorBase64(new Y.Doc()),
+    );
+
+    const fragment = await leasedFragment(opened, "art-1");
+    if (fragment === null) throw new Error("missing fragment");
+    const fragmentDoc = fragment.doc;
+    if (fragmentDoc === null) throw new Error("missing fragment doc");
+
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
+    fragmentDoc.transact(() => {
+      fragmentDoc.getMap("offline").set("k", "v");
+    });
+
+    handle().artifactRoomApplied.length = 0;
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    expect(handle().artifactRoomApplied.length).toBe(0);
+
+    handle().callbacks.onSnapshot(
+      buildMeta("viewer", donor),
+      Y.encodeStateAsUpdate(donor),
+    );
+    expect(opened.store.getState().permissionRole).toBeNull();
+    expect(handle().artifactRoomApplied.length).toBe(0);
+
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", donor),
+      Y.encodeStateAsUpdate(donor),
+    );
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      emptySnapshot(),
+      stateVectorBase64(new Y.Doc()),
+    );
+    expect(handle().artifactRoomApplied.length).toBe(0);
+    const refreshedFragment = await leasedFragment(opened, "art-1");
+    expect(refreshedFragment).not.toBeNull();
+    if (refreshedFragment === null)
+      throw new Error("missing refreshed fragment");
+    const refreshedFragmentDoc = refreshedFragment.doc;
+    if (refreshedFragmentDoc === null)
+      throw new Error("missing refreshed fragment doc");
+    expect(refreshedFragmentDoc.getMap("offline").get("k")).toBeUndefined();
+
+    opened.dispose();
+  });
+
+  it("clears queued artifact-room-body edits on access loss (fail-closed)", async () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      emptySnapshot(),
+      stateVectorBase64(new Y.Doc()),
+    );
+
+    const fragment = await leasedFragment(opened, "art-1");
+    if (fragment === null) throw new Error("missing fragment");
+    const fragmentDoc = fragment.doc;
+    if (fragmentDoc === null) throw new Error("missing fragment doc");
+
+    handle().callbacks.onConnectionStatus("connecting", null, true, null);
+    fragmentDoc.transact(() => {
+      fragmentDoc.getMap("offline").set("k", "v");
+    });
+
+    // Access lost - any queued local artifactRoom edits must be dropped.
+    handle().callbacks.onPermissionChanged(null);
+
+    // Even after reopen no queued edit should be sent: what matters is that no
+    // stale artifactRoomApplyUpdate is emitted for the queued edit.
+    handle().artifactRoomApplied.length = 0;
+
+    opened.dispose();
+  });
+
+  it("merges incoming artifactRoomSnapshot into the existing local artifactRoom replica without destroying offline edits", async () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+    const seedArtifactRoomDoc = new Y.Doc();
+    seedArtifactRoomDoc.getXmlFragment("artifact-body:art-1").insert(0, []);
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      Y.encodeStateAsUpdate(seedArtifactRoomDoc),
+      stateVectorBase64(seedArtifactRoomDoc),
+    );
+
+    const fragment = await leasedFragment(opened, "art-1");
+    if (fragment === null) throw new Error("missing fragment");
+    // Snapshot the artifact-room doc identity before the second snapshot so we can
+    // assert the editor's bound fragment was preserved (no remount).
+    const docBefore = fragment.doc;
+    expect(docBefore).not.toBeNull();
+
+    // Drop into reconnecting and apply a local body edit - this becomes
+    // the dirty divergence the merge path must preserve.
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
+    const fragmentDoc = fragment.doc;
+    if (fragmentDoc === null) throw new Error("missing fragment doc");
+    fragmentDoc.transact(() => {
+      fragmentDoc.getMap("offline").set("k", "v");
+    });
+
+    // Host now ships a fresh `artifactRoomSnapshot` for the SAME artifactRoom.
+    handle().artifactRoomApplied.length = 0;
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", donor),
+      Y.encodeStateAsUpdate(donor),
+    );
+    const refreshedArtifactRoomDoc = new Y.Doc();
+    refreshedArtifactRoomDoc
+      .getXmlFragment("artifact-body:art-1")
+      .insert(0, []);
+    refreshedArtifactRoomDoc.getMap("server").set("flag", true);
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      Y.encodeStateAsUpdate(refreshedArtifactRoomDoc),
+      stateVectorBase64(refreshedArtifactRoomDoc),
+    );
+
+    // Local replica must still hold the offline edit AND the new server
+    // map - the snapshot was merged, not replaced.
+    const fragmentAfter = await leasedFragment(opened, "art-1");
+    expect(fragmentAfter).not.toBeNull();
+    if (fragmentAfter === null) throw new Error("missing fragment after");
+    expect(fragmentAfter.doc).toBe(docBefore);
+    const fragmentAfterDoc = fragmentAfter.doc;
+    if (fragmentAfterDoc === null)
+      throw new Error("missing fragment-after doc");
+    expect(fragmentAfterDoc.getMap("offline").get("k")).toBe("v");
+    expect(fragmentAfterDoc.getMap("server").get("flag")).toBe(true);
+
+    // The store must have shipped a reconcile update so the host
+    // catches up to the offline edit; the offline-buffer queue is also
+    // drained because the reconcile subsumes its bytes.
+    expect(handle().artifactRoomApplied.length).toBeGreaterThan(0);
+    expect(handle().artifactRoomApplied[0].artifactRoomId).toBe(
+      "artifact-room-0",
+    );
+
+    opened.dispose();
+  });
+
+  it("keeps streaming artifact-room body edits to the host during a cloud-sync drop", async () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    // Cloud catch-up completes the first connect (connectionStatus → "open") so
+    // the drop below reads as a reconnect, not the bootstrap "connecting".
+    handle().callbacks.onCloudSyncStatus("connected", NO_CLOUD_SYNC_DURABILITY);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+    const seedArtifactRoomDoc = new Y.Doc();
+    seedArtifactRoomDoc.getXmlFragment("artifact-body:art-1").insert(0, []);
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      Y.encodeStateAsUpdate(seedArtifactRoomDoc),
+      stateVectorBase64(seedArtifactRoomDoc),
+    );
+
+    const fragment = await leasedFragment(opened, "art-1");
+    if (fragment === null) throw new Error("missing fragment");
+    const fragmentDoc = fragment.doc;
+    if (fragmentDoc === null) throw new Error("missing fragment doc");
+
+    // Host's cloud link drops; the renderer↔host transport stays open, so
+    // the pill shows reconnecting...
+    handle().callbacks.onCloudSyncStatus(
+      "disconnected",
+      NO_CLOUD_SYNC_DURABILITY,
+    );
+    expect(opened.store.getState().connectionStatus).toBe("reconnecting");
+
+    // ...but a body edit must stream straight to the local host (which
+    // durably persists + later syncs it), NOT sit in the artifact-room pending
+    // queue where a restart would discard it.
+    handle().artifactRoomApplied.length = 0;
+    fragmentDoc.transact(() => {
+      fragmentDoc.getMap("offline").set("k", "v");
+    });
+    expect(handle().artifactRoomApplied.length).toBeGreaterThan(0);
+    expect(handle().artifactRoomApplied[0].artifactRoomId).toBe(
+      "artifact-room-0",
+    );
+
+    opened.dispose();
+  });
+
+  it("defers the snapshot reconcile until a fresh editor root snapshot after reopen", async () => {
+    // Reproduces the reconnect ordering gap in reconnect-safe body edits:
+    // a fresh `artifactRoomSnapshot`
+    // can land while `connectionStatus` is still `connecting` /
+    // `reconnecting` (after the host transitions before the
+    // status frame is observed). The merge must preserve every local
+    // artifact-room-body edit produced during the reconnect window AND must
+    // retain an outbound propagation path so the fresh root snapshot after
+    // reopen ships a reconcile carrying those edits to the host.
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+    const seedArtifactRoomDoc = new Y.Doc();
+    seedArtifactRoomDoc.getXmlFragment("artifact-body:art-1").insert(0, []);
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      Y.encodeStateAsUpdate(seedArtifactRoomDoc),
+      stateVectorBase64(seedArtifactRoomDoc),
+    );
+
+    const fragment = await leasedFragment(opened, "art-1");
+    if (fragment === null) throw new Error("missing fragment");
+    const docBefore = fragment.doc;
+    expect(docBefore).not.toBeNull();
+
+    // ── 1. Stream transitions away from `open` and a local edit lands.
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
+    handle().artifactRoomApplied.length = 0;
+    const fragmentDoc = fragment.doc;
+    if (fragmentDoc === null) throw new Error("missing fragment doc");
+    fragmentDoc.transact(() => {
+      fragmentDoc.getMap("offline").set("k", "v");
+    });
+    // Edit is queued, not sent.
+    expect(handle().artifactRoomApplied.length).toBe(0);
+
+    // ── 2. A fresh `artifactRoomSnapshot` arrives BEFORE the status frame.
+    const refreshedArtifactRoomDoc = new Y.Doc();
+    refreshedArtifactRoomDoc
+      .getXmlFragment("artifact-body:art-1")
+      .insert(0, []);
+    refreshedArtifactRoomDoc.getMap("server").set("flag", true);
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      Y.encodeStateAsUpdate(refreshedArtifactRoomDoc),
+      stateVectorBase64(refreshedArtifactRoomDoc),
+    );
+    // Snapshot must NOT ship a reconcile while the stream is not open
+    // - that would race the transport's open transition.
+    expect(handle().artifactRoomApplied.length).toBe(0);
+    // …and must NOT remount the artifact-room doc while the local replica still
+    // holds dirty offline edits.
+    const fragmentAfterSnapshot = await leasedFragment(opened, "art-1");
+    expect(fragmentAfterSnapshot).not.toBeNull();
+    if (fragmentAfterSnapshot === null)
+      throw new Error("missing fragment after snapshot");
+    expect(fragmentAfterSnapshot.doc).toBe(docBefore);
+    const fragmentAfterSnapshotDoc = fragmentAfterSnapshot.doc;
+    if (fragmentAfterSnapshotDoc === null)
+      throw new Error("missing fragment-after-snapshot doc");
+    // Local body content survives the merge alongside the new server map.
+    expect(fragmentAfterSnapshotDoc.getMap("offline").get("k")).toBe("v");
+    expect(fragmentAfterSnapshotDoc.getMap("server").get("flag")).toBe(true);
+
+    // ── 3. Stream reopens - raw open alone must not flush.
+    //
+    // Acceptance: the outbound surface after
+    // the fresh editor root snapshot carries EXACTLY one `artifactRoomApplyUpdate`
+    // for the correct `artifactRoomId`. That single frame is the snapshot-derived
+    // reconcile; it must subsume any locally-buffered edits captured during
+    // the reconnect window so the queue is not double-shipped alongside the
+    // reconcile.
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    expect(handle().artifactRoomApplied).toHaveLength(0);
+
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", donor),
+      Y.encodeStateAsUpdate(donor),
+    );
+    expect(handle().artifactRoomApplied).toHaveLength(1);
+    expect(handle().artifactRoomApplied[0].artifactRoomId).toBe(
+      "artifact-room-0",
+    );
+    // The reconcile carries the offline edit the host has not yet
+    // observed. Apply it to a fresh copy of the host's snapshot view
+    // and assert the offline map round-trips. This proves the single
+    // outbound frame is sufficient - no retained `pendingUpdates`
+    // queue is required after the snapshot merge.
+    const hostReplay = new Y.Doc();
+    Y.applyUpdate(hostReplay, Y.encodeStateAsUpdate(refreshedArtifactRoomDoc));
+    Y.applyUpdate(hostReplay, handle().artifactRoomApplied[0].bytes);
+    expect(hostReplay.getMap("offline").get("k")).toBe("v");
+
+    opened.dispose();
+  });
+
+  it("does not send a stale reconcile after a null permission revoke between snapshot-while-not-open and reopen", async () => {
+    // A full revoke (`permissionRole === null`) goes straight through
+    // `clearAllPendingArtifactRoomUpdates`. The deferred reconcile stashed
+    // during the reconnect window MUST be discarded so a subsequent
+    // `onConnectionStatus("open")` on the same handle does not emit stale
+    // `artifactRoomApplyUpdate` bytes.
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+    const seedArtifactRoomDoc = new Y.Doc();
+    seedArtifactRoomDoc.getXmlFragment("artifact-body:art-1").insert(0, []);
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      Y.encodeStateAsUpdate(seedArtifactRoomDoc),
+      stateVectorBase64(seedArtifactRoomDoc),
+    );
+
+    const fragment = await leasedFragment(opened, "art-1");
+    if (fragment === null) throw new Error("missing fragment");
+    const fragmentDoc = fragment.doc;
+    if (fragmentDoc === null) throw new Error("missing fragment doc");
+
+    // Reconnecting → local edit → snapshot-while-not-open stashes a
+    // deferred reconcile.
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
+    fragmentDoc.transact(() => {
+      fragmentDoc.getMap("offline").set("k", "v");
+    });
+    handle().artifactRoomApplied.length = 0;
+    const refreshedArtifactRoomDoc = new Y.Doc();
+    refreshedArtifactRoomDoc
+      .getXmlFragment("artifact-body:art-1")
+      .insert(0, []);
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      Y.encodeStateAsUpdate(refreshedArtifactRoomDoc),
+      stateVectorBase64(refreshedArtifactRoomDoc),
+    );
+    expect(handle().artifactRoomApplied.length).toBe(0);
+
+    // Full revoke: the stream handle stays up - `accessLost` flips and the
+    // queue / pending reconcile must be cleared in place.
+    handle().callbacks.onPermissionChanged(null);
+    expect(opened.store.getState().accessLost).toBe(true);
+    expect(opened.store.getState().permissionRole).toBeNull();
+
+    // Reopening on the same handle (e.g. transport recovers before
+    // a permission re-grant) must not emit any artifactRoomApplyUpdate.
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    expect(handle().artifactRoomApplied).toHaveLength(0);
+
+    opened.dispose();
+  });
+
+  it("clears the per-artifact-room dirty signal when a artifactRoomUpdate's host state vector covers the local watermark", async () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+    const seedArtifactRoomDoc = new Y.Doc();
+    seedArtifactRoomDoc.getXmlFragment("artifact-body:art-1").insert(0, []);
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      Y.encodeStateAsUpdate(seedArtifactRoomDoc),
+      stateVectorBase64(seedArtifactRoomDoc),
+    );
+
+    const fragment = await leasedFragment(opened, "art-1");
+    if (fragment === null) throw new Error("missing fragment");
+    const fragmentDoc = fragment.doc;
+    if (fragmentDoc === null) throw new Error("missing fragment doc");
+
+    // Local edit while open: the store fan-outs artifactRoomApplyUpdate and marks
+    // the per-artifact-room dirty watermark.
+    handle().artifactRoomApplied.length = 0;
+    fragmentDoc.transact(() => {
+      fragmentDoc.getMap("local").set("typed", "yes");
+    });
+    expect(handle().artifactRoomApplied.length).toBe(1);
+    expect(opened.store.getState().isDirty).toBe(true);
+    expect(opened.isClean()).toBe(false);
+    const localUpdate = handle().artifactRoomApplied[0].bytes;
+
+    // Host echos the local update back as a artifactRoomUpdate; the included
+    // state vector must cover the local watermark and clear the dirty
+    // bit on the per-artifact-room replica.
+    const hostArtifactRoomDoc = new Y.Doc();
+    Y.applyUpdate(
+      hostArtifactRoomDoc,
+      Y.encodeStateAsUpdate(seedArtifactRoomDoc),
+    );
+    Y.applyUpdate(hostArtifactRoomDoc, localUpdate);
+    handle().callbacks.onArtifactRoomUpdate(
+      "artifact-room-0",
+      localUpdate,
+      stateVectorBase64(hostArtifactRoomDoc),
+    );
+    // The local edit's OWN `body/update` call is still outstanding at this
+    // point - posting it is what synchronously set `isDirty`, and only its
+    // OWN settlement (not this host ack, a separate round trip) releases
+    // that latch. See `pendingBodyUpdateCallCountByGeneration`'s own doc.
+    // `drainUntil`, not a fixed await count: this in-process worker's own
+    // round trip is exactly what `leasedFragment` above already needed it
+    // for, and a fixed tick count that happens to cover THAT round trip is
+    // not a promise it covers this one too.
+    await drainUntil(() => (opened.store.getState().isDirty ? null : true));
+    expect(opened.store.getState().isDirty).toBe(false);
+    expect(opened.isClean()).toBe(true);
+
+    // Doing another snapshot pass with the host's now-up-to-date view
+    // must NOT emit a redundant reconcile update, since coverage is
+    // already proven.
+    handle().artifactRoomApplied.length = 0;
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      Y.encodeStateAsUpdate(hostArtifactRoomDoc),
+      stateVectorBase64(hostArtifactRoomDoc),
+    );
+    expect(handle().artifactRoomApplied.length).toBe(0);
+
+    opened.dispose();
+  });
+
+  it("discardUnsyncedEdits clears public dirty state for artifact-room body edits", async () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+    const seedArtifactRoomDoc = new Y.Doc();
+    seedArtifactRoomDoc.getXmlFragment("artifact-body:art-1").insert(0, []);
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      Y.encodeStateAsUpdate(seedArtifactRoomDoc),
+      stateVectorBase64(seedArtifactRoomDoc),
+    );
+
+    const fragment = await leasedFragment(opened, "art-1");
+    if (fragment === null) throw new Error("missing fragment");
+    const fragmentDoc = fragment.doc;
+    if (fragmentDoc === null) throw new Error("missing fragment doc");
+
+    fragmentDoc.transact(() => {
+      fragmentDoc.getMap("local").set("typed", "yes");
+    });
+    expect(opened.store.getState().isDirty).toBe(true);
+    expect(opened.isClean()).toBe(false);
+
+    opened.store.getState().discardUnsyncedEdits();
+
+    // Same reason as the sibling test above: the local edit's own
+    // `body/update` call is still outstanding, and `discardUnsyncedEdits`
+    // does not touch that latch - only the call's own settlement does.
+    await drainUntil(() => (opened.store.getState().isDirty ? null : true));
+    expect(opened.store.getState().isDirty).toBe(false);
+    expect(opened.isClean()).toBe(true);
+
+    opened.dispose();
+  });
+
+  it("converges per-artifact-room dirty state when the host resolver acks a client-origin artifactRoomApplyUpdate by echoing the same bytes back with the post-apply host artifactRoom state vector", async () => {
+    // Models the fix for the Batch 3 convergence gap: the resolver suppresses
+    // the artifact-room doc's update observer for self-origin applies (to avoid a
+    // feedback loop), so without an explicit ack the GUI never observes
+    // host coverage of its own local artifactRoom edit. The contract-level fix is
+    // for the resolver to emit a `artifactRoomUpdate` keyed by artifactRoomId carrying
+    // `hostArtifactRoomStateVectorBase64` taken AFTER applying the inbound bytes.
+    // This test pins the GUI side: re-applying the same bytes is harmless
+    // (Yjs is idempotent), and the included covering state vector must
+    // clear the per-artifact-room dirty watermark so a follow-up snapshot does not
+    // ship a redundant reconcile.
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+    const seedArtifactRoomDoc = new Y.Doc();
+    seedArtifactRoomDoc.getXmlFragment("artifact-body:art-1").insert(0, []);
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      Y.encodeStateAsUpdate(seedArtifactRoomDoc),
+      stateVectorBase64(seedArtifactRoomDoc),
+    );
+
+    const fragment = await leasedFragment(opened, "art-1");
+    if (fragment === null) throw new Error("missing fragment");
+    const fragmentDoc = fragment.doc;
+    if (fragmentDoc === null) throw new Error("missing fragment doc");
+
+    // Step 1: GUI emits a local artifact-room-body edit while the stream is open.
+    // The store fans this out as a single outbound artifactRoomApplyUpdate frame
+    // and stamps the per-artifact-room dirty watermark with the post-edit state
+    // vector.
+    handle().artifactRoomApplied.length = 0;
+    fragmentDoc.transact(() => {
+      fragmentDoc.getMap("local").set("typed", "yes");
+    });
+    expect(handle().artifactRoomApplied).toHaveLength(1);
+    expect(handle().artifactRoomApplied[0].artifactRoomId).toBe(
+      "artifact-room-0",
+    );
+    expect(opened.store.getState().isDirty).toBe(true);
+    expect(opened.isClean()).toBe(false);
+    const sentBytes = handle().artifactRoomApplied[0].bytes;
+
+    // Step 2: simulate the host resolver applying that update against
+    // its artifact-room doc and acking back. The ack carries:
+    //   - the same binary payload (the resolver re-uses the inbound
+    //     bytes - idempotent under Yjs)
+    //   - hostArtifactRoomStateVectorBase64 taken AFTER the apply, so it covers
+    //     the GUI's local watermark
+    const hostArtifactRoomDoc = new Y.Doc();
+    Y.applyUpdate(
+      hostArtifactRoomDoc,
+      Y.encodeStateAsUpdate(seedArtifactRoomDoc),
+    );
+    Y.applyUpdate(hostArtifactRoomDoc, sentBytes);
+    const ackVector = stateVectorBase64(hostArtifactRoomDoc);
+    handle().callbacks.onArtifactRoomUpdate(
+      "artifact-room-0",
+      sentBytes,
+      ackVector,
+    );
+    // Same reason as the sibling tests above: the local edit's own
+    // `body/update` call is still outstanding, and only ITS OWN settlement
+    // releases the pending latch that posting it set.
+    await drainUntil(() => (opened.store.getState().isDirty ? null : true));
+    expect(opened.store.getState().isDirty).toBe(false);
+    expect(opened.isClean()).toBe(true);
+
+    // Local replica content is still consistent (the ack apply is a
+    // no-op under Yjs CRDT semantics).
+    const localFragment = await leasedFragment(opened, "art-1");
+    expect(localFragment).not.toBeNull();
+    if (localFragment === null) throw new Error("missing fragment after ack");
+    const localFragmentDoc = localFragment.doc;
+    if (localFragmentDoc === null)
+      throw new Error("missing local fragment doc");
+    expect(localFragmentDoc.getMap("local").get("typed")).toBe("yes");
+
+    // Step 3: indirect proof of dirty-watermark clearance - a follow-up
+    // artifactRoomSnapshot whose state vector merely matches the post-ack host
+    // view must NOT trigger a reconcile fan-out. If the watermark were
+    // still set, the store would ship sentBytes again to converge.
+    handle().artifactRoomApplied.length = 0;
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      Y.encodeStateAsUpdate(hostArtifactRoomDoc),
+      stateVectorBase64(hostArtifactRoomDoc),
+    );
+    expect(handle().artifactRoomApplied).toHaveLength(0);
+
+    opened.dispose();
+  });
+
+  it("preserves local edits when artifactRoomSnapshot arrives BEFORE the local edit (steady state)", async () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+    const seedArtifactRoomDoc = new Y.Doc();
+    seedArtifactRoomDoc.getXmlFragment("artifact-body:art-1").insert(0, []);
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      Y.encodeStateAsUpdate(seedArtifactRoomDoc),
+      stateVectorBase64(seedArtifactRoomDoc),
+    );
+
+    const fragmentBefore = await leasedFragment(opened, "art-1");
+    if (fragmentBefore === null) throw new Error("missing fragment");
+    const fragmentBeforeDoc = fragmentBefore.doc;
+    if (fragmentBeforeDoc === null)
+      throw new Error("missing fragment-before doc");
+
+    // Local edit AFTER the snapshot - the editor fan-outs an
+    // applyArtifactRoomUpdate. The fragment identity must NOT remount.
+    fragmentBeforeDoc.transact(() => {
+      fragmentBeforeDoc.getMap("typed-after-snapshot").set("k", "v");
+    });
+    expect(handle().artifactRoomApplied.length).toBe(1);
+
+    const fragmentAfter = await leasedFragment(opened, "art-1");
+    expect(fragmentAfter).toBe(fragmentBefore);
+
+    opened.dispose();
+  });
+
+  it("clears the per-artifact-room dirty watermark on access loss (fail-closed)", async () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    const donor = new Y.Doc();
+    seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+    const seedArtifactRoomDoc = new Y.Doc();
+    seedArtifactRoomDoc.getXmlFragment("artifact-body:art-1").insert(0, []);
+    handle().callbacks.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      Y.encodeStateAsUpdate(seedArtifactRoomDoc),
+      stateVectorBase64(seedArtifactRoomDoc),
+    );
+
+    const fragment = await leasedFragment(opened, "art-1");
+    if (fragment === null) throw new Error("missing fragment");
+    const fragmentDoc = fragment.doc;
+    if (fragmentDoc === null) throw new Error("missing fragment doc");
+
+    // Disconnect + edit so the dirty watermark is set without an
+    // outbound applyArtifactRoomUpdate landing.
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
+    fragmentDoc.transact(() => {
+      fragmentDoc.getMap("dirty").set("k", "v");
+    });
+
+    handle().artifactRoomApplied.length = 0;
+
+    // Access lost - fail-closed: the queue and the dirty watermark are
+    // dropped before the resolver re-snapshots.
+    handle().callbacks.onPermissionChanged(null);
+
+    // Reconnect + resnapshot naming the retired viewer role. Even if the new
+    // snapshot's state vector trails the prior watermark, we must not ship a
+    // stale local update - the store dropped the watermark on the loss.
+    const refreshed = handle().callbacks;
+    refreshed.onConnectionStatus("open", null, true, null);
+    refreshed.onSnapshot(buildMeta("viewer", null), emptySnapshot());
+    refreshed.onArtifactRoomSnapshot(
+      "artifact-room-0",
+      emptySnapshot(),
+      stateVectorBase64(new Y.Doc()),
+    );
+    expect(handle().artifactRoomApplied.length).toBe(0);
+
+    opened.dispose();
+  });
+
+  it("does not assume artifactRoom frames imply root metadata changes - artifactRoom state slice updates do not touch projected root slices", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-artifact-rooms",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    const donor = new Y.Doc();
+    donor.getMap("epic").set("title", "Title from snapshot");
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", null),
+      Y.encodeStateAsUpdate(donor),
+    );
+
+    const titleBefore = opened.store.getState().epic.title;
+    const treeBefore = opened.store.getState().tree;
+    handle().callbacks.onArtifactRoomState("artifact-room-x", "unavailable");
+    handle().callbacks.onArtifactRoomState("artifact-room-y", "retrying");
+
+    expect(opened.store.getState().epic.title).toBe(titleBefore);
+    expect(opened.store.getState().tree).toBe(treeBefore);
+    // RETAINED, NOT LEAKED. This snapshot carries a title and no artifacts, so
+    // nothing names either room - and the published slice is keyed by artifact,
+    // so it stays empty. The room-keyed values are held internally against the
+    // snapshot that may yet name them (a `@1` room reports its state
+    // independently of any snapshot, so frames in this order are ordinary), but
+    // a room no artifact ever claims must never reach a consumer.
+    expect(opened.store.getState().artifactRooms.stateByArtifactId).toEqual({});
+    expect(opened.store.getState().getArtifactBodyAvailability("art-1")).toBe(
+      "unavailable",
+    );
+
+    opened.dispose();
+  });
+
+  describe("migration slice", () => {
+    it("starts idle and transitions to running on migrationStarted + progress", () => {
+      const { factory, handle } = fakeFactory();
+      const opened = openStoreForTest({
+        epicId: "epic-a",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
+
+      expect(opened.store.getState().migration.status).toBe("idle");
+
+      handle().callbacks.onMigrationStarted();
+      expect(opened.store.getState().migration).toMatchObject({
+        status: "running",
+        phase: "prepare",
+      });
+
+      handle().callbacks.onMigrationProgress("upload", 3, 7);
+      expect(opened.store.getState().migration).toEqual({
+        status: "running",
+        phase: "upload",
+        chunksDone: 3,
+        chunksTotal: 7,
+      });
+
+      handle().callbacks.onMigrationProgress("finalize", 0, 1);
+      expect(opened.store.getState().migration.phase).toBe("finalize");
+
+      opened.dispose();
+    });
+
+    it("resets to idle once the post-migration snapshot lands", () => {
+      const { factory, handle } = fakeFactory();
+      const opened = openStoreForTest({
+        epicId: "epic-a",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
+
+      handle().callbacks.onMigrationStarted();
+      handle().callbacks.onMigrationProgress("upload", 5, 5);
+      expect(opened.store.getState().migration.status).toBe("running");
+
+      handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
+      expect(opened.store.getState().migration.status).toBe("idle");
+
+      opened.dispose();
+    });
+
+    it("transitions to error on onMigrationFailed and retries in-stream", () => {
+      const { factory, handle } = fakeFactory();
+      const opened = openStoreForTest({
+        epicId: "epic-a",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
+
+      // The host's `migrationFailed` path keeps the WS open, so the
+      // renderer's `currentStatus` is still "open". The retryMigration
+      // action must route through the existing stream client, not fall
+      // back to a session reopen. Simulate the open status explicitly.
+      handle().callbacks.onConnectionStatus("open", null, true, null);
+      handle().callbacks.onMigrationStarted();
+      handle().callbacks.onMigrationFailed("publishArtifactRoom timeout");
+
+      expect(opened.store.getState().migration).toEqual({
+        status: "error",
+        phase: null,
+        chunksDone: 0,
+        chunksTotal: 0,
+      });
+
+      opened.store.getState().retryMigration();
+      expect(handle().retryMigrationCount).toBe(1);
+      expect(opened.store.getState().migration.status).toBe("running");
+
+      opened.dispose();
+    });
+
+    it("transitions to not-allowed on onMigrationNotAllowed (terminal, not retryable)", () => {
+      const { factory, handle } = fakeFactory();
+      const opened = openStoreForTest({
+        epicId: "epic-a",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
+
+      handle().callbacks.onConnectionStatus("open", null, true, null);
+      handle().callbacks.onMigrationNotAllowed();
+
+      expect(opened.store.getState().migration).toEqual({
+        status: "not-allowed",
+        phase: null,
+        chunksDone: 0,
+        chunksTotal: 0,
+      });
+
+      // Retry is a no-op: there is no error state to recover and the host
+      // never started a migration for this caller.
+      opened.store.getState().retryMigration();
+      expect(handle().retryMigrationCount).toBe(0);
+      expect(opened.store.getState().migration.status).toBe("not-allowed");
+
+      opened.dispose();
+    });
+
+    it("transitions to error on a fatal close after migration started", () => {
+      const { factory, handle } = fakeFactory();
+      const opened = openStoreForTest({
+        epicId: "epic-a",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
+
+      handle().callbacks.onMigrationStarted();
+      handle().callbacks.onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: {
+            code: "INCOMPATIBLE",
+            reason: "boom",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
+        },
+        true,
+        null,
+      );
+
+      expect(opened.store.getState().migration).toEqual({
+        status: "error",
+        phase: null,
+        chunksDone: 0,
+        chunksTotal: 0,
+      });
+
+      opened.dispose();
+    });
+
+    it("routes UNAUTHORIZED fatal close to onAuthError even mid-migration (does not pin user on migration error)", () => {
+      // Pre-fix, a fatal close arriving while migration was running was
+      // unconditionally converted into the migration error modal - including
+      // UNAUTHORIZED - which trapped the user behind the modal instead of
+      // letting the re-auth flow take over.
+      const { factory, handle } = fakeFactory();
+      const opened = openStoreForTest({
+        epicId: "epic-mid-migration-unauth",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
+
+      handle().callbacks.onMigrationStarted();
+      handle().callbacks.onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: {
+            code: "UNAUTHORIZED",
+            reason: "token expired",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
+        },
+        true,
+        null,
+      );
+
+      expect(opened.store.getState().snapshotFetchError?.code).toBe(
+        "UNAUTHORIZED",
+      );
+      // Migration must NOT be flipped into the error modal - it stays in
+      // the running state the modal already showed, and the auth flow owns
+      // recovery from here.
+      expect(opened.store.getState().migration.status).toBe("running");
+
+      opened.dispose();
+    });
+
+    it("ignores fatal close when no migration ever started", () => {
+      const { factory, handle } = fakeFactory();
+      const opened = openStoreForTest({
+        epicId: "epic-a",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
+
+      handle().callbacks.onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: {
+            code: "INCOMPATIBLE",
+            reason: "boom",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
+        },
+        true,
+        null,
+      );
+
+      expect(opened.store.getState().migration.status).toBe("idle");
+
+      opened.dispose();
+    });
+
+    it("retryMigration after a fatal close reopens the session instead of sending a dead-WS frame", () => {
+      // The fatal-close path leaves the WS disposed - sending retryMigration
+      // on it would be silently dropped by ws-stream-client, trapping the
+      // user on the Prepare step. Verify the store falls back to a full
+      // requestFreshSnapshot (close + reopen) instead of in-stream retry.
+      const { factory, handle, handles } = fakeFactory();
+      const opened = openStoreForTest({
+        epicId: "epic-a",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
+
+      const initialStream = handle();
+      handle().callbacks.onMigrationStarted();
+      handle().callbacks.onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: {
+            code: "INCOMPATIBLE",
+            reason: "boom",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
+        },
+        true,
+        null,
+      );
+      expect(opened.store.getState().migration.status).toBe("error");
+
+      opened.store.getState().retryMigration();
+
+      // No in-stream retry frame on the dead client - would be dropped.
+      expect(initialStream.retryMigrationCount).toBe(0);
+      // The store closed the old client and opened a fresh one.
+      expect(initialStream.closeCount).toBe(1);
+      expect(handles()).toHaveLength(2);
+      expect(opened.store.getState().migration).toEqual({
+        status: "running",
+        phase: "prepare",
+        chunksDone: 0,
+        chunksTotal: 1,
+      });
+
+      opened.dispose();
+    });
+
+    it("retryMigration is a no-op when migration is not in error", () => {
+      const { factory, handle } = fakeFactory();
+      const opened = openStoreForTest({
+        epicId: "epic-a",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
+
+      opened.store.getState().retryMigration();
+      expect(handle().retryMigrationCount).toBe(0);
+
+      handle().callbacks.onMigrationStarted();
+      opened.store.getState().retryMigration();
+      expect(handle().retryMigrationCount).toBe(0);
+      expect(opened.store.getState().migration.status).toBe("running");
+
+      opened.dispose();
+    });
+  });
+
+  it("settles an in-flight attachment read when disposed without an abort", async () => {
+    const { factory } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    // Park a waiter on a hash that has not synced in yet, then dispose the
+    // session without firing the caller's abort signal - the path the
+    // registry's MRU prune takes. The promise must still resolve (null) and
+    // the waiter's observer must unbind, rather than dangling on the
+    // destroyed doc forever.
+    let settled = false;
+    const pending = opened.store
+      .getState()
+      .readAttachmentBytes("missing-hash")
+      .then((bytes) => {
+        settled = true;
+        return bytes;
+      });
+
+    opened.dispose();
+
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(settled).toBe(true);
+    expect(await pending).toBeNull();
+  });
+
+  it("synchronously reports attachment bytes in the local root replica", async () => {
+    const hostDoc = new Y.Doc();
+    hostDoc
+      .getMap("attachments")
+      .set("present-hash", new Uint8Array([1, 2, 3]));
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      Y.encodeStateAsUpdate(hostDoc),
+    );
+    // The READ is still synchronous - that is what this pins - but the FACT it
+    // reads is now published by the worker. The snapshot has to reach the
+    // replica and its hash set has to come back before the answer means
+    // anything; asserting one microtask early asks a projection that has not
+    // landed.
+    await settle(opened);
+
+    expect(opened.store.getState().hasAttachmentBytes("present-hash")).toBe(
+      true,
+    );
+    expect(opened.store.getState().hasAttachmentBytes("missing-hash")).toBe(
+      false,
+    );
+
+    opened.dispose();
+    hostDoc.destroy();
+  });
+
+  describe("sync-pill raw connection legs (hostTransportStatus / cloudSyncStatus / hasConnectedOnce)", () => {
+    it("keeps the optimistic cloud display value separate from fresh cloud proof", () => {
+      const { factory } = fakeFactory();
+      const opened = openStoreForTest({
+        epicId: "epic-legs-construct",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
+
+      const state = opened.store.getState();
+      expect(state.cloudSyncStatus).toBe("connected");
+      expect(state.hasFreshCloudSyncStatus).toBe(false);
+      expect(state.hasConnectedOnce).toBe(false);
+      expect(state.hostTransportStatus).toBe("connecting");
+      expect(state.connectionStatus).toBe("connecting");
+
+      opened.dispose();
+    });
+
+    it("publishes raw transport, cloud, and freshness legs across each open cycle", () => {
+      const { factory, handle } = fakeFactory();
+      const opened = openStoreForTest({
+        epicId: "epic-legs-lifecycle",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
+
+      // Transport opens before a current-cycle cloud status arrives. Preserve
+      // the historical functional `open` blend, but freshness remains false
+      // so the pill cannot treat this as cloud-ack proof.
+      handle().callbacks.onConnectionStatus("open", null, true, null);
+      let state = opened.store.getState();
+      expect(state.hostTransportStatus).toBe("open");
+      expect(state.cloudSyncStatus).toBe("connected");
+      expect(state.hasFreshCloudSyncStatus).toBe(false);
+      expect(state.hasConnectedOnce).toBe(false);
+      expect(state.connectionStatus).toBe("open");
+
+      // Genuine cloud connected frame latches hasConnectedOnce; the blend
+      // stays open.
+      handle().callbacks.onCloudSyncStatus(
+        "connected",
+        NO_CLOUD_SYNC_DURABILITY,
+      );
+      state = opened.store.getState();
+      expect(state.cloudSyncStatus).toBe("connected");
+      expect(state.hasFreshCloudSyncStatus).toBe(true);
+      expect(state.hasConnectedOnce).toBe(true);
+      expect(state.connectionStatus).toBe("open");
+
+      // A transport re-open preserves the established functional connection
+      // state while invalidating its cloud proof for the new cycle.
+      handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
+      state = opened.store.getState();
+      expect(state.hostTransportStatus).toBe("reconnecting");
+      expect(state.hasFreshCloudSyncStatus).toBe(true);
+      expect(state.hasConnectedOnce).toBe(true);
+      expect(state.connectionStatus).toBe("reconnecting");
+
+      handle().callbacks.onConnectionStatus("open", null, true, null);
+      state = opened.store.getState();
+      expect(state.hostTransportStatus).toBe("open");
+      expect(state.cloudSyncStatus).toBe("connected");
+      expect(state.hasFreshCloudSyncStatus).toBe(false);
+      expect(state.hasConnectedOnce).toBe(true);
+      expect(state.connectionStatus).toBe("open");
+
+      // A new cloud frame is the fresh proof for this cycle. When it reports
+      // a drop, the functional blend remains reconnecting as before.
+      handle().callbacks.onCloudSyncStatus(
+        "disconnected",
+        NO_CLOUD_SYNC_DURABILITY,
+      );
+      state = opened.store.getState();
+      expect(state.hostTransportStatus).toBe("open");
+      expect(state.cloudSyncStatus).toBe("disconnected");
+      expect(state.hasFreshCloudSyncStatus).toBe(true);
+      expect(state.connectionStatus).toBe("reconnecting");
+
+      opened.dispose();
+    });
+
+    it("requestFreshSnapshot invalidates cloud acknowledgement for its new cycle", () => {
+      const { factory, handle } = fakeFactory();
+      const opened = openStoreForTest({
+        epicId: "epic-legs-refresh",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
+
+      handle().callbacks.onConnectionStatus("open", null, true, null);
+      handle().callbacks.onCloudSyncStatus(
+        "connected",
+        NO_CLOUD_SYNC_DURABILITY,
+      );
+      expect(opened.store.getState().hasConnectedOnce).toBe(true);
+
+      opened.requestFreshSnapshot();
+
+      const state = opened.store.getState();
+      expect(state.hostTransportStatus).toBe("connecting");
+      expect(state.cloudSyncStatus).toBe("connected");
+      expect(state.hasFreshCloudSyncStatus).toBe(false);
+      expect(state.hasConnectedOnce).toBe(false);
+      expect(state.connectionStatus).toBe("connecting");
+
+      opened.dispose();
+    });
+  });
+
+  // ── Artifact-room materialization leases ────────────────────────────────
+  //
+  // A Y.Doc retains one `Item` struct per edit for its whole lifetime, so a
+  // room an agent has rewritten repeatedly is far larger materialized than
+  // encoded. These tests pin the contract that keeps that cost proportional
+  // to what is actually on screen: rooms arrive cold, a lease materializes
+  // one, and losing the lease eventually gives the memory back - but never
+  // while the replica still holds edits the host has not acknowledged.
+  describe("artifact-room materialization leases", () => {
+    /** Mirrors `MAX_HOT_ARTIFACT_ROOMS` in the store, so the cap test scales
+     * with it instead of hard-coding a room count. */
+    const MAX_HOT_ARTIFACT_ROOMS_FOR_TESTS = 32;
+
+    async function openWithReadyRoom(
+      epicId: string,
+      bodyText: string,
+    ): Promise<{
+      readonly opened: OpenedStoreForTest;
+      readonly handle: () => FakeStreamHandle;
+    }> {
+      const { factory, handle } = fakeFactory();
+      const opened = openStoreForTest({
+        epicId,
+        userId: null,
+        factories: { streamClientFactory: factory, laneSelection: null },
+        writeCommand: null,
+      });
+      const donor = new Y.Doc();
+      seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+      handle().callbacks.onConnectionStatus("open", null, true, null);
+      handle().callbacks.onSnapshot(
+        buildMeta("editor", null),
+        Y.encodeStateAsUpdate(donor),
+      );
+      const artifactRoomDoc = new Y.Doc();
+      const seeded = artifactRoomDoc.getXmlFragment("artifact-body:art-1");
+      const paragraph = new Y.XmlElement("paragraph");
+      paragraph.insert(0, [new Y.XmlText(bodyText)]);
+      seeded.insert(0, [paragraph]);
+      handle().callbacks.onArtifactRoomSnapshot(
+        "artifact-room-0",
+        Y.encodeStateAsUpdate(artifactRoomDoc),
+        stateVectorBase64(artifactRoomDoc),
+      );
+      // The room's snapshot is a round trip now; hand back a store whose
+      // setup has actually landed rather than one still in flight.
+      await settle(opened);
+      return { opened, handle };
+    }
+
+    it("reports a snapshotted room ready without materializing a doc for it", async () => {
+      const { opened } = await openWithReadyRoom(
+        "epic-lease-cold",
+        "cold body",
+      );
+      // SETTLE BEFORE the negative assertion, not after the acquire only. One
+      // microtask early, nothing has happened either way and
+      // `hotArtifactRoomIdsForTests()` is empty against every implementation -
+      // the assertion would pass without proving anything. Giving the
+      // materialize its chance to happen and THEN finding it did not is the
+      // claim this test is making.
+      await settle(opened);
+
+      // Ready is about the host having the room open, not about this renderer
+      // holding a replica - the tile needs the former to stop showing its
+      // unavailable placeholder.
+      expect(opened.store.getState().getArtifactBodyAvailability("art-1")).toBe(
+        "ready",
+      );
+      // Snapshotting a room nobody is looking at must not build a doc for
+      // it. Checked through the seam: reading the fragment is what
+      // materializes a room, so asserting on the read would destroy the
+      // very property under test.
+      expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+      const release = opened.store.getState().acquireArtifactBodyLease("art-1");
+      await settle(opened);
+      // The materialize is a ROUND TRIP now: the lease posts `body/materialize`
+      // and the doc lands on main only when the response does.
+      await settle(opened);
+      const fragment = opened.store.getState().getArtifactFragment("art-1");
+      expect(fragment).not.toBeNull();
+      expect(fragment?.toJSON()).toContain("cold body");
+      expect(opened.hotArtifactRoomIdsForTests()).toEqual(["artifact-room-0"]);
+
+      release();
+      opened.dispose();
+    });
+
+    it("replays updates that arrived while a room was cold", async () => {
+      vi.useFakeTimers();
+      try {
+        const { opened, handle } = await openWithReadyRoom(
+          "epic-lease-cold-updates",
+          "first",
+        );
+
+        // Mirror the room into a donor so we can produce the exact update
+        // bytes the host would send for an appended paragraph.
+        const donorRoom = new Y.Doc();
+        const leaseForBytes = opened.store
+          .getState()
+          .acquireArtifactBodyLease("art-1");
+        await settle(opened);
+        const liveFragment = opened.store
+          .getState()
+          .getArtifactFragment("art-1");
+        if (liveFragment === null) throw new Error("missing fragment");
+        const liveDoc = liveFragment.doc;
+        if (liveDoc === null) throw new Error("missing fragment doc");
+        Y.applyUpdate(donorRoom, Y.encodeStateAsUpdate(liveDoc));
+
+        // Let the room cool before the update lands, so the frame has to take
+        // the cold path.
+        leaseForBytes();
+        vi.advanceTimersByTime(61_000);
+        // Advancing the clock fires the WORKER's cooldown; its demote reaches
+        // main over the bridge, so the effect is a round trip away.
+        await settle(opened);
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+        const before = Y.encodeStateVector(donorRoom);
+        const donorFragment = donorRoom.getXmlFragment("artifact-body:art-1");
+        const appended = new Y.XmlElement("paragraph");
+        appended.insert(0, [new Y.XmlText("second")]);
+        donorFragment.insert(donorFragment.length, [appended]);
+        const updateBytes = Y.encodeStateAsUpdate(donorRoom, before);
+
+        handle().callbacks.onArtifactRoomUpdate(
+          "artifact-room-0",
+          updateBytes,
+          stateVectorBase64(donorRoom),
+        );
+
+        const release = opened.store
+          .getState()
+          .acquireArtifactBodyLease("art-1");
+        await settle(opened);
+        const rematerialized = opened.store
+          .getState()
+          .getArtifactFragment("art-1");
+        expect(rematerialized?.toJSON()).toContain("first");
+        expect(rematerialized?.toJSON()).toContain("second");
+
+        release();
+        opened.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("demotes a room once its last lease is released and the linger window elapses", async () => {
+      vi.useFakeTimers();
+      try {
+        const { opened } = await openWithReadyRoom(
+          "epic-lease-linger",
+          "lingering",
+        );
+
+        const release = opened.store
+          .getState()
+          .acquireArtifactBodyLease("art-1");
+        await settle(opened);
+        expect(
+          opened.store.getState().getArtifactFragment("art-1"),
+        ).not.toBeNull();
+
+        release();
+        // Still hot through the linger window: a tab switch that remounts the
+        // tile must not pay to re-materialize the body.
+        vi.advanceTimersByTime(59_000);
+        // Advancing the clock fires the WORKER's cooldown; its demote reaches
+        // main over the bridge, so the effect is a round trip away.
+        await settle(opened);
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([
+          "artifact-room-0",
+        ]);
+
+        vi.advanceTimersByTime(2_000);
+        // Advancing the clock fires the WORKER's cooldown; its demote reaches
+        // main over the bridge, so the effect is a round trip away.
+        await settle(opened);
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+        // …and the content survives the round trip through encoded bytes.
+        const reacquired = opened.store
+          .getState()
+          .acquireArtifactBodyLease("art-1");
+        await settle(opened);
+        expect(
+          opened.store.getState().getArtifactFragment("art-1")?.toJSON(),
+        ).toContain("lingering");
+        reacquired();
+        opened.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps a room materialized while it holds edits the host has not acknowledged", async () => {
+      vi.useFakeTimers();
+      try {
+        const { opened, handle } = await openWithReadyRoom(
+          "epic-lease-dirty",
+          "dirty body",
+        );
+        const release = opened.store
+          .getState()
+          .acquireArtifactBodyLease("art-1");
+        await settle(opened);
+        const fragment = opened.store.getState().getArtifactFragment("art-1");
+        if (fragment === null) throw new Error("missing fragment");
+        const docBefore = fragment.doc;
+
+        // Drop the transport, then edit: the update has nowhere to go and is
+        // queued on the replica.
+        handle().callbacks.onConnectionStatus("closed", null, true, null);
+        const edited = new Y.XmlElement("paragraph");
+        edited.insert(0, [new Y.XmlText("offline edit")]);
+        fragment.insert(fragment.length, [edited]);
+        expect(opened.store.getState().isDirty).toBe(true);
+
+        release();
+        vi.advanceTimersByTime(10 * 60_000);
+        // Advancing the clock fires the WORKER's cooldown; its demote reaches
+        // main over the bridge, so the effect is a round trip away.
+        await settle(opened);
+
+        // Cooling here would encode the replica down and drop the queued
+        // update with it - the edit would be lost with no outbound path.
+        const stillLive = opened.store.getState().getArtifactFragment("art-1");
+        expect(stillLive).not.toBeNull();
+        expect(stillLive?.doc).toBe(docBefore);
+        expect(stillLive?.toJSON()).toContain("offline edit");
+
+        opened.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("leaves the fragment accessor pure - reading never materializes", async () => {
+      // These accessors run inside Zustand selectors. Materializing there let
+      // an unrelated store update extend a room's lifetime, and let cap
+      // enforcement destroy an unpinned `Y.Doc` while a component rendered
+      // earlier in the same pass still held its fragment. Materialization
+      // belongs to the lease path.
+      vi.useFakeTimers();
+      try {
+        const { opened } = await openWithReadyRoom("epic-pure-read", "read me");
+
+        expect(opened.store.getState().getArtifactFragment("art-1")).toBeNull();
+        expect(
+          opened.store.getState().getArtifactBodyAwareness("art-1"),
+        ).toBeNull();
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+        // Repeated reads must not touch cooldown or LRU state either.
+        vi.advanceTimersByTime(120_000);
+        // Advancing the clock fires the WORKER's cooldown; its demote reaches
+        // main over the bridge, so the effect is a round trip away.
+        await settle(opened);
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+        const release = opened.store
+          .getState()
+          .acquireArtifactBodyLease("art-1");
+        await settle(opened);
+        expect(
+          opened.store.getState().getArtifactFragment("art-1")?.toJSON(),
+        ).toContain("read me");
+
+        release();
+        opened.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("never hands out a fragment for a room that is ready but unseeded", async () => {
+      // `artifactRoomState` reports `ready` on first observation and on every
+      // recovery transition, independently of `artifactRoomSnapshot`, so there
+      // is a window where the room is ready with no bytes anywhere. Handing
+      // back a live-but-empty fragment there reads as a real, empty body:
+      // export skips its "still loading" guard and writes an empty file.
+      const { factory, handle } = fakeFactory();
+      const opened = openStoreForTest({
+        epicId: "epic-lease-unseeded",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
+      const donor = new Y.Doc();
+      seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
+      handle().callbacks.onConnectionStatus("open", null, true, null);
+      handle().callbacks.onSnapshot(
+        buildMeta("editor", null),
+        Y.encodeStateAsUpdate(donor),
+      );
+
+      handle().callbacks.onArtifactRoomState("artifact-room-0", "ready");
+      expect(opened.store.getState().getArtifactBodyAvailability("art-1")).toBe(
+        "ready",
+      );
+
+      expect(opened.store.getState().getArtifactFragment("art-1")).toBeNull();
+      expect(
+        opened.store.getState().getArtifactBodyAwareness("art-1"),
+      ).toBeNull();
+      // Taking a lease must not conjure one either.
+      opened.store.getState().acquireArtifactBodyLease("art-1");
+      await settle(opened);
+      expect(opened.store.getState().getArtifactFragment("art-1")).toBeNull();
+      expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+      opened.dispose();
+    });
+
+    it("re-arms the linger when discarding unsynced edits clears a room's dirty pin", async () => {
+      vi.useFakeTimers();
+      try {
+        const { opened, handle } = await openWithReadyRoom(
+          "epic-lease-discard",
+          "discard me",
+        );
+        const release = opened.store
+          .getState()
+          .acquireArtifactBodyLease("art-1");
+        await settle(opened);
+        const fragment = opened.store.getState().getArtifactFragment("art-1");
+        if (fragment === null) throw new Error("missing fragment");
+
+        handle().callbacks.onConnectionStatus("closed", null, true, null);
+        const edited = new Y.XmlElement("paragraph");
+        edited.insert(0, [new Y.XmlText("offline edit")]);
+        fragment.insert(fragment.length, [edited]);
+        release();
+
+        // Dirty, so the linger correctly refuses to cool it.
+        vi.advanceTimersByTime(10 * 60_000);
+        // Advancing the clock fires the WORKER's cooldown; its demote reaches
+        // main over the bridge, so the effect is a round trip away.
+        await settle(opened);
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([
+          "artifact-room-0",
+        ]);
+
+        // Discarding removes the dirty pin. Nothing else re-arms the timer for
+        // this room, so without a re-arm here the rooms a user actually edited
+        // - the ones holding the most Yjs structs - stay hot forever.
+        opened.store.getState().discardUnsyncedEdits();
+        vi.advanceTimersByTime(61_000);
+        // Advancing the clock fires the WORKER's cooldown; its demote reaches
+        // main over the bridge, so the effect is a round trip away.
+        await settle(opened);
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+        opened.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("replays presence that arrived while a room was cold", async () => {
+      // A room the local user has never opened has no `Awareness` instance, so
+      // inbound presence frames have nowhere to land. Dropping them left a
+      // collaborator already sitting in the body invisible until their next
+      // renewal (y-protocols refreshes local state every outdatedTimeout/2).
+      const { Awareness: PeerAwareness, encodeAwarenessUpdate } =
+        await import("y-protocols/awareness");
+      const { opened, handle } = await openWithReadyRoom(
+        "epic-cold-presence",
+        "shared body",
+      );
+      // Cold: snapshotted, never leased.
+      expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+      const peerDoc = new Y.Doc();
+      const peer = new PeerAwareness(peerDoc);
+      peer.setLocalState({ userName: "Peer" });
+      handle().callbacks.onArtifactRoomAwareness(
+        "artifact-room-0",
+        encodeAwarenessUpdate(peer, [peer.clientID]),
+      );
+      // Still cold - presence must not be what materializes a room.
+      expect(opened.hotArtifactRoomIdsForTests()).toEqual([]);
+
+      const release = opened.store.getState().acquireArtifactBodyLease("art-1");
+      await settle(opened);
+      const awareness = opened.store
+        .getState()
+        .getArtifactBodyAwareness("art-1");
+      if (awareness === null) throw new Error("missing awareness");
+
+      const seen = Array.from(awareness.getStates().entries()).filter(
+        ([clientId]) => clientId !== awareness.clientID,
+      );
+      expect(seen).toHaveLength(1);
+      expect(seen[0][1]).toMatchObject({ userName: "Peer" });
+
+      release();
+      peer.destroy();
+      peerDoc.destroy();
+      opened.dispose();
+    });
+
+    it("keeps a room hot while a remote collaborator is present in it", async () => {
+      const { Awareness: PeerAwareness, encodeAwarenessUpdate } =
+        await import("y-protocols/awareness");
+      vi.useFakeTimers();
+      try {
+        const { opened, handle } = await openWithReadyRoom(
+          "epic-lease-presence",
+          "shared body",
+        );
+        const release = opened.store
+          .getState()
+          .acquireArtifactBodyLease("art-1");
+        await settle(opened);
+        const awareness = opened.store
+          .getState()
+          .getArtifactBodyAwareness("art-1");
+        if (awareness === null) throw new Error("missing awareness");
+
+        // A peer announces itself into the room.
+        const peerDoc = new Y.Doc();
+        const peer = new PeerAwareness(peerDoc);
+        peer.setLocalState({ userName: "Peer" });
+        handle().callbacks.onArtifactRoomAwareness(
+          "artifact-room-0",
+          encodeAwarenessUpdate(peer, [peer.clientID]),
+        );
+
+        release();
+        vi.advanceTimersByTime(10 * 60_000);
+        // Advancing the clock fires the WORKER's cooldown; its demote reaches
+        // main over the bridge, so the effect is a round trip away.
+        await settle(opened);
+        // Cooling would destroy this room's Awareness, and inbound awareness
+        // frames are dropped while cold with no way to ask for a resync - the
+        // peer's caret and avatar would simply vanish until they moved again.
+        expect(opened.hotArtifactRoomIdsForTests()).toEqual([
+          "artifact-room-0",
+        ]);
+
+        peer.destroy();
+        peerDoc.destroy();
+        opened.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("evicts the least recently leased room once more rooms are hot than the cap", async () => {
+      const { factory, handle } = fakeFactory();
+      const opened = openStoreForTest({
+        epicId: "epic-lease-cap",
+        userId: null,
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        writeCommand: null,
+      });
+      const roomCount = MAX_HOT_ARTIFACT_ROOMS_FOR_TESTS + 1;
+      const donor = new Y.Doc();
+      for (let index = 0; index < roomCount; index += 1) {
+        seedRootArtifactWithArtifactRoom(
+          donor,
+          `art-${index}`,
+          `artifact-room-${index}`,
+        );
+      }
+      handle().callbacks.onConnectionStatus("open", null, true, null);
+      handle().callbacks.onSnapshot(
+        buildMeta("editor", null),
+        Y.encodeStateAsUpdate(donor),
+      );
+      for (let index = 0; index < roomCount; index += 1) {
+        const roomDoc = new Y.Doc();
+        roomDoc.getXmlFragment(`artifact-body:art-${index}`).insert(0, []);
+        handle().callbacks.onArtifactRoomSnapshot(
+          `artifact-room-${index}`,
+          Y.encodeStateAsUpdate(roomDoc),
+          stateVectorBase64(roomDoc),
+        );
+      }
+
+      // Open and close each body in order. Every release only arms the linger
+      // timer, so without the cap every one of them would stay materialized.
+      for (let index = 0; index < roomCount; index += 1) {
+        opened.store.getState().acquireArtifactBodyLease(`art-${index}`)();
+        await settle(opened);
+      }
+
+      // The cap holds, and it evicted the least recently leased room: the
+      // oldest is cold, the newest and its predecessor are not.
+      const hot = opened.hotArtifactRoomIdsForTests();
+      expect(hot).toHaveLength(MAX_HOT_ARTIFACT_ROOMS_FOR_TESTS);
+      expect(hot).not.toContain("artifact-room-0");
+      expect(hot).toContain(`artifact-room-${roomCount - 1}`);
+      expect(hot).toContain("artifact-room-1");
+
+      opened.dispose();
+    });
+  });
+});

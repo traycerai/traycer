@@ -1,0 +1,2003 @@
+import {
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  within,
+} from "@testing-library/react";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { deriveToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
+import { deriveToolInputSummary } from "@traycer/protocol/host/agent/gui/tool-input-summary";
+import type { ToolCallArtifactStamp } from "@traycer/protocol/persistence/epic/content-blocks";
+import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
+import { deriveA2ASendCollapsibleKey } from "@/components/chat/chat-collapsible-key";
+import { ToolSegment } from "@/components/chat/segments/tool-segment";
+import { useSetA2ASendOpen } from "@/stores/chats/a2a-open-store-context";
+import {
+  chatTranscriptJumpKey,
+  useChatTranscriptJumpStore,
+} from "@/stores/chats/chat-transcript-jump-store";
+import {
+  useChatCollapsibleTileInstanceId,
+  useSetChatFindForcedOpen,
+} from "@/stores/chats/chat-find-force-store-context";
+import { useToolOpenStore } from "@/stores/chats/tool-open-store";
+import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
+import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import {
+  drawsRobotGlyph,
+  mascotPathsAt,
+  renderedMascotPaths,
+} from "@/components/bots/__tests__/mascot-drawing";
+import {
+  EMPTY_DIRECTORY_STATE,
+  TEAM_MAIN_BOT_ID,
+  TWO_MAIN_BOTS_DIRECTORY,
+} from "@/lib/home-bots/__tests__/standalone-bots-fixtures";
+import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
+
+const PREFIX_RECEIVER_ID = "9600b202-1111-4111-8111-111111111111";
+const tileNavigationMocks = vi.hoisted(() => ({
+  openTile: vi.fn(),
+}));
+
+function render(ui: ReactNode) {
+  return rtlRender(
+    <ChatExpansionTestProviders tileInstanceId="tool-segment-test-tile">
+      {ui}
+    </ChatExpansionTestProviders>,
+  );
+}
+
+// The host precomputes these from the raw harness input (no longer persisted)
+// at the accumulator chokepoint; the component renders the precomputed fields.
+// Compute them here so the tests exercise the real summary/detail behavior.
+function inputProps(toolName: string, input: unknown) {
+  return {
+    inputSummary: deriveToolInputSummary(toolName, input),
+    inputDetail: deriveToolInputDetail(toolName, input),
+    imageResults: [],
+    artifact: null,
+    mcpApp: null,
+    feedbackDraft: null,
+  };
+}
+
+// Cross-task opens go through the top-level task navigation seam
+// (`activateTabIntent`), not the current task's tile navigation.
+const navigationMocks = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  activateTabIntent:
+    vi.fn<
+      (
+        navigate: unknown,
+        intent: TabNavigationIntent,
+        extra: unknown,
+      ) => boolean
+    >(),
+  navigateToTabIntent:
+    vi.fn<(navigate: unknown, intent: unknown, options: unknown) => void>(),
+}));
+
+vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
+  useConnectableHostIds: () => ({ hostIds: [], resolved: false }),
+}));
+
+vi.mock("@tanstack/react-router", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@tanstack/react-router")>();
+  return { ...actual, useNavigate: () => navigationMocks.navigate };
+});
+
+vi.mock("@/lib/tab-navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/tab-navigation")>();
+  return {
+    ...actual,
+    activateTabIntent: navigationMocks.activateTabIntent,
+    navigateToTabIntent: navigationMocks.navigateToTabIntent,
+  };
+});
+
+function expectCrossTaskActivation(node: {
+  readonly id: string;
+  readonly type: "chat" | "terminal-agent";
+  readonly hostId: string;
+}): void {
+  expect(navigationMocks.activateTabIntent).toHaveBeenCalledTimes(1);
+  const call = navigationMocks.activateTabIntent.mock.calls.at(0);
+  if (call === undefined) throw new Error("activateTabIntent was not called");
+  const [navigate, intent] = call;
+  expect(navigate).toBe(navigationMocks.navigate);
+  expect(intent).toMatchObject({
+    kind: "open-epic",
+    epicId: "epic-2",
+    includeNestedFocus: true,
+    preparation: { kind: "open-tile", gesture: "explicit", node },
+  });
+  // The other task is activated at the top level; the current task's tile
+  // navigation must not also open a tile (no double open).
+  expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+}
+
+vi.mock("@/hooks/host/use-host-query", () => ({
+  useHostQuery: () => ({ data: undefined }),
+}));
+
+vi.mock("@/hooks/host/use-tab-host-client", () => ({
+  useTabHostClient: () => null,
+  useMaybeTabHostClient: () => null,
+}));
+
+vi.mock("@/lib/epic-selectors", () => ({
+  useRegisteredEpicLiveAgents: () => [],
+  useEpicAgentReference: (referenceId: string) => {
+    if (referenceId === "agent-receiver-1") {
+      return {
+        id: "agent-receiver-1",
+        parentId: null,
+        title: "Receiver Agent",
+        hostId: "host-1",
+      };
+    }
+    if (referenceId === "agent-receiver-optimistic") {
+      return {
+        id: "agent-receiver-optimistic",
+        parentId: null,
+        title: "Optimistic Receiver",
+        hostId: null,
+      };
+    }
+    if (referenceId === PREFIX_RECEIVER_ID || referenceId === "9600b202") {
+      return {
+        id: PREFIX_RECEIVER_ID,
+        parentId: null,
+        title: "Prefix Receiver",
+        hostId: "host-1",
+      };
+    }
+    if (referenceId === "agent-receiver-tui-1") {
+      return {
+        id: "agent-receiver-tui-1",
+        title: "Receiver Terminal Agent",
+        hostId: "host-1",
+        harnessId: "claude",
+      };
+    }
+    return null;
+  },
+  useMaybeOpenEpicId: () => "epic-1",
+}));
+
+// Cross-task peers come from the shared `useA2AMessagePeer` hook. An id with
+// no entry falls through to the real hook, so every same-task test above keeps
+// exercising the current-task projection fast path unchanged.
+const peerMocks = vi.hoisted(() => ({
+  /** Every (agentId, origin) the card asked the hook about. */
+  origins: [] as { agentId: string; origin: unknown }[],
+  byId: {} as Record<
+    string,
+    {
+      epicId: string;
+      agentId: string;
+      hostId: string;
+      title: string | null;
+      surface: "gui" | "tui";
+      bot: { botId: string; title: string } | null;
+    } | null
+  >,
+}));
+
+vi.mock(
+  import("@/hooks/agent/use-a2a-message-peer"),
+  async (importOriginal) => {
+    const actual = await importOriginal();
+    return {
+      ...actual,
+      useA2AMessagePeer: (
+        agentId: string,
+        origin: Parameters<typeof actual.useA2AMessagePeer>[1],
+      ) => {
+        peerMocks.origins.push({ agentId, origin });
+        return agentId in peerMocks.byId
+          ? peerMocks.byId[agentId]
+          : actual.useA2AMessagePeer(agentId, origin);
+      },
+    };
+  },
+);
+
+// An open epic: the card names and links its receiver as the epic resolves it.
+vi.mock("@/providers/use-open-epic-handle", () => ({
+  useMaybeOpenEpicHandle: () => ({ epicId: "epic-1" }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({
+    openTile: tileNavigationMocks.openTile,
+  }),
+}));
+
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
+  useTabHostId: () => "active-host-1",
+}));
+
+const hostDirectoryMocks = vi.hoisted(() => ({
+  labels: new Map<string, string>(),
+}));
+
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: (hostId: string | null) => {
+    if (hostId === null) return null;
+    const label = hostDirectoryMocks.labels.get(hostId);
+    return label === undefined ? null : { hostId, label };
+  },
+}));
+
+// The row-routing suite below stubs the stamp-driven row so it can
+// assert the SELECTION (which row, with which stamp/fallback) without
+// standing up each row's own scope/store dependencies - those are each
+// row's own test file's job. No other test in this file stamps `artifact`, so these stubs never engage outside that suite.
+vi.mock("@/components/chat/segments/artifact-row", () => ({
+  // Deliberately renders neither the stamp nor the fallback: the routing
+  // suite below asserts SELECTION, and a stub that painted its fallback
+  // (the real generic row) would make "which row rendered" indistinguishable
+  // from "the fallback's own content happens to be present".
+  ArtifactRow: (_props: {
+    readonly artifact: ToolCallArtifactStamp | null;
+    readonly fallback: ReactNode;
+  }) => <div data-testid="artifact-row-stub" />,
+}));
+
+interface OpenA2ASendButtonProps {
+  readonly label: string;
+  readonly segmentId: string;
+}
+
+function OpenA2ASendButton(props: OpenA2ASendButtonProps) {
+  const setOpen = useSetA2ASendOpen();
+  return (
+    <button type="button" onClick={() => setOpen(props.segmentId, true)}>
+      {props.label}
+    </button>
+  );
+}
+
+interface ForceA2ASendButtonProps {
+  readonly label: string;
+  readonly segmentId: string;
+}
+
+function ForceA2ASendButton(props: ForceA2ASendButtonProps) {
+  const tileInstanceId = useChatCollapsibleTileInstanceId();
+  const setFindForcedOpen = useSetChatFindForcedOpen();
+  const key = deriveA2ASendCollapsibleKey(tileInstanceId, props.segmentId);
+  return (
+    <button type="button" onClick={() => setFindForcedOpen(key, true)}>
+      {props.label}
+    </button>
+  );
+}
+
+describe("<ToolSegment /> A2A send-message rendering", () => {
+  afterEach(() => {
+    useToolOpenStore.getState().reset("default");
+    tileNavigationMocks.openTile.mockClear();
+    useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
+    cleanup();
+  });
+
+  it("renders a structured agentMessageSend as an expandable agent-message card", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="a2a-send-1"
+        toolName="traycer_a2a/traycer_send_message"
+        {...inputProps("traycer_a2a/traycer_send_message", {
+          toAgentId: "agent-receiver-1",
+          message: "Please inspect the failing test.",
+          responseId: "response-1",
+          expectReply: true,
+        })}
+        error={null}
+        agentMessageSend={{
+          receiverAgentId: "agent-receiver-1",
+          message: "Please inspect the failing test.",
+          responseId: "response-1",
+          expectReply: true,
+        }}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    // The direction label is for assistive tech only: the icon plus "to"
+    // already say it, and the visible words were crowding the receiver name
+    // out of narrow headers.
+    expect(screen.getByText("Sent message").className).toContain("sr-only");
+    expect(screen.getByText("to")).toBeTruthy();
+    expect(screen.queryByText("to agent")).toBeNull();
+    expect(screen.getByText("Receiver Agent")).toBeTruthy();
+    expect(screen.getByText(/Please inspect the failing test/)).toBeTruthy();
+    // Reply-expected is a compact icon in the always-visible header; the
+    // spelled-out line only appears once the card is expanded.
+    expect(screen.getByRole("img", { name: "Reply expected" })).toBeTruthy();
+    expect(screen.queryByText("Reply expected")).toBeNull();
+    expect(screen.queryByText("reply expected")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Sent message/ }));
+
+    expect(screen.getByRole("button", { name: "Receiver Agent" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Reply expected" })).toBeTruthy();
+    expect(screen.getByText("Reply expected")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
+    expect(screen.getByText("Please inspect the failing test.")).toBeTruthy();
+    expect(
+      screen
+        .getByText("Please inspect the failing test.")
+        .closest(".md-prose")
+        ?.hasAttribute("data-quotable"),
+    ).toBe(false);
+    expect(screen.queryByText("Thread")).toBeNull();
+    expect(screen.queryByText("Output")).toBeNull();
+  });
+
+  it("opens sent A2A cards through the provider store", () => {
+    const segmentId = "a2a-send-controlled";
+    render(
+      <>
+        <OpenA2ASendButton label="Open sent A2A" segmentId={segmentId} />
+        <ToolSegment
+          headerFindUnitId={null}
+          id={segmentId}
+          toolName="traycer_a2a/traycer_send_message"
+          {...inputProps("traycer_a2a/traycer_send_message", {})}
+          error={null}
+          agentMessageSend={{
+            receiverAgentId: "agent-receiver-1",
+            message: "Please inspect the controlled card.",
+            responseId: "response-1",
+            expectReply: true,
+          }}
+          managedCommand={null}
+          agentMessageReceipt={null}
+          agentMessageDelivery={null}
+          botSendReceipt={null}
+          isStreaming={false}
+          endState={null}
+          stopped={false}
+          progress={null}
+          backgroundOutput={null}
+          backgroundTask={false}
+          startedAt={0}
+          durationMs={null}
+          variant="card"
+        />
+      </>,
+    );
+
+    expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open sent A2A" }));
+
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
+    expect(screen.getByText("Reply expected")).toBeTruthy();
+  });
+
+  it("opens sent A2A cards through find-force and releases on manual collapse", () => {
+    const segmentId = "a2a-send-find-forced";
+    render(
+      <>
+        <ForceA2ASendButton label="Force sent A2A" segmentId={segmentId} />
+        <ToolSegment
+          headerFindUnitId={null}
+          id={segmentId}
+          toolName="traycer_a2a/traycer_send_message"
+          {...inputProps("traycer_a2a/traycer_send_message", {})}
+          error={null}
+          agentMessageSend={{
+            receiverAgentId: "agent-receiver-1",
+            message: "Please inspect the find-forced card.",
+            responseId: "response-1",
+            expectReply: true,
+          }}
+          managedCommand={null}
+          agentMessageReceipt={null}
+          agentMessageDelivery={null}
+          botSendReceipt={null}
+          isStreaming={false}
+          endState={null}
+          stopped={false}
+          progress={null}
+          backgroundOutput={null}
+          backgroundTask={false}
+          startedAt={0}
+          durationMs={null}
+          variant="card"
+        />
+      </>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Force sent A2A" }));
+
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /Sent message/ }));
+
+    expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
+  });
+
+  it("keeps tools without an agentMessageSend payload on the generic tool surface", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="generic-tool-1"
+        toolName="shell"
+        {...inputProps("shell", { command: "echo hi" })}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    expect(screen.getByText("shell")).toBeTruthy();
+    expect(screen.queryByText("Sent message")).toBeNull();
+  });
+
+  it("keeps an A2A send on its own card even when the call carries image results", () => {
+    const { container } = render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="a2a-send-images"
+        toolName="traycer_a2a/traycer_send_message"
+        {...inputProps("traycer_a2a/traycer_send_message", {
+          toAgentId: "agent-receiver-1",
+          message: "Please inspect the failing test.",
+          responseId: "response-1",
+          expectReply: false,
+        })}
+        imageResults={[
+          {
+            attachmentHash: "hash-a2a",
+            mediaType: "image/png",
+            byteLength: 256,
+            width: null,
+            height: null,
+            alt: "stray image",
+            revisedPrompt: null,
+            filePath: null,
+          },
+        ]}
+        error={null}
+        agentMessageSend={{
+          receiverAgentId: "agent-receiver-1",
+          message: "Please inspect the failing test.",
+          responseId: "response-1",
+          expectReply: false,
+        }}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    expect(screen.getByText("Sent message")).toBeTruthy();
+    expect(screen.getByText("Receiver Agent")).toBeTruthy();
+    expect(container.querySelector("figure")).toBeNull();
+    expect(screen.queryByText("stray image")).toBeNull();
+  });
+
+  it("opens optimistic chat receivers with the active host fallback", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="a2a-send-optimistic"
+        toolName="traycer_a2a/traycer_send_message"
+        {...inputProps("traycer_a2a/traycer_send_message", {})}
+        error={null}
+        agentMessageSend={{
+          receiverAgentId: "agent-receiver-optimistic",
+          message: "Please continue this thread.",
+          responseId: null,
+          expectReply: false,
+        }}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Sent message/ }));
+
+    expect(
+      screen.getByRole("button", { name: "Optimistic Receiver" }),
+    ).toBeTruthy();
+  });
+
+  it("resolves a unique receiver prefix and opens the canonical agent id", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="a2a-send-prefix"
+        toolName="traycer_a2a/traycer_send_message"
+        {...inputProps("traycer_a2a/traycer_send_message", {})}
+        error={null}
+        agentMessageSend={{
+          receiverAgentId: "9600b202",
+          message: "Please inspect the prefix resolution.",
+          responseId: null,
+          expectReply: false,
+        }}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Prefix Receiver" }));
+
+    // The header link names the EPIC and asks for a deliberate, de-duped open;
+    // it carries no mouse event of its own (the shared `AgentHeaderLink` also
+    // fires on Enter/Space), so the modifier triple is absent by construction.
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+      {
+        node: expect.objectContaining({
+          id: PREFIX_RECEIVER_ID,
+          type: "chat",
+          name: "Prefix Receiver",
+          hostId: "host-1",
+        }) as EpicCanvasTileRef,
+        target: { epicId: "epic-1" },
+        gesture: "explicit",
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      },
+      "user",
+    );
+  });
+
+  it("parks a transcript jump for the receiver when agentMessageReceipt matches the receiver node", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="a2a-send-with-receipt"
+        toolName="traycer_a2a/traycer_send_message"
+        {...inputProps("traycer_a2a/traycer_send_message", {
+          toAgentId: "agent-receiver-1",
+          message: "Please inspect the failing test.",
+          responseId: null,
+          expectReply: false,
+        })}
+        error={null}
+        agentMessageSend={{
+          receiverAgentId: "agent-receiver-1",
+          message: "Please inspect the failing test.",
+          responseId: null,
+          expectReply: false,
+        }}
+        managedCommand={null}
+        agentMessageReceipt={{
+          receiverAgentId: "agent-receiver-1",
+          messageId: "receiver-message-1",
+        }}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Receiver Agent" }));
+
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        node: expect.objectContaining({
+          id: "agent-receiver-1",
+          type: "chat",
+        }) as EpicCanvasTileRef,
+        target: { epicId: "epic-1" },
+      }),
+      "user",
+    );
+    const key = chatTranscriptJumpKey("host-1", "agent-receiver-1");
+    const parked = useChatTranscriptJumpStore.getState().requestsByChatId[key];
+    expect(parked?.target).toEqual({
+      kind: "message",
+      messageId: "receiver-message-1",
+    });
+  });
+
+  it("does not park a transcript jump when agentMessageReceipt is null", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="a2a-send-no-receipt"
+        toolName="traycer_a2a/traycer_send_message"
+        {...inputProps("traycer_a2a/traycer_send_message", {
+          toAgentId: "agent-receiver-1",
+          message: "Please inspect the failing test.",
+          responseId: null,
+          expectReply: false,
+        })}
+        error={null}
+        agentMessageSend={{
+          receiverAgentId: "agent-receiver-1",
+          message: "Please inspect the failing test.",
+          responseId: null,
+          expectReply: false,
+        }}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Receiver Agent" }));
+
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        node: expect.objectContaining({
+          id: "agent-receiver-1",
+          type: "chat",
+        }) as EpicCanvasTileRef,
+        target: { epicId: "epic-1" },
+      }),
+      "user",
+    );
+    const key = chatTranscriptJumpKey("host-1", "agent-receiver-1");
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[key],
+    ).toBeUndefined();
+  });
+
+  it("does not park a transcript jump for a terminal-agent (TUI) receiver", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="a2a-send-tui-receiver"
+        toolName="traycer_a2a/traycer_send_message"
+        {...inputProps("traycer_a2a/traycer_send_message", {
+          toAgentId: "agent-receiver-tui-1",
+          message: "Please inspect the failing test.",
+          responseId: null,
+          expectReply: false,
+        })}
+        error={null}
+        agentMessageSend={{
+          receiverAgentId: "agent-receiver-tui-1",
+          message: "Please inspect the failing test.",
+          responseId: null,
+          expectReply: false,
+        }}
+        managedCommand={null}
+        agentMessageReceipt={{
+          receiverAgentId: "agent-receiver-tui-1",
+          messageId: "receiver-message-1",
+        }}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Receiver Terminal Agent" }),
+    );
+
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        node: expect.objectContaining({
+          id: "agent-receiver-tui-1",
+          type: "terminal-agent",
+        }) as EpicCanvasTileRef,
+        target: { epicId: "epic-1" },
+      }),
+      "user",
+    );
+    const key = chatTranscriptJumpKey("host-1", "agent-receiver-tui-1");
+    expect(
+      useChatTranscriptJumpStore.getState().requestsByChatId[key],
+    ).toBeUndefined();
+  });
+
+  describe("cross-task receivers", () => {
+    const CROSS_ID = "cross-receiver-1";
+    const CANONICAL_ID = "cccc1234-1111-4111-8111-111111111111";
+
+    beforeEach(() => {
+      // The controller acknowledges a Tracy intent and commits its channel.
+      navigationMocks.activateTabIntent.mockImplementation((_nav, intent) => {
+        if (intent.kind === "tracy") {
+          useTracySurfaceStore.getState().selectChannel(intent.botId);
+        }
+        return true;
+      });
+      useSelectionAuthorityStore.setState({
+        effectiveHostId: "active-host-1",
+      });
+    });
+
+    afterEach(() => {
+      navigationMocks.activateTabIntent.mockReset();
+      navigationMocks.navigateToTabIntent.mockClear();
+      useTracySurfaceStore.setState({
+        open: false,
+        hostId: null,
+        botId: null,
+        visitedBotIds: [],
+      });
+      useBotTabLandingStore.setState({ byBotId: {} });
+      peerMocks.byId = {};
+      peerMocks.origins = [];
+    });
+
+    function renderSend(
+      receiverAgentId: string,
+      receipt: { receiverAgentId: string; messageId: string } | null,
+    ) {
+      renderSendWith(receiverAgentId, receipt, null, null);
+    }
+
+    function renderSendWith(
+      receiverAgentId: string,
+      receipt: { receiverAgentId: string; messageId: string } | null,
+      error: string | null,
+      delivery: {
+        targetHostId: string;
+        eventId: string;
+        state: "queued" | "delivered" | "expired" | "failed";
+        targetHostOffline: boolean;
+      } | null,
+    ) {
+      render(
+        <ToolSegment
+          headerFindUnitId={null}
+          id="a2a-send-cross"
+          toolName="traycer_a2a/traycer_send_message"
+          {...inputProps("traycer_a2a/traycer_send_message", {})}
+          error={error}
+          agentMessageSend={{
+            receiverAgentId,
+            message: "Please continue in the other task.",
+            responseId: null,
+            expectReply: false,
+          }}
+          managedCommand={null}
+          agentMessageReceipt={receipt}
+          agentMessageDelivery={delivery}
+          botSendReceipt={null}
+          isStreaming={false}
+          endState={null}
+          stopped={false}
+          progress={null}
+          backgroundOutput={null}
+          backgroundTask={false}
+          startedAt={0}
+          durationMs={null}
+          variant="card"
+        />,
+      );
+    }
+
+    it("shows the cross-task title and opens the OTHER task on its host, jumping to the receipt", () => {
+      peerMocks.byId[CROSS_ID] = {
+        epicId: "epic-2",
+        agentId: CROSS_ID,
+        hostId: "host-2",
+        title: "Cross Task Agent",
+        surface: "gui",
+        bot: null,
+      };
+      renderSend(CROSS_ID, {
+        receiverAgentId: CROSS_ID,
+        messageId: "cross-message-1",
+      });
+
+      // The card hands the hook its receipt so a fork's inherited card can
+      // still resolve by the receiver's (fork-preserved) message id.
+      expect(peerMocks.origins).toContainEqual({
+        agentId: CROSS_ID,
+        origin: { direction: "sent", messageId: "cross-message-1" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Cross Task Agent" }));
+
+      expectCrossTaskActivation({
+        id: CROSS_ID,
+        type: "chat",
+        hostId: "host-2",
+      });
+      const key = chatTranscriptJumpKey("host-2", CROSS_ID);
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[key]?.target,
+      ).toEqual({ kind: "message", messageId: "cross-message-1" });
+    });
+
+    describe("the receiver's picture in the card's header", () => {
+      afterEach(() => {
+        useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
+      });
+
+      function receiverHeader(srLabel: string): HTMLElement {
+        const header = screen.getByText(srLabel).parentElement;
+        if (header === null) throw new Error("the card has no header");
+        return header;
+      }
+
+      function resolveReceiver(bot: { botId: string; title: string } | null) {
+        peerMocks.byId[CROSS_ID] = {
+          epicId: "epic-2",
+          agentId: CROSS_ID,
+          hostId: "host-2",
+          title: bot === null ? "Cross Task Agent" : bot.title,
+          surface: "gui",
+          bot,
+        };
+        renderSend(CROSS_ID, null);
+      }
+
+      it("is the robot glyph for an agent receiver", () => {
+        resolveReceiver(null);
+
+        const picture = within(receiverHeader("Sent message")).getByTestId(
+          "a2a-peer-picture",
+        );
+        expect(picture.getAttribute("data-peer")).toBe("agent");
+        expect(picture.querySelector("svg.lucide-bot")).not.toBeNull();
+        expect(renderedMascotPaths(picture)).toEqual([]);
+      });
+
+      it("is the bot's own 16px mascot for a bot receiver, not the robot glyph", () => {
+        resolveReceiver({ botId: "bot-1", title: "Release bot" });
+
+        const picture = within(receiverHeader("Sent message")).getByTestId(
+          "a2a-peer-picture",
+        );
+        expect(picture.getAttribute("data-peer")).toBe("bot");
+        expect(renderedMascotPaths(picture)).toEqual(
+          mascotPathsAt("bot-1", false, 16),
+        );
+        expect(drawsRobotGlyph(picture)).toBe(false);
+      });
+
+      describe("when the send was not delivered or faulted", () => {
+        const UNDELIVERED = {
+          targetHostId: "host-2",
+          eventId: "evt-1",
+          state: "failed" as const,
+          targetHostOffline: true,
+        };
+
+        afterEach(() => {
+          hostDirectoryMocks.labels = new Map();
+        });
+
+        function resolveSendTo(
+          bot: { botId: string; title: string } | null,
+          error: string | null,
+          delivery: typeof UNDELIVERED | null,
+        ) {
+          hostDirectoryMocks.labels = new Map([["host-2", "Work Laptop"]]);
+          peerMocks.byId[CROSS_ID] = {
+            epicId: "epic-2",
+            agentId: CROSS_ID,
+            hostId: "host-2",
+            title: bot === null ? "Cross Task Agent" : bot.title,
+            surface: "gui",
+            bot,
+          };
+          renderSendWith(CROSS_ID, null, error, delivery);
+        }
+
+        // A bot's mascot cannot take the glyph colour, so the badge is the
+        // only cue the header gives that the send did not arrive.
+        it("keeps the not-delivered badge beside a bot receiver's mascot", () => {
+          resolveSendTo(
+            { botId: "bot-1", title: "Release bot" },
+            null,
+            UNDELIVERED,
+          );
+
+          const header = receiverHeader("Undelivered message");
+          expect(
+            within(header)
+              .getByTestId("a2a-peer-picture")
+              .getAttribute("data-peer"),
+          ).toBe("bot");
+          expect(within(header).getByText("not delivered")).toBeTruthy();
+        });
+
+        it("keeps the error badge beside a bot receiver's mascot when the send faulted", () => {
+          resolveSendTo(
+            { botId: "bot-1", title: "Release bot" },
+            "tool failed: receiver unreachable",
+            null,
+          );
+
+          const header = receiverHeader("Sent message");
+          expect(
+            within(header)
+              .getByTestId("a2a-peer-picture")
+              .getAttribute("data-peer"),
+          ).toBe("bot");
+          expect(within(header).getByText("error")).toBeTruthy();
+        });
+
+        it("colours an agent receiver's robot glyph destructive when undelivered", () => {
+          resolveSendTo(null, null, UNDELIVERED);
+
+          const glyph = within(receiverHeader("Undelivered message"))
+            .getByTestId("a2a-peer-picture")
+            .querySelector("svg.lucide-bot");
+          expect(glyph?.getAttribute("class")).toContain("text-destructive");
+        });
+      });
+
+      it("replaces the send arrow the header carried", () => {
+        resolveReceiver(null);
+
+        expect(
+          receiverHeader("Sent message").querySelector(
+            "svg.lucide-send-horizontal",
+          ),
+        ).toBeNull();
+      });
+
+      it("names a bot receiver as the standalone directory does, by its environment when two main bots are visible", () => {
+        useStandaloneBotsStore.setState({
+          directory: TWO_MAIN_BOTS_DIRECTORY,
+          settled: true,
+        });
+        resolveReceiver({ botId: TEAM_MAIN_BOT_ID, title: "Tracy" });
+
+        expect(
+          screen.getByRole("button", { name: "Tracy · traycerai" }),
+        ).toBeTruthy();
+      });
+    });
+
+    it("opens a cross-task terminal agent without parking a jump", () => {
+      peerMocks.byId[CROSS_ID] = {
+        epicId: "epic-2",
+        agentId: CROSS_ID,
+        hostId: "host-2",
+        title: "Cross Terminal",
+        surface: "tui",
+        bot: null,
+      };
+      renderSend(CROSS_ID, {
+        receiverAgentId: CROSS_ID,
+        messageId: "cross-message-1",
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Cross Terminal" }));
+
+      expectCrossTaskActivation({
+        id: CROSS_ID,
+        type: "terminal-agent",
+        hostId: "host-2",
+      });
+      expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual(
+        {},
+      );
+    });
+
+    it("opens a bot receiver's channel on the window host, landing on the session, and parks no transcript jump", () => {
+      peerMocks.byId[CROSS_ID] = {
+        epicId: "bot-1",
+        agentId: CROSS_ID,
+        hostId: "host-2",
+        title: "Release bot",
+        surface: "gui",
+        bot: { botId: "bot-1", title: "Release bot" },
+      };
+      renderSend(CROSS_ID, {
+        receiverAgentId: CROSS_ID,
+        messageId: "cross-message-1",
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Release bot" }));
+
+      expect(useTracySurfaceStore.getState()).toMatchObject({
+        open: true,
+        hostId: "active-host-1",
+        botId: "bot-1",
+      });
+      expect(navigationMocks.activateTabIntent).toHaveBeenCalledTimes(1);
+      expect(navigationMocks.activateTabIntent).toHaveBeenCalledWith(
+        navigationMocks.navigate,
+        { kind: "tracy", botId: "bot-1" },
+        expect.anything(),
+      );
+      expect(navigationMocks.navigateToTabIntent).not.toHaveBeenCalled();
+      expect(useBotTabLandingStore.getState().byBotId["bot-1"]).toEqual({
+        kind: "sender",
+        chatId: CROSS_ID,
+      });
+      expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual(
+        {},
+      );
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+    });
+
+    it("renders the abbreviated id as plain text when the peer cannot be resolved", () => {
+      peerMocks.byId[CROSS_ID] = null;
+      renderSend(CROSS_ID, null);
+
+      // Without a receipt there is no message to anchor a fork lookup to.
+      expect(peerMocks.origins).toContainEqual({
+        agentId: CROSS_ID,
+        origin: null,
+      });
+      expect(screen.getByText(`${CROSS_ID.slice(0, 8)}...`)).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: `${CROSS_ID.slice(0, 8)}...` }),
+      ).toBeNull();
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+      expect(navigationMocks.activateTabIntent).not.toHaveBeenCalled();
+    });
+
+    it("resolves the peer from the receipt's canonical id when the input id is abbreviated", () => {
+      const abbreviated = CANONICAL_ID.slice(0, 8);
+      // Only the canonical id resolves; the abbreviated input id must not be
+      // what the card asks the hook about.
+      peerMocks.byId[abbreviated] = null;
+      peerMocks.byId[CANONICAL_ID] = {
+        epicId: "epic-2",
+        agentId: CANONICAL_ID,
+        hostId: "host-2",
+        title: "Canonical Peer",
+        surface: "gui",
+        bot: null,
+      };
+      renderSend(abbreviated, {
+        receiverAgentId: CANONICAL_ID,
+        messageId: "cross-message-2",
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Canonical Peer" }));
+
+      expectCrossTaskActivation({
+        id: CANONICAL_ID,
+        type: "chat",
+        hostId: "host-2",
+      });
+      const key = chatTranscriptJumpKey("host-2", CANONICAL_ID);
+      expect(
+        useChatTranscriptJumpStore.getState().requestsByChatId[key]?.target,
+      ).toEqual({ kind: "message", messageId: "cross-message-2" });
+    });
+  });
+});
+
+describe("<ToolSegment /> cross-host send delivery", () => {
+  afterEach(() => {
+    useToolOpenStore.getState().reset("default");
+    hostDirectoryMocks.labels = new Map();
+    cleanup();
+  });
+
+  function renderDelivery(
+    state: "queued" | "delivered" | "expired" | "failed" | null,
+    targetHostOffline: boolean,
+  ) {
+    hostDirectoryMocks.labels = new Map([["host-2", "Work Laptop"]]);
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="a2a-send-delivery"
+        toolName="traycer_a2a/traycer_send_message"
+        {...inputProps("traycer_a2a/traycer_send_message", {})}
+        error={null}
+        agentMessageSend={{
+          receiverAgentId: "agent-receiver-1",
+          message: "Please pick this up.",
+          responseId: null,
+          expectReply: false,
+        }}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        botSendReceipt={null}
+        agentMessageDelivery={
+          state === null
+            ? null
+            : {
+                targetHostId: "host-2",
+                eventId: "evt-1",
+                state,
+                targetHostOffline,
+              }
+        }
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+  }
+
+  // The host reports failures only (traycer#2421): a send nothing has failed
+  // is the plain sent card, with no tag, whatever host build stamped it.
+  it.each(["queued", "delivered"] as const)(
+    "renders a %s send to a host not seen offline as the plain sent card",
+    (state) => {
+      renderDelivery(state, false);
+      expect(screen.getByText("Sent message").className).toContain("sr-only");
+      expect(screen.queryByText("queued")).toBeNull();
+      expect(screen.queryByText(/Queued for/)).toBeNull();
+      expect(screen.queryByText(/Delivered on/)).toBeNull();
+      expect(screen.queryByText(/looked offline/)).toBeNull();
+    },
+  );
+
+  it("renders a send to a host seen offline as sent, with the offline note and no tag", () => {
+    renderDelivery("queued", true);
+    expect(
+      screen.getByText(
+        "Sent. Work Laptop looked offline; if it is not back online within 24 hours, this expires.",
+      ).className,
+    ).toContain("text-muted-foreground");
+    expect(screen.getByText("Sent message").className).toContain("sr-only");
+    expect(screen.queryByText("queued")).toBeNull();
+  });
+
+  // The note is status copy, not the message: chat find indexes the message
+  // body, so a search for "offline" must not land on the card's note.
+  it("marks the delivery note as skipped by chat find, collapsed and open", () => {
+    renderDelivery("queued", true);
+    const collapsed = screen.getAllByText(/looked offline/);
+    expect(collapsed.length).toBeGreaterThan(0);
+    for (const note of collapsed) {
+      expect(note.hasAttribute("data-find-skip")).toBe(true);
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: /Sent message/ }));
+
+    const open = screen.getAllByText(/looked offline/);
+    expect(open.length).toBeGreaterThan(0);
+    for (const note of open) {
+      expect(note.hasAttribute("data-find-skip")).toBe(true);
+    }
+  });
+
+  it.each(["expired", "failed"] as const)(
+    "renders a %s send as not delivered with destructive styling",
+    (state) => {
+      renderDelivery(state, true);
+      const note = screen.getByText(/Not delivered: Work Laptop/);
+      expect(note.className).toContain("text-destructive");
+      // The badge paints its own fill: `bg-muted` collapses into raised surfaces.
+      const badge = screen.getByText("not delivered");
+      expect(badge.className).toContain("text-destructive");
+      expect(badge.className).not.toContain("bg-muted");
+      expect(screen.queryByText(/looked offline/)).toBeNull();
+    },
+  );
+
+  it("renders a null delivery exactly as the plain sent card", () => {
+    renderDelivery(null, false);
+    expect(screen.getByText("Sent message")).toBeTruthy();
+    expect(screen.queryByText(/looked offline/)).toBeNull();
+    expect(screen.queryByText(/Not delivered/)).toBeNull();
+    expect(screen.queryByText("queued")).toBeNull();
+  });
+});
+
+describe("<ToolSegment /> input rendering", () => {
+  afterEach(() => {
+    useToolOpenStore.getState().reset("default");
+    cleanup();
+  });
+
+  it("renders the Traycer browser REPL as browser activity", () => {
+    const view = render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="browser-repl-1"
+        toolName="mcp__browser__repl"
+        {...inputProps("mcp__browser__repl", {
+          title: "Inspect checkout",
+          code: "await page.snapshot()",
+        })}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    expect(screen.getByText("Browser")).toBeTruthy();
+    expect(screen.getByText("Inspect checkout")).toBeTruthy();
+    expect(view.container.querySelector("svg")).not.toBeNull();
+    expect(screen.queryByText("mcp__browser__repl")).toBeNull();
+  });
+
+  it("paints a long command's whole line in the header and stays expandable", () => {
+    // Well past the 80-unit persisted summary cap. The header span truncates
+    // itself with CSS, so it must receive the whole command, not the capped cut.
+    const command = `bun run --filter @traycer/gui-app vitest run ${"src/components/chat/segments/__tests__/tool-segment.test.tsx ".repeat(2)}--reporter verbose`;
+    const props = inputProps("Bash", { command });
+    expect(props.inputSummary?.endsWith("\u2026")).toBe(true);
+
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="bash-long-command"
+        toolName="Bash"
+        {...props}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    expect(screen.getByText(command)).toBeTruthy();
+    expect(screen.queryByText(/\u2026/)).toBeNull();
+    // Still expandable: the header no longer proves the call is fully shown by
+    // the persisted summary, so the expand affordance must survive.
+    expect(screen.getByRole("button", { name: /Bash/ })).toBeTruthy();
+  });
+
+  it("expands a grep call into a reconstructed command, not JSON", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="grep-tool-1"
+        toolName="Grep"
+        {...inputProps("Grep", {
+          pattern: "overflow-anchor",
+          output_mode: "content",
+          "-n": true,
+          "-C": 3,
+        })}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    // Header summary is the bare pattern; the call is expandable because it
+    // carries flags the header doesn't show.
+    fireEvent.click(screen.getByRole("button", { name: /Grep/ }));
+    // The `$ ` prefix is a sibling span, so match the reconstructed command text.
+    expect(screen.getByText('grep -n -C 3 "overflow-anchor"')).toBeTruthy();
+    // No raw JSON dump and no `json` language pill.
+    expect(screen.queryByText("json")).toBeNull();
+    expect(screen.queryByText(/"pattern":/)).toBeNull();
+  });
+
+  it("labels a backgrounded MCP call's output as Result and pretty-prints JSON", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="mcp-bg-tool-1"
+        toolName="mcp__probe__slow_op"
+        {...inputProps("mcp__probe__slow_op", {})}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={{
+          stdout: '{"answer":42,"items":[1,2]}',
+          stderr: "",
+          truncated: false,
+        }}
+        backgroundTask
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /slow_op/ }));
+    expect(screen.getByText("Result")).toBeTruthy();
+    expect(screen.queryByText("Output")).toBeNull();
+    // Re-indented JSON, not the single-line tail.
+    expect(screen.getByText(/"answer": 42/)).toBeTruthy();
+  });
+
+  it("keeps non-JSON MCP background output verbatim under the Result label", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="mcp-bg-tool-2"
+        toolName="mcp__probe__slow_op"
+        {...inputProps("mcp__probe__slow_op", {})}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={{
+          stdout: "plain text result",
+          stderr: "",
+          truncated: false,
+        }}
+        backgroundTask
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /slow_op/ }));
+    expect(screen.getByText("Result")).toBeTruthy();
+    expect(screen.getByText("plain text result")).toBeTruthy();
+  });
+
+  it("renders a self-describing call as a non-expandable header (no toggle)", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="glob-tool-1"
+        toolName="glob"
+        {...inputProps("glob", { pattern: "**/*.tsx" })}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    // Header is enough (just the pattern) → no expand affordance at all.
+    expect(screen.getByText("glob")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /glob/ })).toBeNull();
+  });
+
+  it("renders capped background output in the expanded tool card", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="tool-background-output"
+        toolName="Bash"
+        {...inputProps("Bash", {
+          command: "printf hello",
+          run_in_background: true,
+        })}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={{
+          stdout: "hello\n",
+          stderr: "warning\n",
+          truncated: true,
+        }}
+        backgroundTask
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Bash/ }));
+
+    expect(screen.getByText("Output")).toBeTruthy();
+    expect(screen.getByText("hello")).toBeTruthy();
+    expect(screen.getByText("Error output")).toBeTruthy();
+    expect(screen.getByText("warning")).toBeTruthy();
+    expect(screen.getByText("Output truncated")).toBeTruthy();
+  });
+
+  it("shows a completed badge for a background command with empty output", () => {
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="tool-background-empty"
+        toolName="Bash"
+        {...inputProps("Bash", {
+          command: "true",
+          run_in_background: true,
+        })}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={{ stdout: "", stderr: "", truncated: false }}
+        backgroundTask
+        startedAt={0}
+        durationMs={7_600}
+        variant="card"
+      />,
+    );
+
+    expect(screen.getByText("completed")).toBeTruthy();
+    expect(screen.getByText("7s")).toBeTruthy();
+  });
+
+  it("shows a neutral stopped badge from the legacy 'stopped: ...' error-string convention", () => {
+    // Back-compat: blocks persisted before the `stopped` boolean field existed
+    // carry no signal except this string prefix on `error`.
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="tool-background-stopped-legacy"
+        toolName="Bash"
+        {...inputProps("Bash", {
+          command: "sleep 60",
+          run_in_background: true,
+        })}
+        error="stopped: user requested stop"
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask
+        startedAt={0}
+        durationMs={7_600}
+        variant="card"
+      />,
+    );
+
+    expect(screen.getByText("stopped")).toBeTruthy();
+    expect(screen.getByText("7s")).toBeTruthy();
+    expect(screen.queryByText("error")).toBeNull();
+  });
+
+  it("shows a neutral stopped badge from the authoritative `stopped` field, not the destructive error badge", () => {
+    // `status: "errored"` with `stopped: true` is how the host now reports an
+    // explicit stop (deadline-killed Monitor, user-stopped command) - no
+    // reliance on sniffing the error string.
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="tool-background-stopped-authoritative"
+        toolName="Bash"
+        {...inputProps("Bash", {
+          command: "sleep 60",
+          run_in_background: true,
+        })}
+        error="Monitor deadline exceeded"
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask
+        startedAt={0}
+        durationMs={7_600}
+        variant="card"
+      />,
+    );
+
+    expect(screen.getByText("stopped")).toBeTruthy();
+    expect(screen.getByText("7s")).toBeTruthy();
+    expect(screen.queryByText("error")).toBeNull();
+  });
+});
+
+describe("<ToolSegment /> streaming heartbeat", () => {
+  afterEach(() => {
+    useToolOpenStore.getState().reset("default");
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("keeps a streaming background command timer in the card header", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="tool-background-streaming"
+        toolName="Bash"
+        {...inputProps("Bash", {
+          command: "sleep 60",
+          run_in_background: true,
+        })}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask
+        startedAt={5_000}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+
+    const header = screen.getByText("Bash").closest("div");
+
+    expect(header?.textContent).toContain("5s");
+    expect(header?.textContent).toContain("Running sleep 60");
+  });
+
+  // The row variant is the path generic tools actually render on (they group
+  // into the activity timeline); the footer renders beneath the row.
+  it("shows the latest progress line and an elapsed counter while streaming", () => {
+    // Pinned: `LiveElapsed` reads the wall clock, so a render that crossed a
+    // second boundary turned the "0s" assertions below into "1s" at random.
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const startedAt = 10_000;
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="streaming-tool-1"
+        toolName="mcp__fetch"
+        {...inputProps("mcp__fetch", { url: "https://example.com" })}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        progress="Fetched 3/10 pages"
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={startedAt}
+        durationMs={null}
+        variant="row"
+      />,
+    );
+
+    // The progress line keeps its own line under the row - it is a sentence
+    // that changes as the tool works, so it wants the width. The elapsed
+    // counter does NOT: it rides the header row, left of the status badge, the
+    // way the standalone card has always shown it. Both used to share that
+    // second line, which gave a progress-less tool (every command, most tools)
+    // a whole row holding nothing but a number.
+    // Anchored to the row TRIGGER, not to `parentElement`: the contract is
+    // "the counter shares the header row", and one more wrapper around the tool
+    // name would silently retarget a parent-walk at that wrapper and fail here
+    // for a reason that has nothing to do with placement.
+    const headerRow = screen
+      .getByText("mcp__fetch")
+      .closest("[data-row-header]");
+    expect(headerRow).not.toBeNull();
+    expect(headerRow?.contains(screen.getByText("0s"))).toBe(true);
+    expect(headerRow?.contains(screen.getByText("Fetched 3/10 pages"))).toBe(
+      false,
+    );
+    // Ephemeral chrome inside a find anchor: without the skip a query on the
+    // digits paints a highlight in a unit that counted no match.
+    expect(screen.getByText("0s").closest("[data-find-skip]")).not.toBeNull();
+    // A progress line DOES earn the second row.
+    expect(screen.getByTestId("segment-row-footer")).toBeTruthy();
+  });
+
+  it("renders no footer for a streaming tool that reports no progress", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const startedAt = 10_000;
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="streaming-tool-quiet"
+        toolName="mcp__fetch"
+        {...inputProps("mcp__fetch", { url: "https://example.com" })}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={startedAt}
+        durationMs={null}
+        variant="row"
+      />,
+    );
+
+    // The counter is on the header row and there is nothing else to say, so the
+    // row is one line - not a line plus an empty strip carrying a lone number.
+    const headerRow = screen
+      .getByText("mcp__fetch")
+      .closest("[data-row-header]");
+    expect(headerRow).not.toBeNull();
+    expect(headerRow?.contains(screen.getByText("0s"))).toBe(true);
+    // And the footer element is ABSENT, not merely empty. Asserting only on the
+    // counter's position left a mutation that rendered the footer with an empty
+    // progress string undetected - an invisible second row that still costs the
+    // padding, which is the defect this whole change removes.
+    expect(screen.queryByTestId("segment-row-footer")).toBeNull();
+  });
+
+  it("omits the heartbeat once the call completes", () => {
+    // Pinned for a second reason than the tests above: on a real clock this
+    // one passes VACUOUSLY. `queryByText("0s")` also returns null when a
+    // counter is rendered and the clock has ticked to "1s", so a regression
+    // that kept the heartbeat alive would go unseen. Pin the clock so "0s" is
+    // what a surviving counter would say, and match any counter besides.
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const startedAt = 10_000;
+    render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="completed-tool-1"
+        toolName="mcp__fetch"
+        {...inputProps("mcp__fetch", { url: "https://example.com" })}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress="Fetched 10/10 pages"
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={startedAt}
+        durationMs={null}
+        variant="row"
+      />,
+    );
+
+    // No footer once streaming ends - progress is a streaming-only affordance.
+    expect(screen.queryByText("Fetched 10/10 pages")).toBeNull();
+    expect(screen.queryByText("0s")).toBeNull();
+    expect(screen.queryByText(/^\d+s$/)).toBeNull();
+  });
+
+  it.each([
+    ["the host's receipt", 20_000, "0s"],
+    ["an earlier native start", 14_000, "6s"],
+    ["a native start ahead of the clock", 25_000, "0s"],
+  ] as const)(
+    "counts the live elapsed time from %s",
+    (_name, startedAt, expected) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(20_000);
+      render(
+        <ToolSegment
+          headerFindUnitId={null}
+          id="elapsed-anchor-tool"
+          toolName="mcp__fetch"
+          {...inputProps("mcp__fetch", { url: "https://example.com" })}
+          error={null}
+          agentMessageSend={null}
+          managedCommand={null}
+          agentMessageReceipt={null}
+          agentMessageDelivery={null}
+          botSendReceipt={null}
+          isStreaming
+          endState={null}
+          stopped={false}
+          progress={null}
+          backgroundOutput={null}
+          backgroundTask={false}
+          startedAt={startedAt}
+          durationMs={null}
+          variant="row"
+        />,
+      );
+
+      expect(screen.getByText(expected)).toBeTruthy();
+    },
+  );
+
+  it.each([
+    ["receipt", 1_700_000_100_000],
+    ["native start", 1_700_000_040_000],
+  ] as const)(
+    "stamps a sent A2A message with the tool's %s time",
+    (_name, startedAt) => {
+      render(
+        <ToolSegment
+          headerFindUnitId={null}
+          id={`a2a-send-stamp-${startedAt}`}
+          toolName="traycer_a2a/traycer_send_message"
+          {...inputProps("traycer_a2a/traycer_send_message", {})}
+          error={null}
+          agentMessageSend={{
+            receiverAgentId: "agent-receiver-1",
+            message: "Please inspect the failing test.",
+            responseId: "response-1",
+            expectReply: false,
+          }}
+          managedCommand={null}
+          agentMessageReceipt={null}
+          agentMessageDelivery={null}
+          botSendReceipt={null}
+          isStreaming={false}
+          endState={null}
+          stopped={false}
+          progress={null}
+          backgroundOutput={null}
+          backgroundTask={false}
+          startedAt={startedAt}
+          durationMs={null}
+          variant="card"
+        />,
+      );
+
+      expect(
+        screen.getByTestId("chat-message-timestamp").getAttribute("datetime"),
+      ).toBe(new Date(startedAt).toISOString());
+    },
+  );
+
+  it("shows a 'stopped' badge for an interrupted call and 'superseded' for a steered one", () => {
+    const { rerender } = render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="end-state-tool-1"
+        toolName="shell"
+        {...inputProps("shell", { command: "sleep 30" })}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState="interrupted"
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="row"
+      />,
+    );
+    expect(screen.getByText("stopped")).toBeTruthy();
+
+    rerender(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="end-state-tool-1"
+        toolName="shell"
+        {...inputProps("shell", { command: "sleep 30" })}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState="superseded"
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="row"
+      />,
+    );
+    expect(screen.getByText("superseded")).toBeTruthy();
+  });
+});
+
+describe("<ToolSegment /> row routing", () => {
+  afterEach(() => {
+    useToolOpenStore.getState().reset("default");
+    cleanup();
+  });
+
+  const ARTIFACT_STAMP: ToolCallArtifactStamp = {
+    artifactId: "art-1",
+    title: "My Artifact",
+    manifest: { files: {}, capturedAt: 0 },
+    originChatId: "chat-1",
+  };
+
+  function renderRouted(artifact: ToolCallArtifactStamp | null) {
+    return render(
+      <ToolSegment
+        headerFindUnitId={null}
+        id="routing-1"
+        toolName="Bash"
+        {...inputProps("Bash", { command: "echo hi" })}
+        artifact={artifact}
+        error={null}
+        agentMessageSend={null}
+        managedCommand={null}
+        agentMessageReceipt={null}
+        agentMessageDelivery={null}
+        botSendReceipt={null}
+        isStreaming={false}
+        endState={null}
+        stopped={false}
+        progress={null}
+        backgroundOutput={null}
+        backgroundTask={false}
+        startedAt={0}
+        durationMs={null}
+        variant="card"
+      />,
+    );
+  }
+
+  it("routes a stamped artifact call to the artifact row", () => {
+    renderRouted(ARTIFACT_STAMP);
+
+    expect(screen.getByTestId("artifact-row-stub")).toBeTruthy();
+    expect(screen.queryByText("Bash")).toBeNull();
+  });
+
+  it("falls through to the generic tool row when no artifact stamp is set", () => {
+    renderRouted(null);
+
+    expect(screen.queryByTestId("artifact-row-stub")).toBeNull();
+    expect(screen.getByText("Bash")).toBeTruthy();
+  });
+});

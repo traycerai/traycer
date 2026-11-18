@@ -1,0 +1,797 @@
+import {
+  AppearanceFontRows,
+  AppearanceMotionRows,
+} from "@/components/settings/themes/appearance-details";
+import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
+import { useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  AppWindow,
+  FileDiff,
+  Image,
+  Palette,
+  RotateCcw,
+  Shapes,
+  SquareTerminal,
+  Type,
+  type LucideIcon,
+} from "lucide-react";
+import { Tabs as TabsPrimitive } from "radix-ui";
+import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import { SettingsRow } from "@/components/settings/settings-row";
+import { SettingsGroup } from "@/components/settings/settings-group";
+import {
+  SettingsDetailHeader,
+  SettingsMasterDetail,
+  SettingsMasterSelect,
+} from "@/components/settings/settings-master-detail";
+import {
+  SETTINGS_AREA_BODY_PROPS,
+  useSettingsAnchorArea,
+  useSettingsAreaStartsAtTop,
+} from "@/components/settings/settings-master-detail-area";
+import { settingsRailRowClassName } from "@/components/settings/settings-rail-row";
+import { StartPageSettingsSection } from "@/components/settings/start-page-settings-section";
+import { DiffViewerSettingsSection } from "@/components/settings/diff-viewer-settings-section";
+import { useSettingsDensity } from "@/providers/settings-density-context";
+import { EpicNodeIconColorPicker } from "@/components/settings/controls/node-icon-color-picker";
+import { SettingsNumberInput } from "@/components/settings/controls/settings-number-input";
+import { NullableFontSizeInput } from "@/components/settings/controls/nullable-font-size-input";
+import { FontPicker } from "@/components/settings/controls/font-picker";
+import { ThemeGallery } from "@/components/settings/themes/theme-gallery";
+import { TerminalCursorStylePicker } from "@/components/settings/controls/terminal-cursor-style-picker";
+import { Button } from "@/components/ui/button";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useDesktopZoomBridge } from "@/hooks/runner/use-desktop-zoom-bridge";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import {
+  useRunnerZoomChangeSubscription,
+  useRunnerZoomPercentQuery,
+  useRunnerZoomResetMutation,
+  useRunnerZoomSetMutation,
+} from "@/hooks/runner/use-runner-zoom";
+import { formatZoomPercent } from "@/lib/windows/format-zoom-percent";
+import { Switch } from "@/components/ui/switch";
+import {
+  useSettingsStore,
+  DEFAULT_UI_FONT_SIZE,
+  DEFAULT_CODE_FONT_SIZE,
+  type TerminalCursorStyle,
+} from "@/stores/settings/settings-store";
+import { cn } from "@/lib/utils";
+import {
+  isOfficeViewChoice,
+  OFFICE_VIEW_CHOICES,
+  OFFICE_VIEW_LABELS,
+  type OfficeViewChoice,
+} from "@/lib/comm-graph/office/office-view-vocabulary";
+import { useEffectiveTerminalFont } from "@/hooks/settings/use-effective-terminal-font";
+import { useRunnerInstalledFontsQuery } from "@/hooks/runner/use-runner-installed-fonts-query";
+import type { InstalledFont } from "@/lib/desktop-installed-fonts";
+import {
+  trackedSettingSetter,
+  trackSettingChanged,
+  type AnalyticsSetting,
+} from "@/lib/analytics";
+
+function officeViewChoiceLabel(choice: OfficeViewChoice): string {
+  return OFFICE_VIEW_LABELS[choice];
+}
+
+function trackedAppearanceSetter<Value>(
+  setting: AnalyticsSetting,
+  setter: (value: Value) => void,
+): (value: Value) => void {
+  return trackedSettingSetter("appearance", setting, setter);
+}
+
+function trackAppearanceSetting(setting: AnalyticsSetting): void {
+  trackSettingChanged("appearance", setting);
+}
+
+/**
+ * The page's areas, in the order the rail lists them. Each is one group of the
+ * page's definitions, so its label and its search anchor come from there, and
+ * a search result finds its area by the group its row sits in.
+ */
+type AppearanceAreaId =
+  | "themes"
+  | "startPage"
+  | "interface"
+  | "typography"
+  | "terminal"
+  | "diffViewer"
+  | "tasks";
+
+interface AppearanceArea {
+  readonly id: AppearanceAreaId;
+  readonly icon: LucideIcon;
+  readonly description: string;
+}
+
+const APPEARANCE_AREAS: ReadonlyArray<AppearanceArea> = [
+  {
+    id: "themes",
+    icon: Palette,
+    description: "Light and dark themes, and which one is in use.",
+  },
+  {
+    id: "startPage",
+    icon: Image,
+    description: "The wallpaper and what the start page shows.",
+  },
+  {
+    id: "interface",
+    icon: AppWindow,
+    description: "Zoom, motion and contrast across the app.",
+  },
+  {
+    id: "typography",
+    icon: Type,
+    description: "Fonts and sizes for the interface, code and prompts.",
+  },
+  {
+    id: "terminal",
+    icon: SquareTerminal,
+    description: "The terminal's font and cursor.",
+  },
+  {
+    id: "diffViewer",
+    icon: FileDiff,
+    description: "How diffs and file edits in chat are drawn.",
+  },
+  {
+    id: "tasks",
+    icon: Shapes,
+    description: "The agent office view a task opens in, and its icon colors.",
+  },
+];
+
+function appearanceAreaLabel(id: AppearanceAreaId): string {
+  return APPEARANCE.definitions[id].label;
+}
+
+/**
+ * The area a settings-search anchor lives in, or `null` for one that is not
+ * this page's.
+ */
+function appearanceAreaForId(id: string): AppearanceAreaId | null {
+  return APPEARANCE_AREAS.find((area) => area.id === id)?.id ?? null;
+}
+
+function appearanceAreaForAnchor(anchor: string): AppearanceAreaId | null {
+  const definition = Object.values(APPEARANCE.definitions).find(
+    (entry) => entry.anchor === anchor,
+  );
+  if (definition === undefined) return null;
+  const groupKey =
+    definition.kind === "row" ? definition.group : definition.key;
+  return groupKey === null ? null : appearanceAreaForId(groupKey);
+}
+
+/**
+ * Appearance, one area at a time, in the master-detail layout Settings ▸
+ * Providers and Settings ▸ Layout use: a rail of areas beside the picked one
+ * from `md` up, a select above it below `md`.
+ *
+ * The page was one scroll of nine titled groups. It is the long page of the
+ * Application group - thirty rows - so the rail lets a person go to the one
+ * area they came to change.
+ *
+ * The areas are a vertical tab list, so the arrow keys walk them. Every area
+ * stays mounted, hidden while another is picked (`forceMount` makes Radix drop
+ * its own `hidden`, so it is passed here): a settings-search result picks its
+ * area and then looks for its row, and Radix would mount a picked area's
+ * children a commit after the pick.
+ */
+export function AppearanceSettingsPanel() {
+  const isMobile = useIsMobileViewport();
+  const [area, setArea] = useState<AppearanceAreaId>("themes");
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useSettingsAnchorArea("appearance", appearanceAreaForAnchor, setArea);
+  useSettingsAreaStartsAtTop(rootRef, area);
+
+  return (
+    <SettingsPanelShell
+      title={APPEARANCE.page.label}
+      description={APPEARANCE.page.description}
+      // Desktop only, as on Providers and Layout: the card fills the settings
+      // pane and the picked area's body owns the scroll. A phone has one
+      // scroll container already, so there the card is sized by its contents.
+      fillHeight={!isMobile}
+    >
+      <TabsPrimitive.Root
+        ref={rootRef}
+        value={area}
+        onValueChange={(value) => {
+          const next = appearanceAreaForId(value);
+          if (next !== null) setArea(next);
+        }}
+        orientation="vertical"
+        className="flex flex-col md:h-full md:min-h-0"
+      >
+        <SettingsMasterDetail
+          railLabel="Appearance areas"
+          mobileSelect={
+            <SettingsMasterSelect
+              label="Appearance area"
+              value={area}
+              options={APPEARANCE_AREAS.map((entry) => ({
+                value: entry.id,
+                label: appearanceAreaLabel(entry.id),
+                icon: <entry.icon className="size-4 shrink-0" />,
+                trailing: null,
+              }))}
+              onSelect={setArea}
+            />
+          }
+          rail={
+            <TabsPrimitive.List
+              aria-label="Appearance areas"
+              // Shrinks and scrolls in a short pane, as Providers' list does,
+              // so the last areas are never clipped by the card.
+              className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2"
+            >
+              {APPEARANCE_AREAS.map((entry) => (
+                <TabsPrimitive.Trigger
+                  key={entry.id}
+                  value={entry.id}
+                  className={settingsRailRowClassName(area === entry.id)}
+                >
+                  <entry.icon className="size-4 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">
+                    {appearanceAreaLabel(entry.id)}
+                  </span>
+                </TabsPrimitive.Trigger>
+              ))}
+            </TabsPrimitive.List>
+          }
+        >
+          {APPEARANCE_AREAS.map((entry) => (
+            <TabsPrimitive.Content
+              key={entry.id}
+              value={entry.id}
+              forceMount
+              hidden={area !== entry.id}
+              // Named by its area rather than by the rail's trigger, which a
+              // phone does not draw.
+              aria-labelledby={undefined}
+              aria-label={appearanceAreaLabel(entry.id)}
+              className="flex flex-1 flex-col outline-none md:min-h-0"
+            >
+              <div className="border-b border-border/60 pb-4">
+                <SettingsDetailHeader
+                  title={appearanceAreaLabel(entry.id)}
+                  badge={null}
+                  description={entry.description}
+                  footer={null}
+                  action={null}
+                />
+              </div>
+              {/* From `md` up the scroll owner, so the rail and the area's
+              header stay put. A container too: the theme tiles and the
+              terminal preview lay themselves out by the width of this pane,
+              not of the window. */}
+              <div
+                {...SETTINGS_AREA_BODY_PROPS}
+                className="@container -mx-5 flex flex-col gap-4 px-5 pt-4 pb-5 md:min-h-0 md:flex-1 md:overflow-y-auto"
+              >
+                <AppearanceAreaBody area={entry.id} />
+              </div>
+            </TabsPrimitive.Content>
+          ))}
+        </SettingsMasterDetail>
+      </TabsPrimitive.Root>
+    </SettingsPanelShell>
+  );
+}
+
+/**
+ * One area's rows. The area's header already names it, so no group here draws
+ * its own title.
+ */
+function AppearanceAreaBody(props: {
+  readonly area: AppearanceAreaId;
+}): ReactNode {
+  switch (props.area) {
+    case "themes":
+      return <ThemeGallery />;
+    case "startPage":
+      return <StartPageSettingsSection />;
+    case "interface":
+      return <InterfaceArea />;
+    case "typography":
+      return <TypographyArea />;
+    case "terminal":
+      return <TerminalArea />;
+    case "diffViewer":
+      return <DiffViewerSettingsSection />;
+    case "tasks":
+      return <TasksArea />;
+  }
+}
+
+function InterfaceArea(): ReactNode {
+  const pointerCursors = useSettingsStore((state) => state.pointerCursors);
+  const setPointerCursors = useSettingsStore(
+    (state) => state.setPointerCursors,
+  );
+  return (
+    <SettingsGroup
+      group={APPEARANCE.definitions.interface}
+      showTitle={false}
+      tone="default"
+      dataTestId={undefined}
+      fill={false}
+    >
+      <DesktopZoomSettingsRow />
+      <SettingsRow
+        row={APPEARANCE.definitions.pointerCursors}
+        control={
+          <Switch
+            checked={pointerCursors}
+            onCheckedChange={trackedAppearanceSetter(
+              "pointerCursors",
+              setPointerCursors,
+            )}
+            aria-label="Show a hand cursor over clickable controls"
+          />
+        }
+      />
+      <AppearanceMotionRows />
+    </SettingsGroup>
+  );
+}
+
+function TypographyArea(): ReactNode {
+  const uiFontSize = useSettingsStore((state) => state.uiFontSize);
+  const setUiFontSize = useSettingsStore((state) => state.setUiFontSize);
+  const codeFontSize = useSettingsStore((state) => state.codeFontSize);
+  const setCodeFontSize = useSettingsStore((state) => state.setCodeFontSize);
+  const uiFontFamily = useSettingsStore((state) => state.uiFontFamily);
+  const setUiFontFamily = useSettingsStore((state) => state.setUiFontFamily);
+  const codeFontFamily = useSettingsStore((state) => state.codeFontFamily);
+  const setCodeFontFamily = useSettingsStore(
+    (state) => state.setCodeFontFamily,
+  );
+  const installedFonts = useInstalledFonts();
+  return (
+    <SettingsGroup
+      group={APPEARANCE.definitions.typography}
+      showTitle={false}
+      tone="default"
+      dataTestId={undefined}
+      fill={false}
+    >
+      <SettingsRow
+        row={APPEARANCE.definitions.uiFont}
+        control={
+          <div className="flex flex-col items-end gap-2">
+            <FontPicker
+              value={uiFontFamily}
+              onChange={trackedAppearanceSetter(
+                "uiFontFamily",
+                setUiFontFamily,
+              )}
+              options={installedFonts}
+              defaultLabel="Figtree (Default)"
+              resetTooltip="Reset to default"
+              ariaLabel="Interface font"
+            />
+            <SettingsNumberInput
+              value={uiFontSize}
+              onChange={trackedAppearanceSetter("uiFontSize", setUiFontSize)}
+              min={10}
+              max={20}
+              unit="px"
+              ariaLabel="Interface font size"
+              defaultValue={DEFAULT_UI_FONT_SIZE}
+              resetTooltip="Reset to default"
+            />
+          </div>
+        }
+      />
+      <SettingsRow
+        row={APPEARANCE.definitions.codeFont}
+        control={
+          <div className="flex flex-col items-end gap-2">
+            <FontPicker
+              value={codeFontFamily}
+              onChange={trackedAppearanceSetter(
+                "codeFontFamily",
+                setCodeFontFamily,
+              )}
+              options={installedFonts}
+              defaultLabel="System Default"
+              resetTooltip="Reset to default"
+              ariaLabel="Code font"
+            />
+            <SettingsNumberInput
+              value={codeFontSize}
+              onChange={trackedAppearanceSetter(
+                "codeFontSize",
+                setCodeFontSize,
+              )}
+              min={10}
+              max={24}
+              unit="px"
+              ariaLabel="Code font size"
+              defaultValue={DEFAULT_CODE_FONT_SIZE}
+              resetTooltip="Reset to default"
+            />
+          </div>
+        }
+      />
+      <AppearanceFontRows />
+    </SettingsGroup>
+  );
+}
+
+function TerminalArea(): ReactNode {
+  const codeFontSize = useSettingsStore((state) => state.codeFontSize);
+  const terminalFontFamily = useSettingsStore(
+    (state) => state.terminalFontFamily,
+  );
+  const setTerminalFontFamily = useSettingsStore(
+    (state) => state.setTerminalFontFamily,
+  );
+  const terminalFontSize = useSettingsStore((state) => state.terminalFontSize);
+  const setTerminalFontSize = useSettingsStore(
+    (state) => state.setTerminalFontSize,
+  );
+  const terminalCursorStyle = useSettingsStore(
+    (state) => state.terminalCursorStyle,
+  );
+  const setTerminalCursorStyle = useSettingsStore(
+    (state) => state.setTerminalCursorStyle,
+  );
+  const terminalCursorBlink = useSettingsStore(
+    (state) => state.terminalCursorBlink,
+  );
+  const setTerminalCursorBlink = useSettingsStore(
+    (state) => state.setTerminalCursorBlink,
+  );
+  const installedFonts = useInstalledFonts();
+  const compact = useSettingsDensity() === "compact";
+  return (
+    <SettingsGroup
+      group={APPEARANCE.definitions.terminal}
+      showTitle={false}
+      tone="default"
+      dataTestId={undefined}
+      fill={false}
+    >
+      <div className="@container">
+        <div className="grid grid-cols-1 @min-[32rem]:grid-cols-[7fr_5fr]">
+          <div className="flex flex-col">
+            <SettingsRow
+              row={APPEARANCE.definitions.terminalFont}
+              control={
+                <div className="flex flex-col items-end gap-2">
+                  <FontPicker
+                    value={terminalFontFamily}
+                    onChange={trackedAppearanceSetter(
+                      "terminalFontFamily",
+                      setTerminalFontFamily,
+                    )}
+                    options={installedFonts}
+                    defaultLabel="Same as code font"
+                    resetTooltip="Use code font"
+                    ariaLabel="Terminal font"
+                  />
+                  <NullableFontSizeInput
+                    value={terminalFontSize}
+                    followValue={codeFontSize}
+                    onChange={trackedAppearanceSetter(
+                      "terminalFontSize",
+                      setTerminalFontSize,
+                    )}
+                    min={10}
+                    max={24}
+                    ariaLabel="Terminal font size"
+                    resetTooltip="Follow code size"
+                  />
+                </div>
+              }
+            />
+            <SettingsRow
+              row={APPEARANCE.definitions.terminalCursor}
+              control={
+                <TerminalCursorStylePicker
+                  value={terminalCursorStyle}
+                  onChange={trackedAppearanceSetter<TerminalCursorStyle>(
+                    "terminalCursorStyle",
+                    setTerminalCursorStyle,
+                  )}
+                />
+              }
+            />
+            <SettingsRow
+              row={APPEARANCE.definitions.blinkCursor}
+              control={
+                <Switch
+                  checked={terminalCursorBlink}
+                  onCheckedChange={trackedAppearanceSetter(
+                    "terminalCursorBlink",
+                    setTerminalCursorBlink,
+                  )}
+                  aria-label="Blink terminal cursor"
+                />
+              }
+            />
+          </div>
+          <div
+            className={cn(
+              "flex items-center border-t border-border/40 @min-[32rem]:border-t-0 @min-[32rem]:border-l",
+              compact ? "p-3.5" : "p-4",
+            )}
+          >
+            <TerminalPreview />
+          </div>
+        </div>
+      </div>
+    </SettingsGroup>
+  );
+}
+
+function TasksArea(): ReactNode {
+  const artifactIconColorMode = useSettingsStore(
+    (state) => state.artifactIconColorMode,
+  );
+  const setArtifactIconColorMode = useSettingsStore(
+    (state) => state.setArtifactIconColorMode,
+  );
+  const artifactIconColors = useSettingsStore(
+    (state) => state.artifactIconColors,
+  );
+  const setArtifactIconColor = useSettingsStore(
+    (state) => state.setArtifactIconColor,
+  );
+  const resetArtifactIconColors = useSettingsStore(
+    (state) => state.resetArtifactIconColors,
+  );
+  const agentOfficeDefaultView = useSettingsStore(
+    (state) => state.agentOfficeDefaultView,
+  );
+  const setAgentOfficeDefaultView = useSettingsStore(
+    (state) => state.setAgentOfficeDefaultView,
+  );
+  return (
+    <SettingsGroup
+      group={APPEARANCE.definitions.tasks}
+      showTitle={false}
+      tone="default"
+      dataTestId={undefined}
+      fill={false}
+    >
+      <SettingsRow
+        row={APPEARANCE.definitions.agentOfficeDefaultView}
+        control={
+          <Select
+            value={agentOfficeDefaultView}
+            onValueChange={(value) => {
+              if (!isOfficeViewChoice(value)) return;
+              trackAppearanceSetting("agentOfficeDefaultView");
+              setAgentOfficeDefaultView(value);
+            }}
+          >
+            <SelectTrigger
+              size="sm"
+              aria-label="Agent office default view"
+              className="w-[40vw] max-w-32"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {OFFICE_VIEW_CHOICES.map((choice) => (
+                <SelectItem key={choice} value={choice}>
+                  {officeViewChoiceLabel(choice)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        }
+      />
+      <SettingsRow
+        row={APPEARANCE.definitions.artifactIconColors}
+        control={
+          <EpicNodeIconColorPicker
+            enabled={artifactIconColorMode === "byType"}
+            onEnabledChange={(enabled) => {
+              trackAppearanceSetting("artifactIconColorMode");
+              setArtifactIconColorMode(enabled ? "byType" : "none");
+            }}
+            colors={artifactIconColors}
+            onChange={(type, color) => {
+              trackAppearanceSetting("artifactIconColors");
+              setArtifactIconColor(type, color);
+            }}
+            onReset={() => {
+              trackAppearanceSetting("artifactIconColors");
+              resetArtifactIconColors();
+            }}
+          />
+        }
+      />
+    </SettingsGroup>
+  );
+}
+
+/** The fonts installed on this machine, `[]` until the desktop answers. */
+function useInstalledFonts(): readonly InstalledFont[] {
+  const installedFontsQuery = useRunnerInstalledFontsQuery();
+  return useMemo(
+    () => installedFontsQuery.data ?? [],
+    [installedFontsQuery.data],
+  );
+}
+
+/**
+ * The gate, and only the gate. Every hook the row needs reaches
+ * `useRunnerHost()`, which throws without a provider — so a host-less shell
+ * must decide "no row" BEFORE any of them run, which means they live in a
+ * child mounted only once the predicate has passed.
+ */
+function DesktopZoomSettingsRow() {
+  const availability = useSettingsAvailabilityContext();
+  if (!APPEARANCE.definitions.zoom.availableWhen(availability)) return null;
+  return <AvailableDesktopZoomSettingsRow />;
+}
+
+function AvailableDesktopZoomSettingsRow() {
+  const zoom = useDesktopZoomBridge();
+  const zoomQuery = useRunnerZoomPercentQuery(zoom);
+  const setMutation = useRunnerZoomSetMutation(zoom);
+  const resetMutation = useRunnerZoomResetMutation(zoom);
+  useRunnerZoomChangeSubscription(zoom);
+  const percent = zoomQuery.data ?? null;
+
+  // The predicate above is the gate; this only narrows the bridge for the
+  // control below, and resolves the same bridge from the same host.
+  if (zoom === null) return null;
+
+  return (
+    <SettingsRow
+      row={APPEARANCE.definitions.zoom}
+      control={
+        <div className="flex items-center gap-2">
+          <Select
+            value={percent === null ? "loading" : String(percent)}
+            disabled={setMutation.isPending || resetMutation.isPending}
+            onValueChange={(value) => {
+              const nextPercent = Number.parseInt(value, 10);
+              if (!Number.isFinite(nextPercent)) return;
+              setMutation.mutate(nextPercent);
+            }}
+          >
+            <SelectTrigger
+              size="sm"
+              aria-label="Display zoom"
+              className="w-[min(40vw,8rem)]"
+            >
+              <span data-slot="select-value">
+                {percent === null ? "Loading" : formatZoomPercent(percent)}
+              </span>
+            </SelectTrigger>
+            <SelectContent>
+              {percent === null ? (
+                <SelectItem value="loading" disabled>
+                  Loading
+                </SelectItem>
+              ) : null}
+              {zoom.ladder.map((candidate) => (
+                <SelectItem key={candidate} value={String(candidate)}>
+                  {formatZoomPercent(candidate)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={resetMutation.isPending}
+            onClick={() => {
+              resetMutation.mutate();
+            }}
+          >
+            <RotateCcw aria-hidden="true" />
+            Reset
+            {resetMutation.isPending ? (
+              <AgentSpinningDots
+                className="ml-1"
+                testId="desktop-zoom-settings-reset-pending"
+                variant="dots2"
+              />
+            ) : null}
+          </Button>
+        </div>
+      }
+    />
+  );
+}
+
+/**
+ * Pure-CSS-var preview of the active terminal palette. Renders no xterm
+ * instance - the fake prompt + ANSI-colored output reads `--term-ansi-*`
+ * directly so the cascade re-paints in lockstep with the Preset picker
+ * above. Decorative; `aria-hidden` because the surrounding rows already
+ * convey the same information textually. Font family/size are applied
+ * inline rather than through the `font-mono`/`text-code-sm` utilities,
+ * which track the Code font - this preview must reflect the effective
+ * TERMINAL font, which `useEffectiveTerminalFont` resolves.
+ */
+function TerminalPreview() {
+  const cursorStyle = useSettingsStore((state) => state.terminalCursorStyle);
+  const cursorBlink = useSettingsStore((state) => state.terminalCursorBlink);
+  const terminalFont = useEffectiveTerminalFont();
+  return (
+    <div
+      className="w-full overflow-hidden rounded-md border border-border bg-background text-foreground"
+      style={{
+        fontFamily: terminalFont.fontFamily,
+        fontSize: `${terminalFont.fontSize}px`,
+      }}
+      aria-hidden="true"
+    >
+      <div className="flex items-center gap-1.5 border-b border-border bg-foreground/8 px-3 py-1.5">
+        <span className="size-2.5 rounded-full bg-[var(--term-ansi-red)]" />
+        <span className="size-2.5 rounded-full bg-[var(--term-ansi-yellow)]" />
+        <span className="size-2.5 rounded-full bg-[var(--term-ansi-green)]" />
+        <span className="ml-2 text-ui-xs text-muted-foreground">terminal</span>
+      </div>
+      <div className="space-y-0.5 px-3 py-2 leading-snug">
+        <div>
+          <span className="text-[var(--term-ansi-green)]">$</span>{" "}
+          <span>git status</span>
+        </div>
+        <div className="text-[var(--term-ansi-cyan)]">On branch main</div>
+        <div>Changes to be committed:</div>
+        <div className="text-[var(--term-ansi-green)]">
+          {"  modified: src/index.css"}
+        </div>
+        <div className="text-[var(--term-ansi-red)]">
+          {"  deleted:  legacy/old.ts"}
+        </div>
+        <div className="text-[var(--term-ansi-yellow)]">
+          {"  untracked: foo.txt"}
+        </div>
+        <div>
+          <span className="text-[var(--term-ansi-green)]">$</span>{" "}
+          <PreviewCursor style={cursorStyle} blink={cursorBlink} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Live cursor glyph for the preview - mirrors the chosen shape/blink so the
+// setting is tangible without spinning up an xterm instance. The lit rect uses
+// the terminal foreground token so it tracks the active theme.
+const PREVIEW_CURSOR_SHAPE_CLASS: Record<TerminalCursorStyle, string> = {
+  block: "inset-0",
+  bar: "top-0 bottom-0 left-0 w-[2px]",
+  underline: "right-0 bottom-0 left-0 h-[2px]",
+};
+
+function PreviewCursor(props: { style: TerminalCursorStyle; blink: boolean }) {
+  return (
+    <span className="relative inline-block h-[1.1em] w-[0.6ch] align-text-bottom">
+      <span
+        className={cn(
+          "absolute bg-foreground",
+          PREVIEW_CURSOR_SHAPE_CLASS[props.style],
+          props.blink && "motion-safe:animate-caret-blink",
+        )}
+      />
+    </span>
+  );
+}

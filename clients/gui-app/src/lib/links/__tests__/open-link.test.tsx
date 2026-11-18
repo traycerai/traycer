@@ -1,0 +1,820 @@
+import "../../../../__tests__/test-browser-apis";
+import type { ReactNode } from "react";
+import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostListItem } from "@traycer/protocol/host/host-status";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type {
+  BrowserOpenedTab,
+  BrowserSessionInfo,
+  BrowserTabInfo,
+} from "@traycer/protocol/host/browser/contracts";
+import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { epicScope } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
+import { LinkTargetContext } from "@/lib/links/link-target-context";
+import { setMobileApp } from "@/lib/mobile-app";
+import {
+  useOpenLink,
+  useOpenLinkIn,
+  type LinkClickEvent,
+} from "@/lib/links/open-link";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { isBrowserSessionTileRef } from "@/stores/epics/canvas/types";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+
+const EPIC_ID = "epic-links";
+const VIEW_TAB_ID = "view-tab-links";
+const HOST_ID = "host-links";
+const DOCS_URL = "https://example.test/docs";
+
+interface ToastAction {
+  readonly label: string;
+  readonly onClick: () => void;
+}
+
+const toastError = vi.hoisted(() =>
+  vi.fn<
+    (message: string, options: { action?: ToastAction } | undefined) => void
+  >(),
+);
+const toastWarning = vi.hoisted(() =>
+  vi.fn<
+    (
+      message: string,
+      options: { description?: string; action?: ToastAction } | undefined,
+    ) => void
+  >(),
+);
+
+const harness = vi.hoisted<{
+  sessions: BrowserSessionsState | null;
+  /** The chosen open host's inventory; null when no pin or local host picks one. */
+  openSessions: BrowserSessionsState | null;
+  bridged: string[];
+  intents: TileOpenIntent[];
+  /** Tab ids with an Electron control binding (headless tabs have none). */
+  boundTabIds: string[];
+  navigated: string[];
+  /** The directory's rows by host id; the binding answers `findById` from it. */
+  entries: Map<string, HostDirectoryEntry>;
+}>(() => ({
+  sessions: null,
+  openSessions: null,
+  bridged: [],
+  intents: [],
+  boundTabIds: [],
+  navigated: [],
+  entries: new Map(),
+}));
+
+vi.mock("sonner", () => ({
+  toast: { error: toastError, warning: toastWarning },
+}));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostBinding: () => ({
+    directory: {
+      findById: (hostId: string) => harness.entries.get(hostId) ?? null,
+    },
+  }),
+}));
+vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
+  useMaybeBrowserSessionsSnapshot: () => ({ current: harness.sessions }),
+  useMaybeBrowserOpenSessionsSnapshot: () => ({
+    current: harness.openSessions,
+  }),
+}));
+vi.mock("@/lib/links/open-external-link", () => ({
+  useOpenExternalLink: () => ({
+    isPending: false,
+    mutateAsync: (url: string) => {
+      harness.bridged.push(url);
+      return Promise.resolve();
+    },
+  }),
+}));
+vi.mock("@/lib/browser-view/sessions/electron-tab-directory", () => ({
+  electronTabBinding: (_hostId: string, _sessionId: string, tabId: string) =>
+    harness.boundTabIds.includes(tabId)
+      ? {
+          control: (frame: { kind: string; url: string }) => {
+            harness.navigated.push(frame.url);
+            return Promise.resolve();
+          },
+        }
+      : null,
+}));
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({
+    openTile: (intent: TileOpenIntent) => {
+      harness.intents.push(intent);
+      return null;
+    },
+  }),
+}));
+
+function tab(overrides: Partial<BrowserTabInfo>): BrowserTabInfo {
+  return {
+    tabId: "tab-1",
+    url: DOCS_URL,
+    originTier: "external",
+    status: "ready",
+    title: null,
+    viewed: false,
+    drivenBy: [],
+    boundWindowId: null,
+    ...overrides,
+  };
+}
+
+function session(tabs: readonly BrowserTabInfo[]): BrowserSessionInfo {
+  return {
+    sessionId: "session-1",
+    scope: epicScope(EPIC_ID),
+    hostId: HOST_ID,
+    profile: "primary",
+    lastActivityAt: 0,
+    runtime: { kind: "headless", revision: 1 },
+    tabs: [...tabs],
+  };
+}
+
+const openTab = vi.fn<BrowserSessionsState["openTab"]>(() =>
+  Promise.resolve({
+    sessionId: "session-opened",
+    tabId: "tab-opened",
+    handoffToken: null,
+  }),
+);
+
+function liveSessions(
+  items: readonly BrowserSessionInfo[],
+): BrowserSessionsState {
+  return {
+    hostId: HOST_ID,
+    lifecycle: "live",
+    inventoryReady: true,
+    canMaterializeElectron: false,
+    connectionGeneration: 0,
+    viewports: {},
+    setViewport: () => Promise.reject(new Error("not used")),
+    reportViewport: () => undefined,
+    items,
+    errorMessage: null,
+    retry: () => undefined,
+    openTab,
+    prepareOpenTab: () => {
+      throw new Error("not used in this test");
+    },
+    closeTab: () => Promise.resolve(),
+    attachTab: () => Promise.reject(new Error("not used")),
+    moveTab: () => Promise.reject(new Error("not used")),
+  };
+}
+
+const OPEN_HOST_ID = "host-open";
+const openTabOnOpenHost = vi.fn<BrowserSessionsState["openTab"]>(() =>
+  Promise.resolve({
+    sessionId: "session-on-open-host",
+    tabId: "tab-on-open-host",
+    handoffToken: null,
+  }),
+);
+
+function openHostSessions(
+  tabs: readonly BrowserTabInfo[],
+): BrowserSessionsState {
+  return {
+    ...liveSessions([{ ...session(tabs), hostId: OPEN_HOST_ID }]),
+    hostId: OPEN_HOST_ID,
+    openTab: openTabOnOpenHost,
+  };
+}
+
+function click(overrides: Partial<LinkClickEvent>): LinkClickEvent {
+  return {
+    altKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+    button: 0,
+    ...overrides,
+  };
+}
+
+function wrapper(props: { readonly children: ReactNode }): ReactNode {
+  return (
+    <LinkTargetContext value={{ epicId: EPIC_ID, viewTabId: VIEW_TAB_ID }}>
+      {props.children}
+    </LinkTargetContext>
+  );
+}
+
+function renderOpenLink() {
+  return renderHook(() => useOpenLink(), { wrapper }).result;
+}
+
+function openViewTab(): void {
+  useEpicCanvasStore.setState({
+    tabsById: {
+      [VIEW_TAB_ID]: { tabId: VIEW_TAB_ID, epicId: EPIC_ID, name: "Links" },
+    },
+    openTabOrder: [VIEW_TAB_ID],
+    activeTabId: VIEW_TAB_ID,
+    canvasByTabId: {},
+  });
+}
+
+beforeEach(() => {
+  harness.sessions = liveSessions([]);
+  harness.openSessions = null;
+  harness.bridged = [];
+  harness.intents = [];
+  harness.boundTabIds = [];
+  harness.navigated = [];
+  harness.entries = new Map();
+  openViewTab();
+  useSettingsStore.setState({
+    linkOpen: {
+      default: "in-app",
+      markdown: "in-app",
+      terminal: "in-app",
+      github: "in-app",
+      image: "in-app",
+    },
+    browserDevOrigins: [],
+  });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+  setMobileApp(false);
+});
+
+describe("useOpenLink in the installed mobile app", () => {
+  beforeEach(() => {
+    setMobileApp(true);
+  });
+
+  // The setting is hidden there, but a value persisted before the build was
+  // installed (or synced from a desktop) may still say "in-app".
+  it("opens a configured in-app link in the phone's browser, alt-click included", () => {
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(DOCS_URL, "markdown", null);
+    void openLink(DOCS_URL, "markdown", click({ altKey: true }));
+
+    expect(harness.bridged).toEqual([DOCS_URL, DOCS_URL]);
+    expect(openTab).not.toHaveBeenCalled();
+    expect(harness.intents).toEqual([]);
+  });
+
+  it("offers no in-app destination and lands an explicit in-app request outside", () => {
+    const { result } = renderHook(() => useOpenLinkIn(), { wrapper });
+
+    expect(result.current.canOpenInApp).toBe(false);
+    result.current.openLinkIn(DOCS_URL, "in-app");
+
+    expect(harness.bridged).toEqual([DOCS_URL]);
+    expect(openTab).not.toHaveBeenCalled();
+  });
+});
+
+describe("useOpenLink", () => {
+  it("opens a configured in-app link as a browser tile", async () => {
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(DOCS_URL, "markdown", null);
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(openTab).toHaveBeenCalledWith(null, DOCS_URL);
+    const intent = harness.intents[0];
+    expect(isBrowserSessionTileRef(intent.node)).toBe(true);
+    expect(intent).toMatchObject({
+      target: { tabId: VIEW_TAB_ID },
+      gesture: "single",
+      dedupe: true,
+      placement: null,
+    });
+    expect(harness.bridged).toEqual([]);
+  });
+
+  it.each(["auth", "docs", "account", "app"] as const)(
+    "sends a %s link straight out and never touches sessions",
+    (kind) => {
+      const { current: openLink } = renderOpenLink();
+
+      void openLink(DOCS_URL, kind, null);
+
+      expect(harness.bridged).toEqual([DOCS_URL]);
+      expect(openTab).not.toHaveBeenCalled();
+      expect(harness.intents).toEqual([]);
+    },
+  );
+
+  it("sends a non-http(s) link out whatever the kind", () => {
+    const { current: openLink } = renderOpenLink();
+
+    void openLink("mailto:someone@example.test", "markdown", null);
+
+    expect(harness.bridged).toEqual(["mailto:someone@example.test"]);
+    expect(openTab).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["Command", click({ metaKey: true })],
+    ["Control", click({ ctrlKey: true })],
+  ])("%s-click forces external", (_name, event) => {
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(DOCS_URL, "markdown", event);
+
+    expect(harness.bridged).toEqual([DOCS_URL]);
+    expect(openTab).not.toHaveBeenCalled();
+  });
+
+  it("inverts the configured mode on alt-click, both ways", async () => {
+    useSettingsStore.setState({
+      linkOpen: {
+        default: "per-kind",
+        markdown: "external",
+        terminal: "in-app",
+        github: "in-app",
+        image: "in-app",
+      },
+    });
+    const { current: openLink } = renderOpenLink();
+
+    // Configured external + alt -> in-app.
+    void openLink(DOCS_URL, "markdown", click({ altKey: true }));
+    await waitFor(() => expect(openTab).toHaveBeenCalledWith(null, DOCS_URL));
+    expect(harness.bridged).toEqual([]);
+
+    // Configured in-app + alt -> external.
+    void openLink(
+      "https://example.test/terminal",
+      "terminal",
+      click({ altKey: true }),
+    );
+    expect(harness.bridged).toEqual(["https://example.test/terminal"]);
+    expect(openTab).toHaveBeenCalledTimes(1);
+  });
+
+  it("consumes alt at the link layer instead of passing it to placement", async () => {
+    useSettingsStore.setState({
+      linkOpen: {
+        default: "per-kind",
+        markdown: "external",
+        terminal: "in-app",
+        github: "in-app",
+        image: "in-app",
+      },
+    });
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(DOCS_URL, "markdown", click({ altKey: true }));
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    // `alt` already inverted external -> in-app (A3); leaking it into the
+    // intent would ALSO invert tab<->split in the resolver.
+    expect(harness.intents[0].modifiers).toEqual({
+      shift: false,
+      alt: false,
+      middle: false,
+    });
+  });
+
+  it("opens externally on a surface with no link target at all (A5a)", () => {
+    const { result } = renderHook(() => useOpenLink());
+
+    void result.current(DOCS_URL, "markdown", null);
+
+    expect(harness.bridged).toEqual([DOCS_URL]);
+    expect(openTab).not.toHaveBeenCalled();
+    expect(harness.intents).toEqual([]);
+    // Nothing was attempted, so nothing failed: this is not the A5 toast.
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("focuses a tab already showing the same page instead of opening one", async () => {
+    harness.sessions = liveSessions([
+      session([tab({ tabId: "tab-open", url: "https://example.test/docs/" })]),
+    ]);
+    const { current: openLink } = renderOpenLink();
+
+    // Trailing slash is not a different page (B4).
+    void openLink("https://example.test/docs", "markdown", null);
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(openTab).not.toHaveBeenCalled();
+    expect(harness.intents[0].node).toMatchObject({
+      type: "browser-session",
+      hostId: HOST_ID,
+      sessionId: "session-1",
+      tabId: "tab-open",
+    });
+  });
+
+  it("moves a bound tab to the clicked fragment instead of opening one", async () => {
+    harness.sessions = liveSessions([
+      session([tab({ tabId: "tab-open", url: "https://example.test/docs/" })]),
+    ]);
+    harness.boundTabIds = ["tab-open"];
+    const { current: openLink } = renderOpenLink();
+
+    void openLink("https://example.test/docs#section", "markdown", null);
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(openTab).not.toHaveBeenCalled();
+    expect(harness.navigated).toEqual(["https://example.test/docs#section"]);
+  });
+
+  it("opens a fresh tab when a tab it cannot move is on another fragment", async () => {
+    // Headless: no Electron binding, so reusing it would leave the user on the
+    // anchor they came from.
+    harness.sessions = liveSessions([
+      session([
+        tab({ tabId: "tab-open", url: "https://example.test/docs#intro" }),
+      ]),
+    ]);
+    const { current: openLink } = renderOpenLink();
+
+    void openLink("https://example.test/docs#section", "markdown", null);
+
+    await waitFor(() =>
+      expect(openTab).toHaveBeenCalledWith(
+        null,
+        "https://example.test/docs#section",
+      ),
+    );
+    expect(harness.navigated).toEqual([]);
+  });
+
+  it("joins an openTab already in flight for the same page", async () => {
+    const pending: {
+      settle: (tab: BrowserOpenedTab) => void;
+    } = { settle: () => undefined };
+    openTab.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          pending.settle = resolve;
+        }),
+    );
+    const { current: openLink } = renderOpenLink();
+
+    // Both clicks land before the first `openTab` settles, so neither can see
+    // the other's tab in the snapshot.
+    void openLink(DOCS_URL, "markdown", null);
+    void openLink(DOCS_URL, "markdown", null);
+
+    expect(openTab).toHaveBeenCalledTimes(1);
+    pending.settle({
+      sessionId: "session-1",
+      tabId: "tab-joined",
+      handoffToken: null,
+    });
+
+    await waitFor(() => expect(harness.intents).toHaveLength(2));
+    expect(openTab).toHaveBeenCalledTimes(1);
+    expect(harness.intents.map((intent) => intent.node)).toEqual([
+      expect.objectContaining({ tabId: "tab-joined" }),
+      expect.objectContaining({ tabId: "tab-joined" }),
+    ]);
+  });
+
+  it("middle-click skips the match and opens a fresh background tab", async () => {
+    harness.sessions = liveSessions([session([tab({ tabId: "tab-open" })])]);
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(DOCS_URL, "markdown", click({ button: 1 }));
+
+    await waitFor(() => expect(openTab).toHaveBeenCalledWith(null, DOCS_URL));
+    expect(harness.intents[0].modifiers).toEqual({
+      shift: false,
+      alt: false,
+      middle: true,
+    });
+  });
+
+  it("records dev-server origins from terminal links only", () => {
+    const { current: openLink } = renderOpenLink();
+
+    void openLink("http://localhost:5173/ready", "terminal", null);
+    void openLink("http://localhost:5173/again", "terminal", null);
+    void openLink("http://localhost:5174/docs", "markdown", null);
+
+    expect(useSettingsStore.getState().browserDevOrigins).toEqual([
+      "http://localhost:5173",
+    ]);
+  });
+
+  it("falls back to the epic when the view tab closed mid-open (R8)", async () => {
+    const settles: Array<(tab: BrowserOpenedTab) => void> = [];
+    openTab.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          settles.push(resolve);
+        }),
+    );
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(DOCS_URL, "markdown", null);
+    await waitFor(() => expect(settles).toHaveLength(1));
+    // The header tab goes away while the host is still opening the tab.
+    useEpicCanvasStore.setState({
+      tabsById: {},
+      openTabOrder: [],
+      activeTabId: null,
+    });
+    settles[0]({
+      sessionId: "session-opened",
+      tabId: "tab-opened",
+      handoffToken: null,
+    });
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(harness.intents[0].target).toEqual({ epicId: EPIC_ID });
+  });
+
+  it("offers the OS browser on a refusal instead of taking it", async () => {
+    openTab.mockImplementationOnce(() =>
+      Promise.reject(new Error("no runtime")),
+    );
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(DOCS_URL, "markdown", null);
+
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(harness.bridged).toEqual([]);
+    const [message, options] = toastError.mock.calls[0];
+    expect(message).toBe("no runtime");
+    expect(options?.action?.label).toBe("Open in browser");
+    // The user's own click is the only thing that may send the link outside.
+    options?.action?.onClick();
+    expect(harness.bridged).toEqual([DOCS_URL]);
+  });
+
+  it("offers the OS browser when no browser session is live", () => {
+    harness.sessions = null;
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(DOCS_URL, "markdown", null);
+
+    expect(toastError).toHaveBeenCalled();
+    expect(harness.bridged).toEqual([]);
+    expect(harness.intents).toEqual([]);
+  });
+});
+
+function hostItem(kind: "personal" | "sandbox"): HostListItem {
+  return {
+    hostId: HOST_ID,
+    displayName: HOST_ID,
+    platform: "linux",
+    kind,
+    publicKey: "pk",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatePolicy: "manual",
+    status: {
+      connectivity: "connectable",
+      viewerReachability: "ok",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: "1.5.0",
+      lastSeenAt: null,
+    },
+    ...(kind === "sandbox"
+      ? {
+          sandboxState: "awake" as const,
+          sandboxFrozen: false,
+          profile: "agent" as const,
+        }
+      : {}),
+  };
+}
+
+function remoteEntry(kind: "personal" | "sandbox"): HostDirectoryEntry {
+  return hostListItemToDirectoryEntry(
+    hostItem(kind),
+    "wss://relay.example.test",
+  );
+}
+
+describe("useOpenLink on a host that does not take sign-ins", () => {
+  const CREDENTIALED = "https://alice:token@example.test/docs";
+
+  it("opens nothing for a credentialed URL on a sandbox host, and says why", () => {
+    harness.entries.set(HOST_ID, remoteEntry("sandbox"));
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(CREDENTIALED, "markdown", null);
+
+    expect(openTab).not.toHaveBeenCalled();
+    expect(harness.intents).toEqual([]);
+    expect(harness.navigated).toEqual([]);
+    expect(toastWarning).toHaveBeenCalledTimes(1);
+    expect(toastWarning.mock.lastCall).toMatchObject([
+      "Sandboxes don't take sign-ins",
+      { description: "Remove the sign-in from this URL to open it here." },
+    ]);
+  });
+
+  it("offers the OS browser as the refusal's action, and only the user's click takes it", () => {
+    harness.entries.set(HOST_ID, remoteEntry("sandbox"));
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(CREDENTIALED, "markdown", null);
+
+    expect(harness.bridged).toEqual([]);
+    const action = toastWarning.mock.lastCall?.[1]?.action;
+    expect(action?.label).toBe("Open in browser");
+    action?.onClick();
+    expect(harness.bridged).toEqual([CREDENTIALED]);
+  });
+
+  it("does not navigate a sandbox tab already showing that page on another fragment", () => {
+    harness.entries.set(HOST_ID, remoteEntry("sandbox"));
+    harness.sessions = liveSessions([
+      session([
+        tab({
+          tabId: "tab-open",
+          url: "https://alice:token@example.test/docs/",
+        }),
+      ]),
+    ]);
+    harness.boundTabIds = ["tab-open"];
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(
+      "https://alice:token@example.test/docs#section",
+      "markdown",
+      null,
+    );
+
+    expect(harness.navigated).toEqual([]);
+    expect(harness.intents).toEqual([]);
+    expect(openTab).not.toHaveBeenCalled();
+    expect(toastWarning).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens a plain URL on a sandbox host as usual", async () => {
+    harness.entries.set(HOST_ID, remoteEntry("sandbox"));
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(DOCS_URL, "markdown", null);
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(openTab).toHaveBeenCalledWith(null, DOCS_URL);
+    expect(toastWarning).not.toHaveBeenCalled();
+  });
+
+  it("passes the same credentialed URL through on a personal host", async () => {
+    harness.entries.set(HOST_ID, remoteEntry("personal"));
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(CREDENTIALED, "markdown", null);
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(openTab).toHaveBeenCalledWith(null, CREDENTIALED);
+    expect(toastWarning).not.toHaveBeenCalled();
+  });
+
+  it("passes it through when the directory has no row for the host", async () => {
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(CREDENTIALED, "markdown", null);
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(toastWarning).not.toHaveBeenCalled();
+  });
+});
+
+describe("useOpenLink on the open host", () => {
+  const SAME_PAGE = tab({ tabId: "tab-same", url: DOCS_URL });
+
+  it("opens the tile on the open host, through that host's openTab", async () => {
+    harness.openSessions = openHostSessions([]);
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(DOCS_URL, "markdown", null);
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(openTabOnOpenHost).toHaveBeenCalledWith(null, DOCS_URL);
+    expect(openTab).not.toHaveBeenCalled();
+    expect(harness.intents[0].node).toMatchObject({
+      type: "browser-session",
+      hostId: OPEN_HOST_ID,
+    });
+  });
+
+  it("does not focus a tab showing the page on the tile's own host", async () => {
+    harness.sessions = liveSessions([session([SAME_PAGE])]);
+    harness.openSessions = openHostSessions([]);
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(DOCS_URL, "markdown", null);
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(openTabOnOpenHost).toHaveBeenCalledWith(null, DOCS_URL);
+    expect(harness.intents[0].node).toMatchObject({ hostId: OPEN_HOST_ID });
+  });
+
+  it("focuses a tab showing the page on the open host", async () => {
+    harness.openSessions = openHostSessions([SAME_PAGE]);
+    const { current: openLink } = renderOpenLink();
+
+    void openLink(DOCS_URL, "markdown", null);
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(openTabOnOpenHost).not.toHaveBeenCalled();
+    expect(harness.intents[0].node).toMatchObject({
+      hostId: OPEN_HOST_ID,
+      tabId: "tab-same",
+    });
+  });
+
+  it("refuses a credentialed URL on a sandbox open host though the tile's host is personal", () => {
+    harness.entries.set(HOST_ID, remoteEntry("personal"));
+    harness.entries.set(
+      OPEN_HOST_ID,
+      hostListItemToDirectoryEntry(
+        { ...hostItem("sandbox"), hostId: OPEN_HOST_ID },
+        "wss://relay.example.test",
+      ),
+    );
+    harness.openSessions = openHostSessions([]);
+    const { current: openLink } = renderOpenLink();
+
+    void openLink("https://alice:token@example.test/docs", "markdown", null);
+
+    expect(openTabOnOpenHost).not.toHaveBeenCalled();
+    expect(openTab).not.toHaveBeenCalled();
+    expect(harness.intents).toEqual([]);
+    expect(toastWarning).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useOpenLinkIn", () => {
+  const EXTERNAL_ONLY_SETTINGS = {
+    default: "external",
+    markdown: "external",
+    terminal: "external",
+    github: "external",
+    image: "external",
+  } as const;
+
+  it("opens in the OS browser on request, whatever the link-open setting says", () => {
+    const { result } = renderHook(() => useOpenLinkIn(), { wrapper });
+
+    result.current.openLinkIn(DOCS_URL, "external");
+
+    expect(harness.bridged).toEqual([DOCS_URL]);
+    expect(openTab).not.toHaveBeenCalled();
+    expect(harness.intents).toEqual([]);
+  });
+
+  it("opens in-app on request even when the link-open setting says external", async () => {
+    useSettingsStore.setState({ linkOpen: EXTERNAL_ONLY_SETTINGS });
+    const { result } = renderHook(() => useOpenLinkIn(), { wrapper });
+
+    result.current.openLinkIn(DOCS_URL, "in-app");
+
+    await waitFor(() => expect(harness.intents).toHaveLength(1));
+    expect(openTab).toHaveBeenCalledWith(null, DOCS_URL);
+    expect(harness.intents[0]).toMatchObject({
+      target: { tabId: VIEW_TAB_ID },
+      modifiers: { shift: false, alt: false, middle: false },
+    });
+    expect(harness.bridged).toEqual([]);
+  });
+
+  it("falls back to the OS browser for an in-app request with no link target", () => {
+    const { result } = renderHook(() => useOpenLinkIn());
+
+    result.current.openLinkIn(DOCS_URL, "in-app");
+
+    expect(harness.bridged).toEqual([DOCS_URL]);
+    expect(openTab).not.toHaveBeenCalled();
+    expect(harness.intents).toEqual([]);
+  });
+
+  it("sends a non-http(s) URL to the OS even when asked to open it in-app", () => {
+    const { result } = renderHook(() => useOpenLinkIn(), { wrapper });
+
+    result.current.openLinkIn("mailto:someone@example.test", "in-app");
+
+    expect(harness.bridged).toEqual(["mailto:someone@example.test"]);
+    expect(openTab).not.toHaveBeenCalled();
+  });
+
+  it("reports an in-app destination only where a link target is provided", () => {
+    const withTarget = renderHook(() => useOpenLinkIn(), { wrapper });
+    const withoutTarget = renderHook(() => useOpenLinkIn());
+
+    expect(withTarget.result.current.canOpenInApp).toBe(true);
+    expect(withoutTarget.result.current.canOpenInApp).toBe(false);
+  });
+});

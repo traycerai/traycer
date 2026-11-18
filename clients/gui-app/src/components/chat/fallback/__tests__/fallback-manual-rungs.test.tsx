@@ -1,0 +1,2261 @@
+import { useState, type ComponentProps, type ReactNode } from "react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  ChatRunSettings,
+  FallbackWaitDisposition,
+  LastFailedAttempt,
+} from "@traycer/protocol/host/agent/gui/subscribe";
+import type { FallbackRungRefusalDetail } from "@traycer/protocol/host/chat-fallback";
+import { BotIdentityContext } from "@/components/bots/bot-identity-context";
+import { useBotMayChange } from "@/hooks/bots/use-bot-may-change";
+import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
+import {
+  BotMayChangeContext,
+  readerMayChangeBot,
+} from "@/hooks/bots/use-reader-may-change-bot";
+import type { EnvironmentListResponseV11 } from "@traycer/protocol/host/environment/contracts";
+import { REASON_ELIGIBLE_RUNGS } from "@traycer/protocol/host/fallback-policy";
+import { AGENT_FAILURE_REASONS } from "@traycer/protocol/persistence/epic/content-blocks";
+import { recordFailedTurnRefusal } from "@/components/chat/fallback/failed-turn-actions";
+import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
+import { FallbackManualRungActions } from "@/components/chat/fallback/fallback-manual-rungs";
+import type { RoutingDestinationPicker } from "@/components/chat/fallback/routing-destination-picker";
+import { chatFallbackMutationKeys } from "@/lib/query-keys";
+import { formatClockTime, formatResetDateTime } from "@/lib/relative-time";
+import {
+  BANNED_VOCABULARY,
+  FAILED_CLAUDE_TUPLE,
+  chatRunSettings,
+  lastFailedAttempt,
+} from "./fallback-fixtures";
+
+const EPIC_ID = "epic-manual";
+const CHAT_ID = "chat-manual";
+const HOST_ID = "host-manual";
+const TURN_ID = "turn-attempt";
+const USER_MESSAGE_ID = "user-msg-attempt";
+const RESETS_AT = new Date(2026, 5, 15, 15, 0, 0).getTime();
+
+interface MockRungResponse {
+  readonly outcome: string;
+  readonly detail: FallbackRungRefusalDetail | null;
+}
+
+const harness = vi.hoisted(() => {
+  // The published confirmed actions, in order. The announcer reads this slot
+  // for real; here it is a recorder so a case can assert what was published.
+  const publishedActions: unknown[] = [];
+  // Same idea for MF11's unattended-outcome channel: `useFallbackRunManualRung`
+  // reaches `publishUnattended` through the reporting object built from this
+  // slice's own `usePublishUnattendedFallbackOutcome`, which in turn resolves
+  // through `useExistingChatSessionHandle` -> `handle.store.getState()`. A
+  // slice omitting this member fails the same way the comment below warns
+  // about for `publishConfirmedManualFallbackAction`: a production stack trace
+  // inside `use-unattended-fallback-outcome.ts` wearing a fixture gap.
+  const publishedUnattended: unknown[] = [];
+  // `publishConfirmedManualFallbackAction` is part of the slice, not an extra
+  // on the double: the component reaches it through
+  // `handle.store.getState()`, so a slice that omits it fails as
+  // "publishConfirmedManualFallbackAction is not a function" thrown INSIDE
+  // `use-confirmed-manual-action.ts` - a fixture gap wearing a production
+  // stack trace, which is the same class as the under-modelled `onSuccess`
+  // below.
+  //
+  // `access` and `connectionStatus` are the chat's ACT CAPABILITY, and they
+  // are part of the slice for the same reason the two publishers are: the
+  // component reaches them through `handle.store`, so a slice that omitted
+  // them would answer `undefined` and silently disable every affordance in
+  // this file - a fixture gap that reads as "the feature is broken" rather
+  // than "the double is short". The default is the state every case here
+  // assumed before the gate existed: this user owns the chat and its stream is
+  // up. The two cases where it is not are pinned explicitly below.
+  type Slice = {
+    lastFailedAttempt: LastFailedAttempt | undefined;
+    access: { readonly canAct: boolean } | null;
+    connectionStatus: "connecting" | "open" | "reconnecting" | "closed";
+    chat: { readonly settings: ChatRunSettings | null } | null;
+    publishConfirmedManualFallbackAction: (input: unknown) => void;
+    publishUnattendedFallbackOutcome: (input: unknown) => void;
+  };
+  const initialSlice = (): Slice => ({
+    lastFailedAttempt: undefined,
+    access: { canAct: true },
+    connectionStatus: "open",
+    chat: null,
+    publishConfirmedManualFallbackAction: (input: unknown): void => {
+      publishedActions.push(input);
+    },
+    publishUnattendedFallbackOutcome: (input: unknown): void => {
+      publishedUnattended.push(input);
+    },
+  });
+  let state: Slice = initialSlice();
+  const listeners = new Set<() => void>();
+  const store = {
+    getState: (): Slice => state,
+    getInitialState: (): Slice => initialSlice(),
+    // MERGES, because zustand's `setState` merges shallowly and the call sites
+    // here pass only `{ lastFailedAttempt }`. A replacing double would drop
+    // the action above on the first `setState` and reintroduce exactly the
+    // failure this slice was widened to fix - silently, one call later.
+    setState: (next: Partial<Slice>): Slice => {
+      state = { ...state, ...next };
+      for (const listener of listeners) {
+        listener();
+      }
+      return state;
+    },
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+  // Typed by its return rather than an `as`: a case sets the entry to null, and
+  // the lint's autofix strips a widening assertion on a non-null literal.
+  const hostEntry = (): { readonly label: string } | null => ({
+    label: "Surya's MacBook",
+  });
+  return {
+    mutate: vi.fn(),
+    // `useIsMutatingOf`'s answer, and the filters it was asked with.
+    mutating: 0,
+    mutatingArgs: new Array<unknown>(),
+    // Every props object the stubbed chooser rendered with, newest last.
+    pickerProps: [] as ComponentProps<typeof RoutingDestinationPicker>[],
+    openSettings: vi.fn(),
+    toast: vi.fn(),
+    store,
+    publishedActions,
+    publishedUnattended,
+    mutationResult: null as {
+      readonly outcome: string;
+      readonly detail: FallbackRungRefusalDetail | null;
+    } | null,
+    // The tab host record's directory entry: the refusal that names a machine
+    // reads its label from here, never from the host's detail.
+    hostEntry: hostEntry(),
+    // Deferred mode, for the ONE thing a synchronous double cannot express:
+    // the ORDER of the newer-turn frame and the host's answer. Every other case
+    // here resolves inside `mutate`, which fixes that order to "answer first"
+    // and therefore cannot reach MF11's failing sequence at all.
+    deferResponses: false,
+    pendingResponses: [] as Array<
+      (result: {
+        readonly outcome: string;
+        readonly detail: FallbackRungRefusalDetail | null;
+      }) => void
+    >,
+  };
+});
+
+vi.mock("sonner", () => ({
+  toast: harness.toast,
+}));
+
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({ data: undefined }),
+}));
+
+/**
+ * `useFallbackModelLabels` alone - see `fallback-grace-card.test.tsx`'s copy of
+ * this double for the argument, and `fallback-model-labels.test.tsx` for the
+ * resolver's own rules. The real hook mounts TanStack queries this suite has no
+ * `QueryClientProvider` for, and every model string pinned below would
+ * otherwise depend on a catalogue fixture.
+ *
+ * `null` (the default) passes the slug through, which is what the resolver
+ * degrades to with no catalogue; a `Map` keyed `harnessId:model` is the one
+ * case that cares whether this card reads the resolver's answer.
+ */
+const modelLabelOverride = vi.hoisted(() => ({
+  value: null as ReadonlyMap<string, string> | null,
+}));
+
+const botSwitchGate = vi.hoisted(() => ({
+  environments: undefined as EnvironmentListResponseV11 | undefined,
+  environmentListEnabled: [] as boolean[],
+}));
+
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: (enabled: boolean) => {
+    botSwitchGate.environmentListEnabled.push(enabled);
+    return { data: botSwitchGate.environments };
+  },
+}));
+
+vi.mock(
+  "@/components/chat/fallback/fallback-identity",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/chat/fallback/fallback-identity")
+      >();
+    return {
+      ...actual,
+      useFallbackModelLabels: () => (harnessId: string, model: string) =>
+        modelLabelOverride.value?.get(`${harnessId}:${model}`) ?? model,
+    };
+  },
+);
+
+vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/registries/chat-session-registry")
+  >()),
+  useExistingChatSessionHandle: () => ({ store: harness.store }),
+}));
+
+vi.mock("@/hooks/use-mutation-state-of", () => ({
+  useIsMutatingOf: (filters: unknown) => {
+    harness.mutatingArgs.push(filters);
+    return harness.mutating;
+  },
+}));
+
+// The chooser has its own suite. Here it is a button that records what the row
+// handed it and goes quiet the way the real trigger does.
+vi.mock("@/components/chat/fallback/routing-destination-picker", () => ({
+  RoutingDestinationPicker: (
+    props: ComponentProps<typeof RoutingDestinationPicker>,
+  ) => {
+    harness.pickerProps.push(props);
+    return (
+      <button
+        type="button"
+        data-variant={props.triggerVariant}
+        disabled={props.triggerDisabled || !props.canAct}
+      >
+        {props.triggerLabel}
+      </button>
+    );
+  },
+}));
+
+vi.mock("@/providers/use-open-epic-handle", () => ({
+  useMaybeOpenEpicHandle: () => ({ epicId: EPIC_ID }),
+}));
+
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
+
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => harness.hostEntry,
+}));
+
+vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
+  useHostScopedMutationForClient: (
+    _client: unknown,
+    args: {
+      readonly onSuccess:
+        | ((response: MockRungResponse, variables: unknown) => void)
+        | undefined;
+    },
+  ) => {
+    // Real `useState`, not a static `isPending: false` - the spinner + Retry/
+    // Switch reordering behaviour reads `runManualRung.isPending` and
+    // `.variables.rung` (both real TanStack fields), and a mutation that never
+    // reports itself pending can never exercise either. Mirrors TanStack's own
+    // shape closely enough for this file's purposes: `isPending` flips true the
+    // instant `mutate` is called and false the instant the result is
+    // delivered, `variables` is set alongside `isPending` and is only ever
+    // read by production code while `isPending` is true (an `&&` short-circuit
+    // in `fallback-manual-rungs.tsx`), so its value once settled is moot.
+    const [state, setState] = useState<{
+      readonly isPending: boolean;
+      readonly variables: { readonly rung: string } | undefined;
+    }>({ isPending: false, variables: undefined });
+    return {
+      mutate: (
+        vars: { readonly rung: string },
+        opts:
+          | {
+              readonly onSuccess:
+                | ((response: MockRungResponse, variables: unknown) => void)
+                | undefined;
+            }
+          | undefined,
+      ) => {
+        harness.mutate(vars);
+        setState({ isPending: true, variables: vars });
+        // TanStack runs the hook-level onSuccess in addition to the per-call
+        // one. The refusal note (per-call) and the announcer hand-off (hook-level) both depend on firing.
+        //
+        // BOTH receive `vars` as the second argument, because that is TanStack's
+        // real signature - `onSuccess(data, variables, context)` - and the
+        // hook-level handler reads it: the confirmed-action record is built from
+        // `variables.rung` / `.userMessageId` / `.turnId` / `.target`, which the
+        // response does not carry. Passing only `result` here modelled the
+        // callback too narrowly, and the omission was invisible for as long as
+        // nothing read the second parameter; the moment the record landed it
+        // surfaced as `TypeError: Cannot read properties of undefined (reading
+        // 'rung')` thrown INSIDE `use-fallback-actions.ts`, which reads as a
+        // production bug rather than a fixture gap. Model the full signature even
+        // where a parameter is currently unread.
+        const deliver = (result: MockRungResponse): void => {
+          setState({ isPending: false, variables: undefined });
+          if (args.onSuccess !== undefined) {
+            args.onSuccess(result, vars);
+          }
+          // Deliberately delivered even when the initiating subtree has since
+          // unmounted, where real TanStack would SKIP this one. The double is
+          // conservative in the safe direction: if the per-call handler ever
+          // became a second reporting channel, a duplicate-publication pin would
+          // catch it here rather than be hidden by a faithful skip.
+          if (opts !== undefined && opts.onSuccess !== undefined) {
+            opts.onSuccess(result, vars);
+          }
+        };
+        if (harness.deferResponses) {
+          harness.pendingResponses.push(deliver);
+          return;
+        }
+        const result = harness.mutationResult;
+        if (result === null) return;
+        deliver(result);
+      },
+      isPending: state.isPending,
+      variables: state.variables,
+    };
+  },
+}));
+
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({ openSettings: harness.openSettings }),
+}));
+
+function positiveAttempt(input: {
+  readonly userMessageId: string;
+  readonly turnId: string;
+  readonly reason: "rate_limit" | "auth";
+  readonly eligibleRungs: ReadonlyArray<"retry" | "switch" | "wait_once">;
+  readonly resetsAt: number | undefined;
+  readonly waitDisposition: FallbackWaitDisposition;
+}): LastFailedAttempt {
+  return lastFailedAttempt({
+    userMessageId: input.userMessageId,
+    turnId: input.turnId,
+    failure:
+      input.resetsAt === undefined
+        ? { reason: input.reason }
+        : {
+            reason: input.reason,
+            resetsAt: input.resetsAt,
+            resetsAtSource: "provider",
+          },
+    eligibleRungs: input.eligibleRungs,
+    waitDisposition: input.waitDisposition,
+    // Derived from `eligibleRungs`, the way the host emits it now: "eligible"
+    // exactly when `switch` is on offer, "unknown" otherwise. The host never
+    // emits `no_destination` any more and no disposition renders a switch
+    // sentence (clutter cuts, 2026-09-27); a test that wants the legacy value
+    // an older host could still send uses {@link withheldSwitchAttempt}.
+    switchDisposition: input.eligibleRungs.includes("switch")
+      ? "eligible"
+      : "unknown",
+    failedTuple: FAILED_CLAUDE_TUPLE,
+  });
+}
+
+/**
+ * The attempt shape an older host could still send: `switch` absent from
+ * `eligibleRungs` AND the legacy `no_destination` verdict on the wire.
+ *
+ * Nothing on the card renders for it (the switch button follows
+ * `eligibleRungs` only, and no sentence explains a missing switch), which is
+ * what the tests using it pin. Separate from {@link positiveAttempt} rather
+ * than a parameter on it, so the pairing of those two facts is written out at
+ * the one place it is asserted instead of computed by a builder the
+ * assertions would then be testing.
+ */
+function withheldSwitchAttempt(
+  failedTuple: ChatRunSettings | null,
+): LastFailedAttempt {
+  return lastFailedAttempt({
+    userMessageId: USER_MESSAGE_ID,
+    turnId: TURN_ID,
+    failure: { reason: "rate_limit" },
+    // `retry` stays. The point of the row is that ONE control went away and
+    // the others did not - a bare card would be explained by any number of
+    // rules, and would pass with the switch gate deleted and the whole DTO
+    // withheld instead.
+    eligibleRungs: ["retry"],
+    waitDisposition: "no_verified_reset",
+    switchDisposition: "no_destination",
+    failedTuple,
+  });
+}
+
+/**
+ * A Default-shaped Claude chat: the exact tuple the defect is about.
+ *
+ * `default` is a real slug the Claude SDK advertises, and its model family
+ * lives only in the catalog LABEL (`Default (Sonnet 4.5)`) - which is why it
+ * belongs to no equivalence class the host matches on a slug, and why a chat
+ * on it has nowhere to switch.
+ */
+const DEFAULT_SHAPED_TUPLE: ChatRunSettings = chatRunSettings({
+  harnessId: "claude",
+  model: "default",
+  profileId: null,
+});
+
+const ALL_RUNGS: ReadonlyArray<"retry" | "switch" | "wait_once"> = [
+  "retry",
+  "switch",
+  "wait_once",
+];
+
+function seedAttempt(attempt: LastFailedAttempt | undefined): void {
+  harness.store.setState({ lastFailedAttempt: attempt });
+}
+
+/**
+ * The chat's act capability, exactly as the session store publishes it -
+ * `access.canAct` for the role, `connectionStatus` for the stream.
+ *
+ * Both, and separately, because the component ANDs them and a single flag
+ * could not tell the two refusals apart: a viewer is refused permanently, an
+ * owner mid-reconnect is refused for a moment. A pin that only ever moved one
+ * of them would leave the other term free to be deleted.
+ */
+function seedActCapability(input: {
+  readonly canAct: boolean;
+  readonly connectionStatus: "connecting" | "open" | "reconnecting" | "closed";
+}): void {
+  harness.store.setState({
+    access: { canAct: input.canAct },
+    connectionStatus: input.connectionStatus,
+  });
+}
+
+/** Narrows a queried control to the element whose `disabled` is the answer. */
+function buttonNamed(name: string): HTMLButtonElement {
+  const element = screen.getByRole("button", { name });
+  if (!(element instanceof HTMLButtonElement)) {
+    throw new Error(`expected "${name}" to be a button`);
+  }
+  return element;
+}
+
+function lastPickerProps(): ComponentProps<typeof RoutingDestinationPicker> {
+  const props = harness.pickerProps.at(-1);
+  if (props === undefined) throw new Error("the chooser never rendered");
+  return props;
+}
+
+function renderActions(turnId: string) {
+  return render(
+    <TabHostProvider hostId={HOST_ID}>
+      <ChatTranscriptProvider
+        value={{ chatId: CHAT_ID, hostId: HOST_ID, payerHostId: HOST_ID }}
+      >
+        <FallbackManualRungActions turnId={turnId} />
+      </ChatTranscriptProvider>
+    </TabHostProvider>,
+  );
+}
+
+const BOT_ENVIRONMENT_ID = "env-a";
+
+function BotSurfaceRole(props: { readonly children: ReactNode }): ReactNode {
+  const environments = useEnvironmentListQuery(true);
+  return (
+    <BotMayChangeContext
+      value={readerMayChangeBot(environments.data, BOT_ENVIRONMENT_ID)}
+    >
+      {props.children}
+    </BotMayChangeContext>
+  );
+}
+
+function botActionsTree(turnId: string, surfaceBotId: string) {
+  return (
+    <BotIdentityContext
+      value={{ botId: surfaceBotId, title: "Release Bot", owner: null }}
+    >
+      <BotSurfaceRole>
+        <TabHostProvider hostId={HOST_ID}>
+          <ChatTranscriptProvider
+            value={{ chatId: CHAT_ID, hostId: HOST_ID, payerHostId: HOST_ID }}
+          >
+            <FallbackManualRungActions turnId={turnId} />
+          </ChatTranscriptProvider>
+        </TabHostProvider>
+      </BotSurfaceRole>
+    </BotIdentityContext>
+  );
+}
+
+function renderBotActions(turnId: string) {
+  return render(botActionsTree(turnId, EPIC_ID));
+}
+
+function MayChangeProbe(props: { readonly environmentId: string | null }) {
+  return (
+    <output data-testid="may-change-answer">
+      {String(useBotMayChange(props.environmentId))}
+    </output>
+  );
+}
+
+function environmentRow(
+  environmentId: string,
+  ownerKind: "organization" | "user",
+  effectiveRole: "admin" | "editor" | "viewer" | "owner",
+): EnvironmentListResponseV11["environments"][number] {
+  return {
+    environmentId,
+    ownerKind,
+    ownerId: "owner-1",
+    roomId: "room-1",
+    label: "Acme",
+    effectiveRole,
+    kind: ownerKind === "user" ? "personal" : "team",
+    hostCount: 1,
+    providerHandle: null,
+  };
+}
+
+function setBotEnvironmentRole(
+  environmentId: string,
+  role: "admin" | "editor" | "viewer",
+): void {
+  botSwitchGate.environments = {
+    environments: [environmentRow(environmentId, "organization", role)],
+  };
+}
+
+describe("FallbackManualRungActions", () => {
+  beforeEach(() => {
+    harness.mutate.mockReset();
+    harness.mutating = 0;
+    harness.mutatingArgs = [];
+    harness.pickerProps = [];
+    harness.store.setState({ chat: null });
+    harness.openSettings.mockReset();
+    harness.toast.mockReset();
+    harness.mutationResult = null;
+    harness.hostEntry = { label: "Surya's MacBook" };
+    // In place, not reassigned: the recorder closure captured this array when
+    // the slice was built, so a fresh array here would be written to by
+    // nothing and every later assertion would read an empty list.
+    harness.publishedActions.length = 0;
+    harness.publishedUnattended.length = 0;
+    harness.deferResponses = false;
+    harness.pendingResponses.length = 0;
+    // Restored per test, not merely seeded once: `setState` MERGES, so a case
+    // that drops the capability would otherwise leave every later case running
+    // as a viewer - and they would fail as "the button isn't there", which is
+    // the wrong diagnosis entirely.
+    seedActCapability({ canAct: true, connectionStatus: "open" });
+    seedAttempt(undefined);
+    // Pass-through by default, so every model string pinned below reads back
+    // the tuple it was seeded with.
+    modelLabelOverride.value = null;
+    botSwitchGate.environments = undefined;
+    botSwitchGate.environmentListEnabled.length = 0;
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("draws Switch to…, Wait until and Retry for a fully eligible rate-limit attempt, the lead filled and the rest outlined", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderActions(TURN_ID);
+    const row = screen.getByTestId("failed-turn-actions");
+    const buttons = within(row).getAllByRole("button");
+    // The cause's order of usefulness: a spent quota is not cured by trying the
+    // same account again, so the switch leads and Retry is the last resort.
+    expect(buttons.map((b) => b.textContent)).toEqual([
+      "Switch to…",
+      `Wait until ${formatClockTime(RESETS_AT)}`,
+      "Retry",
+    ]);
+    expect(buttons.map((b) => b.getAttribute("data-variant"))).toEqual([
+      "default",
+      "outline",
+      "outline",
+    ]);
+    const text = row.parentElement?.textContent ?? "";
+    expect(text).not.toMatch(BANNED_VOCABULARY);
+    expect(text).not.toContain("rate_limit");
+    // The retired text-link entry into settings is gone from this card.
+    expect(screen.queryByRole("button", { name: "Model routing" })).toBeNull();
+    expect(botSwitchGate.environmentListEnabled).toEqual([]);
+  });
+
+  it("hides Switch for a Viewer while Retry and Wait stay, with the first remaining action filled", () => {
+    setBotEnvironmentRole(BOT_ENVIRONMENT_ID, "viewer");
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    const { container } = renderBotActions(TURN_ID);
+    const row = screen.getByTestId("failed-turn-actions");
+    const buttons = within(row).getAllByRole("button");
+
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      `Wait until ${formatClockTime(RESETS_AT)}`,
+      "Retry",
+    ]);
+    expect(
+      buttons.map((button) => button.getAttribute("data-variant")),
+    ).toEqual(["default", "outline"]);
+    expect(container.textContent).toBe(
+      `Wait until ${formatClockTime(RESETS_AT)}Retry`,
+    );
+    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+  });
+
+  it("hides Switch when the answered environment list does not name the bot's environment", () => {
+    botSwitchGate.environments = {
+      environments: [environmentRow("env-other", "organization", "admin")],
+    };
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderBotActions(TURN_ID);
+
+    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("treats a different surface bot as an ordinary chat, whatever the reader's role", () => {
+    setBotEnvironmentRole(BOT_ENVIRONMENT_ID, "viewer");
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    render(botActionsTree(TURN_ID, "different-bot"));
+
+    expect(screen.getByRole("button", { name: "Switch to…" })).toBeTruthy();
+  });
+
+  it("offers Switch before the list answers and follows a later change of the reader's role", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    const view = renderBotActions(TURN_ID);
+
+    expect(screen.getByRole("button", { name: "Switch to…" })).toBeTruthy();
+
+    setBotEnvironmentRole(BOT_ENVIRONMENT_ID, "viewer");
+    view.rerender(botActionsTree(TURN_ID, EPIC_ID));
+    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+
+    setBotEnvironmentRole(BOT_ENVIRONMENT_ID, "editor");
+    view.rerender(botActionsTree(TURN_ID, EPIC_ID));
+    expect(screen.getByRole("button", { name: "Switch to…" })).toBeTruthy();
+
+    setBotEnvironmentRole(BOT_ENVIRONMENT_ID, "viewer");
+    view.rerender(botActionsTree(TURN_ID, EPIC_ID));
+    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+  });
+
+  it("does not let an Editor's role restore Switch after the refusal removes it", () => {
+    setBotEnvironmentRole(BOT_ENVIRONMENT_ID, "editor");
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderBotActions(TURN_ID);
+    act(() => {
+      recordFailedTurnRefusal({ hostId: HOST_ID, chatId: CHAT_ID }, TURN_ID, {
+        text: "The chat moved on.",
+        remaining: "none",
+      });
+    });
+
+    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+    expect(screen.queryByTestId("failed-turn-actions")).toBeNull();
+    expect(screen.getByTestId("failed-turn-refusal").textContent).toBe(
+      "The chat moved on.",
+    );
+  });
+
+  it("keeps useBotMayChange false without an environment id and applies the real role rule when one arrives", () => {
+    const view = render(<MayChangeProbe environmentId={null} />);
+
+    expect(screen.getByTestId("may-change-answer").textContent).toBe("false");
+    expect(botSwitchGate.environmentListEnabled).toEqual([false]);
+
+    botSwitchGate.environments = {
+      environments: [environmentRow("env-a", "user", "owner")],
+    };
+    view.rerender(<MayChangeProbe environmentId="env-a" />);
+    expect(screen.getByTestId("may-change-answer").textContent).toBe("true");
+
+    setBotEnvironmentRole("env-a", "admin");
+    view.rerender(<MayChangeProbe environmentId="env-a" />);
+    expect(screen.getByTestId("may-change-answer").textContent).toBe("true");
+
+    setBotEnvironmentRole("env-a", "editor");
+    view.rerender(<MayChangeProbe environmentId="env-a" />);
+    expect(screen.getByTestId("may-change-answer").textContent).toBe("true");
+
+    setBotEnvironmentRole("env-a", "viewer");
+    view.rerender(<MayChangeProbe environmentId="env-a" />);
+    expect(screen.getByTestId("may-change-answer").textContent).toBe("false");
+
+    botSwitchGate.environments = { environments: [] };
+    view.rerender(<MayChangeProbe environmentId="env-a" />);
+    expect(screen.getByTestId("may-change-answer").textContent).toBe("false");
+  });
+
+  // The policy's wait cap reaches seven days, so "Wait until" needs its
+  // weekday once the reset is that far out - the bare clock time alone would
+  // name the wrong day.
+  it("names Wait until with its weekday once the reset is a day or more away", () => {
+    const farResetsAt = Date.now() + 4 * 24 * 60 * 60_000;
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: farResetsAt,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderActions(TURN_ID);
+    // Falsification: `formatWaitTime` always returning `formatClockTime` -
+    // this button is never found, since its name still carries the bare
+    // clock time instead of the weekday-qualified form.
+    expect(
+      screen.getByRole("button", {
+        name: `Wait until ${formatResetDateTime(farResetsAt)}`,
+      }),
+    ).toBeDefined();
+  });
+
+  // `waitResumesAt` is when a `wait_once` pressed NOW would resume (boundary +
+  // margin + per-chat jitter), so the button names it instead of the bare
+  // provider boundary the host will not actually wake at.
+  it("names Wait until with waitResumesAt, not the boundary, when the host sends it", () => {
+    const waitResumesAt = RESETS_AT + 150_000;
+    seedAttempt({
+      ...positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+      waitResumesAt,
+    });
+    renderActions(TURN_ID);
+    expect(
+      screen.getByRole("button", {
+        name: `Wait until ${formatClockTime(waitResumesAt)}`,
+      }),
+    ).toBeDefined();
+    expect(
+      screen.queryByRole("button", {
+        name: `Wait until ${formatClockTime(RESETS_AT)}`,
+      }),
+    ).toBeNull();
+  });
+
+  it("names Wait until with the weekday of waitResumesAt once it is a day or more away", () => {
+    const waitResumesAt = Date.now() + 4 * 24 * 60 * 60_000;
+    seedAttempt({
+      ...positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+      waitResumesAt,
+    });
+    renderActions(TURN_ID);
+    expect(
+      screen.getByRole("button", {
+        name: `Wait until ${formatResetDateTime(waitResumesAt)}`,
+      }),
+    ).toBeDefined();
+  });
+
+  // An older host never sends the field: the boundary is the best name there is.
+  it("falls back to the boundary when waitResumesAt is absent (older host)", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderActions(TURN_ID);
+    expect(
+      screen.getByRole("button", {
+        name: `Wait until ${formatClockTime(RESETS_AT)}`,
+      }),
+    ).toBeDefined();
+  });
+
+  it("draws no Wait until when waitResumesAt is null and wait_once is not offered", () => {
+    seedAttempt({
+      ...positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ["retry", "switch"],
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+      waitResumesAt: null,
+    });
+    renderActions(TURN_ID);
+    expect(screen.queryByRole("button", { name: /Wait until/ })).toBeNull();
+  });
+
+  // A host that still offers wait_once but sends a null waitResumesAt: the label
+  // must fall back to the boundary, never render a time built from null.
+  it("falls back to the boundary when waitResumesAt is null but wait_once is still offered", () => {
+    seedAttempt({
+      ...positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+      waitResumesAt: null,
+    });
+    renderActions(TURN_ID);
+    expect(
+      screen.getByRole("button", {
+        name: `Wait until ${formatClockTime(RESETS_AT)}`,
+      }),
+    ).toBeDefined();
+    for (const button of screen.getAllByRole("button")) {
+      expect(button.textContent).not.toMatch(/Invalid Date|1970|Wait until $/);
+      expect(button.getAttribute("aria-label") ?? "").not.toMatch(
+        /Invalid Date|1970|Wait until $/,
+      );
+    }
+  });
+
+  // The negative twins of the case above, and the reason this card needed a
+  // gate at all: `ErrorSegment` is DURABLE TRANSCRIPT, so this row mounts for
+  // anyone who can open the chat, and `chat.fallback.runManualRung` is a plain
+  // unary RPC with nothing client-side in front of it.
+  //
+  // A VIEWER of someone else's chat has no standing to steer it, now or after a
+  // reconnect, so the actions are not drawn at all: greying them
+  // with "Reconnecting…" would promise something that is not coming.
+  it("draws no actions and no reconnecting label for a VIEWER, and dispatches nothing", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    // The stream is UP. This row is about the role alone, so a gate that only
+    // read `connectionStatus` would leave it red.
+    seedActCapability({ canAct: false, connectionStatus: "open" });
+    renderActions(TURN_ID);
+
+    expect(screen.queryByTestId("failed-turn-actions")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByText("Reconnecting…")).toBeNull();
+    expect(harness.mutate).not.toHaveBeenCalled();
+    // The viewer's answer holds through a dropped stream too: settled for the
+    // session, not "come back later".
+    act(() => {
+      seedActCapability({ canAct: false, connectionStatus: "reconnecting" });
+    });
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByText("Reconnecting…")).toBeNull();
+  });
+
+  // The control pair for the viewer case: the SAME fixture, only the capability
+  // moves, so neither can pass because the buttons happened not to render.
+  it("keeps the actions on screen, disabled, with Reconnecting… for an OWNER whose chat stream has dropped", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    // The role is fine; the transport is not. `canSendAction` refuses the
+    // stream-side hold in exactly this state, and this card agrees with it.
+    seedActCapability({ canAct: true, connectionStatus: "reconnecting" });
+    renderActions(TURN_ID);
+
+    const retry = buttonNamed("Retry");
+    expect(retry.disabled).toBe(true);
+    expect(buttonNamed("Switch to…").disabled).toBe(true);
+    expect(
+      buttonNamed(`Wait until ${formatClockTime(RESETS_AT)}`).disabled,
+    ).toBe(true);
+    expect(screen.getByText("Reconnecting…")).toBeDefined();
+
+    fireEvent.click(retry);
+    expect(harness.mutate).not.toHaveBeenCalled();
+
+    // And it comes back on its own when the stream does.
+    act(() => {
+      seedActCapability({ canAct: true, connectionStatus: "open" });
+    });
+    expect(buttonNamed("Retry").disabled).toBe(false);
+    expect(screen.queryByText("Reconnecting…")).toBeNull();
+  });
+
+  it("treats a host that has not said who this reader is yet as reconnecting", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    // An open stream with no `access` yet: not enough to dispatch on.
+    harness.store.setState({ access: null, connectionStatus: "open" });
+    renderActions(TURN_ID);
+
+    expect(buttonNamed("Retry").disabled).toBe(true);
+    expect(buttonNamed("Switch to…").disabled).toBe(true);
+    expect(screen.getByText("Reconnecting…")).toBeDefined();
+    fireEvent.click(buttonNamed("Retry"));
+    expect(harness.mutate).not.toHaveBeenCalled();
+  });
+
+  // Clutter cuts, 2026-09-27: the card's explanation block renders ONLY the
+  // beyond-cap sentence. Every other disposition leaves the whole card's text
+  // free of any sentence about resets or waiting.
+  it.each([
+    { waitDisposition: "eligible", resetsAt: RESETS_AT },
+    { waitDisposition: "checking", resetsAt: undefined },
+    { waitDisposition: "no_verified_reset", resetsAt: undefined },
+    { waitDisposition: "attempt_unavailable", resetsAt: undefined },
+  ] as const)(
+    "renders no explanation sentence for $waitDisposition",
+    ({ waitDisposition, resetsAt }) => {
+      seedAttempt(
+        positiveAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          reason: "rate_limit",
+          eligibleRungs: ["retry", "switch"],
+          resetsAt,
+          waitDisposition,
+        }),
+      );
+      const { container } = renderActions(TURN_ID);
+      const text = container.textContent;
+      // The card is its buttons and the empty refusal region, nothing else.
+      expect(text).toBe("Switch to…Retry");
+      expect(text).not.toContain("resets");
+      expect(text).not.toContain("nothing to wait for");
+      expect(text).not.toContain("Checking");
+      expect(text).not.toContain("hasn't said");
+    },
+  );
+
+  // `checking` renders nothing (clutter cuts, 2026-09-27); `beyond_cap` is the
+  // one disposition with a standing sentence, pinned below. Both are literal,
+  // neither derived from `describeWaitDisposition`.
+  it("renders no sentence while a reset probe is in flight", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ["retry"],
+        resetsAt: undefined,
+        waitDisposition: "checking",
+      }),
+    );
+    renderActions(TURN_ID);
+    // Falsification: make the `checking` arm of `describeWaitDisposition`
+    // return any sentence and the card text below picks it up.
+    const retry = screen.getByRole("button", { name: "Retry" });
+    const text = retry.parentElement?.parentElement?.textContent ?? "";
+    expect(text).not.toContain("Checking when this limit resets");
+    // The card's only content is its buttons and the empty refusal region.
+    expect(text).toBe("Retry");
+  });
+
+  it("renders the beyond-cap sentence, with and without a named reset time", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ["retry"],
+        resetsAt: undefined,
+        waitDisposition: "beyond_cap",
+      }),
+    );
+    const { unmount, container } = renderActions(TURN_ID);
+    // Falsification: swap the `resetsAtLabel === null` branches in
+    // `describeWaitDisposition`'s `beyond_cap` arm - this goes red for a
+    // failure with no verified reset time in hand.
+    expect(
+      screen.getByText("This limit resets later than Traycer is set to wait."),
+    ).toBeDefined();
+    // Exactly that one sentence: nothing else about resets or waiting.
+    expect(container.textContent).toBe(
+      "This limit resets later than Traycer is set to wait.Retry",
+    );
+    unmount();
+
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ["retry"],
+        resetsAt: RESETS_AT,
+        waitDisposition: "beyond_cap",
+      }),
+    );
+    renderActions(TURN_ID);
+    expect(
+      screen.getByText(
+        `This limit resets at ${formatClockTime(RESETS_AT)} — longer than Traycer is set to wait.`,
+      ),
+    ).toBeDefined();
+  });
+
+  // Same weekday rule as "Wait until": the boundary this sentence names is,
+  // by construction, later than the policy's cap - up to seven days - so the
+  // bare clock time is wrong here even more often than on the button.
+  it("names the beyond-cap boundary with its weekday once it is a day or more away", () => {
+    const farResetsAt = Date.now() + 4 * 24 * 60 * 60_000;
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ["retry"],
+        resetsAt: farResetsAt,
+        waitDisposition: "beyond_cap",
+      }),
+    );
+    renderActions(TURN_ID);
+    const resetsAtLabel = formatResetDateTime(farResetsAt);
+    // Falsification: `formatWaitTime` always returning `formatClockTime` -
+    // this reads the bare clock time instead of the weekday-qualified form.
+    expect(
+      screen.getByText(
+        `This limit resets at ${resetsAtLabel} — longer than Traycer is set to wait.`,
+      ),
+    ).toBeDefined();
+  });
+
+  // The no-reset sentence is the answer to a pressed Wait and appears nowhere
+  // else: pressing Wait and being refused with `no_verified_reset` writes it
+  // into the refusal note, exactly once, and the rest of the card stays free
+  // of it.
+  it("writes the provider sentence only into the refusal note when Wait is refused with no_verified_reset", () => {
+    const sentence =
+      "The provider hasn't said when this limit resets, so there's nothing to wait for.";
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    harness.mutationResult = {
+      outcome: "rung_unavailable",
+      detail: { kind: "no_verified_reset", label: "x", retryable: false },
+    };
+    const { container } = renderActions(TURN_ID);
+    // Before the press: nowhere on the card.
+    expect(container.textContent).not.toContain("hasn't said");
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `Wait until ${formatClockTime(RESETS_AT)}`,
+      }),
+    );
+    const note = screen.getByTestId("failed-turn-refusal");
+    expect(note.getAttribute("role")).toBe("status");
+    expect(note.textContent).toBe(sentence);
+    const whole = container.textContent;
+    expect(whole.split(sentence).length - 1).toBe(1);
+    expect(whole.replace(note.textContent, "")).not.toContain("hasn't said");
+    expect(whole.replace(note.textContent, "")).not.toContain(
+      "nothing to wait for",
+    );
+    expect(harness.toast).not.toHaveBeenCalled();
+  });
+
+  // `attempt_unavailable` now returns `null` from `describeWaitDisposition`
+  // (see that module: the withdrawn sentence claimed no cause and named no
+  // remedy, so the honest copy is none) - the row renders no wait sentence at
+  // all, silently. Retry still has to stay enabled and clickable beside that
+  // silence: this is the control that would catch a regression back to a
+  // sentence claiming something false about the account the message ran on.
+  it("renders no wait sentence for attempt_unavailable, and keeps Retry enabled beside its absence", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ["retry"],
+        resetsAt: undefined,
+        waitDisposition: "attempt_unavailable",
+      }),
+    );
+    renderActions(TURN_ID);
+    // Falsification: revert the `attempt_unavailable` arm of
+    // `describeWaitDisposition` to return a sentence instead of `null` - this
+    // assertion must go red.
+    expect(
+      screen.queryByText("Waiting isn't available for this message."),
+    ).toBeNull();
+    const retry = screen.getByRole("button", { name: "Retry" });
+    if (!(retry instanceof HTMLButtonElement)) {
+      throw new Error("expected the Retry button");
+    }
+    expect(retry.disabled).toBe(false);
+  });
+
+  it("renders no action row when eligibleRungs is empty, and no settings link in its place", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: [],
+        resetsAt: RESETS_AT,
+        waitDisposition: "no_verified_reset",
+      }),
+    );
+    renderActions(TURN_ID);
+    // Falsification: drop the rungs.includes(...) guards and render the buttons unconditionally — this assertion must go red.
+    expect(screen.queryByTestId("failed-turn-actions")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Wait until/ })).toBeNull();
+    // The "Model routing" text link was retired from the card: the settings
+    // entry is the routing card's gear, and an action-less failed row is not a
+    // place to bring it back.
+    expect(screen.queryByRole("button", { name: "Model routing" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Model routing" })).toBeNull();
+  });
+
+  it("renders nothing when lastFailedAttempt is undefined", () => {
+    seedAttempt(undefined);
+    renderActions(TURN_ID);
+    // Falsification: delete the if (attempt === undefined) return null line — this assertion must go red.
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Model routing" })).toBeNull();
+  });
+
+  it("renders nothing on a row whose turnId does not match the attempt, and clears by value", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: "turn-a",
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderActions("turn-b");
+    // Falsification: remove the attempt.turnId !== turnId guard — this assertion must go red.
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+
+    cleanup();
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderActions(TURN_ID);
+    expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+    act(() => {
+      harness.store.setState({ lastFailedAttempt: undefined });
+    });
+    // Falsification: make the hook remember its last non-undefined value — this assertion must go red.
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("renders the eligible rungs for an auth failure in the non-switch-lead order, Retry filled", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "auth",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderActions(TURN_ID);
+    // Falsification: reinstate an auth early return - no button renders and
+    // this goes red. Make `switchLeads` true for auth - the order flips.
+    const buttons = screen.getAllByRole("button", {
+      name: /^(Retry|Switch to…|Wait until )/,
+    });
+    expect(buttons.map((b) => b.textContent)).toEqual([
+      "Retry",
+      "Switch to…",
+      `Wait until ${formatClockTime(RESETS_AT)}`,
+    ]);
+    expect(buttons.map((b) => b.getAttribute("data-variant"))).toEqual([
+      "default",
+      "outline",
+      "outline",
+    ]);
+  });
+
+  it("gates the wait button on wait_once eligibility, never on resetsAt alone", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    const { unmount } = renderActions(TURN_ID);
+    expect(
+      screen.getByRole("button", {
+        name: `Wait until ${formatClockTime(RESETS_AT)}`,
+      }),
+    ).toBeDefined();
+    unmount();
+
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: undefined,
+        waitDisposition: "eligible",
+      }),
+    );
+    const second = renderActions(TURN_ID);
+    expect(screen.queryByRole("button", { name: /Wait until/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+    second.unmount();
+
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ["retry", "switch"],
+        resetsAt: RESETS_AT,
+        waitDisposition: "no_verified_reset",
+      }),
+    );
+    renderActions(TURN_ID);
+    // Falsification: change waitUntilLabel to gate on resetsAt alone — this assertion must go red.
+    expect(screen.queryByRole("button", { name: /Wait until/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+  });
+
+  // The manual retry had no feedback of its own between the click and the
+  // next frame - `disabled` was the only signal, and it read identically to
+  // every other rung's mutation being in flight. `ManualRetryButton` now
+  // carries its OWN inline spinner, driven by `retryInFlight` - `isPending`
+  // AND `variables.rung === "retry"` - so a Switch pick in flight does not
+  // light up a Retry button that never fired.
+  it("shows the inline spinner on Retry only while ITS OWN mutation is in flight", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    harness.deferResponses = true;
+    renderActions(TURN_ID);
+
+    const retry = buttonNamed("Retry");
+    // No spinner before the click - falsification: render `inFlight` `true`
+    // unconditionally and this goes red.
+    expect(retry.querySelector('[aria-hidden="true"]')).toBeNull();
+
+    fireEvent.click(retry);
+    // Falsification: drop the `runManualRung.variables.rung === "retry"` half
+    // of `retryInFlight` (leaving only `isPending`) - this still passes on its
+    // own, but the next assertion (a Switch in flight) would then go red.
+    expect(retry.querySelector('[aria-hidden="true"]')).not.toBeNull();
+    expect(harness.pendingResponses).toHaveLength(1);
+
+    act(() => {
+      harness.pendingResponses[0]({ outcome: "applied", detail: null });
+    });
+    // Delivered, not removed - the recorder only ever pushes. Clear it so the
+    // Switch below is unambiguously the NEXT entry.
+    harness.pendingResponses.length = 0;
+    expect(retry.querySelector('[aria-hidden="true"]')).toBeNull();
+  });
+
+  // F-reorder: Retry moves to AFTER the Switch… menu when the failure is
+  // `rate_limit` or `billing` AND a switch is on offer - see `switchLeads`'s
+  // own doc for why (retrying the same account for a spent quota is unlikely
+  // to help, so the useful control leads).
+  it("renders Retry after Switch… for rate_limit and billing when a switch is available", () => {
+    // Built literally rather than through `positiveAttempt`, whose `reason`
+    // is narrowed to `"rate_limit" | "auth"` (see its own type) - `billing`
+    // is outside that, and reaches this row exactly the way `rate_limit`
+    // does (both admit `retry`/`switch`/`wait_once`; only the presentation
+    // and the reordering rule single billing out).
+    for (const reason of ["rate_limit", "billing"] as const) {
+      seedAttempt(
+        lastFailedAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          failure: { reason },
+          eligibleRungs: ["retry", "switch"],
+          waitDisposition: "no_verified_reset",
+          switchDisposition: "eligible",
+          failedTuple: FAILED_CLAUDE_TUPLE,
+        }),
+      );
+      const { unmount } = renderActions(TURN_ID);
+      const buttons = screen.getAllByRole("button", {
+        name: /^(Retry|Switch to…)$/,
+      });
+      // Falsification: delete the `switchLeads` gate around `retryButton`'s
+      // two placements in `fallback-manual-rungs.tsx` - Retry would render
+      // first regardless of `reason`, and this goes red for both reasons.
+      expect(
+        buttons.map((b) => b.textContent),
+        reason,
+      ).toEqual(["Switch to…", "Retry"]);
+      unmount();
+    }
+  });
+
+  it("keeps Retry before Switch… for a reason outside the reordering rule, even with a switch available", () => {
+    // `positiveAttempt` only builds `"rate_limit" | "auth"` failures (see its
+    // own type), and `auth` is covered by its own case above - so a reason
+    // OUTSIDE the reordering rule that is not one of those is built literally
+    // here instead, the same way `withheldSwitchAttempt`'s sibling cases do.
+    seedAttempt(
+      lastFailedAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        failure: { reason: "model_unavailable" },
+        eligibleRungs: ["retry", "switch"],
+        waitDisposition: "no_verified_reset",
+        switchDisposition: "eligible",
+        failedTuple: FAILED_CLAUDE_TUPLE,
+      }),
+    );
+    renderActions(TURN_ID);
+    const buttons = screen.getAllByRole("button", {
+      name: /^(Retry|Switch to…)$/,
+    });
+    expect(buttons.map((b) => b.textContent)).toEqual(["Retry", "Switch to…"]);
+  });
+
+  it("sends the attempt's ids, not the row's, on Retry and Wait until", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    // Settles the mutation immediately, so Retry's own pick does not leave
+    // every affordance `busy` (disabled) for the Wait-until click that
+    // follows it.
+    harness.mutationResult = { outcome: "applied", detail: null };
+    renderActions(TURN_ID);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    // Falsification: hard-code userMessageId: "" at the call site — this assertion must go red.
+    expect(harness.mutate).toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      rung: "retry",
+      target: null,
+      userMessageId: USER_MESSAGE_ID,
+      turnId: TURN_ID,
+    });
+
+    harness.mutate.mockReset();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `Wait until ${formatClockTime(RESETS_AT)}`,
+      }),
+    );
+    expect(harness.mutate).toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      rung: "wait_once",
+      target: null,
+      userMessageId: USER_MESSAGE_ID,
+      turnId: TURN_ID,
+    });
+  });
+
+  // The Switch… control is `RoutingDestinationPicker`; this suite stubs it and
+  // pins the seam - what the row hands it. The chooser's own behaviour (rows,
+  // confirm, refusals, the lease) is `routing-destination-picker.test.tsx`.
+  it("hands the Switch… chooser a failed-turn entry: the attempt and its own failed tuple", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderActions(TURN_ID);
+    const props = lastPickerProps();
+    expect(props.entry.kind).toBe("failed-turn");
+    if (props.entry.kind !== "failed-turn") return;
+    expect(props.entry.attempt.userMessageId).toBe(USER_MESSAGE_ID);
+    expect(props.entry.attempt.turnId).toBe(TURN_ID);
+    expect(props.entry.seedTuple).toEqual(FAILED_CLAUDE_TUPLE);
+    expect(props.triggerLabel).toBe("Switch to…");
+    expect(props.canAct).toBe(true);
+    expect(props.epicId).toBe(EPIC_ID);
+    expect(props.chatId).toBe(CHAT_ID);
+    expect(props.hostId).toBe(HOST_ID);
+  });
+
+  it("seeds the chooser from the chat's own settings when the host named no failed tuple", () => {
+    harness.store.setState({ chat: { settings: DEFAULT_SHAPED_TUPLE } });
+    seedAttempt(
+      lastFailedAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        failure: { reason: "rate_limit" },
+        eligibleRungs: ALL_RUNGS,
+        waitDisposition: "no_verified_reset",
+        switchDisposition: "eligible",
+        failedTuple: null,
+      }),
+    );
+    renderActions(TURN_ID);
+    const props = lastPickerProps();
+    expect(props.entry.kind).toBe("failed-turn");
+    if (props.entry.kind !== "failed-turn") return;
+    expect(props.entry.seedTuple).toEqual(DEFAULT_SHAPED_TUPLE);
+  });
+
+  it("offers no Switch… when neither the attempt nor the chat has a tuple to seed from", () => {
+    harness.store.setState({ chat: { settings: null } });
+    seedAttempt(
+      lastFailedAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        failure: { reason: "rate_limit" },
+        eligibleRungs: ALL_RUNGS,
+        waitDisposition: "no_verified_reset",
+        switchDisposition: "eligible",
+        failedTuple: null,
+      }),
+    );
+    renderActions(TURN_ID);
+    expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+  });
+
+  it("quiets Retry, Wait until and the Switch… trigger while ANY runManualRung for the chat is in flight", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    // A rung the CHOOSER sent: this hook instance is not the one pending, so
+    // only the shared mutation key can tell the bare buttons about it.
+    harness.mutating = 1;
+    renderActions(TURN_ID);
+    expect(harness.mutatingArgs).toContainEqual({
+      mutationKey: chatFallbackMutationKeys.runManualRung(CHAT_ID),
+    });
+    expect(buttonNamed("Retry").disabled).toBe(true);
+    expect(
+      buttonNamed(`Wait until ${formatClockTime(RESETS_AT)}`).disabled,
+    ).toBe(true);
+    expect(buttonNamed("Switch to…").disabled).toBe(true);
+    fireEvent.click(buttonNamed("Retry"));
+    expect(harness.mutate).not.toHaveBeenCalled();
+  });
+
+  // A toast never carries a refusal. The answer is written where
+  // the button was, as a status note, and nothing goes to sonner.
+  it("answers a refused Retry inline with the literal sentence, never a toast, and keeps every button", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    harness.mutationResult = { outcome: "rung_unavailable", detail: null };
+    renderActions(TURN_ID);
+    // The live region is mounted before any refusal, and empty.
+    expect(screen.getByTestId("failed-turn-refusal").textContent).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    // Falsification: put the `toast(message)` line back in
+    // `useFallbackRunManualRung`'s hook-level onSuccess and this goes red.
+    expect(harness.toast).not.toHaveBeenCalled();
+    const note = screen.getByTestId("failed-turn-refusal");
+    expect(note.getAttribute("role")).toBe("status");
+    // No detail from an older host: the neutral sentence for the action, not
+    // the shared outcome sentence and not a cause.
+    expect(note.textContent).toBe("Couldn't retry just now.");
+    expect(buttonNamed("Retry").disabled).toBe(false);
+    expect(screen.getByRole("button", { name: "Switch to…" })).toBeDefined();
+    expect(
+      screen.getByRole("button", {
+        name: `Wait until ${formatClockTime(RESETS_AT)}`,
+      }),
+    ).toBeDefined();
+    // The inline surface answers, so the announcer stays quiet.
+    expect(harness.publishedUnattended).toEqual([]);
+  });
+
+  it("answers a refused Wait until inline too, with the wait's own neutral sentence", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    harness.mutationResult = { outcome: "rung_unavailable", detail: null };
+    renderActions(TURN_ID);
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `Wait until ${formatClockTime(RESETS_AT)}`,
+      }),
+    );
+    expect(harness.toast).not.toHaveBeenCalled();
+    expect(screen.getByTestId("failed-turn-refusal").textContent).toBe(
+      "Couldn't start the wait just now.",
+    );
+  });
+
+  it("clears the note when the next press starts", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    harness.mutationResult = { outcome: "rung_unavailable", detail: null };
+    renderActions(TURN_ID);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(screen.getByTestId("failed-turn-refusal").textContent).not.toBe("");
+    harness.deferResponses = true;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    // The text goes; the live region stays mounted.
+    expect(screen.getByTestId("failed-turn-refusal").textContent).toBe("");
+  });
+
+  it("keeps one refusal live region mounted from the start, and fills and clears that same node", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderActions(TURN_ID);
+    const region = screen.getByTestId("failed-turn-refusal");
+    expect(region.getAttribute("role")).toBe("status");
+    expect(region.textContent).toBe("");
+
+    harness.mutationResult = {
+      outcome: "rung_unavailable",
+      detail: { kind: "storage_failed", retryable: false, label: "" },
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(screen.getByTestId("failed-turn-refusal")).toBe(region);
+    const first = region.textContent;
+    expect(first).not.toBe("");
+    // Retry survives this refusal, so it can be pressed again.
+    harness.deferResponses = true;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(screen.getByTestId("failed-turn-refusal")).toBe(region);
+    expect(region.textContent).toBe("");
+
+    act(() => {
+      harness.pendingResponses[0]({
+        outcome: "rung_unavailable",
+        detail: null,
+      });
+    });
+    expect(screen.getByTestId("failed-turn-refusal")).toBe(region);
+    expect(region.textContent).toBe("Couldn't retry just now.");
+  });
+
+  it("says the chat moved on, with the next step, and draws no buttons, for attempt_not_latest", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    harness.mutationResult = { outcome: "attempt_not_latest", detail: null };
+    renderActions(TURN_ID);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(harness.toast).not.toHaveBeenCalled();
+    expect(screen.getByTestId("failed-turn-refusal").textContent).toBe(
+      "This chat has moved on since that message. Send a new message to continue.",
+    );
+    expect(screen.queryByTestId("failed-turn-actions")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  /**
+   * One render per refusal kind: the sentence the card
+   * writes, and the buttons it leaves. The expectations are literal and NOT read
+   * from the copy module, so a change to the module is a change here.
+   *
+   * The names are the buttons drawn after the refusal, in order, for a
+   * `rate_limit` attempt offering all three actions - so `Switch to…` leads and
+   * `Retry` is last, and dropping one shows as a shorter list rather than a
+   * different render.
+   */
+  describe("a refusal, by kind", () => {
+    const WAIT = `Wait until ${formatClockTime(RESETS_AT)}`;
+    const ALL = ["Switch to…", WAIT, "Retry"];
+    const REFUSALS: ReadonlyArray<{
+      readonly kind: string;
+      readonly text: string | null;
+      readonly left: ReadonlyArray<string>;
+    }> = [
+      {
+        kind: "turn_running",
+        text: "This chat is busy. The actions come back when the current turn ends.",
+        left: [],
+      },
+      { kind: "routing_active", text: null, left: [] },
+      {
+        kind: "worktree_missing",
+        text: "This chat's worktree no longer exists on Surya's MacBook. Start a new chat from this task.",
+        left: [],
+      },
+      {
+        kind: "no_workspace",
+        text: "This chat has no folder to run in any more. Start a new chat from this task.",
+        left: [],
+      },
+      {
+        kind: "message_changed",
+        text: "The original message changed, so it can't be replayed. Send it again from the composer.",
+        left: [],
+      },
+      {
+        kind: "message_unreplayable",
+        text: "Something this message refers to is no longer available, so it can't be replayed. Send it again from the composer.",
+        left: [],
+      },
+      {
+        kind: "prelaunch_failed",
+        text: "Couldn't start the replacement turn. Try again, or switch.",
+        left: ["Switch to…", "Retry"],
+      },
+      {
+        kind: "reset_passed",
+        text: "That limit has reset. Retry instead.",
+        left: ["Switch to…", "Retry"],
+      },
+      {
+        kind: "no_verified_reset",
+        text: "The provider hasn't said when this limit resets, so there's nothing to wait for.",
+        left: ["Switch to…", "Retry"],
+      },
+      {
+        kind: "host_unavailable",
+        text: "This chat's host is restarting. Try again in a moment.",
+        left: ALL,
+      },
+      {
+        kind: "settings_missing",
+        text: "This chat has no model set. Pick one in the composer and send again.",
+        left: [],
+      },
+      {
+        kind: "storage_failed",
+        text: "Couldn't save this chat's state just now. Try again.",
+        left: ALL,
+      },
+      {
+        kind: "target_unusable",
+        text: "That model can't be used right now. Pick another.",
+        left: ["Switch to…"],
+      },
+    ];
+
+    function refuse(input: {
+      readonly kind: string;
+      readonly retryable: boolean;
+      readonly label: string;
+    }): void {
+      seedAttempt(
+        positiveAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          reason: "rate_limit",
+          eligibleRungs: ALL_RUNGS,
+          resetsAt: RESETS_AT,
+          waitDisposition: "eligible",
+        }),
+      );
+      harness.mutationResult = {
+        outcome: "rung_unavailable",
+        detail: {
+          kind: input.kind,
+          label: input.label,
+          retryable: input.retryable,
+        },
+      };
+      renderActions(TURN_ID);
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    }
+
+    function buttonsLeft(): ReadonlyArray<string | null> {
+      return screen.queryAllByRole("button").map((b) => b.textContent);
+    }
+
+    it.each(REFUSALS)(
+      "$kind writes its sentence and leaves $left",
+      ({ kind, text, left }) => {
+        refuse({ kind, retryable: false, label: "the host's own label" });
+        expect(harness.toast).not.toHaveBeenCalled();
+        if (text === null) {
+          // The routing card on screen is the explanation; a second line here
+          // would be the same fact twice.
+          expect(screen.getByTestId("failed-turn-refusal").textContent).toBe(
+            "",
+          );
+        } else {
+          expect(screen.getByTestId("failed-turn-refusal").textContent).toBe(
+            text,
+          );
+        }
+        expect(buttonsLeft()).toEqual(left);
+        if (left.length === 0) {
+          expect(screen.queryByTestId("failed-turn-actions")).toBeNull();
+        } else {
+          // The lead is still exactly one filled button after a refusal took
+          // some away: the next action steps up rather than leaving no primary.
+          const filled = screen
+            .getAllByRole("button")
+            .filter((b) => b.getAttribute("data-variant") === "default");
+          expect(filled.map((b) => b.textContent)).toEqual([left[0]]);
+        }
+      },
+    );
+
+    it.each(REFUSALS)(
+      "$kind keeps every button when the host says pressing again can work",
+      ({ kind }) => {
+        refuse({ kind, retryable: true, label: "the host's own label" });
+        // The two kinds that say the chat is busy hide the row whatever the
+        // host says; the host brings the actions back itself.
+        const busy = kind === "turn_running" || kind === "routing_active";
+        expect(buttonsLeft()).toEqual(busy ? [] : ALL);
+      },
+    );
+
+    it("renders the host's label for the residue kind and keeps every button", () => {
+      refuse({
+        kind: "unknown",
+        retryable: false,
+        label: "Something unexpected happened.",
+      });
+      expect(screen.getByTestId("failed-turn-refusal").textContent).toBe(
+        "Something unexpected happened.",
+      );
+      expect(buttonsLeft()).toEqual(ALL);
+    });
+
+    it("renders the host's label for a kind this build has never heard of", () => {
+      refuse({
+        kind: "a_kind_from_a_newer_host",
+        retryable: false,
+        label: "The newer host's sentence.",
+      });
+      expect(screen.getByTestId("failed-turn-refusal").textContent).toBe(
+        "The newer host's sentence.",
+      );
+      expect(buttonsLeft()).toEqual(ALL);
+    });
+
+    it("says the neutral sentence, with Retry still enabled, when the host's label is blank", () => {
+      refuse({ kind: "unknown", retryable: false, label: "  " });
+      expect(screen.getByTestId("failed-turn-refusal").textContent).toBe(
+        "Couldn't retry just now.",
+      );
+      expect(buttonNamed("Retry").disabled).toBe(false);
+      expect(buttonsLeft()).toEqual(ALL);
+    });
+
+    it("names the machine from the tab host record, and omits it without one", () => {
+      harness.hostEntry = null;
+      refuse({
+        kind: "worktree_missing",
+        retryable: false,
+        label: "Some other machine",
+      });
+      expect(screen.getByTestId("failed-turn-refusal").textContent).toBe(
+        "This chat's worktree no longer exists on its host. Start a new chat from this task.",
+      );
+    });
+
+    it("carries no banned word and no raw code on any refusal sentence", () => {
+      for (const { kind } of REFUSALS) {
+        refuse({ kind, retryable: false, label: "the host's own label" });
+        const note = screen.queryByTestId("failed-turn-refusal");
+        if (note !== null) {
+          expect(note.textContent).not.toMatch(BANNED_VOCABULARY);
+          expect(note.textContent).not.toMatch(/fallback/i);
+          expect(note.textContent).not.toContain(kind);
+        }
+        cleanup();
+        harness.mutate.mockReset();
+      }
+    });
+  });
+
+  it("hands a refusal to the chat's announcer when the card is gone before the host answers", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    harness.deferResponses = true;
+    const { unmount } = renderActions(TURN_ID);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(harness.pendingResponses).toHaveLength(1);
+    // A newer turn removed the row under the press - what `attempt_not_latest`
+    // MEANS - and the host answers a beat later.
+    unmount();
+    harness.pendingResponses[0]({
+      outcome: "attempt_not_latest",
+      detail: null,
+    });
+    // Never a toast, and not lost either: one channel, the announcer.
+    expect(harness.toast).not.toHaveBeenCalled();
+    expect(harness.publishedUnattended).toEqual([
+      {
+        hostId: HOST_ID,
+        epicId: EPIC_ID,
+        chatId: CHAT_ID,
+        text: "This chat has moved on since that message. Send a new message to continue.",
+      },
+    ]);
+  });
+
+  it("publishes a confirmed action, and nothing else, when the press applies", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    harness.mutationResult = { outcome: "applied", detail: null };
+    renderActions(TURN_ID);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(harness.toast).not.toHaveBeenCalled();
+    expect(screen.getByTestId("failed-turn-refusal").textContent).toBe("");
+    expect(harness.publishedUnattended).toEqual([]);
+    expect(harness.publishedActions).toHaveLength(1);
+  });
+
+  // The lead by cause, and exactly one filled button in every arrangement.
+  describe("the lead action", () => {
+    const CAUSES: ReadonlyArray<{
+      readonly reason:
+        | "rate_limit"
+        | "billing"
+        | "model_unavailable"
+        | "provider_unavailable";
+      readonly order: ReadonlyArray<string>;
+    }> = [
+      {
+        reason: "rate_limit",
+        order: [
+          "Switch to…",
+          `Wait until ${formatClockTime(RESETS_AT)}`,
+          "Retry",
+        ],
+      },
+      {
+        reason: "billing",
+        order: [
+          "Switch to…",
+          `Wait until ${formatClockTime(RESETS_AT)}`,
+          "Retry",
+        ],
+      },
+      {
+        reason: "model_unavailable",
+        order: [
+          "Retry",
+          "Switch to…",
+          `Wait until ${formatClockTime(RESETS_AT)}`,
+        ],
+      },
+      {
+        reason: "provider_unavailable",
+        order: [
+          "Retry",
+          "Switch to…",
+          `Wait until ${formatClockTime(RESETS_AT)}`,
+        ],
+      },
+    ];
+
+    it.each(CAUSES)(
+      "orders $reason as $order with one default button first",
+      ({ reason, order }) => {
+        seedAttempt(
+          lastFailedAttempt({
+            userMessageId: USER_MESSAGE_ID,
+            turnId: TURN_ID,
+            failure: {
+              reason,
+              resetsAt: RESETS_AT,
+              resetsAtSource: "provider",
+            },
+            eligibleRungs: ALL_RUNGS,
+            waitDisposition: "eligible",
+            switchDisposition: "eligible",
+            failedTuple: FAILED_CLAUDE_TUPLE,
+          }),
+        );
+        renderActions(TURN_ID);
+        const buttons = within(
+          screen.getByTestId("failed-turn-actions"),
+        ).getAllByRole("button");
+        expect(buttons.map((b) => b.textContent)).toEqual(order);
+        // Exactly one default; the rest outline. Never ghost or secondary.
+        expect(buttons.map((b) => b.getAttribute("data-variant"))).toEqual([
+          "default",
+          "outline",
+          "outline",
+        ]);
+      },
+    );
+
+    it("steps the next action up to the lead when the lead is not on offer", () => {
+      // A rate limit with no destination: the switch is withheld, so the wait
+      // leads rather than leaving a row with no filled button.
+      seedAttempt(
+        lastFailedAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          failure: {
+            reason: "rate_limit",
+            resetsAt: RESETS_AT,
+            resetsAtSource: "provider",
+          },
+          eligibleRungs: ["retry", "wait_once"],
+          waitDisposition: "eligible",
+          switchDisposition: "no_destination",
+          failedTuple: FAILED_CLAUDE_TUPLE,
+        }),
+      );
+      renderActions(TURN_ID);
+      const buttons = within(
+        screen.getByTestId("failed-turn-actions"),
+      ).getAllByRole("button");
+      expect(
+        buttons.map((b) => [b.textContent, b.getAttribute("data-variant")]),
+      ).toEqual([
+        [`Wait until ${formatClockTime(RESETS_AT)}`, "default"],
+        ["Retry", "outline"],
+      ]);
+    });
+
+    it("hands the Switch to… chooser the same variant the row drew for it", () => {
+      seedAttempt(
+        positiveAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          reason: "rate_limit",
+          eligibleRungs: ALL_RUNGS,
+          resetsAt: RESETS_AT,
+          waitDisposition: "eligible",
+        }),
+      );
+      renderActions(TURN_ID);
+      expect(lastPickerProps().triggerVariant).toBe("default");
+    });
+  });
+
+  /**
+   * The Switch to… button follows `eligibleRungs` and nothing else (clutter
+   * cuts, 2026-09-27). The card never explains a missing switch: the picker
+   * opens the full composer picker, so there is no sentence to print.
+   */
+  describe("the switch button follows eligibleRungs only", () => {
+    it("offers Switch to… when eligible, even with switchDisposition no_destination", () => {
+      seedAttempt(
+        lastFailedAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          failure: { reason: "rate_limit" },
+          eligibleRungs: ["retry", "switch"],
+          waitDisposition: "no_verified_reset",
+          switchDisposition: "no_destination",
+          failedTuple: DEFAULT_SHAPED_TUPLE,
+        }),
+      );
+      renderActions(TURN_ID);
+
+      expect(screen.getByRole("button", { name: "Switch to…" })).toBeDefined();
+      const root = screen.getByRole("button", { name: "Retry" }).parentElement
+        ?.parentElement;
+      expect(root?.textContent ?? "").not.toContain("No other model is set up");
+    });
+
+    it("draws no Switch to… when eligibleRungs omits it, and says nothing about it", () => {
+      seedAttempt(withheldSwitchAttempt(DEFAULT_SHAPED_TUPLE));
+      renderActions(TURN_ID);
+
+      expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+      // `retry` survives, so the row is not merely bare.
+      expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+      const root = screen.getByRole("button", { name: "Retry" }).parentElement
+        ?.parentElement;
+      const text = root?.textContent ?? "";
+      expect(text).not.toContain("No other model is set up");
+      expect(text).not.toContain("Claude Code · default");
+    });
+
+    it("draws no Switch to… without a failed tuple, and prints no subject-less sentence", () => {
+      seedAttempt(withheldSwitchAttempt(null));
+      renderActions(TURN_ID);
+
+      expect(screen.queryByRole("button", { name: "Switch to…" })).toBeNull();
+      const root = screen.getByRole("button", { name: "Retry" }).parentElement
+        ?.parentElement;
+      expect(root?.textContent ?? "").not.toContain("No other model is set up");
+    });
+  });
+
+  /**
+   * The wait explanation is a rate-limit-only fact.
+   *
+   * The card's one standing wait line (`beyond_cap`: "This limit resets at …
+   * longer than Traycer is set to wait") is about a RATE LIMIT, but the host
+   * derives `waitDisposition` from the failed tuple's reset gauge alone. So a
+   * turn that failed for an unrelated reason - a spent quota, a stream that
+   * ended with no terminal event, a model that went away - can arrive
+   * `beyond_cap` whenever the gauge reads that way, and would be told about a
+   * limit it never hit. `waitExplanationFor` gates the line on
+   * `REASON_ELIGIBLE_RUNGS[attempt.failure.reason].includes("wait")`, the
+   * shared matrix the host engine reads too.
+   *
+   * Every case uses `beyond_cap`, the one disposition the card still stands a
+   * line for (clutter cuts, 2026-09-27): a case on any other disposition would
+   * pass with the gate deleted. The control - `rate_limit` keeps the line - is
+   * "renders the beyond-cap sentence, with and without a named reset time"
+   * above.
+   */
+  describe("the wait explanation is a rate-limit-only fact", () => {
+    it("does not show the beyond-cap sentence for missing_terminal_event, and still renders Retry", () => {
+      seedAttempt(
+        lastFailedAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          failure: { reason: "missing_terminal_event" },
+          eligibleRungs: ["retry"],
+          waitDisposition: "beyond_cap",
+          switchDisposition: "unknown",
+          failedTuple: null,
+        }),
+      );
+      renderActions(TURN_ID);
+      expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+      // A stalled stream has no reset boundary to be "beyond the cap" of, and
+      // `REASON_ELIGIBLE_RUNGS.missing_terminal_event` carries no "wait" rung.
+      expect(screen.queryByText(/Traycer is set to wait/)).toBeNull();
+    });
+
+    it("does not show the beyond-cap sentence for a non-wait reason (billing), with a reset time in hand", () => {
+      seedAttempt(
+        lastFailedAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          failure: {
+            reason: "billing",
+            resetsAt: RESETS_AT,
+            resetsAtSource: "provider",
+          },
+          eligibleRungs: ["retry"],
+          waitDisposition: "beyond_cap",
+          switchDisposition: "unknown",
+          failedTuple: null,
+        }),
+      );
+      renderActions(TURN_ID);
+      expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+      // `REASON_ELIGIBLE_RUNGS.billing` is `["profile", "tier"]` - no "wait".
+      // Matches both wordings of the sentence, which share this clause.
+      expect(screen.queryByText(/Traycer is set to wait/)).toBeNull();
+    });
+
+    /**
+     * The generalised sweep: EVERY reason `REASON_ELIGIBLE_RUNGS` marks as
+     * carrying no `"wait"` rung gets no wait sentence - not only the two
+     * hand-picked above. Iterates `AGENT_FAILURE_REASONS` - the typed list a
+     * `LastFailedAttempt.failure.reason` actually draws from - and indexes
+     * `REASON_ELIGIBLE_RUNGS` with it directly, the same way the production
+     * gate does, so a new reason added to the protocol with no "wait" rung is
+     * covered here without this file changing. `auth` is in the sweep: the
+     * card renders a signed-out failure's actions like any other.
+     */
+    it("finds at least one non-wait reason, and none of them show the beyond-cap sentence", () => {
+      const nonWaitReasons = AGENT_FAILURE_REASONS.filter(
+        (reason) => !REASON_ELIGIBLE_RUNGS[reason].includes("wait"),
+      );
+      // Not vacuous - falsification: an empty filter would make the loop
+      // below assert nothing and pass for the wrong reason entirely.
+      expect(nonWaitReasons.length).toBeGreaterThan(0);
+
+      for (const reason of nonWaitReasons) {
+        seedAttempt(
+          lastFailedAttempt({
+            userMessageId: USER_MESSAGE_ID,
+            turnId: TURN_ID,
+            failure: { reason },
+            eligibleRungs: ["retry"],
+            waitDisposition: "beyond_cap",
+            switchDisposition: "unknown",
+            failedTuple: null,
+          }),
+        );
+        const { unmount } = renderActions(TURN_ID);
+        expect(
+          screen.getByRole("button", { name: "Retry" }),
+          reason,
+        ).toBeDefined();
+        expect(screen.queryByText(/Traycer is set to wait/), reason).toBeNull();
+        unmount();
+      }
+    });
+  });
+});

@@ -1,0 +1,1606 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  RunnerHostEvent,
+  RunnerHostInvoke,
+  RunnerHostSync,
+} from "../../ipc-contracts/ipc-channels";
+import type { BrowserScreencastServerFrame } from "@traycer/protocol/host/browser/contracts";
+import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
+import type { DesktopNotificationForegroundDisplay } from "../../ipc-contracts/notification-types";
+import type {
+  DesktopLocalAuthSessionRestoreResult,
+  DesktopMenuSnapshot,
+} from "../../ipc-contracts/window-types";
+import type { HostTokensBridgeSurface } from "../../ipc-contracts/host-token-types";
+import { createDesktopHostTokenSource } from "../../renderer-shell/desktop-host-tokens";
+import { hostTokenBearer } from "@traycer-clients/shared/auth/host-token-lease";
+
+/**
+ * Preload replay-safety tests. The preload module wires `ipcRenderer.on` and
+ * exposes a bridge at module load, so each test dynamically imports the
+ * preload after resetting the fake `electron` module state - otherwise
+ * `contextBridge.exposeInMainWorld` and the eagerly-registered `ipcRenderer`
+ * listeners would leak across tests.
+ */
+
+type IpcHandler = (event: unknown, payload: unknown) => void;
+
+type InvokeFn = (channel: string, ...args: unknown[]) => Promise<unknown>;
+type SendSyncFn = (channel: string, ...args: unknown[]) => unknown;
+
+interface SyncCall {
+  readonly channel: string;
+  readonly args: readonly unknown[];
+}
+
+interface FakeElectron {
+  channels: Map<string, Set<IpcHandler>>;
+  exposed: Map<string, unknown>;
+  invokeFn: InvokeFn;
+  sendSyncFn: SendSyncFn;
+  syncCalls: SyncCall[];
+  emit(channel: string, payload: unknown): void;
+  reset(): void;
+}
+
+const fakeElectron: FakeElectron = {
+  channels: new Map(),
+  exposed: new Map(),
+  invokeFn: () => Promise.resolve(undefined),
+  sendSyncFn: (channel: string) => {
+    if (channel === RunnerHostSync.windowId) {
+      return "preload-window";
+    }
+    return null;
+  },
+  syncCalls: [],
+  emit(channel: string, payload: unknown): void {
+    const handlers = fakeElectron.channels.get(channel);
+    if (handlers === undefined) {
+      return;
+    }
+    for (const handler of handlers) {
+      handler({}, payload);
+    }
+  },
+  reset(): void {
+    fakeElectron.channels.clear();
+    fakeElectron.exposed.clear();
+    fakeElectron.invokeFn = () => Promise.resolve(undefined);
+    fakeElectron.sendSyncFn = (channel: string) => {
+      if (channel === RunnerHostSync.windowId) {
+        return "preload-window";
+      }
+      return null;
+    };
+    fakeElectron.syncCalls = [];
+  },
+};
+
+vi.mock("electron", () => ({
+  ipcRenderer: {
+    on: (channel: string, handler: IpcHandler): void => {
+      let set = fakeElectron.channels.get(channel);
+      if (set === undefined) {
+        set = new Set();
+        fakeElectron.channels.set(channel, set);
+      }
+      set.add(handler);
+    },
+    removeListener: (channel: string, handler: IpcHandler): void => {
+      fakeElectron.channels.get(channel)?.delete(handler);
+    },
+    invoke: (channel: string, ...args: unknown[]): Promise<unknown> =>
+      fakeElectron.invokeFn(channel, ...args),
+    sendSync: (channel: string, ...args: unknown[]): unknown => {
+      fakeElectron.syncCalls.push({ channel, args });
+      return fakeElectron.sendSyncFn(channel, ...args);
+    },
+  },
+  contextBridge: {
+    exposeInMainWorld: (key: string, value: unknown): void => {
+      fakeElectron.exposed.set(key, value);
+    },
+  },
+  webUtils: {
+    getPathForFile: (_file: File): string => "/tmp/dropped-file",
+  },
+}));
+
+interface PreloadLocalHostSnapshot {
+  readonly hostId: string;
+  readonly availability: string;
+}
+
+interface PreloadBridge {
+  onLocalHostChange(
+    handler: (snapshot: PreloadLocalHostSnapshot | null) => void,
+  ): { dispose: () => void };
+  readonly authnBaseUrl: string;
+  readonly initialRoute: string | null;
+  readonly windows: {
+    readonly windowId: string;
+    list(): Promise<unknown>;
+    requestFocus(windowId: string): Promise<void>;
+    requestOpenEpicInNewWindow(
+      epicId: string,
+      title: string,
+      tabId: string,
+    ): Promise<unknown>;
+    ownership: {
+      snapshot(): Promise<unknown>;
+      claim(tabId: string, epicId: string): Promise<unknown>;
+      release(tabId: string): Promise<void>;
+      onChange(handler: (entries: unknown) => void): { dispose: () => void };
+    };
+    perWindowState: {
+      get(): Promise<unknown>;
+      update(patch: unknown): Promise<void>;
+      clear(): Promise<void>;
+    };
+    authSession: {
+      get(): Promise<unknown>;
+      restoreLocal(expected: {
+        readonly userId: string;
+        readonly token: string;
+      }): Promise<DesktopLocalAuthSessionRestoreResult>;
+      set(snapshot: unknown): Promise<void>;
+      revoke(
+        rejectedToken: string,
+        revocation: "user-epoch" | null,
+      ): Promise<void>;
+      onChange(handler: (snapshot: unknown) => void): { dispose: () => void };
+      onVerificationRevoked(
+        handler: (
+          rejectedToken: string,
+          revocation: "user-epoch" | null,
+        ) => void,
+      ): { dispose: () => void };
+    };
+  };
+  validateAuthTokenIdentity(
+    token: string,
+  ): Promise<AuthIdentityValidationResult>;
+  listUserSessions(bearerToken: string): Promise<unknown>;
+  revokeUserSession(
+    bearerToken: string,
+    familyId: string,
+    useStepUpCredential: boolean,
+  ): Promise<unknown>;
+  revokeAllSessions(bearerToken: string): Promise<unknown>;
+  requestStepUpChallenge(bearerToken: string): Promise<unknown>;
+  verifyStepUpChallenge(bearerToken: string, code: string): Promise<unknown>;
+  onAuthCallback(handler: () => void): {
+    dispose: () => void;
+  };
+  notifications: {
+    readonly systemSettings: { open(): Promise<void> } | null;
+    onForegroundDisplay(
+      handler: (display: DesktopNotificationForegroundDisplay) => void,
+    ): { dispose: () => void };
+  };
+  tokenStore: {
+    get(): Promise<string | null>;
+    set(token: string): Promise<void>;
+    delete(): Promise<void>;
+  };
+  workspaceFolders: {
+    pickFolders(): Promise<readonly string[]>;
+  };
+  fileDrops: {
+    getPathForFile(file: File): string;
+    writeTemporaryFile(input: unknown): Promise<string>;
+    copyTemporaryFiles(paths: readonly string[]): Promise<readonly string[]>;
+    saveFile(input: unknown): Promise<unknown>;
+    openSavedFile(path: string): Promise<void>;
+  };
+  requestHostRespawn(): Promise<unknown>;
+  forceRestartUnresponsiveHost(offer: {
+    readonly pid: number;
+    readonly offerId: number;
+  }): Promise<unknown>;
+  hostManagement: {
+    convergeReady(force: boolean): Promise<unknown>;
+    applyStaged(trigger: "launch" | "manual", force: boolean): Promise<unknown>;
+    activateInstalled(force: boolean): Promise<unknown>;
+    installVersion(pin: string, force: boolean): Promise<unknown>;
+    registerService(): Promise<unknown>;
+  };
+  menu: {
+    readonly platform: "darwin" | "win32" | "linux";
+    onCommand(handler: (payload: unknown) => void): { dispose: () => void };
+    onChange(handler: () => void): { dispose: () => void };
+    getSnapshot(): Promise<DesktopMenuSnapshot>;
+    executeItem(revision: number, itemId: string): Promise<void>;
+    openTopLevel(
+      menuId: "file" | "edit" | "view" | "window" | "help",
+      anchorX: number,
+      anchorY: number,
+    ): Promise<void>;
+  };
+  support: {
+    getSnapshot(): Promise<unknown>;
+    revealLog(target: unknown): Promise<unknown>;
+    tailLog(input: unknown): Promise<unknown>;
+  };
+  browserView: BrowserViewBridge;
+  service: {
+    install(): Promise<void>;
+    uninstall(purge: boolean): Promise<void>;
+    start(): Promise<void>;
+    stop(): Promise<void>;
+    restart(): Promise<void>;
+    upgrade(): Promise<void>;
+    enableLinger(): Promise<void>;
+    getLogTail(maxLines: number): Promise<string | null>;
+  };
+  hostLifecycle: {
+    get(): Promise<unknown>;
+    set(request: unknown): Promise<unknown>;
+    onChange(handler: (view: unknown) => void): { dispose: () => void };
+    onQuitRequest(handler: (request: unknown) => void): {
+      dispose: () => void;
+    };
+    respondToQuitRequest(response: unknown): Promise<void>;
+    onQuitState(handler: (event: unknown) => void): { dispose: () => void };
+  };
+  readonly hostTokens: HostTokensBridgeSurface;
+  readonly localHostCapability: "managed" | "none";
+  readonly soundtrackSourceAvailable: boolean;
+  readSoundtrackSet(): Promise<unknown>;
+}
+
+interface LoadPreloadOptions {
+  authnApiUrl: string | undefined;
+  desktopDev: string | undefined;
+  initialRouteArg: string | undefined;
+  invokeFn: InvokeFn | undefined;
+  sendSyncFn: SendSyncFn | undefined;
+}
+
+async function loadPreload(
+  options: LoadPreloadOptions,
+): Promise<PreloadBridge> {
+  vi.resetModules();
+  fakeElectron.reset();
+  if (options.invokeFn !== undefined) {
+    fakeElectron.invokeFn = options.invokeFn;
+  }
+  if (options.sendSyncFn !== undefined) {
+    fakeElectron.sendSyncFn = options.sendSyncFn;
+  }
+  const previousAuthnApiUrl = process.env.AUTHN_API_URL;
+  const previousDesktopDev = process.env.TRAYCER_DESKTOP_DEV;
+  const previousArgv = process.argv;
+  process.argv =
+    options.initialRouteArg === undefined
+      ? previousArgv.filter(
+          (arg) => !arg.startsWith("--traycer-initial-route="),
+        )
+      : [...previousArgv, options.initialRouteArg];
+  if (options.authnApiUrl === undefined) {
+    delete process.env.AUTHN_API_URL;
+  } else {
+    process.env.AUTHN_API_URL = options.authnApiUrl;
+  }
+  if (options.desktopDev === undefined) {
+    delete process.env.TRAYCER_DESKTOP_DEV;
+  } else {
+    process.env.TRAYCER_DESKTOP_DEV = options.desktopDev;
+  }
+  await import("../preload-bridge");
+  if (previousAuthnApiUrl === undefined) {
+    delete process.env.AUTHN_API_URL;
+  } else {
+    process.env.AUTHN_API_URL = previousAuthnApiUrl;
+  }
+  if (previousDesktopDev === undefined) {
+    delete process.env.TRAYCER_DESKTOP_DEV;
+  } else {
+    process.env.TRAYCER_DESKTOP_DEV = previousDesktopDev;
+  }
+  process.argv = previousArgv;
+  const bridge = fakeElectron.exposed.get("runnerHost");
+  if (bridge === undefined) {
+    throw new Error("preload did not expose runnerHost");
+  }
+  return bridge as PreloadBridge;
+}
+
+describe("preload auth-callback replay", () => {
+  beforeEach(() => {
+    fakeElectron.reset();
+  });
+
+  afterEach(() => {
+    fakeElectron.reset();
+    vi.unstubAllGlobals();
+  });
+
+  it("replays the cached browser-return signal to subscribers that arrive after the IPC event fired", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: undefined,
+    });
+
+    // The browser-return signal is payload-free - the IPC event carries no body.
+    fakeElectron.emit(RunnerHostEvent.authCallback, undefined);
+
+    let observed = 0;
+    const subscription = bridge.onAuthCallback(() => {
+      observed += 1;
+    });
+
+    expect(observed).toBe(1);
+    subscription.dispose();
+  });
+
+  it("fans out subsequent browser-return IPC events to every live subscriber", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: undefined,
+    });
+
+    let a = 0;
+    let b = 0;
+    bridge.onAuthCallback(() => {
+      a += 1;
+    });
+    bridge.onAuthCallback(() => {
+      b += 1;
+    });
+
+    fakeElectron.emit(RunnerHostEvent.authCallback, undefined);
+    fakeElectron.emit(RunnerHostEvent.authCallback, undefined);
+
+    expect(a).toBe(2);
+    expect(b).toBe(2);
+  });
+
+  it("does not invoke a subscriber synchronously when no browser-return signal has fired yet", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: undefined,
+    });
+
+    let observed = 0;
+    bridge.onAuthCallback(() => {
+      observed += 1;
+    });
+
+    expect(observed).toBe(0);
+
+    fakeElectron.emit(RunnerHostEvent.authCallback, undefined);
+    expect(observed).toBe(1);
+  });
+});
+
+describe("preload foreground-notification buffering", () => {
+  beforeEach(() => {
+    fakeElectron.reset();
+  });
+
+  afterEach(() => {
+    fakeElectron.reset();
+  });
+
+  it("delivers a notification received before GUI subscription exactly once", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: undefined,
+    });
+    const display: DesktopNotificationForegroundDisplay = {
+      title: "Traycer",
+      body: "Background agent failed",
+      payload: null,
+      replaceKey: "app-local:host.error:failure-1",
+      deliveryKey: "user-1:host.error:failure-1:40",
+      feedSource: "app-local",
+      foregroundAppLocal: {
+        userId: "user-1",
+        entry: { id: "host.error:failure-1", updatedAt: 40 },
+        inboxOnly: false,
+      },
+    };
+
+    fakeElectron.emit(RunnerHostEvent.notificationForegroundDisplay, display);
+
+    const observed: DesktopNotificationForegroundDisplay[] = [];
+    const first = bridge.notifications.onForegroundDisplay((value) => {
+      observed.push(value);
+    });
+    expect(observed).toEqual([display]);
+    first.dispose();
+
+    const second = bridge.notifications.onForegroundDisplay((value) => {
+      observed.push(value);
+    });
+    expect(observed).toEqual([display]);
+
+    fakeElectron.emit(RunnerHostEvent.notificationForegroundDisplay, display);
+    expect(observed).toEqual([display, display]);
+    second.dispose();
+  });
+
+  it("logs each oldest display dropped when the preload buffer is full", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: undefined,
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    for (let index = 0; index < 21; index++) {
+      fakeElectron.emit(RunnerHostEvent.notificationForegroundDisplay, {
+        title: "Traycer",
+        body: `Background agent ${index} failed`,
+        payload: null,
+        replaceKey: null,
+        deliveryKey: `user-1:failure-${index}`,
+        foregroundAppLocal: null,
+      });
+    }
+
+    expect(warn).toHaveBeenCalledWith(
+      "[preload] dropped buffered foreground notification display",
+      { deliveryKey: "user-1:failure-0" },
+    );
+    warn.mockRestore();
+
+    const observed: DesktopNotificationForegroundDisplay[] = [];
+    const subscription = bridge.notifications.onForegroundDisplay((display) => {
+      observed.push(display);
+    });
+    expect(observed).toHaveLength(20);
+    expect(observed[0]?.deliveryKey).toBe("user-1:failure-1");
+    subscription.dispose();
+  });
+});
+
+describe("preload host-management mutation invokes", () => {
+  beforeEach(() => {
+    fakeElectron.reset();
+  });
+
+  afterEach(() => {
+    fakeElectron.reset();
+  });
+
+  it("passes every mutation intent through its exact IPC channel and payload", async () => {
+    const calls: Array<{ readonly channel: string; readonly args: unknown[] }> =
+      [];
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel, ...args) => {
+        calls.push({ channel, args });
+        return Promise.resolve({ kind: "deferred", message: "not now" });
+      },
+      sendSyncFn: undefined,
+    });
+
+    await bridge.hostManagement.convergeReady(true);
+    await bridge.hostManagement.applyStaged("launch", false);
+    await bridge.hostManagement.activateInstalled(true);
+    await bridge.hostManagement.installVersion("2.0.0", false);
+    await bridge.hostManagement.registerService();
+
+    expect(calls).toEqual([
+      {
+        channel: RunnerHostInvoke.traycerHostConvergeReady,
+        args: [{ force: true }],
+      },
+      {
+        channel: RunnerHostInvoke.traycerHostApplyStaged,
+        args: [{ trigger: "launch", force: false }],
+      },
+      {
+        channel: RunnerHostInvoke.traycerHostActivateInstalled,
+        args: [{ force: true }],
+      },
+      {
+        channel: RunnerHostInvoke.traycerHostInstallVersion,
+        args: [{ pin: "2.0.0", force: false }],
+      },
+      { channel: RunnerHostInvoke.traycerServiceRegister, args: [] },
+    ]);
+  });
+});
+
+describe("preload new-capability wiring", () => {
+  beforeEach(() => {
+    fakeElectron.reset();
+  });
+
+  afterEach(() => {
+    fakeElectron.reset();
+    vi.unstubAllGlobals();
+  });
+
+  it("exposes the window initial route from preload bootstrap arguments", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: "--traycer-initial-route=%2Fepics%2Fepic-a%2Ftab-a",
+      invokeFn: undefined,
+      sendSyncFn: undefined,
+    });
+
+    expect(bridge.initialRoute).toBe("/epics/epic-a/tab-a");
+  });
+
+  it("routes native notification settings through dedicated IPC", async () => {
+    const platform = vi
+      .spyOn(process, "platform", "get")
+      .mockReturnValue("darwin");
+    const calls: Array<{ readonly channel: string; readonly args: unknown[] }> =
+      [];
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel, ...args) => {
+        calls.push({ channel, args });
+        return Promise.resolve(undefined);
+      },
+      sendSyncFn: undefined,
+    });
+
+    await bridge.notifications.systemSettings?.open();
+
+    expect(calls).toContainEqual({
+      channel: RunnerHostInvoke.notificationOpenSystemSettings,
+      args: [],
+    });
+    platform.mockRestore();
+  });
+
+  it("forwards Windows top-level menu popup requests with their anchor", async () => {
+    const calls: Array<{ readonly channel: string; readonly args: unknown[] }> =
+      [];
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel, ...args) => {
+        calls.push({ channel, args });
+        return Promise.resolve(undefined);
+      },
+      sendSyncFn: undefined,
+    });
+
+    await bridge.menu.openTopLevel("help", 120, 40);
+
+    expect(calls).toContainEqual({
+      channel: RunnerHostInvoke.menuOpenTopLevel,
+      args: ["help", 120, 40],
+    });
+  });
+
+  it("does not expose the unhandled metadata-only service-status invoke", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: undefined,
+    });
+
+    expect("status" in bridge.service).toBe(false);
+  });
+
+  it("forwards validateAuthTokenIdentity through ipcRenderer.invoke", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel, token) => {
+        if (channel !== RunnerHostInvoke.validateAuthTokenIdentity) {
+          throw new Error(`unexpected channel ${channel}`);
+        }
+        expect(token).toBe("jwt-identity");
+        return Promise.resolve({ kind: "rejected" });
+      },
+      sendSyncFn: undefined,
+    });
+
+    await expect(
+      bridge.validateAuthTokenIdentity("jwt-identity"),
+    ).resolves.toEqual({ kind: "rejected" });
+  });
+
+  it("forwards devices and step-up auth calls through ipcRenderer.invoke", async () => {
+    const invokeFn = vi.fn(async () => ({ kind: "network-error" }));
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+
+    await bridge.listUserSessions("jwt");
+    await bridge.revokeUserSession("jwt", "family-1", true);
+    await bridge.revokeAllSessions("jwt");
+    await bridge.requestStepUpChallenge("jwt");
+    await bridge.verifyStepUpChallenge("jwt", "123456");
+
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.listUserSessions,
+      "jwt",
+    );
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.revokeUserSession,
+      "jwt",
+      "family-1",
+      true,
+    );
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.revokeAllSessions,
+      "jwt",
+    );
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.requestStepUpChallenge,
+      "jwt",
+    );
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.verifyStepUpChallenge,
+      "jwt",
+      "123456",
+    );
+  });
+
+  it("exposes the build-time DESKTOP_AUTHN_BASE_URL constant", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: undefined,
+    });
+    // The OSS build ships production endpoints in source, so this is the
+    // production authn URL. No env-var override path exists anymore.
+    expect(bridge.authnBaseUrl).toBe("https://authn.traycer.ai");
+  });
+
+  it("forwards requestHostRespawn through ipcRenderer.invoke", async () => {
+    const invokeFn = vi.fn(async () => undefined);
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+    await bridge.requestHostRespawn();
+    expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.requestHostRespawn);
+  });
+
+  it("forwards forceRestartUnresponsiveHost through ipcRenderer.invoke with the pid and the offer id", async () => {
+    const invokeFn = vi.fn(async () => undefined);
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+    await bridge.forceRestartUnresponsiveHost({ pid: 4242, offerId: 7 });
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.forceRestartUnresponsiveHost,
+      { pid: 4242, offerId: 7 },
+    );
+  });
+
+  it("forwards workspace folder picking through ipcRenderer.invoke", async () => {
+    const invokeFn = vi.fn(async () => ["/tmp/project-a", "/tmp/project-b"]);
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+    await expect(bridge.workspaceFolders.pickFolders()).resolves.toEqual([
+      "/tmp/project-a",
+      "/tmp/project-b",
+    ]);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.workspaceFoldersPick,
+    );
+  });
+
+  it("exposes file drop path lookup and temporary materialization", async () => {
+    const invokeFn = vi.fn(async () => "/tmp/materialized-drop.png");
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+    const file = new File(["image"], "screenshot.png", { type: "image/png" });
+    const bytes = new Uint8Array([105, 109, 97, 103, 101]).buffer;
+
+    expect(bridge.fileDrops.getPathForFile(file)).toBe("/tmp/dropped-file");
+    await expect(
+      bridge.fileDrops.writeTemporaryFile({
+        name: file.name,
+        type: file.type,
+        bytes,
+      }),
+    ).resolves.toBe("/tmp/materialized-drop.png");
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.fileDropWriteTemporary,
+      {
+        name: "screenshot.png",
+        type: "image/png",
+        bytes,
+      },
+    );
+
+    await expect(
+      bridge.fileDrops.saveFile({
+        name: "diagram.png",
+        type: "image/png",
+        bytes,
+      }),
+    ).resolves.toBe("/tmp/materialized-drop.png");
+    expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.fileSave, {
+      name: "diagram.png",
+      type: "image/png",
+      bytes,
+    });
+
+    await bridge.fileDrops.openSavedFile("/tmp/saved/diagram.png");
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.fileOpenSaved,
+      "/tmp/saved/diagram.png",
+    );
+  });
+
+  it("exposes menu-command and support bridges", async () => {
+    const invokeFn = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === RunnerHostInvoke.menuGetSnapshot) {
+        return { revision: 8, menus: [] };
+      }
+      if (channel === RunnerHostInvoke.menuExecuteItem) {
+        return undefined;
+      }
+      if (channel === RunnerHostInvoke.supportSnapshotGet) {
+        return { appName: "Traycer", logs: [] };
+      }
+      if (channel === RunnerHostInvoke.supportRevealLog) {
+        return { target: args[0], path: "/tmp/log" };
+      }
+      if (channel === RunnerHostInvoke.supportTailLog) {
+        return {
+          target: "host",
+          path: "/tmp/log",
+          lines: ["ready"],
+          truncated: false,
+        };
+      }
+      return undefined;
+    });
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+
+    const commands: unknown[] = [];
+    const changes: number[] = [];
+    const subscription = bridge.menu.onCommand((payload) => {
+      commands.push(payload);
+    });
+    const changeSubscription = bridge.menu.onChange(() => {
+      changes.push(changes.length + 1);
+    });
+    await expect(bridge.menu.getSnapshot()).resolves.toEqual({
+      revision: 8,
+      menus: [],
+    });
+    await bridge.menu.executeItem(8, "file/0");
+    expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.menuGetSnapshot);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.menuExecuteItem,
+      8,
+      "file/0",
+    );
+    fakeElectron.emit(RunnerHostEvent.menuCommand, {
+      command: "app.openLogs",
+      windowId: "preload-window",
+    });
+    fakeElectron.emit(RunnerHostEvent.menuChanged, undefined);
+    expect(changes).toEqual([1]);
+    changeSubscription.dispose();
+    fakeElectron.emit(RunnerHostEvent.menuChanged, undefined);
+    subscription.dispose();
+    fakeElectron.emit(RunnerHostEvent.menuCommand, {
+      command: "app.aboutDetails",
+      windowId: "preload-window",
+    });
+
+    await expect(bridge.support.getSnapshot()).resolves.toEqual({
+      appName: "Traycer",
+      logs: [],
+    });
+    await expect(bridge.support.revealLog("host")).resolves.toEqual({
+      target: "host",
+      path: "/tmp/log",
+    });
+    await expect(
+      bridge.support.tailLog({ target: "host", tailLines: 100 }),
+    ).resolves.toEqual({
+      target: "host",
+      path: "/tmp/log",
+      lines: ["ready"],
+      truncated: false,
+    });
+    expect(commands).toEqual([
+      { command: "app.openLogs", windowId: "preload-window" },
+    ]);
+    expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.supportSnapshotGet);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.supportRevealLog,
+      "host",
+    );
+    expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.supportTailLog, {
+      target: "host",
+      tailLines: 100,
+    });
+  });
+
+  it("exposes desktop windows, ownership, per-window state, and auth-session bridge calls", async () => {
+    const invokeFn = vi.fn(async (channel: string) => {
+      if (channel === RunnerHostInvoke.windowsList) {
+        return [{ windowId: "preload-window", title: "Traycer" }];
+      }
+      if (channel === RunnerHostInvoke.ownershipSnapshot) {
+        return [
+          { tabId: "tab-a", epicId: "epic-a", windowId: "preload-window" },
+        ];
+      }
+      if (channel === RunnerHostInvoke.ownershipClaim) {
+        return { ok: true };
+      }
+      if (channel === RunnerHostInvoke.perWindowStateGet) {
+        return {
+          epicTabs: [],
+          activeTabId: null,
+          canvasByTabId: {},
+          landingDrafts: [],
+          activeLandingDraftId: null,
+        };
+      }
+      if (channel === RunnerHostInvoke.authSessionGet) {
+        return { status: "signed-out", token: null, profile: null };
+      }
+      if (channel === RunnerHostInvoke.authSessionRestoreLocal) {
+        return "restored";
+      }
+      if (channel === RunnerHostInvoke.windowsRequestOpenEpicInNewWindow) {
+        return { result: "moved", windowId: "new-window" };
+      }
+      return undefined;
+    });
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+
+    expect(bridge.windows.windowId).toBe("preload-window");
+    await expect(bridge.windows.list()).resolves.toEqual([
+      { windowId: "preload-window", title: "Traycer" },
+    ]);
+    await bridge.windows.requestFocus("other-window");
+    await expect(
+      bridge.windows.requestOpenEpicInNewWindow("epic-a", "Alpha", "tab-a"),
+    ).resolves.toEqual({ result: "moved", windowId: "new-window" });
+    await expect(bridge.windows.ownership.snapshot()).resolves.toEqual([
+      { tabId: "tab-a", epicId: "epic-a", windowId: "preload-window" },
+    ]);
+    await expect(
+      bridge.windows.ownership.claim("tab-a", "epic-a"),
+    ).resolves.toEqual({ ok: true });
+    await bridge.windows.ownership.release("tab-a");
+    await expect(bridge.windows.perWindowState.get()).resolves.toEqual({
+      epicTabs: [],
+      activeTabId: null,
+      canvasByTabId: {},
+      landingDrafts: [],
+      activeLandingDraftId: null,
+    });
+    await bridge.windows.perWindowState.update({ activeTabId: "tab-a" });
+    await bridge.windows.perWindowState.clear();
+    expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.perWindowStateClear);
+    await expect(bridge.windows.authSession.get()).resolves.toEqual({
+      status: "signed-out",
+      token: null,
+      profile: null,
+    });
+    await expect(
+      bridge.windows.authSession.restoreLocal({
+        userId: "test-user",
+        token: "jwt",
+      }),
+    ).resolves.toBe("restored");
+    await bridge.windows.authSession.set({
+      status: "signed-in",
+      token: "jwt",
+      profile: {
+        userId: "test-user",
+        userName: "User",
+        email: "user@example.com",
+      },
+    });
+
+    const observed: unknown[] = [];
+    const ownershipObserved: unknown[] = [];
+    bridge.windows.ownership.onChange((entries) => {
+      ownershipObserved.push(entries);
+    });
+    bridge.windows.authSession.onChange((snapshot) => {
+      observed.push(snapshot);
+    });
+    fakeElectron.emit(RunnerHostEvent.ownershipChange, [
+      { tabId: "tab-a", epicId: "epic-a", windowId: "preload-window" },
+    ]);
+    fakeElectron.emit(RunnerHostEvent.authSessionChange, {
+      status: "signed-in",
+      token: "jwt",
+      profile: {
+        userId: "test-user",
+        userName: "User",
+        email: "user@example.com",
+      },
+    });
+
+    expect(observed).toEqual([
+      {
+        status: "signed-in",
+        token: "jwt",
+        profile: {
+          userId: "test-user",
+          userName: "User",
+          email: "user@example.com",
+        },
+      },
+    ]);
+    expect(ownershipObserved).toEqual([
+      [{ tabId: "tab-a", epicId: "epic-a", windowId: "preload-window" }],
+    ]);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.windowsRequestFocus,
+      "other-window",
+    );
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.windowsRequestOpenEpicInNewWindow,
+      "epic-a",
+      "Alpha",
+      "tab-a",
+    );
+    expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.ownershipSnapshot);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.ownershipClaim,
+      "tab-a",
+      "epic-a",
+    );
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.ownershipRelease,
+      "tab-a",
+    );
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.perWindowStateUpdate,
+      { activeTabId: "tab-a" },
+    );
+    expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.authSessionSet, {
+      status: "signed-in",
+      token: "jwt",
+      profile: {
+        userId: "test-user",
+        userName: "User",
+        email: "user@example.com",
+      },
+    });
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.authSessionRestoreLocal,
+      { userId: "test-user", token: "jwt" },
+    );
+  });
+
+  it("carries the revocation scope both ways over the auth-session revoke channels", async () => {
+    const invokeFn = vi.fn((_channel: string, ..._args: unknown[]) =>
+      Promise.resolve<unknown>(undefined),
+    );
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+
+    // Outbound: the scope rides next to the bearer, as a second argument.
+    await bridge.windows.authSession.revoke("bearer-a", "user-epoch");
+    await bridge.windows.authSession.revoke("bearer-b", null);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.authSessionRevoke,
+      "bearer-a",
+      "user-epoch",
+    );
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.authSessionRevoke,
+      "bearer-b",
+      null,
+    );
+
+    // Inbound: main fans out `{ token, revocation }`, which the handler gets
+    // as two arguments rather than as the wrapper object.
+    const observed: Array<readonly [string, "user-epoch" | null]> = [];
+    const subscription = bridge.windows.authSession.onVerificationRevoked(
+      (rejectedToken, revocation) => {
+        observed.push([rejectedToken, revocation]);
+      },
+    );
+    fakeElectron.emit(RunnerHostEvent.authVerificationRevoked, {
+      token: "bearer-a",
+      revocation: "user-epoch",
+    });
+    fakeElectron.emit(RunnerHostEvent.authVerificationRevoked, {
+      token: "bearer-b",
+      revocation: null,
+    });
+    expect(observed).toEqual([
+      ["bearer-a", "user-epoch"],
+      ["bearer-b", null],
+    ]);
+
+    subscription.dispose();
+    fakeElectron.emit(RunnerHostEvent.authVerificationRevoked, {
+      token: "bearer-c",
+      revocation: "user-epoch",
+    });
+    expect(observed).toHaveLength(2);
+  });
+
+  it("round-trips the saved-logins pref through ipcRenderer.invoke", async () => {
+    const invokeFn = vi.fn(async (channel: string, ...args: unknown[]) => {
+      if (channel === RunnerHostInvoke.browserViewSaveLoginsGet) return true;
+      if (channel === RunnerHostInvoke.browserViewSaveLoginsSet) {
+        return args[0];
+      }
+      return undefined;
+    });
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+
+    await expect(bridge.browserView.getSaveLogins()).resolves.toBe(true);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.browserViewSaveLoginsGet,
+    );
+
+    await expect(bridge.browserView.setSaveLogins(false)).resolves.toBe(false);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.browserViewSaveLoginsSet,
+      false,
+    );
+    expect(invokeFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("routes the sessions-stream open/close/send trio to their H10 channels", async () => {
+    const invokeFn = vi.fn(async () => undefined);
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+    const key = {
+      scope: { kind: "epic", epicId: "epic-1" } as const,
+      hostId: "host-1",
+      identityKey: "identity-1",
+    };
+
+    // A host id and an epic, and nothing else: main reads the signed-in user
+    // from the desktop auth session it owns (H10 ruling 1).
+    await bridge.browserView.openSessionsStream(key);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.browserViewSessionsOpen,
+      key,
+    );
+
+    await bridge.browserView.sendSessionsFrame({
+      key,
+      frame: {
+        kind: "openTab",
+        hasBinaryPayload: false,
+        requestId: "request-1",
+        sessionId: null,
+        url: "https://example.com",
+      },
+    });
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.browserViewSessionsSend,
+      {
+        key,
+        frame: {
+          kind: "openTab",
+          hasBinaryPayload: false,
+          requestId: "request-1",
+          sessionId: null,
+          url: "https://example.com",
+        },
+      },
+    );
+
+    await bridge.browserView.closeSessionsStream(key);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.browserViewSessionsClose,
+      key,
+    );
+    expect(invokeFn).toHaveBeenCalledTimes(3);
+  });
+
+  it("routes clearSavedLoginSite to its own confirm-then-clear channel", async () => {
+    const invokeFn = vi.fn(async (channel: string) => {
+      if (channel === RunnerHostInvoke.browserViewClearSavedLoginSite) {
+        return true;
+      }
+      return undefined;
+    });
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+
+    await expect(
+      bridge.browserView.clearSavedLoginSite("example.com"),
+    ).resolves.toBe(true);
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.browserViewClearSavedLoginSite,
+      { domain: "example.com" },
+    );
+    expect(invokeFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("exposes native PiP capture through the browser view bridge", async () => {
+    const invokeFn = vi.fn(() => Promise.resolve(undefined));
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn,
+      sendSyncFn: undefined,
+    });
+    const input = {
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      registrationId: "registration-1",
+      maxWidth: 640,
+      maxHeight: 360,
+      quality: 70,
+    };
+    const frames: BrowserScreencastServerFrame[] = [];
+    const subscription = bridge.browserView.onPipCaptureFrame((frame) => {
+      frames.push(frame);
+    });
+
+    await bridge.browserView.startPipCapture(input);
+    fakeElectron.emit(RunnerHostEvent.pipCaptureFrame, {
+      frame: {
+        kind: "stalled",
+        hasBinaryPayload: false,
+      },
+      jpegBytes: null,
+    });
+    // The video plane's frame kinds ride this bridge unfiltered (webrtc
+    // ticket 12, G5): the payload is the whole server-frame union, so a kind
+    // the bridge never heard of must still reach the renderer intact.
+    fakeElectron.emit(RunnerHostEvent.pipCaptureFrame, {
+      frame: {
+        kind: "agentCursor",
+        hasBinaryPayload: false,
+        type: "move",
+        epoch: 3,
+        normalizedX: 0.25,
+        normalizedY: 0.75,
+        label: "Agent",
+      },
+      jpegBytes: null,
+    });
+    subscription.dispose();
+    fakeElectron.emit(RunnerHostEvent.pipCaptureFrame, {
+      frame: {
+        kind: "stalled",
+        hasBinaryPayload: false,
+      },
+      jpegBytes: null,
+    });
+    await bridge.browserView.stopPipCapture();
+
+    expect(invokeFn).toHaveBeenCalledWith(
+      RunnerHostInvoke.pipCaptureStart,
+      input,
+    );
+    expect(invokeFn).toHaveBeenCalledWith(RunnerHostInvoke.pipCaptureStop);
+    expect(frames.map((frame) => frame.kind)).toEqual([
+      "stalled",
+      "agentCursor",
+    ]);
+    expect(frames.at(1)).toEqual({
+      kind: "agentCursor",
+      hasBinaryPayload: false,
+      type: "move",
+      epoch: 3,
+      normalizedX: 0.25,
+      normalizedY: 0.75,
+      label: "Agent",
+    });
+  });
+});
+
+/**
+ * Regression guard for the delivery half of int #48.
+ *
+ * `localHostChange` is an edge-triggered push onto a preload-module cache that
+ * starts at `null`, and `null` is not "unknown" downstream - it is the
+ * renderer's only way of saying "this machine has no host", which the directory
+ * turns into an explicitly unavailable row and which turns every chat owned by
+ * that host into a read-only published copy.
+ *
+ * So every delivery hazard on that channel lies rather than degrades, and lies
+ * in the direction that costs the user their session: a window registering
+ * after the install-time fan-out, a ⌘R that re-executes this module and resets
+ * the cache, a send dropped mid-navigation. None of them self-correct on a
+ * steady-state host, because the correction would have to be a `change` event
+ * and nothing is changing. On 2026-08-11 the renderer sat snapshot-less while
+ * its own helper process held a dozen live TCP connections to the very host it
+ * was rendering as gone.
+ *
+ * The fix is that a subscriber ASKS. These tests pin that it asks, that the
+ * answer reaches handlers, and that it never overwrites a push.
+ */
+describe("preload local-host snapshot convergence", () => {
+  beforeEach(() => {
+    fakeElectron.reset();
+  });
+
+  it("pulls the current snapshot when nothing was ever pushed", async () => {
+    const snapshot: PreloadLocalHostSnapshot = {
+      hostId: "host-a",
+      availability: "available",
+    };
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel: string) =>
+        Promise.resolve(
+          channel === RunnerHostInvoke.localHostSnapshot ? snapshot : undefined,
+        ),
+      sendSyncFn: undefined,
+    });
+
+    const seen: (PreloadLocalHostSnapshot | null)[] = [];
+    bridge.onLocalHostChange((next) => seen.push(next));
+    // Synchronous seed is still the cached value, which is all a push-only
+    // channel could ever offer.
+    expect(seen).toEqual([null]);
+
+    await vi.waitFor(() => {
+      expect(seen.at(-1)).toEqual(snapshot);
+    });
+  });
+
+  it("delivers the pulled snapshot to a handler that subscribed before it landed", async () => {
+    const snapshot: PreloadLocalHostSnapshot = {
+      hostId: "host-a",
+      availability: "busy",
+    };
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel: string) =>
+        Promise.resolve(
+          channel === RunnerHostInvoke.localHostSnapshot ? snapshot : undefined,
+        ),
+      sendSyncFn: undefined,
+    });
+
+    const first: (PreloadLocalHostSnapshot | null)[] = [];
+    const second: (PreloadLocalHostSnapshot | null)[] = [];
+    bridge.onLocalHostChange((next) => first.push(next));
+    bridge.onLocalHostChange((next) => second.push(next));
+
+    await vi.waitFor(() => {
+      expect(first.at(-1)).toEqual(snapshot);
+      expect(second.at(-1)).toEqual(snapshot);
+    });
+  });
+
+  it("retries the pull for a later subscriber after a rejected invoke", async () => {
+    // The repair must not consume its once-per-preload slot on failure: a
+    // boot-time rejection (main not ready yet) with the flag left set would
+    // freeze the cache at `null` - "this machine has no host" - until a
+    // `change` event a steady-state host never sends.
+    const snapshot: PreloadLocalHostSnapshot = {
+      hostId: "host-a",
+      availability: "available",
+    };
+    let attempts = 0;
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel: string) => {
+        if (channel !== RunnerHostInvoke.localHostSnapshot) {
+          return Promise.resolve(undefined);
+        }
+        attempts += 1;
+        return attempts === 1
+          ? Promise.reject(new Error("main not ready"))
+          : Promise.resolve(snapshot);
+      },
+      sendSyncFn: undefined,
+    });
+
+    const first: (PreloadLocalHostSnapshot | null)[] = [];
+    bridge.onLocalHostChange((next) => first.push(next));
+    expect(attempts).toBe(1);
+    // Let the rejection SETTLE (its `.catch` is what re-arms the pull) before
+    // the next subscriber arrives; the cache still honestly holds `null`.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(first).toEqual([null]);
+
+    // A later subscriber re-runs the repair, and the fan-out reaches BOTH.
+    const second: (PreloadLocalHostSnapshot | null)[] = [];
+    bridge.onLocalHostChange((next) => second.push(next));
+    await vi.waitFor(() => {
+      expect(first.at(-1)).toEqual(snapshot);
+      expect(second.at(-1)).toEqual(snapshot);
+    });
+    expect(attempts).toBe(2);
+  });
+
+  it("lets a push that lands mid-flight win over the pull", async () => {
+    // The pull is a floor, never an overwrite: main's answer was read before
+    // the push, so applying it afterwards would move the renderer backwards.
+    const pushed: PreloadLocalHostSnapshot = {
+      hostId: "host-a",
+      availability: "available",
+    };
+    let releasePull: (value: unknown) => void = () => undefined;
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel: string) =>
+        channel === RunnerHostInvoke.localHostSnapshot
+          ? new Promise((resolve) => {
+              releasePull = resolve;
+            })
+          : Promise.resolve(undefined),
+      sendSyncFn: undefined,
+    });
+
+    const seen: (PreloadLocalHostSnapshot | null)[] = [];
+    bridge.onLocalHostChange((next) => seen.push(next));
+
+    fakeElectron.emit(RunnerHostEvent.localHostChange, pushed);
+    expect(seen.at(-1)).toEqual(pushed);
+
+    releasePull(null);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(seen.at(-1)).toEqual(pushed);
+  });
+});
+
+describe("preload exposes the host-lifecycle surface", () => {
+  afterEach(() => {
+    fakeElectron.reset();
+    vi.unstubAllGlobals();
+  });
+
+  it("exposes both hostLifecycle and localHostCapability on runnerHost - dropping either silently changes a `none` desktop's mode surface", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: (channel: string) =>
+        channel === RunnerHostSync.localHostCapability ? "none" : null,
+    });
+
+    // `readLocalHostCapability` treats anything other than the literal
+    // string `"none"` as `"managed"` - so a DROPPED key reads back as
+    // `undefined !== "none"`, which is indistinguishable from a healthy
+    // `"managed"` desktop unless the key's presence itself is asserted.
+    expect(bridge.localHostCapability).toBe("none");
+
+    // `hostLifecycle` must stay live even in `none` mode - it is the one
+    // surface that can switch the mode back. Presence, not just a truthy
+    // value, is what a dropped key would fail: `typeof` on `undefined`
+    // still passes a bare falsy check but not this.
+    expect(typeof bridge.hostLifecycle).toBe("object");
+    expect(typeof bridge.hostLifecycle.get).toBe("function");
+    expect(typeof bridge.hostLifecycle.set).toBe("function");
+  });
+});
+
+describe("preload exposes the soundtrack source", () => {
+  afterEach(() => {
+    fakeElectron.reset();
+    vi.unstubAllGlobals();
+  });
+
+  async function load(options: {
+    flag: unknown;
+    invokeFn: InvokeFn | undefined;
+  }): Promise<PreloadBridge> {
+    return loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: options.invokeFn,
+      sendSyncFn: (channel: string) =>
+        channel === RunnerHostSync.soundtrackSourceAvailable
+          ? options.flag
+          : null,
+    });
+  }
+
+  it("reports no source when main answers null, as it does an untrusted sender", async () => {
+    const bridge = await load({ flag: null, invokeFn: undefined });
+
+    expect(bridge.soundtrackSourceAvailable).toBe(false);
+  });
+
+  it("reports a source when main says there is one", async () => {
+    const bridge = await load({ flag: true, invokeFn: undefined });
+
+    expect(bridge.soundtrackSourceAvailable).toBe(true);
+  });
+
+  it("reads the set through its own invoke channel", async () => {
+    const invoked: string[] = [];
+    const bridge = await load({
+      flag: true,
+      invokeFn: (channel) => {
+        invoked.push(channel);
+        return Promise.resolve({ kind: "unavailable" });
+      },
+    });
+
+    await expect(bridge.readSoundtrackSet()).resolves.toEqual({
+      kind: "unavailable",
+    });
+    expect(invoked).toEqual([RunnerHostInvoke.readSoundtrackSet]);
+  });
+});
+
+describe("preload host-token era reads", () => {
+  afterEach(() => {
+    fakeElectron.reset();
+    vi.unstubAllGlobals();
+  });
+
+  it("uses the main-era sync read once and keeps current and bearer reads local", async () => {
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: undefined,
+      sendSyncFn: (channel) =>
+        channel === RunnerHostSync.hostTokensEra ? 0 : null,
+    });
+    const tokens = createDesktopHostTokenSource(bridge.hostTokens);
+    const hostId = "computer-a";
+    fakeElectron.emit(RunnerHostEvent.hostTokensChange, {
+      userId: "user-a",
+      hostId,
+      token: { token: "host-token", expiresAtMs: Date.now() + 60_000 },
+      era: 0,
+    });
+    const callsBeforeEraRead = fakeElectron.syncCalls.length;
+    const knownEra = tokens.era("user-a");
+    expect(
+      fakeElectron.syncCalls
+        .slice(callsBeforeEraRead)
+        .map((call) => call.channel),
+    ).toEqual([RunnerHostSync.hostTokensEra]);
+    const callsBeforeReads = fakeElectron.syncCalls.length;
+    const signInLease = {
+      identity: { userId: "user-a" },
+      getBearerToken: () => "sign-in-token",
+    };
+    const bearer = hostTokenBearer(
+      tokens,
+      () => signInLease,
+      hostId,
+      () => undefined,
+    );
+
+    expect(knownEra).toBe(0);
+    expect(tokens.current("user-a", hostId)?.token).toBe("host-token");
+    expect(bearer()).not.toBeNull();
+    expect(fakeElectron.syncCalls).toHaveLength(callsBeforeReads);
+  });
+
+  it("does not invoke a token operation when main's era read answers null", async () => {
+    const invoked: string[] = [];
+    const bridge = await loadPreload({
+      authnApiUrl: undefined,
+      desktopDev: undefined,
+      initialRouteArg: undefined,
+      invokeFn: (channel) => {
+        invoked.push(channel);
+        return Promise.resolve(undefined);
+      },
+      sendSyncFn: () => null,
+    });
+    const tokens = createDesktopHostTokenSource(bridge.hostTokens);
+
+    await expect(
+      tokens.obtain("user-a", "computer-a", false, null),
+    ).resolves.toEqual({
+      kind: "superseded",
+    });
+    expect(invoked).toEqual([]);
+  });
+
+  it.each([
+    { value: -1, expected: -1 },
+    { value: 1.5, expected: 91 },
+    { value: Number.NaN, expected: 91 },
+    { value: "0", expected: 91 },
+    { value: null, expected: 91 },
+  ])(
+    "validates readSyncNumberFor like readSyncNumber for $value",
+    async ({ value, expected }) => {
+      fakeElectron.sendSyncFn = () => value;
+      const { readSyncNumber, readSyncNumberFor } =
+        await import("../sync-bootstrap");
+
+      expect(readSyncNumber(RunnerHostSync.hostTokensEra, 91)).toBe(expected);
+      expect(
+        readSyncNumberFor(RunnerHostSync.hostTokensEra, "user-a", 91),
+      ).toBe(expected);
+      expect(fakeElectron.syncCalls).toHaveLength(2);
+    },
+  );
+});

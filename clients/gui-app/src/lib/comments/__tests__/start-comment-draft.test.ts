@@ -1,0 +1,104 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Editor } from "@tiptap/core";
+import StarterKit from "@tiptap/starter-kit";
+import { startCommentDraft } from "@/lib/comments/start-comment-draft";
+import type { DraftRange } from "@/stores/comments/comment-threads-store";
+import { useLeftPanelStore } from "@/stores/epics/left-panel-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
+
+const editors: Editor[] = [];
+
+function makeEditor(content: string): Editor {
+  const editor = new Editor({
+    extensions: [StarterKit],
+    content,
+  });
+  editors.push(editor);
+  return editor;
+}
+
+function resetLeftPanelStore(): void {
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+  useLeftPanelStore.setState({
+    activePanelIdByTabId: {},
+    mainCollapsedByTabId: {},
+    commentsPanelRevealedByTabId: {},
+    localRootCreatePendingByEpicPanel: {},
+    acknowledgedRootCreatePendingByEpicPanel: {},
+    chatFilterByEpicId: {},
+    artifactFilterByEpicId: {},
+  });
+}
+
+beforeEach(resetLeftPanelStore);
+
+afterEach(() => {
+  editors.splice(0).forEach((editor) => editor.destroy());
+  resetLeftPanelStore();
+});
+
+describe("startCommentDraft", () => {
+  it("stores the selected range with the owning tile and artifact", () => {
+    const editor = makeEditor("hello world");
+    editor.commands.setTextSelection({ from: 1, to: 6 });
+
+    const drafts: Array<DraftRange | null> = [];
+    const result = startCommentDraft(
+      editor,
+      {
+        epicId: "epic-a",
+        tabId: "tab-a",
+        tileId: "tile-a",
+        artifactId: "spec-a",
+      },
+      (_epicId, draft) => {
+        drafts.push(draft);
+      },
+    );
+
+    expect(result.started).toBe(true);
+    expect(drafts).toHaveLength(1);
+    const captured = drafts[0];
+    if (captured === null) throw new Error("the draft was cleared, not stored");
+    expect(captured.draftId.length).toBeGreaterThan(0);
+    expect({ ...captured, draftId: "" }).toEqual({
+      draftId: "",
+      tileId: "tile-a",
+      artifactId: "spec-a",
+      from: 1,
+      to: 6,
+      quotedText: "hello",
+    });
+    expect(useLeftPanelStore.getState().getActivePanelId("tab-a")).toBe(
+      "comments",
+    );
+    expect(useLeftPanelStore.getState().getActivePanelId("tab-b")).toBe(
+      "chats",
+    );
+  });
+
+  it("does not create a draft for a collapsed selection", () => {
+    const editor = makeEditor("hello world");
+    editor.commands.setTextSelection(1);
+
+    let called = false;
+    const result = startCommentDraft(
+      editor,
+      {
+        epicId: "epic-a",
+        tabId: "tab-a",
+        tileId: "tile-a",
+        artifactId: "spec-a",
+      },
+      () => {
+        called = true;
+      },
+    );
+
+    expect(result).toEqual({ started: false, draft: null });
+    expect(called).toBe(false);
+  });
+});

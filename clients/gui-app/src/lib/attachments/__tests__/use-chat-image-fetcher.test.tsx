@@ -1,0 +1,633 @@
+import type { ReactNode } from "react";
+import { renderHook } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  HostMethodVersionUnsatisfiedError,
+  HostRpcError,
+  type RequiredHostMethodVersion,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type {
+  ReadChatAttachmentRequest,
+  ReadChatAttachmentResponse,
+} from "@traycer/protocol/host/epic/chat-attachment";
+
+import {
+  ChatAttachmentScopeContext,
+  type ChatAttachmentReadClient,
+  type ChatAttachmentScopeValue,
+} from "@/components/chat/chat-attachment-scope-context";
+import type {
+  EpicReadArtifactObjectRequest,
+  EpicReadArtifactObjectResponse,
+} from "@traycer/protocol/host/epic/artifact-objects";
+import type { ImageBytesResult } from "@/lib/attachments/image-blob-cache";
+import {
+  READ_CHAT_ATTACHMENT_LOCAL_ONLY_MINOR,
+  resetChatAttachmentHostSupport,
+  useChatAttachmentByteReader,
+  useChatImageFetcher,
+} from "@/lib/attachments/use-chat-image-fetcher";
+import { useAuthStore } from "@/stores/auth/auth-store";
+
+const PROFILE = { userId: "user-1", userName: "U", email: "u@example.com" };
+const CONTEXT = { userId: "user-1", username: "U" };
+
+/**
+ * The chat-plane byte chain: `epic.readChatAttachment` on the tile's host
+ * first, the epic doc replica only as the legacy fallback.
+ *
+ * The load-bearing case is a chat whose doc `attachments` map is EMPTY - which
+ * is every chat once bytes stop being written into the document - so most of
+ * these tests hold `hasAttachmentBytes` at false and assert the image resolves
+ * anyway. The second load-bearing case is the inverse: `readAttachmentBytes`
+ * waits indefinitely for a hash the replica does not hold, so the chain must
+ * never reach it without the presence guard passing first.
+ */
+
+const docMocks = vi.hoisted(() => ({
+  hasAttachmentBytes: vi.fn((_hash: string) => false),
+  readAttachmentBytes: vi.fn(
+    (_hash: string, _signal: AbortSignal): Promise<Uint8Array | null> =>
+      Promise.resolve(null),
+  ),
+  present: true,
+  /** The session's durability status, read live by the verdict gate. */
+  durabilityStatus: null as "local" | "promoting" | "cloud" | null,
+  /** The statement retained across a reconnect, consulted when the cycle's own is silent. */
+  retainedDurabilityStatus: null as "local" | "promoting" | "cloud" | null,
+}));
+
+vi.mock("@/providers/use-open-epic-handle", () => ({
+  useMaybeOpenEpicHandle: () =>
+    docMocks.present
+      ? {
+          epicId: "epic-1",
+          store: {
+            getState: () => ({
+              hasAttachmentBytes: docMocks.hasAttachmentBytes,
+              readAttachmentBytes: docMocks.readAttachmentBytes,
+              durabilityStatus: docMocks.durabilityStatus,
+              retainedDurabilityStatus: docMocks.retainedDurabilityStatus,
+            }),
+          },
+        }
+      : null,
+}));
+
+const HASH = "a".repeat(64);
+const CHAT_ID = "chat-1";
+const CHAT_PLANE_BYTES = new Uint8Array([1, 2, 3]);
+const DOC_BYTES = new Uint8Array([9, 9]);
+/** base64 of CHAT_PLANE_BYTES. */
+const CHAT_PLANE_BASE64 = "AQID";
+
+const request =
+  vi.fn<
+    (
+      method: "epic.readChatAttachment",
+      params: ReadChatAttachmentRequest,
+      signal: AbortSignal | undefined,
+    ) => Promise<ReadChatAttachmentResponse>
+  >();
+
+/**
+ * The floor-bearing leg. Kept as a SEPARATE mock from `request` (the plain
+ * `requestWithSignal` leg) rather than one spy dispatching on an extra
+ * argument: the two are different capabilities on the wire client, and a test
+ * asserting "the floor leg was not called" must be able to fail independently
+ * of whether the plain leg was.
+ */
+const requestFloor =
+  vi.fn<
+    (
+      method: "epic.readChatAttachment",
+      params: ReadChatAttachmentRequest,
+      signal: AbortSignal | undefined,
+      requirement: RequiredHostMethodVersion,
+    ) => Promise<ReadChatAttachmentResponse>
+  >();
+
+function requestWithSignal(
+  method: "epic.readChatAttachment",
+  params: ReadChatAttachmentRequest,
+  signal: AbortSignal | undefined,
+): Promise<ReadChatAttachmentResponse>;
+function requestWithSignal(
+  method: "epic.readArtifactObject",
+  params: EpicReadArtifactObjectRequest,
+  signal: AbortSignal | undefined,
+): Promise<EpicReadArtifactObjectResponse>;
+function requestWithSignal(
+  method: "epic.readChatAttachment" | "epic.readArtifactObject",
+  params: ReadChatAttachmentRequest | EpicReadArtifactObjectRequest,
+  signal: AbortSignal | undefined,
+): Promise<ReadChatAttachmentResponse | EpicReadArtifactObjectResponse> {
+  if (method === "epic.readChatAttachment" && "chatId" in params) {
+    return request(method, params, signal);
+  }
+  throw new Error("Unexpected artifact read in chat image test");
+}
+
+const stubClient: ChatAttachmentReadClient = {
+  requestWithSignal,
+  requestWithSignalRequiringHostMethodVersion: (
+    method,
+    params,
+    signal,
+    requirement,
+  ) => requestFloor(method, params, signal, requirement),
+};
+
+const HOST_VERSION = "1.4.0";
+
+function scopeValue(
+  hostId: string,
+  withClient: boolean,
+): ChatAttachmentScopeValue {
+  return scopeAt(hostId, HOST_VERSION, withClient);
+}
+
+function scopeAt(
+  hostId: string,
+  hostVersion: string | null,
+  withClient: boolean,
+): ChatAttachmentScopeValue {
+  return {
+    epicId: "epic-1",
+    chatId: CHAT_ID,
+    hostId,
+    hostVersion,
+    client: withClient ? stubClient : null,
+  };
+}
+
+function wrapperFor(scope: ChatAttachmentScopeValue | null) {
+  return function Wrapper({ children }: { children: ReactNode }): ReactNode {
+    return (
+      <ChatAttachmentScopeContext.Provider value={scope}>
+        {children}
+      </ChatAttachmentScopeContext.Provider>
+    );
+  };
+}
+
+function rpcError(code: "E_HOST_UNSUPPORTED" | "RPC_ERROR"): HostRpcError {
+  return new HostRpcError({
+    code,
+    message: code === "E_HOST_UNSUPPORTED" ? "unsupported" : "socket died",
+    requestId: "req-1",
+    method: "epic.readChatAttachment",
+    fatalDetails: null,
+  });
+}
+
+function fetchOnce(
+  scope: ChatAttachmentScopeValue | null,
+): Promise<ImageBytesResult> {
+  const { result } = renderHook(() => useChatImageFetcher(), {
+    wrapper: wrapperFor(scope),
+  });
+  return result.current.fetch(HASH, new AbortController().signal);
+}
+
+/** The bytes alone, for the many assertions that do not care about the type. */
+async function bytesOnce(
+  scope: ChatAttachmentScopeValue | null,
+): Promise<Uint8Array> {
+  return (await fetchOnce(scope)).bytes;
+}
+
+beforeEach(() => {
+  // The chat-plane leg is admitted for a session holding a cloud verdict (or
+  // a local-homed epic); every case models a verified session unless it says
+  // otherwise.
+  useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+  docMocks.durabilityStatus = null;
+  docMocks.retainedDurabilityStatus = null;
+  resetChatAttachmentHostSupport();
+  request.mockReset();
+  requestFloor.mockReset();
+  resetNegotiatedManifests();
+  docMocks.present = true;
+  docMocks.hasAttachmentBytes.mockReset();
+  docMocks.hasAttachmentBytes.mockReturnValue(false);
+  docMocks.readAttachmentBytes.mockReset();
+  docMocks.readAttachmentBytes.mockResolvedValue(null);
+});
+
+afterEach(() => {
+  useAuthStore.getState().setSignedOut();
+  resetNegotiatedManifests();
+  vi.restoreAllMocks();
+});
+
+describe("useChatImageFetcher", () => {
+  it("serves a sent message's image from the host while the doc map is empty", async () => {
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
+      CHAT_PLANE_BYTES,
+    );
+
+    expect(request).toHaveBeenCalledWith(
+      "epic.readChatAttachment",
+      { epicId: "epic-1", chatId: CHAT_ID, hash: HASH },
+      expect.any(AbortSignal),
+    );
+    // The doc replica is not consulted at all on a chat-plane hit.
+    expect(docMocks.hasAttachmentBytes).not.toHaveBeenCalled();
+    expect(docMocks.readAttachmentBytes).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the doc replica when the host answers missing", async () => {
+    request.mockResolvedValue({ ok: false, reason: "missing" });
+    docMocks.hasAttachmentBytes.mockReturnValue(true);
+    docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
+
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
+      DOC_BYTES,
+    );
+    // ONE argument, no signal. `readHeldEpicAttachmentBytes` says why at its
+    // own site: "there is nothing to abort. The waiting is what a signal
+    // bounded, and this leg does not wait." A pin still demanding a signal is
+    // asserting the pre-relocation shape of a call that deliberately lost it.
+    expect(docMocks.readAttachmentBytes).toHaveBeenCalledWith(HASH);
+  });
+
+  it("never calls the indefinitely-waiting doc read without a presence hit", async () => {
+    request.mockResolvedValue({ ok: false, reason: "missing" });
+    docMocks.hasAttachmentBytes.mockReturnValue(false);
+
+    await expect(bytesOnce(scopeValue("host-1", true))).rejects.toThrow(
+      /unavailable/,
+    );
+    // The PROPERTY survives; the mechanism it used to name does not. This leg
+    // was guarded by a separate `hasAttachmentBytes` pre-check, and the guard
+    // moved INTO the worker - `readAttachmentBytes` answers `null` for a hash
+    // the replica does not hold rather than waiting for one to arrive, so
+    // there is one call where there were two, and main no longer calls the
+    // predicate at all. Asserting the old pre-check here would pin a
+    // construction that was deleted on purpose.
+    //
+    // What must stay true is what the test's NAME claims: the caller never
+    // parks. The rejection above is that, and this is the read that answered
+    // null to produce it.
+    expect(docMocks.hasAttachmentBytes).not.toHaveBeenCalled();
+    expect(docMocks.readAttachmentBytes).toHaveBeenCalledWith(HASH);
+  });
+
+  it("propagates a transient RPC failure so the blob cache retries it", async () => {
+    request.mockRejectedValue(rpcError("RPC_ERROR"));
+    docMocks.hasAttachmentBytes.mockReturnValue(true);
+    docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
+
+    await expect(bytesOnce(scopeValue("host-1", true))).rejects.toThrow(
+      "socket died",
+    );
+    // A dropped socket is not "these bytes moved to the doc" - the fallback
+    // must not silently absorb it into a legacy read.
+    expect(docMocks.readAttachmentBytes).not.toHaveBeenCalled();
+  });
+
+  it("skips the RPC leg permanently for a host that answers E_HOST_UNSUPPORTED", async () => {
+    request.mockRejectedValue(rpcError("E_HOST_UNSUPPORTED"));
+    docMocks.hasAttachmentBytes.mockReturnValue(true);
+    docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
+
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
+      DOC_BYTES,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // Second image, same build: the verdict is cached, not re-derived.
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
+      DOC_BYTES,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // A different host is a different build - it gets its own probe.
+    await expect(bytesOnce(scopeValue("host-2", true))).resolves.toEqual(
+      DOC_BYTES,
+    );
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-probes once the same host id is running a newer build", async () => {
+    request.mockRejectedValue(rpcError("E_HOST_UNSUPPORTED"));
+    docMocks.hasAttachmentBytes.mockReturnValue(true);
+    docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
+
+    await expect(bytesOnce(scopeAt("host-1", "1.4.0", true))).resolves.toEqual(
+      DOC_BYTES,
+    );
+    await expect(bytesOnce(scopeAt("host-1", "1.4.0", true))).resolves.toEqual(
+      DOC_BYTES,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // Traycer can install and activate a newer host under the SAME id with no
+    // renderer reload. Keyed on the id alone the verdict would outlive the
+    // build that produced it, and chat-plane-only images - whose bytes are not
+    // in the doc replica at all - would stay unavailable until a full reload.
+    request.mockReset();
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+    await expect(bytesOnce(scopeAt("host-1", "1.5.0", true))).resolves.toEqual(
+      CHAT_PLANE_BYTES,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let one build's unsupported verdict suppress a different build", async () => {
+    // The verdict key was `${hostId}\n${hostVersion}`, with a comment
+    // asserting a host id "never contains" a newline - an assumption about a
+    // value that crosses the wire as an unconstrained string, and silent about
+    // `hostVersion` entirely. These two pairs joined to the same key, so the
+    // first host's permanent negative suppressed the second's RPC leg for the
+    // rest of the renderer session.
+    request.mockRejectedValue(rpcError("E_HOST_UNSUPPORTED"));
+    docMocks.hasAttachmentBytes.mockReturnValue(true);
+    docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
+
+    await expect(bytesOnce(scopeAt("h", "a\nb", true))).resolves.toEqual(
+      DOC_BYTES,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // A DIFFERENT build, aliasing onto the same joined key. It must still be
+    // probed - and it answers, so its bytes come off the chat plane.
+    request.mockReset();
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+    await expect(bytesOnce(scopeAt("h\na", "b", true))).resolves.toEqual(
+      CHAT_PLANE_BYTES,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("never pins a verdict for a host whose build is not yet known", async () => {
+    request.mockRejectedValue(rpcError("E_HOST_UNSUPPORTED"));
+    docMocks.hasAttachmentBytes.mockReturnValue(true);
+    docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
+
+    await expect(bytesOnce(scopeAt("host-1", null, true))).resolves.toEqual(
+      DOC_BYTES,
+    );
+    await expect(bytesOnce(scopeAt("host-1", null, true))).resolves.toEqual(
+      DOC_BYTES,
+    );
+
+    // An unknown version cannot name a build, so remembering under it would be
+    // a verdict no upgrade could ever clear. Re-deriving is the safe answer.
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("carries the host's sniffed media type alongside the bytes", async () => {
+    // The host derives this from the delivered bytes' magic bytes and never
+    // echoes a client claim, so it is the only trustworthy statement about
+    // what the image IS - and the SVG sanitization gate downstream keys on it.
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/svg+xml",
+    });
+
+    await expect(fetchOnce(scopeValue("host-1", true))).resolves.toEqual({
+      bytes: CHAT_PLANE_BYTES,
+      mediaType: "image/svg+xml",
+    });
+  });
+
+  it("offers no media-type verdict for a doc-replica read", async () => {
+    request.mockResolvedValue({ ok: false, reason: "missing" });
+    docMocks.hasAttachmentBytes.mockReturnValue(true);
+    docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
+
+    await expect(fetchOnce(scopeValue("host-1", true))).resolves.toEqual({
+      bytes: DOC_BYTES,
+      mediaType: null,
+    });
+  });
+
+  it("skips the RPC leg entirely with no chat scope", async () => {
+    docMocks.hasAttachmentBytes.mockReturnValue(true);
+    docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
+
+    await expect(bytesOnce(null)).resolves.toEqual(DOC_BYTES);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("skips the RPC leg when the tile's host client is not resolved", async () => {
+    docMocks.hasAttachmentBytes.mockReturnValue(true);
+    docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
+
+    await expect(bytesOnce(scopeValue("host-1", false))).resolves.toEqual(
+      DOC_BYTES,
+    );
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("skips the chat-plane leg for a cloud-homed epic once the cloud verdict is withdrawn", async () => {
+    // The host's leg is a bearer pass-through to the cloud blob for an
+    // attachment another host published, and the request has no plane
+    // selector - so without a verdict the leg is not dispatched at all, and
+    // the doc replica is the only remaining source.
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+    docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
+    useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
+      DOC_BYTES,
+    );
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps the chat-plane leg for a LOCAL-homed epic without a verdict", async () => {
+    // No cloud task exists for a local home, so the host has nothing to fall
+    // back to and its disk-served images keep rendering.
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+    docMocks.durabilityStatus = "local";
+    useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
+      CHAT_PLANE_BYTES,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the chat-plane leg through a reconnect beat for a LOCAL-homed epic, from the retained statement", async () => {
+    // A reconnect clears the cycle's own durability status while the retained
+    // pair still stands; the gate reads current-then-retained like every
+    // other local-home gate, so the beat does not blank the epic's images.
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+    docMocks.durabilityStatus = null;
+    docMocks.retainedDurabilityStatus = "local";
+    useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
+      CHAT_PLANE_BYTES,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats an undecodable body as a retryable failure, not a miss", async () => {
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: "!!!not base64!!!",
+      mediaType: "image/png",
+    });
+
+    await expect(bytesOnce(scopeValue("host-1", true))).rejects.toThrow(
+      /undecodable/,
+    );
+  });
+
+  it("pins the floor-bearing leg for a selected plane, carrying the exact requirement and the selector", async () => {
+    // Unverified (no cloud verdict) against a host that has negotiated
+    // `epic.readChatAttachment@1.1`: `chatPlaneReadSelector` picks
+    // `"local-only"`, and the request must carry BOTH the version floor and
+    // the selector it exists to protect - a pin that only checked the method
+    // name would survive someone dropping either half.
+    recordNegotiatedHostManifest("host-1", {
+      "epic.readChatAttachment": { major: 1, minor: 1 },
+    });
+    useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+    requestFloor.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
+      CHAT_PLANE_BYTES,
+    );
+
+    expect(requestFloor).toHaveBeenCalledWith(
+      "epic.readChatAttachment",
+      { epicId: "epic-1", chatId: CHAT_ID, hash: HASH, plane: "local-only" },
+      expect.any(AbortSignal),
+      {
+        method: "epic.readChatAttachment",
+        version: { major: 1, minor: READ_CHAT_ATTACHMENT_LOCAL_ONLY_MINOR },
+      },
+    );
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("claims no floor and sends no selector once the session holds its own cloud verdict - same host, only auth differs", async () => {
+    // Non-vacuity for the case above: the ONLY variable that moved is the
+    // session's verdict (still `host-1` negotiated at `@1.1`). A signed-in
+    // session never needs the disk-only leg, so the plain call is used and no
+    // floor is claimed - claiming one here would make every ordinary
+    // signed-in read refusable on a peer that later drops the minor.
+    recordNegotiatedHostManifest("host-1", {
+      "epic.readChatAttachment": { major: 1, minor: 1 },
+    });
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+
+    await expect(bytesOnce(scopeValue("host-1", true))).resolves.toEqual(
+      CHAT_PLANE_BYTES,
+    );
+
+    expect(request).toHaveBeenCalledWith(
+      "epic.readChatAttachment",
+      { epicId: "epic-1", chatId: CHAT_ID, hash: HASH },
+      expect.any(AbortSignal),
+    );
+    expect(requestFloor).not.toHaveBeenCalled();
+  });
+
+  it("propagates a dispatch-time floor refusal instead of falling back to the doc replica", async () => {
+    // The capability read admitted the leg off a render-time / cached
+    // negotiation of `@1.1`; the process behind the connection carrying THIS
+    // frame has since dropped to `@1.0` and refuses the pinned request - the
+    // dispatch-time gap `requestWithSignalRequiringHostMethodVersion` exists
+    // to close. `HostMethodVersionUnsatisfiedError` is not
+    // `E_HOST_UNSUPPORTED` (`isHostUnsupported` only matches that code), so it
+    // must NOT be swallowed into the "this build predates the method"
+    // degrade, and it must not be treated as "missing" either - both would
+    // quietly serve a doc-replica image in place of a refused disk-only read.
+    recordNegotiatedHostManifest("host-1", {
+      "epic.readChatAttachment": { major: 1, minor: 1 },
+    });
+    useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
+    docMocks.hasAttachmentBytes.mockReturnValue(true);
+    docMocks.readAttachmentBytes.mockResolvedValue(DOC_BYTES);
+    const refusal = new HostMethodVersionUnsatisfiedError({
+      requirement: {
+        method: "epic.readChatAttachment",
+        version: { major: 1, minor: READ_CHAT_ATTACHMENT_LOCAL_ONLY_MINOR },
+      },
+      negotiated: { major: 1, minor: 0 },
+      requestId: "req-dispatch-floor",
+      method: "epic.readChatAttachment",
+      hostId: "host-1",
+    });
+    requestFloor.mockRejectedValue(refusal);
+
+    await expect(bytesOnce(scopeValue("host-1", true))).rejects.toBe(refusal);
+
+    // Not a quiet fallback: the doc replica is never consulted for this hash.
+    expect(docMocks.readAttachmentBytes).not.toHaveBeenCalled();
+    // Nor remembered as "this build lacks the method" - a floor refusal says
+    // nothing about whether the method exists, only that this connection
+    // will not serve it below the pinned minor.
+    await expect(bytesOnce(scopeValue("host-1", true))).rejects.toBe(refusal);
+    expect(requestFloor).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("useChatAttachmentByteReader", () => {
+  it("answers bytes through the same chain", async () => {
+    request.mockResolvedValue({
+      ok: true,
+      bytesBase64: CHAT_PLANE_BASE64,
+      mediaType: "image/png",
+    });
+    const { result } = renderHook(() => useChatAttachmentByteReader(), {
+      wrapper: wrapperFor(scopeValue("host-1", true)),
+    });
+
+    await expect(result.current(HASH)).resolves.toEqual(CHAT_PLANE_BYTES);
+  });
+
+  it("answers null instead of throwing so a copy keeps its hash-only node", async () => {
+    request.mockResolvedValue({ ok: false, reason: "missing" });
+    const { result } = renderHook(() => useChatAttachmentByteReader(), {
+      wrapper: wrapperFor(scopeValue("host-1", true)),
+    });
+
+    await expect(result.current(HASH)).resolves.toBeNull();
+  });
+});

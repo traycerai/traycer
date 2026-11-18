@@ -1,0 +1,163 @@
+import { useMemo } from "react";
+import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
+
+/**
+ * The runtime binding a host-scoped panel re-provides so every hook beneath it
+ * targets the host the page is SHOWING rather than a spine that names none.
+ *
+ * THE ONE implementation FOR A `HostScope`, with two governed exceptions. It
+ * used to claim to be the only one anywhere — `providers-settings-panel.tsx`
+ * had carried a byte-equivalent copy inline — and that claim was false when it
+ * was written, which is worse than no claim: an audit that trusted it missed
+ * two live copies. The honest list, and why each is legitimate:
+ *
+ *   - `agent-selection-guide-section.tsx` re-provides on `ready` ONLY, with no
+ *     `following` arm. A deliberate narrowing, not an oversight: its gate holds
+ *     non-usable children in a hidden `<Activity>`, so it needs no third state.
+ *   - `provider-reauth-banner.tsx` is TAB-bound, not scope-bound — its client is
+ *     `useTabHostClient()` and its host `useTabHostId()`. It has no `HostScope`
+ *     to hand this hook, so it structurally cannot use it.
+ *
+ * TWELVE surfaces re-provide `HostRuntimeContext` in total. The count is one
+ * formula — TEN through this hook, plus the two exceptions above — stated
+ * once here so a surface added later moves both halves of it rather than
+ * leaving a headline and a list disagreeing about how many there are. The ten:
+ *
+ *   `rate-limit-icon`, `shell`, `diagnostics`, `providers`, `host`,
+ *   `environment-host-binding` (around the Agent definitions and Browser agent
+ *   access pages, which read the ambient binding: a Local row's pick reaches
+ *   them through it; Settings pages, no composer beneath),
+ *   `app-status-bar` (the bottom strip, re-providing for the host it watches),
+ *   `layout` (around its WHOLE Status bar group: the live preview at the top of
+ *   it and the per-provider toggles below describe one machine, and resolving
+ *   the watch pick twice is how they would come to describe two), the
+ *   onboarding TOUR, and the session-import DIALOG.
+ *
+ * Anything reading `useHostClient()` / `useAddressableHostId()` beneath any of
+ * the eleven gets that surface's host.
+ *
+ * The tour (`onboarding-page.tsx`) is the first of them outside a
+ * Settings-shaped surface: its two host-dependent acts read one machine -
+ * the session scan lists what is on it, the agent guide is stored on it - so
+ * a person with several hosts can run the tour once and still import into,
+ * and write a guide for, whichever machine they name. It re-provides BOTH
+ * contexts for that reason, and it is safe for the positional reason below:
+ * the tour has no composer, and so no path to the microphone.
+ *
+ * The session-import DIALOG (`session-import-dialog.tsx`) joined for the same
+ * reason as the tour's import act: it carries its own host picker,
+ * and the scan it shows and the run it starts belong to the machine that
+ * picker names. It also re-provides BOTH contexts, and contains no composer.
+ *
+ * ⚠ A RE-PROVIDER MUST NOT WRAP A SURFACE CONTAINING THE MIC PATH.
+ * `useDictationAvailability` reads `useHostClient()` and is app-wide BY DESIGN
+ * (see its own doc and `AGENTS.md`): `speech.dictate` streams live microphone
+ * audio, so pointing it at a pinned host ships a user's voice to a machine they
+ * only picked to administer. Today it is safe only because no re-provider
+ * happens to sit above a composer — a positional fact, not an invariant, which
+ * is why it is written down here, where the NEXT re-provider gets added - an
+ * ordinal in that sentence is one more number to keep in step, and this note
+ * only ever meant "the one you are about to add". The two most recent are the
+ * bottom strip and Layout's Status bar group, and both
+ * are safe for that same positional reason: a 24px strip holds usage segments
+ * and a readout, a Settings group holds toggles, and no composer will ever be a
+ * child of either.
+ *
+ * ⚠ AND THE RULE BINDS `StreamRuntimeContext` AT LEAST AS HARD, which this
+ * note used to imply it did not by naming only the unary provider.
+ * `useDictationAvailability` (`speech.ensureModel`) is the unary half; the
+ * AUDIO itself goes through `useVoiceDictation`, which reads
+ * `useWsStreamClient()`. So the stream context is literally the transport a
+ * user's microphone rides, and a stream re-provider above a composer is the
+ * voice-to-the-wrong-machine outcome directly rather than by implication.
+ * That population is no longer a single surface: there are EIGHT stream
+ * re-providers. `resource-monitor-popover` was the only one, and the epic
+ * sidebar's file tree, the git diff PANEL and the git diff TILE (two surfaces,
+ * not one - a pinned panel body and a canvas tile), the HOST OVERVIEW
+ * (`host-settings-panel.tsx`, whose `StreamRuntimeContext.Provider` carries
+ * `useScopedStreamBinding`), the onboarding TOUR, `app-status-bar` and the
+ * session-import DIALOG are the other seven. The Overview joined the list for its Data & migration
+ * group: both rows move ONE machine's local data over a stream, so the stream
+ * has to be the named host's. The tour joined it for the same reason one act
+ * down — the session scan and the run it starts are that machine's — and the
+ * dialog for exactly that scan and run. The strip joined it because its readout
+ * rides `resources.subscribe` for the host it watches, while its usage
+ * segments' reads are unary. All are safe for the same positional reason as the
+ * file and diff browsers — they contain no composer, a 24px strip least of all,
+ * and so no path to the microphone.
+ *
+ * Three consumers of a re-provided stream now also CHECK it before acting,
+ * because this hook's binding lands in an effect: `host-import-migration-
+ * section.tsx` withholds its rows, and the tour its stages and the dialog its
+ * wizard (both through `scopedHostReadiness`), until
+ * `useStreamRuntimeBinding()` names the host the surface does. A re-provider
+ * whose subtree starts work on one machine's data owes that check — the
+ * commit after a pick is still on the ambient transport.
+ *
+ * Three arms, and which one you are in is the whole question:
+ *
+ *   - `status === "ready"` with an explicit pick re-provides `scope.client`.
+ *     That client addresses the host the page names, which is what stops one
+ *     host's data rendering under another host's name.
+ *   - `connecting`, `unreachable` and `vanished` return null. They have no
+ *     client at all, re-providing a null one would make `useHostClient()`
+ *     throw, and falling back to the ambient host is the substitution above.
+ *     The panels gate those states rather than render through them.
+ *   - `following` NOW RE-PROVIDES TOO, and it did not used to. The old comment
+ *     said the ambient binding already IS the scoped host's — true while a
+ *     privileged bound host existed, and false the moment redesign P4.2
+ *     deleted the active slot. The ambient binding's `hostClient` is the
+ *     window's spine: it owns the messenger, coordinator and request context,
+ *     and it deliberately addresses NO host, so a panel left beneath it would
+ *     resolve every read against nothing.
+ *
+ * The `following` client is NOT re-derived here. `use-host-scope.ts` already
+ * answers it — `client: status === "following" ? ambientClient : overrideClient`,
+ * where `ambientClient` is `useHostClient()`, the effective host's own
+ * requester. Re-deriving it in this hook would put a second decider behind the
+ * same question, which is the defect the whole selection layer is being
+ * rebuilt to remove. All this hook decides now is WHETHER to re-provide.
+ *
+ * NAMED BEHAVIOR PROPERTY of that third arm: a `following` subtree now
+ * re-renders when the effective host moves, where before it re-rendered only
+ * when the ambient binding itself changed. That is the point rather than a
+ * cost — a following panel must re-point when the host it follows moves — and
+ * it is semantics-preserving today, because today the ambient binding IS the
+ * effective host's. It becomes load-bearing after the slot is gone.
+ *
+ * `hostId` IS THE FIELD THAT MAKES ANY OF THIS TRUE, and TypeScript cannot make
+ * you set it here. The return below is a SPREAD into a declared return type, so
+ * `...realBinding` already satisfies the required field with the app-wide
+ * binding's `null` — the tree compiles clean while every panel silently falls
+ * back to the ambient host, which is precisely the defect this closes. Nothing
+ * but a test can hold this line: `window-host-client-resolution.test.tsx`
+ * renders this hook and asserts the REQUEST lands on the scoped host. Delete
+ * either `hostId:` below and it reddens; that is the only guard there is.
+ */
+export function useScopedHostBinding(
+  scope: HostScope,
+): HostRuntimeBinding<HostRpcRegistry> | null {
+  const realBinding = useHostBinding();
+  return useMemo(() => {
+    if (realBinding === null) return null;
+    // Fail closed on the status FIRST. `scope.client` is already null for
+    // `connecting`/`unreachable`/`vanished`, but that is a guarantee made
+    // upstream, and this is the boundary where re-providing the wrong client
+    // renders one host's data under another host's name.
+    if (scope.status !== "ready" && scope.status !== "following") return null;
+    if (scope.client === null) return null;
+    // `following` NAMES NO HOST on purpose: the subtree is meant to track the
+    // app-wide effective host, so it must fall through to the same resolution
+    // every ambient consumer uses and re-point when that moves. Naming
+    // `scope.hostId` here would pin the panel to whichever host was effective
+    // when it mounted — auto-follow, silently deleted.
+    if (scope.status === "following") {
+      return { ...realBinding, hostClient: scope.client, hostId: null };
+    }
+    // `ready` guarantees a host: `deriveHostScopeStatus` returns before `ready`
+    // whenever `host === null`, and `scope.hostId` is `host?.hostId`.
+    return { ...realBinding, hostClient: scope.client, hostId: scope.hostId };
+  }, [scope.status, scope.hostId, scope.client, realBinding]);
+}

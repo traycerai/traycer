@@ -1,0 +1,444 @@
+import { describe, expect, it } from "vitest";
+import type {
+  WorktreeBinding,
+  WorktreeBindingEntry,
+} from "@traycer/protocol/host/worktree-schemas";
+import {
+  CHECKING_WORKSPACE_FOLDER_HINT,
+  NO_BOUND_WORKSPACE_FOLDER_HINT,
+  NO_WORKSPACE_FOLDER_HINT,
+  UNRESOLVED_WORKSPACE_FOLDER_HINT,
+  WORKSPACE_FOLDER_CHECK_FAILED_HINT,
+  WORKSPACE_COMPOSER_READY,
+  deriveResolvedWorkspaceAvailability,
+  deriveWorktreeBindingWorkspaceAvailability,
+  effectiveMissingWorktreePaths,
+  workspaceComposerCanStart,
+  worktreeMissingComposerHint,
+} from "@/lib/composer/workspace-composer-availability";
+import type { ResolvedFolder } from "@/lib/workspace/resolved-folder";
+
+describe("deriveResolvedWorkspaceAvailability", () => {
+  it("keeps composer submit checking while empty folders are still resolving", () => {
+    expect(deriveResolvedWorkspaceAvailability([], true, false)).toEqual({
+      status: "checking",
+      disabledHint: CHECKING_WORKSPACE_FOLDER_HINT,
+    });
+  });
+
+  it("blocks once resolving finishes with no folders", () => {
+    expect(deriveResolvedWorkspaceAvailability([], false, false)).toEqual({
+      status: "blocked",
+      disabledHint: NO_WORKSPACE_FOLDER_HINT,
+    });
+  });
+
+  it("blocks unresolved folders and allows resolved folders", () => {
+    expect(
+      deriveResolvedWorkspaceAvailability(
+        [unresolvedFolder("/Users/me/missing")],
+        false,
+        false,
+      ),
+    ).toEqual({
+      status: "blocked",
+      disabledHint: UNRESOLVED_WORKSPACE_FOLDER_HINT,
+    });
+
+    expect(
+      deriveResolvedWorkspaceAvailability(
+        [localOnlyFolder("/Users/me/project")],
+        false,
+        false,
+      ),
+    ).toEqual(WORKSPACE_COMPOSER_READY);
+  });
+
+  it("distinguishes a failed host check from a confirmed missing folder", () => {
+    expect(
+      deriveResolvedWorkspaceAvailability(
+        [unresolvedFolder("/Users/me/project")],
+        false,
+        true,
+      ),
+    ).toEqual({
+      status: "blocked",
+      disabledHint: WORKSPACE_FOLDER_CHECK_FAILED_HINT,
+    });
+  });
+});
+
+describe("deriveWorktreeBindingWorkspaceAvailability", () => {
+  it("keeps chat submit blocked while the binding has not resolved", () => {
+    expect(
+      deriveWorktreeBindingWorkspaceAvailability(
+        null,
+        false,
+        { count: 1, didResolutionFail: false },
+        [],
+      ),
+    ).toEqual({
+      status: "checking",
+      disabledHint: CHECKING_WORKSPACE_FOLDER_HINT,
+    });
+  });
+
+  it("keeps chat submit checking while the epic folder list is pending", () => {
+    expect(
+      deriveWorktreeBindingWorkspaceAvailability(
+        null,
+        true,
+        { count: null, didResolutionFail: false },
+        [],
+      ),
+    ).toEqual({
+      status: "checking",
+      disabledHint: CHECKING_WORKSPACE_FOLDER_HINT,
+    });
+  });
+
+  it("blocks a resolved chat only when the epic has no folders", () => {
+    expect(
+      deriveWorktreeBindingWorkspaceAvailability(
+        null,
+        true,
+        { count: 0, didResolutionFail: false },
+        [],
+      ),
+    ).toEqual({
+      status: "blocked",
+      disabledHint: NO_BOUND_WORKSPACE_FOLDER_HINT,
+    });
+    expect(
+      deriveWorktreeBindingWorkspaceAvailability(
+        binding([]),
+        true,
+        { count: 0, didResolutionFail: false },
+        [],
+      ),
+    ).toEqual({
+      status: "blocked",
+      disabledHint: NO_BOUND_WORKSPACE_FOLDER_HINT,
+    });
+  });
+
+  it("blocks with the failed-check hint when the epic folder query failed", () => {
+    const failed = {
+      status: "blocked",
+      disabledHint: WORKSPACE_FOLDER_CHECK_FAILED_HINT,
+    };
+    expect(
+      deriveWorktreeBindingWorkspaceAvailability(
+        null,
+        true,
+        { count: null, didResolutionFail: true },
+        [],
+      ),
+    ).toEqual(failed);
+    expect(
+      deriveWorktreeBindingWorkspaceAvailability(
+        binding([]),
+        true,
+        { count: null, didResolutionFail: true },
+        [],
+      ),
+    ).toEqual(failed);
+  });
+
+  it("ignores the failure flag once the epic folder count is known", () => {
+    expect(
+      deriveWorktreeBindingWorkspaceAvailability(
+        null,
+        true,
+        { count: 0, didResolutionFail: true },
+        [],
+      ),
+    ).toEqual({
+      status: "blocked",
+      disabledHint: NO_BOUND_WORKSPACE_FOLDER_HINT,
+    });
+    expect(
+      deriveWorktreeBindingWorkspaceAvailability(
+        null,
+        true,
+        { count: 1, didResolutionFail: true },
+        [],
+      ),
+    ).toEqual(WORKSPACE_COMPOSER_READY);
+  });
+
+  it("keeps every earlier verdict ahead of the failed-check hint", () => {
+    expect(
+      deriveWorktreeBindingWorkspaceAvailability(
+        null,
+        false,
+        { count: null, didResolutionFail: true },
+        [],
+      ),
+    ).toEqual({
+      status: "checking",
+      disabledHint: CHECKING_WORKSPACE_FOLDER_HINT,
+    });
+    expect(
+      deriveWorktreeBindingWorkspaceAvailability(
+        binding([bindingEntry("/Users/me/project")]),
+        true,
+        { count: null, didResolutionFail: true },
+        ["/Users/me/project"],
+      ),
+    ).toMatchObject({
+      status: "worktree-missing",
+      missingWorkspacePaths: ["/Users/me/project"],
+    });
+    expect(
+      deriveWorktreeBindingWorkspaceAvailability(
+        binding([bindingEntry("/Users/me/project")]),
+        true,
+        { count: null, didResolutionFail: true },
+        [],
+      ),
+    ).toEqual(WORKSPACE_COMPOSER_READY);
+    expect(
+      deriveWorktreeBindingWorkspaceAvailability(
+        { entries: [], workspaceMode: "folderless" },
+        true,
+        { count: null, didResolutionFail: true },
+        [],
+      ),
+    ).toEqual(WORKSPACE_COMPOSER_READY);
+  });
+
+  it("allows an unbound chat when the epic has at least one folder", () => {
+    expect(
+      deriveWorktreeBindingWorkspaceAvailability(
+        null,
+        true,
+        { count: 1, didResolutionFail: false },
+        [],
+      ),
+    ).toEqual(WORKSPACE_COMPOSER_READY);
+    expect(
+      deriveWorktreeBindingWorkspaceAvailability(
+        binding([]),
+        true,
+        { count: 2, didResolutionFail: false },
+        [],
+      ),
+    ).toEqual(WORKSPACE_COMPOSER_READY);
+  });
+
+  it("allows chat submit when the chat binding has a folder", () => {
+    expect(
+      deriveWorktreeBindingWorkspaceAvailability(
+        binding([bindingEntry("/Users/me/project")]),
+        true,
+        { count: 0, didResolutionFail: false },
+        [],
+      ),
+    ).toEqual(WORKSPACE_COMPOSER_READY);
+  });
+
+  it("blocks submit on a missing bound folder with a folder-naming hint", () => {
+    const availability = deriveWorktreeBindingWorkspaceAvailability(
+      binding([bindingEntry("/Users/me/project")]),
+      true,
+      { count: 1, didResolutionFail: false },
+      ["/Users/me/project"],
+    );
+    // A missing bound folder now BLOCKS send (status `worktree-missing` with a
+    // hint), so a turn can never be launched into a missing directory from the
+    // composer. The disable is paired with the chat tile's on-focus
+    // `worktree.getBinding` re-check, so restoring the folder + refocusing
+    // recomputes the missing set fresh and lifts the disable — recovery does not
+    // depend on a send the disable would forbid.
+    expect(availability).toEqual({
+      status: "worktree-missing",
+      disabledHint: worktreeMissingComposerHint(
+        ["/Users/me/project"],
+        binding([bindingEntry("/Users/me/project")]),
+      ),
+      missingWorkspacePaths: ["/Users/me/project"],
+    });
+    expect(workspaceComposerCanStart(availability)).toBe(false);
+  });
+
+  it("carries (and names) every missing bound folder while blocking submit", () => {
+    const availability = deriveWorktreeBindingWorkspaceAvailability(
+      binding([
+        bindingEntry("/Users/me/project"),
+        bindingEntry("/Users/me/other"),
+      ]),
+      true,
+      { count: 2, didResolutionFail: false },
+      ["/Users/me/project", "/Users/me/other"],
+    );
+    expect(availability).toEqual({
+      status: "worktree-missing",
+      disabledHint: worktreeMissingComposerHint(
+        ["/Users/me/project", "/Users/me/other"],
+        binding([
+          bindingEntry("/Users/me/project"),
+          bindingEntry("/Users/me/other"),
+        ]),
+      ),
+      missingWorkspacePaths: ["/Users/me/project", "/Users/me/other"],
+    });
+    expect(workspaceComposerCanStart(availability)).toBe(false);
+    // The hint names both folders so the disabled-send tooltip is actionable.
+    expect(availability.disabledHint).toContain("/Users/me/project");
+    expect(availability.disabledHint).toContain("/Users/me/other");
+  });
+
+  it("names the missing WORKTREE, not the source repo it was cut from", () => {
+    // The host's `missingWorktreePaths` is keyed by binding entry, so a deleted
+    // sibling worktree arrives as the source repo's path — a folder that is
+    // still on disk. Blaming it made the disabled-send tooltip look like a false
+    // alarm and pointed recovery at the wrong directory.
+    const availability = deriveWorktreeBindingWorkspaceAvailability(
+      binding([
+        worktreeBindingEntry(
+          "/Users/me/project",
+          "/Users/me/worktrees/feature",
+        ),
+      ]),
+      true,
+      { count: 1, didResolutionFail: false },
+      ["/Users/me/project"],
+    );
+
+    expect(availability.disabledHint).toBe(
+      "A bound folder is missing on disk: /Users/me/worktrees/feature (the worktree bound to /Users/me/project). Restore it, or pick another folder in the folder picker, to send.",
+    );
+    // Still keyed by entry: the picker chip matches its row by workspacePath.
+    expect(availability).toMatchObject({
+      status: "worktree-missing",
+      missingWorkspacePaths: ["/Users/me/project"],
+    });
+  });
+
+  it("follows the host's run-directory rule for a Local row carrying a stale worktreePath", () => {
+    // The host's `entryRunDirectory` is mode-INDEPENDENT — `worktreePath` when
+    // set, else `workspacePath` — and it decides BOTH what the missing-check
+    // stats and where a turn launches. So for this shape the host stat-ed the
+    // stale worktree, and that is what the hint must name. Describing it as
+    // `/Users/me/project` (this repo's mode-aware `resolveBindingRunningDir`
+    // rule) would name a folder still on disk and leave the gone one unnamed —
+    // the exact defect this hint was changed to fix. If mode should win, the
+    // host's single run-directory owner is where that changes.
+    expect(
+      worktreeMissingComposerHint(
+        ["/Users/me/project"],
+        binding([
+          {
+            ...bindingEntry("/Users/me/project"),
+            worktreePath: "/Users/me/worktrees/stale",
+          },
+        ]),
+      ),
+    ).toContain(
+      "/Users/me/worktrees/stale (the worktree bound to /Users/me/project)",
+    );
+  });
+
+  it("falls back to the entry key when the binding cannot name a run directory", () => {
+    // A Local row is its own run directory, and a re-bind can drop the entry
+    // between the host's stat and this render — neither may lose the path.
+    expect(
+      worktreeMissingComposerHint(
+        ["/Users/me/local", "/Users/me/dropped"],
+        binding([bindingEntry("/Users/me/local")]),
+      ),
+    ).toBe(
+      "Bound folders are missing on disk: /Users/me/local, /Users/me/dropped. Restore them, or pick others in the folder picker, to send.",
+    );
+    expect(worktreeMissingComposerHint(["/Users/me/local"], null)).toContain(
+      "/Users/me/local",
+    );
+  });
+});
+
+describe("effectiveMissingWorktreePaths", () => {
+  it("returns the source missing paths when no workspace paths changed", () => {
+    const missingPaths = ["/Users/me/project", "/Users/me/other"];
+
+    expect(effectiveMissingWorktreePaths(missingPaths, new Set())).toBe(
+      missingPaths,
+    );
+  });
+
+  it("hides only changed missing paths while keeping other warnings visible", () => {
+    const missingPaths = [
+      "/Users/me/project",
+      "/Users/me/other",
+      "/Users/me/third",
+    ];
+
+    expect(
+      effectiveMissingWorktreePaths(missingPaths, new Set(["/Users/me/other"])),
+    ).toEqual(["/Users/me/project", "/Users/me/third"]);
+  });
+
+  it("hides all missing paths only when every missing path changed", () => {
+    const missingPaths = ["/Users/me/project"];
+
+    expect(
+      effectiveMissingWorktreePaths(
+        missingPaths,
+        new Set(["/Users/me/project"]),
+      ),
+    ).toEqual([]);
+  });
+});
+
+function binding(
+  entries: ReadonlyArray<WorktreeBindingEntry>,
+): WorktreeBinding {
+  return { entries: [...entries] };
+}
+
+function worktreeBindingEntry(
+  workspacePath: string,
+  worktreePath: string,
+): WorktreeBindingEntry {
+  return {
+    ...bindingEntry(workspacePath),
+    mode: "worktree",
+    worktreePath,
+    branch: "feature",
+  };
+}
+
+function bindingEntry(workspacePath: string): WorktreeBindingEntry {
+  return {
+    workspacePath,
+    mode: "local",
+    repoIdentifier: null,
+    worktreePath: null,
+    branch: "main",
+    isPrimary: true,
+    isImported: false,
+    setupState: "not_required",
+    setupTerminalSessionId: null,
+    setupExitCode: null,
+    setupFailedAt: null,
+    createdAt: 1,
+    ownedSubmodules: [],
+  };
+}
+
+function localOnlyFolder(path: string): ResolvedFolder {
+  return {
+    kind: "local-only",
+    path,
+    name: "project",
+  };
+}
+
+function unresolvedFolder(path: string): ResolvedFolder {
+  return {
+    kind: "unresolved",
+    path,
+    name: "missing",
+    repoIdentifier: { owner: "acme", repo: "app" },
+  };
+}

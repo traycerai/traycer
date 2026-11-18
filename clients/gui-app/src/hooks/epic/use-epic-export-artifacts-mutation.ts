@@ -1,0 +1,194 @@
+import { isMarkdownArtifactKind } from "@/lib/artifacts/node-display";
+import { useMutation } from "@tanstack/react-query";
+import {
+  createArtifactExport,
+  serializeArtifactMarkdown,
+  type ArtifactExportFormat,
+} from "@/lib/artifacts/artifact-export";
+import { arrangeArtifactExport } from "@/lib/artifacts/artifact-export-selection";
+import {
+  ArtifactBodyUnavailableError,
+  holdArtifactBody,
+} from "@/lib/epic-replica-reads";
+import {
+  hasSeparateDownloadRoute,
+  saveBlobToDisk,
+  type SavedFile,
+} from "@/lib/files/save-blob-to-disk";
+import { toastSavedFile } from "@/lib/files/saved-file-toast";
+import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
+import { appLogger } from "@/lib/logger";
+import { epicMutationKeys } from "@/lib/query-keys";
+import { toastFromRunnerError } from "@/lib/runner-error-toast";
+import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+
+interface ArtifactExportSelection {
+  readonly id: string;
+  readonly title: string;
+}
+
+export interface EpicExportArtifactsInput {
+  readonly artifacts: readonly ArtifactExportSelection[];
+  readonly format: ArtifactExportFormat;
+  readonly archive: boolean;
+  readonly archiveTitle: string | null;
+  /**
+   * Also export every Markdown artifact nested under the picked ones. Resolved
+   * against the tree when the export runs, not when the menu rendered, so a
+   * child added since is included. Either way the archive lays the exported
+   * artifacts out as the tree.
+   */
+  readonly includeNested: boolean;
+}
+
+interface EpicExportArtifactsOutcome {
+  readonly saved: SavedFile | null;
+  /** Artifacts written, nested ones included. */
+  readonly artifactCount: number;
+}
+
+export function useEpicExportArtifacts() {
+  const epicHandle = useOpenEpicHandle();
+  const fileSave = useFileSaveHost();
+  const openSaved = useOpenSavedFile();
+
+  return useMutation<
+    EpicExportArtifactsOutcome,
+    Error,
+    EpicExportArtifactsInput
+  >({
+    mutationKey: epicMutationKeys.exportArtifacts(),
+    mutationFn: async (input) => {
+      const firstArtifact = input.artifacts.at(0);
+      if (firstArtifact === undefined) {
+        throw new Error("Select at least one artifact to export.");
+      }
+      // Artifact-room docs are only materialized while leased, and export is
+      // the one fragment reader with no editor mounted behind it. Take a lease
+      // per artifact for the duration of the read - without one, exporting a
+      // body nobody has opened in this session reads as "still loading".
+      //
+      // ONE lease at a time, and the body is serialized before the next is
+      // materialized. Holding them all was the byte spike the accountant
+      // exists to prevent: a lease is what keeps a room resident, so retaining
+      // every hold until the build made the whole selection hot at once, with
+      // no bound on how much a user may select. Sequential MATERIALIZATION was
+      // never the property that mattered - sequential RETENTION is.
+      const picked = arrangeArtifactExport(
+        epicHandle.store.getState(),
+        input.artifacts,
+        input.includeNested,
+      );
+      const pickedIds = new Set(input.artifacts.map((artifact) => artifact.id));
+      const titleById = new Map(
+        picked.map((artifact) => [artifact.id, artifact.title]),
+      );
+      const serialized: Array<{
+        readonly id: string;
+        readonly title: string;
+        readonly parentId: string | null;
+        readonly markdown: string;
+      }> = [];
+      for (const artifact of picked) {
+        // A stale menu must not try to lease an object artifact as a Markdown body.
+        const records = epicHandle.store.getState().artifacts.byId;
+        if (
+          Object.hasOwn(records, artifact.id) &&
+          !isMarkdownArtifactKind(records[artifact.id].kind)
+        ) {
+          throw new Error(
+            "Only Markdown artifacts can be exported as documents.",
+          );
+        }
+        const hold = await holdArtifactBody(
+          epicHandle,
+          artifact.id,
+          // NO LINGER. The release below was already ordered before the next
+          // materialize, but the lease bridge answers a last release by arming
+          // the 60s cooldown - a bet that the user is coming back to this
+          // body. An export reads each body once and moves on, so that bet is
+          // known wrong here, and taking it left every already-serialized body
+          // hot behind the one this loop thought was the only resident.
+          "immediate",
+        ).catch((cause: unknown) => {
+          // The seam names the artifact by id; the user knows it by title. An
+          // artifact the export added by nesting was never picked, so its
+          // title alone would not say where it is.
+          if (cause instanceof ArtifactBodyUnavailableError) {
+            const nestedUnder =
+              pickedIds.has(artifact.id) || artifact.parentId === null
+                ? undefined
+                : titleById.get(artifact.parentId);
+            throw new Error(
+              nestedUnder === undefined
+                ? `“${artifact.title}” is still loading.`
+                : `“${artifact.title}”, nested under “${nestedUnder}”, is still loading.`,
+            );
+          }
+          throw cause;
+        });
+        try {
+          serialized.push({
+            ...artifact,
+            markdown: serializeArtifactMarkdown(hold.fragment),
+          });
+        } finally {
+          // Before the next materialize, so at most one body is resident -
+          // including on the throw path, where the loop is abandoned. The
+          // `"immediate"` retention above is the other half of that claim:
+          // ordering the release early bounds nothing on its own if the
+          // release only arms a cooldown.
+          hold.release();
+        }
+      }
+      const output = await createArtifactExport({
+        artifacts: serialized,
+        format: input.format,
+        archive: input.archive,
+        archiveTitle: input.archiveTitle ?? firstArtifact.title,
+      });
+      // No leases are held here any more - each was released as its body was
+      // serialized - so `saveBlobToDisk` can block on native OS UI (a save
+      // dialog, a share sheet) the user leaves open for minutes without
+      // pinning a single room. That wait is why holding leases across the
+      // build was worth removing rather than merely bounding.
+      return {
+        saved: await saveBlobToDisk(
+          output.blob,
+          output.suggestedName,
+          fileSave,
+        ),
+        artifactCount: serialized.length,
+      };
+    },
+    onSuccess: ({ saved, artifactCount }, input) => {
+      if (saved !== null) {
+        Analytics.getInstance().track(AnalyticsEvent.ArtifactExported, {
+          format: input.format,
+          artifact_count: artifactCount,
+          include_nested: input.includeNested,
+        });
+        // No Share/Download split on this surface, deliberately: its controls
+        // promise an "Export", which a share sheet honours as truthfully as a
+        // save dialog does, so there is no mislabelled control to correct -
+        // only a confirmation that must not claim a save the sheet never made.
+        toastSavedFile(
+          saved,
+          openSaved.mutate,
+          fileSave,
+          hasSeparateDownloadRoute(fileSave) ? "share" : "save",
+        );
+      }
+    },
+    onError: (error, input) => {
+      appLogger.errorSummary(
+        "[artifact-export] export failed",
+        { artifactCount: input.artifacts.length, format: input.format },
+        error,
+      );
+      toastFromRunnerError(error, "Failed to export artifacts");
+    },
+  });
+}

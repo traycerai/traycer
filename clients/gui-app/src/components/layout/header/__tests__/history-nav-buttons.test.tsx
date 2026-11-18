@@ -1,0 +1,216 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import {
+  RouterContextProvider,
+  createMemoryHistory,
+  createRouter,
+  type RouterHistory,
+} from "@tanstack/react-router";
+import { QueryClient } from "@tanstack/react-query";
+import { routeTree } from "@/routeTree.gen";
+import type { AppRouter } from "@/router";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { createPersistentMemoryHistory } from "@/lib/persistent-history";
+import { HistoryNavButtons } from "@/components/layout/header/history-nav-buttons";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { formatChordForDisplay } from "@/lib/keybindings/chord";
+
+const WINDOW_ID = "history-nav-buttons-test-window";
+
+function storageKey(windowId: string): string {
+  return `traycer-gui-app:last-route:${windowId}`;
+}
+
+function makeRouter(history: RouterHistory): AppRouter {
+  return createRouter({
+    routeTree,
+    history,
+    context: {
+      queryClient: new QueryClient(),
+      getAuthSnapshot: () => useAuthStore.getState(),
+      getHostClient: () => null,
+    },
+  });
+}
+
+// Seed a multi-entry persistent stack via localStorage so the history boots with
+// the desired entries/index without firing any navigation notification.
+function seedPersistentHistory(
+  entries: ReadonlyArray<string>,
+  index: number,
+): RouterHistory {
+  window.localStorage.setItem(
+    storageKey(WINDOW_ID),
+    JSON.stringify({ entries, index }),
+  );
+  return createPersistentMemoryHistory(null, WINDOW_ID);
+}
+
+function renderButtons(router: AppRouter) {
+  return render(
+    <RouterContextProvider router={router}>
+      <TooltipProvider>
+        <HistoryNavButtons />
+      </TooltipProvider>
+    </RouterContextProvider>,
+  );
+}
+
+beforeEach(() => {
+  window.localStorage.clear();
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  window.localStorage.clear();
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+});
+
+describe("HistoryNavButtons", () => {
+  it("exposes back and forward buttons by accessible name", () => {
+    renderButtons(
+      makeRouter(seedPersistentHistory(["/draft/d1", "/settings/general"], 1)),
+    );
+    expect(screen.getByRole("button", { name: "Go back" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Go forward" })).toBeTruthy();
+  });
+
+  it("shows the current navigation shortcuts in the arrow tooltips", async () => {
+    renderButtons(
+      makeRouter(seedPersistentHistory(["/draft/d1", "/settings/general"], 1)),
+    );
+
+    fireEvent.focus(screen.getByRole("button", { name: "Go back" }));
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      `Go back (${formatChordForDisplay("mod+shift+,")})`,
+    );
+  });
+
+  it("reflects canGoBack/canGoForward in the disabled state", () => {
+    // Index 0 of 2: only forward is navigable.
+    renderButtons(
+      makeRouter(seedPersistentHistory(["/draft/d1", "/settings/general"], 0)),
+    );
+    expect(
+      screen.getByRole("button", { name: "Go back" }).hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      screen
+        .getByRole("button", { name: "Go forward" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("renders nothing under memory/browser history (feature inert outside Electron)", () => {
+    renderButtons(makeRouter(createMemoryHistory({ initialEntries: ["/"] })));
+    expect(screen.queryByRole("button", { name: "Go back" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Go forward" })).toBeNull();
+  });
+
+  it("steps the current router history back when the enabled back arrow is clicked", () => {
+    const history = seedPersistentHistory(
+      ["/draft/d1", "/settings/general"],
+      1,
+    );
+    const router = makeRouter(history);
+    const goSpy = vi.spyOn(history, "go").mockImplementation(() => {});
+    renderButtons(router);
+
+    fireEvent.click(screen.getByRole("button", { name: "Go back" }));
+
+    expect(goSpy).toHaveBeenCalledWith(-1);
+  });
+
+  it("steps the current router history forward when the enabled forward arrow is clicked", () => {
+    const history = seedPersistentHistory(
+      ["/draft/d1", "/settings/general"],
+      0,
+    );
+    const router = makeRouter(history);
+    const goSpy = vi.spyOn(history, "go").mockImplementation(() => {});
+    renderButtons(router);
+
+    fireEvent.click(screen.getByRole("button", { name: "Go forward" }));
+
+    expect(goSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("disables back when only closed-task entries remain behind", () => {
+    const store = useEpicCanvasStore.getState();
+    const openId = store.openEpicTab("e1", "Open");
+    const closedId = store.openEpicTab("e1", "Closed");
+    store.closeTab(closedId);
+
+    renderButtons(
+      makeRouter(
+        seedPersistentHistory(
+          [`/epics/e1/${closedId}`, `/epics/e1/${openId}`],
+          1,
+        ),
+      ),
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Go back" }).hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      screen
+        .getByRole("button", { name: "Go forward" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("re-enables back after the closed Task is reopened", () => {
+    const store = useEpicCanvasStore.getState();
+    const openId = store.openEpicTab("e1", "Open");
+    const closedId = store.openEpicTab("e1", "Closed");
+    store.closeTab(closedId);
+
+    renderButtons(
+      makeRouter(
+        seedPersistentHistory(
+          [`/epics/e1/${closedId}`, `/epics/e1/${openId}`],
+          1,
+        ),
+      ),
+    );
+    expect(
+      screen.getByRole("button", { name: "Go back" }).hasAttribute("disabled"),
+    ).toBe(true);
+
+    act(() => {
+      useEpicCanvasStore.getState().setActiveTab(closedId);
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Go back" }).hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("skips a closed-task entry when the back arrow is clicked", () => {
+    const store = useEpicCanvasStore.getState();
+    const openId = store.openEpicTab("e1", "Open");
+    const closedId = store.openEpicTab("e1", "Closed");
+    store.closeTab(closedId);
+
+    const history = seedPersistentHistory(
+      [`/epics/e1/${openId}`, `/epics/e1/${closedId}`, `/epics/e1/${openId}`],
+      2,
+    );
+    const goSpy = vi.spyOn(history, "go").mockImplementation(() => {});
+    renderButtons(makeRouter(history));
+
+    fireEvent.click(screen.getByRole("button", { name: "Go back" }));
+
+    expect(goSpy).toHaveBeenCalledWith(-2);
+  });
+});

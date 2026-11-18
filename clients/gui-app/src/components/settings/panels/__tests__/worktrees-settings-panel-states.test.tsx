@@ -1,0 +1,643 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { UNNAMED_HOST_LABEL } from "@/hooks/agent/use-host-reachability";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  MockHostMessenger,
+  type MockHandlerMap,
+} from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
+import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import type { WorktreeHostEntryV16 } from "@traycer/protocol/host/index";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+
+// `WorktreesSettingsPanel` sits above `WorktreesList` (covered exhaustively by
+// `worktrees-settings-panel.test.tsx`) and owns the host-scoped states: no host
+// selected, checking reachability, offline, not signed in, loading, error,
+// and empty. None of those states are reachable through `WorktreesList`
+// directly (it is only ever mounted once a host is reachable and signed in),
+// so this file mocks the host-scoped hooks `WorktreesSettingsPanel` composes
+// and drives each state independently. The base listing itself
+// (`useWorktreeListing`) is exercised for real against a `HostClient` bound to
+// a `MockHostMessenger`, so pending/error/empty/success states go through the
+// real paginated `worktree.listAllForHost` query instead of a hook mock.
+const state = vi.hoisted(() => ({
+  activeHostId: null as string | null,
+  hosts: [] as HostDirectoryEntry[],
+  reachability: {
+    status: "reachable",
+    hostLabel: "Host A",
+  },
+  client: null as HostClient<HostRpcRegistry> | null,
+  // `null` uses the fixture default (follows the host); set to drive the
+  // gate's non-usable states.
+  scopeStatus: null as "unreachable" | null,
+  enrichment: {
+    enrichedByPath: new Map<string, WorktreeHostEntryV16>(),
+    erroredPaths: new Set<string>(),
+    seededPaths: new Set<string>(),
+    reportVisiblePaths: vi.fn(),
+    enriching: false,
+  },
+}));
+
+vi.mock("@/hooks/host/use-addressable-host-id", () => ({
+  useAddressableHostId: () => state.activeHostId,
+}));
+
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({ data: state.hosts }),
+}));
+
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/agent/use-host-reachability")
+  >()),
+  useHostReachability: () => state.reachability,
+}));
+
+// The panel now takes its host from the ONE sidebar picker rather than its own
+// dropdown, so the scope hook is what drives these states. Derived from the
+// same `state` the other host mocks use, so each test still sets one field.
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { hostScopeFixture, hostScopeOptionFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  return {
+    useHostScope: () =>
+      hostScopeFixture({
+        host:
+          state.activeHostId === null
+            ? null
+            : hostScopeOptionFixture({
+                hostId: state.activeHostId,
+                name: state.reachability.hostLabel,
+              }),
+        client: state.client,
+        ...(state.scopeStatus === null ? {} : { status: state.scopeStatus }),
+      }),
+  };
+});
+
+vi.mock("@/hooks/host/use-host-client-for", () => ({
+  useHostClientFor: () => state.client,
+}));
+
+vi.mock("@/components/settings/panels/worktrees-enrichment", () => ({
+  useRevalidateStaleWorktreeActivity: () => {},
+  useWorktreeActivityEnrichment: () => state.enrichment,
+}));
+
+vi.mock("@/lib/host/use-worktree-delete-stream-transport", () => ({
+  useWorktreeDeleteStreamTransportFactory: () => () => ({
+    wsStreamClient: {},
+    close: () => {},
+  }),
+}));
+
+vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
+  useCloudEpicTasksQuery: () => ({ currentUserId: null, tasks: [] }),
+}));
+
+import { WorktreesSettingsPanel } from "@/components/settings/panels/worktrees-settings-panel";
+import { isConcealed } from "@/components/settings/host-scope/concealment-test-helpers";
+import {
+  DEFAULT_WORKTREE_BRANCH_PREFIX,
+  useSettingsStore,
+} from "@/stores/settings/settings-store";
+import { installWorktreeVirtualizerOffsetHeight } from "./worktrees-virtualizer-test-utils";
+
+let restoreOffsetHeight: (() => void) | null = null;
+// jsdom's default width is the desktop toolbar. A phone test assigns a
+// narrower width, and the media-query shim does not notify subscribers, so
+// the desktop width has to be put back before the next render.
+const DESKTOP_INNER_WIDTH = window.innerWidth;
+
+function host(
+  over: Partial<HostDirectoryEntry> & { hostId: string },
+): HostDirectoryEntry {
+  return {
+    label: over.hostId,
+    kind: "local",
+    websocketUrl: null,
+    version: null,
+    transportDialability: "dialable",
+    ...over,
+  };
+}
+
+/**
+ * Builds a real, bound `HostClient` around a single-method mock handler for
+ * `worktree.listAllForHost`, so `useWorktreeListing`'s real `useInfiniteQuery`
+ * + `useReactiveHostReadiness` machinery drives the panel's pending / error /
+ * empty / success states instead of a hook-level mock.
+ */
+function clientWithHandler(
+  handler: MockHandlerMap<HostRpcRegistry>["worktree.listAllForHost"],
+): HostClient<HostRpcRegistry> {
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: { invalidateHostScope: () => undefined },
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `req-${Math.random()}`,
+      handlers: { "worktree.listAllForHost": handler },
+    }),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  const client = spine.createRequester(mockLocalHostEntry);
+  return client;
+}
+
+function renderPanel(): { readonly rerender: () => void } {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>{props.children}</TooltipProvider>
+    </QueryClientProvider>
+  );
+  // A FRESH element per (re)render — a referentially identical element lets
+  // React bail out of the subtree without re-reading the mutated mocks.
+  const makeUi = () => (
+    <Wrapper>
+      <WorktreesSettingsPanel />
+    </Wrapper>
+  );
+  const view = render(makeUi());
+  return {
+    rerender: () => {
+      view.rerender(makeUi());
+    },
+  };
+}
+
+beforeEach(() => {
+  window.innerWidth = DESKTOP_INNER_WIDTH;
+  restoreOffsetHeight = installWorktreeVirtualizerOffsetHeight(() => 100_000);
+  state.activeHostId = null;
+  state.hosts = [];
+  state.reachability = { status: "reachable", hostLabel: "Host A" };
+  state.client = null;
+  state.scopeStatus = null;
+  state.enrichment = {
+    enrichedByPath: new Map(),
+    erroredPaths: new Set(),
+    seededPaths: new Set(),
+    reportVisiblePaths: vi.fn(),
+    enriching: false,
+  };
+  window.localStorage.clear();
+  useSettingsStore.setState({
+    worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
+  });
+});
+
+afterEach(() => {
+  window.innerWidth = DESKTOP_INNER_WIDTH;
+  cleanup();
+  if (restoreOffsetHeight !== null) {
+    restoreOffsetHeight();
+  }
+  restoreOffsetHeight = null;
+  useDesktopDialogStore.setState({
+    activeDialog: null,
+    reportIssueAvailable: false,
+    reportIssueContext: null,
+  });
+  window.localStorage.clear();
+  useSettingsStore.setState({
+    worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
+  });
+});
+
+const CLEAN_WORKTREE = {
+  repoLabel: "acme/app",
+  repoIdentifier: { owner: "acme", repo: "app" },
+  worktreePath: "/wt/clean",
+  branch: "feat-clean",
+  inUse: false,
+  uncommittedCount: 0,
+  gitRemovable: true,
+  scripts: null,
+  owners: [],
+  lastActivityAt: null,
+  branchStatus: null,
+  createdAt: null,
+  prState: null,
+  prNumber: null,
+  prUrl: null,
+  mergedHeadShaMatches: false,
+  submodules: [],
+  atBaseCommit: false,
+  resolvedAt: 1,
+  presence: "present",
+  gitUnreadable: false,
+} satisfies WorktreeHostEntryV16;
+
+/** A signed-in host whose list has one present worktree, so the toolbar mounts. */
+async function renderPopulatedWorktreeList(): Promise<void> {
+  state.hosts = [
+    host({ hostId: "host-a", label: "Host A" }),
+    host({ hostId: "host-b", label: "Host B" }),
+  ];
+  state.activeHostId = "host-a";
+  state.client = clientWithHandler(() => ({
+    worktrees: [CLEAN_WORKTREE],
+    nextCursor: null,
+  }));
+  state.enrichment = {
+    enrichedByPath: new Map([["/wt/clean", CLEAN_WORKTREE]]),
+    erroredPaths: new Set(),
+    seededPaths: new Set(),
+    reportVisiblePaths: vi.fn(),
+    enriching: false,
+  };
+  renderPanel();
+  await waitFor(() => {
+    screen.getByText("feat-clean");
+  });
+}
+
+/**
+ * The panel is inventory-only: no branch-prefix strip, in any host state.
+ * The global default moved to General settings; a per-repository override
+ * lives in that repo's Environment dialog.
+ */
+function assertBranchPrefixStripAbsent(): void {
+  expect(screen.queryByText("New worktrees")).toBeNull();
+  expect(screen.queryByText("Existing worktrees")).toBeNull();
+  expect(screen.queryByText("Applies on every host")).toBeNull();
+  expect(screen.queryByText("All hosts")).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "Branch prefix" })).toBeNull();
+  expect(screen.queryByText(/New branches start like/)).toBeNull();
+}
+
+describe("WorktreesSettingsPanel host-scoped states", () => {
+  it("defers to the scope gate when no host is resolved", () => {
+    state.hosts = [host({ hostId: "host-a" })];
+    state.activeHostId = null;
+
+    renderPanel();
+
+    // Was "Select a host to manage its worktrees." — a flattened non-answer
+    // this panel produced for every unresolved scope, including a host that
+    // had just been deregistered out from under the user, and which offered
+    // nothing to act on. `HostScopeGate` owns those states now: it names the
+    // host, distinguishes deregistered from unroutable, and carries the way
+    // back to the active host.
+    expect(
+      screen.queryByText("Select a host to manage its worktrees."),
+    ).toBeNull();
+    screen.getByTestId("host-scope-empty");
+    // Inventory-only: no branch-prefix strip regardless of host selection.
+    assertBranchPrefixStripAbsent();
+  });
+
+  it("shows a reachability check while the host is being probed", () => {
+    state.hosts = [host({ hostId: "host-a", label: "Host A" })];
+    state.activeHostId = "host-a";
+    state.reachability = { status: "checking", hostLabel: "Host A" };
+
+    renderPanel();
+
+    screen.getByText("Checking Host A…");
+  });
+
+  it("shows an offline message and disables refresh when the host is unreachable", () => {
+    state.hosts = [host({ hostId: "host-a", label: "Host A" })];
+    state.activeHostId = "host-a";
+    state.reachability = { status: "unreachable", hostLabel: "Host A" };
+
+    renderPanel();
+
+    screen.getByText(
+      "Host A is offline. Worktrees can only be managed on a reachable host.",
+    );
+    const refresh = screen.getByRole("button", { name: "Refresh worktrees" });
+    expect(refresh.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("opens the offline sentence with The host, never an id, when the host has no name", () => {
+    state.hosts = [host({ hostId: "host-a", label: "" })];
+    state.activeHostId = "host-a";
+    // What `useHostReachability` answers for a host it has no name for.
+    state.reachability = {
+      status: "unreachable",
+      hostLabel: UNNAMED_HOST_LABEL,
+    };
+
+    renderPanel();
+
+    screen.getByText(
+      "The host is offline. Worktrees can only be managed on a reachable host.",
+    );
+  });
+
+  it("prompts sign-in when the host is reachable but no client is bound", () => {
+    state.hosts = [host({ hostId: "host-a" })];
+    state.activeHostId = "host-a";
+    state.reachability = { status: "reachable", hostLabel: "Host A" };
+    state.client = null;
+
+    renderPanel();
+
+    screen.getByText("Sign in to manage worktrees on this host.");
+  });
+
+  it("shows a loading state while the base listing is pending", () => {
+    state.hosts = [host({ hostId: "host-a" })];
+    state.activeHostId = "host-a";
+    // Never resolves - the base query stays pending indefinitely.
+    state.client = clientWithHandler(() => new Promise(() => {}));
+
+    renderPanel();
+
+    screen.getByText("Loading worktrees…");
+  });
+
+  it("surfaces the query error message with a working refresh retry path", async () => {
+    state.hosts = [host({ hostId: "host-a" })];
+    state.activeHostId = "host-a";
+    state.client = clientWithHandler(() => {
+      throw new HostRpcError({
+        code: "RPC_ERROR",
+        message: "Could not reach the worktree service.",
+        requestId: "req-error",
+        method: "worktree.listAllForHost",
+        fatalDetails: null,
+      });
+    });
+
+    renderPanel();
+
+    await waitFor(() => {
+      screen.getByText("Could not reach the worktree service.");
+    });
+    const refresh = screen.getByRole("button", { name: "Refresh worktrees" });
+    expect(refresh.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("gates the partial-listing report action on capability and reports only fixed generic context", async () => {
+    state.hosts = [host({ hostId: "host-a" })];
+    state.activeHostId = "host-a";
+    const cleanWorktree = {
+      repoLabel: "acme/app",
+      repoIdentifier: { owner: "acme", repo: "app" },
+      worktreePath: "/wt/clean",
+      branch: "feat-clean",
+      inUse: false,
+      uncommittedCount: 0,
+      gitRemovable: true,
+      scripts: null,
+      owners: [],
+      lastActivityAt: null,
+      branchStatus: null,
+      createdAt: null,
+      prState: null,
+      prNumber: null,
+      prUrl: null,
+      mergedHeadShaMatches: false,
+      submodules: [],
+      atBaseCommit: false,
+      resolvedAt: 1,
+      presence: "present",
+      gitUnreadable: false,
+    } satisfies WorktreeHostEntryV16;
+    let call = 0;
+    state.client = clientWithHandler(() => {
+      call += 1;
+      if (call === 1) {
+        return { worktrees: [cleanWorktree], nextCursor: "cursor-2" };
+      }
+      throw new HostRpcError({
+        code: "RPC_ERROR",
+        message: "secret-token-should-never-render",
+        requestId: "req-partial",
+        method: "worktree.listAllForHost",
+        fatalDetails: null,
+      });
+    });
+    state.enrichment = {
+      enrichedByPath: new Map([["/wt/clean", cleanWorktree]]),
+      erroredPaths: new Set(),
+      seededPaths: new Set(),
+      reportVisiblePaths: vi.fn(),
+      enriching: false,
+    };
+
+    renderPanel();
+
+    // Wait for the partial-listing banner specifically - not an unscoped
+    // role="status", which also matches the always-mounted
+    // WorktreeBranchPrefixLiveStatus region (empty when idle).
+    await waitFor(() => {
+      screen.getByText(/Some worktrees could not be loaded/);
+    });
+    // Capability-gated off by default.
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+
+    act(() => {
+      useDesktopDialogStore.setState({ reportIssueAvailable: true });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Report issue" }));
+    // The report draft carries only fixed generic context - never the raw
+    // host error message threaded through the banner's own visible copy.
+    expect(useDesktopDialogStore.getState()).toMatchObject({
+      activeDialog: "report-issue",
+      reportIssueContext: {
+        title: "Some worktrees could not be loaded",
+        message: null,
+        code: null,
+        source: "Worktrees",
+      },
+    });
+  });
+
+  it("never leaves the partial-listing Retry actionable over the outage notice", async () => {
+    // Pins the user-visible claim, not the mechanism. Today the banner
+    // cannot outlive the disconnect at all (no client ⇒ the listing data and
+    // `isPartial` drop with it), so this passes via absence; if the listing
+    // cache ever learns to survive a client loss, the banner's place inside
+    // the gate makes this pass via concealment instead. Either way no host
+    // RPC Retry stays clickable above the unreachable notice.
+    state.hosts = [host({ hostId: "host-a" })];
+    state.activeHostId = "host-a";
+    const cleanWorktree = {
+      repoLabel: "acme/app",
+      repoIdentifier: { owner: "acme", repo: "app" },
+      worktreePath: "/wt/clean",
+      branch: "feat-clean",
+      inUse: false,
+      uncommittedCount: 0,
+      gitRemovable: true,
+      scripts: null,
+      owners: [],
+      lastActivityAt: null,
+      branchStatus: null,
+      createdAt: null,
+      prState: null,
+      prNumber: null,
+      prUrl: null,
+      mergedHeadShaMatches: false,
+      submodules: [],
+      atBaseCommit: false,
+      resolvedAt: 1,
+      presence: "present",
+      gitUnreadable: false,
+    } satisfies WorktreeHostEntryV16;
+    let call = 0;
+    state.client = clientWithHandler(() => {
+      call += 1;
+      if (call === 1) {
+        return { worktrees: [cleanWorktree], nextCursor: "cursor-2" };
+      }
+      throw new HostRpcError({
+        code: "RPC_ERROR",
+        message: "later page failed",
+        requestId: "req-partial-conceal",
+        method: "worktree.listAllForHost",
+        fatalDetails: null,
+      });
+    });
+
+    const view = renderPanel();
+    await waitFor(() => {
+      screen.getByText(/Some worktrees could not be loaded/);
+    });
+
+    state.scopeStatus = "unreachable";
+    state.client = null;
+    view.rerender();
+
+    screen.getByTestId("host-scope-unreachable");
+    const banner = screen.queryByText(/Some worktrees could not be loaded/);
+    expect(banner === null || isConcealed(banner)).toBe(true);
+  });
+
+  it("says nothing was created when the host's list is empty", async () => {
+    state.hosts = [host({ hostId: "host-a" })];
+    state.activeHostId = "host-a";
+    state.client = clientWithHandler(() => ({
+      worktrees: [],
+      nextCursor: null,
+    }));
+
+    renderPanel();
+
+    await waitFor(() => {
+      screen.getByText("No worktrees created on this host.");
+    });
+  });
+
+  it("renders the full toolbar without any host selector or host readout once the list is populated", async () => {
+    await renderPopulatedWorktreeList();
+    // The toolbar neither picks the host nor names it: both belong to the
+    // sidebar. Asserted on the host LABEL rather than on a testid - checking
+    // that a testid which exists nowhere is absent proves nothing, while the
+    // label is what actually reappears if a readout is ever restored here.
+    expect(screen.queryByTestId("worktrees-host-select")).toBeNull();
+    expect(
+      screen.queryByText(state.reachability.hostLabel, {
+        selector: "[data-testid='worktrees-toolbar-actions'] *",
+      }),
+    ).toBeNull();
+    screen.getByPlaceholderText("Search repo, branch, path, PR, or Task");
+    screen.getByTestId("worktrees-filter-trigger");
+    screen.getByTestId("worktrees-sort-trigger");
+    screen.getByRole("button", { name: "Refresh worktrees" });
+    // The automatic-cleanup policy rides in this toolbar as ONE chip. The card
+    // it replaced sat above the list and spent rows the list could not get
+    // back, and the panel header lost its subtitle with it - so the list card
+    // is the only thing under the title now.
+    const cleanupChip = screen.getByTestId("worktree-auto-cleanup-chip");
+    expect(screen.queryByTestId("worktree-auto-cleanup-section")).toBeNull();
+    // The agent-worktrees chip rides in the same leading slot, to the right of
+    // Automatic cleanup: the host's two worktree policies side by side.
+    const agentChip = screen.getByTestId("worktree-agent-create-chip");
+    expect(
+      cleanupChip.compareDocumentPosition(agentChip) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeGreaterThan(0);
+    expect(agentChip.parentElement).toBe(cleanupChip.parentElement);
+    expect(
+      screen.queryByText("Traycer-created worktrees on this host."),
+    ).toBeNull();
+    // Same as the no-host empty state - host-scoped UI carries no
+    // branch-prefix strip; that control lives in General settings now.
+    assertBranchPrefixStripAbsent();
+  });
+
+  it("shows policy, selection, and refresh inline above a populated list on a phone", async () => {
+    window.innerWidth = 390;
+    await renderPopulatedWorktreeList();
+
+    expect(screen.queryByRole("button", { name: "List actions" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Filter and sort/ }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy paths" })).toBeNull();
+    expect(screen.queryByText("Copy paths")).toBeNull();
+
+    const search = screen.getByRole("searchbox", { name: "Search worktrees" });
+    const filter = screen.getByRole("button", { name: "Filter: All" });
+    const sort = screen.getByRole("button", { name: "Sort: Newest" });
+    const refresh = screen.getByRole("button", { name: "Refresh worktrees" });
+    const selectAll = screen.getByRole("checkbox", {
+      name: "Select all visible worktrees",
+    });
+    const collapse = screen.getByRole("button", { name: "Collapse all" });
+    const cleanupChip = screen.getByTestId("worktree-auto-cleanup-chip");
+    const agentChip = screen.getByTestId("worktree-agent-create-chip");
+    let toolbar: HTMLElement | null = filter;
+    while (
+      toolbar !== null &&
+      !toolbar.classList.contains("@container/worktrees-toolbar")
+    ) {
+      toolbar = toolbar.parentElement;
+    }
+    if (!(toolbar instanceof HTMLElement)) {
+      throw new Error("expected the worktrees toolbar");
+    }
+    for (const control of [
+      search,
+      filter,
+      sort,
+      refresh,
+      selectAll,
+      collapse,
+      cleanupChip,
+      agentChip,
+    ]) {
+      expect(toolbar.contains(control)).toBe(true);
+      expect(control.closest("[data-slot='popover-content']")).toBeNull();
+    }
+    expect(
+      cleanupChip.compareDocumentPosition(agentChip) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeGreaterThan(0);
+    expect(agentChip.parentElement).toBe(cleanupChip.parentElement);
+    expect(screen.queryByTestId("worktree-auto-cleanup-section")).toBeNull();
+    // The row keeps its own actions trigger. Its "Copy path" item is asserted
+    // in the list suite, whose menu is mounted open; this file leaves the real
+    // menu closed.
+    screen.getByRole("button", { name: "Worktree actions for feat-clean" });
+  });
+});

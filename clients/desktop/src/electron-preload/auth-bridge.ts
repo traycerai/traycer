@@ -1,0 +1,877 @@
+import type {
+  TeamChatAutoArchiveReadResult,
+  TeamChatAutoArchiveSetRequest,
+  TeamChatAutoArchiveWriteResult,
+} from "@traycer-clients/shared/host-client/team-chat-auto-archive";
+import type { HostOwnershipResult } from "@traycer-clients/shared/host-client/host-ownership";
+import type { TeamComputersResult } from "@traycer-clients/shared/host-client/team-computers";
+import type { TeamComputerInstallTokenResult } from "@traycer-clients/shared/host-client/team-computer-install";
+import type { TeamComputerReleaseResult } from "@traycer-clients/shared/host-client/team-computer-release";
+import type { AutoPolicySaveResult } from "@traycer-clients/shared/host-client/auto-policy-save";
+import type {
+  TaskEnvironmentAttachmentRequest,
+  TaskEnvironmentAttachmentResult,
+} from "@traycer-clients/shared/host-client/task-environment-attachment";
+import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-client/environment-directory";
+import type {
+  BotDeleteResult,
+  BotSetupWriteResult,
+} from "@traycer-clients/shared/host-client/bot-setup";
+import type {
+  BotDeleteRequest,
+  BotUpdateReplyModeRequest,
+  BotUpdateRunSettingsRequest,
+} from "@traycer/protocol/host/bot/schemas";
+import type { SandboxCatalogueReadinessRequest } from "@traycer/protocol/host/sandbox-control";
+import { ipcRenderer } from "electron";
+import {
+  RunnerHostEvent,
+  RunnerHostInvoke,
+  RunnerHostSync,
+} from "../ipc-contracts/ipc-channels";
+import type { AuthIdentityValidationResult } from "@traycer-clients/shared/auth/auth-validation-types";
+import type {
+  DeregisterHostFetchResult,
+  HostListFetchResult,
+  ListUserSessionsFetchResult,
+  MintHostCredentialFetchResult,
+  MintHostCredentialRequest,
+  RetainedStepUpVerifyFetchResult,
+  RevokeAllSessionsFetchResult,
+  RevokeUserSessionFetchResult,
+  StepUpChallengeFetchResult,
+  SandboxAutomationFetchResult,
+  SlackAppInstallUrlResult,
+  SlackAppManifestResult,
+  SlackAppReadResult,
+  SlackAppDmsRequest,
+  SlackAppRegisterRequest,
+  SlackAppWriteResult,
+  SandboxAutomationOpenFetchResult,
+  SandboxCatalogueFetchResult,
+  SandboxCostsFetchResult,
+  SandboxCreateFetchResult,
+  TraycerModelsFetchResult,
+  SandboxAutomationOpenTarget,
+  SandboxCreateRequest,
+  SandboxPatchRequest,
+  EnvironmentApiKeyReplaceRequest,
+  EnvironmentApiKeyReplaceResult,
+  EnvironmentProvidersFetchResult,
+  SandboxGrantsFetchResult,
+  TeamEnvironmentFetchResult,
+  SandboxLifecycleVerb,
+  SandboxListFetchResult,
+  SandboxLifecycleVerbFetchResult,
+  SandboxVerbFetchResult,
+  SandboxVerbGesture,
+  SecretRequestDecideFetchResult,
+  SecretRequestDecision,
+  UpdateHostVersionPolicyFetchResult,
+  UpdateHostVersionPolicyInput,
+  VoiceAvailabilityFetchResult,
+  VoiceSessionEndFetchResult,
+  VoiceSessionIndicator,
+  VoiceSessionMintFetchResult,
+  VoiceSessionMintRequest,
+} from "../ipc-contracts/host-types";
+import type {
+  CredentialsMigrationOutcome,
+  StoredAuthTokens,
+  StoredCredentials,
+  StoredCredentialsIdentity,
+  TokenRotateResult,
+  TokenStoreChange,
+  SignInSaveResult,
+} from "../ipc-contracts/auth-types";
+import type {
+  DesktopAuthSessionSetResult,
+  DesktopAuthSessionSnapshot,
+  DesktopAuthVerificationRevoked,
+  DesktopLocalAuthSessionRestoreResult,
+} from "../ipc-contracts/window-types";
+import type { SoundtrackSetReadResult } from "../ipc-contracts/soundtrack-types";
+import { subscribe, type Disposable, type Listener } from "./subscribe";
+import {
+  NO_ISSUED_HOST_TOKEN_ERA,
+  type HostTokenBridgeChange,
+  type HostTokenEraReply,
+  type HostTokenObtainReply,
+  type HostTokenRenewReply,
+  type HostTokensBridgeSurface,
+} from "../ipc-contracts/host-token-types";
+import { readSyncNumberFor } from "./sync-bootstrap";
+
+/**
+ * Eagerly subscribe at module load so a cold-start browser-return deep link
+ * that arrives before `AuthService.start()` installs its subscription is
+ * captured and replayed to the first subscriber. The signal is payload-free
+ * (device flow is the only login - the token arrives over the poll, not here),
+ * so we only track that it fired. Mirrors the `localHostChange` replay-safety
+ * pattern in `host-bridge.ts`.
+ */
+let authReturnSignalled = false;
+const authCallbackHandlers = new Set<Listener<void>>();
+
+ipcRenderer.on(RunnerHostEvent.authCallback, (): void => {
+  // No live subscriber yet (cold-start deep link): cache the signal as a
+  // one-time replay for the next subscriber. With live subscribers, deliver
+  // straight through and drop any stale cache so a later subscriber doesn't
+  // replay an already-handled return.
+  if (authCallbackHandlers.size === 0) {
+    authReturnSignalled = true;
+    return;
+  }
+  authReturnSignalled = false;
+  for (const handler of authCallbackHandlers) {
+    handler();
+  }
+});
+
+function subscribeAuthCallback(handler: Listener<void>): Disposable {
+  authCallbackHandlers.add(handler);
+  if (authReturnSignalled) {
+    // Consume the cached signal so it replays exactly once, to the first
+    // subscriber, and never to later ones.
+    authReturnSignalled = false;
+    handler();
+  }
+  return {
+    dispose: () => {
+      authCallbackHandlers.delete(handler);
+    },
+  };
+}
+
+export interface AuthBridgeSurface {
+  validateAuthTokenIdentity(
+    token: string,
+  ): Promise<AuthIdentityValidationResult>;
+  listRegisteredHosts(bearerToken: string): Promise<HostListFetchResult>;
+  listUserSessions(bearerToken: string): Promise<ListUserSessionsFetchResult>;
+  revokeUserSession(
+    bearerToken: string,
+    familyId: string,
+    useStepUpCredential: boolean,
+  ): Promise<RevokeUserSessionFetchResult>;
+  revokeAllSessions(bearerToken: string): Promise<RevokeAllSessionsFetchResult>;
+  mintHostCredential(
+    bearerToken: string,
+    request: MintHostCredentialRequest,
+  ): Promise<MintHostCredentialFetchResult>;
+  requestStepUpChallenge(
+    bearerToken: string,
+  ): Promise<StepUpChallengeFetchResult>;
+  verifyStepUpChallenge(
+    bearerToken: string,
+    code: string,
+  ): Promise<RetainedStepUpVerifyFetchResult>;
+  updateHostVersionPolicy(
+    bearerToken: string,
+    hostId: string,
+    input: UpdateHostVersionPolicyInput,
+  ): Promise<UpdateHostVersionPolicyFetchResult>;
+  readHostOwnership(
+    bearer: string,
+    hostId: string,
+  ): Promise<HostOwnershipResult>;
+  listTeamComputers(
+    bearer: string,
+    environmentId: string,
+  ): Promise<TeamComputersResult>;
+  mintTeamComputerInstallToken(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<TeamComputerInstallTokenResult>;
+
+  releaseTeamComputer(
+    bearer: string,
+    hostId: string,
+    environmentId: string,
+  ): Promise<TeamComputerReleaseResult>;
+
+  deregisterHostFromAccount(
+    bearerToken: string,
+    hostId: string,
+  ): Promise<DeregisterHostFetchResult>;
+  readSoundtrackSet(): Promise<SoundtrackSetReadResult>;
+  listSandboxes(bearerToken: string): Promise<SandboxListFetchResult>;
+  listEnvironments(bearerToken: string): Promise<EnvironmentDirectoryResult>;
+  saveAutoPolicy(
+    bearerToken: string,
+    body: string,
+  ): Promise<AutoPolicySaveResult>;
+  attachTaskEnvironment(
+    bearerToken: string,
+    request: TaskEnvironmentAttachmentRequest,
+  ): Promise<TaskEnvironmentAttachmentResult>;
+  getSandboxCosts(bearerToken: string): Promise<SandboxCostsFetchResult>;
+  getSandboxCatalogue(
+    bearerToken: string,
+    context: SandboxCatalogueReadinessRequest | null,
+  ): Promise<SandboxCatalogueFetchResult>;
+  getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
+  getVoiceAvailability(
+    bearerToken: string,
+  ): Promise<VoiceAvailabilityFetchResult>;
+  mintVoiceSession(
+    bearerToken: string,
+    request: VoiceSessionMintRequest,
+  ): Promise<VoiceSessionMintFetchResult>;
+  endVoiceSession(
+    bearerToken: string,
+    voiceSessionId: string,
+  ): Promise<VoiceSessionEndFetchResult>;
+  setVoiceSessionLive(live: boolean): Promise<void>;
+  setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void>;
+  createSandbox(
+    bearerToken: string,
+    request: SandboxCreateRequest,
+  ): Promise<SandboxCreateFetchResult>;
+  destroySandbox(
+    bearerToken: string,
+    sandboxId: string,
+    onlyIfIdle: boolean,
+  ): Promise<SandboxVerbFetchResult>;
+  patchSandbox(
+    bearerToken: string,
+    sandboxId: string,
+    request: SandboxPatchRequest,
+  ): Promise<SandboxVerbFetchResult>;
+  keepSandbox(
+    bearerToken: string,
+    sandboxId: string,
+  ): Promise<SandboxVerbFetchResult>;
+  runSandboxVerb(
+    bearerToken: string,
+    sandboxId: string,
+    verb: SandboxLifecycleVerb,
+    gesture: SandboxVerbGesture | null,
+    timeoutMs: number,
+  ): Promise<SandboxLifecycleVerbFetchResult>;
+  getSandboxAutomation(
+    bearerToken: string,
+    environmentId: string | null,
+  ): Promise<SandboxAutomationFetchResult>;
+  openSandboxAutomation(
+    bearerToken: string,
+    target: SandboxAutomationOpenTarget | null,
+  ): Promise<SandboxAutomationOpenFetchResult>;
+  readSlackApp(bearerToken: string, botId: string): Promise<SlackAppReadResult>;
+  getSlackAppManifest(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppManifestResult>;
+  registerSlackApp(
+    bearerToken: string,
+    request: SlackAppRegisterRequest,
+  ): Promise<SlackAppWriteResult>;
+  mintSlackAppInstallUrl(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppInstallUrlResult>;
+  disconnectSlackApp(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppWriteResult>;
+  setSlackAppDms(
+    bearerToken: string,
+    request: SlackAppDmsRequest,
+  ): Promise<SlackAppWriteResult>;
+  updateBotRunSettings(
+    bearerToken: string,
+    request: BotUpdateRunSettingsRequest,
+  ): Promise<BotSetupWriteResult>;
+  updateBotReplyMode(
+    bearerToken: string,
+    request: BotUpdateReplyModeRequest,
+  ): Promise<BotSetupWriteResult>;
+  deleteBot(
+    bearerToken: string,
+    request: BotDeleteRequest,
+  ): Promise<BotDeleteResult>;
+  getSandboxGrants(
+    bearerToken: string,
+    environmentId: string | null,
+    hostId: string,
+  ): Promise<SandboxGrantsFetchResult>;
+  /**
+   * A team's environment id and an environment's provider counts, both from
+   * authn with the user's bearer. See `host-client/sandbox-secrets.ts`.
+   */
+  getTeamEnvironment(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamEnvironmentFetchResult>;
+  replaceEnvironmentApiKey(
+    bearerToken: string,
+    request: EnvironmentApiKeyReplaceRequest,
+  ): Promise<EnvironmentApiKeyReplaceResult>;
+  getEnvironmentProviders(
+    bearerToken: string,
+    environmentId: string,
+  ): Promise<EnvironmentProvidersFetchResult>;
+  decideSecretRequest(
+    bearerToken: string,
+    environmentId: string | null,
+    requestId: string,
+    decision: SecretRequestDecision,
+  ): Promise<SecretRequestDecideFetchResult>;
+  beginAuthAttempt(): void;
+  onAuthCallback(handler: Listener<void>): Disposable;
+
+  getTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+  ): Promise<TeamChatAutoArchiveReadResult>;
+
+  setTeamChatAutoArchive(
+    bearerToken: string,
+    teamId: string,
+    request: TeamChatAutoArchiveSetRequest,
+  ): Promise<TeamChatAutoArchiveWriteResult>;
+}
+
+export function buildAuthBridge(): AuthBridgeSurface {
+  return {
+    validateAuthTokenIdentity: (token) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.validateAuthTokenIdentity,
+        token,
+      ) as Promise<AuthIdentityValidationResult>,
+
+    listRegisteredHosts: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.listRegisteredHosts,
+        bearerToken,
+      ) as Promise<HostListFetchResult>,
+
+    listUserSessions: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.listUserSessions,
+        bearerToken,
+      ) as Promise<ListUserSessionsFetchResult>,
+
+    revokeUserSession: (bearerToken, familyId, useStepUpCredential) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.revokeUserSession,
+        bearerToken,
+        familyId,
+        useStepUpCredential,
+      ) as Promise<RevokeUserSessionFetchResult>,
+
+    revokeAllSessions: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.revokeAllSessions,
+        bearerToken,
+      ) as Promise<RevokeAllSessionsFetchResult>,
+
+    mintHostCredential: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.mintHostCredential,
+        bearerToken,
+        request,
+      ) as Promise<MintHostCredentialFetchResult>,
+
+    requestStepUpChallenge: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.requestStepUpChallenge,
+        bearerToken,
+      ) as Promise<StepUpChallengeFetchResult>,
+
+    verifyStepUpChallenge: (bearerToken, code) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.verifyStepUpChallenge,
+        bearerToken,
+        code,
+      ) as Promise<RetainedStepUpVerifyFetchResult>,
+
+    updateHostVersionPolicy: (bearerToken, hostId, input) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.updateHostVersionPolicy,
+        bearerToken,
+        hostId,
+        input,
+      ) as Promise<UpdateHostVersionPolicyFetchResult>,
+
+    readHostOwnership: (bearer, hostId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.readHostOwnership,
+        bearer,
+        hostId,
+      ) as Promise<HostOwnershipResult>,
+    listTeamComputers: (bearer, environmentId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.listTeamComputers,
+        bearer,
+        environmentId,
+      ) as Promise<TeamComputersResult>,
+    mintTeamComputerInstallToken: (bearerToken, environmentId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.mintTeamComputerInstallToken,
+        bearerToken,
+        environmentId,
+      ) as Promise<TeamComputerInstallTokenResult>,
+    releaseTeamComputer: (bearer, hostId, environmentId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.releaseTeamComputer,
+        bearer,
+        hostId,
+        environmentId,
+      ) as Promise<TeamComputerReleaseResult>,
+
+    deregisterHostFromAccount: (bearerToken, hostId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.deregisterHostFromAccount,
+        bearerToken,
+        hostId,
+      ) as Promise<DeregisterHostFetchResult>,
+
+    readSoundtrackSet: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.readSoundtrackSet,
+      ) as Promise<SoundtrackSetReadResult>,
+
+    listSandboxes: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.listSandboxes,
+        bearerToken,
+      ) as Promise<SandboxListFetchResult>,
+
+    listEnvironments: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.listEnvironments,
+        bearerToken,
+      ) as Promise<EnvironmentDirectoryResult>,
+
+    saveAutoPolicy: (bearerToken, body) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.saveAutoPolicy,
+        bearerToken,
+        body,
+      ) as Promise<AutoPolicySaveResult>,
+
+    attachTaskEnvironment: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.attachTaskEnvironment,
+        bearerToken,
+        request,
+      ) as Promise<TaskEnvironmentAttachmentResult>,
+
+    getSandboxCosts: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getSandboxCosts,
+        bearerToken,
+      ) as Promise<SandboxCostsFetchResult>,
+
+    getSandboxCatalogue: (bearerToken, context) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getSandboxCatalogue,
+        bearerToken,
+        context,
+      ) as Promise<SandboxCatalogueFetchResult>,
+
+    getVoiceAvailability: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getVoiceAvailability,
+        bearerToken,
+      ) as Promise<VoiceAvailabilityFetchResult>,
+
+    mintVoiceSession: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.mintVoiceSession,
+        bearerToken,
+        request,
+      ) as Promise<VoiceSessionMintFetchResult>,
+
+    endVoiceSession: (bearerToken, voiceSessionId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.endVoiceSession,
+        bearerToken,
+        voiceSessionId,
+      ) as Promise<VoiceSessionEndFetchResult>,
+
+    setVoiceSessionLive: (live) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.setVoiceSessionLive,
+        live,
+      ) as Promise<void>,
+
+    setVoiceSessionIndicator: (indicator) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.setVoiceSessionIndicator,
+        indicator,
+      ) as Promise<void>,
+
+    getTraycerModels: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getTraycerModels,
+        bearerToken,
+      ) as Promise<TraycerModelsFetchResult>,
+
+    createSandbox: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.createSandbox,
+        bearerToken,
+        request,
+      ) as Promise<SandboxCreateFetchResult>,
+
+    destroySandbox: (bearerToken, sandboxId, onlyIfIdle) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.destroySandbox,
+        bearerToken,
+        sandboxId,
+        onlyIfIdle,
+      ) as Promise<SandboxVerbFetchResult>,
+
+    patchSandbox: (bearerToken, sandboxId, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.patchSandbox,
+        bearerToken,
+        sandboxId,
+        request,
+      ) as Promise<SandboxVerbFetchResult>,
+
+    keepSandbox: (bearerToken, sandboxId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.keepSandbox,
+        bearerToken,
+        sandboxId,
+      ) as Promise<SandboxVerbFetchResult>,
+
+    runSandboxVerb: (bearerToken, sandboxId, verb, gesture, timeoutMs) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.runSandboxVerb,
+        bearerToken,
+        sandboxId,
+        verb,
+        gesture,
+        timeoutMs,
+      ) as Promise<SandboxLifecycleVerbFetchResult>,
+
+    getSandboxAutomation: (bearerToken, environmentId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getSandboxAutomation,
+        bearerToken,
+        environmentId,
+      ) as Promise<SandboxAutomationFetchResult>,
+
+    openSandboxAutomation: (bearerToken, target) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.openSandboxAutomation,
+        bearerToken,
+        target,
+      ) as Promise<SandboxAutomationOpenFetchResult>,
+
+    readSlackApp: (bearerToken, botId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.readSlackApp,
+        bearerToken,
+        botId,
+      ) as Promise<SlackAppReadResult>,
+
+    getSlackAppManifest: (bearerToken, botId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getSlackAppManifest,
+        bearerToken,
+        botId,
+      ) as Promise<SlackAppManifestResult>,
+
+    registerSlackApp: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.registerSlackApp,
+        bearerToken,
+        request,
+      ) as Promise<SlackAppWriteResult>,
+
+    mintSlackAppInstallUrl: (bearerToken, botId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.mintSlackAppInstallUrl,
+        bearerToken,
+        botId,
+      ) as Promise<SlackAppInstallUrlResult>,
+
+    disconnectSlackApp: (bearerToken, botId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.disconnectSlackApp,
+        bearerToken,
+        botId,
+      ) as Promise<SlackAppWriteResult>,
+
+    setSlackAppDms: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.setSlackAppDms,
+        bearerToken,
+        request,
+      ) as Promise<SlackAppWriteResult>,
+
+    updateBotRunSettings: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.updateBotRunSettings,
+        bearerToken,
+        request,
+      ) as Promise<BotSetupWriteResult>,
+
+    updateBotReplyMode: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.updateBotReplyMode,
+        bearerToken,
+        request,
+      ) as Promise<BotSetupWriteResult>,
+
+    deleteBot: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.deleteBot,
+        bearerToken,
+        request,
+      ) as Promise<BotDeleteResult>,
+
+    getSandboxGrants: (bearerToken, environmentId, hostId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getSandboxGrants,
+        bearerToken,
+        environmentId,
+        hostId,
+      ) as Promise<SandboxGrantsFetchResult>,
+
+    getTeamEnvironment: (bearerToken, teamId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getTeamEnvironment,
+        bearerToken,
+        teamId,
+      ) as Promise<TeamEnvironmentFetchResult>,
+
+    replaceEnvironmentApiKey: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.replaceEnvironmentApiKey,
+        bearerToken,
+        request,
+      ) as Promise<EnvironmentApiKeyReplaceResult>,
+
+    getEnvironmentProviders: (bearerToken, environmentId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getEnvironmentProviders,
+        bearerToken,
+        environmentId,
+      ) as Promise<EnvironmentProvidersFetchResult>,
+
+    decideSecretRequest: (bearerToken, environmentId, requestId, decision) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.decideSecretRequest,
+        bearerToken,
+        environmentId,
+        requestId,
+        decision,
+      ) as Promise<SecretRequestDecideFetchResult>,
+
+    // Desktop does not dedupe browser-return signals on URL identity, so the
+    // attempt-boundary hook is a renderer-local no-op. It still exists to
+    // satisfy the shared `IRunnerHost` contract.
+    beginAuthAttempt: () => undefined,
+
+    onAuthCallback: (handler) => subscribeAuthCallback(handler),
+    getTeamChatAutoArchive: (bearerToken, teamId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getTeamChatAutoArchive,
+        bearerToken,
+        teamId,
+      ) as Promise<TeamChatAutoArchiveReadResult>,
+    setTeamChatAutoArchive: (bearerToken, teamId, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.setTeamChatAutoArchive,
+        bearerToken,
+        teamId,
+        request,
+      ) as Promise<TeamChatAutoArchiveWriteResult>,
+  };
+}
+
+/**
+ * Renderer-side `ITokenStore` backed by the main-process `FileTokenStore`
+ * (tech plan §3). `rotate` performs the refresh spend in main under the file
+ * lock; `subscribe` receives the owned-watcher change events (source lands in
+ * §4). The renderer wraps this exactly as its `ITokenStore` implementation.
+ */
+export interface AuthTokenStoreBridgeSurface {
+  get(): Promise<StoredCredentials | null>;
+  getSignInStorageLow(): Promise<boolean>;
+  subscribeSignInStorageLow(handler: Listener<boolean>): Disposable;
+  signIn(
+    tokens: StoredAuthTokens,
+    identity: StoredCredentialsIdentity,
+  ): Promise<SignInSaveResult>;
+  rotate(expected: {
+    readonly userId: string;
+    readonly token: string;
+  }): Promise<TokenRotateResult>;
+  delete(): Promise<void>;
+  deleteIfToken(expectedToken: string): Promise<"deleted" | "kept">;
+  subscribe(handler: Listener<TokenStoreChange>): Disposable;
+  migrateLegacyCredentials(
+    legacy: StoredAuthTokens,
+  ): Promise<CredentialsMigrationOutcome>;
+}
+
+export function buildAuthTokenStoreBridge(): AuthTokenStoreBridgeSurface {
+  return {
+    subscribeSignInStorageLow: (handler) =>
+      subscribe<{ readonly low: boolean }>(
+        RunnerHostEvent.authSignInStorageLowChanged,
+        (change) => handler(change.low),
+      ),
+    getSignInStorageLow: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreGetSignInStorageLow,
+      ) as Promise<boolean>,
+    get: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreGet,
+      ) as Promise<StoredCredentials | null>,
+    signIn: (tokens, identity) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreSignIn,
+        tokens,
+        identity,
+      ) as Promise<SignInSaveResult>,
+    rotate: (expected) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreRotate,
+        expected,
+      ) as Promise<TokenRotateResult>,
+    delete: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreDelete,
+      ) as Promise<void>,
+    deleteIfToken: (expectedToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreDeleteIfToken,
+        expectedToken,
+      ) as Promise<"deleted" | "kept">,
+    subscribe: (handler) =>
+      subscribe<TokenStoreChange>(
+        RunnerHostEvent.authTokenStoreChange,
+        handler,
+      ),
+    migrateLegacyCredentials: (legacy) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authTokenStoreMigrateLegacy,
+        legacy,
+      ) as Promise<CredentialsMigrationOutcome>,
+  };
+}
+
+export function buildHostTokensBridge(): HostTokensBridgeSurface {
+  return {
+    era: (userId) =>
+      readSyncNumberFor(
+        RunnerHostSync.hostTokensEra,
+        userId,
+        NO_ISSUED_HOST_TOKEN_ERA,
+      ),
+    obtain: (userId, hostId, fresh, expectedEra) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensObtain,
+        userId,
+        hostId,
+        fresh,
+        expectedEra,
+      ) as Promise<HostTokenObtainReply>,
+    renew: (userId, hostIds, expectedEra) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensRenew,
+        userId,
+        hostIds,
+        expectedEra,
+      ) as Promise<HostTokenRenewReply>,
+    adopt: (userId, hostId, token, expectedEra) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensAdopt,
+        userId,
+        hostId,
+        token,
+        expectedEra,
+      ) as Promise<HostTokenEraReply>,
+    forgetUser: (userId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.hostTokensForgetUser,
+        userId,
+      ) as Promise<HostTokenEraReply>,
+    subscribe: (handler) =>
+      subscribe<HostTokenBridgeChange>(
+        RunnerHostEvent.hostTokensChange,
+        handler,
+      ),
+  };
+}
+
+export interface AuthSessionBridgeSurface {
+  get(): Promise<DesktopAuthSessionSnapshot>;
+  restoreLocal(expected: {
+    readonly userId: string;
+    readonly token: string;
+  }): Promise<DesktopLocalAuthSessionRestoreResult>;
+  /**
+   * Main verifies the bearer before adopting it, so a set can be REFUSED -
+   * the renderer is told why rather than silently believing it landed.
+   */
+  set(
+    snapshot: DesktopAuthSessionSnapshot,
+  ): Promise<DesktopAuthSessionSetResult>;
+  /**
+   * Withdraws main's verification of the held session without replacing it -
+   * the renderer's terminal verdict loss, which `set` cannot carry: the
+   * nearest status it flattens to would sign sibling windows out.
+   * `revocation` is passed on to the other windows (`onVerificationRevoked`).
+   */
+  revoke(rejectedToken: string, revocation: "user-epoch" | null): Promise<void>;
+  onChange(handler: Listener<DesktopAuthSessionSnapshot>): Disposable;
+  /**
+   * The verdict-loss edge, fanned to every window - including the one that
+   * raised it. Separate from `onChange` because main answers a revoke by
+   * republishing the SAME snapshot, which every window's latch reads as an
+   * echo; a sibling that only listens to `onChange` therefore never learns
+   * its bearer was refused. Carries that bearer so each window fences the
+   * demotion to the session it actually holds, and the revocation scope so a
+   * "sign out everywhere" reaches every window as one.
+   */
+  onVerificationRevoked(
+    handler: (rejectedToken: string, revocation: "user-epoch" | null) => void,
+  ): Disposable;
+}
+
+export function buildAuthSessionBridge(): AuthSessionBridgeSurface {
+  return {
+    restoreLocal: (expected) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authSessionRestoreLocal,
+        expected,
+      ) as Promise<DesktopLocalAuthSessionRestoreResult>,
+    get: () =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authSessionGet,
+      ) as Promise<DesktopAuthSessionSnapshot>,
+    set: (snapshot) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authSessionSet,
+        snapshot,
+      ) as Promise<DesktopAuthSessionSetResult>,
+    revoke: (rejectedToken, revocation) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.authSessionRevoke,
+        rejectedToken,
+        revocation,
+      ) as Promise<void>,
+    onChange: (handler) =>
+      subscribe<DesktopAuthSessionSnapshot>(
+        RunnerHostEvent.authSessionChange,
+        handler,
+      ),
+    onVerificationRevoked: (handler) =>
+      subscribe<DesktopAuthVerificationRevoked>(
+        RunnerHostEvent.authVerificationRevoked,
+        (revoked) => {
+          handler(revoked.token, revoked.revocation);
+        },
+      ),
+  };
+}

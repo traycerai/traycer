@@ -1,0 +1,2 @@
+export const RECURRENCE_WINDOW_MS = 60_000;
+export const RECURRENCE_THRESHOLD = 3;

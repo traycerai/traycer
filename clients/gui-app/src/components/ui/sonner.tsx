@@ -1,0 +1,228 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useTheme } from "next-themes";
+import { Toaster as Sonner, type ToasterProps } from "sonner";
+import { DismissableLayer } from "radix-ui/internal";
+import {
+  CircleCheckIcon,
+  InfoIcon,
+  TriangleAlertIcon,
+  OctagonXIcon,
+} from "lucide-react";
+import { ProgressToastIcon } from "@/components/ui/progress-toast-icon";
+import { cn } from "@/lib/utils";
+import { isMobileApp } from "@/lib/mobile-app";
+import { APP_HEADER_HEIGHT } from "@/components/layout/header/app-header-height";
+import {
+  listTileRects,
+  subscribeTileRects,
+} from "@/lib/browser-view/tiles/tile-rect-registry";
+import {
+  DEFAULT_TOASTER_ANCHOR,
+  pickToasterAnchor,
+  type ToasterAnchor,
+  type ToasterSize,
+} from "@/components/ui/toaster-anchor";
+// Where the close button sits on a touch device. A stylesheet, not classes:
+// sonner injects its own CSS unlayered, which outranks every Tailwind utility
+// (see the file).
+import "./sonner.css";
+
+const TOAST_CLASS_NAME = cn("cn-toast", "group/toast");
+// Sonner itself always shows the close button. Hiding it until hover only
+// makes sense for a fine pointer, so the hide is scoped to
+// `not-pointer-coarse` - the app's touch convention, the same `pointer-coarse`
+// the mobile header keys its touch chrome on. A coarse pointer keeps sonner's
+// own visibility, and the button is tappable, even on a device that can also
+// hover. (Sonner's stylesheet uses the stricter `(hover: none) and (pointer:
+// coarse)`, but only to reset its own lift transform.)
+// There the 20px glyph also gets a 44px hit area: a pseudo-element square
+// centred on it, so the visual size and sonner's corner transform are
+// untouched (the pseudo-element moves with the button). Sized outright rather
+// than inset, because an inset measures from inside the button's border.
+//
+// A collapsed stack's back toasts are hidden by sonner with `opacity: 0` on
+// their children and nothing else, so without the hide above their close
+// buttons stay tappable while invisible - and they peek out past the front
+// toast. The last rule takes them out of hit testing; it outranks every
+// reveal on specificity, and on desktop hovering the toaster expands the
+// stack first, so it never fights a hover reveal.
+const TOAST_CLOSE_BUTTON_CLASS_NAME = cn(
+  "not-pointer-coarse:pointer-events-none",
+  "not-pointer-coarse:opacity-0",
+  "pointer-coarse:after:absolute",
+  "pointer-coarse:after:top-1/2",
+  "pointer-coarse:after:left-1/2",
+  "pointer-coarse:after:size-11",
+  "pointer-coarse:after:-translate-x-1/2",
+  "pointer-coarse:after:-translate-y-1/2",
+  "group-hover/toast:pointer-events-auto",
+  "group-hover/toast:opacity-100",
+  "group-focus-within/toast:pointer-events-auto",
+  "group-focus-within/toast:opacity-100",
+  "focus-visible:pointer-events-auto",
+  "focus-visible:opacity-100",
+  "group-data-[expanded=false]/toast:group-data-[front=false]/toast:pointer-events-none",
+);
+const TOAST_CANCEL_BUTTON_CLASS_NAME = cn(
+  "border border-border bg-background text-foreground",
+  // Not `hover:bg-muted`: the button is `bg-background`, and the five flat
+  // light presets define `--muted` as exactly that, so the hover was a no-op
+  // there. The fill IS the whole state change here - the border is static.
+  "hover:bg-foreground/5",
+);
+const INTERACTIVE_ELEMENT_SELECTOR =
+  "button, a, input, textarea, select, [role='button']";
+const NOTIFICATION_TOAST_ACTION_SELECTOR = "[data-notification-toast-action]";
+// The outer `<section>` sonner renders is a static, zero-height wrapper -
+// the fixed, painted surface is one `<ol data-sonner-toaster>` per toast
+// position, and sonner (2.0.8) mounts each only once a toast exists for
+// that position. Size is measured from those lists so toast placement can
+// prefer anchors that miss live browser tiles.
+const SONNER_TOASTER_LIST_SELECTOR = "[data-sonner-toaster]";
+// The installed phone app shows toasts at the top, where a notification is
+// expected on a phone; sonner derives swipe-up-to-dismiss from the position.
+// The toaster is `fixed` and paints above everything, so it is offset past
+// the app header rather than over it - the header row sits directly under
+// `#root`'s top inset and never scrolls. The extra 1.5rem keeps the close
+// button's touch hit area clear of the header's, with room to spare: the
+// button now sits INSIDE the card on a coarse pointer (`sonner.css`), so its
+// 44px hit area reaches 4px above the toast rather than the 18px sonner's own
+// off-corner placement produced, and the header's own 44px hit areas overhang
+// its 40px row by 2px.
+const MOBILE_APP_TOASTER_ANCHOR: ToasterAnchor = "top-center";
+const MOBILE_APP_TOASTER_TOP = `calc(var(--safe-area-inset-top) + ${APP_HEADER_HEIGHT} + 1.5rem)`;
+// Both offsets: sonner reads `mobileOffset` at <=600px and `offset` above
+// it, and a phone in landscape is wider than that.
+const MOBILE_APP_TOASTER_OFFSET = { top: MOBILE_APP_TOASTER_TOP };
+
+const Toaster = ({ ...props }: ToasterProps) => {
+  const { theme = "system" } = useTheme();
+  const toasterTheme = normalizeToasterTheme(theme);
+  const sectionRef = useRef<HTMLElement | null>(null);
+  // Sonner mounts the `<ol>` only while a toast exists (see the selector
+  // comment above), so this is also the "is a toast currently visible" flag
+  // - `recomputeAnchor` reads it to honor invariant 10's other half:
+  // don't re-anchor a toaster a toast is already showing on.
+  const toastVisibleRef = useRef(false);
+  // The toaster's own last-measured rect, cached across the `<ol>` mounting
+  // and unmounting so a prospective anchor rect never has to hardcode a
+  // size - see `toaster-anchor.ts`.
+  const toasterSizeRef = useRef<ToasterSize | null>(null);
+  const [anchor, setAnchor] = useState<ToasterAnchor>(DEFAULT_TOASTER_ANCHOR);
+  // Read at render, not at module load: the phone entry sets it before the
+  // first render, which is after this module has been imported.
+  const mobileApp = isMobileApp();
+
+  const recomputeAnchor = useCallback(() => {
+    if (toastVisibleRef.current) return;
+    setAnchor(
+      pickToasterAnchor({
+        toasterSize: toasterSizeRef.current,
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        tileRects: listTileRects(),
+      }),
+    );
+  }, []);
+
+  useEffect(() => {
+    const section = sectionRef.current;
+    if (section === null) return;
+    const sync = (): void => {
+      const first = section.querySelector<HTMLElement>(
+        SONNER_TOASTER_LIST_SELECTOR,
+      );
+      if (first !== null) {
+        const rect = first.getBoundingClientRect();
+        toasterSizeRef.current = { width: rect.width, height: rect.height };
+      }
+      toastVisibleRef.current = first !== null;
+    };
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(section, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  useEffect(() => subscribeTileRects(recomputeAnchor), [recomputeAnchor]);
+
+  return (
+    <DismissableLayer.Branch
+      data-slot="toaster-branch"
+      onClick={activateNotificationToastSurface}
+    >
+      <Sonner
+        ref={sectionRef}
+        theme={toasterTheme}
+        className="toaster group"
+        icons={{
+          success: <CircleCheckIcon className="size-4" />,
+          info: <InfoIcon className="size-4" />,
+          warning: <TriangleAlertIcon className="size-4" />,
+          error: <OctagonXIcon className="size-4" />,
+          loading: <ProgressToastIcon />,
+        }}
+        style={
+          {
+            "--normal-bg": "var(--popover)",
+            "--normal-text": "var(--popover-foreground)",
+            "--normal-border": "var(--border)",
+            "--border-radius": "var(--radius)",
+          } as React.CSSProperties
+        }
+        toastOptions={{
+          classNames: {
+            toast: TOAST_CLASS_NAME,
+            closeButton: TOAST_CLOSE_BUTTON_CLASS_NAME,
+            cancelButton: TOAST_CANCEL_BUTTON_CLASS_NAME,
+          },
+        }}
+        {...props}
+        closeButton={props.closeButton ?? true}
+        position={
+          props.position ?? (mobileApp ? MOBILE_APP_TOASTER_ANCHOR : anchor)
+        }
+        offset={
+          props.offset ?? (mobileApp ? MOBILE_APP_TOASTER_OFFSET : undefined)
+        }
+        mobileOffset={
+          props.mobileOffset ??
+          (mobileApp ? MOBILE_APP_TOASTER_OFFSET : undefined)
+        }
+      />
+    </DismissableLayer.Branch>
+  );
+};
+
+function activateNotificationToastSurface(
+  event: React.MouseEvent<HTMLDivElement>,
+): void {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+
+  const interactiveTarget = target.closest(INTERACTIVE_ELEMENT_SELECTOR);
+  const toastSurface = target.closest("[data-sonner-toast]");
+  const action = toastSurface?.querySelector<HTMLButtonElement>(
+    NOTIFICATION_TOAST_ACTION_SELECTOR,
+  );
+  if (interactiveTarget !== null) return;
+
+  if (action === undefined || action === null) return;
+  action.click();
+}
+
+function normalizeToasterTheme(
+  theme: string | undefined,
+): ToasterProps["theme"] {
+  if (isValidToasterTheme(theme)) return theme;
+  return "system";
+}
+
+function isValidToasterTheme(
+  theme: string | undefined,
+): theme is "light" | "dark" | "system" {
+  return theme === "light" || theme === "dark" || theme === "system";
+}
+
+export { Toaster };

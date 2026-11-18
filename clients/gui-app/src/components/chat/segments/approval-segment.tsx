@@ -1,0 +1,209 @@
+import { Check, X } from "lucide-react";
+import { useState } from "react";
+import type { ApprovalDecision } from "@traycer/protocol/persistence/epic/schemas";
+import type { ToolInputDetail } from "@traycer/protocol/host/agent/gui/tool-input-detail";
+import { toolHeaderLine } from "@traycer/protocol/host/agent/gui/tool-input-summary";
+import { cn } from "@/lib/utils";
+import { SegmentCard } from "./segment-card";
+import { SegmentRow } from "./segment-row";
+import { ToolInputPanel } from "./tool-input-panel";
+import { resolvedApprovalBodyText } from "./approval-text";
+
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+interface ResolvedApprovalSegmentProps {
+  toolName: string | null;
+  description: string | null;
+  inputSummary: string | null;
+  // Precomputed expand body for the pending tool's input (raw input not stored).
+  inputDetail: ToolInputDetail | null;
+  decision: ApprovalDecision;
+  variant: "card" | "row";
+  headerFindUnitId: string | null;
+  // Seeds the disclosure at mount, once. Open state is local here, so the copy
+  // of this row inside the bounded live activity window cannot hand its own
+  // over: a click there promotes, and this is how the copy that replaces it
+  // knows it was the row asked for.
+  initiallyOpen: boolean;
+}
+
+/**
+ * Inline-history view of an approval that has already been resolved. Pending
+ * approvals are routed to `ComposerSlotApprovalQueue`; the inline path is
+ * resolved-only by construction (see `isSuppressedForComposerSlot` and
+ * `isWorkStep`), so this component does not accept Approve/Deny callbacks.
+ */
+export function ResolvedApprovalSegment(props: ResolvedApprovalSegmentProps) {
+  const {
+    toolName,
+    description,
+    inputSummary,
+    inputDetail,
+    decision,
+    variant,
+  } = props;
+  const [open, setOpen] = useState<boolean>(props.initiallyOpen);
+  const label = toolName ?? description ?? "approval";
+  const header = (
+    <ResolvedApprovalHeader
+      label={label}
+      // The whole input on one line, cut by the header's own `truncate` at the
+      // row's width (`toolHeaderLine`); the body below still compares against
+      // the persisted summary.
+      inputSummary={toolHeaderLine(toolName, inputSummary, inputDetail)}
+      decision={decision}
+    />
+  );
+  const bodyText = resolvedApprovalBodyText(
+    label,
+    inputSummary,
+    description,
+    inputDetail,
+  );
+  const body = (
+    <ResolvedApprovalBody
+      request={bodyText.request}
+      inputDetail={bodyText.inputDetail}
+      decision={decision}
+    />
+  );
+  // A row whose header already says everything has nothing to open.
+  const expandable =
+    bodyText.request !== null ||
+    bodyText.inputDetail !== null ||
+    decision.reason !== null;
+  const tone = decision.approved ? "default" : "destructive";
+
+  if (variant === "row") {
+    return (
+      <SegmentRow
+        headerAction={null}
+        open={open}
+        onOpenChange={setOpen}
+        header={header}
+        body={body}
+        tone={tone}
+        stickyHeader
+        expandable={expandable}
+        headerFindUnitId={props.headerFindUnitId}
+        bodyFindUnitId={null}
+        className={undefined}
+        footer={null}
+      />
+    );
+  }
+  return (
+    <SegmentCard
+      footer={null}
+      open={open}
+      onOpenChange={setOpen}
+      header={header}
+      headerAction={null}
+      collapsedPreview={null}
+      body={body}
+      tone={tone}
+      headerPosition="normal"
+      bodyOverflow="hidden"
+      expandable={expandable}
+      headerFindUnitId={props.headerFindUnitId}
+      bodyFindUnitId={null}
+      className={undefined}
+    />
+  );
+}
+
+function ResolvedApprovalHeader(props: {
+  label: string;
+  inputSummary: string | null;
+  decision: ApprovalDecision;
+}) {
+  const { label, inputSummary, decision } = props;
+  const verdictLabel = decision.approved ? "Approved" : "Denied";
+  const VerdictIcon = decision.approved ? Check : X;
+  return (
+    <>
+      <VerdictIcon
+        className={cn(
+          "size-3.5 shrink-0",
+          decision.approved ? "text-success-foreground" : "text-destructive",
+        )}
+        aria-hidden
+      />
+      <span
+        className={cn(
+          "shrink-0 text-ui-sm font-medium",
+          decision.approved ? "text-foreground/85" : "text-destructive",
+        )}
+      >
+        {verdictLabel}
+      </span>
+      <span aria-hidden className="shrink-0 text-muted-foreground/40">
+        ·
+      </span>
+      <span className="shrink-0 font-mono text-code-sm text-muted-foreground">
+        {label}
+      </span>
+      {inputSummary !== null ? (
+        <>
+          <span aria-hidden className="shrink-0 text-muted-foreground/40">
+            ·
+          </span>
+          <span className="min-w-0 flex-1 truncate font-mono text-code-sm text-muted-foreground">
+            {inputSummary}
+          </span>
+        </>
+      ) : (
+        <span aria-hidden className="flex-1" />
+      )}
+      {!decision.approved && decision.reason !== null ? (
+        <TooltipWrapper
+          label={decision.reason}
+          side="top"
+          sideOffset={undefined}
+          align={undefined}
+        >
+          <span className="@max-[28rem]:hidden shrink-0 truncate text-ui-xs text-destructive/80">
+            {decision.reason}
+          </span>
+        </TooltipWrapper>
+      ) : null}
+    </>
+  );
+}
+
+function ResolvedApprovalBody(props: {
+  request: string | null;
+  inputDetail: ToolInputDetail | null;
+  decision: ApprovalDecision;
+}) {
+  const { request, inputDetail, decision } = props;
+  return (
+    <div className="flex flex-col gap-2">
+      {request !== null ? (
+        <div className="flex flex-col gap-1">
+          <span className="select-none font-medium uppercase text-overline text-muted-foreground/80">
+            Request
+          </span>
+          <p className="m-0 whitespace-pre-wrap text-foreground/85">
+            {request}
+          </p>
+        </div>
+      ) : null}
+      {inputDetail !== null ? <ToolInputPanel detail={inputDetail} /> : null}
+      {decision.reason !== null ? (
+        <div className="flex flex-col gap-1">
+          <span className="select-none font-medium uppercase text-overline text-muted-foreground/80">
+            Reason
+          </span>
+          <p
+            className={cn(
+              "m-0 whitespace-pre-wrap",
+              decision.approved ? "text-foreground/85" : "text-destructive/90",
+            )}
+          >
+            {decision.reason}
+          </p>
+        </div>
+      ) : null}
+    </div>
+  );
+}

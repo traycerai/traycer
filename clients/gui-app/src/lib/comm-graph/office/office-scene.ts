@@ -1,0 +1,7015 @@
+/**
+ * The office simulation: who is where, who is walking, what is bubbling, and
+ * which envelopes are in the air at this instant.
+ *
+ * PURE AND DETERMINISTIC BY CONSTRUCTION. Nothing here reads a clock, a random
+ * source, the DOM or a canvas. Time enters only through `tick(dtMs)` and
+ * per-agent variety only through a hash of the agent id, so two scenes fed the
+ * same sync/tick sequence produce identical frames. That is what makes
+ * playback scrubbable, replayable and testable - a scene that sampled
+ * `Date.now()` would render a different floor every time the same cursor was
+ * revisited.
+ *
+ * ANCHORS the canvas must honour - a frame is coordinates and nothing else:
+ *
+ * - `floor`, `props` and `actors` sprites are TOP-LEFT anchored at `(x, y)`.
+ * - A character hangs from its FOOT POINT, the projected bottom centre of the
+ *   tile it stands on: its sprite corner is that point less half a character's
+ *   width and a whole character's height, so its feet land on its tile and its
+ *   head rises above it. On the Floor's identity projector that is exactly
+ *   `(col * OFFICE_TILE, row * OFFICE_TILE - 4)`.
+ * - `overlay` sprites (bubbles, sparkles) are BOTTOM-CENTER anchored - `x` is
+ *   the character's horizontal centre, `y` its top minus two.
+ * - `envelope` drawables are CENTER anchored. Their `y` ALREADY includes the
+ *   flight arc, and `progress` is the EASED parameter, so a ground shadow must
+ *   be derived from that same value or it will slide out from under the
+ *   envelope.
+ * - `clock` drawables are CENTER anchored on the clock FACE, so the hands are
+ *   drawn outward from `(x, y)`.
+ * - A `label` is centered on `x` with its baseline above `y`, per the shared
+ *   type.
+ *
+ * A DESK IS ONLY DRAWN FOR AN AGENT THAT EXISTS AS OF THE CURSOR. The floor
+ * plan covers every agent in the epic so positions never shift as playback
+ * reveals people, but rendering an empty desk for someone who has not been
+ * created yet would leak the future into a historical view.
+ *
+ * MESSAGES FLY BETWEEN SEATS, never between bodies. An envelope aimed at
+ * wherever a character happens to be standing lands in an empty chair the
+ * moment that character is walking in or away at reception, so both endpoints
+ * are the agents' DESKS and anyone an envelope touches is seated first.
+ */
+import type {
+  CommGraphPulse,
+  CommGraphPulseKind,
+} from "@/lib/comm-graph/comm-graph-timeline";
+import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
+import {
+  isOfficeHotStatus,
+  officeArchivedAsOf,
+} from "@/lib/comm-graph/office/office-status";
+import { findOfficePath } from "@/lib/comm-graph/office/office-path";
+import { OfficeSeatBook } from "@/lib/comm-graph/office/office-seat-book";
+import type { OfficeSeatWant } from "@/lib/comm-graph/office/office-seat-book";
+import type { OfficePopulation } from "@/lib/comm-graph/office/office-population";
+import { officeArchivedByHost } from "@/lib/comm-graph/office/office-population";
+import {
+  officeTruncateLabel,
+  OFFICE_MAX_LABEL_CHARS,
+} from "@/lib/comm-graph/office/office-label-text";
+import {
+  OFFICE_CHARACTER_HEIGHT,
+  OFFICE_CHARACTER_WIDTH,
+  OFFICE_LABEL_GAP,
+  OFFICE_LOGO_SIZE,
+  OFFICE_TILE,
+  type OfficeAgentInput,
+  type OfficeAgentStatus,
+  type OfficeCharacterAccessory,
+  type OfficeCharacterPose,
+  type OfficeCivicKind,
+  type OfficeCivicRoom,
+  type OfficeCivicTally,
+  type OfficeDrawable,
+  type OfficeEnvelopeHitRegion,
+  type OfficeErrandKind,
+  type OfficeErrandSpot,
+  type OfficeFacing,
+  type OfficeFloor,
+  type OfficeFrame,
+  type OfficeHitRegion,
+  type OfficeLayout,
+  type OfficeLod,
+  type OfficePipGlyph,
+  type OfficePoint,
+  type OfficeRect,
+  type OfficeRoad,
+  type OfficeRoom,
+  type OfficeSceneInput,
+  type OfficeSeat,
+  type OfficeSize,
+  type OfficeSpriteName,
+  type OfficeTilePos,
+  type OfficeTileRect,
+  type OfficeVehicleKind,
+  type OfficeWorldDrawable,
+} from "@/lib/comm-graph/office/office-types";
+import {
+  officeTileRectOf,
+  OFFICE_PROJECTION_BLEED_PX,
+} from "@/lib/comm-graph/office/office-projection";
+import type {
+  OfficeDeskState,
+  OfficeProjector,
+  OfficeView,
+} from "@/lib/comm-graph/office/views/office-view";
+
+/**
+ * How far outside the camera's rect the frame is still built.
+ *
+ * A character standing just off the left edge is half on screen, and a desk's
+ * monitor is drawn eight pixels above the desk's own tile. One tile's worth of
+ * slack, four times over, costs a handful of drawables and removes every class
+ * of thing popping into existence at the edge of the viewport.
+ */
+export const OFFICE_CULL_MARGIN_PX = 64;
+
+/**
+ * The side of one frame-index chunk, in tiles - 512 sprite pixels, the same
+ * square the static layer bakes in.
+ *
+ * The index exists so `frame` never walks every seat in a thousand-agent
+ * office to find the forty that are on screen. It is rebuilt per layout and
+ * read per frame, so the chunk wants to be big enough that a viewport touches
+ * a dozen of them and small enough that one is not most of the world.
+ */
+const FRAME_CHUNK_TILES = 32;
+
+/**
+ * The same chunk, in the PROJECTED world pixels the index is actually keyed by.
+ * A tile is `OFFICE_TILE` across before projection, so this is the chunk's side
+ * for a view whose projector is the identity - and the unit every view's boxes
+ * are bucketed and queried in, identity or not.
+ */
+const FRAME_CHUNK_PX = FRAME_CHUNK_TILES * OFFICE_TILE;
+
+/** A cubby's occupant is drawn dimmed at close-up: present, not working. */
+const CUBBY_OCCUPANT_ALPHA = 0.6;
+
+const WALK_TILES_PER_SECOND = 3;
+/**
+ * An arrival is not a stroll. A newcomer's first message lands within a step of
+ * its creation, so the walk from the door has to be over by then or the
+ * envelope arrives at an empty chair.
+ */
+const ARRIVAL_TILES_PER_SECOND = 8;
+/**
+ * A message is waiting: whoever it is to or from RUNS. This is what replaced
+ * snapping an agent into its chair the instant a pulse touched it - a character
+ * teleporting mid-stride reads as a rendering glitch, while the same character
+ * sprinting back reads as the office noticing.
+ */
+const HURRY_TILES_PER_SECOND = 14;
+/**
+ * TWICE A WALKER'S, and written as twice rather than as six so that retuning
+ * the walk retunes the drive with it. It is the plain walk that is doubled, not
+ * the arrival or the hurry: those are situational speeds for a person with a
+ * reason to move, while a vehicle simply travels faster than people walk.
+ */
+const VEHICLE_TILES_PER_SECOND = 2 * WALK_TILES_PER_SECOND;
+/**
+ * How long a vehicle stands at the kerb: at least this, longer while anybody it
+ * came for is still on their feet, and never past the cap.
+ *
+ * The floor is what makes a trip read as a visit rather than a drive-by; the
+ * ceiling is what stops one agent whose walk never ends from parking an
+ * ambulance on the road for the rest of the session.
+ */
+const VEHICLE_WAIT_MIN_MS = 4_000;
+const VEHICLE_WAIT_MAX_MS = 12_000;
+/** The lamps swap this often while a vehicle moves or waits. */
+const VEHICLE_LIGHT_MS = 250;
+/**
+ * How many vehicles may be on the road at once, over the whole scene.
+ *
+ * The cap is the budget ([Performance] rule 6): a trigger that finds it taken
+ * is DROPPED rather than queued, because the room still receives the agent and
+ * only the show is skipped. Two is enough for an ambulance and a police car to
+ * pass each other and small enough that the frame never notices.
+ */
+const MAX_VEHICLES = 2;
+/**
+ * How many crashes an infirmary has to be answering for before the engine
+ * comes instead of the vans.
+ *
+ * Counted over the ROOM rather than the storey, for the same reason the
+ * coalescing key is: on a plaza storey one infirmary serves a whole building,
+ * and three crashes spread over three of its floors are one emergency, not
+ * three separate ones that never reach the threshold.
+ *
+ * The count is of agents the room is ANSWERING FOR, not of beds it has filled.
+ * An agent that crashed and found the ward full is still part of what made
+ * this an emergency, and leaving it out would mean a floor stopped summoning
+ * the engine at exactly the point it got bad enough to run out of beds.
+ */
+const FIRE_ENGINE_MIN_CRASHES = 3;
+/**
+ * Below this step length playback is running fast enough that a walk-in would
+ * still be in progress when the next row is drawn, so arrivals are announced
+ * with a sparkle at the desk instead.
+ */
+const FAST_PLAYBACK_STEP_MS = 600;
+const WALK_FRAME_MS = 120;
+const TYPING_FRAME_MS = 180;
+const BACKGROUND_FRAME_MS = 400;
+const BUBBLE_BOB_MS = 500;
+const BUBBLE_HELLO_MS = 700;
+const SPARKLE_MS = 400;
+const ENVELOPE_STEP_FRACTION = 0.75;
+const ENVELOPE_MIN_MS = 350;
+const ENVELOPE_MAX_MS = 900;
+/**
+ * Peak height of an envelope's flight, in sprite pixels. Exported because the
+ * renderer has to undo it: the drawable's `y` already has this lift folded in,
+ * and adding it back is what recovers the ground line the shadow sits on.
+ */
+export const ENVELOPE_ARC_LIFT = 14;
+/**
+ * A burst of traffic in one step must not turn the floor into confetti, and an
+ * unbounded list would grow without limit while scrubbing. Oldest is dropped
+ * because the newest rows are the ones the cursor is actually about.
+ */
+const MAX_LIVE_ENVELOPES = 24;
+/** Even with motion off an arrival has to be on screen long enough to see. */
+const REDUCED_MOTION_ARRIVAL_MS = 300;
+const BUBBLE_GAP = 2;
+/** The one offset; a painter's `reserve` lettering lines up on it too. */
+const LABEL_GAP = OFFICE_LABEL_GAP;
+/**
+ * A lit screen is never still: two frames alternate while an agent is in a
+ * turn, and far more slowly while it is only working in the background.
+ *
+ * The scene owns the CLOCK and the painter owns the art, so what crosses the
+ * seam is which of the two frames a desk is on.
+ */
+const MONITOR_WORKING_FRAME_MS = 260;
+const MONITOR_BACKGROUND_FRAME_MS = 700;
+/** Slack around an envelope's box, so a moving 10x8 target stays clickable. */
+const ENVELOPE_HIT_PADDING = 2;
+/**
+ * Errands. Only a LIVE floor runs them - playback makes every agent idle
+ * between its own rows, so a break during it would fire constantly - and only
+ * after a stretch of nothing long enough that the stillness is the point. The
+ * stagger is what keeps a quiet epic from standing up in unison.
+ *
+ * The threshold is DELIBERATELY short. An office where nobody moves for half a
+ * minute reads as a screenshot, and the whole reason this exists is that agents
+ * between turns looked dead.
+ *
+ * AN IDLE AGENT IN VIEW IS NEVER AT ITS DESK. Past the threshold everyone the
+ * camera can see gets up, and errands CHAIN - one finishes, the next begins
+ * from where the last one ended - so what puts somebody back in a chair is
+ * something that actually happened to them: a status that stopped being idle,
+ * a message, a summons to reception, an archival, playback starting, going
+ * invisible - or the camera leaving, which ends a chain at its next linger.
+ * There is deliberately no COOLDOWN after one: it existed to keep the floor
+ * looking populated, and a floor of people sitting perfectly still is the
+ * thing this is for.
+ *
+ * What bounds it instead is `MAX_CONCURRENT_ERRANDS` and the rect the last
+ * frame drew, which cost the liveliness nothing because nobody is watching the
+ * agents they exclude.
+ */
+const IDLE_ERRAND_MS = 5_000;
+/**
+ * How many agents may be away from their desks at once, the walk back included.
+ *
+ * MOTION IS THE ONE COST A VIEWPORT DOES NOT BOUND. Everything else a frame
+ * does is a fact about the rect it draws, but a walker is re-pathed, advanced
+ * and re-sorted every tick whether or not anyone can see it, so a thousand-agent
+ * epic that let everybody stroll would pay for a thousand walks to draw forty.
+ *
+ * Thirty-two is deliberately well over what a viewport holds: a screen shows
+ * around forty agents at office zoom and only the idle ones walk, so the cap is
+ * a ceiling on the pathological case rather than a budget the ordinary floor
+ * spends. Paired with the rect below it, a 1,000-agent bench moves about as
+ * much as a 40-agent epic does, which is the point.
+ */
+export const MAX_CONCURRENT_ERRANDS = 32;
+const ERRAND_STAGGER_SPREAD_MS = 4_000;
+const ERRAND_LINGER_MIN_MS = 3_000;
+const ERRAND_LINGER_SPREAD_MS = 5_000;
+/** A visit is a shorter beat: two people talking, not one person standing. */
+const VISIT_LINGER_MIN_MS = 3_000;
+const VISIT_LINGER_SPREAD_MS = 2_000;
+/** A corridor spot is one leg of a stroll: stand, then move on to the next. */
+const STROLL_PAUSE_MS = 2_000;
+/** How many corridor spots one stroll takes in before it counts as done. */
+const STROLL_MIN_LEGS = 2;
+const STROLL_LEG_SPREAD = 3;
+/** Lounging on the sofa: long, because a sofa that is a pause reads as a queue. */
+const SOFA_LINGER_MIN_MS = 6_000;
+const SOFA_LINGER_SPREAD_MS = 6_000;
+/** Looking in at somebody else's room, and looking down the stairwell. */
+const PEEK_LINGER_MS = 2_000;
+const STAIRS_LINGER_MS = 3_000;
+/** A go on the arcade cabinet, and how often its screen flashes while played. */
+const ARCADE_LINGER_MIN_MS = 5_000;
+const ARCADE_LINGER_SPREAD_MS = 4_000;
+const ARCADE_SPARKLE_GAP_MS = 2_000;
+/**
+ * The two-player games: ping-pong, foosball and chess. They are the errands
+ * that need somebody OPPOSITE, so the first to arrive holds their side open for
+ * a while and gives up if nobody comes - a character standing alone at a table
+ * forever reads as a hang, not as a wait.
+ *
+ * All three share one clock and one pairing rule. What differs is only what is
+ * drawn: a ball shuttling across the table, or two people thinking.
+ */
+const GAME_ALONE_MS = 6_000;
+const GAME_PLAY_MIN_MS = 8_000;
+const GAME_PLAY_SPREAD_MS = 6_000;
+/** One stroke: the ball crosses to the other side and comes back. */
+const GAME_STROKE_MS = 500;
+/** How often the thinking bubble passes between two players at the chess table. */
+const CHESS_THINK_MS = 2_000;
+/** The kinds two agents play together, in the order the pairing bias tries them. */
+const TWO_PLAYER_KINDS: ReadonlyArray<OfficeErrandTargetKind> = [
+  "pingpong",
+  "foosball",
+  "chess",
+];
+/** A game on the console: the television flashes while somebody is on the sofa. */
+const CONSOLE_LINGER_MIN_MS = 6_000;
+const CONSOLE_LINGER_SPREAD_MS = 5_000;
+const CONSOLE_SPARKLE_GAP_MS = 2_000;
+/**
+ * A nap: long, and the sleeping bubble comes up once the agent has settled.
+ * Anything shorter reads as lying down and getting straight back up.
+ */
+const NAP_LINGER_MIN_MS = 10_000;
+const NAP_LINGER_SPREAD_MS = 8_000;
+const NAP_SETTLE_MS = 2_000;
+/**
+ * Reading in the library. The thought bubble comes and goes on its own beat -
+ * a page turned - rather than standing for the whole sit like a status would.
+ */
+const READ_LINGER_MIN_MS = 8_000;
+const READ_LINGER_SPREAD_MS = 6_000;
+const READ_THOUGHT_CYCLE_MS = 3_000;
+const READ_THOUGHT_ON_MS = 1_500;
+/** A stint on a treadmill, and how fast the walking frames alternate on it. */
+const TREADMILL_LINGER_MIN_MS = 6_000;
+const TREADMILL_LINGER_SPREAD_MS = 5_000;
+const TREADMILL_FRAME_MS = 200;
+/** Tending a plant: the can is out for the whole beat, the sparkle ends it. */
+const WATER_PLANT_MS = 3_000;
+/**
+ * A paper toss: a beat to line the shot up, then two or three throws a beat
+ * apart. The gap is longer than the flight so the ball is seen to land before
+ * the next one leaves.
+ *
+ * DARTS is the same throw against a different target, so it runs on the same
+ * clock. It takes a fixed three, and none of them miss: a dart is aimed, and a
+ * board full of floor-bound darts would read as the arc being broken.
+ */
+const BIN_STAND_MS = 1_000;
+const BIN_THROW_GAP_MS = 800;
+const BIN_MIN_THROWS = 2;
+const BIN_THROW_SPREAD = 2;
+const DARTS_THROWS = 3;
+const PAPER_BALL_FLIGHT_MS = 500;
+/** A missed ball lies where it landed rather than vanishing mid-air. */
+const PAPER_BALL_REST_MS = 3_000;
+/** Roughly three in ten throws miss - seeded, never sampled. */
+const PAPER_MISS_PERCENT = 30;
+/** Where a missed ball comes to rest, in sprite pixels beside the bin. */
+const PAPER_MISS_OFFSET = 6;
+/** The can hangs at the character's right hand, beside the body. */
+const WATERING_CAN_X_OFFSET = 10;
+const WATERING_CAN_Y_OFFSET = 14;
+/** How often two agents in one conversation swap who is talking. */
+const CHAT_ALTERNATE_MS = 900;
+/**
+ * How often a seated idle agent does something small at its own desk, and the
+ * spread over which that gap varies per agent.
+ *
+ * SHORTER THAN THE ERRAND THRESHOLD, deliberately. A desk filler used to be
+ * what the floor did while the two agents allowed out at once were away; now
+ * everybody leaves, so the only time an idle agent is in its chair at all is
+ * the few seconds between falling idle and standing up. A gap longer than that
+ * window is a feature that never fires.
+ */
+const FILLER_GAP_MIN_MS = 1_500;
+const FILLER_GAP_SPREAD_MS = 2_000;
+const FILLER_LOOK_MS = 1_500;
+const FILLER_LOOK_STEP_MS = 500;
+const FILLER_STRETCH_MS = 1_200;
+const FILLER_SPIN_STEP_MS = 120;
+const FILLER_SPIN_TURNS = 2;
+const FILLER_SPIN_FACINGS: ReadonlyArray<OfficeFacing> = [
+  "down",
+  "left",
+  "up",
+  "right",
+];
+/**
+ * How badly the errand kinds are wanted. The cafeteria outweighs the rest
+ * because it is where two agents can end up in the same place; standing at a
+ * window is scenery, and a floor of scenery is the problem this solves.
+ */
+const ERRAND_WEIGHTS: Readonly<Record<OfficeErrandTargetKind, number>> = {
+  // The rooms that only appear once a floor is big enough. A kind with no spot
+  // on THIS floor can never be drawn whatever its weight, so these only ever
+  // compete where the room they belong to actually exists.
+  foosball: 3,
+  darts: 2,
+  chess: 2,
+  console: 2,
+  nap: 2,
+  read: 2,
+  garden: 2,
+  treadmill: 1,
+  coffee: 3,
+  cafe: 3,
+  sofa: 2,
+  cooler: 2,
+  vending: 2,
+  corridor: 2,
+  visit: 2,
+  bin: 2,
+  window: 2,
+  peek: 1,
+  "water-plant": 1,
+  whiteboard: 1,
+  plant: 1,
+  stairs: 1,
+  // The game room is worth crossing the floor for, and the table most of all:
+  // it is the only errand two agents play TOGETHER.
+  pingpong: 3,
+  arcade: 2,
+};
+const ARCHIVED_ALPHA = 0.45;
+/** Spread of the per-agent animation phase offset. */
+const PHASE_SPREAD_MS = 1000;
+
+interface TransientBubble {
+  readonly sprite: OfficeSpriteName;
+  remainingMs: number;
+}
+
+/**
+ * What a character is away from its desk FOR. One field rather than several
+ * flags, because every one of these drives the same path and only one of them
+ * can be true at a time.
+ *
+ * - `arriving` - walking in from its floor's door to take a seat.
+ * - `errand-out` / `errand-wait` / `errand-return` - a break somewhere on the
+ *   floor: the cafeteria, a window, a colleague's desk.
+ * - `queue-out` / `queue-stand` - waiting at reception for a person.
+ * - `leaving` - archived; walking to the door to disappear.
+ * - `returning` - walking back to its own chair from anything else.
+ *
+ * An errand keeps its own return state rather than folding into `returning`,
+ * because the cap on how many people are away at once has to count the walk
+ * back: release the slot the moment the linger ends and the next bored agent
+ * stands up while the last one is still crossing the floor.
+ */
+type OfficeErrand =
+  | "none"
+  | "arriving"
+  | "errand-out"
+  | "errand-wait"
+  | "errand-return"
+  | "queue-out"
+  | "queue-stand"
+  | "civic-out"
+  | "leaving"
+  | "returning";
+
+/**
+ * The states that spend a slot of `MAX_CONCURRENT_ERRANDS`: the three an errand
+ * itself passes through, walk home included, as the doc above requires.
+ *
+ * The others are not errands and are not capped. `arriving` and `leaving` are
+ * an agent's own life happening, `queue-out` is a summons somebody asked for,
+ * `civic-out` is the same summons with a bed or a chair at the end of it, and
+ * `returning` is what ends every one of those - refusing any of them because
+ * the floor is busy would leave an agent standing where the scene put it.
+ *
+ * There is deliberately no `civic-stay` beside `queue-stand`. A queueing agent
+ * STANDS on a tile the plan does not call a seat, so its errand is the only
+ * record that it is there; an agent in a bed is in a seat the BOOK owns, so
+ * `effectiveSeat` answers where it is and `settleInChair` ends the walk exactly
+ * as it ends a walk to a moved desk. A second name for "sitting down" would be
+ * a second answer to a question already answered.
+ *
+ * `civic-*` belongs on this side of the line because a claim is WALKED LIKE
+ * A SUMMONS. A crashed agent that had to wait for an errand slot would sit at
+ * its desk with a crashed screen while thirty-two colleagues watered plants,
+ * and the bed it had already been given would stand empty for as long as that
+ * took. The cap is there to stop the floor looking like a fire drill; it is not
+ * a queue for the infirmary.
+ */
+const AWAY_ERRANDS: ReadonlySet<OfficeErrand> = new Set<OfficeErrand>([
+  "errand-out",
+  "errand-wait",
+  "errand-return",
+]);
+
+/**
+ * `visit` is the one errand with no tile in the floor plan: it is paid to a
+ * COLLEAGUE, whose desk moves whenever the agent set does. The layout could not
+ * carry it without turning the plan into a function of who is idle, so the
+ * scene derives it and the other kinds are read straight off the floor.
+ */
+type OfficeErrandTargetKind = OfficeErrandKind | "visit";
+
+interface OfficeErrandTarget {
+  readonly kind: OfficeErrandTargetKind;
+  /** Where the walker STANDS. The spot's `approachTile`, which it may not own. */
+  readonly tile: OfficeTilePos;
+  readonly facing: OfficeFacing;
+  /** The colleague a `visit` is paid to; `null` for every other kind. */
+  readonly partnerId: string | null;
+  /**
+   * The FIXTURE, so two agents at one table are two agents at one table.
+   * `null` for a visit and a stroll, which have no furniture between them.
+   */
+  readonly fixtureId: string | null;
+  /**
+   * What this errand acts ON - the bin a ball is thrown at, the plant that is
+   * watered, the screen that flashes - or `null` for one that acts on nothing.
+   * Carried from the spot rather than looked up a tile above, which is a fact
+   * about one floor plan rather than about errands.
+   */
+  readonly actionTile: OfficeTilePos | null;
+  /**
+   * The SEAT this errand's fixture also is, or `null` for a fixture that is
+   * nothing but furniture - which is nearly all of them.
+   *
+   * Carried from the spot for the same reason `actionTile` is, and read by the
+   * civic pass: a bench an idle agent is sitting on is a seat the waiting room
+   * would otherwise hand to a waiter, and the pass has to be able to find the
+   * sitter from the seat it just claimed.
+   */
+  readonly seatId: string | null;
+}
+
+/**
+ * Every errand target that is not a spot on the plan names no fixture - and so
+ * no seat either. A corridor tile and a colleague's desk are places to stand,
+ * not seats the book can lend.
+ */
+function derivedTarget(args: {
+  readonly kind: OfficeErrandTargetKind;
+  readonly tile: OfficeTilePos;
+  readonly facing: OfficeFacing;
+  readonly partnerId: string | null;
+}): OfficeErrandTarget {
+  return { ...args, fixtureId: null, actionTile: null, seatId: null };
+}
+
+function targetOfSpot(spot: OfficeErrandSpot): OfficeErrandTarget {
+  return {
+    kind: spot.kind,
+    tile: spot.approachTile,
+    facing: spot.facing,
+    partnerId: null,
+    fixtureId: spot.fixtureId,
+    actionTile: spot.actionTile,
+    seatId: spot.seatId,
+  };
+}
+
+/**
+ * Something small a seated idle agent does at its own desk. Errands move two
+ * people at a time and the rest of the floor would sit perfectly still without
+ * these - which is the exact complaint that started all of this.
+ */
+type OfficeFillerKind = "look" | "stretch" | "spin";
+
+interface OfficeFiller {
+  readonly kind: OfficeFillerKind;
+  elapsedMs: number;
+  readonly durationMs: number;
+}
+
+/** An envelope that landed while its receiver was away from its chair. */
+interface PendingItem {
+  readonly bubble: OfficeSpriteName;
+  readonly sparkle: boolean;
+  /**
+   * Whether the pile on the desk already counts this message: an unanswered
+   * request is in the as-of open-request count from the moment it lands, so
+   * adding it here as well would draw one message as two.
+   */
+  readonly inOpenCount: boolean;
+}
+
+interface OfficeCharacter {
+  readonly agentId: string;
+  /** Tile coordinates, fractional while walking. */
+  col: number;
+  row: number;
+  facing: OfficeFacing;
+  seated: boolean;
+  path: ReadonlyArray<OfficeTilePos>;
+  pathIndex: number;
+  walkPhaseMs: number;
+  /** Scene time spent seated and idle; drives the sleep bubble. */
+  idleMs: number;
+  bubble: TransientBubble | null;
+  sparkleMs: number;
+  errand: OfficeErrand;
+  /** Scene time left standing at the spot, while `errand` is `errand-wait`. */
+  waitMs: number;
+  /** What `waitMs` started at, so a stint can be told long from short. */
+  lingerTotalMs: number;
+  /** The reception slot this character was assigned, while it holds one. */
+  queueTile: OfficeTilePos | null;
+  /** Where this errand is headed. Held for the whole errand, return included. */
+  errandTarget: OfficeErrandTarget | null;
+  /** Tile of the last errand's destination; never chosen twice running. */
+  lastErrandKey: string | null;
+  /** Kind of the last errand; never chosen twice running either. */
+  lastErrandKind: OfficeErrandTargetKind | null;
+  /**
+   * Where this character's feet PROJECT, remembered.
+   *
+   * Culling asks for it once per character per frame over the whole
+   * population, and a projector allocates a point every call - so a still
+   * office spent a thousand allocations a frame re-deriving a thousand
+   * unchanged positions, most of them nowhere near the viewport. Kept here
+   * rather than in a scene-side map because it is invalidated by exactly two
+   * things, and one of them is this character moving.
+   */
+  foot: CachedFootPoint | null;
+  /** Legs taken of the current stroll, and how many it means to take. */
+  errandLegs: number;
+  errandLegsWanted: number;
+  /** In a rally: a partner took the other end of the table and play began. */
+  rallying: boolean;
+  /** Paper balls this character still means to throw, while it is at a bin. */
+  throwsLeft: number;
+  /** Scene time until the next throw leaves its hand. */
+  nextThrowMs: number;
+  filler: OfficeFiller | null;
+  /** Scene time until the next desk filler, once the current one is over. */
+  nextFillerMs: number;
+  /** How many fillers this character has run; part of the next one's seed. */
+  fillerCount: number;
+  /** Envelopes that landed while this character was out of its chair. */
+  pending: PendingItem[];
+  /** Running for the chair because a message is waiting. Cleared on sitting. */
+  hurrying: boolean;
+}
+
+/** A projected foot point, and the two facts that make it still true. */
+interface CachedFootPoint {
+  readonly col: number;
+  readonly row: number;
+  /** The plan it was projected under; a new layout is a new projector. */
+  readonly version: number;
+  readonly point: OfficePoint;
+}
+
+interface OfficeEnvelope {
+  readonly fromAgentId: string;
+  readonly toAgentId: string;
+  readonly pulseKind: CommGraphPulseKind;
+  /** The pair edge the message belongs to, carried through to the drawable. */
+  readonly edgeId: string;
+  elapsedMs: number;
+  readonly durationMs: number;
+}
+
+/**
+ * A vehicle on a floor's road: a SCENE-OWNED TRANSIENT ACTOR, on the envelope's
+ * pattern rather than a character's.
+ *
+ * It has no seat, no claim in the seat book, no path search and no hit region.
+ * It is not a character and nothing about the office's state depends on it -
+ * which is the point: the room receives its agent whether or not a vehicle ever
+ * came, so every gate below can drop one with nothing to repair.
+ *
+ * The route is the PLAN's (`OfficeFloor.road`), not the scene's. A vehicle
+ * interpolates along that polyline; it never asks whether a tile is walkable,
+ * because a road is drawn rather than searched.
+ */
+interface OfficeVehicle {
+  readonly kind: OfficeVehicleKind;
+  /**
+   * A CACHE of the floor the room is on - which on a plaza storey is not every
+   * rider's - and NOT the trip's identity. `civicRoomId` below is that.
+   *
+   * It is not `readonly` because a floor index is a position in the partition's
+   * host-id ordering, so a host arriving lexically earlier moves the room this
+   * trip serves to a new index while the trip is still on the road.
+   * `floorOfVehicle` validates it against the room before trusting it and
+   * re-finds it when it has moved.
+   */
+  floorIndex: number;
+  /** The room whose kerb it stops at; also the coalescing key, with `kind`. */
+  readonly civicRoomId: string;
+  /** Everyone this trip serves. Coalescing appends; it never queues a second. */
+  readonly forAgentIds: string[];
+  phase: "arrive" | "wait" | "depart";
+  /**
+   * Within the phase, not within the trip - and in `wait`, NEVER reset by a
+   * join. This is the clock the twelve second ceiling reads, and it has to be
+   * one a newcomer cannot push out or the ceiling is not a ceiling: riders
+   * arriving less than four seconds apart held the car at the kerb forever.
+   */
+  elapsedMs: number;
+  /**
+   * Time since the last rider joined, which is what the four second FLOOR
+   * reads.
+   *
+   * Two clocks because the floor and the ceiling measure different things. The
+   * floor is a courtesy to whoever just arrived - a visit that ends the
+   * instant somebody is added reads as the car ignoring them - so a join
+   * restarts it. The ceiling is a promise to the road, so nothing restarts it.
+   */
+  sinceJoinMs: number;
+  /**
+   * Which way it points, carried rather than recomputed so that a WAITING
+   * vehicle keeps the facing it arrived on - there is no segment under it to
+   * take a direction from while it stands still.
+   */
+  facing: OfficeFacing;
+}
+
+/**
+ * A crumpled page on its way to a bin. Flies the same arc an envelope does -
+ * the shape is what makes a thrown thing read as thrown - and a miss then lies
+ * on the floor beside the bin for a few seconds instead of blinking out.
+ */
+interface OfficePaperBall {
+  readonly from: OfficePoint;
+  readonly to: OfficePoint;
+  readonly missed: boolean;
+  elapsedMs: number;
+}
+
+function clamp(value: number, low: number, high: number): number {
+  return Math.min(high, Math.max(low, value));
+}
+
+function easeInOut(t: number): number {
+  return t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) * (-2 * t + 2)) / 2;
+}
+
+/** FNV-1a: a stable, dependency-free spread over agent ids. */
+function hashAgentId(agentId: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < agentId.length; index += 1) {
+    hash ^= agentId.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+/**
+ * A per-agent phase offset, so a room of typists does not hammer its keyboards
+ * in lockstep. Seeded from the id rather than from arrival order, which would
+ * make the animation depend on how the timeline was scrubbed.
+ */
+function phaseOffsetMs(agentId: string): number {
+  return hashAgentId(agentId) % PHASE_SPREAD_MS;
+}
+
+/**
+ * How much longer than the threshold THIS agent sits still before getting up.
+ * Derived from the id for the same reason the typing phase is: a floor where
+ * everyone stands at once is an animation, not an office.
+ */
+function errandStaggerMs(agentId: string): number {
+  return hashAgentId(agentId) % ERRAND_STAGGER_SPREAD_MS;
+}
+
+/**
+ * Folds a second number into an agent's hash. Every per-agent CHOICE - which
+ * spot, how long to linger, which filler comes next - is drawn from one of
+ * these rather than from a random source, so the same tick sequence replays
+ * frame for frame. Two seeds that differ by one must not land on neighbouring
+ * values either, or a per-second reseed would walk an agent along the spot list
+ * instead of moving it around the floor.
+ */
+function mixSeed(seed: number, salt: number): number {
+  let hash = (seed ^ Math.imul(salt + 0x9e3779b9, 0x85ebca6b)) >>> 0;
+  hash = Math.imul(hash ^ (hash >>> 15), 0x2c1b3c6d) >>> 0;
+  return (hash ^ (hash >>> 13)) >>> 0;
+}
+
+function tileKeyOf(tile: OfficeTilePos): string {
+  return `${tile.col},${tile.row}`;
+}
+
+/**
+ * How far it is along a tile polyline from one index to another.
+ *
+ * MANHATTAN per segment, the same measure `advanceWalk` spends its budget in,
+ * so "twice a walker's speed" means the same thing on a road as it does in a
+ * corridor. A road's tiles are normally adjacent and every segment is 1, but
+ * measuring rather than counting means a polyline that skips a tile still costs
+ * what it is actually long.
+ */
+function pathLength(
+  tiles: ReadonlyArray<OfficeTilePos>,
+  from: number,
+  to: number,
+): number {
+  const step = to >= from ? 1 : -1;
+  let total = 0;
+  for (let at = from; at !== to; at += step) {
+    const here = tiles[at];
+    const next = tiles[at + step];
+    total += Math.abs(next.col - here.col) + Math.abs(next.row - here.row);
+  }
+  return total;
+}
+
+/**
+ * Where a traveller is after `travelled` tiles from `from` towards `to`, as a
+ * fractional tile plus the segment it is on.
+ *
+ * The segment comes back with the position because the CALLER needs both and
+ * walking the polyline twice to get them separately is the kind of thing that
+ * drifts: the facing has to come from the segment the vehicle is actually on,
+ * not from one recomputed under slightly different rounding.
+ */
+function tileAlong(
+  tiles: ReadonlyArray<OfficeTilePos>,
+  from: number,
+  to: number,
+  travelled: number,
+): {
+  readonly col: number;
+  readonly row: number;
+  readonly index: number;
+  readonly step: number;
+} {
+  const step = to >= from ? 1 : -1;
+  let left = Math.max(0, travelled);
+  for (let at = from; at !== to; at += step) {
+    const here = tiles[at];
+    const next = tiles[at + step];
+    const span = Math.abs(next.col - here.col) + Math.abs(next.row - here.row);
+    if (span === 0) continue;
+    if (left < span) {
+      const fraction = left / span;
+      return {
+        col: here.col + (next.col - here.col) * fraction,
+        row: here.row + (next.row - here.row) * fraction,
+        index: at,
+        step,
+      };
+    }
+    left -= span;
+  }
+  const end = tiles[to];
+  return { col: end.col, row: end.row, index: to, step };
+}
+
+/**
+ * The same remembered tile, moved. `lastErrandKey` outlives the errand that
+ * set it - that is what it is for - so it has to follow a shift on its own
+ * rather than being re-derived from a target that may already be null.
+ */
+function slideTileKey(key: string, shift: OfficeTilePos): string {
+  const comma = key.indexOf(",");
+  if (comma < 0) return key;
+  const col = Number(key.slice(0, comma));
+  const row = Number(key.slice(comma + 1));
+  if (!Number.isFinite(col) || !Number.isFinite(row)) return key;
+  return tileKeyOf({ col: col + shift.col, row: row + shift.row });
+}
+
+/**
+ * Which way a character ends up turned once it reaches its spot. A spot's own
+ * facing looks AT the thing it names, which is what somebody walking up to it
+ * does - the sofa is the exception, because you approach one facing it and then
+ * turn round, so the room is what you end up looking at.
+ */
+function arrivalFacingOf(target: OfficeErrandTarget | null): OfficeFacing {
+  if (target === null) return "up";
+  return target.kind === "sofa" ? "down" : target.facing;
+}
+
+/** An errand two agents take TOGETHER, one on each side of the same table. */
+function isTwoPlayerKind(kind: OfficeErrandTargetKind): boolean {
+  return TWO_PLAYER_KINDS.includes(kind);
+}
+
+/**
+ * An errand taken SITTING DOWN. The spot's tile is the furniture itself for
+ * three of these - a sleeping bag, an armchair, a bench - and the sofa's is the
+ * aisle in front of it, but the character reads the same way in all of them:
+ * off its feet, and off its own chair.
+ *
+ * `seated` is deliberately still false throughout. It means "in its own chair",
+ * which is what every errand, delivery and hurry rule keys on.
+ */
+function isSeatedErrandKind(kind: OfficeErrandTargetKind): boolean {
+  return (
+    kind === "sofa" ||
+    kind === "nap" ||
+    kind === "read" ||
+    kind === "console" ||
+    kind === "garden"
+  );
+}
+
+/**
+ * Whether this errand THROWS something. A dart and a crumpled page fly the
+ * same arc at the same cadence; only what they are aimed at - which the spot
+ * itself carries - and whether a shot can miss differ.
+ */
+function targetIsThrowable(kind: OfficeErrandTargetKind): boolean {
+  return kind === "bin" || kind === "darts";
+}
+
+/**
+ * Errands whose length is part of what they ARE - a two-second glance through a
+ * doorway, three seconds of watering - or `null` for the ones a per-agent seed
+ * decides. A game's beat is fixed for a third reason: it is not how long the
+ * game lasts but how long this agent will WAIT for somebody to take the other
+ * side, and play sets its own clock the moment one does.
+ */
+function fixedLingerMsFor(kind: OfficeErrandTargetKind): number | null {
+  if (kind === "corridor") return STROLL_PAUSE_MS;
+  if (kind === "peek") return PEEK_LINGER_MS;
+  if (kind === "stairs") return STAIRS_LINGER_MS;
+  if (kind === "water-plant") return WATER_PLANT_MS;
+  if (isTwoPlayerKind(kind)) return GAME_ALONE_MS;
+  return null;
+}
+
+interface LingerRange {
+  readonly minMs: number;
+  readonly spreadMs: number;
+}
+
+/**
+ * How long a seeded stint runs. A nap outlasts a coffee for the same reason a
+ * sofa outlasts a window: what the errand is worth is how long somebody would
+ * actually stay.
+ */
+function seededLingerRangeOf(kind: OfficeErrandTargetKind): LingerRange {
+  if (kind === "arcade") {
+    return { minMs: ARCADE_LINGER_MIN_MS, spreadMs: ARCADE_LINGER_SPREAD_MS };
+  }
+  if (kind === "sofa") {
+    return { minMs: SOFA_LINGER_MIN_MS, spreadMs: SOFA_LINGER_SPREAD_MS };
+  }
+  if (kind === "visit") {
+    return { minMs: VISIT_LINGER_MIN_MS, spreadMs: VISIT_LINGER_SPREAD_MS };
+  }
+  if (kind === "nap") {
+    return { minMs: NAP_LINGER_MIN_MS, spreadMs: NAP_LINGER_SPREAD_MS };
+  }
+  if (kind === "read") {
+    return { minMs: READ_LINGER_MIN_MS, spreadMs: READ_LINGER_SPREAD_MS };
+  }
+  if (kind === "console") {
+    return { minMs: CONSOLE_LINGER_MIN_MS, spreadMs: CONSOLE_LINGER_SPREAD_MS };
+  }
+  if (kind === "treadmill") {
+    return {
+      minMs: TREADMILL_LINGER_MIN_MS,
+      spreadMs: TREADMILL_LINGER_SPREAD_MS,
+    };
+  }
+  return { minMs: ERRAND_LINGER_MIN_MS, spreadMs: ERRAND_LINGER_SPREAD_MS };
+}
+
+function areAdjacent(left: OfficeTilePos, right: OfficeTilePos): boolean {
+  return Math.abs(left.col - right.col) + Math.abs(left.row - right.row) === 1;
+}
+
+function withinTileRect(bounds: OfficeTileRect, tile: OfficeTilePos): boolean {
+  return (
+    tile.col >= bounds.col &&
+    tile.col < bounds.col + bounds.cols &&
+    tile.row >= bounds.row &&
+    tile.row < bounds.row + bounds.rows
+  );
+}
+
+/** How long a filler of this kind runs, once started. */
+function fillerDurationMs(kind: OfficeFillerKind): number {
+  if (kind === "look") return FILLER_LOOK_MS;
+  if (kind === "stretch") return FILLER_STRETCH_MS;
+  return FILLER_SPIN_STEP_MS * FILLER_SPIN_FACINGS.length * FILLER_SPIN_TURNS;
+}
+
+/**
+ * Which way a character is turned partway through a filler, and how it sits.
+ *
+ * A look ends back at the SCREEN, which is wherever this seat faces - `up` on
+ * the Floor and something else in a view whose desks are turned.
+ */
+function fillerPoseOf(
+  filler: OfficeFiller,
+  seatFacing: OfficeFacing,
+): {
+  readonly pose: OfficeCharacterPose;
+  readonly facing: OfficeFacing;
+} {
+  const elapsed = filler.elapsedMs;
+  if (filler.kind === "stretch") return { pose: "stand", facing: "down" };
+  if (filler.kind === "spin") {
+    const step = Math.floor(elapsed / FILLER_SPIN_STEP_MS);
+    return {
+      pose: "stand",
+      facing: FILLER_SPIN_FACINGS[step % FILLER_SPIN_FACINGS.length],
+    };
+  }
+  // Looking around: left, then right, then back to the screen.
+  if (elapsed < FILLER_LOOK_STEP_MS) return { pose: "stand", facing: "left" };
+  if (elapsed < FILLER_LOOK_STEP_MS * 2) {
+    return { pose: "stand", facing: "right" };
+  }
+  return { pose: "stand", facing: seatFacing };
+}
+
+/**
+ * Everything the floor plan depends on. Names and archive flags are
+ * deliberately absent: a rename must not restack the office. The HOST is not,
+ * because it decides which storey the agent lives on.
+ */
+function agentSetSignature(agents: ReadonlyArray<OfficeAgentInput>): string {
+  return agents
+    .map(
+      (agent) =>
+        `${agent.id}\u0000${agent.parentId ?? ""}\u0000${agent.createdAt}\u0000${agent.hostId ?? ""}`,
+    )
+    .sort()
+    .join("\u0001");
+}
+
+/** The names alone, so a rename is detectable without being a re-layout. */
+function agentNameSignature(agents: ReadonlyArray<OfficeAgentInput>): string {
+  return agents
+    .map((agent) => `${agent.id}\u0000${agent.name}`)
+    .sort()
+    .join("\u0001");
+}
+
+/**
+ * The same floor plan with every cabin sign, pod plate and piece of lettering
+ * re-lettered from the current agent names. Geometry is untouched, so nothing
+ * that was placed moves.
+ *
+ * The SIGNS are refreshed as well as the rooms and pods they were copied from.
+ * They are what the renderer actually draws, so re-lettering only the source
+ * would rename the room in the hover card and leave the wall saying the old
+ * name - which is the shape of bug a copied string always eventually has.
+ *
+ * SIGNS ARE THE SOURCE for a room's name, not `rootAgentId`. A room id is a
+ * key that `seat.roomId` resolves to and nothing more: a view that splits a
+ * large team across several rooms makes it up, so resolving it as an agent
+ * would silently name the wrong person - or nobody - on exactly the layouts
+ * where rooms outnumber leads. A pod's `leadAgentId` IS an agent, and stays
+ * one.
+ */
+function withRefreshedNames(
+  layout: OfficeLayout,
+  agentById: ReadonlyMap<string, OfficeAgentInput>,
+): OfficeLayout {
+  const signs = layout.signs.map((sign) => {
+    const owner = sign.ownerAgentId;
+    if (owner === null) return sign;
+    const name = agentById.get(owner)?.name;
+    if (name === undefined || name === sign.text) return sign;
+    return { ...sign, text: name };
+  });
+  const roomNames = new Map<string, string>();
+  for (const sign of signs) {
+    if (sign.kind !== "room") continue;
+    roomNames.set(tileKeyOf(sign.tile), sign.text);
+  }
+  return {
+    ...layout,
+    rooms: layout.rooms.map((room) => ({
+      ...room,
+      name: roomNames.get(tileKeyOf(room.signTile)) ?? room.name,
+      pods: room.pods.map((pod) => ({
+        ...pod,
+        name: agentById.get(pod.leadAgentId)?.name ?? pod.name,
+      })),
+    })),
+    signs,
+  };
+}
+
+function facingFor(dCol: number, dRow: number): OfficeFacing | null {
+  if (Math.abs(dCol) >= Math.abs(dRow) && dCol !== 0) {
+    return dCol > 0 ? "right" : "left";
+  }
+  if (dRow !== 0) return dRow > 0 ? "down" : "up";
+  return null;
+}
+
+function sameTile(
+  left: OfficeTilePos | null,
+  right: OfficeTilePos | null,
+): boolean {
+  if (left === null || right === null) return false;
+  return left.col === right.col && left.row === right.row;
+}
+
+/**
+ * An in-flight envelope's clickable box: its sprite, padded, so a target that
+ * is both small and moving can still be hit.
+ */
+function envelopeHitRegionsOf(
+  overlay: ReadonlyArray<OfficeDrawable>,
+): ReadonlyArray<OfficeEnvelopeHitRegion> {
+  const size = officeSpriteSize({ name: "envelope" });
+  const regions: OfficeEnvelopeHitRegion[] = [];
+  for (const drawable of overlay) {
+    if (drawable.kind !== "envelope") continue;
+    regions.push({
+      edgeId: drawable.edgeId,
+      rect: {
+        x: drawable.x - size.width / 2 - ENVELOPE_HIT_PADDING,
+        y: drawable.y - size.height / 2 - ENVELOPE_HIT_PADDING,
+        width: size.width + ENVELOPE_HIT_PADDING * 2,
+        height: size.height + ENVELOPE_HIT_PADDING * 2,
+      },
+    });
+  }
+  return regions;
+}
+
+function containsPoint(rect: OfficeRect, point: OfficePoint): boolean {
+  return (
+    point.x >= rect.x &&
+    point.x < rect.x + rect.width &&
+    point.y >= rect.y &&
+    point.y < rect.y + rect.height
+  );
+}
+
+function isCreatedPulseFor(
+  pulse: CommGraphPulse | null,
+  agentId: string,
+): boolean {
+  if (pulse === null) return false;
+  if (pulse.kind !== "edge") return false;
+  return pulse.pulseKind === "created" && pulse.toAgentId === agentId;
+}
+
+function pulseSenderId(pulse: CommGraphPulse | null): string | null {
+  if (pulse === null) return null;
+  return pulse.kind === "edge" ? pulse.fromAgentId : pulse.senderAgentId;
+}
+
+/**
+ * The fields every character starts with however it arrives, so a walk-in and a
+ * silently seated agent cannot drift apart as fields are added.
+ */
+function blankCharacter(agentId: string): OfficeCharacter {
+  return {
+    agentId,
+    col: 0,
+    row: 0,
+    facing: "up",
+    seated: true,
+    path: [],
+    pathIndex: 0,
+    walkPhaseMs: 0,
+    idleMs: 0,
+    bubble: null,
+    sparkleMs: 0,
+    errand: "none",
+    waitMs: 0,
+    lingerTotalMs: 0,
+    queueTile: null,
+    errandTarget: null,
+    lastErrandKey: null,
+    lastErrandKind: null,
+    foot: null,
+    errandLegs: 0,
+    errandLegsWanted: 0,
+    rallying: false,
+    throwsLeft: 0,
+    nextThrowMs: 0,
+    filler: null,
+    // Staggered from the id, so a room of idle agents does not stretch in unison
+    // on the very first frame they are all still.
+    nextFillerMs:
+      FILLER_GAP_MIN_MS + (hashAgentId(agentId) % FILLER_GAP_SPREAD_MS),
+    fillerCount: 0,
+    pending: [],
+    hurrying: false,
+  };
+}
+
+function seatedCharacter(agentId: string, seat: OfficeSeat): OfficeCharacter {
+  return {
+    ...blankCharacter(agentId),
+    col: seat.chairTile.col,
+    row: seat.chairTile.row,
+    // Seated means facing the screen, which the SEAT knows about and the scene
+    // does not: `up` on the Floor, and something else wherever a view turns a
+    // desk round.
+    facing: seat.facing,
+    seated: true,
+  };
+}
+
+/** A seat the PAINTER is asked about; `null` where nobody is in it. */
+interface SeatedAgent {
+  /** `null` for an unoccupied reserve, which is furniture with nobody in it. */
+  readonly agentId: string | null;
+  readonly seat: OfficeSeat;
+}
+
+/**
+ * A seat with somebody actually in it. The occupancy view rather than the paint
+ * view: every routine that asks "who is sitting where" - visits, rallies,
+ * boards - wants an agent, and an empty reserve is not an answer to that.
+ */
+interface OccupiedSeat {
+  readonly agentId: string;
+  readonly seat: OfficeSeat;
+}
+
+/** Everything that stands still, bucketed by chunk. Rebuilt per layout. */
+interface FrameChunkIndex {
+  readonly seats: ReadonlyMap<string, ReadonlyArray<OfficeSeat>>;
+  readonly spots: ReadonlyMap<string, ReadonlyArray<OfficeErrandSpot>>;
+  /**
+   * Seat ids the plan assigned to NOBODY - the spare desks a wake can claim.
+   *
+   * Read off `layout.desks` rather than off who is currently seated, because
+   * those answer different questions: a desk whose owner does not exist at the
+   * cursor is empty too, and drawing it would leak the future onto the floor.
+   * The plan's own assignment is the only thing that distinguishes "furniture
+   * nobody owns" from "somebody's desk, waiting for them".
+   */
+  readonly reserves: ReadonlySet<string>;
+}
+
+interface CachedSeatProps {
+  readonly key: string;
+  readonly drawables: ReadonlyArray<OfficeWorldDrawable>;
+}
+
+/** One painted floor and the three things that decide what it contains. */
+interface CachedFloor {
+  readonly key: string;
+  readonly drawables: ReadonlyArray<OfficeDrawable>;
+}
+
+/** The painter's declared block overhang, and the plan it was measured on. */
+interface CachedOverhang {
+  readonly version: number;
+  readonly px: number;
+}
+
+/** What a floor was asked for: the plan, the band, and the rectangle of it. */
+function floorKeyOf(
+  layoutVersion: number,
+  lod: OfficeLod,
+  tiles: OfficeTileRect,
+): string {
+  return `${layoutVersion}|${lod}|${tiles.col},${tiles.row},${tiles.cols},${tiles.rows}`;
+}
+
+function compareIdPair(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+/** One hit region with the place in the world stream it was drawn at. */
+interface DepthOrderedRegion {
+  readonly region: OfficeHitRegion;
+  readonly depth: number;
+  /** Props before actors at one depth, as `mergeByDepth` leaves them. */
+  readonly tier: 0 | 1;
+  readonly order: number;
+}
+
+function compareDepthOrder(
+  left: DepthOrderedRegion,
+  right: DepthOrderedRegion,
+): number {
+  if (left.depth !== right.depth) return left.depth - right.depth;
+  if (left.tier !== right.tier) return left.tier - right.tier;
+  return left.order - right.order;
+}
+
+/**
+ * The LAST depth each owner was drawn at. A character is a sprite plus its
+ * tag, emitted together, so one depth describes the whole of it.
+ *
+ * Deliberately NOT how a seat is read: a desk is several drawables at several
+ * depths, and see `shallowestByOwner` for the half of that which is safe to
+ * state about its whole box.
+ */
+function deepestByOwner(
+  entries: ReadonlyArray<OfficeWorldDrawable>,
+): ReadonlyMap<string, number> {
+  const deepest = new Map<string, number>();
+  for (const entry of entries) {
+    const owner = entry.ownerAgentId;
+    if (owner === null) continue;
+    const current = deepest.get(owner);
+    if (current === undefined || entry.depth > current) {
+      deepest.set(owner, entry.depth);
+    }
+  }
+  return deepest;
+}
+
+/**
+ * The FIRST depth each owner was drawn at.
+ *
+ * The depth a whole seat box may claim, because it is the only one every part
+ * of that seat is at least as deep as. Anything more is a foreground part's
+ * depth applied to ground the foreground part does not cover - which is how a
+ * desk's back used to beat a character standing over it.
+ */
+function shallowestByOwner(
+  entries: ReadonlyArray<OfficeWorldDrawable>,
+): ReadonlyMap<string, number> {
+  const shallowest = new Map<string, number>();
+  for (const entry of entries) {
+    const owner = entry.ownerAgentId;
+    if (owner === null) continue;
+    const current = shallowest.get(owner);
+    if (current === undefined || entry.depth < current) {
+      shallowest.set(owner, entry.depth);
+    }
+  }
+  return shallowest;
+}
+
+/**
+ * A drawable's own box in world pixels, or `null` where it has no extent a
+ * pointer should resolve to.
+ *
+ * Sprites are top-left anchored; clocks and logos are centred on their point.
+ * A label is lettering, an envelope carries its own regions, and a pip is the
+ * whole of an agent at a zoom where nothing is hovered.
+ */
+function drawableBox(drawable: OfficeDrawable): OfficeRect | null {
+  if (drawable.kind === "block") {
+    return {
+      x: drawable.x,
+      y: drawable.y,
+      width: drawable.width,
+      height: drawable.height,
+    };
+  }
+  if (drawable.kind === "sprite") {
+    const size = officeSpriteSize(drawable.sprite);
+    return {
+      x: drawable.x,
+      y: drawable.y,
+      width: size.width,
+      height: size.height,
+    };
+  }
+  if (drawable.kind === "clock" || drawable.kind === "logo") {
+    const size =
+      drawable.kind === "logo"
+        ? { width: OFFICE_LOGO_SIZE, height: OFFICE_LOGO_SIZE }
+        : officeSpriteSize({ name: "clock" });
+    return {
+      x: drawable.x - size.width / 2,
+      y: drawable.y - size.height / 2,
+      width: size.width,
+      height: size.height,
+    };
+  }
+  return null;
+}
+
+/** Baseline draw order: a character lower on the floor overlaps one above it. */
+function compareByDrawOrder(
+  left: OfficeCharacter,
+  right: OfficeCharacter,
+): number {
+  if (left.row !== right.row) return left.row - right.row;
+  if (left.col !== right.col) return left.col - right.col;
+  return compareIdPair(left.agentId, right.agentId);
+}
+
+/**
+ * Everything about a desk that changes what it LOOKS like, as one string.
+ *
+ * The cache this keys exists because a floor of idle agents produces the
+ * identical desk drawables on every frame, and rebuilding them is most of what
+ * a still office used to spend its frame budget on.
+ */
+function deskStateKey(state: OfficeDeskState): string {
+  return [
+    state.agentId ?? "",
+    state.name ?? "",
+    state.status,
+    state.sheeted ? "1" : "0",
+    state.openRequests,
+    state.screenFrame,
+    state.harnessId ?? "",
+    state.modelTier,
+    state.accentId ?? "",
+  ].join("|");
+}
+
+/**
+ * The actors of a frame with the vehicles interleaved among them by depth.
+ *
+ * BOTH PAINTER SHAPES ARE SERVED HERE rather than in either painter, because
+ * the answer is the same for both and neither painter knows a road exists: a
+ * world painter merges this against its props afterwards, and a layered one
+ * draws it in order. A vehicle takes the plain foot depth of the tile it is
+ * crossing, so it passes in front of the plaza it drives over and behind the
+ * building face that stands on the same row - the faces carry their foot plus
+ * a fraction exactly so they can.
+ *
+ * VEHICLES COME FIRST AT AN EXACT TIE. A tie needs identical foot y and is
+ * therefore rare, so this is a determinism rule rather than a look: at equal
+ * depth the agent paints over the vehicle, because the agent is the subject of
+ * the scene and the vehicle is the show that came for it.
+ */
+function withVehiclesByDepth(
+  actors: ReadonlyArray<OfficeWorldDrawable>,
+  vehicles: ReadonlyArray<OfficeWorldDrawable>,
+): ReadonlyArray<OfficeWorldDrawable> {
+  if (vehicles.length === 0) return actors;
+  const merged = [...vehicles, ...actors];
+  // Stable, so the vehicles-first order survives the sort at equal depth.
+  merged.sort((left, right) => left.depth - right.depth);
+  return merged;
+}
+
+/**
+ * One depth-ordered stream out of the two halves a world painter emits.
+ *
+ * Stable within a depth, and the PROPS come first at equal depth: a desk front
+ * carries its occupant's own depth plus a hair, so a painter that wants to
+ * cover a lap says so with the depth rather than relying on which array it
+ * came from.
+ */
+function mergeByDepth(
+  props: ReadonlyArray<OfficeWorldDrawable>,
+  actors: ReadonlyArray<OfficeWorldDrawable>,
+): ReadonlyArray<OfficeWorldDrawable> {
+  const merged = [...props, ...actors];
+  merged.sort((left, right) => left.depth - right.depth);
+  return merged;
+}
+
+/** The tile one step AGAINST a facing: where somebody looking that way stands. */
+function stepAgainst(tile: OfficeTilePos, facing: OfficeFacing): OfficeTilePos {
+  if (facing === "up") return { col: tile.col, row: tile.row + 1 };
+  if (facing === "down") return { col: tile.col, row: tile.row - 1 };
+  if (facing === "left") return { col: tile.col + 1, row: tile.row };
+  return { col: tile.col - 1, row: tile.row };
+}
+
+/**
+ * How solid a character is drawn.
+ *
+ * Three independent reasons to fade, multiplied rather than ranked, because
+ * they are answers to different questions: archived is "has left", cubby is
+ * "is waiting rather than working", and the SEAT's own `idleAlpha` is a view
+ * saying that a quiet occupant of this particular desk should recede - Building
+ * dims its team-room desks so a live room reads as the lit ones. `undefined`
+ * where nothing applies, so the common case emits no alpha at all.
+ */
+function characterAlpha(args: {
+  readonly archived: boolean;
+  readonly inCubby: boolean;
+  readonly seatIdle: number | null;
+}): number | undefined {
+  const { archived, inCubby, seatIdle } = args;
+  let alpha = 1;
+  if (archived) alpha *= ARCHIVED_ALPHA;
+  if (inCubby) alpha *= CUBBY_OCCUPANT_ALPHA;
+  if (seatIdle !== null) alpha *= seatIdle;
+  return alpha === 1 ? undefined : alpha;
+}
+
+const NO_AWAY_IDS: ReadonlySet<string> = new Set<string>();
+
+/** Nobody. Shared so a sync that rehomes no one allocates nothing. */
+const NO_IDS: ReadonlyArray<string> = [];
+
+/** What the engine's threshold reads when no crash is among the transitions. */
+const NO_CRASH_COUNTS: ReadonlyMap<string, number> = new Map();
+
+/** A summons that supersedes nothing, which is every one but the engine's. */
+const NO_VEHICLES: ReadonlyArray<OfficeVehicle> = [];
+
+/** Nobody spoken for, which is what a plan made from scratch is told. */
+const NO_OCCUPANCY: ReadonlyMap<string, string> = new Map();
+
+/** An office with no floor plan yet counts nothing, in either half. */
+const NO_ROOM_COUNTS: ReadonlyMap<string, number> = new Map();
+const NO_HOST_COUNTS: ReadonlyMap<string | null, number> = new Map();
+
+/**
+ * What a painter is told about a reserve seat standing empty. Shared rather
+ * than rebuilt per frame: it is the same answer for every empty seat in the
+ * office, and the seat-prop cache keys off it.
+ */
+const EMPTY_SEAT_STATE: OfficeDeskState = {
+  agentId: null,
+  name: null,
+  status: "idle",
+  sheeted: false,
+  openRequests: 0,
+  screenFrame: 0,
+  harnessId: null,
+  modelTier: "medium",
+  accentId: null,
+};
+
+/** What a scene with no layout answers with: a frame of nothing, at no size. */
+function emptyFrame(): OfficeFrame {
+  return {
+    size: { width: 0, height: 0 },
+    staticVersion: 0,
+    floor: [],
+    props: [],
+    actors: [],
+    world: null,
+    overlay: [],
+    hitRegions: [],
+    envelopeHitRegions: [],
+    awayAgentIds: NO_AWAY_IDS,
+    focus: null,
+  };
+}
+
+/** The mark an overview pip wears, so state is never colour alone. */
+function pipGlyphOf(status: OfficeAgentStatus): OfficePipGlyph {
+  if (status === "attention" || status === "failure") return "bang";
+  if (status === "awaiting") return "ring";
+  if (status === "archived") return "hollow";
+  return "none";
+}
+
+/**
+ * Every index chunk a PROJECTED box reaches.
+ *
+ * The index and the query have to live in one space, and that space is world
+ * pixels AFTER projection. Bucketing by the unprojected tile and querying by
+ * the projected viewport agrees only for the identity projector: on Campus,
+ * City, or anything else that moves an origin or skews an axis, the chunk a
+ * desk was filed under is not a chunk the viewport ever asks for, and the
+ * projected box test downstream can only reject candidates - it can never
+ * recover one whose bucket went unread.
+ *
+ * A box wider than a chunk lands in several, so both halves of the index
+ * dedupe what they hand back.
+ */
+function chunkKeysOfBox(box: OfficeRect): ReadonlyArray<string> {
+  const firstCol = Math.floor(box.x / FRAME_CHUNK_PX);
+  const lastCol = Math.floor(
+    (box.x + Math.max(0, box.width - 1)) / FRAME_CHUNK_PX,
+  );
+  const firstRow = Math.floor(box.y / FRAME_CHUNK_PX);
+  const lastRow = Math.floor(
+    (box.y + Math.max(0, box.height - 1)) / FRAME_CHUNK_PX,
+  );
+  const keys: string[] = [];
+  for (let row = firstRow; row <= lastRow; row += 1) {
+    for (let col = firstCol; col <= lastCol; col += 1) {
+      keys.push(`${col},${row}`);
+    }
+  }
+  return keys;
+}
+
+/** The archive's way in on this storey, or `null` where this storey has none. */
+function archiveDoorOn(floor: OfficeFloor): OfficeTilePos | null {
+  for (const room of floor.civic) {
+    if (room.kind === "archive") return room.doorTile;
+  }
+  return null;
+}
+
+function rectsOverlap(a: OfficeRect, b: OfficeRect): boolean {
+  return (
+    a.x < b.x + b.width &&
+    b.x < a.x + a.width &&
+    a.y < b.y + b.height &&
+    b.y < a.y + a.height
+  );
+}
+
+/** The rect grown by the cull margin on every side. */
+function grownBy(rect: OfficeRect, margin: number): OfficeRect {
+  return {
+    x: rect.x - margin,
+    y: rect.y - margin,
+    width: rect.width + margin * 2,
+    height: rect.height + margin * 2,
+  };
+}
+
+export class OfficeScene {
+  private readonly view: OfficeView;
+  /**
+   * The plan in force, or `null` until the first sync makes one.
+   *
+   * Deliberately not a plan of `[]` at construction. An empty plan is a real
+   * packing pass over a world nobody asked for - and for a view whose shape
+   * reads the viewport, it is a packing pass against a viewport that does not
+   * exist yet. The canvas does not build a scene until its inputs are ready,
+   * so the gap between here and the first sync is where nothing happens.
+   */
+  private layoutOrNull: OfficeLayout | null = null;
+  private projectorOrNull: OfficeProjector | null = null;
+  /**
+   * WHO SITS WHERE. The scene owns it and every routine that needs a seat asks
+   * it rather than reading `layout.desks`, which is only ever the plan's
+   * opening offer.
+   */
+  private readonly seats = new OfficeSeatBook();
+  private partition: OfficePopulation | null = null;
+  private activityById: ReadonlyMap<string, number> = new Map<string, number>();
+  private viewport: OfficeSize = { width: 0, height: 0 };
+  /**
+   * How far the world moved on the last plan, until somebody takes it.
+   *
+   * The scene translates its own state by the shift; the CAMERA is the
+   * renderer's, so the delta is left here to be collected once and applied
+   * there. Consumed rather than reported on the frame, because a frame is
+   * built many times per shift and would otherwise pan the camera on each.
+   */
+  private pendingShift: OfficePoint | null = null;
+  private readonly characters = new Map<string, OfficeCharacter>();
+  /**
+   * An open handover: the seat an agent has left but not yet walked out of,
+   * by the agent leaving it.
+   *
+   * A waking agent's effective seat becomes its reserve the instant it claims
+   * one, so nothing derived from the book can tell "still standing in the
+   * cubby it is leaving" from "walked away from that cubby three errands
+   * ago". This says which, opened when the claim moves an agent off its own
+   * seat and closed the first time it sits down anywhere.
+   */
+  private readonly handover = new Map<string, string>();
+  private envelopes: OfficeEnvelope[] = [];
+  private vehicles: OfficeVehicle[] = [];
+  private paperBalls: OfficePaperBall[] = [];
+  private agentById = new Map<string, OfficeAgentInput>();
+  private visibleAgentIds: ReadonlySet<string> = new Set<string>();
+  private statusById: ReadonlyMap<string, OfficeAgentStatus> = new Map<
+    string,
+    OfficeAgentStatus
+  >();
+  private openRequestsByReceiver: ReadonlyMap<string, number> = new Map<
+    string,
+    number
+  >();
+  private agentSignature: string | null = null;
+  private nameSignature = "";
+  /**
+   * WHETHER THE FEED HAS EVER SAID IT WAS DONE REPLAYING. A latch, not an
+   * edge: it is set by the first settled sync and never cleared.
+   *
+   * An explicit view draws before the feed settles - it is a drawing of the
+   * agent list, and waiting for the events left the office blank for as long
+   * as the feed was down. What it draws meanwhile is a partition of statuses
+   * that are still arriving, so nobody is busy yet: teams read cold, their
+   * members are planned into the quiet cubbies, and the rooms a live team
+   * would have had are not there. Once the feed settles, that plan draws a
+   * floor that no longer exists, and no OTHER trigger will replace it - the
+   * agent set did not change, and a status flip on its own deliberately never
+   * re-plans.
+   *
+   * So settling is a trigger of its own (see `adoptLayout`), and it fires at
+   * most ONCE per scene. A latch rather than an edge because the question is
+   * "has this office ever been planned from a settled feed", which a
+   * reconnect's second replay does not re-open: re-shuffling a settled office
+   * because the transport blinked would be the same defect in reverse. A
+   * scene whose FIRST sync is already settled needs nothing extra - its
+   * ordinary first plan is the settled one - so the latch sets and no second
+   * plan is owed.
+   */
+  private feedSettled = false;
+  private pulse: CommGraphPulse | null = null;
+  private lastPulseKey: string | null = null;
+  private playing = false;
+  private reducedMotion = false;
+  private stepMs = 0;
+  private cursorMs: number | null = null;
+  private clockMs = 0;
+  private nowMs = 0;
+  private synced = false;
+  /** Archived AS OF the cursor at the last sync; the walk-out reads changes. */
+  private archivedIds: ReadonlySet<string> = new Set<string>();
+  /**
+   * What each building's archive sign says, folded once per sync.
+   *
+   * Per sync rather than per frame because both its inputs - the partition and
+   * the statuses - move only here, and a thousand-agent epic would otherwise
+   * walk its whole membership thirty times a second to letter two signs.
+   */
+  private archivedByHost: ReadonlyMap<string | null, number> = new Map<
+    string | null,
+    number
+  >();
+  /** Archived agents whose character has already walked out; their desk is sheeted. */
+  private readonly departedIds = new Set<string>();
+  /** Agents un-archived by a scrub back, which walk in again on this sync. */
+  private readonly returningIds = new Set<string>();
+  /** Agents needing a person, in the order they were first seen needing one. */
+  private queueOrder: string[] = [];
+
+  /**
+   * Bumped on every layout replacement, and on nothing else.
+   *
+   * It is the renderer's cache key for the floor, so it has to move whenever
+   * `buildFloor` would produce something different and stay put otherwise -
+   * which is exactly the lifetime of `currentLayout`, the only thing that
+   * function reads.
+   */
+  private layoutVersion = 0;
+  /**
+   * Bumped whenever a character is ADDED or REMOVED, and on nothing else.
+   *
+   * `orderedByAgentId` sorts by identity alone, so movement cannot reorder it
+   * - only membership can. That matters because the partner lookups call it
+   * once per character per tick, which without a cache is a sort per character
+   * per tick to answer a question whose answer did not change.
+   */
+  private membershipVersion = 0;
+  private byAgentIdCache: ReadonlyArray<OfficeCharacter> | null = null;
+  private byAgentIdVersion = -1;
+  /**
+   * Seats and spots by index chunk, rebuilt once per layout.
+   *
+   * `frame` is bounded by the viewport rather than by the population, and this
+   * is what makes that true: without it, finding the forty desks on screen in
+   * a thousand-agent office is a walk over a thousand desks, thirty times a
+   * second.
+   */
+  private chunkIndex: FrameChunkIndex | null = null;
+  private chunkIndexVersion = -1;
+  /** Seat props by seat, keyed by the desk state that produced them. */
+  private readonly seatPropCache = new Map<string, CachedSeatProps>();
+  /** Spot props by approach tile, keyed by the band - a spot has no state. */
+  private readonly spotPropCache = new Map<string, CachedSeatProps>();
+  private seatPropVersion = -1;
+  /**
+   * The last floor the painter was asked for, and what it was asked for.
+   *
+   * The floor is a pure function of the layout, the band and the rectangle, and
+   * on a still office all three hold from frame to frame - so a floor of
+   * thousands of tile drawables is built once and handed back by identity,
+   * which is also what lets the renderer's own bitmap cache skip a repaint.
+   */
+  private floorCache: CachedFloor | null = null;
+  /**
+   * The painter's block overhang for the current plan, measured once.
+   *
+   * A PROPERTY OF THE LAYOUT, asked for on every overview frame. The isometric
+   * painter derives it by walking every floor, amenity and room, so asking per
+   * frame put the whole room population back in front of the floor cache -
+   * 2,505 room reads across five identical empty frames at a thousand agents,
+   * every one of them arriving at the same number. It is cached here rather
+   * than in the painter because a painter is a value, held in a registry and
+   * shared; the scene is the thing that knows when a plan has been replaced.
+   */
+  private overhangCache: CachedOverhang | null = null;
+  /**
+   * The rect the last frame drew, cull margin included, or `null` before the
+   * first one. What `updateErrandStarts` sends people walking inside.
+   *
+   * NOT dropped on suspension. It is a record of where the camera was, not
+   * derived state, and the viewport a hidden tile comes back to is the one it
+   * left - so keeping it means the first tick after a resume starts errands
+   * where they will be seen instead of anywhere at all.
+   */
+  private lastViewRect: OfficeRect | null = null;
+  /**
+   * The band the last frame was drawn at, so a dispatch can refuse at overview.
+   *
+   * `null` before the first frame, and a scene that has never drawn does not
+   * refuse - the same answer `inLastViewRect` gives for the same reason.
+   */
+  private lastLod: OfficeLod | null = null;
+
+  /**
+   * A view and, optionally, the layout to answer with until the first sync.
+   *
+   * The view is a VALUE - three pure functions and two strings - so a scene is
+   * bound to one for life and a view change is a new scene through the
+   * renderer's own unmount path. There is no view id anywhere below this line.
+   */
+  constructor(view: OfficeView, initialLayout: OfficeLayout | null) {
+    this.view = view;
+    if (initialLayout === null) return;
+    this.installLayout(initialLayout);
+  }
+
+  /** The plan in force, or `null` before the first sync has made one. */
+  layout(): OfficeLayout | null {
+    return this.layoutOrNull;
+  }
+
+  /**
+   * How big the world is, in canvas pixels - the projector's bounds, which is
+   * `frame().size` without building a frame.
+   *
+   * Answered separately because the CAMERA has to settle before the frame is
+   * built: a frame is culled to what the camera can see, so fitting the camera
+   * to a size read off that frame would fit it to the previous framing. Zero
+   * before the first plan.
+   */
+  worldSize(): OfficeSize {
+    const projector = this.projectorOrNull;
+    if (projector === null) return { width: 0, height: 0 };
+    return { width: projector.bounds.width, height: projector.bounds.height };
+  }
+
+  /**
+   * How far the world moved since the caller last asked, in world pixels, or
+   * `null` where it has not. Taken once: the renderer pans the camera back by
+   * it so a building that grew a storey does not jump on screen.
+   */
+  takeShift(): OfficePoint | null {
+    const shift = this.pendingShift;
+    this.pendingShift = null;
+    return shift;
+  }
+
+  /**
+   * Stops holding anything DERIVED. The logical state - who is where, what is
+   * in flight - stays, because that is what makes the return a single sync
+   * rather than a re-materialized floor.
+   *
+   * The scene keeps no suspended FLAG. Whether an office is off screen is the
+   * renderer's question - it owns the four signals that decide it - and a
+   * second copy here could only ever disagree with the one that matters. What
+   * `suspend` changes is what the scene is holding, nothing more.
+   */
+  suspend(): void {
+    this.byAgentIdCache = null;
+    this.byAgentIdVersion = -1;
+    this.chunkIndex = null;
+    this.chunkIndexVersion = -1;
+    this.seatPropCache.clear();
+    this.spotPropCache.clear();
+    this.seatPropVersion = -1;
+    this.floorCache = null;
+    this.overhangCache = null;
+  }
+
+  /**
+   * Back on screen: ONE sync, with whatever rows went by while it was away
+   * suppressed. Replaying them would fly a burst of envelopes across a floor
+   * nobody was watching; the input carries the state those rows led to, which
+   * is the thing actually worth showing.
+   */
+  resume(input: OfficeSceneInput): void {
+    // Adopted BEFORE the sync, so the pulse-key check inside it sees the row
+    // as already seen and `applyPulse` never fires for it.
+    this.lastPulseKey = input.pulseKey;
+    this.sync(input);
+    this.dropTransientMotion();
+  }
+
+  sync(input: OfficeSceneInput): void {
+    const firstSync = !this.synced;
+    this.synced = true;
+    this.visibleAgentIds = input.visibleAgentIds;
+    // Captured BEFORE the new map lands, because the whole of "entered" is the
+    // difference between the two.
+    //
+    // A REFERENCE, not a copy. Every producer builds a fresh map per input -
+    // `officeAgentStatuses` allocates one per call and the bench replaces its
+    // cached object wholesale - so holding the outgoing one costs nothing,
+    // while cloning would walk the population on every sync. The contract that
+    // makes it safe, and which the suites follow: NOBODY MUTATES A STATUS MAP
+    // IN PLACE between two syncs. Passing the same map twice is fine and reads
+    // as "nothing changed", which is exactly true.
+    const outgoingStatuses = this.statusById;
+    this.statusById = input.statusById;
+    this.openRequestsByReceiver = input.openRequestsByReceiver;
+    // CAPTURED BEFORE `playing` IS OVERWRITTEN, and that is not a style
+    // preference. `this.playing` is assigned on the very next line, so the
+    // natural spelling of this transition - `input.playing && !this.playing` -
+    // beside the reads below is ALWAYS FALSE, and the playback leg of the
+    // settlement would be silently dead while every test still passed.
+    const wasSuppressed = this.motionSuppressed();
+    this.playing = input.playing;
+    // Every transition is read BEFORE the new values it compares against are
+    // stored - `wasSuppressed` above the `playing` assignment, these two above
+    // theirs - and none fires on the first sync: there is nothing in flight to
+    // end, and no provisional floor to replace, since the first plan is made
+    // from whatever this input carries, settled or not.
+    const motionJustReduced = input.reducedMotion && !this.reducedMotion;
+    const rewound = this.cursorRewoundBy(input);
+    const settling = input.feedSettled && !this.feedSettled && !firstSync;
+    this.feedSettled = this.feedSettled || input.feedSettled;
+    this.reducedMotion = input.reducedMotion;
+    this.stepMs = input.stepMs;
+    this.cursorMs = input.cursorMs;
+    this.clockMs = input.clockMs;
+    this.pulse = input.pulse;
+    this.partition = input.partition;
+    // The archive's counter, taken here because this is where every part of it
+    // arrives. Not from the walk-outs: a floor opened at a cursor where
+    // three hundred records were already archived has watched nobody leave.
+    // And not from `statusById` either - that says how a desk is PAINTED, and
+    // an archived agent carrying a failure or an unanswered request is painted
+    // something else. It reads the archive moment, the same predicate
+    // `archivedAsOf` below departs a character on.
+    this.archivedByHost = officeArchivedByHost({
+      partition: input.partition,
+      agents: input.agents,
+      visibleAgentIds: input.visibleAgentIds,
+      cursorMs: input.cursorMs,
+    });
+    this.activityById = input.activityById;
+    this.viewport = input.viewport;
+    this.agentById = new Map(input.agents.map((agent) => [agent.id, agent]));
+    if (!firstSync) {
+      this.settleForStilledMotion(motionJustReduced, wasSuppressed);
+      if (rewound) this.dropTransientMotion();
+    }
+
+    const agentSignatureBefore = this.agentSignature;
+    this.adoptLayout(input.agents, settling);
+    // A NEW history source that is still behind re-arms the settle latch, so
+    // its catch-up re-plans the provisional floor it forced. Extracted so the
+    // conditions do not push `sync` over its complexity ceiling.
+    this.reArmSettleForNewHistorySource(input, firstSync, agentSignatureBefore);
+    let reclaimed: ReadonlyArray<string> = NO_IDS;
+    // A scrub back cannot replay the walks that led to today's claims, so it
+    // does not try. A SETTLE cannot trust them: a wake claim made while the
+    // feed was behind was made from a status that had not arrived yet, which
+    // is the same untrustworthy input the provisional plan was made from. Both
+    // re-derive the claims from the statuses in hand; only the scrub also
+    // forgets what is in flight.
+    if (rewound || settling) {
+      reclaimed = this.recomputeClaimsFromStatuses(input, rewound);
+    }
+    this.applyArchivalTransitions(input, firstSync);
+    this.reconcileCharacters(input, firstSync);
+    this.returningIds.clear();
+    // The claims were REPLACED above, and a character that survived
+    // reconciliation is still standing wherever the old claim put it. Nothing
+    // downstream would notice: `updateSeatClaims` compares the seats it finds
+    // after the replacement against themselves. Rehoming here is what makes
+    // painted occupancy, the effective seat and the as-of state agree, so a
+    // scrub back off a reserve ends at the cubby rather than on a seat the
+    // agent no longer holds.
+    this.rehomeCharacters(reclaimed);
+    // RECEPTION, THEN ROOMS, THEN DESKS, and the order is the contract's.
+    //
+    // The counter goes first because `attention` is the one status that still
+    // wants a person rather than a room, and both passes below have to see a
+    // queue that is already settled. The civic pass goes before the wake pass
+    // because a cubby agent that crashed needs a bed, not a reserve desk -
+    // `updateSeatClaims` already declines to claim for an agent headed to the
+    // counter, and now declines for one holding a bed or a chair too.
+    this.updateReceptionQueue();
+    this.updateCivicClaims();
+    this.updateSeatClaims();
+    // An errand ends on the sync that ends it, not on the tick after: playback
+    // starting or an agent picking work back up are both seen here first.
+    for (const character of this.characters.values()) {
+      if (!this.onCancellableErrand(character)) continue;
+      if (!this.errandMustEnd(character.agentId)) continue;
+      this.returnToDesk(character);
+    }
+    // NO CIVIC WALK SURVIVES A SUPPRESSED SYNC, whichever pass made it.
+    //
+    // The settlement at the top of this method only ever catches walks
+    // already in flight from an EARLIER sync: it runs before every pass that
+    // can create one. Each creator was therefore gated on its own, and
+    // `spawnAtDoor` was missed - it routes a readmitted agent from the door
+    // to its EFFECTIVE seat, which may be a held civic chair, and consults
+    // nothing.
+    //
+    // Stated once here instead, after the last creator that can leave a HELD
+    // CIVIC route ungated. That is the claim this placement needs, and it is
+    // narrower than "the last route builder in the method", which is not
+    // true of this line. The rest of the class, and why none of them leaves
+    // such a route behind:
+    //
+    // - `walkTo` (so `returnToDesk`) yields no path under suppression;
+    // - `startCivicWalk` seats the body with `seatInstantlyAt`;
+    // - `startQueueWalk` targets the counter, which is never a civic seat;
+    // - `startLeaving`, from `sendArchivedHome`, targets the archive door,
+    //   and the civic pass has already ended a departing agent's claim, so
+    //   by this line it is releasing or gone;
+    // - `applyPulse` runs AFTER this line and can reach `walkTo` through
+    //   `startHurry`/`returnToDesk`, but that path is itself gated, so the
+    //   later call cannot reopen what this one settled;
+    // - `startErrand` builds from ticks rather than from a sync, and a civic
+    //   holder is non-idle, so `errandMustEnd` refuses it in any case.
+    //
+    // On `motionSuppressed()` rather than on the transition into it: a sync
+    // taken IN a suppressed mode owes the same stillness as the sync that
+    // entered one.
+    //
+    // Before the dispatch below, which asks who is still on their feet - so it
+    // reads the settled floor it already sees for the two gated creators.
+    //
+    // The scope comes free from the predicate: an ordinary readmitted agent
+    // holds no civic claim, so `walkingToCivicSeat` leaves it walking in from
+    // the door exactly as before.
+    if (this.motionSuppressed()) this.settleCivicWalks();
+    // LAST, after all three passes and after the errand-end loop, because
+    // every one of them is something a dispatch reads. A police car asks who
+    // just got a queue slot, and the kerb wait asks who is still on their
+    // feet - which is only true of the agents this sync has already set
+    // walking, and only of the ones whose errand this sync did not just end.
+    // Dispatching before the loop would summon a car for an agent about to be
+    // sent back to its desk on the same sync.
+    this.updateVehicleDispatch({
+      outgoing: outgoingStatuses,
+      firstSync,
+      rewound,
+      settling,
+    });
+
+    if (input.pulseKey !== this.lastPulseKey) {
+      this.lastPulseKey = input.pulseKey;
+      // A first sync MATERIALIZES the floor as of the cursor; it does not
+      // replay the row the cursor happens to be sitting on.
+      if (!firstSync) this.applyPulse(input.pulse);
+    }
+  }
+
+  tick(dtMs: number): void {
+    if (dtMs <= 0) return;
+    this.nowMs += dtMs;
+    for (const character of this.characters.values()) {
+      this.advanceCharacter(character, dtMs);
+    }
+    this.updateErrandStarts();
+    this.advanceEnvelopes(dtMs);
+    this.advanceVehicles(dtMs);
+    this.advancePaperBalls(dtMs);
+  }
+
+  /**
+   * One frame, for one level of detail and one rectangle of world.
+   *
+   * Both arguments are load-bearing. The RECT is what makes the cost of a
+   * frame a fact about the viewport rather than about the population: nothing
+   * outside it plus the cull margin is built, hit-tested or reported away. The
+   * LOD is what the floor is asked for - a block map at overview, tiles
+   * otherwise - and at overview it is also all there is of a character: one
+   * pip carrying a state glyph, because sixteen pixels of pixel art at 0.3x is
+   * a smudge and thirty thousand of them is a smudge that costs a bitmap.
+   */
+  frame(lod: OfficeLod, view: OfficeRect): OfficeFrame {
+    const layout = this.layoutOrNull;
+    const projector = this.projectorOrNull;
+    if (layout === null || projector === null) return emptyFrame();
+    const rect = grownBy(view, OFFICE_CULL_MARGIN_PX);
+    // Remembered for the errand starts, which only send people walking where
+    // someone can see them walk; see `updateErrandStarts`.
+    this.lastViewRect = rect;
+    this.lastLod = lod;
+    const floor = this.floorIn(
+      layout,
+      officeTileRectOf({
+        projector,
+        cols: layout.cols,
+        rows: layout.rows,
+        rect,
+        // TWO DIFFERENT QUESTIONS, one per band. Above overview the bleed is
+        // about SPRITES: art anchored at a tile just outside the rect that
+        // reaches into it. At overview there are no sprites - the floor is a
+        // block map - but a block is not always drawn where its tiles are, and
+        // the painter is the only thing that knows by how much. Three of the
+        // four answer zero and pay nothing.
+        bleedPx:
+          lod === 0 ? this.blockOverhangPx(layout) : OFFICE_PROJECTION_BLEED_PX,
+      }),
+      lod,
+    );
+    // Culled ONCE and shared. The overlay reads the same characters the actors
+    // do, so a non-overview frame no longer walks the population twice.
+    const characters = this.charactersIn(rect);
+    const overlay =
+      lod === 0 ? this.buildEnvelopes() : this.buildOverlay(rect, characters);
+    const seats = this.seatsIn(rect);
+    const size: OfficeSize = {
+      width: projector.bounds.width,
+      height: projector.bounds.height,
+    };
+    if (lod === 0) {
+      return {
+        size,
+        staticVersion: this.layoutVersion,
+        floor,
+        props: [],
+        actors: this.buildPips(characters),
+        world: null,
+        overlay,
+        hitRegions: this.buildHitRegions(characters, seats),
+        envelopeHitRegions: envelopeHitRegionsOf(overlay),
+        awayAgentIds: this.awayAgentIdsAmong(characters),
+        focus: this.focusPoint(),
+      };
+    }
+    const props = this.buildSeatProps({ layout, seats, rect, lod });
+    const actors = withVehiclesByDepth(
+      this.buildActors(characters, lod),
+      this.buildVehicles(rect),
+    );
+    const layered = this.view.painter.depth === "layered";
+    return {
+      size,
+      staticVersion: this.layoutVersion,
+      floor,
+      props: layered ? props.map((entry) => entry.drawable) : [],
+      actors: layered ? actors.map((entry) => entry.drawable) : [],
+      world: layered ? null : mergeByDepth(props, actors),
+      overlay,
+      hitRegions: layered
+        ? this.buildHitRegions(characters, seats)
+        : this.worldHitRegions({ characters, seats, props, actors }),
+      envelopeHitRegions: envelopeHitRegionsOf(overlay),
+      awayAgentIds: this.awayAgentIdsAmong(characters),
+      focus: this.focusPoint(),
+    };
+  }
+
+  /**
+   * Where to point the camera for this agent: its seat's box, or its own where
+   * it is away from that seat.
+   *
+   * Answered from the seat book and the projector rather than from the last
+   * frame, so it works for an agent nowhere near the view rect - which is the
+   * only kind the directory and Find ever ask about.
+   */
+  locate(agentId: string): OfficeRect | null {
+    const projector = this.projectorOrNull;
+    if (projector === null) return null;
+    const character = this.characters.get(agentId);
+    // An agent AWAY from its chair is answered from its own box, which is the
+    // same foot-point derivation the frame drew it with - and a walker is
+    // between two tiles for most of a journey, so a tile rounded from its
+    // position would point the camera up to a tile away from the person.
+    if (character !== undefined && !character.seated) {
+      return this.characterBox(character);
+    }
+    return this.seats.locate(agentId, projector, null);
+  }
+
+  /**
+   * The hover card's "where" line: the place this agent is, in the words the
+   * floor plan uses for it.
+   *
+   * Derived from the effective seat and the character's own motion, never from
+   * a label the plan carried - a plan-only label is a string that stops being
+   * true the moment somebody walks.
+   */
+  whereabouts(agentId: string): string | null {
+    const layout = this.layoutOrNull;
+    if (layout === null) return null;
+    const character = this.characters.get(agentId);
+    if (character !== undefined && !character.seated) {
+      return this.awayWhereabouts(layout, character);
+    }
+    const seat = this.seats.effectiveSeat(agentId);
+    if (seat === null) return null;
+    if (seat.kind === "cubby") return "Quiet stack";
+    // A civic seat carries its room on itself, which is the only way to name
+    // it: `roomId` is the TEAM's room and a bed belongs to no team, and the
+    // tile lookup below would answer with whatever the plan calls the floor
+    // the infirmary happens to stand on.
+    const civic = this.civicRoomOfSeat(layout, seat);
+    if (civic !== null) return civic.name;
+    const room = this.roomOfSeat(seat);
+    if (room !== null) return room.name;
+    return this.placeNameAt(layout, seat.chairTile, seat.floorIndex);
+  }
+
+  /**
+   * WHAT THE CIVIC SIGNS COUNT right now: each room's taken seats, and each
+   * building's archived records.
+   *
+   * The scene answers it because the scene owns the seat book, and the book is
+   * the only thing that knows a bed is spoken for - a plan knows how many beds
+   * there are, and the signs have to say how many of them are somebody's.
+   * OCCUPIED is `occupant`, which is "who is in this seat", so a claim being
+   * released reads as a free bed from the moment its holder stands up rather
+   * than when it finishes walking home.
+   */
+  civicTally(): OfficeCivicTally {
+    const layout = this.layoutOrNull;
+    if (layout === null) {
+      return { occupiedByRoom: NO_ROOM_COUNTS, archivedByHost: NO_HOST_COUNTS };
+    }
+    const occupiedByRoom = new Map<string, number>();
+    for (const floor of layout.floors) {
+      for (const room of floor.civic) {
+        let taken = 0;
+        for (const seatId of room.seatIds) {
+          if (this.seats.occupant(seatId) !== null) taken += 1;
+        }
+        if (taken > 0) occupiedByRoom.set(room.civicRoomId, taken);
+      }
+    }
+    return { occupiedByRoom, archivedByHost: this.archivedByHost };
+  }
+
+  /**
+   * THE SCENE'S OWN ANIMATION CLOCK, in milliseconds since it opened.
+   *
+   * What every alternating frame in the office is phased on (`screenFrameOf`),
+   * exposed because one of them is painted from outside: a sign is lettered by
+   * the renderer, so the medbay's beacon has to read the same clock the lit
+   * monitors do or the floor would carry two notions of "now" - and this one
+   * advances with `tick`, so a suspended office does not silently blink its
+   * way through the time it spent off screen.
+   */
+  animationClockMs(): number {
+    return this.nowMs;
+  }
+
+  /** Characters win over desks: a person is the more specific target. */
+  hitTest(point: OfficePoint): string | null {
+    const layout = this.layoutOrNull;
+    if (layout === null) return null;
+    // The point plus a tile of slack: the regions are culled, so asking for a
+    // rect that could not contain the point would answer nothing.
+    const rect: OfficeRect = {
+      x: point.x - OFFICE_TILE,
+      y: point.y - OFFICE_TILE,
+      width: OFFICE_TILE * 2,
+      height: OFFICE_TILE * 2,
+    };
+    const regions = this.hitOrderedRegions({
+      layout,
+      rect,
+      characters: this.charactersIn(rect),
+      seats: this.seatsIn(rect),
+    });
+    for (const region of regions) {
+      if (containsPoint(region.rect, point)) return region.agentId;
+    }
+    return null;
+  }
+
+  /**
+   * Hit regions in the order the frame would draw them, front-most first.
+   *
+   * `hitTest` answers a POINTER, which asks the same question the eye does, so
+   * it has to be ordered the same way the frame is - and for a `world` painter
+   * that ordering is only knowable from the drawables themselves. The painter
+   * is called directly rather than through `buildSeatProps` on purpose: this
+   * runs on pointer events over two tiles of world, and routing it through the
+   * per-frame cache would evict a whole frame's worth of seats to answer one
+   * hover at a level of detail nothing is being drawn at.
+   */
+  private hitOrderedRegions(args: {
+    readonly layout: OfficeLayout;
+    readonly rect: OfficeRect;
+    readonly characters: ReadonlyArray<OfficeCharacter>;
+    readonly seats: ReadonlyArray<SeatedAgent>;
+  }): ReadonlyArray<OfficeHitRegion> {
+    const { characters, layout, seats } = args;
+    if (this.view.painter.depth === "layered") {
+      return this.buildHitRegions(characters, seats);
+    }
+    const props: OfficeWorldDrawable[] = [];
+    for (const seated of seats) {
+      props.push(
+        ...this.view.painter.seatProps(
+          layout,
+          seated.seat,
+          this.deskStateOf(seated),
+          2,
+        ),
+      );
+    }
+    return this.worldHitRegions({
+      characters,
+      seats,
+      props,
+      actors: this.buildActors(characters, 2),
+    });
+  }
+
+  /**
+   * The pair edge of the envelope under the point, topmost first - a message
+   * is a more specific target than the floor it happens to be flying over, so
+   * the canvas asks this BEFORE `hitTest`.
+   */
+  hitTestEnvelope(point: OfficePoint): string | null {
+    if (this.layoutOrNull === null) return null;
+    const regions = envelopeHitRegionsOf(this.buildEnvelopes());
+    for (let index = regions.length - 1; index >= 0; index -= 1) {
+      const region = regions[index];
+      if (containsPoint(region.rect, point)) return region.edgeId;
+    }
+    return null;
+  }
+
+  /**
+   * The plan in force.
+   *
+   * Every private routine below reads this rather than carrying a layout
+   * argument through thirty call sites. It is valid from the first sync
+   * onward, which every public entry point above has already checked - so the
+   * throw is a statement about this class's own invariant rather than a case
+   * anything downstream has to handle.
+   */
+  private get currentLayout(): OfficeLayout {
+    const layout = this.layoutOrNull;
+    if (layout === null) {
+      throw new Error("OfficeScene: no layout before the first sync");
+    }
+    return layout;
+  }
+
+  private get projector(): OfficeProjector {
+    const projector = this.projectorOrNull;
+    if (projector === null) {
+      throw new Error("OfficeScene: no projector before the first sync");
+    }
+    return projector;
+  }
+
+  /** A tile, projected. EVERY point the scene emits goes through here. */
+  private point(col: number, row: number): OfficePoint {
+    return this.projector.project(col, row);
+  }
+
+  /**
+   * WHERE A PERSON'S FEET ARE: the projected bottom centre of the tile they
+   * stand on, fractional col and row included, because a walker is between two
+   * tiles for most of its journey.
+   *
+   * Every character-relative point in the scene is derived from this one -
+   * sprite corner, hit box, name tag, bubble, envelope endpoint, world depth -
+   * rather than from the tile's top-left plus a hand-tuned offset. The offset
+   * was a fact about the identity projector: on an oblique or isometric one a
+   * tile's top-left is not above its own floor, and a sprite hung from it
+   * stands beside the person it belongs to. The foot point is the same pixel
+   * in every projection, which is why it is the one the others hang off.
+   */
+  private footPoint(col: number, row: number): OfficePoint {
+    return this.projector.project(col + 0.5, row + 1);
+  }
+
+  /**
+   * This character's projected foot point, from the cache where it still
+   * holds. The two invalidations are the character moving and the plan
+   * changing under it; nothing else can move a projected point.
+   */
+  private footOf(character: OfficeCharacter): OfficePoint {
+    const cached = character.foot;
+    if (
+      cached !== null &&
+      cached.version === this.layoutVersion &&
+      cached.col === character.col &&
+      cached.row === character.row
+    ) {
+      return cached.point;
+    }
+    const point = this.footPoint(character.col, character.row);
+    character.foot = {
+      col: character.col,
+      row: character.row,
+      version: this.layoutVersion,
+      point,
+    };
+    return point;
+  }
+
+  /** The sprite corner for a 16x20 character standing at `foot`. */
+  private spriteCornerOf(foot: OfficePoint): OfficePoint {
+    return {
+      x: foot.x - OFFICE_CHARACTER_WIDTH / 2,
+      y: foot.y - OFFICE_CHARACTER_HEIGHT,
+    };
+  }
+
+  /** Takes up a layout and the projector that goes with it, as one step. */
+  private installLayout(layout: OfficeLayout): void {
+    this.layoutOrNull = layout;
+    this.projectorOrNull = this.view.painter.projector(layout);
+    this.layoutVersion += 1;
+    this.chunkIndex = null;
+    this.chunkIndexVersion = -1;
+    this.seatPropCache.clear();
+    this.spotPropCache.clear();
+  }
+
+  // ---- Population ---------------------------------------------------- //
+
+  /**
+   * Archived AS OF THE CURSOR, which is the only reading a scrubbable floor
+   * can use: `archivedAt` is a moment on the same timeline the cursor sits on,
+   * so a record archived after the cursor is still at its desk in that view.
+   */
+  private isArchivedAsOf(agent: OfficeAgentInput): boolean {
+    return officeArchivedAsOf(agent.archivedAt, this.cursorMs);
+  }
+
+  /**
+   * Archiving is a DEPARTURE, not a state flip: the character stands, walks to
+   * its floor's door and is gone, and only then does the desk get its sheet.
+   * Scrubbing back un-archives, and the same person walks in again.
+   */
+  private applyArchivalTransitions(
+    input: OfficeSceneInput,
+    firstSync: boolean,
+  ): void {
+    const archived = new Set<string>();
+    for (const agent of input.agents) {
+      if (this.isArchivedAsOf(agent)) archived.add(agent.id);
+    }
+    // No walk on the first sync or with motion reduced: the floor is being
+    // MATERIALIZED as of the cursor, and a departure nobody saw begin is just
+    // an empty desk.
+    const instant = firstSync || input.reducedMotion;
+    this.sendArchivedHome(input, archived, instant);
+    this.readmitUnarchived(input, archived, instant);
+    // A character mid-departure whose agent is no longer archived turns
+    // around: the cursor moved back before the archival, so the walk it was
+    // performing never happened.
+    for (const character of this.characters.values()) {
+      if (character.errand !== "leaving") continue;
+      if (archived.has(character.agentId)) continue;
+      this.returnToDesk(character);
+    }
+    this.archivedIds = archived;
+  }
+
+  /** Starts the walk out, or removes the character outright when instant. */
+  private sendArchivedHome(
+    input: OfficeSceneInput,
+    archived: ReadonlySet<string>,
+    instant: boolean,
+  ): void {
+    for (const agentId of archived) {
+      if (this.departedIds.has(agentId)) continue;
+      const character = this.characters.get(agentId);
+      if (character === undefined || !input.visibleAgentIds.has(agentId)) {
+        this.departedIds.add(agentId);
+        continue;
+      }
+      if (instant) {
+        this.characters.delete(agentId);
+        this.membershipVersion += 1;
+        this.departedIds.add(agentId);
+        continue;
+      }
+      if (character.errand === "leaving") continue;
+      this.startLeaving(character);
+    }
+  }
+
+  /** Queues a walk back in for anyone the cursor has moved back before. */
+  private readmitUnarchived(
+    input: OfficeSceneInput,
+    archived: ReadonlySet<string>,
+    instant: boolean,
+  ): void {
+    for (const agentId of Array.from(this.departedIds)) {
+      if (archived.has(agentId)) continue;
+      this.departedIds.delete(agentId);
+      if (instant) continue;
+      if (!input.visibleAgentIds.has(agentId)) continue;
+      this.returningIds.add(agentId);
+    }
+  }
+
+  private reconcileCharacters(
+    input: OfficeSceneInput,
+    firstSync: boolean,
+  ): void {
+    for (const agentId of Array.from(this.characters.keys())) {
+      if (input.visibleAgentIds.has(agentId)) continue;
+      this.removeCharacter(agentId);
+    }
+    // Fast playback outruns a walk: the newcomer would still be crossing the
+    // floor when the next row is drawn, so the arrival is a sparkle instead.
+    const fastPlayback = input.playing && input.stepMs < FAST_PLAYBACK_STEP_MS;
+    for (const agent of input.agents) {
+      if (!input.visibleAgentIds.has(agent.id)) continue;
+      if (this.characters.has(agent.id)) continue;
+      if (this.departedIds.has(agent.id)) continue;
+      const seat = this.seats.effectiveSeat(agent.id);
+      if (seat === null) continue;
+      // Walking in is what a REVEAL looks like: playback advancing, the cursor
+      // resting on the very row that created this agent, or a scrub back past
+      // its archival. A hand-scrubbed jump and a live arrival while paused are
+      // not reveals - they are the floor being restated - so those seat
+      // silently.
+      const revealed =
+        this.returningIds.has(agent.id) ||
+        input.playing ||
+        isCreatedPulseFor(input.pulse, agent.id);
+      const announced = !firstSync && !input.reducedMotion && revealed;
+      if (announced && !fastPlayback) {
+        this.characters.set(agent.id, this.spawnAtDoor(agent.id, seat));
+        this.membershipVersion += 1;
+        continue;
+      }
+      const character = seatedCharacter(agent.id, seat);
+      if (announced) character.sparkleMs = SPARKLE_MS;
+      this.characters.set(agent.id, character);
+      this.membershipVersion += 1;
+    }
+  }
+
+  private removeCharacter(agentId: string): void {
+    this.characters.delete(agentId);
+    this.handover.delete(agentId);
+    this.membershipVersion += 1;
+    this.envelopes = this.envelopes.filter(
+      (envelope) =>
+        envelope.fromAgentId !== agentId && envelope.toAgentId !== agentId,
+    );
+  }
+
+  private spawnAtDoor(agentId: string, seat: OfficeSeat): OfficeCharacter {
+    const door = this.floorOfAgent(agentId).doorTile;
+    const path = findOfficePath(this.currentLayout, door, seat.chairTile);
+    if (path === null || path.length === 0) {
+      return seatedCharacter(agentId, seat);
+    }
+    return {
+      ...blankCharacter(agentId),
+      col: door.col,
+      row: door.row,
+      seated: false,
+      path,
+      errand: "arriving",
+    };
+  }
+
+  /**
+   * After a re-layout, everyone whose desk MOVED walks to the new one; everyone
+   * whose desk stayed put keeps their exact position. Comparing destinations
+   * rather than current positions is what keeps a walker that is already headed
+   * to the right chair from being restarted every re-layout.
+   *
+   * A departure and a reception queue are left alone: those are not headed for
+   * a chair at all, and their own updaters re-target them on this same sync.
+   */
+  private rehomeCharacters(moved: ReadonlyArray<string>): void {
+    for (const agentId of moved) {
+      const character = this.characters.get(agentId);
+      if (character === undefined) continue;
+      if (character.errand === "leaving") continue;
+      if (this.inReceptionQueue(character)) continue;
+      const seat = this.seats.effectiveSeat(agentId);
+      if (seat === null) continue;
+      const destination = this.destinationOf(character);
+      if (
+        destination.col === seat.chairTile.col &&
+        destination.row === seat.chairTile.row
+      ) {
+        continue;
+      }
+      this.returnToDesk(character);
+    }
+  }
+
+  private destinationOf(character: OfficeCharacter): OfficeTilePos {
+    const last = character.path.at(-1);
+    if (!character.seated && last !== undefined) return last;
+    return { col: Math.round(character.col), row: Math.round(character.row) };
+  }
+
+  private startTileOf(character: OfficeCharacter): OfficeTilePos {
+    return { col: Math.round(character.col), row: Math.round(character.row) };
+  }
+
+  /** Walks toward `goal`, or lands on it outright when there is no route. */
+  private walkTo(character: OfficeCharacter, goal: OfficeTilePos): boolean {
+    const start = this.startTileOf(character);
+    const path = this.motionSuppressed()
+      ? null
+      : findOfficePath(this.currentLayout, start, goal);
+    if (path === null || path.length === 0) {
+      character.col = goal.col;
+      character.row = goal.row;
+      character.path = [];
+      character.pathIndex = 0;
+      character.idleMs = 0;
+      return false;
+    }
+    character.col = start.col;
+    character.row = start.row;
+    character.seated = false;
+    character.path = path;
+    character.pathIndex = 0;
+    character.walkPhaseMs = 0;
+    character.idleMs = 0;
+    return true;
+  }
+
+  /**
+   * NOBODY WALKS ACROSS A FLOOR THAT IS NOT RUNNING FORWARD IN REAL TIME.
+   *
+   * Playback replays history far faster than a walk takes, a paused cursor is
+   * a still photograph of one moment, and reduced motion is the reader asking
+   * for none. In all three the contract is the same: a character that acquires
+   * a new seat is AT it, not on its way. The errand engine already gates on
+   * exactly this - `updateErrandStarts` and `advanceFiller` read it to mean
+   * "start no ambient motion" - and the seat walks read it to mean "seat
+   * instantly". One condition, named once, so the three cannot drift apart.
+   */
+  private motionSuppressed(): boolean {
+    return this.playing || this.cursorMs !== null || this.reducedMotion;
+  }
+
+  /**
+   * Seating without a walk, TILE INCLUDED.
+   *
+   * `settleInChair` answers everything about being seated except WHERE: it
+   * sets facing, `seated` and the errand fields and never touches `col`/`row`.
+   * That is right for a character the walk has already delivered, whose tile
+   * is the chair's by the time it arrives - and wrong for every instant path,
+   * where nothing moved it. `buildActors` paints `footOf(character)`, so
+   * settling without moving left the actor sitting at its desk while the book,
+   * `whereabouts` and `locate` all named the bed.
+   *
+   * `walkTo` has always done this for the rehome - its no-route branch sets
+   * the goal tile before `returnToDesk` falls through to `settleInChair`. This
+   * is that same step for the seat walks, which had no equivalent.
+   */
+  private seatInstantlyAt(character: OfficeCharacter, seat: OfficeSeat): void {
+    character.col = seat.chairTile.col;
+    character.row = seat.chairTile.row;
+    this.settleInChair(character);
+  }
+
+  /** Back to its own chair, from an errand, a queue or a moved desk. */
+  private returnToDesk(character: OfficeCharacter): void {
+    const seat = this.seats.effectiveSeat(character.agentId);
+    if (seat === null) {
+      character.errand = "none";
+      character.waitMs = 0;
+      character.queueTile = null;
+      character.errandTarget = null;
+      return;
+    }
+    const fromErrand = this.onErrand(character);
+    character.queueTile = null;
+    character.waitMs = 0;
+    character.filler = null;
+    if (this.walkTo(character, seat.chairTile)) {
+      character.errand = fromErrand ? "errand-return" : "returning";
+      return;
+    }
+    // No route, or motion is reduced: sitting down IS the return.
+    this.settleInChair(character);
+  }
+
+  /**
+   * Everything that has to be true the instant a character is back in its seat,
+   * wherever it came from: the errand released and any message that landed
+   * while it was away finally acknowledged.
+   */
+  private settleInChair(character: OfficeCharacter): void {
+    const seat = this.seats.effectiveSeat(character.agentId);
+    // The SEAT says which way its occupant looks; `up` was only ever the
+    // Floor's answer to that question.
+    character.facing = seat === null ? "up" : seat.facing;
+    character.seated = true;
+    character.path = [];
+    character.pathIndex = 0;
+    character.walkPhaseMs = 0;
+    character.idleMs = 0;
+    character.errand = "none";
+    character.waitMs = 0;
+    character.queueTile = null;
+    character.errandTarget = null;
+    character.errandLegs = 0;
+    character.throwsLeft = 0;
+    character.rallying = false;
+    // Arrived: the hurry is over because the thing it was for has happened.
+    character.hurrying = false;
+    // HOME, so a reserve it was releasing is free NOW rather than whenever the
+    // next input happens to arrive. `vacated` only acts on a claim already in
+    // `releasing`, and a releasing claim means the chair just taken is the
+    // agent's own assignment - so this cannot free a seat somebody is in.
+    this.seats.vacated(character.agentId);
+    // Wherever this chair is, the agent has arrived in one: the seat it left
+    // is nobody's silhouette any more.
+    this.handover.delete(character.agentId);
+    this.flushPending(character);
+  }
+
+  private startLeaving(character: OfficeCharacter): void {
+    const door = this.departureDoorOf(character.agentId);
+    const start = this.startTileOf(character);
+    const path = findOfficePath(this.currentLayout, start, door);
+    if (path === null || path.length === 0) {
+      this.depart(character.agentId);
+      return;
+    }
+    character.col = start.col;
+    character.row = start.row;
+    character.seated = false;
+    character.path = path;
+    character.pathIndex = 0;
+    character.walkPhaseMs = 0;
+    character.idleMs = 0;
+    character.errand = "leaving";
+    character.queueTile = null;
+    character.waitMs = 0;
+    character.hurrying = false;
+    // AND THE STROLL IT WAS ON IS OVER, which is a claim about THIS route and
+    // not about the class. There is no invariant that a route change nulls the
+    // target: of the six creators that lay a path - `spawnAtDoor`,
+    // `walkTo`, `startLeaving`, `startQueueWalk`, `startCivicWalk` and
+    // `startErrand` - `walkTo` touches it on neither exit, its caller
+    // `returnToDesk` keeps it through a successful walk BY DESIGN (see
+    // `claimedSpotKeys`), and `startErrand` sets one. What is true here is
+    // narrower: a departure is not an errand return, so the bench it strolled
+    // to is nothing it will ever reach, and a reader looking for walkers by
+    // their targets must not find this one - measured: an archived agent that
+    // had strolled to a bench was sent BACK TO ITS DESK by the bench's new
+    // claimant, replacing its walk to the door, and with no further sync the
+    // body never left.
+    character.errandTarget = null;
+  }
+
+  /**
+   * An archived agent leaves through the ARCHIVE's door: the one on its own
+   * storey where that storey has one, ELSE ANY ARCHIVE IN ITS OWN BUILDING, and
+   * through the storey's own entrance only where its building has none at all.
+   *
+   * The archive is a door with a counter rather than a room somebody sits
+   * in, so walking into it is the whole of being archived. Every view that plans
+   * no civic rooms keeps the entrance, which is what it always used.
+   *
+   * FLOOR, THEN BUILDING - the same sentence `seatPoolAdmits` reads for a civic
+   * seat, and for the same reason. `floors` is one entry per STOREY in the
+   * oblique views (Towers at 309 agents has 65 of them) and only the PLAZA
+   * storey carries civic rooms, so reading the agent's own storey alone found no
+   * archive on any other storey and fell through to that storey's stairwell
+   * lobby. Measured: in Towers an archived agent walked to (1,18) while its
+   * building's records door stood at (0,17), reachable in sixteen steps from its
+   * desk - it left by the wrong door on every storey but one, in both plazas.
+   *
+   * AND THE HOST IS A WALL, which is why this scans its own building rather than
+   * every floor: hosts are separate buildings with no walkable route between
+   * them, so the neighbour's plaza is a records door this agent could never
+   * reach. An agent whose building genuinely has no archive keeps the entrance,
+   * and a door with no route to it is `startLeaving`'s existing case - it
+   * departs where it stands rather than walking nowhere.
+   */
+  private departureDoorOf(agentId: string): OfficeTilePos {
+    const floor = this.floorOfAgent(agentId);
+    const onOwnStorey = archiveDoorOn(floor);
+    if (onOwnStorey !== null) return onOwnStorey;
+    for (const other of this.currentLayout.floors) {
+      if (other.hostId !== floor.hostId) continue;
+      const door = archiveDoorOn(other);
+      if (door !== null) return door;
+    }
+    return floor.doorTile;
+  }
+
+  private depart(agentId: string): void {
+    this.removeCharacter(agentId);
+    this.departedIds.add(agentId);
+    // GONE, so anything it was holding is free. An archived agent walks out of
+    // whatever seat it was in, reserve included, and waiting for a later sync
+    // to notice would keep a desk reserved for somebody who has left the
+    // building. `endClaim` first because the claim may still be `held`:
+    // `vacated` only releases one that is already on its way out.
+    this.seats.endClaim(agentId);
+    this.seats.vacated(agentId);
+  }
+
+  // ---- Reception ------------------------------------------------------ //
+
+  private inReceptionQueue(character: OfficeCharacter): boolean {
+    return (
+      character.errand === "queue-out" || character.errand === "queue-stand"
+    );
+  }
+
+  /**
+   * A CRASHED AGENT GOES TO THE INFIRMARY, NOT TO THE COUNTER.
+   *
+   * This read `attention || failure`, because before there was an infirmary the
+   * counter was the only place an office could send somebody who needed help.
+   * Now `failure` has somewhere of its own to be, and sending it to both would
+   * be two summonses for one agent - it would queue at reception, get a bed
+   * from `updateCivicClaims`, and walk out of the queue again on the next sync.
+   *
+   * What is left at the counter is `attention`: a person is needed, which is
+   * what a front desk is for.
+   */
+  private needsReception(agentId: string): boolean {
+    const status = this.statusOf(agentId);
+    if (status !== "attention") return false;
+    if (!this.visibleAgentIds.has(agentId)) return false;
+    if (this.archivedIds.has(agentId)) return false;
+    return this.characters.has(agentId);
+  }
+
+  /**
+   * Whoever needs a person queues at their own floor's reception, in the order
+   * they started needing one. Arrival order is kept as a list rather than
+   * re-derived, because "who got here first" is not recoverable from the
+   * statuses alone; newcomers within one sync break their tie by id so the
+   * queue is still a function of the data.
+   *
+   * A floor with more people needing help than it has standing room leaves the
+   * overflow at their desks, bubble and all - a queue that grew past the lobby
+   * would read as a crowd, and there is nowhere to put them anyway.
+   */
+  private updateReceptionQueue(): void {
+    const needy = new Set<string>();
+    for (const agentId of this.characters.keys()) {
+      if (this.needsReception(agentId)) needy.add(agentId);
+    }
+    this.queueOrder = this.queueOrder.filter((agentId) => needy.has(agentId));
+    const known = new Set(this.queueOrder);
+    const newcomers: string[] = [];
+    for (const agentId of needy) {
+      if (!known.has(agentId)) newcomers.push(agentId);
+    }
+    newcomers.sort();
+    this.queueOrder.push(...newcomers);
+
+    // Claimed by PHYSICAL TILE, not by floor and slot index.
+    //
+    // A storey does not own its reception: on Towers and Building every floor
+    // of one building derives its queue from the building's own column and
+    // plaza row, so floor 0's slot 0 and floor 1's slot 0 are the same
+    // coordinate - the same aliasing the errand-spot index already dedupes by
+    // tile. Counting per floor handed that one tile to two agents and stood
+    // them inside each other. The per-floor cursor stays, because a floor's
+    // tiles are still its own list in its own order; what is global is the
+    // claim, and `queueOrder` is already one order by arrival.
+    const slots = new Map<string, OfficeTilePos>();
+    const nextByFloor = new Map<number, number>();
+    const takenTiles = new Set<string>();
+    for (const agentId of this.queueOrder) {
+      const floorIndex = this.floorIndexOfAgent(agentId);
+      const tiles = this.currentLayout.floors[floorIndex].receptionQueueTiles;
+      let next = nextByFloor.get(floorIndex) ?? 0;
+      while (next < tiles.length && takenTiles.has(tileKeyOf(tiles[next]))) {
+        next += 1;
+      }
+      nextByFloor.set(floorIndex, next + 1);
+      if (next >= tiles.length) continue;
+      const tile = tiles[next];
+      slots.set(agentId, tile);
+      takenTiles.add(tileKeyOf(tile));
+    }
+
+    for (const character of this.characters.values()) {
+      if (character.errand === "leaving") continue;
+      const slot = slots.get(character.agentId);
+      if (slot === undefined) {
+        if (this.inReceptionQueue(character)) this.returnToDesk(character);
+        continue;
+      }
+      if (
+        this.inReceptionQueue(character) &&
+        sameTile(character.queueTile, slot)
+      ) {
+        continue;
+      }
+      this.startQueueWalk(character, slot);
+    }
+  }
+
+  private startQueueWalk(
+    character: OfficeCharacter,
+    slot: OfficeTilePos,
+  ): void {
+    const start = this.startTileOf(character);
+    const standing = (): void => {
+      character.col = slot.col;
+      character.row = slot.row;
+      // Facing the counter, which is the way a person waiting actually stands
+      // - and which way that is, is the STOREY's fact rather than the scene's.
+      character.facing = this.queueFacingOf(character.agentId);
+      character.seated = false;
+      character.path = [];
+      character.pathIndex = 0;
+      character.walkPhaseMs = 0;
+      character.idleMs = 0;
+      character.errand = "queue-stand";
+      character.queueTile = slot;
+      character.waitMs = 0;
+      character.errandTarget = null;
+      character.filler = null;
+      character.hurrying = false;
+    };
+    if (this.reducedMotion) {
+      standing();
+      return;
+    }
+    if (start.col === slot.col && start.row === slot.row) {
+      standing();
+      return;
+    }
+    const path = findOfficePath(this.currentLayout, start, slot);
+    // No route means no queue: a character is never teleported out of its
+    // chair, it simply keeps its bubble where it sits.
+    if (path === null || path.length === 0) return;
+    character.col = start.col;
+    character.row = start.row;
+    character.seated = false;
+    character.path = path;
+    character.pathIndex = 0;
+    character.walkPhaseMs = 0;
+    character.idleMs = 0;
+    character.errand = "queue-out";
+    character.queueTile = slot;
+    character.waitMs = 0;
+    character.errandTarget = null;
+    character.filler = null;
+    character.hurrying = false;
+  }
+
+  // ---- The civic layer ------------------------------------------------ //
+
+  /** Walking to a bed or a chair. Sitting down in one is not an errand. */
+  private inCivicWalk(character: OfficeCharacter): boolean {
+    return character.errand === "civic-out";
+  }
+
+  /**
+   * The civic seat this agent's STATUS asks for, or `null` for a status that
+   * asks for nothing.
+   *
+   * A crash goes to a bed, a wait goes to a chair, and `attention` is the
+   * one that still wants a person rather than a room - it queues at the counter
+   * instead, which is `needsReception`.
+   */
+  private civicWantOf(agentId: string): OfficeSeatWant | null {
+    if (!this.visibleAgentIds.has(agentId)) return null;
+    if (this.archivedIds.has(agentId)) return null;
+    const status = this.statusOf(agentId);
+    if (status === "failure") return "bed";
+    if (status === "awaiting") return "lounge";
+    return null;
+  }
+
+  /**
+   * Who gets the next free bed: the agent that has been waiting for one
+   * longest.
+   *
+   * It is a list for the same reason the reception queue is one -
+   * "who started needing this first" is not recoverable from the statuses,
+   * which say only who needs it NOW. Newcomers within a single sync break their
+   * tie by id, so the order is still a function of the data and two runs of the
+   * same history agree.
+   *
+   * KEPT PER `(host, kind)`, WHICH IS THE POOL'S OWN GRANULARITY. A queue only
+   * orders people who are competing, so its key has to match the set they
+   * compete for, and `firstFreeSeat` filters the pool by host and by want and
+   * by nothing else: storey is a PREFERENCE inside that pool ("a room of this
+   * kind on the agent's own storey if there is one, else any on its host"),
+   * never a restriction on it. Two agents on one host with one want therefore
+   * draw from the identical set of beds.
+   *
+   * This was keyed per `(floor, kind)`, which is the same thing only where
+   * every storey has its own ward - the Floor, one host and one storey, where
+   * the two keys are indistinguishable. Wherever one plaza ward serves a
+   * building, three crashers on three storeys formed three one-element queues,
+   * and `civicArrivalOrder` concatenates per-key lists in `characters` order:
+   * arrival order kept inside each key and thrown away across them, so a freed
+   * bed went to whoever sorted first in character order. Keying at the pool's
+   * granularity makes key and pool one-to-one, preserving arrival order.
+   *
+   * A FLOOR KEY IS NOT EVEN STABLE FOR ONE AGENT ACROSS ITS OWN CLAIM, which
+   * is the sharper form of the same point: `effectiveSeat` moves
+   * `floorIndexOfAgent` to the plaza the moment the agent sits, so a bedded
+   * agent's key silently migrated to the plaza's. A host key is stable by
+   * construction, because every storey of a building answers the same host.
+   */
+  private civicOrder = new Map<string, string[]>();
+
+  private civicOrderKey(agentId: string, want: OfficeSeatWant): string {
+    // The host of the storey the agent is on - which is what `owningHostOf`
+    // resolves for that agent, so the key names exactly the pool it will be
+    // served from. A real host id is never the empty string, so the `null`
+    // building cannot collide with a named one.
+    return `${this.floorOfAgent(agentId).hostId ?? ""}/${want}`;
+  }
+
+  /**
+   * WHO WANTS A ROOM, and the order in which they asked - per `(host, kind)`.
+   *
+   * "Who started needing this first" is not recoverable from the statuses,
+   * which say only who needs one now, so the order is KEPT rather than
+   * re-derived: an agent that has been waiting keeps its place, one that has
+   * stopped asking is dropped from it, and newcomers within a single sync break
+   * their tie by id so the order is still a function of the data.
+   *
+   * The whole list is built before any seat is handed out. Serving as the scan
+   * goes would let the first agent in canonical order take a bed the queue it
+   * belongs to had not been assembled for yet, which is the reception queue's
+   * own reason for the same shape.
+   *
+   * Separated from the claiming below because they answer different questions -
+   * this one is bookkeeping over statuses, that one hands out seats and starts
+   * walks - and because the pair together read past what the complexity budget
+   * allows for one method.
+   */
+  private civicArrivalOrder(): {
+    readonly wantById: ReadonlyMap<string, OfficeSeatWant>;
+    readonly served: ReadonlyArray<string>;
+  } {
+    const wantById = new Map<string, OfficeSeatWant>();
+    const needyByKey = new Map<string, Set<string>>();
+    for (const agentId of this.characters.keys()) {
+      const want = this.civicWantOf(agentId);
+      if (want === null) continue;
+      wantById.set(agentId, want);
+      const key = this.civicOrderKey(agentId, want);
+      const needy = needyByKey.get(key);
+      if (needy === undefined) needyByKey.set(key, new Set([agentId]));
+      else needy.add(agentId);
+    }
+    for (const [key, order] of Array.from(this.civicOrder)) {
+      const needy = needyByKey.get(key);
+      if (needy === undefined) {
+        this.civicOrder.delete(key);
+        continue;
+      }
+      this.civicOrder.set(
+        key,
+        order.filter((agentId) => needy.has(agentId)),
+      );
+    }
+    const served: string[] = [];
+    for (const [key, needy] of needyByKey) {
+      const order = this.civicOrder.get(key) ?? [];
+      const known = new Set(order);
+      const newcomers = Array.from(needy)
+        .filter((agentId) => !known.has(agentId))
+        .sort();
+      const next = [...order, ...newcomers];
+      this.civicOrder.set(key, next);
+      served.push(...next);
+    }
+    return { wantById, served };
+  }
+
+  /**
+   * Beds and chairs, from the statuses, once per sync.
+   *
+   * Runs BEFORE `updateSeatClaims` because a cubby agent that crashed needs a
+   * bed rather than a reserve desk, and after `updateReceptionQueue` because
+   * `attention` is the counter's and this pass must not see it.
+   */
+  private updateCivicClaims(): void {
+    const { wantById, served } = this.civicArrivalOrder();
+
+    // A status that STOPPED asking is released first, everywhere, before any
+    // seat is handed out: the bed an agent has just recovered from is a bed the
+    // next one can have on this same sync rather than the next.
+    //
+    // UNDER AN INSTANT MODE, that is - reduced motion, or any suppressed
+    // motion, where the walk home is resolved inside this pass and `vacated`
+    // runs before the allocation below. With motion on, 2b's rule holds
+    // instead: this pass only ENDS the claim, the reservation survives while
+    // the body is still in the seat, and the seat frees when the walk ends.
+    // The block at the foot of this loop says where each walk ends.
+    for (const agentId of this.seats.knownAgentIds()) {
+      // ANY held claim, not only a civic one. A cubby agent on a wake reserve
+      // that crashes holds a DESK claim of the wrong kind, and `claim` refuses
+      // a mismatch rather than overwriting it - so if this loop read civic
+      // claims alone, nothing would ever end that desk claim and the agent
+      // would sit on it wanting a bed forever. Releasing it here is the same
+      // protocol a civic holder gets: walk home, `vacated` frees the reserve on
+      // arrival, and the next sync's civic pass makes the bed claim.
+      const heldWant = this.seats.heldClaimWant(agentId);
+      if (heldWant === null) continue;
+      const want = wantById.get(agentId);
+      if (want === heldWant) continue;
+      // An ordinary wake desk belongs to the wake pass, not to this one: only
+      // an agent that WANTS a civic seat is this loop's business. Without this
+      // the release would evict every woken agent on every sync.
+      if (want === undefined && heldWant === "desk") continue;
+      this.seats.endClaim(agentId);
+      const character = this.characters.get(agentId);
+      // NOBODY LEFT TO WALK HOME, so the seat is freed HERE. An archived agent
+      // is deleted outright on a first sync or under reduced motion, and
+      // `vacated` is only ever called by a character arriving somewhere - so a
+      // claim ended for an agent that no longer exists would sit in
+      // `releasing` with nothing able to finish it, and its bed or chair would
+      // stay in `occupancy()` for the life of the scene. Measured: the seat
+      // was still held after six syncs and sixteen hundred ticks.
+      if (character === undefined) {
+        this.seats.vacated(agentId);
+        continue;
+      }
+      // THIS PASS RELEASES SEATS; IT DOES NOT CHOOSE DESTINATIONS. Two walks
+      // are already under way by the time it runs, and `returnToDesk` would
+      // overwrite either with `returning`:
+      //
+      // - a departure. `sendArchivedHome` runs before this and sets `leaving`,
+      //   so an archived lounge holder would be sent back to its desk instead
+      //   of out of the building, and would never depart.
+      // - a queue walk. `updateReceptionQueue` runs before this too, so a
+      //   civic holder that flips to `attention` would have the summons it was
+      //   just given cancelled on the same sync.
+      //
+      // Both keep their walk. The claim is ended either way, which is the part
+      // that is this pass's business, and the seat frees when the walk ends.
+      //
+      // AND THAT PROMISE HAS TO BE KEPT ON BOTH BRANCHES. `leaving` keeps it
+      // through `depart()`, which ends the claim and vacates. The queue walk
+      // ends at the counter, where nothing was freeing anything: the seat
+      // stayed in `occupancy()` for as long as the agent stood there, and a
+      // competing crasher could not have it until the attention cleared.
+      if (character.errand === "leaving") continue;
+      if (this.inReceptionQueue(character)) {
+        // ALREADY AT THE COUNTER, so the walk is over and there is no arrival
+        // left to free the seat - freed here, exactly as an absent claimant is
+        // above. Not a reduced-motion special case: `updateReceptionQueue`'s
+        // instant placement also fires with motion fully on when the agent's
+        // start tile already IS its queue slot.
+        //
+        // It cannot move into that placement, which is where it would
+        // naturally go: `updateReceptionQueue` runs BEFORE this pass, so the
+        // claim is still `held` there and `vacated` only acts on one already
+        // `releasing`.
+        if (character.errand === "queue-stand") this.seats.vacated(agentId);
+        continue;
+      }
+      this.returnToDesk(character);
+    }
+
+    for (const agentId of served) {
+      const want = wantById.get(agentId);
+      if (want === undefined) continue;
+      if (this.seats.civicClaimOf(agentId) === want) continue;
+      const character = this.characters.get(agentId);
+      if (character === undefined) continue;
+      const seat = this.seats.claim(agentId, {
+        roomId: null,
+        floorIndex: this.floorIndexOfAgent(agentId),
+        wants: want,
+        // The ward is as big as it is. An agent that finds it full keeps
+        // its desk and its glyph and stays on this list, so the next bed to
+        // come free is its rather than whoever sorts first.
+        shortfall: "none",
+      });
+      if (seat === null) continue;
+      this.startCivicWalk(character, seat);
+    }
+    // AFTER every claim this sync could make, and reading the book rather than
+    // what the loop above returned - see `yieldStrollsOnTakenSeats`. A claim
+    // rebuilt by `recomputeClaims` and seated by rehome never passes through the
+    // loop at all, and its bench needs clearing just the same.
+    this.yieldStrollsOnTakenSeats();
+  }
+
+  /**
+   * A STROLL GIVES UP A BENCH THE WAITING ROOM NEEDS.
+   *
+   * `spotSuitsAgent` already refuses to send a stroll to a bench somebody is
+   * sitting in. This is the other direction, and the two are halves of one rule:
+   * between a decorative errand and a civic claim, **the stroll is always the one
+   * that yields** - it will not take a seat somebody is in, and it gives up one
+   * somebody needs. Without this half, a bench an idle agent had strolled to was
+   * invisible to the book (`firstFreeSeat` reads assignments and claims, never
+   * errand targets), so a waiter was seated onto it and two characters sat at one
+   * tile in two poses, with the book convinced it had seated one of them.
+   *
+   * WHY THIS SIDE AND NOT THE BOOK'S. Teaching the book to skip seats an errand
+   * targets would make the waiting room quietly smaller than `civicCapacityFor`
+   * promises - a stroll could deny a crashed agent a chair - and it would put
+   * knowledge of characters into a module that deliberately has none. Evicting
+   * costs the stroller nothing it minds: it returns to its own desk, which is
+   * where `returnToDesk` was already sending it when its own status changed.
+   *
+   * And it happens HERE, in the claiming pass, not in `errandMustEnd` on the
+   * next tick. `updateCivicClaims` runs during sync, before the errand-ending
+   * loop; an eviction deferred to a tick would leave one frame - the frame a
+   * reduced-motion sync paints immediately - with both characters drawn sitting
+   * on the bench. Nothing is left to observe by the time this returns.
+   *
+   * IT ASKS THE BOOK, NOT THE PASS, and the first form of this did the opposite:
+   * it took the seat the claiming loop had just handed out and looked for a
+   * stroll on that. A sync makes claims in more than one way - `recomputeClaims`
+   * rebuilds them and rehome seats their holders before this pass runs at all,
+   * and the pass then SKIPS an agent whose claim already matches what it wants -
+   * so a bench claimed by a recompute never reached the eviction and kept its
+   * duplicate. Reading the book covers every route to a claim, including ones
+   * added later, because it asks the only question that matters: does this bench
+   * now belong to somebody else.
+   */
+  private yieldStrollsOnTakenSeats(): void {
+    for (const character of this.characters.values()) {
+      const target = character.errandTarget;
+      if (target === null || target.seatId === null) continue;
+      // ALREADY GOING HOME, AND ITS TARGET IS NOT DEBRIS. This rule reads the
+      // book, so its answer does not change while an evicted stroller walks -
+      // the bench still belongs to its claimant - and the retained target is
+      // deliberate: `claimedSpotKeys` RESERVES the spot of somebody walking back
+      // from it, so clearing it on the return would hand that spot to the next
+      // bored agent while the last one is still crossing the floor. The sweep
+      // asks the other question instead, and asking it is what makes running
+      // every sync idempotent.
+      if (this.walkingToOwnChair(character)) continue;
+      // `occupant` is the INJECTIVE reading - one agent per seat - and a held
+      // civic claim puts its holder there. A bench with only a stroller on it
+      // has no occupant at all, which is the whole defect this rule answers, so
+      // an untaken bench is correctly left alone.
+      const holder = this.seats.occupant(target.seatId);
+      if (holder === null || holder === character.agentId) continue;
+      // Not `onCancellableErrand`: the question is who is ON this bench or
+      // heading for it, and the answer is the same either way - the seat
+      // belongs to somebody else now, so this errand is over.
+      this.returnToDesk(character);
+    }
+  }
+
+  /**
+   * The walk to a bed or a chair: the reception queue's walk, ending in a SEAT.
+   *
+   * Arrival is `settleInChair`, which is what makes the pose, the facing and
+   * `seated` the seat's own answers - a bed is a seat the book owns, so there
+   * is nothing about being in one that the character has to remember itself.
+   */
+  private startCivicWalk(character: OfficeCharacter, seat: OfficeSeat): void {
+    const start = this.startTileOf(character);
+    // NO HANDOVER, deliberately: "walked like a SUMMONS" is
+    // read as a rule about the desk rather than about the walk.
+    //
+    // The handover is for a seat an agent has genuinely left for a new home -
+    // a wake taking a reserve, a re-layout moving its chair - and it works by
+    // suppressing the old seat's own props so the departing silhouette can
+    // stand in for them. A bed is not a new home: the desk is still this
+    // agent's desk, still drawn, and still showing the crashed monitor that is
+    // the whole reason it is in the infirmary. The reception queue, which is
+    // the other summons, sets no handover for exactly the same reason.
+    //
+    // Setting one here cost two visible things, both caught by cases: the
+    // crashed screen vanished from the desk the moment its owner lay down,
+    // and the desk stopped being painted at all, which the plan-perf
+    // denominator counts.
+    if (this.motionSuppressed()) {
+      this.seatInstantlyAt(character, seat);
+      return;
+    }
+    if (start.col === seat.chairTile.col && start.row === seat.chairTile.row) {
+      // Already standing on it, so there is no tile to move: this is the one
+      // branch for which a bare `settleInChair` is the whole answer.
+      this.settleInChair(character);
+      return;
+    }
+    const path = findOfficePath(this.currentLayout, start, seat.chairTile);
+    // No route means no walk, and the claim still stands: the agent is in the
+    // book's bed without having crossed the floor to it, which is the same
+    // answer `returnToDesk` gives a seat it cannot reach. It is never a
+    // teleport mid-frame - `settleInChair` puts it there in one piece.
+    if (path === null || path.length === 0) {
+      this.seatInstantlyAt(character, seat);
+      return;
+    }
+    character.col = start.col;
+    character.row = start.row;
+    character.seated = false;
+    character.path = path;
+    character.pathIndex = 0;
+    character.walkPhaseMs = 0;
+    character.idleMs = 0;
+    character.errand = "civic-out";
+    character.queueTile = null;
+    character.waitMs = 0;
+    character.errandTarget = null;
+    character.filler = null;
+    character.hurrying = false;
+  }
+
+  // ---- Pulses and envelopes ------------------------------------------ //
+
+  private applyPulse(pulse: CommGraphPulse | null): void {
+    if (pulse === null) return;
+    if (pulse.kind === "agent") {
+      // A half-edge has no second desk to fly between, so the visible agent
+      // just acknowledges the message.
+      this.showBubble(pulse.agentId, "bubble-hello", BUBBLE_HELLO_MS);
+      return;
+    }
+    if (pulse.pulseKind === "notice") {
+      // A notice travels back TO the agent that is waiting, so its `from` is
+      // the stalled side - the one that owes the answer.
+      this.showBubble(
+        pulse.fromAgentId,
+        "bubble-notice",
+        Math.max(this.stepMs, REDUCED_MOTION_ARRIVAL_MS),
+      );
+    }
+    if (!this.characters.has(pulse.fromAgentId)) return;
+    if (!this.characters.has(pulse.toAgentId)) return;
+    // The DESK sends and the desk receives, so an agent caught mid-floor does
+    // not have to be anywhere for the flight to be correct. What it does is
+    // HURRY: cancel whatever it was doing and run for its chair. Snapping it
+    // there instead - which this replaced - read as the sprite teleporting.
+    this.startHurry(pulse.fromAgentId);
+    this.startHurry(pulse.toAgentId);
+    if (this.reducedMotion) {
+      this.deliver(pulse.toAgentId, pulse.pulseKind);
+      return;
+    }
+    this.envelopes.push({
+      fromAgentId: pulse.fromAgentId,
+      toAgentId: pulse.toAgentId,
+      pulseKind: pulse.pulseKind,
+      edgeId: pulse.edgeId,
+      elapsedMs: 0,
+      durationMs: clamp(
+        this.stepMs * ENVELOPE_STEP_FRACTION,
+        ENVELOPE_MIN_MS,
+        ENVELOPE_MAX_MS,
+      ),
+    });
+    while (this.envelopes.length > MAX_LIVE_ENVELOPES) this.envelopes.shift();
+  }
+
+  /**
+   * The envelope has landed on the receiver's DESK. If its owner is in the
+   * chair, that is an acknowledgement now; if not, the message sits on the desk
+   * as one more item on the pile and is acknowledged the moment they sit.
+   *
+   * Which is what a message actually is - waiting work, not a thing that can
+   * only exist while someone is looking at it.
+   */
+  private deliver(agentId: string, pulseKind: CommGraphPulseKind): void {
+    const character = this.characters.get(agentId);
+    if (character === undefined) return;
+    const item: PendingItem = {
+      bubble: pulseKind === "notice" ? "bubble-notice" : "bubble-hello",
+      sparkle: pulseKind === "created",
+      inOpenCount: pulseKind === "request",
+    };
+    if (!character.seated) {
+      character.pending.push(item);
+      return;
+    }
+    character.bubble = { sprite: item.bubble, remainingMs: BUBBLE_HELLO_MS };
+    if (item.sparkle) character.sparkleMs = SPARKLE_MS;
+  }
+
+  /** The pile clears in one go when its owner is back; the newest is the one seen. */
+  private flushPending(character: OfficeCharacter): void {
+    const item = character.pending.at(-1);
+    if (item === undefined) return;
+    character.pending = [];
+    character.bubble = { sprite: item.bubble, remainingMs: BUBBLE_HELLO_MS };
+    if (item.sparkle) character.sparkleMs = SPARKLE_MS;
+  }
+
+  /**
+   * An agent with a message in the air, or one waiting on its desk, is in a
+   * hurry: whatever it was doing is over and it is running for its chair.
+   *
+   * A character at reception is the one exception. It is standing there because
+   * a PERSON is needed, which no envelope resolves; pulling it out of the queue
+   * to collect a message would drop its place in line.
+   */
+  private startHurry(agentId: string): void {
+    const character = this.characters.get(agentId);
+    if (character === undefined) return;
+    if (character.errand === "leaving") return;
+    if (this.inReceptionQueue(character)) return;
+    character.filler = null;
+    if (character.seated) return;
+    // A LATCH, not a window: the hurry lasts until the chair is reached, not
+    // until the envelope lands. Dropping back to a stroll partway across the
+    // floor - which is what tying it to the flight did - reads as a stutter.
+    character.hurrying = true;
+    // Already headed for the chair: a re-path would only restart the walk.
+    if (this.walkingToOwnChair(character)) return;
+    this.returnToDesk(character);
+  }
+
+  /**
+   * ALREADY WALKING TO ITS OWN CHAIR - the one state nobody may call
+   * `returnToDesk` on twice.
+   *
+   * `walkTo` starts from `startTileOf`, the ROUNDED tile, so a second call
+   * throws away the fraction of a tile the walk has earned; at three tiles a
+   * second a 100ms tick earns 0.3 of one, and a caller that runs on every sync
+   * never lets the walk finish at all. `startHurry` has kept this since it was
+   * written - "a re-path would only restart the walk" - and the bench eviction
+   * is the second caller that has to, so the three modes are named here once
+   * instead of in two lists that can drift.
+   *
+   * `arriving` sits with the two returns because it is the same walk, from the
+   * floor's door rather than from an errand.
+   */
+  private walkingToOwnChair(character: OfficeCharacter): boolean {
+    return (
+      character.errand === "arriving" ||
+      character.errand === "returning" ||
+      character.errand === "errand-return"
+    );
+  }
+
+  /**
+   * Parked in the QUIET STACK: seated in a cubby rather than at a desk.
+   *
+   * A cubby is a waiting slot, not a workstation. Its occupant is cold by
+   * definition, so it does not fidget at a desk it does not have and does not
+   * wander off for coffee - it is waiting to be woken, and waking it is what
+   * takes it to a real chair. One that is WALKING has already left the slot
+   * and is an ordinary character again.
+   */
+  private seatedInCubby(agentId: string): boolean {
+    const character = this.characters.get(agentId);
+    if (character === undefined || !character.seated) return false;
+    return this.seats.effectiveSeat(agentId)?.kind === "cubby";
+  }
+
+  /**
+   * Whether this agent is running for its chair: latched while it walks, and
+   * true for a seated one that still has a message in the air or on the desk,
+   * which is what keeps it from wandering off in the middle of a delivery.
+   */
+  private isHurrying(agentId: string): boolean {
+    const character = this.characters.get(agentId);
+    if (character !== undefined && character.hurrying) return true;
+    if (character !== undefined && character.pending.length > 0) return true;
+    for (const envelope of this.envelopes) {
+      if (envelope.fromAgentId === agentId) return true;
+      if (envelope.toAgentId === agentId) return true;
+    }
+    return false;
+  }
+
+  private showBubble(
+    agentId: string,
+    sprite: OfficeSpriteName,
+    durationMs: number,
+  ): void {
+    const character = this.characters.get(agentId);
+    if (character === undefined) return;
+    character.bubble = { sprite, remainingMs: durationMs };
+  }
+
+  /**
+   * Whether this input's cursor sits BEFORE the one last synced - a seek, a
+   * step back, or leaving live for history. That lands on a prefix in which
+   * whatever was mid-flight has not happened yet: an envelope from a later row
+   * must not keep flying over the earlier floor, let alone land there.
+   *
+   * Two rows can share a millisecond, and a step between them moves the cursor
+   * without moving `cursorMs`. The pulse key names the row, so a key change at
+   * an equal time is a move too - taken as a rewind either way, because
+   * dropping a flight the next row would restart costs nothing and keeping one
+   * from a later row costs the truth of the earlier prefix.
+   */
+  private cursorRewoundBy(input: OfficeSceneInput): boolean {
+    if (input.cursorMs === null) return false;
+    if (this.cursorMs === null) return true;
+    if (input.cursorMs < this.cursorMs) return true;
+    return (
+      input.cursorMs === this.cursorMs && input.pulseKey !== this.lastPulseKey
+    );
+  }
+
+  /**
+   * Re-arms the settle latch when a NEW history source (a host an agent just
+   * introduced) is behind. The fan-in adds the host with a null snapshot
+   * boundary, so `feedSettled` legitimately goes true -> false -> true; while
+   * it is false the new host's agents change the set and force a provisional
+   * plan from statuses still in flight. The latch, set by the earlier settle,
+   * would otherwise swallow the source's catch-up (`settling` never fires) and
+   * strand that provisional floor for the life of the mount - the set is
+   * unchanged by then and a status flip never re-plans. Clearing it here makes
+   * the catch-up count as a settle and re-plan. A RECONNECT re-replays the SAME
+   * agents (the signature does not move), so it does not re-arm and the settled
+   * floor it already drew is not reshuffled - the regression the latch prevents.
+   */
+  private reArmSettleForNewHistorySource(
+    input: OfficeSceneInput,
+    firstSync: boolean,
+    agentSignatureBefore: string | null,
+  ): void {
+    if (
+      !input.feedSettled &&
+      !firstSync &&
+      this.agentSignature !== agentSignatureBefore
+    ) {
+      this.feedSettled = false;
+    }
+  }
+
+  /**
+   * Re-plans the floor when the agent SET changed, when a seat could not be
+   * found, or when the feed has just settled under a provisional plan - and
+   * only re-letters it when only names did.
+   *
+   * A rename is the one agent change that does NOT restack the floor - a
+   * re-layout sends every errand-goer back to its chair - but the cabin signs
+   * and pod plates carry names copied at layout time, so they are rewritten
+   * in place and the floor's version moves, which is what makes the cached
+   * floor and the static layer pick the new lettering up.
+   */
+  private adoptLayout(
+    agents: ReadonlyArray<OfficeAgentInput>,
+    settling: boolean,
+  ): void {
+    const signature = agentSetSignature(agents);
+    const names = agentNameSignature(agents);
+    // THREE triggers and no others. The agent SET, as it always has been; a
+    // non-empty shortfall, because an agent the book could not seat is a
+    // question only the next plan can answer; and the feed settling under a
+    // provisional floor, once per scene, because that floor was planned from
+    // statuses that were still arriving and nothing else would ever replace
+    // it. Never a status flip on its own, a viewport change or an activity
+    // change: each of those moves lights, not desks - and the third trigger is
+    // no way back in for them, because `sync` latches it on the one transition
+    // the feed has to report and never opens it again.
+    const shortfall = this.seats.needsCapacity();
+    const replan =
+      signature !== this.agentSignature ||
+      this.layoutOrNull === null ||
+      shortfall.length > 0 ||
+      settling;
+    this.agentSignature = signature;
+    if (!replan) {
+      if (names !== this.nameSignature) {
+        const relettered = withRefreshedNames(
+          this.currentLayout,
+          this.agentById,
+        );
+        this.installLayout(relettered);
+        // The book holds the layout it last adopted, and a re-lettering is a
+        // new object with the same seats - so it takes this one up too rather
+        // than answering out of a plan that no longer exists. `"keep"`, of
+        // course: nothing moved, only the lettering changed.
+        this.seats.adopt(
+          relettered,
+          agents.map((agent) => agent.id),
+          "keep",
+        );
+      }
+      this.nameSignature = names;
+      return;
+    }
+    this.nameSignature = names;
+    // A SETTLE IS A FIRST PLAN, and every other re-plan is not. Stability is
+    // the whole job of `previous`, `occupancy` and `needsCapacity` - the
+    // contract is that a status flip planned with the previous layout
+    // preserves seats - so a settle that passed them would ask the planner to
+    // preserve the very floor it exists to discard, and the planner would
+    // oblige: the woken team's members stay in the cubbies a cold team was
+    // given, in the one room a cold team needed. Nothing is lost by discarding
+    // it. A floor planned from statuses that had not arrived is a first draft,
+    // nobody has been promised its seats, and the chip has been saying
+    // `Catching up…` over it the whole time.
+    //
+    // What that costs is a real re-layout: the seat book reports everyone the
+    // new plan seats elsewhere and `rehomeCharacters` walks them there, which
+    // is the office filling in while the chip is still up. What it does NOT
+    // cost is the camera - the settled office is the provisional one grown,
+    // not moved (measured: same projected origin, taller extent), which is the
+    // growth case the camera already handles.
+    const planned = this.view.plan({
+      agents,
+      partition: this.requirePartition(),
+      activityById: this.activityById,
+      viewport: this.viewport,
+      // THE THREE STABILITY INPUTS, and a settle passes none of them -
+      // together they are exactly a first sync's input from the settled
+      // partition. All three matter: every view has its own layer that
+      // honours what it is handed (the oblique recipe copies the previous
+      // packing's assignments and skips whoever is already placed, City
+      // honours `previous.seatIdByAgentId`, Mission control pins the previous
+      // desks), so a settle that let any one of them through would re-derive
+      // the provisional floor it exists to discard.
+      occupancy: settling ? NO_OCCUPANCY : this.seats.occupancy(),
+      needsCapacity: settling ? NO_IDS : shortfall,
+      previous: settling ? null : this.layoutOrNull,
+    });
+    // Both captured against the layout still in force: the chairs so a uniform
+    // shift can be subtracted back out below, and the projector so a growth
+    // that only moved the ORIGIN is still reported to the camera.
+    const chairsBefore = this.chairTilesOfKnown();
+    const projectorBefore = this.projectorOrNull;
+    this.installLayout(planned);
+    this.applyShift(planned.shiftFromPrevious, projectorBefore);
+    // FRESH on the settle, for the same reason the plan above was made from
+    // scratch: a book that kept its seats against a plan made without them
+    // would be the office, and the plan decoration. The quiet stack's cubby
+    // ids outlive a re-plan, so `"keep"` left agents sitting in cubbies this
+    // plan gave nobody - and the seats it did give them went unclaimed, which
+    // put their owners in the shortfall and planned the floor again on every
+    // sync after.
+    const moved = this.seats.adopt(
+      planned,
+      agents.map((agent) => agent.id),
+      settling ? "fresh" : "keep",
+    );
+    // Before reconciling, so a newly spawned walker is not immediately
+    // re-pathed to the destination it was just given. On a STABLE layout the
+    // moved set is empty by construction and this walks nobody.
+    this.rehomeCharacters(
+      this.movedBeyondShift(moved, chairsBefore, planned.shiftFromPrevious),
+    );
+  }
+
+  /**
+   * Re-derives every seat claim from the statuses in hand, and answers with
+   * whoever's effective seat that moved.
+   *
+   * `forgetInFlight` is the scrub's half and the scrub's only: transient
+   * motion is dropped on a seek, and an open handover is transient motion, so
+   * the claims are rebuilt with nothing owed. A settle keeps them - the walks
+   * on screen are real walks by real agents, and the feed catching up is no
+   * reason to cancel one mid-corridor.
+   */
+  private recomputeClaimsFromStatuses(
+    input: OfficeSceneInput,
+    forgetInFlight: boolean,
+  ): ReadonlyArray<string> {
+    const seatsBefore = this.seatIdsOfKnown();
+    if (forgetInFlight) this.handover.clear();
+    this.seats.recomputeClaims(input.statusById, this.seats.knownAgentIds());
+    return this.changedSeats(seatsBefore);
+  }
+
+  /** Every known agent's effective seat id, or `null` where it has none. */
+  private seatIdsOfKnown(): ReadonlyMap<string, string | null> {
+    const seatIds = new Map<string, string | null>();
+    for (const agentId of this.seats.knownAgentIds()) {
+      seatIds.set(agentId, this.seats.effectiveSeat(agentId)?.seatId ?? null);
+    }
+    return seatIds;
+  }
+
+  /** Whoever's effective seat is not the one they had when `before` was taken. */
+  private changedSeats(
+    before: ReadonlyMap<string, string | null>,
+  ): ReadonlyArray<string> {
+    const changed: string[] = [];
+    for (const [agentId, seatId] of before) {
+      const now = this.seats.effectiveSeat(agentId)?.seatId ?? null;
+      if (now !== seatId) changed.push(agentId);
+    }
+    return changed;
+  }
+
+  /** Every known agent's chair, as of the layout still in force. */
+  private chairTilesOfKnown(): ReadonlyMap<string, OfficeTilePos> {
+    const chairs = new Map<string, OfficeTilePos>();
+    for (const agentId of this.seats.knownAgentIds()) {
+      const seat = this.seats.effectiveSeat(agentId);
+      if (seat !== null) chairs.set(agentId, seat.chairTile);
+    }
+    return chairs;
+  }
+
+  /**
+   * Who actually moved, once the whole world's own movement is taken out.
+   *
+   * The seat book decides "moved" by comparing chair coordinates, and a uniform
+   * shift changes every one of them - so a building that merely grew a storey
+   * reports its entire population as having moved, and rehoming them cancels
+   * every errand in flight. The shift is not a move: `applyShift` has already
+   * carried each character, each path and each errand target by exactly this
+   * much, so a chair that is where it was PLUS the shift is a chair nobody
+   * needs to walk to.
+   */
+  private movedBeyondShift(
+    moved: ReadonlyArray<string>,
+    before: ReadonlyMap<string, OfficeTilePos>,
+    shift: OfficeTilePos | null,
+  ): ReadonlyArray<string> {
+    if (shift === null || (shift.col === 0 && shift.row === 0)) return moved;
+    return moved.filter((agentId) => {
+      const was = before.get(agentId);
+      const seat = this.seats.effectiveSeat(agentId);
+      if (was === undefined || seat === null) return true;
+      return (
+        seat.chairTile.col - shift.col !== was.col ||
+        seat.chairTile.row - shift.row !== was.row
+      );
+    });
+  }
+
+  /**
+   * Carry everybody, and everything they were headed for, by a whole-tile
+   * shift. Positions, paths, queue slots and errand targets all name tiles, so
+   * all of them move together or the office tears.
+   */
+  private slideCharacters(shift: OfficeTilePos): void {
+    const slide = (tile: OfficeTilePos): OfficeTilePos => ({
+      col: tile.col + shift.col,
+      row: tile.row + shift.row,
+    });
+    for (const character of this.characters.values()) {
+      character.col += shift.col;
+      character.row += shift.row;
+      character.path = character.path.map(slide);
+      if (character.queueTile !== null) {
+        character.queueTile = slide(character.queueTile);
+      }
+      // The key names a TILE, and the tile moved; a stale key would forbid an
+      // errand to a spot this agent has never been to, or allow a repeat of
+      // the one it just came back from. It is remembered ACROSS errands, so it
+      // moves whether or not one is running.
+      if (character.lastErrandKey !== null) {
+        character.lastErrandKey = slideTileKey(character.lastErrandKey, shift);
+      }
+      const target = character.errandTarget;
+      if (target === null) continue;
+      character.errandTarget = {
+        ...target,
+        tile: slide(target.tile),
+        actionTile:
+          target.actionTile === null ? null : slide(target.actionTile),
+      };
+    }
+  }
+
+  /**
+   * The whole world moved. Everything the scene holds that names a tile or a
+   * point moves with it, so a building that grew a storey does not leave its
+   * people standing where the storey used to be.
+   *
+   * The camera is the renderer's and is left for it to collect, which is what
+   * keeps the office from appearing to jump while nothing in it moved.
+   */
+  private applyShift(
+    shift: OfficeTilePos | null,
+    before: OfficeProjector | null,
+  ): void {
+    if (shift !== null && (shift.col !== 0 || shift.row !== 0)) {
+      this.slideCharacters(shift);
+    }
+    if (before === null) return;
+    // ONE delta, covering both ways the world can move under a fixed camera.
+    //
+    // A tile shift moves what is AT a projected point. An isometric plan that
+    // grows rows moves the point itself: `originX = rows * halfWidth`, so every
+    // projection slides sideways while the tiles, the seats and the ids are all
+    // exactly as they were and `shiftFromPrevious` is null. Measured as "where
+    // the old origin tile lands now, minus where it landed before", one
+    // subtraction answers a tile shift, an origin move, and both at once.
+    const from = before.project(0, 0);
+    const to = this.point(shift?.col ?? 0, shift?.row ?? 0);
+    const delta: OfficePoint = { x: to.x - from.x, y: to.y - from.y };
+    if (delta.x === 0 && delta.y === 0) return;
+    this.paperBalls = this.paperBalls.map((ball) => ({
+      ...ball,
+      from: { x: ball.from.x + delta.x, y: ball.from.y + delta.y },
+      to: { x: ball.to.x + delta.x, y: ball.to.y + delta.y },
+    }));
+    const pending = this.pendingShift;
+    this.pendingShift =
+      pending === null
+        ? delta
+        : { x: pending.x + delta.x, y: pending.y + delta.y };
+  }
+
+  private requirePartition(): OfficePopulation {
+    const partition = this.partition;
+    if (partition === null) {
+      throw new Error("OfficeScene: no partition before the first sync");
+    }
+    return partition;
+  }
+
+  /**
+   * Ends every motion in flight the way it would have ended: each envelope is
+   * delivered, each walk lands on its last tile and does what arriving there
+   * does (sit, stand at the spot, leave), and every thrown ball is gone. The
+   * floor is left in the state a full playthrough would have reached, so
+   * nothing downstream has to know the motion was cut short.
+   */
+  private settleMotion(): void {
+    for (const envelope of this.envelopes) {
+      this.deliver(envelope.toAgentId, envelope.pulseKind);
+    }
+    this.envelopes = [];
+    // Nothing to deliver: a trip is pure show. The agents it came for reach
+    // their rooms through the walk teleport below, exactly as they would have
+    // on foot, so dropping the vehicle loses information nobody was carrying.
+    this.vehicles = [];
+    this.paperBalls = [];
+    this.settleWalks(false);
+  }
+
+  /**
+   * What a mode that stills motion owes the walks already in flight.
+   *
+   * The flag governs what STARTS; what is already crossing the floor has to be
+   * told. A person who just asked for less motion should not watch the
+   * envelope and the walk they asked to skip play out for another few seconds.
+   *
+   * AND THE SAME IS TRUE OF PLAYBACK AND A PAUSED CURSOR, which is why the
+   * second trigger is the whole of `motionSuppressed()` and not reduced motion
+   * alone. The gates on `startCivicWalk` and `walkTo` only decide what BEGINS;
+   * a walker already crossing the floor when playback starts was never offered
+   * to them, so it kept walking - and "during playback and at a paused cursor
+   * nobody walks" was false for exactly that agent.
+   *
+   * `settleMotion` is the whole answer and needs no help: it puts a walker on
+   * the LAST TILE OF ITS PATH and runs the arrival branch, and for a seat walk
+   * that tile IS `seat.chairTile`, because that is what the walk pathed to.
+   * Measured against the projected chair rect - it lands on it exactly. A
+   * second instant placement beside it would be a second way to reach the same
+   * two numbers.
+   */
+  private settleForStilledMotion(
+    motionJustReduced: boolean,
+    wasSuppressed: boolean,
+  ): void {
+    if (motionJustReduced) {
+      this.settleMotion();
+      return;
+    }
+    if (this.motionSuppressed() && !wasSuppressed) this.settleCivicWalks();
+  }
+
+  /**
+   * The SEAT walks only, for a mode that suppresses motion without the reader
+   * having asked for less of it.
+   *
+   * Playback and a paused cursor owe the contract "nobody walks" for an agent
+   * the civic pass has placed: a bed or a chair is where its status says it
+   * is, and replaying an hour of history is not an hour of walking. An
+   * ordinary errand is not that - it is ambient life, and what a rewind does
+   * with one is its own business, unchanged here.
+   *
+   * Reduced motion still settles EVERYTHING through `settleMotion`, because
+   * there the reader has asked for no motion at all rather than for a
+   * different clock.
+   */
+  private settleCivicWalks(): void {
+    this.settleWalks(true);
+  }
+
+  /**
+   * Whether this walker is ON ITS WAY TO A CIVIC SEAT - by destination, not by
+   * label.
+   *
+   * `errand` says how a walk was STARTED, and two different starts reach the
+   * same place: `startCivicWalk` labels its route `civic-out`, and a REHOME to
+   * a seat the recompute just granted goes through `returnToDesk`, which
+   * labels it `returning`. Reading the label settled the first and walked
+   * straight past the second.
+   *
+   * The comparison is not a new notion of "civic walker" invented for the
+   * settle - `rehomeCharacters` already asks exactly this, `destinationOf`
+   * against `seat.chairTile`, to decide whether a moved agent is already
+   * heading for its seat. All this adds is `civicClaimOf` to say which seats
+   * count.
+   *
+   * `civicClaimOf` is HELD-only, and that is load-bearing rather than
+   * incidental: an agent whose claim has gone `releasing` is walking HOME, and
+   * settling it at the civic chair would put it back in the bed it was just
+   * released from.
+   */
+  private walkingToCivicSeat(character: OfficeCharacter): boolean {
+    if (this.seats.civicClaimOf(character.agentId) === null) return false;
+    const seat = this.seats.effectiveSeat(character.agentId);
+    if (seat === null) return false;
+    // DEFENSIVE, and measured to be so: no case reddens without this
+    // comparison, because a held civic claimant cannot today be walking
+    // anywhere else. `mayStartErrand` refuses an agent whose `errandMustEnd`
+    // is true, and that is true for every status but `idle`, while a civic
+    // want needs `failure` or `awaiting` - so a claim holder never strolls.
+    // The one other walk it could be on is the walk HOME, and that begins by
+    // ending the claim, which takes `civicClaimOf` to null above.
+    //
+    // Kept anyway, because it is what makes this predicate locally true: the
+    // alternative asks the reader to reconstruct both of those arguments from
+    // two other files before believing `civicClaimOf` alone is safe.
+    const destination = this.destinationOf(character);
+    return (
+      destination.col === seat.chairTile.col &&
+      destination.row === seat.chairTile.row
+    );
+  }
+
+  /** Teleports walkers to the end of their path and runs the arrival branch. */
+  private settleWalks(civicOnly: boolean): void {
+    for (const character of this.characters.values()) {
+      // The walking check first, so the predicate is only ever asked about a
+      // character that actually has a route left to run.
+      if (character.pathIndex >= character.path.length) continue;
+      if (civicOnly && !this.walkingToCivicSeat(character)) continue;
+      const last = character.path[character.path.length - 1];
+      character.col = last.col;
+      character.row = last.row;
+      character.pathIndex = character.path.length;
+      // A zero-length step walks nowhere and runs the arrival branch alone.
+      this.advanceWalk(character, 0);
+    }
+  }
+
+  /**
+   * Forgets every timeline-derived transient: envelopes in flight, messages
+   * waiting on desks, the bubbles and sparkles they raised. Unlike
+   * `settleMotion` nothing is delivered, because on the prefix the cursor now
+   * shows those messages have not been sent. Walks are left alone - a
+   * character's position is not a fact about the timeline.
+   */
+  private dropTransientMotion(): void {
+    this.envelopes = [];
+    // A vehicle is live-only motion as much as either of these: the road the
+    // cursor lands on is a road with nothing on it, not one carrying a trip
+    // from the present the scrub just left.
+    this.vehicles = [];
+    // Thrown balls are live-only motion too; a historical floor has none.
+    this.paperBalls = [];
+    for (const character of this.characters.values()) {
+      character.pending = [];
+      character.bubble = null;
+      character.sparkleMs = 0;
+    }
+  }
+
+  private advanceEnvelopes(dtMs: number): void {
+    if (this.envelopes.length === 0) return;
+    const live: OfficeEnvelope[] = [];
+    for (const envelope of this.envelopes) {
+      envelope.elapsedMs += dtMs;
+      if (envelope.elapsedMs < envelope.durationMs) {
+        live.push(envelope);
+        continue;
+      }
+      this.deliver(envelope.toAgentId, envelope.pulseKind);
+    }
+    this.envelopes = live;
+  }
+
+  // ---- Vehicles -------------------------------------------------------- //
+
+  /**
+   * Who gets a vehicle this sync, if anybody.
+   *
+   * THE GATES, in the order the plan states them, because the order is the
+   * rule: the four that silence the layer outright, then the viewport, then
+   * coalescing, then the cap. Each is cheaper than the one after it, and each
+   * failure is a DROP rather than a queue - the room still receives its agent,
+   * and only the show is skipped.
+   *
+   * The seed at the first sync, at a scrub and at a settle is not a gate but
+   * a definition:
+   * "entered" is a difference between two syncs, and there is no earlier sync
+   * to differ from. Without it, opening an epic that already has a flagged
+   * agent in it would summon somebody for a thing that happened yesterday.
+   */
+  private updateVehicleDispatch(args: {
+    readonly outgoing: ReadonlyMap<string, OfficeAgentStatus>;
+    readonly firstSync: boolean;
+    readonly rewound: boolean;
+    readonly settling: boolean;
+  }): void {
+    const { firstSync, outgoing, rewound, settling } = args;
+    // The seed is the RETURN, not a stored map: the next sync's outgoing
+    // statuses are this sync's incoming ones either way, so declining to
+    // dispatch here is the whole of "an agent already in `attention` when the
+    // scene opened, or when the cursor landed, did not enter anything".
+    //
+    // A SETTLE IS THE THIRD OF THESE, and for the same reason rather than a
+    // new one. The diff a settle produces is between a PROVISIONAL set of
+    // statuses and the settled set that replaced it, so the agents it reports
+    // as having entered `failure` did so while the office was showing a state
+    // that had not arrived yet. Without this, opening an epic that already
+    // holds a crashed agent would drive an ambulance the moment the feed
+    // caught up - the build seed suppresses that only until the settle lands.
+    // The claims are re-derived on this sync for the same reason (see
+    // `recomputeClaimsFromStatuses`); this is the vehicle half of it.
+    if (firstSync || rewound || settling) return;
+    // The four that silence the layer: the errand-start gates, exactly. BEFORE
+    // the transition scan, which is the only part of this that costs the
+    // population - a floor under reduced motion or mid-playback must not walk a
+    // thousand characters every sync to discover it was never going to
+    // dispatch.
+    if (this.playing || this.cursorMs !== null || this.reducedMotion) return;
+    if (this.lastLod === 0) return;
+    const entered = this.enteredStatuses(outgoing);
+    if (entered.length === 0) return;
+    // ONE PASS FOR THE WHOLE SYNC, and only when a crash is among the
+    // transitions. The engine's trigger is a fact about a ROOM rather than
+    // about the agent that tripped it, so computing it inside the loop would
+    // walk the population once per crash - which is quadratic in exactly the
+    // case the engine exists for, a floor crashing all at once.
+    const crashes = entered.some(
+      (agentId) => this.statusById.get(agentId) === "failure",
+    )
+      ? this.crashesByInfirmary()
+      : NO_CRASH_COUNTS;
+    // THE CAP IS ENFORCED IN `summon`, NOT HERE. Stopping the scan the moment
+    // the road is full would be the cheaper loop and the wrong one: a crash
+    // that trips the engine's threshold has to be allowed to REPLACE this
+    // room's ambulance, and a full road is exactly the state it most needs to
+    // do that from. Bailing out here would make the replacement unreachable in
+    // the one case it exists for.
+    //
+    // What a full road looks like is this room's OWN van plus one other
+    // vehicle - a van for a different infirmary, or a police car. It is never
+    // two van trips for this room THAT CAN STILL TAKE A RIDER: coalescing keys
+    // on (kind, room), so a second crash here joins the standing trip rather
+    // than parking beside it.
+    //
+    // The qualifier is load-bearing and was not always true. Since `standingFor`
+    // began excluding a departing trip, one room can briefly hold two vans - one
+    // pulling away, one arriving to replace it - because a van past the kerb is
+    // no longer something a newcomer can join. That pair is legal, and is what
+    // "allows a departing and arriving trip for one room to share the road"
+    // pins. Read this paragraph as a statement about who can be joined, not as
+    // a cap of one van per room.
+    //
+    // The loop is bounded by the transitions in one sync, and every call below
+    // is map lookups, so what this costs is not the population.
+    for (const agentId of entered) {
+      this.dispatchFor(agentId, crashes);
+    }
+  }
+
+  /**
+   * How many crashed agents each infirmary is answering for, this sync.
+   *
+   * Keyed by room rather than by floor because the room is what the engine
+   * comes to, and on a plaza storey one room answers for several storeys.
+   */
+  private crashesByInfirmary(): ReadonlyMap<string, number> {
+    const counts = new Map<string, number>();
+    for (const character of this.characters.values()) {
+      const agentId = character.agentId;
+      if (this.statusById.get(agentId) !== "failure") continue;
+      const room = this.civicRoomFor(agentId, "infirmary");
+      if (room === null) continue;
+      counts.set(room.civicRoomId, (counts.get(room.civicRoomId) ?? 0) + 1);
+    }
+    return counts;
+  }
+
+  /**
+   * The agents whose status is not the one they had last sync, in canonical
+   * order, restricted to the two statuses that summon anybody.
+   *
+   * Canonical rather than map order for the reason every other contested
+   * choice is: which of two simultaneous triggers takes the last slot under the
+   * cap has to be a fact about their ids, or the same history dispatches
+   * differently on a replay.
+   */
+  private enteredStatuses(
+    outgoing: ReadonlyMap<string, OfficeAgentStatus>,
+  ): ReadonlyArray<string> {
+    const entered: string[] = [];
+    for (const character of this.orderedByAgentId()) {
+      const agentId = character.agentId;
+      const now = this.statusById.get(agentId);
+      if (now !== "attention" && now !== "failure") continue;
+      if (outgoing.get(agentId) === now) continue;
+      entered.push(agentId);
+    }
+    return entered;
+  }
+
+  /**
+   * One agent that just entered a summoning status, turned into a trip - or
+   * into nothing, which is the common answer.
+   *
+   * WHAT THIS PAIR IS NOT is a queue. Every early return here drops the
+   * trigger: there is no pending list, no retry on the next sync, and no
+   * memory that a vehicle was ever owed. That is what bounds the layer.
+   */
+  private dispatchFor(
+    agentId: string,
+    crashes: ReadonlyMap<string, number>,
+  ): void {
+    const status = this.statusById.get(agentId);
+    const character = this.characters.get(agentId);
+    if (character === undefined) return;
+    if (status === "attention") {
+      // A police car comes for an agent that GOT A SLOT at the help desk, not
+      // for one that overflowed back to its desk - the symmetric partner of an
+      // ambulance coming for an agent that got a bed. The car drives in while
+      // the agent walks, which is why this is the slot and not the arrival.
+      if (character.queueTile === null) return;
+      const desk = this.civicRoomFor(agentId, "help-desk");
+      if (desk === null || desk.kerbTile === null) return;
+      this.summon({
+        kind: "police-car",
+        room: desk,
+        kerbTile: desk.kerbTile,
+        agentId,
+        replaces: NO_VEHICLES,
+      });
+      return;
+    }
+    if (status !== "failure") return;
+    const ward = this.civicRoomFor(agentId, "infirmary");
+    if (ward === null || ward.kerbTile === null) return;
+    // THE ENGINE IS ASKED FIRST, and it is a fact about the room rather than
+    // about this agent: a floor with three crashes on it gets one engine, not
+    // three vans. So the threshold is tested before the bed is, and an agent
+    // that trips it summons the engine whether or not the ward had a bed left
+    // for it - running out of beds is part of what makes this an emergency.
+    if ((crashes.get(ward.civicRoomId) ?? 0) >= FIRE_ENGINE_MIN_CRASHES) {
+      this.summonFireEngine(ward, ward.kerbTile, agentId);
+      return;
+    }
+    // WHILE THE ENGINE STANDS, IT SPEAKS FOR THE WARD. The threshold above is
+    // this sync's crash count, which falls again as agents recover - so a
+    // fresh crash arriving under a still-standing engine would otherwise be
+    // answered by a van parked beside it, against the engine having replaced
+    // that room's vans for as long as it is there. It joins the engine
+    // instead, and vans resume once the engine has gone.
+    const engine = this.standingFor("fire-engine", ward.civicRoomId);
+    if (engine !== undefined) {
+      this.summon({
+        kind: "fire-engine",
+        room: ward,
+        kerbTile: ward.kerbTile,
+        agentId,
+        replaces: NO_VEHICLES,
+      });
+      return;
+    }
+    // AN AMBULANCE COMES FOR AN AGENT THAT GOT A BED. The claim is readable
+    // here only because dispatch runs after `updateCivicClaims`: a sync
+    // earlier this agent holds nothing, and the van would come for a crash
+    // that is about to be told the ward is full.
+    if (this.seats.civicClaimOf(agentId) !== "bed") return;
+    this.summon({
+      kind: "ambulance",
+      room: ward,
+      kerbTile: ward.kerbTile,
+      agentId,
+      replaces: NO_VEHICLES,
+    });
+  }
+
+  /**
+   * The engine, which REPLACES this room's ambulances rather than parking
+   * beside them.
+   *
+   * The vans go first and the cap is tested after they have gone, so the
+   * engine can never lose its slot to the two vehicles it is superseding -
+   * which is the one case where a dropped trigger would read as a bug rather
+   * than as the budget working.
+   */
+  private summonFireEngine(
+    room: OfficeCivicRoom,
+    kerbTile: OfficeTilePos,
+    agentId: string,
+  ): void {
+    // NAMES what it supersedes and removes nothing itself. `summon` owns the
+    // order, because the order is the contract: the van comes off the road
+    // only once the trip replacing it is certain to happen.
+    // ONLY THE VANS THAT ARE STILL COMING. A departing van is past the kerb
+    // and on its way out; pulling it off the road mid-exit is the same vanish
+    // the viewport gate above exists to prevent, and it has nothing left to
+    // hand over - its riders were served. So it finishes, and the engine
+    // supersedes only what is still arriving or standing.
+    const vans = this.vehicles.filter(
+      (vehicle) =>
+        vehicle.kind === "ambulance" &&
+        vehicle.civicRoomId === room.civicRoomId &&
+        vehicle.phase !== "depart",
+    );
+    this.summon({
+      kind: "fire-engine",
+      room,
+      kerbTile,
+      agentId,
+      replaces: vans,
+    });
+  }
+
+  /**
+   * The civic room of a kind that serves this agent.
+   *
+   * Its own floor's, where that floor has one; otherwise the floor the agent's
+   * HOST keeps its rooms on, which is how a storey with no infirmary of its
+   * own reaches the plaza's. The room is the coalescing key precisely because
+   * of this fallback: two agents on different storeys of one building share an
+   * infirmary, and therefore share the ambulance that comes to it.
+   */
+  private civicRoomFor(
+    agentId: string,
+    kind: OfficeCivicKind,
+  ): OfficeCivicRoom | null {
+    const floors = this.currentLayout.floors;
+    const own = floors[this.floorIndexOfAgent(agentId)];
+    const here = own.civic.find((room) => room.kind === kind);
+    if (here !== undefined) return here;
+    for (const floor of floors) {
+      if (floor.hostId !== own.hostId) continue;
+      const shared = floor.civic.find((room) => room.kind === kind);
+      if (shared !== undefined) return shared;
+    }
+    return null;
+  }
+
+  /**
+   * Put a vehicle on the road for this room, or join the one already there.
+   *
+   * COALESCED ON THE ROOM, not on the agent's floor: in the views whose civic
+   * rooms live on a plaza storey, a crash on the seventh floor and a crash on
+   * the second are the same infirmary's business and must be the same trip.
+   */
+  private summon(args: {
+    readonly kind: OfficeVehicleKind;
+    readonly room: OfficeCivicRoom;
+    readonly kerbTile: OfficeTilePos;
+    readonly agentId: string;
+    /**
+     * Trips this one SUPERSEDES: the engine's room's ambulance, and empty for
+     * everything else.
+     *
+     * Passed in rather than removed by the caller, because the order is the
+     * whole contract and a caller that destroys first cannot be given it.
+     * Every gate that can refuse this trip answers BEFORE anything comes off
+     * the road, and the riders of whatever is taken are inherited rather than
+     * dropped.
+     */
+    readonly replaces: ReadonlyArray<OfficeVehicle>;
+  }): void {
+    const { agentId, kerbTile, kind, replaces, room } = args;
+    // The floor whose ROAD this is, which is the room's floor and not the
+    // rider's - the two differ exactly where the fallback above found a room
+    // on another storey.
+    const floor = this.currentLayout.floors[room.floorIndex];
+    if (floor.road === null) return;
+    // Viewport-gated at dispatch, on the KERB: a trip nobody can see is a trip
+    // nobody needs. One already on the road finishes even if the camera leaves
+    // - INCLUDING a van an escalation would otherwise have replaced. Refusing
+    // here after having already removed it is how a standing trip disappears
+    // with nothing sent in its place.
+    //
+    // THE VIEWPORT COMES BEFORE THE COALESCE, which is the rules' own
+    // precedence and not a detail: a join is a dispatch that happens to land
+    // on a trip already running, so an offscreen one has to be refused like
+    // any other. Behind this gate, a newcomer nobody can see was restarting a
+    // surviving trip's wait from offscreen.
+    if (!this.tileInLastViewRect(kerbTile)) return;
+    const standing = this.standingFor(kind, room.civicRoomId);
+    if (standing !== undefined) {
+      // Joins the trip and extends its wait rather than queuing a second van.
+      // A join cannot be refused once it is past the gates, so the superseded
+      // trips go here too. Only the FLOOR's clock restarts; the ceiling's does
+      // not, or a steady trickle of joiners would hold the kerb forever.
+      this.absorb(standing, agentId, replaces);
+      if (standing.phase === "wait") standing.sinceJoinMs = 0;
+      return;
+    }
+    // NOTHING IS DESTROYED ABOVE THIS LINE. Every refusal is behind us, so
+    // what follows cannot leave the road emptier than it found it.
+    const inherited = this.clearReplaced(replaces);
+    // THE CAP IS TESTED AFTER THE REMOVAL, so an engine never loses its slot
+    // to the van it is superseding. Where there was a van to replace, a slot
+    // has just been freed on a road that holds at most two, so this cannot
+    // refuse. Where there was none, the ordinary cap applies and the trigger
+    // is dropped like any other - the room still receives its agents, and
+    // only the show is skipped.
+    if (this.vehicles.length >= MAX_VEHICLES) return;
+    this.vehicles.push({
+      kind,
+      floorIndex: room.floorIndex,
+      civicRoomId: room.civicRoomId,
+      forAgentIds: [agentId, ...inherited.filter((id) => id !== agentId)],
+      phase: "arrive",
+      elapsedMs: 0,
+      sinceJoinMs: 0,
+      // The seed, and the one place a default is honest: a vehicle being
+      // created has no facing to keep.
+      facing: this.roadFacingAt(floor.road, 0, 1, "right"),
+    });
+  }
+
+  /**
+   * The trip of this kind serving this room that can still take a newcomer.
+   *
+   * A DEPARTING TRIP IS NOT ONE. It is past the kerb and never comes back, so
+   * appending an id to it is a visit that silently never happens - and the
+   * agent's status cannot trigger again, because entering is a transition and
+   * it has already entered. The newcomer dispatches under the ordinary gates
+   * instead, which is why a departing van and an arriving van for one room can
+   * briefly share the road. That is legal, and the cap is what bounds it.
+   */
+  private standingFor(
+    kind: OfficeVehicleKind,
+    civicRoomId: string,
+  ): OfficeVehicle | undefined {
+    return this.vehicles.find(
+      (vehicle) =>
+        vehicle.kind === kind &&
+        vehicle.civicRoomId === civicRoomId &&
+        vehicle.phase !== "depart",
+    );
+  }
+
+  /**
+   * Adds a rider to a standing trip, along with everyone the trips it
+   * supersedes were already coming for.
+   */
+  private absorb(
+    vehicle: OfficeVehicle,
+    agentId: string,
+    replaces: ReadonlyArray<OfficeVehicle>,
+  ): void {
+    for (const riderId of [agentId, ...this.clearReplaced(replaces)]) {
+      if (vehicle.forAgentIds.includes(riderId)) continue;
+      vehicle.forAgentIds.push(riderId);
+    }
+  }
+
+  /**
+   * Takes the superseded trips off the road and answers who they were for.
+   *
+   * Their riders are still walking to the room - an agent halfway to a bed
+   * does not stop being owed a wait because the van that came for it was
+   * replaced by an engine - so the caller hands them to whatever takes its
+   * place. Dropping them was worth a finding: the engine counted only the
+   * agent that tripped the threshold, found it settled, and left after the
+   * four second minimum while the inherited riders were still crossing.
+   */
+  private clearReplaced(
+    replaces: ReadonlyArray<OfficeVehicle>,
+  ): ReadonlyArray<string> {
+    if (replaces.length === 0) return NO_IDS;
+    const inherited: string[] = [];
+    for (const superseded of replaces) {
+      for (const riderId of superseded.forAgentIds) {
+        if (inherited.includes(riderId)) continue;
+        inherited.push(riderId);
+      }
+    }
+    this.vehicles = this.vehicles.filter(
+      (vehicle) => !replaces.includes(vehicle),
+    );
+    return inherited;
+  }
+
+  /**
+   * Is this tile where the last frame was looking?
+   *
+   * The tile counterpart of `inLastViewRect`, and it answers the same way
+   * before the first frame: a scene that has been ticked but never drawn has
+   * no rect to test against, and holding the whole layer still for that would
+   * make it untestable without a canvas.
+   */
+  private tileInLastViewRect(tile: OfficeTilePos): boolean {
+    const rect = this.lastViewRect;
+    if (rect === null) return true;
+    const foot = this.footPoint(tile.col, tile.row);
+    return (
+      foot.x >= rect.x &&
+      foot.x <= rect.x + rect.width &&
+      foot.y >= rect.y &&
+      foot.y <= rect.y + rect.height
+    );
+  }
+
+  /**
+   * Every vehicle, one tick on.
+   *
+   * Arrive, wait, depart, gone. No walkability, no path search and no
+   * per-vehicle state beyond the phase and its elapsed time: position is a
+   * function of how long this phase has run, which is what makes a trip replay
+   * identically from the same tick sequence.
+   */
+  private advanceVehicles(dtMs: number): void {
+    if (this.vehicles.length === 0) return;
+    const live: OfficeVehicle[] = [];
+    for (const vehicle of this.vehicles) {
+      vehicle.elapsedMs += dtMs;
+      vehicle.sinceJoinMs += dtMs;
+      if (this.advanceVehicle(vehicle)) live.push(vehicle);
+    }
+    this.vehicles = live;
+  }
+
+  /** One vehicle; `false` once its trip is over and it leaves the road. */
+  private advanceVehicle(vehicle: OfficeVehicle): boolean {
+    const road = this.roadOf(vehicle);
+    if (road === null) return false;
+    const kerb = this.kerbIndexOf(vehicle, road);
+    if (kerb === null) return false;
+    if (vehicle.phase === "arrive") {
+      const travelled = this.tilesTravelled(vehicle.elapsedMs);
+      const legs = pathLength(road.tiles, 0, kerb);
+      if (travelled < legs) {
+        vehicle.facing = this.facingAlong({
+          road,
+          from: 0,
+          to: kerb,
+          travelled,
+          current: vehicle.facing,
+        });
+        return true;
+      }
+      vehicle.phase = "wait";
+      vehicle.elapsedMs = 0;
+      vehicle.sinceJoinMs = 0;
+      return true;
+    }
+    if (vehicle.phase === "wait") {
+      // THE CEILING IS READ FIRST, and off the clock a join cannot touch. Put
+      // the floor first and a stream of riders arriving inside four seconds of
+      // each other parks the vehicle at the kerb for the rest of the session,
+      // each one restarting the only clock there was.
+      if (vehicle.elapsedMs >= VEHICLE_WAIT_MAX_MS) {
+        vehicle.phase = "depart";
+        vehicle.elapsedMs = 0;
+        return true;
+      }
+      if (vehicle.sinceJoinMs < VEHICLE_WAIT_MIN_MS) return true;
+      if (
+        vehicle.elapsedMs < VEHICLE_WAIT_MAX_MS &&
+        !this.everyRiderSettled(vehicle)
+      ) {
+        return true;
+      }
+      vehicle.phase = "depart";
+      vehicle.elapsedMs = 0;
+      return true;
+    }
+    const travelled = this.tilesTravelled(vehicle.elapsedMs);
+    const legs = pathLength(road.tiles, kerb, road.tiles.length - 1);
+    if (travelled >= legs) return false;
+    vehicle.facing = this.facingAlong({
+      road,
+      from: kerb,
+      to: road.tiles.length - 1,
+      travelled,
+      current: vehicle.facing,
+    });
+    return true;
+  }
+
+  /**
+   * Has everyone this trip came for stopped moving?
+   *
+   * THREE WAYS TO BE SETTLED, and no fourth: gone from the floor, sitting in a
+   * chair, or standing at the help desk. `seated` covers both halves of a
+   * civic arrival - the agent that got a bed is in it, and the agent that
+   * overflowed kept its own desk - because `settleInChair` sets it whatever
+   * seat the claim resolved to. The counter is the one place an agent is IN a
+   * room without being in a seat, and it has its own state.
+   *
+   * Deliberately no per-agent field: the claim and the character already know,
+   * and a flag kept beside them is one more thing that can disagree.
+   */
+  private everyRiderSettled(vehicle: OfficeVehicle): boolean {
+    for (const agentId of vehicle.forAgentIds) {
+      const character = this.characters.get(agentId);
+      if (character === undefined) continue;
+      if (character.seated) continue;
+      if (character.errand === "queue-stand") continue;
+      return false;
+    }
+    return true;
+  }
+
+  /** This room on this floor, or `null` where the floor does not carry it. */
+  private civicRoomOn(
+    floor: OfficeFloor,
+    civicRoomId: string,
+  ): OfficeCivicRoom | null {
+    return floor.civic.find((room) => room.civicRoomId === civicRoomId) ?? null;
+  }
+
+  /**
+   * The storey this vehicle is driving on, or `null` if it has gone.
+   *
+   * ASKED OF THE ROOM, and the cached index is only a shortcut to it. A re-plan
+   * can drop a floor out from under a trip already on the road - a host leaving
+   * takes its storey with it - and it can also RENUMBER the floor the trip is
+   * serving without moving anything: a floor index is a position in the host-id
+   * ordering, so one lexically earlier host appearing makes storey 0 into storey
+   * 1. An index alone cannot tell those apart, and read X's stable room ids made
+   * the difference visible - a dispatch for the renamed room now coalesces onto
+   * the standing trip, whose index then pointed at ANOTHER HOST's floor: the
+   * kerb lookup found no room, the frame stopped drawing the van, the next tick
+   * removed it, and the rider it had just absorbed never got its trip. Before
+   * those ids the room id changed too, so the coalesce missed and a second van
+   * was dispatched - the old trip was still lost, which is the half of this that
+   * is older than the ids.
+   *
+   * So the index is validated against the room and re-found when it has moved,
+   * which is also what carries a trip already on the road onto its host's new
+   * floor. The cache stays because this is read several times per tick per
+   * vehicle and a layout with a hundred storeys would otherwise scan them all;
+   * the validation is four comparisons on the floor it already believes in.
+   */
+  private floorOfVehicle(vehicle: OfficeVehicle): OfficeFloor | null {
+    const floors = this.currentLayout.floors;
+    // The TYPE says an index is always a floor, which is why the range question
+    // is asked of the LENGTH: comparing the element against `undefined` is a
+    // condition the compiler can see is never true.
+    if (vehicle.floorIndex < floors.length) {
+      const cached = floors[vehicle.floorIndex];
+      if (this.civicRoomOn(cached, vehicle.civicRoomId) !== null) return cached;
+    }
+    const moved = floors.findIndex(
+      (floor) => this.civicRoomOn(floor, vehicle.civicRoomId) !== null,
+    );
+    if (moved < 0) return null;
+    vehicle.floorIndex = moved;
+    return floors[moved];
+  }
+
+  private roadOf(vehicle: OfficeVehicle): OfficeRoad | null {
+    return this.floorOfVehicle(vehicle)?.road ?? null;
+  }
+
+  /** Where on the polyline this vehicle's room stops it. */
+  private kerbIndexOf(vehicle: OfficeVehicle, road: OfficeRoad): number | null {
+    const floor = this.floorOfVehicle(vehicle);
+    const room =
+      floor === null ? null : this.civicRoomOn(floor, vehicle.civicRoomId);
+    const kerb = room?.kerbTile ?? null;
+    if (kerb === null) return null;
+    const index = road.tiles.findIndex(
+      (tile) => tile.col === kerb.col && tile.row === kerb.row,
+    );
+    return index < 0 ? null : index;
+  }
+
+  private tilesTravelled(elapsedMs: number): number {
+    return (elapsedMs / 1000) * VEHICLE_TILES_PER_SECOND;
+  }
+
+  /**
+   * Which way a vehicle points, from the SCREEN-X of the segment it is on.
+   *
+   * Screen rather than tile, because the two disagree under an isometric
+   * projector: a road running `+col` climbs to the right on the Floor and
+   * down-left on Campus, and a van that took its facing from the tile grid
+   * would drive backwards there. A segment with no horizontal component at all
+   * leaves the facing alone rather than picking one.
+   */
+  private facingAlong(args: {
+    readonly road: OfficeRoad;
+    readonly from: number;
+    readonly to: number;
+    readonly travelled: number;
+    /** What it points at now, which is the answer wherever there is no turn. */
+    readonly current: OfficeFacing;
+  }): OfficeFacing {
+    const { current, from, road, to, travelled } = args;
+    const at = tileAlong(road.tiles, from, to, travelled);
+    return this.roadFacingAt(road, at.index, at.step, current);
+  }
+
+  private roadFacingAt(
+    road: OfficeRoad,
+    index: number,
+    step: number,
+    current: OfficeFacing,
+  ): OfficeFacing {
+    const tiles = road.tiles;
+    const next = index + step;
+    // OFF THE END OF THE ROAD IS NOT A DIRECTION. There is no next tile to
+    // take a bearing from, so the vehicle keeps the one it has - answering
+    // `right` here turned every van to face right as it ran out of road.
+    if (next < 0 || next >= tiles.length || index === next) return current;
+    const here = this.footPoint(tiles[index].col, tiles[index].row);
+    const there = this.footPoint(tiles[next].col, tiles[next].row);
+    if (there.x > here.x) return "right";
+    if (there.x < here.x) return "left";
+    // A PURELY VERTICAL SEGMENT IS NOT A DIRECTION EITHER, which is what the
+    // doc above has always claimed and what this line did not do. Every road
+    // at this base is a straight run in `+col`, so no plan reaches it yet -
+    // but `OfficeRoad` is a polyline and the isometric lanes are promised, and
+    // on those a leg that projects straight down would have snapped a van to
+    // `right` mid-drive.
+    return current;
+  }
+
+  // ---- Character animation ------------------------------------------- //
+
+  private advanceCharacter(character: OfficeCharacter, dtMs: number): void {
+    const bubble = character.bubble;
+    if (bubble !== null) {
+      bubble.remainingMs -= dtMs;
+      if (bubble.remainingMs <= 0) character.bubble = null;
+    }
+    if (character.sparkleMs > 0) {
+      character.sparkleMs = Math.max(0, character.sparkleMs - dtMs);
+    }
+    if (
+      this.onCancellableErrand(character) &&
+      this.errandMustEnd(character.agentId)
+    ) {
+      this.returnToDesk(character);
+    }
+    // A message on the way outranks anything an idle agent had planned.
+    if (
+      this.onCancellableErrand(character) &&
+      this.isHurrying(character.agentId)
+    ) {
+      this.returnToDesk(character);
+    }
+    if (character.errand === "errand-wait") {
+      this.advanceRally(character);
+      this.advanceThrows(character, dtMs);
+      character.waitMs -= dtMs;
+      if (character.waitMs <= 0) this.finishLinger(character);
+      return;
+    }
+    // Waiting at reception ends when the status does, which only a sync sees.
+    if (character.errand === "queue-stand") return;
+    if (!character.seated) {
+      this.advanceWalk(character, dtMs);
+      return;
+    }
+    if (this.statusOf(character.agentId) === "idle") character.idleMs += dtMs;
+    else character.idleMs = 0;
+    this.advanceFiller(character, dtMs);
+  }
+
+  // ---- Two-player games -------------------------------------------------- //
+
+  /**
+   * The agent on the OTHER side of this one's table, if somebody has taken it.
+   *
+   * The two are at one table when they stand at spots that name the same
+   * FIXTURE. That used to be read off the geometry - same kind, same row -
+   * which is true of this floor plan and of no other: an oblique storey puts
+   * two tables of one kind on one row, and an isometric one puts the two ends
+   * of a table on different rows entirely.
+   */
+  private rallyPartnerOf(character: OfficeCharacter): OfficeCharacter | null {
+    const target = character.errandTarget;
+    if (target === null || !isTwoPlayerKind(target.kind)) return null;
+    if (target.fixtureId === null) return null;
+    if (character.errand !== "errand-wait") return null;
+    for (const other of this.orderedByAgentId()) {
+      if (other.agentId === character.agentId) continue;
+      if (other.errand !== "errand-wait") continue;
+      const theirs = other.errandTarget;
+      if (theirs === null || theirs.fixtureId !== target.fixtureId) continue;
+      return other;
+    }
+    return null;
+  }
+
+  /**
+   * Play starts the moment the second side is taken, and both players get the
+   * SAME clock - a rally where one of them wandered off mid-point would read as
+   * the other hitting to nobody. Only the lower id starts it, so which of the
+   * two the tick happens to reach first cannot change the game's length.
+   */
+  private advanceRally(character: OfficeCharacter): void {
+    if (character.rallying) return;
+    const partner = this.rallyPartnerOf(character);
+    if (partner === null || partner.rallying) return;
+    if (character.agentId > partner.agentId) return;
+    const seed = mixSeed(
+      hashAgentId(character.agentId),
+      Math.floor(this.nowMs / 1000),
+    );
+    const playMs = GAME_PLAY_MIN_MS + (seed % GAME_PLAY_SPREAD_MS);
+    for (const player of [character, partner]) {
+      player.rallying = true;
+      player.waitMs = playMs;
+      player.lingerTotalMs = playMs;
+    }
+  }
+
+  /**
+   * The ball, mid-rally: one stroke across the table and one back, on a clock
+   * shared by both players so they are always hitting the same ball. Derived
+   * from the scene time rather than stored, which is what keeps it identical on
+   * two machines replaying the same ticks.
+   *
+   * Ping-pong and foosball both have one; chess is played with the two players
+   * thinking at each other instead - see `errandBubbleFor`.
+   */
+  private pushRallyBall(
+    overlay: OfficeDrawable[],
+    character: OfficeCharacter,
+    partner: OfficeCharacter,
+  ): void {
+    const here = this.headPointOfCharacter(character);
+    const there = this.headPointOfCharacter(partner);
+    const phase = (this.nowMs % (GAME_STROKE_MS * 2)) / GAME_STROKE_MS;
+    const progress = easeInOut(phase <= 1 ? phase : 2 - phase);
+    overlay.push({
+      kind: "sprite",
+      sprite: { name: "paper-ball" },
+      x: here.x + (there.x - here.x) * progress,
+      y:
+        here.y +
+        (there.y - here.y) * progress -
+        ENVELOPE_ARC_LIFT * progress * (1 - progress),
+    });
+  }
+
+  // ---- Paper tosses ---------------------------------------------------- //
+
+  /**
+   * The throws of a toss errand, while its owner stands at the line. Driven off
+   * the same wait clock the linger runs on, so the errand can never end with a
+   * throw still owed. A bin and a dartboard are the same errand aimed at
+   * different furniture.
+   */
+  private advanceThrows(character: OfficeCharacter, dtMs: number): void {
+    if (character.throwsLeft <= 0) return;
+    const target = character.errandTarget;
+    if (target === null || !targetIsThrowable(target.kind)) return;
+    character.nextThrowMs -= dtMs;
+    if (character.nextThrowMs > 0) return;
+    character.nextThrowMs += BIN_THROW_GAP_MS;
+    character.throwsLeft -= 1;
+    this.throwPaperBall(character, target);
+  }
+
+  /**
+   * One ball, from the thrower's head to what it is aimed at, and a missed
+   * paper toss lands beside the bin rather than in it. A DART never misses:
+   * darts on the floor around a board read as the arc being broken rather than
+   * as somebody's aim.
+   *
+   * The target is LOOKED UP in the plan rather than derived from the spot by a
+   * fixed offset: how far back the throwing line stands is the layout's
+   * business, and a scene that hard-coded that distance would sail balls into
+   * empty floor the day the plan moved the line.
+   */
+  private throwPaperBall(
+    character: OfficeCharacter,
+    target: OfficeErrandTarget,
+  ): void {
+    if (!targetIsThrowable(target.kind)) return;
+    const targetTile = target.actionTile;
+    if (targetTile === null) return;
+    const seed = mixSeed(
+      hashAgentId(character.agentId),
+      character.throwsLeft + Math.floor(this.nowMs / 1000),
+    );
+    const missed = target.kind === "bin" && seed % 100 < PAPER_MISS_PERCENT;
+    const aim = this.tileCenter(targetTile);
+    this.paperBalls.push({
+      from: this.headPointOfCharacter(character),
+      to: {
+        // A miss carries past the bin to one side; which side is seeded too, so
+        // a floor of missed shots is not a floor of balls in one tidy pile.
+        x: missed
+          ? aim.x + (seed % 2 === 0 ? -PAPER_MISS_OFFSET : PAPER_MISS_OFFSET)
+          : aim.x,
+        y: missed ? aim.y + PAPER_MISS_OFFSET : aim.y,
+      },
+      missed,
+      elapsedMs: 0,
+    });
+  }
+
+  /** A tile's centre, PROJECTED - never `col * OFFICE_TILE` in this class. */
+  private tileCenter(tile: OfficeTilePos): OfficePoint {
+    // PROJECT the mid-point, don't add `OFFICE_TILE / 2` after projecting the
+    // corner: on an affine (Campus/City) projector the two differ, and the flat
+    // offset lands the centre eight world pixels off the tile it belongs to -
+    // the same trap `footPoint` documents. Equal to the old form on the
+    // axis-aligned projectors, correct on the isometric ones.
+    return this.point(tile.col + 0.5, tile.row + 0.5);
+  }
+
+  private advancePaperBalls(dtMs: number): void {
+    if (this.paperBalls.length === 0) return;
+    const live: OfficePaperBall[] = [];
+    for (const ball of this.paperBalls) {
+      ball.elapsedMs += dtMs;
+      const lifeMs =
+        PAPER_BALL_FLIGHT_MS + (ball.missed ? PAPER_BALL_REST_MS : 0);
+      if (ball.elapsedMs < lifeMs) live.push(ball);
+    }
+    this.paperBalls = live;
+  }
+
+  /** Where a ball is right now: along its arc, or lying where it missed. */
+  private paperBallPointOf(ball: OfficePaperBall): OfficePoint {
+    if (ball.elapsedMs >= PAPER_BALL_FLIGHT_MS) return ball.to;
+    const progress = easeInOut(
+      clamp(ball.elapsedMs / PAPER_BALL_FLIGHT_MS, 0, 1),
+    );
+    return {
+      x: ball.from.x + (ball.to.x - ball.from.x) * progress,
+      y:
+        ball.from.y +
+        (ball.to.y - ball.from.y) * progress -
+        ENVELOPE_ARC_LIFT * 4 * progress * (1 - progress),
+    };
+  }
+
+  // ---- Desk fillers --------------------------------------------------- //
+
+  /**
+   * The small things a seated idle agent does between errands. Only ONE cap is
+   * needed here, unlike errands: a filler moves nobody across the floor, so a
+   * room where everyone stretches at once is a room that looks alive rather
+   * than a room being evacuated.
+   */
+  private advanceFiller(character: OfficeCharacter, dtMs: number): void {
+    if (this.motionSuppressed()) {
+      character.filler = null;
+      return;
+    }
+    if (this.statusOf(character.agentId) !== "idle") {
+      character.filler = null;
+      return;
+    }
+    if (this.isHurrying(character.agentId)) {
+      character.filler = null;
+      return;
+    }
+    // A cubby has no desk to look up from, spin on or stretch at.
+    if (this.seatedInCubby(character.agentId)) {
+      character.filler = null;
+      return;
+    }
+    const active = character.filler;
+    if (active !== null) {
+      active.elapsedMs += dtMs;
+      if (active.elapsedMs < active.durationMs) return;
+      character.filler = null;
+      character.fillerCount += 1;
+      character.nextFillerMs = this.fillerGapMs(character);
+      return;
+    }
+    character.nextFillerMs -= dtMs;
+    if (character.nextFillerMs > 0) return;
+    character.filler = this.pickFiller(character);
+  }
+
+  private fillerGapMs(character: OfficeCharacter): number {
+    const seed = mixSeed(hashAgentId(character.agentId), character.fillerCount);
+    return FILLER_GAP_MIN_MS + (seed % FILLER_GAP_SPREAD_MS);
+  }
+
+  private pickFiller(character: OfficeCharacter): OfficeFiller {
+    const kinds: OfficeFillerKind[] = ["look", "stretch", "spin"];
+    const seed = mixSeed(
+      hashAgentId(character.agentId),
+      character.fillerCount + 1,
+    );
+    const kind = kinds[seed % kinds.length];
+    return { kind, elapsedMs: 0, durationMs: fillerDurationMs(kind) };
+  }
+
+  // ---- Errands -------------------------------------------------------- //
+
+  /** On the way to a spot, or standing at one - a break that can still be cut short. */
+  private onCancellableErrand(character: OfficeCharacter): boolean {
+    return (
+      character.errand === "errand-out" || character.errand === "errand-wait"
+    );
+  }
+
+  /**
+   * Settled somewhere the character is OFF ITS FEET: a sofa, a sleeping bag, an
+   * armchair, a console seat, a garden bench.
+   *
+   * The garden is the one kind that is both. Its bench seats and its stroll
+   * spots are the same errand kind, so the layout is asked which this tile is by
+   * looking for the bench that would be standing over it - the same question
+   * the bin and the plant already put to it.
+   */
+  private onSeatedErrand(character: OfficeCharacter): boolean {
+    const target = character.errandTarget;
+    if (target === null || character.errand !== "errand-wait") return false;
+    if (!isSeatedErrandKind(target.kind)) return false;
+    if (target.kind !== "garden") return true;
+    // A garden BENCH spot names the bench it sits in front of; a garden
+    // stroll spot names nothing, which is the difference between the two.
+    return target.actionTile !== null;
+  }
+
+  /**
+   * Whether this stint on the sofa has turned into a doze: only a LONG sit
+   * does, and only in its second half.
+   *
+   * Keyed on the stint rather than on the agent, which is the difference
+   * between a floor where anyone might nod off and a floor with one designated
+   * narcoleptic - the sofa linger is already seeded per stint, so reading its
+   * length costs nothing and varies the way a person does.
+   */
+  private dozingOnSofa(character: OfficeCharacter): boolean {
+    const longSit = SOFA_LINGER_MIN_MS + SOFA_LINGER_SPREAD_MS / 2;
+    if (character.lingerTotalMs < longSit) return false;
+    return character.waitMs <= character.lingerTotalMs / 2;
+  }
+
+  /** ...plus the walk back, which is still time spent away from the desk. */
+  private onErrand(character: OfficeCharacter): boolean {
+    return (
+      this.onCancellableErrand(character) ||
+      character.errand === "errand-return"
+    );
+  }
+
+  /**
+   * An errand belongs to a LIVE floor and to an agent that is still idle, still
+   * on it, and still nothing is happening to it. Playback makes every agent
+   * idle between its own rows, so an errand during it would fire constantly.
+   */
+  private errandMustEnd(agentId: string): boolean {
+    if (this.playing) return true;
+    // A paused historical view is a still photograph of that moment; the
+    // people in it do not wander off for coffee while it is looked at.
+    if (this.cursorMs !== null) return true;
+    if (!this.visibleAgentIds.has(agentId)) return true;
+    if (this.archivedIds.has(agentId)) return true;
+    return this.statusOf(agentId) !== "idle";
+  }
+
+  /** Spots somebody is already using, or walking to, or walking back from. */
+  private claimedSpotKeys(): Set<string> {
+    const claimed = new Set<string>();
+    for (const character of this.characters.values()) {
+      const target = character.errandTarget;
+      if (target === null) continue;
+      claimed.add(tileKeyOf(target.tile));
+    }
+    return claimed;
+  }
+
+  /**
+   * Every idle agent past its threshold that someone can SEE gets up, up to
+   * `MAX_CONCURRENT_ERRANDS` away at once.
+   *
+   * TWO BOUNDS, and they do different jobs. The rect keeps the walking
+   * population a fact about the viewport, like everything else in a frame: an
+   * agent nobody is looking at sits still, and starts strolling the moment the
+   * camera reaches it. The cap is what covers the case the rect cannot - a
+   * zoomed-out view whose rect IS the world - and it is high enough that a
+   * viewport-sized crowd never reaches it.
+   *
+   * A walker that leaves the rect KEEPS WALKING. Only starting is gated, so
+   * nobody is ever frozen mid-floor by a pan, and the errand that carries it
+   * home is the one that frees its slot. What it does not do is take a NEXT
+   * errand out there: `finishLinger` asks this same question again when a
+   * chain would continue, so an agent the camera has left walks home once and
+   * then sits, rather than strolling off-screen for the rest of the session.
+   *
+   * Canonical order still decides who claims a contested spot - and now also
+   * who gets a slot when the cap bites - which keeps both facts about their
+   * ids rather than about map insertion order.
+   */
+  private updateErrandStarts(): void {
+    if (this.motionSuppressed()) return;
+    let away = this.errandCount();
+    if (away >= MAX_CONCURRENT_ERRANDS) return;
+    const claimed = this.claimedSpotKeys();
+    for (const character of this.orderedByAgentId()) {
+      if (!this.mayStartErrand(character)) continue;
+      const target = this.nextErrandFor(character, claimed);
+      if (target === null) continue;
+      if (!this.startErrand(character, target)) continue;
+      claimed.add(tileKeyOf(target.tile));
+      away += 1;
+      if (away >= MAX_CONCURRENT_ERRANDS) return;
+    }
+  }
+
+  /** How many agents are away from their desks right now, walk back included. */
+  private errandCount(): number {
+    let count = 0;
+    for (const character of this.characters.values()) {
+      if (AWAY_ERRANDS.has(character.errand)) count += 1;
+    }
+    return count;
+  }
+
+  private mayStartErrand(character: OfficeCharacter): boolean {
+    if (character.errand !== "none") return false;
+    if (!character.seated) return false;
+    if (this.seatedInCubby(character.agentId)) return false;
+    if (this.errandMustEnd(character.agentId)) return false;
+    if (this.isHurrying(character.agentId)) return false;
+    const threshold = IDLE_ERRAND_MS + errandStaggerMs(character.agentId);
+    // Before the rect, which costs a projected point: almost everybody asked
+    // is short of the threshold, and that answer is two field reads.
+    if (character.idleMs < threshold) return false;
+    return this.inLastViewRect(character);
+  }
+
+  /**
+   * Is this agent where the last frame was looking?
+   *
+   * Before the first frame there is no rect and the answer is YES. A scene that
+   * has been ticked but never drawn is a scene under test or one whose canvas
+   * has not painted yet, and neither is a reason to hold the whole floor still;
+   * the first frame narrows it.
+   */
+  private inLastViewRect(character: OfficeCharacter): boolean {
+    const rect = this.lastViewRect;
+    if (rect === null) return true;
+    return this.characterTouches(character, rect);
+  }
+
+  /**
+   * Somewhere to be next: a free spot if the floor has one, and a corridor tile
+   * to stroll between if it does not.
+   *
+   * The fallback is the whole reason an agent never has to go back to its desk.
+   * A floor with more idle agents than spots used to put the surplus back in
+   * their chairs, which is exactly the still office this replaced; now they walk
+   * the corridors instead, and a corridor tile is claimed like any spot so two
+   * of them never stand in the same place.
+   */
+  private nextErrandFor(
+    character: OfficeCharacter,
+    claimed: ReadonlySet<string>,
+  ): OfficeErrandTarget | null {
+    const spot = this.pickErrandTarget(character, claimed);
+    if (spot !== null) return spot;
+    return this.strollTargetFor(character, claimed);
+  }
+
+  /**
+   * Where this agent goes next. The seed folds the clock in at one-second
+   * resolution so the same agent does not walk the same loop forever, and the
+   * last destination is excluded outright - twice to the same window reads as
+   * the animation being stuck rather than as a habit.
+   */
+  private pickErrandTarget(
+    character: OfficeCharacter,
+    claimed: ReadonlySet<string>,
+  ): OfficeErrandTarget | null {
+    const seed = mixSeed(
+      hashAgentId(character.agentId),
+      Math.floor(this.nowMs / 1000),
+    );
+    const options = this.errandOptionsFor(character, claimed, seed);
+    // Somebody is holding a side of a table open. Taking the other one beats
+    // any roll: a game needs two, and leaving it to the weights means the
+    // waiter usually gives up before a second player happens to choose it.
+    for (const kind of TWO_PLAYER_KINDS) {
+      const table = options.find((option) => option.kind === kind);
+      if (table !== undefined && this.someoneWaitingToPlay(kind)) return table;
+    }
+    return this.weightedPick(options, seed);
+  }
+
+  /**
+   * Somebody has a side of THIS game's table, or is on their way to one, with
+   * nobody opposite - an open invitation.
+   *
+   * EN ROUTE counts, and has to. The game room is across the floor from the
+   * desks, so a player spends far longer walking to the table than the few
+   * seconds it will then wait at it: a bias that only answered an agent already
+   * standing there would send the second player off a moment before the first
+   * gave up, and no game would ever happen on a floor big enough to have a game
+   * room.
+   */
+  private someoneWaitingToPlay(kind: OfficeErrandTargetKind): boolean {
+    for (const character of this.characters.values()) {
+      if (character.rallying) continue;
+      if (!this.onCancellableErrand(character)) continue;
+      const target = character.errandTarget;
+      if (target !== null && target.kind === kind) return true;
+    }
+    return false;
+  }
+
+  private errandOptionsFor(
+    character: OfficeCharacter,
+    claimed: ReadonlySet<string>,
+    seed: number,
+  ): ReadonlyArray<OfficeErrandTarget> {
+    const floor = this.floorOfAgent(character.agentId);
+    const options: OfficeErrandTarget[] = [];
+    for (const spot of floor.errandSpots) {
+      // Claimed by the tile a walker would STAND on, which is what two agents
+      // can collide over. An aliased spot - one storey's copy of a plaza's -
+      // therefore blocks the physical spot for the whole building, which is
+      // the point of aliasing it in the first place.
+      const key = tileKeyOf(spot.approachTile);
+      if (claimed.has(key)) continue;
+      if (key === character.lastErrandKey) continue;
+      if (spot.kind === character.lastErrandKind) continue;
+      if (!this.spotSuitsAgent(character, spot)) continue;
+      options.push(targetOfSpot(spot));
+    }
+    if (character.lastErrandKind !== "visit") {
+      const visit = this.visitTargetFor(character, claimed, seed);
+      if (visit !== null) options.push(visit);
+    }
+    return options;
+  }
+
+  /**
+   * Whether this spot is one THIS agent has any business at: its own storey,
+   * and then whoever the plan says the spot is FOR.
+   *
+   * The rule used to be read off the kind - a bin belongs to the cabin it
+   * stands in, a peek is somebody else's door - which is a fact about this one
+   * floor plan wearing the costume of a fact about errands. A plaza plant
+   * belongs to no cabin and a leads-only board belongs to a class of agent,
+   * and neither can be said in kinds without the scene learning view names.
+   */
+  private spotSuitsAgent(
+    character: OfficeCharacter,
+    spot: OfficeErrandSpot,
+  ): boolean {
+    const seat = this.seats.effectiveSeat(character.agentId);
+    if (seat === null) return false;
+    if (spot.floorIndex !== seat.floorIndex) return false;
+    // A FIXTURE SOMEBODY IS ALREADY IN IS NOT SOMEWHERE TO GO. Campus's
+    // courtyard bench is both the thing a stroll sits on and a seat its waiting
+    // room lends, and the two are the same tile - so a bench with an agent on it
+    // has to stop being an errand option, or the scene puts a second character
+    // at that tile in a different pose and the seat book believes it seated one
+    // of them. Every other fixture carries `seatId: null` and never reaches here.
+    //
+    // `occupant` and not `occupancy`: the question is who is IN the bench now,
+    // and an agent whose claim is releasing has decided to get up - its effective
+    // seat is its own desk again, so the bench is free for whoever walks over.
+    if (spot.seatId !== null && this.seats.occupant(spot.seatId) !== null) {
+      return false;
+    }
+    const audience = spot.audience;
+    if (audience.kind === "nobody") return false;
+    if (audience.kind === "floor") return true;
+    if (audience.kind === "room") return seat.roomId === audience.roomId;
+    // A peek: anybody with a cabin of their own that is not this one. Having a
+    // cabin is part of the test rather than an afterthought - a solo at an
+    // open-plan desk belongs to no room, and giving it every cabin's doorway
+    // would be a change, not a migration.
+    if (audience.kind === "not-room") {
+      return seat.roomId !== null && seat.roomId !== audience.roomId;
+    }
+    return this.leadsATeam(character.agentId);
+  }
+
+  /**
+   * Whether this agent runs something: a team's lead, or the one the host's HQ
+   * belongs to. Read off the partition, which is the single answer every
+   * layout, board and directory row already shares.
+   */
+  private leadsATeam(agentId: string): boolean {
+    const partition = this.partition;
+    if (partition === null) return false;
+    if (partition.teamOf(agentId)?.leadAgentId === agentId) return true;
+    return partition.hosts.some((host) => host.hqAgentId === agentId);
+  }
+
+  /**
+   * A corridor tile to stand on when every spot is taken - the floor's OWN
+   * corridors, which is where somebody with nowhere to be would actually be.
+   *
+   * The tiles are carried by the storey rather than scanned for, because "the
+   * rows between the wall face and the lobby, minus the rooms" is a fact about
+   * one storey of one view: an oblique aisle and an isometric district street
+   * are both corridors and neither is above a lobby.
+   */
+  private strollTargetFor(
+    character: OfficeCharacter,
+    claimed: ReadonlySet<string>,
+  ): OfficeErrandTarget | null {
+    const options = this.corridorTilesFor(character, claimed);
+    if (options.length === 0) return null;
+    const seed = mixSeed(
+      hashAgentId(character.agentId),
+      character.errandLegs + Math.floor(this.nowMs / 1000),
+    );
+    const floor = this.floorOfAgent(character.agentId);
+    return derivedTarget({
+      kind: "corridor",
+      tile: options[seed % options.length],
+      facing: floor.queueFacing,
+      partnerId: null,
+    });
+  }
+
+  private corridorTilesFor(
+    character: OfficeCharacter,
+    claimed: ReadonlySet<string>,
+  ): ReadonlyArray<OfficeTilePos> {
+    const floor = this.floorOfAgent(character.agentId);
+    const tiles: OfficeTilePos[] = [];
+    for (const tile of floor.corridorTiles) {
+      const key = tileKeyOf(tile);
+      if (claimed.has(key)) continue;
+      if (key === character.lastErrandKey) continue;
+      tiles.push(tile);
+    }
+    return tiles;
+  }
+
+  /** Weighted by kind; an empty list is a floor with nowhere to go. */
+  private weightedPick(
+    options: ReadonlyArray<OfficeErrandTarget>,
+    seed: number,
+  ): OfficeErrandTarget | null {
+    let total = 0;
+    for (const option of options) total += ERRAND_WEIGHTS[option.kind];
+    if (total === 0) return null;
+    let roll = seed % total;
+    for (const option of options) {
+      roll -= ERRAND_WEIGHTS[option.kind];
+      if (roll < 0) return option;
+    }
+    return options[options.length - 1];
+  }
+
+  /**
+   * A call on somebody in the SAME cabin: the aisle tile under their desk,
+   * facing them. Same cabin because a visit is meant to read as two people who
+   * work together talking, and because the aisle under a desk in another room
+   * is a corridor the visitor has no business standing in.
+   *
+   * The colleague has to be at their desk and either idle or working - there is
+   * no point calling on somebody who is themselves out, and an agent that needs
+   * a person has a queue to stand in.
+   */
+  private visitTargetFor(
+    character: OfficeCharacter,
+    claimed: ReadonlySet<string>,
+    seed: number,
+  ): OfficeErrandTarget | null {
+    const mySeat = this.seats.effectiveSeat(character.agentId);
+    if (mySeat === null || mySeat.roomId === null) return null;
+    const room = this.roomOfSeat(mySeat);
+    const hosts: OfficeErrandTarget[] = [];
+    for (const seated of this.visibleSeats()) {
+      if (seated.agentId === character.agentId) continue;
+      if (seated.seat.roomId !== mySeat.roomId) continue;
+      const colleague = this.characters.get(seated.agentId);
+      if (colleague === undefined || !colleague.seated) continue;
+      const status = this.statusOf(seated.agentId);
+      if (status !== "idle" && status !== "working") continue;
+      // Under the colleague's OWN chair, which is what makes a visit read as
+      // two people talking rather than as a queue at one tile. The room's
+      // `visitTile` is the fallback for a view whose chairs have nothing
+      // walkable under them.
+      const tile = this.visitTileNear(seated.seat, room);
+      if (tile === null) continue;
+      const key = tileKeyOf(tile);
+      if (claimed.has(key) || key === character.lastErrandKey) continue;
+      hosts.push(
+        derivedTarget({
+          kind: "visit",
+          tile,
+          facing: seated.seat.facing,
+          partnerId: seated.agentId,
+        }),
+      );
+    }
+    if (hosts.length === 0) return null;
+    hosts.sort((left, right) =>
+      left.partnerId === right.partnerId ||
+      left.partnerId === null ||
+      right.partnerId === null
+        ? 0
+        : left.partnerId.localeCompare(right.partnerId),
+    );
+    return hosts[seed % hosts.length];
+  }
+
+  private startErrand(
+    character: OfficeCharacter,
+    target: OfficeErrandTarget,
+  ): boolean {
+    const start = this.startTileOf(character);
+    const path = findOfficePath(this.currentLayout, start, target.tile);
+    // No route means no errand: a character must never be teleported out of its
+    // chair for something as incidental as a coffee.
+    if (path === null || path.length === 0) return false;
+    character.col = start.col;
+    character.row = start.row;
+    character.seated = false;
+    character.path = path;
+    character.pathIndex = 0;
+    character.walkPhaseMs = 0;
+    character.idleMs = 0;
+    character.errand = "errand-out";
+    character.errandTarget = target;
+    character.rallying = false;
+    character.errandLegs = 0;
+    character.errandLegsWanted = this.strollLegsFor(character);
+    character.lastErrandKey = tileKeyOf(target.tile);
+    character.lastErrandKind = target.kind;
+    character.waitMs = 0;
+    character.filler = null;
+    return true;
+  }
+
+  /**
+   * How many corridor spots this stroll takes in. Only a corridor errand reads
+   * it; standing in one corridor and turning round is not a stroll.
+   */
+  private strollLegsFor(character: OfficeCharacter): number {
+    const seed = mixSeed(
+      hashAgentId(character.agentId),
+      Math.floor(this.nowMs / 1000),
+    );
+    return STROLL_MIN_LEGS + (seed % STROLL_LEG_SPREAD);
+  }
+
+  /** Continues an errand in progress: the next leg keeps the walk's own state. */
+  private startErrandLeg(
+    character: OfficeCharacter,
+    target: OfficeErrandTarget,
+  ): boolean {
+    const legs = character.errandLegs + 1;
+    const wanted = character.errandLegsWanted;
+    const kind = character.lastErrandKind;
+    if (!this.startErrand(character, target)) return false;
+    character.errandLegs = legs;
+    character.errandLegsWanted = wanted;
+    // A leg is the SAME errand, so the kind it may not repeat next is still the
+    // one this whole errand started as.
+    character.lastErrandKind = kind;
+    return true;
+  }
+
+  /**
+   * How long this character stands where it has arrived. Three answers, in
+   * order: a beat whose length is part of what the activity IS, a toss that
+   * lasts exactly as long as the throws it owes, or a seeded stint so a pair at
+   * the cooler do not finish in lockstep.
+   */
+  private lingerMsFor(
+    character: OfficeCharacter,
+    target: OfficeErrandTarget,
+  ): number {
+    const fixed = fixedLingerMsFor(target.kind);
+    if (fixed !== null) return fixed;
+    const seed = mixSeed(
+      hashAgentId(character.agentId),
+      character.errandLegs + Math.floor(this.nowMs / 1000),
+    );
+    if (targetIsThrowable(target.kind)) {
+      return this.armThrows(character, target.kind, seed);
+    }
+    const range = seededLingerRangeOf(target.kind);
+    return range.minMs + (seed % range.spreadMs);
+  }
+
+  /**
+   * A toss is as long as the throws it holds: a beat to line up, then one per
+   * throw. Arming the counters here rather than in the walk is what keeps the
+   * linger and the throws from ever disagreeing about how many are coming.
+   */
+  private armThrows(
+    character: OfficeCharacter,
+    kind: OfficeErrandTargetKind,
+    seed: number,
+  ): number {
+    // A dart player throws a fixed three; a paper toss varies, because two
+    // people lobbing exactly the same number of balls reads as a loop.
+    const throws =
+      kind === "darts"
+        ? DARTS_THROWS
+        : BIN_MIN_THROWS + (seed % BIN_THROW_SPREAD);
+    character.throwsLeft = throws;
+    character.nextThrowMs = BIN_STAND_MS;
+    return BIN_STAND_MS + throws * BIN_THROW_GAP_MS;
+  }
+
+  /**
+   * The linger is over, so the NEXT errand begins - from here, not from the
+   * desk. Chaining is the rule: an idle agent has nothing to go back for, and a
+   * walk home between every two errands was what made the floor look like it
+   * was commuting rather than living.
+   *
+   * A stroll is the one errand with several legs, because standing in one
+   * corridor and turning round is not a stroll. Only a floor with nowhere left
+   * to go at all puts somebody back in a chair.
+   */
+  private finishLinger(character: OfficeCharacter): void {
+    // WHERE A CHAIN ENDS. An errand leads into the next one for as long as its
+    // agent stays idle, which is what keeps a live floor from emptying back
+    // into its chairs - but a chain is a START like any other, and one that
+    // never asked again would mean an agent that got up once while the camera
+    // was on it walks for the rest of the session wherever the camera goes.
+    // Off the rect it goes home instead, which is the same ending it takes on
+    // a floor with nowhere left to go.
+    if (!this.inLastViewRect(character)) {
+      this.returnToDesk(character);
+      return;
+    }
+    const target = character.errandTarget;
+    if (
+      target !== null &&
+      target.kind === "corridor" &&
+      character.errandLegs + 1 < character.errandLegsWanted
+    ) {
+      const next = this.nextStrollSpot(character);
+      if (next !== null && this.startErrandLeg(character, next)) return;
+    }
+    const claimed = this.claimedSpotKeys();
+    // Its own spot is free the moment it steps off it, and it is the one place
+    // this agent may not go next anyway.
+    if (target !== null) claimed.delete(tileKeyOf(target.tile));
+    const next = this.nextErrandFor(character, claimed);
+    if (next !== null && this.startErrand(character, next)) return;
+    this.returnToDesk(character);
+  }
+
+  private nextStrollSpot(
+    character: OfficeCharacter,
+  ): OfficeErrandTarget | null {
+    const claimed = this.claimedSpotKeys();
+    const here = character.errandTarget;
+    if (here !== null) claimed.delete(tileKeyOf(here.tile));
+    const floor = this.floorOfAgent(character.agentId);
+    const options: OfficeErrandTarget[] = [];
+    for (const spot of floor.errandSpots) {
+      if (spot.kind !== "corridor") continue;
+      const key = tileKeyOf(spot.approachTile);
+      if (claimed.has(key) || key === character.lastErrandKey) continue;
+      options.push(targetOfSpot(spot));
+    }
+    if (options.length === 0) return this.strollTargetFor(character, claimed);
+    const seed = mixSeed(hashAgentId(character.agentId), character.errandLegs);
+    return options[seed % options.length];
+  }
+
+  // ---- Conversations -------------------------------------------------- //
+
+  /**
+   * Who this character is talking to, if anyone. Two agents lingering on
+   * NEIGHBOURING spots of the same kind are together - which is exactly what
+   * the two cooler spots and each table's two seats were laid out to produce -
+   * and a visitor is together with the colleague it called on.
+   */
+  private chatPartnerOf(character: OfficeCharacter): OfficeCharacter | null {
+    const target = character.errandTarget;
+    if (target !== null && character.errand === "errand-wait") {
+      if (target.kind === "visit") {
+        return this.seatedPartner(target.partnerId);
+      }
+      if (target.kind === "cooler" || target.kind === "cafe") {
+        return this.neighbourAt(character, target);
+      }
+    }
+    // The other half of a visit: this character is the one being called on.
+    if (!character.seated) return null;
+    let visitor: OfficeCharacter | null = null;
+    for (const other of this.characters.values()) {
+      if (other.errand !== "errand-wait") continue;
+      const theirs = other.errandTarget;
+      if (theirs === null || theirs.kind !== "visit") continue;
+      if (theirs.partnerId !== character.agentId) continue;
+      // Lowest id wins, so two callers at once is still one conversation and
+      // still the SAME one on every machine.
+      if (visitor === null || other.agentId < visitor.agentId) visitor = other;
+    }
+    return visitor;
+  }
+
+  private seatedPartner(agentId: string | null): OfficeCharacter | null {
+    if (agentId === null) return null;
+    const partner = this.characters.get(agentId);
+    if (partner === undefined || !partner.seated) return null;
+    return partner;
+  }
+
+  private neighbourAt(
+    character: OfficeCharacter,
+    target: OfficeErrandTarget,
+  ): OfficeCharacter | null {
+    for (const other of this.orderedByAgentId()) {
+      if (other.agentId === character.agentId) continue;
+      if (other.errand !== "errand-wait") continue;
+      const theirs = other.errandTarget;
+      if (theirs === null || theirs.kind !== target.kind) continue;
+      if (!areAdjacent(theirs.tile, target.tile)) continue;
+      return other;
+    }
+    return null;
+  }
+
+  /**
+   * Whose turn it is to talk. One bubble at a time, swapping on a shared clock:
+   * two bubbles at once reads as two people waiting rather than as two people
+   * in a conversation.
+   */
+  private chatBubbleFor(character: OfficeCharacter): OfficeSpriteName | null {
+    const partner = this.chatPartnerOf(character);
+    if (partner === null) return null;
+    const speaksFirst = character.agentId < partner.agentId;
+    const onBeat = Math.floor(this.nowMs / CHAT_ALTERNATE_MS) % 2 === 0;
+    return speaksFirst === onBeat ? "bubble-awaiting" : null;
+  }
+
+  // ---- Walking -------------------------------------------------------- //
+
+  /**
+   * A walk in from the door outruns a stroll, and a walk with a message waiting
+   * outruns both. The arrival speed exists because a newcomer's first message
+   * lands within a step; the hurry speed exists because that message can arrive
+   * for anyone, at any point on the floor.
+   */
+  private walkSpeedOf(character: OfficeCharacter): number {
+    if (this.isHurrying(character.agentId)) return HURRY_TILES_PER_SECOND;
+    if (character.errand === "arriving") return ARRIVAL_TILES_PER_SECOND;
+    return WALK_TILES_PER_SECOND;
+  }
+
+  private advanceWalk(character: OfficeCharacter, dtMs: number): void {
+    character.walkPhaseMs += dtMs;
+    const speed = this.walkSpeedOf(character);
+    let budget = (dtMs / 1000) * speed;
+    while (budget > 0 && character.pathIndex < character.path.length) {
+      const target = character.path[character.pathIndex];
+      const dCol = target.col - character.col;
+      const dRow = target.row - character.row;
+      // Steps are axis-aligned single tiles, so Manhattan distance IS the
+      // distance travelled.
+      const distance = Math.abs(dCol) + Math.abs(dRow);
+      const nextFacing = facingFor(dCol, dRow);
+      if (nextFacing !== null) character.facing = nextFacing;
+      if (distance <= budget) {
+        character.col = target.col;
+        character.row = target.row;
+        character.pathIndex += 1;
+        budget -= distance;
+        continue;
+      }
+      const fraction = budget / distance;
+      character.col += dCol * fraction;
+      character.row += dRow * fraction;
+      budget = 0;
+    }
+    if (character.pathIndex < character.path.length) return;
+    if (character.errand === "leaving") {
+      // Out of the door and off the floor; the desk takes its dust sheet.
+      this.depart(character.agentId);
+      return;
+    }
+    if (character.errand === "errand-out") {
+      // Arrived: standing where the spot says to stand, turned the way it says
+      // to face, for as long as this agent's own seeded linger runs.
+      const target = character.errandTarget;
+      character.errand = "errand-wait";
+      character.waitMs =
+        target === null
+          ? ERRAND_LINGER_MIN_MS
+          : this.lingerMsFor(character, target);
+      character.lingerTotalMs = character.waitMs;
+      character.facing = arrivalFacingOf(target);
+      character.path = [];
+      character.pathIndex = 0;
+      character.walkPhaseMs = 0;
+      return;
+    }
+    if (character.errand === "queue-out") {
+      character.errand = "queue-stand";
+      character.facing = this.queueFacingOf(character.agentId);
+      character.path = [];
+      character.pathIndex = 0;
+      character.walkPhaseMs = 0;
+      // THE WALK HAS ENDED, so a civic seat it was releasing is free now - the
+      // same debt the `returning` arrival settles below, and safe for the same
+      // reason: `vacated` acts only on a claim already in `releasing`, and a
+      // character standing at the counter is by construction not in its bed.
+      this.seats.vacated(character.agentId);
+      return;
+    }
+    this.settleInChair(character);
+  }
+
+  private statusOf(agentId: string): OfficeAgentStatus {
+    return this.statusById.get(agentId) ?? "idle";
+  }
+
+  /**
+   * How a character is drawn this frame. Pose and facing come back together
+   * because a desk filler changes BOTH - the seated sprite ignores facing
+   * entirely, so "look left" is only visible on a standing body, and a filler
+   * that set facing alone would animate nothing at all.
+   */
+  private renderStateOf(character: OfficeCharacter): {
+    readonly pose: OfficeCharacterPose;
+    readonly facing: OfficeFacing;
+    readonly accessory: OfficeCharacterAccessory | undefined;
+  } {
+    const seat = this.seats.effectiveSeat(character.agentId);
+    const seatFacing = seat === null ? "up" : seat.facing;
+    const filler = character.filler;
+    if (filler !== null && character.seated) {
+      return { ...fillerPoseOf(filler, seatFacing), accessory: undefined };
+    }
+    return {
+      pose: this.poseFor(character),
+      facing: character.facing,
+      accessory: this.accessoryFor(character),
+    };
+  }
+
+  /**
+   * Headphones, and only while an agent is seated at its own desk working in
+   * the BACKGROUND. It is the one state with nothing else to show for itself -
+   * a background turn types at a quarter of the speed of a real one - and a
+   * pair of headphones is what "head down, not interruptible" looks like from
+   * behind.
+   */
+  private accessoryFor(
+    character: OfficeCharacter,
+  ): OfficeCharacterAccessory | undefined {
+    if (!character.seated) return undefined;
+    return this.statusOf(character.agentId) === "background"
+      ? "headphones"
+      : undefined;
+  }
+
+  /**
+   * How a seated character SITS, which is what its status looks like from
+   * behind. The precedence is the status precedence, unchanged: a crashed
+   * screen outranks a raised hand outranks a wait, and anything the record
+   * says is actually happening - a turn, a background turn - outranks all of
+   * them, because a typing body is the more informative reading.
+   */
+  private poseFor(character: OfficeCharacter): OfficeCharacterPose {
+    if (!character.seated) {
+      // Off a desk and off its feet: a sofa, a sleeping bag, an armchair, a
+      // bench. `sit` without being `seated` - seated means "in its own chair",
+      // which is what every errand and delivery rule keys on.
+      if (this.onSeatedErrand(character)) return "sit";
+      // On a treadmill: walking, and going nowhere. The belt is the whole
+      // point, so the frames alternate even though the tile never changes.
+      if (this.onTreadmill(character)) {
+        return this.walkingPose(character.agentId, TREADMILL_FRAME_MS);
+      }
+      // On foot but with nothing left to walk: standing at a spot or in the
+      // queue.
+      if (character.pathIndex >= character.path.length) return "stand";
+      return Math.floor(character.walkPhaseMs / WALK_FRAME_MS) % 2 === 0
+        ? "walk1"
+        : "walk2";
+    }
+    // IN A BED OR A CHAIR, the room decides the body and the status decides
+    // only the glyph above it. A crashed agent lying in the infirmary is drawn
+    // as the nap room draws a sleeper and an awaiting one as the sofa draws a
+    // sitter - both of which are `sit`, the same pose those errands already
+    // use - rather than slumped over a monitor it is nowhere near. The crashed
+    // SCREEN stays behind at its desk, where the monitor is.
+    if (this.seats.civicClaimOf(character.agentId) !== null) return "sit";
+    const status = this.statusOf(character.agentId);
+    if (status === "working") {
+      return this.typingPose(character.agentId, TYPING_FRAME_MS);
+    }
+    if (status === "background") {
+      return this.typingPose(character.agentId, BACKGROUND_FRAME_MS);
+    }
+    if (status === "failure") return "crash";
+    if (status === "attention") return "hand-up";
+    if (status === "awaiting") return "lean";
+    return "sit";
+  }
+
+  private typingPose(agentId: string, frameMs: number): OfficeCharacterPose {
+    const phase = this.nowMs + phaseOffsetMs(agentId);
+    return Math.floor(phase / frameMs) % 2 === 0 ? "type1" : "type2";
+  }
+
+  /**
+   * The walking frames for a character that is not going anywhere. Phased off
+   * the scene clock rather than off `walkPhaseMs`, which only advances while a
+   * path is being walked and would leave a treadmill runner frozen mid-stride.
+   */
+  private walkingPose(agentId: string, frameMs: number): OfficeCharacterPose {
+    const phase = this.nowMs + phaseOffsetMs(agentId);
+    return Math.floor(phase / frameMs) % 2 === 0 ? "walk1" : "walk2";
+  }
+
+  /** On a treadmill, walking in place: the one errand taken at a running pace. */
+  private onTreadmill(character: OfficeCharacter): boolean {
+    const target = character.errandTarget;
+    if (target === null || target.kind !== "treadmill") return false;
+    return character.errand === "errand-wait";
+  }
+
+  // ---- Frame assembly ------------------------------------------------ //
+
+  /**
+   * Whether anything the band being drawn SHOWS is moving right now.
+   *
+   * A renderer that draws sixty identical frames a second is spending a
+   * laptop's battery to redraw a still life, and a floor of seated agents
+   * between turns is exactly that. This is the cheap test for "is another
+   * frame going to differ from this one": something in flight, someone off
+   * their chair, a bubble or sparkle up, or a screen mid-alternation.
+   *
+   * IT TAKES THE BAND because half of that list is invisible at overview. A
+   * frame at lod 0 is pips and envelopes - `frame` builds nothing else - so a
+   * bubble, a sparkle, a paper ball, a filler animation and a typing screen
+   * all resolve to the same pixels from one frame to the next, and a floor of
+   * working agents would otherwise redraw sixty times a second to show a
+   * thousand dots that never move. What still counts there is a character
+   * whose POSITION changes and an envelope in flight.
+   *
+   * A status CHANGE is not in this test at any band. It arrives as an input,
+   * and the canvas invalidates the gate on every sync - so the frame that
+   * shows it is asked for rather than discovered by polling.
+   *
+   * Deliberately CONSERVATIVE within a band. Anything it is unsure about counts
+   * as animating, because a false "no" freezes the floor and a false "yes"
+   * costs one frame.
+   */
+  isAnimating(lod: OfficeLod): boolean {
+    if (this.envelopes.length > 0) return true;
+    for (const character of this.characters.values()) {
+      // A walker moves its pip as surely as its sprite.
+      if (!character.seated) return true;
+      if (lod === 0) continue;
+      if (character.hurrying || character.rallying) return true;
+      if (character.bubble !== null || character.sparkleMs > 0) return true;
+      if (character.filler !== null) return true;
+      // A lit screen alternates its frame while its agent has a turn running,
+      // so a working desk is never a still frame.
+      const status = this.statusOf(character.agentId);
+      if (status === "working" || status === "background") return true;
+      // The attention bubble bobs, so a flagged agent animates even seated.
+      // The awaiting bubble does not: a seated agent waiting on a reply is a
+      // still frame, and a request can stay open for hours.
+      if (status === "attention" || status === "failure") return true;
+    }
+    // The overlay art that only exists above overview, where the overlay is
+    // envelopes alone. A vehicle belongs here rather than beside the envelope
+    // test at the top: one standing at a kerb is still alternating its lamps,
+    // so a road with anything on it is never a still frame - but `frame` draws
+    // no vehicle at overview, and a trip a zoom-out has made invisible must
+    // not hold the gate open for the rest of its twenty seconds.
+    return lod > 0 && (this.vehicles.length > 0 || this.paperBalls.length > 0);
+  }
+
+  /** Sheeted once the archive is real AND the person has actually gone. */
+  private isDeskSheeted(agentId: string): boolean {
+    return this.departedIds.has(agentId) && this.archivedIds.has(agentId);
+  }
+
+  // ---- The per-layout index ------------------------------------------- //
+
+  /**
+   * Seats and spots bucketed by index chunk, built once per layout.
+   *
+   * Without it, drawing the forty desks a viewport holds means walking all
+   * thousand of them, thirty times a second, to find out which forty. The
+   * index is a pure function of the layout, which is why it can be built once
+   * and thrown away wholesale when the layout is replaced or the canvas goes
+   * off screen.
+   *
+   * Spots are DEDUPED by the tile a walker stands on. A storey may alias
+   * another's plaza spot - same tile, same fixture, its own `floorIndex` - so
+   * that the whole building can reach one coffee machine; the painter must
+   * still be asked about that coffee machine exactly once.
+   */
+  private index(): FrameChunkIndex {
+    const cached = this.chunkIndex;
+    if (cached !== null && this.chunkIndexVersion === this.layoutVersion) {
+      return cached;
+    }
+    const layout = this.currentLayout;
+    const seats = new Map<string, OfficeSeat[]>();
+    for (const seat of layout.seats.values()) {
+      // Filed under the chunks its PROJECTED box covers, which is the same box
+      // the accept test below re-checks it against - so the bucket set can
+      // never be narrower than the set of rects that would accept it.
+      for (const key of chunkKeysOfBox(this.seatBox(seat))) {
+        const bucket = seats.get(key);
+        if (bucket === undefined) seats.set(key, [seat]);
+        else bucket.push(seat);
+      }
+    }
+    const spots = new Map<string, OfficeErrandSpot[]>();
+    const seen = new Set<string>();
+    for (const floor of layout.floors) {
+      for (const spot of floor.errandSpots) {
+        const tileKey = tileKeyOf(spot.approachTile);
+        if (seen.has(tileKey)) continue;
+        seen.add(tileKey);
+        for (const key of chunkKeysOfBox(this.spotBox(spot))) {
+          const bucket = spots.get(key);
+          if (bucket === undefined) spots.set(key, [spot]);
+          else bucket.push(spot);
+        }
+      }
+    }
+    const assigned = new Set<string>();
+    for (const desk of layout.desks.values()) assigned.add(desk.seatId);
+    const reserves = new Set<string>();
+    for (const seat of layout.seats.values()) {
+      // A spare CUBBY is the quiet stack's empty slot, not a desk with a front
+      // to draw, so it is not furniture the painter is asked about.
+      if (seat.kind === "cubby" || assigned.has(seat.seatId)) continue;
+      reserves.add(seat.seatId);
+    }
+    const built: FrameChunkIndex = { seats, spots, reserves };
+    this.chunkIndex = built;
+    this.chunkIndexVersion = this.layoutVersion;
+    return built;
+  }
+
+  /**
+   * The seats the rect touches, with the agent in each.
+   *
+   * An OCCUPIED seat is kept when its occupant exists at the cursor. An
+   * unoccupied one is kept only when it is a `reserve`: a reserve standing
+   * empty is a real piece of furniture that a view draws as a faint desk front
+   * and labels at close-up, whereas an empty ASSIGNED desk belongs to somebody
+   * who does not exist yet at this cursor, and drawing that would leak the
+   * future onto the floor.
+   *
+   * A chunk is indexed by the seat's projected box, and a box can straddle
+   * several, so a seat reachable through two keys is still reported once.
+   */
+  private seatsIn(rect: OfficeRect): ReadonlyArray<SeatedAgent> {
+    const index = this.index();
+    const found: SeatedAgent[] = [];
+    const seen = new Set<string>();
+    for (const key of chunkKeysOfBox(rect)) {
+      const bucket = index.seats.get(key);
+      if (bucket === undefined) continue;
+      for (const seat of bucket) {
+        if (seen.has(seat.seatId)) continue;
+        const agentId = this.occupantToPaint(seat);
+        if (agentId === null && !index.reserves.has(seat.seatId)) continue;
+        if (agentId !== null && !this.visibleAgentIds.has(agentId)) continue;
+        if (!rectsOverlap(this.seatBox(seat), rect)) continue;
+        seen.add(seat.seatId);
+        found.push({ agentId, seat });
+      }
+    }
+    // Canonical order, so the same input and rect give the same frame twice.
+    // An empty reserve has no id to sort by, so it sorts under its seat id -
+    // which is stable for the same reason an agent id is.
+    found.sort((left, right) =>
+      compareIdPair(
+        left.agentId ?? left.seat.seatId,
+        right.agentId ?? right.seat.seatId,
+      ),
+    );
+    return found;
+  }
+
+  /**
+   * How far this painter's blocks reach past their tiles, on this plan.
+   *
+   * Keyed on `layoutVersion` exactly as the floor is: the number is a function
+   * of the layout and of nothing else the frame carries, so the camera moving
+   * must not cost a second walk of the rooms.
+   */
+  private blockOverhangPx(layout: OfficeLayout): number {
+    const cached = this.overhangCache;
+    if (cached !== null && cached.version === this.layoutVersion) {
+      return cached.px;
+    }
+    const px = this.view.painter.blockOverhangPx(layout);
+    this.overhangCache = { version: this.layoutVersion, px };
+    return px;
+  }
+
+  /**
+   * The floor inside a tile rect, from the painter, remembered.
+   *
+   * A still office asks for the same floor sixty times a second - same plan,
+   * same band, same rectangle - and the floor is the largest thing in a frame
+   * by an order of magnitude.
+   */
+  private floorIn(
+    layout: OfficeLayout,
+    tiles: OfficeTileRect,
+    lod: OfficeLod,
+  ): ReadonlyArray<OfficeDrawable> {
+    const key = floorKeyOf(this.layoutVersion, lod, tiles);
+    const cached = this.floorCache;
+    if (cached !== null && cached.key === key) return cached.drawables;
+    const drawables = this.view.painter.floor(layout, tiles, lod);
+    this.floorCache = { key, drawables };
+    return drawables;
+  }
+
+  /** The spots the rect touches, deduped by tile in the index and by key here. */
+  private spotsIn(rect: OfficeRect): ReadonlyArray<OfficeErrandSpot> {
+    const index = this.index();
+    const found: OfficeErrandSpot[] = [];
+    const seen = new Set<string>();
+    for (const key of chunkKeysOfBox(rect)) {
+      const bucket = index.spots.get(key);
+      if (bucket === undefined) continue;
+      for (const spot of bucket) {
+        const tileKey = tileKeyOf(spot.approachTile);
+        if (seen.has(tileKey)) continue;
+        if (!rectsOverlap(this.spotBox(spot), rect)) continue;
+        seen.add(tileKey);
+        found.push(spot);
+      }
+    }
+    return found;
+  }
+
+  /**
+   * Who a seat is drawn WITH, which is not always who the book says is in it.
+   *
+   * A waking agent's effective seat becomes the reserve it claimed the moment
+   * it claims it, and its cubby - assigned, so never an unclaimed reserve -
+   * would go out of the frame from under a character that has not taken a
+   * step yet. So the seat keeps its agent while that agent is out of a chair,
+   * and lets go on the same boundary a claim does: the character settles
+   * somewhere, and `vacated` ends the other half of the same handover.
+   *
+   * A seat whose agent does not exist at this cursor is still nobody's - a
+   * future arrival's desk stays unpainted, which is what it was for.
+   */
+  private occupantToPaint(seat: OfficeSeat): string | null {
+    const occupant = this.seats.occupant(seat.seatId);
+    if (occupant !== null) return occupant;
+    const assignee = this.seats.assignee(seat.seatId);
+    if (assignee === null || !this.visibleAgentIds.has(assignee)) return null;
+    // A DESK WHOSE OWNER IS IN THE WARD still belongs to that owner, and still
+    // shows what its owner's screen is doing. This is the same answer the
+    // handover below gives for an agent mid-walk, for the same reason: the
+    // agent exists, it is simply not sitting here. Without it a crashed agent's
+    // monitor stops being crashed the instant it lies down - and the desk stops
+    // being painted at all, which is a workstation blinking out of the office
+    // and a seat the plan-perf denominator counts but the painter never emits.
+    //
+    // Not a cubby: the quiet stack's slot is not furniture with a front to
+    // draw, and it is meant to go the moment its occupant walks out of it
+    // (F19).
+    if (seat.kind !== "cubby" && this.seats.civicClaimOf(assignee) !== null) {
+      return assignee;
+    }
+    // An OPEN handover, not merely an agent out of its chair. Every later
+    // walk - a queue-out, an errand, a trip home - would otherwise reopen a
+    // handover that finished the moment this agent first sat down.
+    if (this.handover.get(assignee) !== seat.seatId) return null;
+    return assignee;
+  }
+
+  /** A seat's projected box - what the rect test and the hit region both use. */
+  private seatBox(seat: OfficeSeat): OfficeRect {
+    // The plan's own answer wins where it has one: a seat painted away from
+    // its desk tile knows where it went, and this end cannot derive it.
+    if (seat.hitBox !== null) return seat.hitBox;
+    const origin = this.point(seat.deskTile.col, seat.deskTile.row);
+    return {
+      x: origin.x,
+      y: origin.y,
+      width: seat.hitTiles.width * OFFICE_TILE,
+      height: seat.hitTiles.height * OFFICE_TILE,
+    };
+  }
+
+  /** A spot's projected box: the one tile its walker stands on. */
+  private spotBox(spot: OfficeErrandSpot): OfficeRect {
+    const origin = this.point(spot.approachTile.col, spot.approachTile.row);
+    return {
+      x: origin.x,
+      y: origin.y,
+      width: OFFICE_TILE,
+      height: OFFICE_TILE,
+    };
+  }
+
+  /** A character's projected box: the sprite standing on its own foot point. */
+  private characterBox(character: OfficeCharacter): OfficeRect {
+    const corner = this.spriteCornerOf(this.footOf(character));
+    return {
+      x: corner.x,
+      y: corner.y,
+      width: OFFICE_CHARACTER_WIDTH,
+      height: OFFICE_CHARACTER_HEIGHT,
+    };
+  }
+
+  /**
+   * The characters inside the rect, in draw order.
+   *
+   * Not indexed: characters MOVE, so an index of them would be rebuilt every
+   * tick to answer a question a single pass over the population already
+   * answers in microseconds. The index exists for the things that stand still.
+   */
+  private charactersIn(rect: OfficeRect): ReadonlyArray<OfficeCharacter> {
+    const found: OfficeCharacter[] = [];
+    // CULL FIRST. Sorting the whole population to answer a viewport that holds
+    // forty of them is the cost this method exists to avoid, and the sort is
+    // the expensive half: the draw order of the forty is the same whether it
+    // is read out of a thousand-entry ordering or computed over the forty.
+    // The overlap test is inlined so an off-screen character costs one
+    // projected point rather than a box object nothing keeps.
+    for (const character of this.characters.values()) {
+      if (!this.agentById.has(character.agentId)) continue;
+      if (!this.characterTouches(character, rect)) continue;
+      found.push(character);
+    }
+    found.sort(compareByDrawOrder);
+    return found;
+  }
+
+  /** Is this character's sprite inside the rect? Asked without building a box. */
+  private characterTouches(
+    character: OfficeCharacter,
+    rect: OfficeRect,
+  ): boolean {
+    const foot = this.footOf(character);
+    const x = foot.x - OFFICE_CHARACTER_WIDTH / 2;
+    const y = foot.y - OFFICE_CHARACTER_HEIGHT;
+    return (
+      x < rect.x + rect.width &&
+      rect.x < x + OFFICE_CHARACTER_WIDTH &&
+      y < rect.y + rect.height &&
+      rect.y < y + OFFICE_CHARACTER_HEIGHT
+    );
+  }
+
+  /** What one desk LOOKS like right now, as the painter needs to see it. */
+  private deskStateOf(seated: SeatedAgent): OfficeDeskState {
+    const agentId = seated.agentId;
+    // An empty reserve: the painter draws the furniture and nothing personal.
+    // Everything below reads off an occupant, so there is nothing to compute.
+    if (agentId === null) return EMPTY_SEAT_STATE;
+    const agent = this.agentById.get(agentId);
+    const status = this.statusOf(agentId);
+    const character = this.characters.get(agentId);
+    // A message that landed while its owner was away is on the desk in exactly
+    // the sense the pile already draws: waiting, unanswered, in front of them.
+    // Except one that the open-request count already holds - that is the same
+    // envelope seen from two sides, not two envelopes.
+    const waiting =
+      character === undefined
+        ? 0
+        : character.pending.filter((item) => !item.inOpenCount).length;
+    return {
+      agentId,
+      name: agent?.name ?? null,
+      status,
+      sheeted: this.isDeskSheeted(agentId),
+      openRequests: (this.openRequestsByReceiver.get(agentId) ?? 0) + waiting,
+      screenFrame: this.screenFrameOf(agentId, status),
+      harnessId: agent?.harnessId ?? null,
+      modelTier: agent?.modelTier ?? "medium",
+      // The member's OWN `teamId`, never `teamOf`. A solo stranded on another
+      // host carries its team's id - that is the whole point of the field,
+      // keeping one team one colour across two buildings - while `teamOf`
+      // answers null for it, because no roster for that team exists on this
+      // host to return. `teamOf` is the roster; `teamId` is the accent.
+      accentId: this.partition?.members.get(agentId)?.teamId ?? null,
+    };
+  }
+
+  /** Which of a lit screen's two frames this desk is on. Shares the typing phase. */
+  private screenFrameOf(agentId: string, status: OfficeAgentStatus): 0 | 1 {
+    if (status !== "working" && status !== "background") return 0;
+    const frameMs =
+      status === "working"
+        ? MONITOR_WORKING_FRAME_MS
+        : MONITOR_BACKGROUND_FRAME_MS;
+    const phase = this.nowMs + phaseOffsetMs(agentId);
+    return Math.floor(phase / frameMs) % 2 === 0 ? 0 : 1;
+  }
+
+  /**
+   * The static half of the frame: what each visible seat and each spot in the
+   * rect looks like, from the painter.
+   *
+   * Cached per seat and keyed by the desk state that produced it, so a floor of
+   * idle agents rebuilds nothing between frames and a desk whose screen just
+   * flickered rebuilds only itself.
+   */
+  private buildSeatProps(args: {
+    readonly layout: OfficeLayout;
+    readonly seats: ReadonlyArray<SeatedAgent>;
+    readonly rect: OfficeRect;
+    readonly lod: OfficeLod;
+  }): ReadonlyArray<OfficeWorldDrawable> {
+    const { layout, lod, rect, seats } = args;
+    if (this.seatPropVersion !== this.layoutVersion) {
+      this.seatPropCache.clear();
+      this.spotPropCache.clear();
+      this.seatPropVersion = this.layoutVersion;
+    }
+    const lodKey = String(lod);
+    const out: OfficeWorldDrawable[] = [];
+    for (const seated of seats) {
+      const state = this.deskStateOf(seated);
+      const key = `${lod}|${deskStateKey(state)}`;
+      const cached = this.seatPropCache.get(seated.seat.seatId);
+      if (cached !== undefined && cached.key === key) {
+        out.push(...cached.drawables);
+        continue;
+      }
+      const drawables = this.view.painter.seatProps(
+        layout,
+        seated.seat,
+        state,
+        lod,
+      );
+      this.seatPropCache.set(seated.seat.seatId, { key, drawables });
+      out.push(...drawables);
+    }
+    // A spot's art has no state at all - it is the layout, the spot and the
+    // band - so it is cached by the band alone and thrown away with the plan
+    // that made it. The cache is the SPOTS THE RECT TOUCHES, not the floor's,
+    // so it is bounded by the viewport like everything else here.
+    for (const spot of this.spotsIn(rect)) {
+      const spotKey = tileKeyOf(spot.approachTile);
+      const cachedSpot = this.spotPropCache.get(spotKey);
+      if (cachedSpot !== undefined && cachedSpot.key === lodKey) {
+        out.push(...cachedSpot.drawables);
+        continue;
+      }
+      const drawables = this.view.painter.spotProps(layout, spot, lod);
+      this.spotPropCache.set(spotKey, { key: lodKey, drawables });
+      out.push(...drawables);
+    }
+    // Stable, so two drawables at one depth keep the order they were made in:
+    // a screen belongs in front of the desk it stands on.
+    out.sort((left, right) => left.depth - right.depth);
+    return out;
+  }
+
+  /** One pip per character in view, and nothing else: this is overview zoom. */
+  private buildPips(
+    characters: ReadonlyArray<OfficeCharacter>,
+  ): ReadonlyArray<OfficeDrawable> {
+    const pips: OfficeDrawable[] = [];
+    for (const character of characters) {
+      const status = this.statusOf(character.agentId);
+      // The tile's centre, PROJECTED - project `(col + 0.5, row + 0.5)` rather
+      // than the corner plus a flat `OFFICE_TILE / 2`, which on the affine
+      // Campus/City projectors shifts every pip eight world pixels off its tile
+      // and past the edge of its own hit box. See `tileCenter`.
+      const center = this.point(character.col + 0.5, character.row + 0.5);
+      pips.push({
+        kind: "pip",
+        x: center.x,
+        y: center.y,
+        status,
+        glyph: pipGlyphOf(status),
+        agentId: character.agentId,
+      });
+    }
+    return pips;
+  }
+
+  /** Whoever in the rect is not in their own chair - the culled set, as promised. */
+  private awayAgentIdsAmong(
+    characters: ReadonlyArray<OfficeCharacter>,
+  ): ReadonlySet<string> {
+    const away = new Set<string>();
+    for (const character of characters) {
+      if (character.seated) continue;
+      away.add(character.agentId);
+    }
+    return away;
+  }
+
+  /**
+   * The characters, in draw order, with their name tags.
+   *
+   * A CUBBY occupant is the exception, and the reason is that a cubby is a
+   * waiting slot rather than a workstation: below close-up its painter draws a
+   * silhouette in the slot, so drawing the character too would put two bodies
+   * in one one-tile box. At close-up the character itself is drawn, dimmed - a
+   * cold agent is present rather than working. One that is WALKING is an
+   * ordinary actor at every level: it has left the slot.
+   */
+  private buildActors(
+    characters: ReadonlyArray<OfficeCharacter>,
+    lod: OfficeLod,
+  ): ReadonlyArray<OfficeWorldDrawable> {
+    const actors: OfficeWorldDrawable[] = [];
+    for (const character of characters) {
+      const agent = this.agentById.get(character.agentId);
+      if (agent === undefined) continue;
+      const inCubby = this.seatedInCubby(character.agentId);
+      if (inCubby && lod < 2) continue;
+      const archived = this.archivedIds.has(character.agentId);
+      const foot = this.footOf(character);
+      const corner = this.spriteCornerOf(foot);
+      const x = corner.x;
+      const y = corner.y;
+      const render = this.renderStateOf(character);
+      // Sorted by the FEET, which is what "in front of" means on a floor: a
+      // taller sprite does not stand nearer, and a world painter interleaves
+      // its props against this same number.
+      const depth = foot.y;
+      actors.push({
+        drawable: {
+          kind: "sprite",
+          sprite: {
+            name: "character",
+            facing: render.facing,
+            pose: render.pose,
+            appearance: agent.appearance,
+            accessory: render.accessory,
+          },
+          x,
+          y,
+          alpha: characterAlpha({
+            archived,
+            inCubby,
+            seatIdle: this.seatIdleAlphaOf(character, lod),
+          }),
+        },
+        depth,
+        ownerAgentId: character.agentId,
+      });
+      actors.push({
+        drawable: {
+          kind: "label",
+          text: officeTruncateLabel(agent.name, OFFICE_MAX_LABEL_CHARS),
+          x: x + OFFICE_CHARACTER_WIDTH / 2,
+          y: y + OFFICE_CHARACTER_HEIGHT + LABEL_GAP,
+          tone: archived ? "muted" : "default",
+          ownerAgentId: character.agentId,
+          fitTiles: this.tagFitTilesOf(character),
+        },
+        depth,
+        ownerAgentId: character.agentId,
+      });
+    }
+    return actors;
+  }
+
+  /**
+   * The vehicles on screen, as drawables.
+   *
+   * ONE DRAWABLE EACH and no hit region: a vehicle names nobody, and the
+   * agents it came for are already targets in their own right. It is culled on
+   * its foot point like everything else in a frame, so a trip that continues
+   * after the camera has left costs a frame nothing.
+   *
+   * The sprite is NOT resolved here. Which of the twelve names this becomes
+   * depends on the projection, and the scene does not know whether its view
+   * draws oblique or isometric - so the drawable carries the three facts that
+   * vary and the renderer resolves the name.
+   */
+  private buildVehicles(rect: OfficeRect): ReadonlyArray<OfficeWorldDrawable> {
+    if (this.vehicles.length === 0) return [];
+    const out: OfficeWorldDrawable[] = [];
+    for (const vehicle of this.vehicles) {
+      const at = this.vehicleTileOf(vehicle);
+      if (at === null) continue;
+      const foot = this.footPoint(at.col, at.row);
+      if (
+        foot.x < rect.x ||
+        foot.x > rect.x + rect.width ||
+        foot.y < rect.y ||
+        foot.y > rect.y + rect.height
+      ) {
+        continue;
+      }
+      out.push({
+        drawable: {
+          kind: "vehicle",
+          vehicleKind: vehicle.kind,
+          x: foot.x,
+          y: foot.y,
+          facing: vehicle.facing,
+          lights: Math.floor(this.nowMs / VEHICLE_LIGHT_MS) % 2 === 0 ? 0 : 1,
+        },
+        // The road's own depth: the foot of the tile it is crossing, the same
+        // number a walker standing there would carry.
+        depth: foot.y,
+        // Nobody's. A vehicle owns no name tag and no hit region, and
+        // `deepestByOwner` skips a null owner for exactly this case.
+        ownerAgentId: null,
+      });
+    }
+    return out;
+  }
+
+  /** Where a vehicle is this instant, as a fractional tile on its road. */
+  private vehicleTileOf(
+    vehicle: OfficeVehicle,
+  ): { readonly col: number; readonly row: number } | null {
+    const road = this.roadOf(vehicle);
+    if (road === null) return null;
+    const kerb = this.kerbIndexOf(vehicle, road);
+    if (kerb === null) return null;
+    if (vehicle.phase === "wait") return road.tiles[kerb];
+    const travelled = this.tilesTravelled(vehicle.elapsedMs);
+    return vehicle.phase === "arrive"
+      ? tileAlong(road.tiles, 0, kerb, travelled)
+      : tileAlong(road.tiles, kerb, road.tiles.length - 1, travelled);
+  }
+
+  /**
+   * The tiles a seated character's name tag has to fit inside, or `null` for
+   * one that is on its feet.
+   *
+   * The EFFECTIVE seat, so an agent borrowing somebody else's desk is fitted
+   * to the desk it is actually in. A walker gets `null` because it has left
+   * its seat: there is no box around it to overprint, and the office would be
+   * abbreviating a name for no reason.
+   */
+  private tagFitTilesOf(character: OfficeCharacter): number | null {
+    if (!character.seated) return null;
+    return this.seats.effectiveSeat(character.agentId)?.hitTiles.width ?? null;
+  }
+
+  /**
+   * The seat's own dimming for a quiet occupant, or `null` where none applies.
+   *
+   * Four conditions, and each excludes a case the view would not want dimmed:
+   * the seat has to declare one, the character has to be IN it rather than
+   * walking over it, the status has to be idle, and the lod has to be one that
+   * draws characters at all - at overview a pip carries the state on its own.
+   */
+  private seatIdleAlphaOf(
+    character: OfficeCharacter,
+    lod: OfficeLod,
+  ): number | null {
+    if (lod === 0) return null;
+    if (!character.seated) return null;
+    if (this.statusOf(character.agentId) !== "idle") return null;
+    return this.seats.effectiveSeat(character.agentId)?.idleAlpha ?? null;
+  }
+
+  /** The envelopes in flight. Always built: there are at most two dozen. */
+  private buildEnvelopes(): ReadonlyArray<OfficeDrawable> {
+    const overlay: OfficeDrawable[] = [];
+    for (const envelope of this.envelopes) {
+      const from = this.seatPointOf(envelope.fromAgentId);
+      const to = this.seatPointOf(envelope.toAgentId);
+      if (from === null || to === null) continue;
+      const progress = easeInOut(
+        clamp(envelope.elapsedMs / envelope.durationMs, 0, 1),
+      );
+      overlay.push({
+        kind: "envelope",
+        x: from.x + (to.x - from.x) * progress,
+        y:
+          from.y +
+          (to.y - from.y) * progress -
+          ENVELOPE_ARC_LIFT * 4 * progress * (1 - progress),
+        pulseKind: envelope.pulseKind,
+        progress,
+        edgeId: envelope.edgeId,
+      });
+    }
+    return overlay;
+  }
+
+  private buildOverlay(
+    rect: OfficeRect,
+    characters: ReadonlyArray<OfficeCharacter>,
+  ): ReadonlyArray<OfficeDrawable> {
+    const overlay: OfficeDrawable[] = [];
+    const clockSize = officeSpriteSize({ name: "clock" });
+    for (const floor of this.currentLayout.floors) {
+      // CENTER anchored on the face the `clock` prop just drew, so the hands
+      // pivot on the dial rather than on its corner.
+      const face = this.point(floor.clockTile.col, floor.clockTile.row);
+      // How far the art reaches ABOVE its own tile - a sprite-space constant,
+      // so it is added to the PROJECTED tile top rather than recomputed from
+      // an unprojected row.
+      const overhang = OFFICE_TILE - clockSize.height;
+      const y = face.y + overhang;
+      if (
+        !rectsOverlap(
+          { x: face.x, y, width: clockSize.width, height: clockSize.height },
+          rect,
+        )
+      ) {
+        continue;
+      }
+      overlay.push({
+        kind: "clock",
+        x: face.x + clockSize.width / 2,
+        y: y + clockSize.height / 2,
+        timeMs: this.clockMs,
+      });
+    }
+    for (const character of characters) {
+      const head = this.headPointOfCharacter(character);
+      const bubble = this.bubbleFor(character);
+      if (bubble !== null) {
+        // Only the attention bubble bobs; a floor where every bubble moved
+        // would read as noise rather than as a call for help.
+        const bobOffset =
+          Math.floor(this.nowMs / BUBBLE_BOB_MS) % 2 === 0 ? -1 : 1;
+        const bob = bubble === "bubble-attention" ? bobOffset : 0;
+        overlay.push({
+          kind: "sprite",
+          sprite: { name: bubble },
+          x: head.x,
+          y: head.y - BUBBLE_GAP + bob,
+        });
+      }
+      if (character.sparkleMs > 0) {
+        overlay.push({
+          kind: "sprite",
+          sprite: { name: "sparkle" },
+          x: head.x,
+          y: head.y - BUBBLE_GAP,
+        });
+      }
+      this.pushWateringDrawables(overlay, character, head);
+      this.pushScreenSparkle(overlay, character, "arcade");
+      this.pushScreenSparkle(overlay, character, "tv");
+      // Once per PAIR, from the lower id, or the ball would be drawn twice on
+      // top of itself. Chess is played without one - see `errandBubbleFor`.
+      if (character.rallying && character.errandTarget?.kind !== "chess") {
+        const partner = this.rallyPartnerOf(character);
+        if (partner !== null && character.agentId < partner.agentId) {
+          this.pushRallyBall(overlay, character, partner);
+        }
+      }
+    }
+    for (const ball of this.paperBalls) {
+      const point = this.paperBallPointOf(ball);
+      overlay.push({
+        kind: "sprite",
+        sprite: { name: "paper-ball" },
+        x: point.x,
+        y: point.y,
+      });
+    }
+    // Envelopes are never culled: there are at most two dozen, and one flying
+    // in from off screen is exactly the thing worth seeing arrive.
+    overlay.push(...this.buildEnvelopes());
+    return overlay;
+  }
+
+  /**
+   * The can in the waterer's hand, and the sparkle on the plant that ends the
+   * job. The can hangs beside the body rather than over the head: it is held,
+   * not thought, and every other overlay sprite is a bubble.
+   *
+   * The sparkle lands on the PLANT the spot names, so what reads as watered
+   * is the plant and not the person - and it lands there in an isometric view
+   * too, because the tile goes through the projector like everything else.
+   */
+  private pushWateringDrawables(
+    overlay: OfficeDrawable[],
+    character: OfficeCharacter,
+    head: OfficePoint,
+  ): void {
+    const target = character.errandTarget;
+    if (target === null || target.kind !== "water-plant") return;
+    if (character.errand !== "errand-wait") return;
+    overlay.push({
+      kind: "sprite",
+      sprite: { name: "watering-can" },
+      x: head.x + WATERING_CAN_X_OFFSET,
+      y: head.y + WATERING_CAN_Y_OFFSET,
+    });
+    if (character.waitMs > SPARKLE_MS) return;
+    const plantTile = target.actionTile;
+    if (plantTile === null) return;
+    const plant = this.tileCenter(plantTile);
+    overlay.push({
+      kind: "sprite",
+      sprite: { name: "sparkle" },
+      x: plant.x,
+      y: plant.y,
+    });
+  }
+
+  /**
+   * A screen flashing every couple of seconds while somebody is at it: the
+   * arcade cabinet, and the television over the console sofa. On the SCREEN
+   * rather than over the player's head - what is happening is on the screen,
+   * and the player is only sitting or standing there.
+   *
+   * The screen is the one the SPOT names rather than an offset from where the
+   * player stands, so how far back the sofa is stays the plan's business.
+   */
+  private pushScreenSparkle(
+    overlay: OfficeDrawable[],
+    character: OfficeCharacter,
+    screen: OfficeSpriteName,
+  ): void {
+    const target = character.errandTarget;
+    if (target === null || character.errand !== "errand-wait") return;
+    const wanted = screen === "arcade" ? "arcade" : "console";
+    if (target.kind !== wanted) return;
+    const gapMs =
+      screen === "arcade" ? ARCADE_SPARKLE_GAP_MS : CONSOLE_SPARKLE_GAP_MS;
+    const played = character.lingerTotalMs - character.waitMs;
+    if (played % gapMs >= SPARKLE_MS) return;
+    const tile = target.actionTile;
+    if (tile === null) return;
+    const point = this.tileCenter(tile);
+    overlay.push({
+      kind: "sprite",
+      sprite: { name: "sparkle" },
+      x: point.x,
+      y: point.y,
+    });
+  }
+
+  /**
+   * A transient acknowledgement outranks a standing state: it lasts under a
+   * second and reports the row the cursor is on, which is what the viewer is
+   * looking at. The standing bubble is still there when it expires.
+   */
+  private bubbleFor(character: OfficeCharacter): OfficeSpriteName | null {
+    const transient = character.bubble;
+    if (transient !== null) return transient.sprite;
+    const status = this.statusOf(character.agentId);
+    // A failure needs a person exactly as much as an interview does, and the
+    // crashed screen at the desk is what says which of the two it is.
+    if (status === "failure" || status === "attention") {
+      return "bubble-attention";
+    }
+    if (status === "awaiting") return "bubble-awaiting";
+    // Standing at the board is thinking out loud; talking to somebody is the
+    // same bubble, alternating so only one of the pair holds it at a time.
+    // Looking in at somebody else's door is the same shape of thought.
+    const errandBubble = this.errandBubbleFor(character);
+    if (errandBubble !== null) return errandBubble;
+    return this.chatBubbleFor(character);
+  }
+
+  /**
+   * The bubble an agent wears because of WHERE it is, not because of what its
+   * agent record says. Standing at the board is thinking out loud; talking to
+   * somebody is the same bubble; looking in at somebody else's door is the
+   * same shape of thought.
+   */
+  private errandBubbleFor(character: OfficeCharacter): OfficeSpriteName | null {
+    const target = character.errandTarget;
+    if (character.errand !== "errand-wait" || target === null) return null;
+    if (target.kind === "whiteboard" || target.kind === "peek") {
+      return "bubble-awaiting";
+    }
+    // Holding a side of a table open. Once somebody takes the other one the
+    // game itself is what says the two are together, so the bubble goes - for
+    // chess, which has no ball, the thinking bubble takes over instead.
+    if (isTwoPlayerKind(target.kind) && !character.rallying) {
+      return "bubble-awaiting";
+    }
+    if (target.kind === "chess") return this.chessThoughtFor(character);
+    // A sofa is where an agent dozes off, on the long sits and in their second
+    // half - see `dozingOnSofa`. A bag is where one is asleep outright, once it
+    // has had a moment to settle onto it.
+    if (target.kind === "sofa" && this.dozingOnSofa(character)) {
+      return "bubble-sleep";
+    }
+    if (target.kind === "nap") {
+      const settled = character.lingerTotalMs - character.waitMs;
+      return settled >= NAP_SETTLE_MS ? "bubble-sleep" : null;
+    }
+    // Reading: the thought comes and goes on its own beat, a page at a time,
+    // rather than standing for the whole sit the way a status bubble would.
+    if (target.kind === "read") {
+      const read = character.lingerTotalMs - character.waitMs;
+      return read % READ_THOUGHT_CYCLE_MS < READ_THOUGHT_ON_MS
+        ? "bubble-awaiting"
+        : null;
+    }
+    return null;
+  }
+
+  /**
+   * Whose turn it is to think at the chess table. One bubble at a time, passed
+   * between the two players on a shared clock - the same shape as a
+   * conversation, because that is what a game without a ball looks like from
+   * above.
+   */
+  private chessThoughtFor(character: OfficeCharacter): OfficeSpriteName | null {
+    if (!character.rallying) return null;
+    const partner = this.rallyPartnerOf(character);
+    if (partner === null) return null;
+    const movesFirst = character.agentId < partner.agentId;
+    const onBeat = Math.floor(this.nowMs / CHESS_THINK_MS) % 2 === 0;
+    return movesFirst === onBeat ? "bubble-awaiting" : null;
+  }
+
+  /**
+   * FRONT-MOST FIRST, which is the reverse of the order the frame is drawn in:
+   * a character walking across somebody else's desk is what the pointer is
+   * over, and so is the nearer of two overlapping towers. The renderer and
+   * `hitTest` both take the FIRST match, so the order IS the precedence.
+   */
+  private buildHitRegions(
+    characters: ReadonlyArray<OfficeCharacter>,
+    seats: ReadonlyArray<SeatedAgent>,
+  ): ReadonlyArray<OfficeHitRegion> {
+    const regions: OfficeHitRegion[] = [];
+    for (let index = characters.length - 1; index >= 0; index -= 1) {
+      const character = characters[index];
+      regions.push({
+        agentId: character.agentId,
+        rect: this.characterBox(character),
+      });
+    }
+    for (let index = seats.length - 1; index >= 0; index -= 1) {
+      const seated = seats[index];
+      const agentId = seated.agentId;
+      // An empty reserve is furniture, not somebody: it is drawn, and it is
+      // not hoverable, because a hit region resolves to an agent.
+      if (agentId === null) continue;
+      regions.push({ agentId, rect: this.seatBox(seated.seat) });
+    }
+    return regions;
+  }
+
+  /**
+   * WHERE A SEAT'S BOX SORTS, or `null` for a seat that gets no region at all.
+   *
+   * AN ORDINARY SEAT sorts with the art it drew: the shallowest depth of its own
+   * props, and none means the frame is not drawing that desk, so a region for it
+   * would put hover on something nobody can see.
+   *
+   * A CIVIC SEAT's art is furniture the PLAN stands up, so the painter returns
+   * nothing for it (O1) and there is no prop of its own to read. What this used
+   * to fall through to was whatever prop the OWNER happened to have, which for a
+   * patient is its DESK: correct-looking while that desk is on screen, and no
+   * region at all the moment the frame culls the building the patient came from.
+   * So the painter is asked - the depth scale is its own - and its answer is
+   * BELIEVED, `null` included. `null` means the seat's furniture is not its own
+   * (Campus's bench is the courtyard's fixture, drawn for nobody) and the
+   * occupant is hit through its own body; falling back to the desk here would put
+   * the box in front of a character it is painted behind, which is the whole
+   * defect, three districts away from the thing being clicked.
+   *
+   * A painter that answers NOTHING - the oblique one, which paints its own civic
+   * seats - keeps the owner's props, because there its civic art IS its own and
+   * carries its own depth.
+   */
+  private seatRegionDepth(
+    seat: OfficeSeat,
+    agentId: string,
+    propFloors: ReadonlyMap<string, number>,
+  ): number | null {
+    const own = propFloors.get(agentId) ?? null;
+    if (seat.civicRoomId === null) return own;
+    const answer = this.view.painter.seatDepth;
+    const layout = this.layoutOrNull;
+    if (answer === null || layout === null) return own;
+    return answer(layout, seat);
+  }
+
+  /**
+   * The same regions, ordered by the DEPTH the world stream is drawn in.
+   *
+   * A `layered` painter draws every prop and then every actor, so reversing the
+   * two lists is already the front-most-first order and `buildHitRegions` is
+   * exact. A `world` painter does not: it interleaves desks and people by
+   * depth, so on Campus or City the nearer of two overlapping buildings can be
+   * the one with the LOWER row, and an order taken from row/column disagrees
+   * with what the eye sees. Taken from the depths the merge itself sorts by,
+   * the pointer always resolves to whatever was painted last.
+   *
+   * Ties keep emission order - props before actors, and within each the order
+   * the painter produced - which is exactly how `mergeByDepth`'s stable sort
+   * leaves them, so a foreground drawable a painter deliberately emitted late
+   * at the same depth stays in front here too.
+   */
+  private worldHitRegions(args: {
+    readonly characters: ReadonlyArray<OfficeCharacter>;
+    readonly seats: ReadonlyArray<SeatedAgent>;
+    readonly props: ReadonlyArray<OfficeWorldDrawable>;
+    readonly actors: ReadonlyArray<OfficeWorldDrawable>;
+  }): ReadonlyArray<OfficeHitRegion> {
+    const { actors, characters, props, seats } = args;
+    const propFloors = shallowestByOwner(props);
+    const actorDepths = deepestByOwner(actors);
+    const entries: DepthOrderedRegion[] = [];
+    // THE WHOLE SEAT, at the only depth all of it is at least as deep as. Its
+    // declared box is what culling, hover and the camera already use, and
+    // where a seat gets a region at all, every point of that box still resolves
+    // to its occupant - just no longer at the depth of whichever part happened to
+    // be drawn last. WHERE IT GETS ONE is `seatRegionDepth`'s answer: a painter
+    // that says its civic seat's furniture is not the seat's own gives it no
+    // region here, and that box then resolves to nobody.
+    for (const seated of seats) {
+      const agentId = seated.agentId;
+      if (agentId === null) continue;
+      const depth = this.seatRegionDepth(seated.seat, agentId, propFloors);
+      if (depth === null) continue;
+      entries.push({
+        region: { agentId, rect: this.seatBox(seated.seat) },
+        depth,
+        tier: 0,
+        order: entries.length,
+      });
+    }
+    // THEN EACH PART, where it actually is and at its own depth, so a
+    // foreground strip wins over a character where the strip covers it and
+    // nowhere else. Pushed after the boxes above, so a part at the same depth
+    // as its own seat is the front-most of the two.
+    for (const part of props) {
+      const agentId = part.ownerAgentId;
+      if (agentId === null) continue;
+      const rect = drawableBox(part.drawable);
+      if (rect === null) continue;
+      entries.push({
+        region: { agentId, rect },
+        depth: part.depth,
+        tier: 0,
+        order: entries.length,
+      });
+    }
+    for (const character of characters) {
+      const depth = actorDepths.get(character.agentId);
+      if (depth === undefined) continue;
+      entries.push({
+        region: {
+          agentId: character.agentId,
+          rect: this.characterBox(character),
+        },
+        depth,
+        tier: 1,
+        order: entries.length,
+      });
+    }
+    entries.sort(compareDepthOrder);
+    const regions: OfficeHitRegion[] = [];
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      regions.push(entries[index].region);
+    }
+    return regions;
+  }
+
+  /**
+   * Where playback points the camera: the sender of the pulsing row.
+   *
+   * The SEATED anchor first, which is the lifted one an envelope already flies
+   * between - a City rooftop is forty pixels above the street its tile
+   * projects to, and a focus that ignored the lift would frame the pavement.
+   * It also keeps the height steady: without it, focus jumped the moment a
+   * flight ended and the branch below took over.
+   */
+  private focusPoint(): OfficePoint | null {
+    const inFlight = this.envelopes.at(0);
+    if (inFlight !== undefined) return this.seatPointOf(inFlight.fromAgentId);
+    const senderId = pulseSenderId(this.pulse);
+    if (senderId === null) return null;
+    // ONLY WHILE SEATED. The lift is a fact about a chair, and a sender
+    // halfway across the floor is not in one: framing its empty seat points
+    // the camera at furniture while the person it is about walks past.
+    const character = this.characters.get(senderId);
+    if (character !== undefined && !character.seated) {
+      return this.headPointOfCharacter(character);
+    }
+    return this.seatPointOf(senderId) ?? this.headPointOf(senderId);
+  }
+
+  // ---- Shared derivations -------------------------------------------- //
+
+  /**
+   * Every agent that exists at the cursor and has somewhere to sit, with the
+   * seat it is actually in - the CLAIM where it holds one, never the plan's
+   * opening offer.
+   */
+  private visibleSeats(): ReadonlyArray<OccupiedSeat> {
+    const seated: OccupiedSeat[] = [];
+    for (const agentId of this.seats.knownAgentIds()) {
+      if (!this.visibleAgentIds.has(agentId)) continue;
+      const seat = this.seats.effectiveSeat(agentId);
+      if (seat === null) continue;
+      seated.push({ agentId, seat });
+    }
+    return seated;
+  }
+
+  /**
+   * Canonical order by id. Every decision that has to break a tie between two
+   * equally eligible agents reads this, so WHO gets up, WHO speaks first and
+   * WHO is visited are facts about their ids rather than about insertion order.
+   */
+  private orderedByAgentId(): ReadonlyArray<OfficeCharacter> {
+    if (
+      this.byAgentIdCache !== null &&
+      this.byAgentIdVersion === this.membershipVersion
+    ) {
+      return this.byAgentIdCache;
+    }
+    const ordered = Array.from(this.characters.values()).sort((left, right) =>
+      compareIdPair(left.agentId, right.agentId),
+    );
+    this.byAgentIdCache = ordered;
+    this.byAgentIdVersion = this.membershipVersion;
+    return ordered;
+  }
+
+  /** The cabin a seat stands in, by the id the plan put on the seat. */
+  private roomOfSeat(seat: OfficeSeat): OfficeRoom | null {
+    const roomId = seat.roomId;
+    if (roomId === null) return null;
+    for (const room of this.currentLayout.rooms) {
+      if (room.rootAgentId === roomId) return room;
+    }
+    return null;
+  }
+
+  private headPointOf(agentId: string): OfficePoint | null {
+    const character = this.characters.get(agentId);
+    if (character === undefined) return null;
+    return this.headPointOfCharacter(character);
+  }
+
+  private headPointOfCharacter(character: OfficeCharacter): OfficePoint {
+    const foot = this.footOf(character);
+    return { x: foot.x, y: foot.y - OFFICE_CHARACTER_HEIGHT };
+  }
+
+  /**
+   * Where an agent's head is WHEN SEATED - the endpoint every envelope uses.
+   * A flight aimed at a live position lands in an empty chair the moment its
+   * owner is walking in or standing at reception.
+   *
+   * Lifted by the seat's own `seatLift`, so a message between two rooftops in
+   * the City flies between the rooftops rather than through the streets.
+   */
+  private seatPointOf(agentId: string): OfficePoint | null {
+    const seat = this.seats.effectiveSeat(agentId);
+    if (seat === null) return null;
+    const foot = this.footPoint(seat.chairTile.col, seat.chairTile.row);
+    return {
+      x: foot.x,
+      y: foot.y - OFFICE_CHARACTER_HEIGHT - this.projector.seatLift(seat),
+    };
+  }
+
+  /** The storey an agent lives on; its door, lobby and reception are that one's. */
+  private floorIndexOfAgent(agentId: string): number {
+    const seat = this.seats.effectiveSeat(agentId);
+    if (seat === null) return 0;
+    const floors = this.currentLayout.floors;
+    if (seat.floorIndex < 0 || seat.floorIndex >= floors.length) return 0;
+    return seat.floorIndex;
+  }
+
+  private floorOfAgent(agentId: string): OfficeFloor {
+    return this.currentLayout.floors[this.floorIndexOfAgent(agentId)];
+  }
+
+  private queueFacingOf(agentId: string): OfficeFacing {
+    return this.floorOfAgent(agentId).queueFacing;
+  }
+
+  private isWalkable(tile: OfficeTilePos): boolean {
+    const layout = this.currentLayout;
+    if (tile.row < 0 || tile.row >= layout.rows) return false;
+    if (tile.col < 0 || tile.col >= layout.cols) return false;
+    return layout.walkable[tile.row][tile.col];
+  }
+
+  /**
+   * Where a visitor stands to call on somebody: BEHIND their chair, looking at
+   * them, which is the aisle tile under a desk on this floor.
+   *
+   * Per PARTNER rather than per room, which is what makes a visit read as two
+   * people talking. The room's own `visitTile` is the fallback for a view
+   * whose chairs have nothing standable behind them - one tile for a whole
+   * cabin is a queue, not a conversation, so it is the last resort and not the
+   * rule.
+   */
+  private visitTileNear(
+    seat: OfficeSeat,
+    room: OfficeRoom | null,
+  ): OfficeTilePos | null {
+    const behind = stepAgainst(seat.chairTile, seat.facing);
+    if (this.isWalkable(behind)) return behind;
+    const fallback = room?.visitTile ?? null;
+    if (fallback === null || !this.isWalkable(fallback)) return null;
+    return fallback;
+  }
+
+  /**
+   * This agent has gone cold: it wants its reserve no longer.
+   *
+   * Two calls, because a released seat is only FREE once the character is out
+   * of it - on a floor with motion that means back home and seated again, and
+   * on one without it means immediately, since there is nobody to be in it.
+   */
+  private releaseClaim(agentId: string, assigned: OfficeSeat): void {
+    this.seats.endClaim(agentId);
+    const character = this.characters.get(agentId);
+    const home =
+      character === undefined ||
+      (character.seated &&
+        character.col === assigned.chairTile.col &&
+        character.row === assigned.chairTile.row);
+    if (home) this.seats.vacated(agentId);
+  }
+
+  /**
+   * WAKING. A cold agent in a cubby whose status turns hot takes the first free
+   * reserve seat it can, and gives it back once it has gone quiet and is home.
+   *
+   * The claim waits for RECEPTION. An attention agent queues at the
+   * counter first, and a desk it is not walking to yet is a desk nobody else
+   * can have: claiming at the moment the wake is decided held a seat empty for
+   * however long the queue took. It is claimed on the sync that ends the
+   * reception stop - which is this one, since `needsReception` is false from
+   * the moment the status stops calling for a person. The cost is real and
+   * accepted: a wake that reaches the counter and finds the office full while
+   * it waited stays where it is and asks the next plan for capacity, exactly
+   * as any other agent that cannot find a seat does.
+   */
+  private updateSeatClaims(): void {
+    const rehome: string[] = [];
+    for (const agentId of this.seats.knownAgentIds()) {
+      const assigned = this.seats.assignedSeat(agentId);
+      if (assigned === null || assigned.kind !== "cubby") continue;
+      const before = this.seats.effectiveSeat(agentId);
+      const hot =
+        this.visibleAgentIds.has(agentId) &&
+        !this.archivedIds.has(agentId) &&
+        isOfficeHotStatus(this.statusById.get(agentId));
+      // A bed or a chair OUTRANKS a reserve desk: an agent that holds one is
+      // where its status says it should be, and claiming a desk for it here
+      // would hold a second seat empty for as long as it was in the ward.
+      if (this.seats.civicClaimOf(agentId) !== null) continue;
+      // WANTING ONE IS ENOUGH - the wake pass is not for an agent the civic
+      // pass is handling, whether or not that pass found it a seat.
+      //
+      // Two things go wrong without this, and the second is the worse:
+      // an agent whose civic claim came back empty is the WARD being full,
+      // not the office being short of desks, so waking it here takes a desk
+      // shortfall and asks the planner to grow the storey on a status flip -
+      // which `shortfall: "none"` exists to prevent. And the release: the
+      // civic pass has just ended this agent's wake desk and started it
+      // walking home, so re-claiming that same desk here - on this very sync,
+      // since `claim` reactivates a releasing claim of the matching kind -
+      // undoes the release, and does it again on every sync. The agent never
+      // leaves the desk it is supposed to be leaving.
+      if (this.civicWantOf(agentId) !== null) continue;
+      if (hot && !this.needsReception(agentId)) {
+        this.seats.claim(agentId, {
+          roomId: assigned.roomId,
+          floorIndex: assigned.floorIndex,
+          wants: "desk",
+          shortfall: "plan",
+        });
+      } else if (hot) {
+        // Headed for the counter: no claim yet, and no release either - one it
+        // already holds from an earlier wake is still its own.
+        continue;
+      } else {
+        this.releaseClaim(agentId, assigned);
+      }
+      const after = this.seats.effectiveSeat(agentId);
+      if (before?.seatId === after?.seatId) continue;
+      rehome.push(agentId);
+      // LEAVING HOME. The seat it is walking out of keeps its silhouette
+      // until it arrives somewhere; the handover closes at `settleInChair`
+      // and nothing reopens it.
+      if (after !== null && after.seatId !== assigned.seatId) {
+        this.handover.set(agentId, assigned.seatId);
+      }
+    }
+    // A wake and a cooling-off both MOVE somebody, so the character walks -
+    // which is the whole visible point of a reserve seat.
+    this.rehomeCharacters(rehome);
+  }
+
+  /** The named place an agent standing somewhere is AT, for the hover card. */
+  private awayWhereabouts(
+    layout: OfficeLayout,
+    character: OfficeCharacter,
+  ): string {
+    // The counter people queue at IS the help desk, so it is called that
+    // wherever it is named - there was never a second reception.
+    if (this.inReceptionQueue(character)) return "Help desk";
+    if (character.errand === "arriving" || character.errand === "leaving") {
+      return "Lobby";
+    }
+    // A civic walker is named by where it is GOING, not by the corridor it is
+    // crossing - and it is named as ON ITS WAY there, because the card would
+    // otherwise put somebody in a bed one end of the floor away from where the
+    // eye can see them standing. The room's own word, whatever the view calls
+    // it: "Walking to the Sick bay" in the Building, "Walking to the Hospital"
+    // in the City. The tile lookup below would say "Open floor".
+    if (this.inCivicWalk(character)) {
+      const seat = this.seats.effectiveSeat(character.agentId);
+      const room = seat === null ? null : this.civicRoomOfSeat(layout, seat);
+      if (room !== null) return `Walking to the ${room.name}`;
+    }
+    const target = character.errandTarget;
+    if (target !== null && target.kind === "visit") return "Visiting";
+    const tile = {
+      col: Math.round(character.col),
+      row: Math.round(character.row),
+    };
+    return this.placeNameAt(
+      layout,
+      tile,
+      this.floorIndexOfAgent(character.agentId),
+    );
+  }
+
+  /** The civic room a seat belongs to, or `null` for a seat that names none. */
+  private civicRoomOfSeat(
+    layout: OfficeLayout,
+    seat: OfficeSeat,
+  ): OfficeCivicRoom | null {
+    const civicRoomId = seat.civicRoomId;
+    if (civicRoomId === null) return null;
+    const floor = layout.floors[seat.floorIndex] ?? layout.floors[0];
+    for (const room of floor.civic) {
+      if (room.civicRoomId === civicRoomId) return room;
+    }
+    return null;
+  }
+
+  /**
+   * What the plan calls the place a tile is in: an amenity's name, a cabin's,
+   * or the open floor. Read off the layout rather than off a label the plan
+   * carried, so it stays true when somebody walks.
+   */
+  private placeNameAt(
+    layout: OfficeLayout,
+    tile: OfficeTilePos,
+    floorIndex: number,
+  ): string {
+    // A layout always has at least one storey, so an index off the end falls
+    // back to the first rather than to nothing.
+    const floor = layout.floors[floorIndex] ?? layout.floors[0];
+    for (const amenity of floor.amenities) {
+      if (withinTileRect(amenity.bounds, tile)) return amenity.name;
+    }
+    for (const room of layout.rooms) {
+      if (withinTileRect(room.bounds, tile)) return room.name;
+    }
+    return "Open floor";
+  }
+}

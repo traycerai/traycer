@@ -1,0 +1,111 @@
+import { useCallback, useMemo, useSyncExternalStore } from "react";
+import {
+  readHostDirectoryEntry,
+  subscribeHostRowChanged,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
+import { isRemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
+import { useHostOwnership } from "@/hooks/auth/use-host-ownership";
+
+const LOCAL_OWNER_SOURCE = Symbol("local-host-owner");
+
+/**
+ * Remote ownership comes from the registry. Local ownership uses the same
+ * account-scoped read as Overview, which also works with Remote access off.
+ * An unresolved read does not invent an owner.
+ */
+export function useHostOwnerTeamId(hostId: string | null): string | null {
+  const subscribe = useCallback(
+    (callback: () => void) =>
+      hostId === null
+        ? () => undefined
+        : subscribeHostRowChanged(hostId, callback),
+    [hostId],
+  );
+  const getSnapshot = useCallback(():
+    | string
+    | typeof LOCAL_OWNER_SOURCE
+    | null => {
+    if (hostId === null) return null;
+    const entry = readHostDirectoryEntry(hostId);
+    if (entry === null) return null;
+    if (entry.kind === "local") return LOCAL_OWNER_SOURCE;
+    if (!isRemoteHostDirectoryEntry(entry)) return null;
+    if (entry.owner !== null)
+      return entry.owner.kind === "team" ? entry.owner.id : null;
+    return entry.sandbox?.ownerTeamId ?? null;
+  }, [hostId]);
+  const source = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const local = source === LOCAL_OWNER_SOURCE;
+  const ownership = useHostOwnership(local ? hostId : null, local);
+  if (!local) return source;
+  const owner = ownership.data?.owner;
+  return owner?.kind === "team" ? owner.id : null;
+}
+
+/** Whether a host is a team's sandbox. */
+export function useOnTeamSandbox(hostId: string | null): boolean {
+  return useSandboxHostConfiguration(hostId)?.kind === "team";
+}
+
+/**
+ * The configuration a sandbox host was created in, from the person's host
+ * directory, or `null` for a host that is not a sandbox and while the
+ * directory cannot say.
+ */
+export function useSandboxHostConfiguration(
+  hostId: string | null,
+): StageConfiguration | null {
+  return useDirectorySandboxConfiguration(hostId, false);
+}
+
+/** `null` for a row with no owner, a host that is not a sandbox, and while the directory cannot say. */
+export function useSandboxHostPayer(
+  hostId: string | null,
+): StageConfiguration | null {
+  return useDirectorySandboxConfiguration(hostId, true);
+}
+
+/** `personalNeedsOwner`: Personal only when the row names the person as its owner. */
+function useDirectorySandboxConfiguration(
+  hostId: string | null,
+  personalNeedsOwner: boolean,
+): StageConfiguration | null {
+  const subscribe = useCallback(
+    (callback: () => void) =>
+      hostId === null
+        ? () => undefined
+        : subscribeHostRowChanged(hostId, callback),
+    [hostId],
+  );
+  // A string, so the snapshot is stable between reads of an unchanged row.
+  const getSnapshot = useCallback((): string | null => {
+    if (hostId === null) return null;
+    const entry = readHostDirectoryEntry(hostId);
+    if (entry === null || !isRemoteHostDirectoryEntry(entry)) return null;
+    if (entry.sandbox === null) return null;
+    const { ownerTeamId, ownerTeamName } = entry.sandbox;
+    if (ownerTeamId !== null) {
+      return `${ownerTeamId}${TEAM_SEPARATOR}${ownerTeamName ?? ""}`;
+    }
+    return !personalNeedsOwner || entry.owner?.kind === "user"
+      ? PERSONAL_SNAPSHOT
+      : null;
+  }, [hostId, personalNeedsOwner]);
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  return useMemo((): StageConfiguration | null => {
+    if (snapshot === null) return null;
+    if (snapshot === PERSONAL_SNAPSHOT) return PERSONAL_CONFIGURATION;
+    const at = snapshot.indexOf(TEAM_SEPARATOR);
+    return {
+      kind: "team",
+      teamId: snapshot.slice(0, at),
+      teamName: snapshot.slice(at + TEAM_SEPARATOR.length),
+    };
+  }, [snapshot]);
+}
+
+/** A team id is never empty and holds no NUL, so the two cannot collide. */
+const PERSONAL_SNAPSHOT = "\u0000personal";
+const TEAM_SEPARATOR = "\u0000";
+const PERSONAL_CONFIGURATION: StageConfiguration = { kind: "personal" };

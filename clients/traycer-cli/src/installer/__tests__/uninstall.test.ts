@@ -1,0 +1,362 @@
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { updateAttemptRecordPath } from "@traycer-clients/shared/host-update";
+import { noopLogger } from "../../logger";
+import { hostPidMetadataPath } from "../../store/paths";
+import {
+  removeHostPidMetadataForPurge,
+  removeHostPidMetadataForPurgeWithVerifier,
+} from "../uninstall";
+
+describe("removeHostPidMetadataForPurge", () => {
+  it("propagates capability loss before pid metadata removal", async () => {
+    let removeCalls = 0;
+    const verify = async (): Promise<void> => {
+      throw new Error("mutation authority lost");
+    };
+
+    await expect(
+      removeHostPidMetadataForPurgeWithVerifier(
+        "dev",
+        noopLogger,
+        async () => {
+          removeCalls += 1;
+        },
+        verify,
+      ),
+    ).rejects.toThrow("mutation authority lost");
+    expect(removeCalls).toBe(0);
+  });
+
+  it("continues when locked pid metadata cannot be removed", async () => {
+    const receivedPaths: string[] = [];
+
+    await expect(
+      removeHostPidMetadataForPurge(
+        "dev",
+        noopLogger,
+        async (path, options) => {
+          receivedPaths.push(path);
+          expect(options).toEqual({ force: true });
+          throw Object.assign(new Error("file is locked"), { code: "EBUSY" });
+        },
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(receivedPaths).toEqual([hostPidMetadataPath("dev")]);
+  });
+});
+
+// `uninstallHost` (Tech Plan, "host uninstall ... removes staged/
+// alongside install/") - a genuine sandbox exercising the real
+// filesystem removal, not a mocked call-count check, since the whole
+// point is that BOTH directories are actually gone from disk afterward.
+type Environment = "dev" | "production";
+
+let sandboxRoot = "";
+
+function hostHomeFor(environment: Environment): string {
+  return join(sandboxRoot, "host", environment);
+}
+function installDirFor(environment: Environment): string {
+  return join(hostHomeFor(environment), "install");
+}
+function stagedDirFor(environment: Environment): string {
+  return join(hostHomeFor(environment), "staged");
+}
+
+// `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
+// load - any export this mock leaves un-overridden (falls through via
+// `...actual` below, e.g. `hostPidMetadataPath`/`cliLogPath` via
+// `createCliLogger`) would otherwise resolve against the REAL production
+// `~/.traycer`, not this sandbox - confirmed root cause of a real prod-host
+// kill (host.log rotated, pid.json deleted for real). Redirect the `os`
+// boundary itself so `vi.importActual`'s fresh module evaluation picks up
+// the sandbox (falling back to the real tmpdir, never the real home,
+// before the first `beforeEach` has set `sandboxRoot`).
+// `vi.mock` factories are hoisted above this file's own top-level `let
+// sandboxRoot` - a direct reference hits a TDZ `ReferenceError`, so the
+// live value has to live in `vi.hoisted` instead.
+const osHome = vi.hoisted(() => ({ current: "" }));
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
+});
+
+vi.mock("../../store/paths", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../store/paths")>(
+      "../../store/paths",
+    );
+  return {
+    ...actual,
+    hostHomeDir: (environment: Environment) => hostHomeFor(environment),
+    hostInstallDir: (environment: Environment) => installDirFor(environment),
+    hostInstallRecordPath: (environment: Environment) =>
+      join(installDirFor(environment), "install.json"),
+    hostStagedDir: (environment: Environment) => stagedDirFor(environment),
+    ensureHostInstallDir: async (environment: Environment) => {
+      mkdirSync(installDirFor(environment), { recursive: true });
+    },
+  };
+});
+
+const ENV: Environment = "production";
+const testMutationVerifier = async (): Promise<void> => undefined;
+
+function sampleInstallRecordJson(version: string): Record<string, unknown> {
+  return {
+    installId: `install-${version}`,
+    version,
+    runtimeVersion: null,
+    platform: "darwin",
+    arch: "arm64",
+    installedAt: "2026-01-01T00:00:00.000Z",
+    source: { kind: "registry", value: version },
+    archiveSha256: "a".repeat(64),
+    signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
+    signatureKeyId: "test-key",
+    sizeBytes: 1,
+    executablePath: join(installDirFor(ENV), "traycer-host"),
+  };
+}
+
+describe("uninstallHost", () => {
+  beforeEach(() => {
+    sandboxRoot = mkdtempSync(join(tmpdir(), "traycer-uninstall-test-"));
+    osHome.current = sandboxRoot;
+  });
+
+  afterEach(() => {
+    rmSync(sandboxRoot, { recursive: true, force: true });
+  });
+
+  it("removes both install/ and staged/ from disk, alongside the install record", async () => {
+    const { uninstallHost } = await import("../uninstall");
+    const installDir = installDirFor(ENV);
+    mkdirSync(installDir, { recursive: true });
+    writeFileSync(join(installDir, "traycer-host"), "binary");
+    writeFileSync(
+      join(installDir, "install.json"),
+      JSON.stringify(sampleInstallRecordJson("1.0.0")),
+    );
+    const stagedDir = stagedDirFor(ENV);
+    mkdirSync(stagedDir, { recursive: true });
+    writeFileSync(join(stagedDir, "staged.json"), '{"version":"2.0.0"}');
+
+    const result = await uninstallHost({
+      environment: ENV,
+      purgeChannelRuntime: false,
+      verifyMutationCapability: testMutationVerifier,
+      discardAttemptRecord: null,
+    });
+
+    expect(result.removedInstallDir).toBe(true);
+    expect(result.removedStagedDir).toBe(true);
+    expect(existsSync(installDir)).toBe(false);
+    expect(existsSync(stagedDir)).toBe(false);
+  });
+
+  it("removes the last-attempt record with the install it describes", async () => {
+    const { uninstallHost } = await import("../uninstall");
+    mkdirSync(installDirFor(ENV), { recursive: true });
+    const recordPath = join(hostHomeFor(ENV), "update-last-attempt.json");
+    writeFileSync(recordPath, "{}");
+
+    await uninstallHost({
+      environment: ENV,
+      purgeChannelRuntime: false,
+      verifyMutationCapability: testMutationVerifier,
+      discardAttemptRecord: null,
+    });
+
+    expect(existsSync(recordPath)).toBe(false);
+  });
+
+  it("removes staged/ under --all too (purgeChannelRuntime does not gate staged-dir removal)", async () => {
+    const { uninstallHost } = await import("../uninstall");
+    mkdirSync(installDirFor(ENV), { recursive: true });
+    const stagedDir = stagedDirFor(ENV);
+    mkdirSync(stagedDir, { recursive: true });
+    writeFileSync(join(stagedDir, "staged.json"), '{"version":"2.0.0"}');
+
+    const result = await uninstallHost({
+      environment: ENV,
+      purgeChannelRuntime: true,
+      verifyMutationCapability: testMutationVerifier,
+      discardAttemptRecord: null,
+    });
+
+    expect(result.removedStagedDir).toBe(true);
+    expect(existsSync(stagedDir)).toBe(false);
+  });
+
+  it("removes the schema-v2 update attempt record beside install/ - a park must not outlive the install it describes", async () => {
+    const { uninstallHost } = await import("../uninstall");
+    mkdirSync(installDirFor(ENV), { recursive: true });
+    // The record lives in the host home, NOT under install/, so removing the
+    // install tree alone leaves it standing - which is exactly the shape that
+    // refused every later maintenance admission for a host that was gone.
+    const recordPath = updateAttemptRecordPath(hostHomeFor(ENV));
+    writeFileSync(
+      recordPath,
+      JSON.stringify({
+        schemaVersion: 2,
+        attemptId: "attempt-1",
+        generation: 1,
+        sequence: 1,
+        trigger: "manual",
+        targetVersion: "2.0.0",
+        phase: "waiting-for-work",
+        execution: "parked",
+        continuation: "resume-apply",
+        progress: null,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        completedAt: null,
+        error: null,
+      }),
+    );
+    // The caller's live lock handle is not evidence and must survive.
+    const lockPath = join(hostHomeFor(ENV), "update-attempt.lock");
+    writeFileSync(lockPath, '{"pid":1,"reason":"test","startedAt":"now"}');
+
+    // The record is canonical state, so it goes ONLY through the caller's
+    // handle-bound discard - never a raw unlink here. With no discard seam
+    // (the legacy/no-contender path) the record must be left exactly as
+    // found: an uninstall without a live capability has no authority to
+    // clear it, and unlinking anyway is the defect `store.ts`'s banner
+    // forbids.
+    let discardCalls = 0;
+    await uninstallHost({
+      environment: ENV,
+      purgeChannelRuntime: false,
+      verifyMutationCapability: testMutationVerifier,
+      discardAttemptRecord: null,
+    });
+    expect(existsSync(recordPath)).toBe(true);
+
+    // Given the seam, the uninstall drives it exactly once, and the lock file
+    // is still untouched - it is the caller's live handle, not evidence.
+    await uninstallHost({
+      environment: ENV,
+      purgeChannelRuntime: false,
+      verifyMutationCapability: testMutationVerifier,
+      discardAttemptRecord: async () => {
+        discardCalls += 1;
+        rmSync(recordPath, { force: true });
+      },
+    });
+    expect(discardCalls).toBe(1);
+    expect(existsSync(recordPath)).toBe(false);
+    expect(existsSync(lockPath)).toBe(true);
+  });
+
+  it("FAILS the uninstall when the attempt-record discard fails - a surviving record is the original defect, not litter", async () => {
+    const { uninstallHost } = await import("../uninstall");
+    const recordPath = updateAttemptRecordPath(hostHomeFor(ENV));
+    mkdirSync(hostHomeFor(ENV), { recursive: true });
+    writeFileSync(recordPath, JSON.stringify({ schemaVersion: 2 }));
+
+    // Reporting success here would leave a valid nonterminal record in a host
+    // home whose install is gone - which refuses the NEXT install's admission,
+    // the exact bug this seam exists to prevent. It must not be swallowed the
+    // way the best-effort directory removals are.
+    await expect(
+      uninstallHost({
+        environment: ENV,
+        purgeChannelRuntime: false,
+        verifyMutationCapability: testMutationVerifier,
+        discardAttemptRecord: async () => {
+          throw new Error(
+            "update attempt record discard was refused (lock-not-live)",
+          );
+        },
+      }),
+    ).rejects.toThrow("discard was refused");
+
+    expect(existsSync(recordPath)).toBe(true);
+  });
+
+  it("reports removedStagedDir: true even when staged/ never existed", async () => {
+    const { uninstallHost } = await import("../uninstall");
+    mkdirSync(installDirFor(ENV), { recursive: true });
+    // No staged/ directory created - `rm(..., { force: true })` on an
+    // absent path resolves successfully, matching `removedInstallDir`'s
+    // identical existing semantics.
+    expect(existsSync(stagedDirFor(ENV))).toBe(false);
+
+    const result = await uninstallHost({
+      environment: ENV,
+      purgeChannelRuntime: false,
+      verifyMutationCapability: testMutationVerifier,
+      discardAttemptRecord: null,
+    });
+
+    expect(result.removedStagedDir).toBe(true);
+  });
+
+  // Final hold model: uninstall is the ONE place a version hold is removed
+  // (`resetHeldHostVersion`) - a later fresh install of the same version must
+  // not inherit a stale hold and silently park its updates. Exercised against
+  // the real hold-record file (same sandboxed `os.homedir()` this suite
+  // already mocks for `store/paths`), not a mock, since the point is the
+  // record is actually gone from disk afterward.
+  it("resets the held-host-version record on uninstall", async () => {
+    const { uninstallHost } = await import("../uninstall");
+    const { setHeldHostVersion } = await import("../../host/held-host-version");
+    const { hostHeldVersionRecordPath, readHostHeldVersion } =
+      await import("@traycer/protocol/config/installation");
+    mkdirSync(installDirFor(ENV), { recursive: true });
+    // `setHeldHostVersion` reaches the record through the CLI's OWN
+    // `ensureHostHomeDir` (module-constant `HOST_HOME`, frozen at this
+    // suite's static import time - before `beforeEach` ever points
+    // `os.homedir()` at the sandbox), while the record's actual path comes
+    // from the protocol package's call-time `hostHeldVersionRecordPath`
+    // (which DOES see the sandbox). Pre-creating the real parent here keeps
+    // the write inside the sandbox rather than leaking into whatever
+    // pre-sandbox path `HOST_HOME` froze to.
+    mkdirSync(join(hostHeldVersionRecordPath(ENV), ".."), {
+      recursive: true,
+    });
+    await setHeldHostVersion(ENV, "1.2.0", "install-a");
+    expect(existsSync(hostHeldVersionRecordPath(ENV))).toBe(true);
+
+    await uninstallHost({
+      environment: ENV,
+      purgeChannelRuntime: false,
+      verifyMutationCapability: testMutationVerifier,
+      discardAttemptRecord: null,
+    });
+
+    expect(existsSync(hostHeldVersionRecordPath(ENV))).toBe(false);
+    await expect(readHostHeldVersion(ENV)).resolves.toBeNull();
+  });
+
+  it("uninstalling with nothing held is a no-op for the hold record (never throws)", async () => {
+    const { uninstallHost } = await import("../uninstall");
+    const { hostHeldVersionRecordPath } =
+      await import("@traycer/protocol/config/installation");
+    mkdirSync(installDirFor(ENV), { recursive: true });
+    expect(existsSync(hostHeldVersionRecordPath(ENV))).toBe(false);
+
+    await expect(
+      uninstallHost({
+        environment: ENV,
+        purgeChannelRuntime: false,
+        verifyMutationCapability: testMutationVerifier,
+        discardAttemptRecord: null,
+      }),
+    ).resolves.toBeDefined();
+
+    expect(existsSync(hostHeldVersionRecordPath(ENV))).toBe(false);
+  });
+});

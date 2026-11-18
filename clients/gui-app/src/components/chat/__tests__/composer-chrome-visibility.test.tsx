@@ -1,0 +1,391 @@
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as testingRender,
+  renderHook,
+  screen,
+  within,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { domAnimation, LazyMotion } from "motion/react";
+import type { ReactElement } from "react";
+import type { TokenUsage } from "@traycer/protocol/persistence/epic/foundation";
+import { ComposerAttachImageButton } from "@/components/home/toolbar/composer-attach-image-button";
+import {
+  ComposerMicButton,
+  ComposerMicPreparing,
+  type ComposerDictationControl,
+} from "@/components/home/toolbar/composer-mic-button";
+import { PermissionsPicker } from "@/components/home/pickers/permissions-picker";
+import { ContextUsageChip } from "@/components/chat/context-usage-chip";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { useDictationHotkey } from "@/hooks/composer/use-dictation-hotkey";
+import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
+import type { VoiceDictationState } from "@/hooks/composer/use-voice-dictation";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
+
+const RELIABLE_USAGE: TokenUsage = {
+  inputTokens: 50_000,
+  outputTokens: 1_000,
+  totalTokens: 51_000,
+  contextTokens: 50_000,
+  contextWindow: 200_000,
+};
+
+function render(ui: ReactElement) {
+  return testingRender(
+    <TooltipProvider delayDuration={0}>
+      <LazyMotion features={domAnimation}>{ui}</LazyMotion>
+    </TooltipProvider>,
+  );
+}
+
+function resetComposerLayout(): void {
+  useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+}
+
+function resetContextUsageSettings(): void {
+  window.localStorage.clear();
+}
+
+beforeEach(() => {
+  resetComposerLayout();
+  resetContextUsageSettings();
+});
+
+afterEach(() => {
+  cleanup();
+  resetComposerLayout();
+  resetContextUsageSettings();
+});
+
+// ── Attach image ─────────────────────────────────────────────────────────────
+
+describe("ComposerAttachImageButton follows Layout ▸ Composer 'Attach image'", () => {
+  it("renders the button and still attaches a picked file when visible", () => {
+    const onAttachImages = vi.fn<(files: ReadonlyArray<File>) => void>();
+    const { container } = render(
+      <ComposerAttachImageButton
+        onAttachImages={onAttachImages}
+        onAttachFiles={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Attach" })).not.toBeNull();
+
+    const input =
+      container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error("expected the hidden file input");
+    const file = new File(["image-bytes"], "screenshot.png", {
+      type: "image/png",
+    });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    expect(onAttachImages).toHaveBeenCalledWith([file]);
+  });
+
+  it("has no accept filter and splits a mixed pick: images to onAttachImages, the rest to onAttachFiles", () => {
+    const onAttachImages = vi.fn<(files: ReadonlyArray<File>) => void>();
+    const onAttachFiles = vi.fn<(files: ReadonlyArray<File>) => void>();
+    const { container } = render(
+      <ComposerAttachImageButton
+        onAttachImages={onAttachImages}
+        onAttachFiles={onAttachFiles}
+      />,
+    );
+    const input =
+      container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error("expected the hidden file input");
+    expect(input.hasAttribute("accept")).toBe(false);
+
+    const png = new File(["p"], "shot.png", { type: "image/png" });
+    const mov = new File(["m"], "clip.mov", { type: "video/quicktime" });
+    const pdf = new File(["d"], "doc.pdf", { type: "application/pdf" });
+    fireEvent.change(input, { target: { files: [mov, png, pdf] } });
+
+    expect(onAttachImages).toHaveBeenCalledTimes(1);
+    expect(onAttachImages).toHaveBeenCalledWith([png]);
+    expect(onAttachFiles).toHaveBeenCalledTimes(1);
+    expect(onAttachFiles).toHaveBeenCalledWith([mov, pdf]);
+  });
+
+  it("calls only the route a single-kind pick needs", () => {
+    const onAttachImages = vi.fn<(files: ReadonlyArray<File>) => void>();
+    const onAttachFiles = vi.fn<(files: ReadonlyArray<File>) => void>();
+    const { container } = render(
+      <ComposerAttachImageButton
+        onAttachImages={onAttachImages}
+        onAttachFiles={onAttachFiles}
+      />,
+    );
+    const input =
+      container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error("expected the hidden file input");
+    const zip = new File(["z"], "a.zip", { type: "application/zip" });
+    fireEvent.change(input, { target: { files: [zip] } });
+
+    expect(onAttachImages).not.toHaveBeenCalled();
+    expect(onAttachFiles).toHaveBeenCalledWith([zip]);
+  });
+
+  // Hidden removes only the toolbar affordance. Paste and drag-drop call
+  // `onAttachImages` directly from the composer's own handlers, never through
+  // this component - so once the button is gone there is nothing left here to
+  // gate on the setting, and the honest assertion is that the callback this
+  // component owns is never invoked through a path it no longer renders.
+  it("removes the button and its hidden input when hidden, leaving the attach callback untouched", () => {
+    const onAttachImages = vi.fn<(files: ReadonlyArray<File>) => void>();
+    useLayoutStore
+      .getState()
+      .setRegionValues("attachImage", { shown: "hidden" });
+    const { container } = render(
+      <ComposerAttachImageButton
+        onAttachImages={onAttachImages}
+        onAttachFiles={vi.fn()}
+      />,
+    );
+
+    expect(container.firstChild).toBeNull();
+    expect(container.querySelector('input[type="file"]')).toBeNull();
+    expect(onAttachImages).not.toHaveBeenCalled();
+  });
+});
+
+// ── Microphone ───────────────────────────────────────────────────────────────
+
+function dictationControl(
+  state: VoiceDictationState,
+): ComposerDictationControl {
+  return {
+    state,
+    onToggle: vi.fn(),
+    onStop: vi.fn(),
+    onCancel: vi.fn(),
+    getStream: () => null,
+  };
+}
+
+describe("ComposerMicButton follows Layout ▸ Composer 'Microphone'", () => {
+  it("renders when mic is visible", () => {
+    render(<ComposerMicButton control={dictationControl("idle")} />);
+
+    expect(
+      screen.getByRole("button", { name: "Start voice input" }),
+    ).not.toBeNull();
+  });
+
+  it("renders nothing when mic is hidden", () => {
+    useLayoutStore.getState().setRegionValues("mic", { shown: "hidden" });
+    const { container } = render(
+      <ComposerMicButton control={dictationControl("idle")} />,
+    );
+
+    expect(container.firstChild).toBeNull();
+  });
+});
+
+describe("ComposerMicPreparing follows Layout ▸ Composer 'Microphone'", () => {
+  const status: DictationPreparingStatus = {
+    errorMessage: null,
+    downloadState: "downloading",
+    progress: 0.4,
+  };
+
+  it("renders the placeholder when mic is visible", () => {
+    render(<ComposerMicPreparing status={status} />);
+
+    expect(screen.getByRole("button")).not.toBeNull();
+  });
+
+  it("renders nothing when mic is hidden - it holds the mic's slot, not its own", () => {
+    useLayoutStore.getState().setRegionValues("mic", { shown: "hidden" });
+    const { container } = render(<ComposerMicPreparing status={status} />);
+
+    expect(container.firstChild).toBeNull();
+  });
+});
+
+describe("Dictation hotkey stays wired when Layout ▸ Composer hides the mic button", () => {
+  // `useDictationHotkey` never reads the layout store - the button is a pure
+  // view and the shortcut is a composer-level concern with its own route, per
+  // the setting's own description ("this does not turn voice input off").
+  // Driving the real module-level hotkey singleton with the `mic` region's
+  // `shown` set to "hidden" is the honest way to pin that boundary, rather
+  // than asserting a negative about a store the hook never touches.
+  it("still starts dictation on the bound chord (Control+Shift+M) with mic hidden", () => {
+    useLayoutStore.getState().setRegionValues("mic", { shown: "hidden" });
+    const start = vi.fn();
+    const stop = vi.fn();
+    const cancel = vi.fn();
+
+    const { unmount } = renderHook(() =>
+      useDictationHotkey({
+        enabled: true,
+        state: "idle",
+        start,
+        stop,
+        cancel,
+      }),
+    );
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          code: "KeyM",
+          ctrlKey: true,
+          shiftKey: true,
+          bubbles: true,
+        }),
+      );
+    });
+
+    expect(start).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keyup", { code: "KeyM", bubbles: true }),
+      );
+    });
+
+    unmount();
+  });
+});
+
+// ── Access (permission mode) ────────────────────────────────────────────────
+
+function renderPermissionsPicker(value: "full_access" | "auto") {
+  return render(
+    <PermissionsPicker
+      value={value}
+      disabled={false}
+      onChange={vi.fn()}
+      supportedPermissionModes={null}
+      harnessLabel={null}
+      catalogSupportedModes={null}
+      // Only matters for `value: "auto"`, which needs the host to be able to
+      // spell it or the display value clamps down to `auto_accept_edits`;
+      // `false` is the original fixture's value and is inert for every other
+      // mode (see `normalizePermissionMode`).
+      hostKnowsAutoMode={value === "auto"}
+      turnActive={false}
+      judgeBilling={null}
+      closeFocus="composer"
+      interactive
+      onOpenPermissionSettings={null}
+    />,
+  );
+}
+
+// The label text sits in a `<span class="truncate">`, itself the first child
+// of the name+chip wrapper span that actually carries the `hidden` utility
+// (it also owns the Experimental badge on the Auto row, so the pair hides as
+// one group) - `hidden` is never on the text node itself.
+function labelGroup(button: HTMLElement, label: string): HTMLElement {
+  const text = within(button).getByText(label);
+  const group = text.parentElement;
+  if (group === null) throw new Error("label has no wrapper");
+  return group;
+}
+
+describe("PermissionsPicker follows Layout ▸ Composer 'Access'", () => {
+  it("shows the label and chevron when access is visible", () => {
+    renderPermissionsPicker("full_access");
+
+    const button = screen.getByRole("button", { name: "Full access" });
+    const group = labelGroup(button, "Full access");
+    const chevron = button.querySelectorAll("svg")[1];
+
+    expect(group.className.split(/\s+/)).not.toContain("hidden");
+    expect(chevron.getAttribute("class")?.split(/\s+/)).not.toContain("hidden");
+  });
+
+  it("hides the label group and chevron but keeps the accessible name when access is compact", () => {
+    useLayoutStore.getState().setRegionValues("access", { size: "chip" });
+    renderPermissionsPicker("full_access");
+
+    const button = screen.getByRole("button", { name: "Full access" });
+    const group = labelGroup(button, "Full access");
+    const chevron = button.querySelectorAll("svg")[1];
+
+    expect(group.className.split(/\s+/)).toContain("hidden");
+    expect(chevron.getAttribute("class")?.split(/\s+/)).toContain("hidden");
+  });
+
+  // Auto's Experimental badge sits inside the same wrapper as its label, so a
+  // switch to compact must hide the whole name+chip group together rather
+  // than leaving the chip visible once the label text disappears.
+  it("hides Auto's label+Experimental-chip group together when access is compact", () => {
+    useLayoutStore.getState().setRegionValues("access", { size: "chip" });
+    renderPermissionsPicker("auto");
+
+    const button = screen.getByRole("button", {
+      name: "Auto — Experimental",
+    });
+    const group = labelGroup(button, "Auto");
+
+    expect(group.className.split(/\s+/)).toContain("hidden");
+    expect(within(group).getByText("Experimental")).toBeTruthy();
+  });
+
+  it("shows Auto's label and Experimental chip together when access is visible", () => {
+    renderPermissionsPicker("auto");
+
+    const button = screen.getByRole("button", {
+      name: "Auto — Experimental",
+    });
+    const group = labelGroup(button, "Auto");
+
+    expect(group.className.split(/\s+/)).not.toContain("hidden");
+    expect(within(group).getByText("Experimental")).toBeTruthy();
+  });
+});
+
+// ── Compact conversation (context usage chip) ───────────────────────────────
+
+describe("Context usage compact action follows Layout ▸ Composer 'Compact conversation'", () => {
+  it("shows the inline compact action when compactButton is visible", () => {
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={vi.fn()} />);
+
+    expect(screen.getByTestId("context-usage-compact-action")).not.toBeNull();
+  });
+
+  it("hides the inline compact action when compactButton is hidden", () => {
+    useLayoutStore
+      .getState()
+      .setRegionValues("contextUsage", { compactButton: "hidden" });
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={vi.fn()} />);
+
+    expect(screen.queryByTestId("context-usage-compact-action")).toBeNull();
+  });
+
+  it("shows the pinned-strip compact action when compactButton is visible", () => {
+    useLayoutStore
+      .getState()
+      .setRegionValues("contextUsage", { pinBreakdown: true });
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={vi.fn()} />);
+
+    const strip = screen.getByTestId("context-usage-pinned-strip");
+    expect(
+      within(strip).getByTestId("context-usage-compact-action"),
+    ).not.toBeNull();
+  });
+
+  it("hides the pinned-strip compact action when compactButton is hidden", () => {
+    useLayoutStore
+      .getState()
+      .setRegionValues("contextUsage", { pinBreakdown: true });
+    useLayoutStore
+      .getState()
+      .setRegionValues("contextUsage", { compactButton: "hidden" });
+    render(<ContextUsageChip usage={RELIABLE_USAGE} onCompact={vi.fn()} />);
+
+    const strip = screen.getByTestId("context-usage-pinned-strip");
+    expect(
+      within(strip).queryByTestId("context-usage-compact-action"),
+    ).toBeNull();
+  });
+});

@@ -1,0 +1,286 @@
+/**
+ * The canvas-wide, transaction-aware set of chat
+ * `instanceId`s a stable tile surface host must keep painted.
+ *
+ * Three layers, matching the design's "Host membership and lifecycle":
+ *
+ * 1. Canvas-wide RETAINED identity - the chat tiles each pane, across every
+ *    open top-level tab's canvas, keeps alive: the one it currently shows,
+ *    plus the recently-active ones its `activationHistory` still names, up to
+ *    `RETAINED_PANE_CHAT_CAP`. Uses the same `resolveActivePaneTab` fallback
+ *    the renderer uses, so a chat `TabGroupView` paints is never omitted from
+ *    membership.
+ *
+ *    This layer used to admit the SELECTED chat only, which made an inner
+ *    pane tab switch a real unmount and left the reader
+ *    watching the transcript re-converge on the way back. Retention is
+ *    derived through the shared `retainedPaneChatInstanceIds` policy, and -
+ *    critically - the WINDOW is picked on tile kind alone, with eligibility
+ *    applied to its RESULT below. Injecting eligibility into the selection
+ *    would not narrow this set relative to `use-mounted-pane-tabs.ts`'s; it
+ *    would SHIFT it, because the window is capped and rejection keeps filling
+ *    (F1). A member the pane therefore never slots does not
+ *    mispaint - a selected chat is seeded first on both sides, so the
+ *    shifted-in id can never carry a stale `tabSelected: true` - it strands:
+ *    its record keeps a non-null environment and the sticky `canMountBody`
+ *    latch, so the hosted body stays mounted forever on a disconnected
+ *    anchor, invisible and holding an unreclaimable chat session lease.
+ * 2. Top-level retained-surface/MRU eligibility - a chat's owning top-level
+ *    tab must also be one of the retained top-level surfaces. This reuses
+ *    `TopLevelTabHost`'s actual recency/cap algorithm, extracted into
+ *    `stores/tabs/top-level-surface-retention.ts` as a shared pure module, so
+ *    both the render-time host and this store-driven mirror apply exactly
+ *    one global cap across every top-level kind (epic, draft, history,
+ *    settings) - never a per-kind cap.
+ * 3. Transaction-aware retention - header tear-off is not one-store atomic
+ *    (`tearOffTabIntoNewHeaderTab` commits `EpicCanvasStore` synchronously;
+ *    `tabCommandCoordinator` places the new header ref in `useTabsStore`
+ *    moments later, in the same transaction). Mid-transaction, the tile's new
+ *    owning top-level tab id can exist in `EpicCanvasStore` before it exists
+ *    in `useTabsStore`'s header strip - recomputing at that instant would
+ *    read a real but momentarily inconsistent cross-store snapshot and could
+ *    evict it. So membership is entirely FROZEN (not recomputed at all)
+ *    while the coordinator's ledger shows an in-flight transaction, and
+ *    reconciles - additions and MRU eviction alike - exactly once, from the
+ *    coordinator's own settle notification.
+ *
+ * The phone shell's second tile joins layer 1 on its own terms: it is shown with
+ * no activation of its own, so no pane's retention window names it
+ * (`mobileSecondaryChatMembership`).
+ *
+ * Membership is recomputed and diffed on every notification from
+ * `useEpicCanvasStore`, `useTabsStore`, `tabCommandCoordinator`, and
+ * `remote-deleted-chat-registry.ts` - deriving from observed state at each
+ * checkpoint rather than trusting any one store's change to imply the others
+ * are consistent (the same observation-over-claim lesson the identity
+ * machinery learned the hard way).
+ *
+ * A selected chat also has to pass `isHostedSurfaceEligible` (shared with
+ * `surface-owner.ts`'s render-routing decision)
+ * - a remote-deleted chat leaves membership the same instant
+ * `ActiveTabBody` reports it, so the registry entry it's holding gets cleared
+ * by the existing membership-loss subscription instead of lingering
+ * alongside the inline `DeletedArtifactBody`.
+ */
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import type {
+  EpicCanvasState,
+  MobileSecondaryTile,
+} from "@/stores/epics/canvas/types";
+import { collectPanes } from "@/stores/epics/canvas/tile-tree";
+import {
+  RETAINED_PANE_CHAT_CAP,
+  retainedPaneChatInstanceIds,
+} from "@/stores/epics/canvas/retained-pane-chats";
+import { useTabsStore } from "@/stores/tabs/store";
+import { flattenStripItemRefs, tabRefKey } from "@/stores/tabs/layout";
+import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
+import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import {
+  advanceTopLevelSurfaceRecency,
+  retainedTopLevelSurfaceKeys,
+} from "@/stores/tabs/top-level-surface-retention";
+import { isHostedSurfaceEligible } from "@/components/epic-canvas/surface-host/surface-owner";
+import {
+  isChatRemoteDeleted,
+  subscribeChatRemoteDeletion,
+} from "@/components/epic-canvas/surface-host/remote-deleted-chat-registry";
+import { isEpicParked, subscribeEpicParking } from "@/lib/epics/epic-parking";
+
+export type SurfaceMembershipListener = () => void;
+
+/**
+ * Layer 1 (pure, standalone-testable): every chat `instanceId` a pane keeps
+ * alive - shown or recently-active - across the complete `canvasByTabId`
+ * snapshot, mapped to the top-level tab id that owns it.
+ */
+export function collectCanvasWideRetainedChatMembership(
+  canvasByTabId: Readonly<Record<string, EpicCanvasState | undefined>>,
+): ReadonlyMap<string, string> {
+  const instanceIdToTabId = new Map<string, string>();
+  for (const [tabId, canvas] of Object.entries(canvasByTabId)) {
+    if (canvas === undefined) continue;
+    for (const pane of collectPanes(canvas.root)) {
+      // The WINDOW is picked on tile kind alone, identically to
+      // `use-mounted-pane-tabs.ts`. Eligibility is applied to the result,
+      // AFTER the cap - injecting it into the selection would shift this
+      // window relative to the render side's and strand a member with no slot
+      // (F1; see `retained-pane-chats.ts`).
+      const retained = retainedPaneChatInstanceIds({
+        pane,
+        cap: RETAINED_PANE_CHAT_CAP,
+        tileFor: (instanceId) => canvas.tilesByInstanceId[instanceId],
+      });
+      for (const instanceId of retained) {
+        const tile = canvas.tilesByInstanceId[instanceId];
+        if (tile === undefined) continue;
+        if (
+          !isHostedSurfaceEligible({
+            node: tile,
+            isRemoteDeleted: isChatRemoteDeleted(instanceId),
+          })
+        ) {
+          continue;
+        }
+        instanceIdToTabId.set(instanceId, tabId);
+      }
+    }
+  }
+  return instanceIdToTabId;
+}
+
+/**
+ * The chats the phone shell shows in its second slot. The slot leaves the pane's
+ * activation alone, so `activationHistory` may never name the tile, and the pane's
+ * capped window can be full of other chats even if it does; the slot is what
+ * keeps it painted. While the width has no room the slot draws nothing, and the
+ * record stays as a retained chat does, unpresented.
+ */
+export function mobileSecondaryChatMembership(
+  canvasByTabId: Readonly<Record<string, EpicCanvasState | undefined>>,
+  slots: Readonly<Record<string, MobileSecondaryTile | undefined>>,
+): ReadonlyMap<string, string> {
+  const instanceIdToTabId = new Map<string, string>();
+  for (const [tabId, slot] of Object.entries(slots)) {
+    if (slot === undefined) continue;
+    const tile = canvasByTabId[tabId]?.tilesByInstanceId[slot.instanceId];
+    if (
+      tile !== undefined &&
+      isHostedSurfaceEligible({
+        node: tile,
+        isRemoteDeleted: isChatRemoteDeleted(slot.instanceId),
+      })
+    ) {
+      instanceIdToTabId.set(slot.instanceId, tabId);
+    }
+  }
+  return instanceIdToTabId;
+}
+
+/**
+ * Layer 2: the kind-qualified `TabRef` keys (the same `"<kind>:<id>"` format
+ * `tabRefKey` produces) currently eligible to retain a hosted surface, given
+ * every open top-level tab strip and which refs are presently active.
+ * Recomputed with the exact same shared algorithm `TopLevelTabHost` uses -
+ * one global MRU/cap decision across every kind, never a per-kind one.
+ */
+function computeRetainedTopLevelRefKeys(): ReadonlyArray<string> {
+  const { items, activeItemId } = useTabsStore.getState();
+  const headerTabs = getHeaderTabs();
+  const knownRefKeys = new Set(headerTabs.map(tabRefKey));
+  const availableRefKeys = items
+    .flatMap(flattenStripItemRefs)
+    .map(tabRefKey)
+    .filter((key, index, keys) => keys.indexOf(key) === index)
+    .filter((key) => knownRefKeys.has(key));
+  const activeItem = items.find((item) => item.id === activeItemId) ?? null;
+  const activeRefKeys =
+    activeItem === null
+      ? []
+      : flattenStripItemRefs(activeItem)
+          .map(tabRefKey)
+          .filter((key) => knownRefKeys.has(key));
+
+  topLevelRecency = advanceTopLevelSurfaceRecency(
+    activeRefKeys,
+    topLevelRecency,
+  );
+  return retainedTopLevelSurfaceKeys(
+    availableRefKeys,
+    activeRefKeys,
+    topLevelRecency,
+  );
+}
+
+let topLevelRecency: ReadonlyArray<string> = [];
+let currentMembership: ReadonlySet<string> = new Set();
+const listeners = new Set<SurfaceMembershipListener>();
+
+function setsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const value of a) {
+    if (!b.has(value)) return false;
+  }
+  return true;
+}
+
+/**
+ * While the coordinator has an in-flight transaction, membership is left
+ * exactly as it was at the last settled snapshot - not recomputed at all.
+ * Header tear-off's canvas write (which moves a tile to a brand-new,
+ * not-yet-in-the-header-strip top-level tab id) synchronously notifies both
+ * `useEpicCanvasStore` and, later in the same transaction, `useTabsStore`;
+ * recomputing mid-transaction would read a real but momentarily
+ * inconsistent snapshot (the tile's new owner exists in one store and not
+ * yet the other) and could evict it. Freezing avoids that by construction -
+ * the correct post-transaction membership is derived fresh, exactly once,
+ * from the coordinator's own settle notification.
+ */
+function recomputeMembership(): void {
+  if (tabCommandCoordinator.getLedger().suppressionDepth > 0) return;
+
+  const canvasState = useEpicCanvasStore.getState();
+  const retainedRefKeys = new Set(computeRetainedTopLevelRefKeys());
+  const instanceIdToTabId = [
+    ...collectCanvasWideRetainedChatMembership(canvasState.canvasByTabId),
+    ...mobileSecondaryChatMembership(
+      canvasState.canvasByTabId,
+      canvasState.mobileSecondaryTileByTabId,
+    ),
+  ];
+  const nextMembership = new Set<string>();
+  for (const [instanceId, tabId] of instanceIdToTabId) {
+    if (!retainedRefKeys.has(tabRefKey({ kind: "epic", id: tabId }))) continue;
+    // Layer 4: renderer parking (plan C, decision C1). A hosted body is
+    // mounted by `StableTileSurfaceHost`, which lives ABOVE every
+    // `EpicSessionProvider` - so unlike an inline tile it does not unmount
+    // when the epic's session gate closes, and a parked epic would otherwise
+    // keep a whole chat surface alive on the DISPOSED handle its environment
+    // record still names, still holding a `chat.subscribe` lease.
+    //
+    // Enforced through membership rather than inside the body, because
+    // membership is the sole authority over which records exist: nothing else
+    // can delete the environment record, and a record left behind keeps the
+    // sticky `canMountBody` latch. Leaving is not losing anything - the
+    // canvas entry is untouched, so showing the epic again re-admits the same
+    // instance and the pane re-slots it.
+    const epicId = canvasState.tabsById[tabId]?.epicId;
+    if (epicId !== undefined && isEpicParked(epicId)) continue;
+    nextMembership.add(instanceId);
+  }
+
+  if (setsEqual(nextMembership, currentMembership)) return;
+  currentMembership = nextMembership;
+  listeners.forEach((listener) => listener());
+}
+
+/** The chat `instanceId`s a stable tile surface host should keep mounted. */
+export function getTileSurfaceMembership(): ReadonlySet<string> {
+  return currentMembership;
+}
+
+export function subscribeTileSurfaceMembership(
+  listener: SurfaceMembershipListener,
+): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+export function resetTileSurfaceMembershipForTesting(): void {
+  topLevelRecency = [];
+  currentMembership = new Set();
+  recomputeMembership();
+}
+
+useEpicCanvasStore.subscribe(recomputeMembership);
+useTabsStore.subscribe(recomputeMembership);
+useLandingDraftStore.subscribe(recomputeMembership);
+tabCommandCoordinator.subscribe(recomputeMembership);
+subscribeChatRemoteDeletion(recomputeMembership);
+// Parking moves no store this file already watches - it is a clock over the
+// visible-view registry - so its own edge has to reach the recompute, in both
+// directions: parking drops an epic's hosted chats, showing it again restores
+// them.
+subscribeEpicParking(recomputeMembership);
+recomputeMembership();

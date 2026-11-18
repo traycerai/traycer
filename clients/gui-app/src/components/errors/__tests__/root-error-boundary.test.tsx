@@ -1,0 +1,154 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { RootErrorBoundary } from "@/components/errors/root-error-boundary";
+import { ReportIssueDialogHost } from "@/components/layout/dialogs/report-issue-dialog-host";
+import { Toaster } from "@/components/ui/sonner";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
+import { createAppRouter } from "@/router";
+import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
+import type { RendererCrashTelemetryInput } from "@traycer-clients/shared/platform/runner-host";
+
+const router = createAppRouter(null, null);
+
+function Boom(): never {
+  throw new Error("boom from a provider");
+}
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  useDesktopDialogStore.getState().close();
+  useDesktopDialogStore.setState({ reportIssueAvailable: false });
+});
+
+describe("<RootErrorBoundary />", () => {
+  it("renders children when nothing throws", () => {
+    render(
+      <RootErrorBoundary router={router}>
+        <div data-testid="ok-child" />
+      </RootErrorBoundary>,
+    );
+
+    expect(screen.getByTestId("ok-child")).toBeTruthy();
+    expect(screen.queryByTestId("app-error-screen")).toBeNull();
+  });
+
+  it("catches a child crash and shows the recovery card", () => {
+    // The thrown error is logged by React and by `componentDidCatch`; silence
+    // the noise and assert the boundary logged it.
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+
+    render(
+      <RootErrorBoundary router={router}>
+        <Boom />
+      </RootErrorBoundary>,
+    );
+
+    expect(screen.getByTestId("app-error-screen")).toBeTruthy();
+    expect(consoleError).toHaveBeenCalled();
+  });
+
+  it("persists the component stack and build identity through the crash sink", () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const persist = vi.fn(
+      (_input: RendererCrashTelemetryInput): Promise<void> => Promise.resolve(),
+    );
+
+    render(
+      <RootErrorBoundary router={router} crashTelemetry={{ persist }}>
+        <Boom />
+      </RootErrorBoundary>,
+    );
+
+    expect(persist).toHaveBeenCalledOnce();
+    const telemetry = persist.mock.calls[0][0];
+    expect(telemetry.appVersion).toBeNull();
+    expect(telemetry.buildRevision).toBeNull();
+    expect(telemetry.componentStack).toContain("Boom");
+    expect(telemetry.correlationId).not.toBe("");
+    expect(telemetry.fingerprint).toMatch(/^fp:v1:/);
+    expect(Number.isFinite(telemetry.timestamp)).toBe(true);
+  });
+
+  it("navigates home when Return to Home is clicked", () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const navigateSpy = vi
+      .spyOn(router, "navigate")
+      .mockResolvedValue(undefined);
+
+    render(
+      <RootErrorBoundary router={router}>
+        <Boom />
+      </RootErrorBoundary>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /return to home/i }));
+    expect(navigateSpy).toHaveBeenCalledWith({ to: "/" });
+  });
+
+  it("shows report submission failures while the root crash screen is active", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const runnerHost = Object.assign(
+      new MockRunnerHost({
+        signInUrl: "https://example.invalid/signin",
+        authnBaseUrl: "https://example.invalid",
+        localHost: null,
+        hosts: [],
+        workspaceFolderPickerPaths: undefined,
+        hasLocalHost: undefined,
+        traycerCli: undefined,
+      }),
+      {
+        support: {
+          getSnapshot: () => Promise.reject(new Error("snapshot unavailable")),
+          revealLog: () => Promise.reject(new Error("log unavailable")),
+          submitReport: () => Promise.reject(new Error("submit unavailable")),
+          tailLog: () => Promise.reject(new Error("log unavailable")),
+          freezeEvidence: () =>
+            Promise.resolve({ reportId: "rpt_test", contactEmail: null }),
+          discardFrozenEvidence: () => Promise.resolve(),
+          readFrozenLogTail: () => Promise.reject(new Error("log unavailable")),
+          saveDiagnosticBundle: () =>
+            Promise.reject(new Error("bundle unavailable")),
+          getFingerprintOccurrence: () => Promise.resolve(null),
+          buildPublicDraft: () =>
+            Promise.reject(new Error("public draft unavailable")),
+        },
+      },
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
+
+    render(
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <QueryClientProvider client={queryClient}>
+          <ReportIssueDialogHost />
+          <Toaster />
+          <RootErrorBoundary router={router}>
+            <Boom />
+          </RootErrorBoundary>
+        </QueryClientProvider>
+      </RunnerHostProvider>,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Report issue" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Send report" }));
+
+    expect(
+      await screen.findByText(
+        "Your report could not be sent. Nothing was lost - it is still here.",
+      ),
+    ).not.toBeNull();
+    expect(screen.getByTestId("app-error-screen")).not.toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Report an issue" }),
+    ).not.toBeNull();
+  });
+});

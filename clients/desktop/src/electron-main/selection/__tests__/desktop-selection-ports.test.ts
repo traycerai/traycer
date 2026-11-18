@@ -1,0 +1,3332 @@
+import { EventEmitter } from "node:events";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
+import type {
+  AuthorityIdentitySource,
+  HostFleetSnapshot,
+  SelectionSubscription,
+} from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import type { AuthorityLog } from "@traycer-clients/shared/host-selection/selection-authority-engine";
+import type { HostListFetchResult } from "@traycer-clients/shared/host-client/remote-fetcher";
+import type {
+  HostConnectivity,
+  HostListItem,
+  HostSandboxState,
+} from "@traycer/protocol/host/host-status";
+import type {
+  IpcHostController,
+  IpcHostLifecycle,
+} from "../../ipc/runner-ipc-bridge";
+import type {
+  HostControllerStatus,
+  LifecycleAdmissionBlock,
+} from "../../host/host-controller-types";
+import type {
+  ActivateInstalledOk,
+  ApplyStagedOk,
+  ApplyStagedTrigger,
+  ConvergeReadyOk,
+  ConvergeReadyVersionPolicy,
+  InstallVersionOk,
+  LocalHostMutationIntent,
+  MutationOutcome,
+  MutationProgress,
+  RemoveTraycerOk,
+  ServiceDefinitionRefreshOk,
+  ServiceRegistrationOk,
+  UninstallOk,
+} from "../../host/host-controller-types";
+import type {
+  DesktopPublishedHostSnapshot,
+  RegisteredHostsPush,
+} from "../../../ipc-contracts/host-types";
+import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
+import { DesktopAuthSession } from "../../auth/desktop-auth-session";
+import type { DesktopAuthSessionSnapshot } from "../../../ipc-contracts/window-types";
+import type { LocalHostIdentityFiles } from "../../host/local-host-identity";
+import {
+  createDesktopLocalHostEnsurePort,
+  DesktopAuthorityIdentitySource,
+  DesktopHostFleetSource,
+  DesktopLocalHostOutageSignal,
+} from "../desktop-selection-ports";
+import { startLocalHostInventorySubscription } from "../local-host-inventory-subscription";
+import {
+  registerRegisteredHostsBroadcast,
+  type RegisteredHostsBroadcastBridge,
+} from "../../ipc/registered-hosts-broadcast";
+
+/**
+ * Controllable stand-in for the fleet port's enrollment read. Default is the
+ * real implementation; A1 overrides it with a deferred gate so the gen-0 read
+ * can be held across the identity switch and released under a known generation.
+ */
+const localHostIdentityTestDoubles = vi.hoisted(() => {
+  type ReadFn = (files: LocalHostIdentityFiles) => Promise<string | null>;
+  let actual: ReadFn = async () => null;
+  const readLastKnownLocalHostId = vi.fn<ReadFn>(async (files) =>
+    actual(files),
+  );
+  return {
+    readLastKnownLocalHostId,
+    /** The real reader, for gated call-throughs that must not re-enter the mock. */
+    get actual(): ReadFn {
+      return actual;
+    },
+    setActual(fn: ReadFn): void {
+      actual = fn;
+      readLastKnownLocalHostId.mockImplementation(fn);
+    },
+    restore(): void {
+      readLastKnownLocalHostId.mockReset();
+      readLastKnownLocalHostId.mockImplementation(async (files) =>
+        actual(files),
+      );
+    },
+  };
+});
+
+vi.mock("../../host/local-host-identity", async (importOriginal) => {
+  const mod =
+    await importOriginal<typeof import("../../host/local-host-identity")>();
+  localHostIdentityTestDoubles.setActual(mod.readLastKnownLocalHostId);
+  return {
+    ...mod,
+    readLastKnownLocalHostId:
+      localHostIdentityTestDoubles.readLastKnownLocalHostId,
+  };
+});
+
+const silentLog: AuthorityLog = {
+  debug: () => undefined,
+  warn: () => undefined,
+};
+
+function signedInSnapshot(
+  userId: string,
+  token: string,
+): DesktopAuthSessionSnapshot {
+  return {
+    status: "signed-in" as const,
+    token,
+    profile: { userId, userName: userId, email: `${userId}@example.com` },
+  };
+}
+
+const tempDirs: string[] = [];
+
+async function makeTempDir(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "selection-ports-test-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
+async function writeEnrollment(dir: string, hostId: string): Promise<string> {
+  const file = join(dir, "enrollment.json");
+  await mkdir(dir, { recursive: true });
+  await writeFile(file, JSON.stringify({ hostId }), "utf8");
+  return file;
+}
+
+afterEach(async () => {
+  tempDirs.length = 0;
+  localHostIdentityTestDoubles.restore();
+});
+
+/**
+ * The first snapshot `fleet` publishes that satisfies `matches`. A local-host
+ * change republishes only after a real `fs.readFile` of the enrollment file
+ * (libuv I/O), so no fixed tick bounds when it lands; waiting on the publish
+ * itself is exact under any load. Subscribe BEFORE triggering the change.
+ */
+function nextSnapshotWhere(
+  fleet: DesktopHostFleetSource,
+  matches: (snapshot: HostFleetSnapshot) => boolean,
+): Promise<HostFleetSnapshot> {
+  return new Promise((resolve) => {
+    const subscription = fleet.onChanged((snapshot) => {
+      if (!matches(snapshot)) return;
+      subscription.dispose();
+      resolve(snapshot);
+    });
+  });
+}
+
+/**
+ * A `listRegisteredHosts` double that hands every caller its OWN deferred and
+ * announces when each call STARTS.
+ *
+ * ## Why the obvious shape is a deadlock
+ *
+ * The natural double for "two overlapping refreshes" is one keyed on call
+ * order - `calls.length === 1 ? firstCall : secondCall`. It encodes an
+ * assumption that is not true: WHICH refresh arrives first is decided by an
+ * async race, not by the order the test started them. `refreshWith` awaits
+ * `readLocalHostId()` - a REAL filesystem read - before it ever calls this
+ * double, so two overlapping refreshes are both suspended in libuv's
+ * threadpool, and under a saturated pool their reads complete out of
+ * submission order. When the second refresh wins, it receives `firstCall`, the
+ * test resolves `firstCall` believing it belongs to the first refresh, and
+ * `await inFlight` then waits on a deferred the test only resolves AFTER that
+ * await. That is a HANG, not slowness - no timeout budget can fix an await
+ * that never settles, which is why this is a fixture bug and not a timing one.
+ *
+ * ## What this replaces it with
+ *
+ * Per-call deferreds (so no call can be mistaken for another) plus a start
+ * signal per call, so a test can WAIT for the fact it needs - "refresh #1 is
+ * now inside the fetch" - instead of assuming it. The signal is resolved from
+ * inside the double itself, so it is exact under any load. A fixed sleep is
+ * the weaker form of the same barrier and is deliberately not used for this:
+ * a sleep long enough today is a sleep too short on a busier machine.
+ */
+interface RecordingRegistry {
+  readonly fetch: () => Promise<HostListFetchResult>;
+  readonly calls: Array<Deferred<HostListFetchResult>>;
+  readonly started: (index: number) => Promise<void>;
+}
+
+function recordingRegistryFetch(): RecordingRegistry {
+  const calls: Array<Deferred<HostListFetchResult>> = [];
+  const startSignals: Array<Deferred<void>> = [];
+  const signalAt = (index: number): Deferred<void> => {
+    while (startSignals.length <= index) {
+      startSignals.push(deferred<void>());
+    }
+    const signal = startSignals[index];
+    if (signal === undefined) {
+      throw new Error(`no start signal for call ${index}`);
+    }
+    return signal;
+  };
+  return {
+    calls,
+    started: (index) => signalAt(index).promise,
+    fetch: () => {
+      const call = deferred<HostListFetchResult>();
+      calls.push(call);
+      signalAt(calls.length - 1).resolve();
+      return call.promise;
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// DesktopAuthorityIdentitySource
+// ---------------------------------------------------------------------------
+
+describe("DesktopAuthorityIdentitySource", () => {
+  it("does not bump the generation or fire onChanged on a token-only refresh (same user)", () => {
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new DesktopAuthorityIdentitySource(authSession);
+    expect(identity.current()).toEqual({
+      identityKey: "user-a",
+      generation: 0,
+    });
+
+    const seen: Array<{ identityKey: string | null; generation: number }> = [];
+    identity.onChanged((next) => seen.push(next));
+
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-2"));
+
+    expect(identity.current()).toEqual({
+      identityKey: "user-a",
+      generation: 0,
+    });
+    expect(seen).toEqual([]);
+    identity.dispose();
+  });
+
+  it("bumps the generation and delivers the new identity on a different signed-in user", () => {
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new DesktopAuthorityIdentitySource(authSession);
+
+    const seen: Array<{ identityKey: string | null; generation: number }> = [];
+    identity.onChanged((next) => seen.push(next));
+
+    setVerifiedSession(authSession, signedInSnapshot("user-b", "token-2"));
+
+    expect(seen).toEqual([{ identityKey: "user-b", generation: 1 }]);
+    expect(identity.current()).toEqual({
+      identityKey: "user-b",
+      generation: 1,
+    });
+    identity.dispose();
+  });
+
+  it("counts sign-out and sign-back-in-as-the-same-user as two transitions", () => {
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new DesktopAuthorityIdentitySource(authSession);
+
+    const seen: Array<{ identityKey: string | null; generation: number }> = [];
+    identity.onChanged((next) => seen.push(next));
+
+    authSession.set({ status: "signed-out", token: null, profile: null });
+    expect(identity.current()).toEqual({ identityKey: null, generation: 1 });
+
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-3"));
+    expect(identity.current()).toEqual({
+      identityKey: "user-a",
+      generation: 2,
+    });
+
+    expect(seen).toEqual([
+      { identityKey: null, generation: 1 },
+      { identityKey: "user-a", generation: 2 },
+    ]);
+    identity.dispose();
+  });
+
+  it("current() is authoritative at any point, and dispose() unsubscribes from later auth-session changes", () => {
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new DesktopAuthorityIdentitySource(authSession);
+    expect(identity.current()).toEqual({
+      identityKey: "user-a",
+      generation: 0,
+    });
+
+    const seen: Array<{ identityKey: string | null; generation: number }> = [];
+    identity.onChanged((next) => seen.push(next));
+
+    identity.dispose();
+    setVerifiedSession(authSession, signedInSnapshot("user-b", "token-2"));
+
+    expect(seen).toEqual([]);
+    // current() is frozen at whatever it held at dispose time - the source no
+    // longer observes the auth session at all.
+    expect(identity.current()).toEqual({
+      identityKey: "user-a",
+      generation: 0,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DesktopHostFleetSource
+// ---------------------------------------------------------------------------
+
+class FakeIdentitySource implements AuthorityIdentitySource {
+  private identityKey: string | null;
+  private generation: number;
+  private readonly listeners = new Set<
+    (identity: { identityKey: string | null; generation: number }) => void
+  >();
+
+  constructor(identityKey: string | null, generation: number) {
+    this.identityKey = identityKey;
+    this.generation = generation;
+  }
+
+  current(): { identityKey: string | null; generation: number } {
+    return { identityKey: this.identityKey, generation: this.generation };
+  }
+
+  onChanged(
+    listener: (identity: {
+      identityKey: string | null;
+      generation: number;
+    }) => void,
+  ): SelectionSubscription {
+    this.listeners.add(listener);
+    return {
+      dispose: () => {
+        this.listeners.delete(listener);
+      },
+    };
+  }
+
+  set(identityKey: string | null, generation: number): void {
+    this.identityKey = identityKey;
+    this.generation = generation;
+    const current = this.current();
+    for (const listener of Array.from(this.listeners)) {
+      listener(current);
+    }
+  }
+}
+
+class FakeHostLifecycle extends EventEmitter implements IpcHostLifecycle {
+  pidMetadataFile = "/tmp/selection-ports-test/pid.json";
+  identityEnrollmentFile = "/tmp/selection-ports-test/enrollment.json";
+  isDisposed = false;
+
+  getSnapshot(): DesktopPublishedHostSnapshot | null {
+    return null;
+  }
+  notifyRespawning(): void {}
+  noteEndpointAnswered(): void {}
+  ensureWatcherInstalled(): void {}
+  async reloadSnapshotFromDisk(): Promise<DesktopPublishedHostSnapshot | null> {
+    return null;
+  }
+  async getRecentLogTail(_maxLines: number): Promise<string | null> {
+    return null;
+  }
+
+  emitChange(): void {
+    this.emit("change", null);
+  }
+}
+
+function buildHostListItem(hostId: string): HostListItem {
+  return {
+    hostId,
+    displayName: null,
+    platform: null,
+    kind: "personal",
+    publicKey: "pub-key",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    status: {
+      connectivity: "connectable",
+      viewerReachability: "ok",
+      clientCloud: "ok",
+      updateState: "current",
+      appVersion: null,
+      lastSeenAt: null,
+    },
+    updatePolicy: "manual",
+  };
+}
+
+function buildTeamHostListItem(hostId: string): HostListItem {
+  return {
+    ...buildHostListItem(hostId),
+    owner: { kind: "team", id: "team-1", name: "Platform" },
+  };
+}
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  resolve(value: T): void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolveFn: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolveFn = resolve;
+  });
+  return { promise, resolve: resolveFn };
+}
+
+/**
+ * Install a signed-in session the way PRODUCTION does.
+ *
+ * `set` alone leaves `verified: false` - main only marks a bearer verified
+ * after it has checked it against JWKS (`auth-ipc`'s `authSessionSet` calls
+ * `beginSet` then `setVerified`). These fixtures used the bare `set`, so every
+ * one of them described a session main does not vouch for, which stopped
+ * mattering the moment a consumer started reading `verified`: the fleet
+ * source now declines its cloud registry read on exactly that flag, and 12 of
+ * these tests were asserting registry behaviour for a session that would
+ * never reach the registry in the field.
+ */
+function setVerifiedSession(
+  session: DesktopAuthSession,
+  snapshot: DesktopAuthSessionSnapshot,
+): void {
+  session.setVerified(snapshot, session.beginSet());
+}
+
+function buildFleetSource(overrides: {
+  identity: AuthorityIdentitySource;
+  authSession: DesktopAuthSession;
+  host: FakeHostLifecycle;
+  listRegisteredHosts: (
+    authnBaseUrl: string,
+    bearerToken: string,
+  ) => Promise<HostListFetchResult>;
+}): DesktopHostFleetSource {
+  // A recording fake, not a no-op: `publishRegistryResponse` is a required
+  // option (P4.1/F22), and callers that don't care what lands here still need
+  // a real sink rather than a silently-dropping one. Tests that DO care what
+  // was published use `buildFleetSourceWithPublisher` below instead.
+  const published: RegisteredHostsPush[] = [];
+  // A controllable clock, not `Date.now()`: none of this builder's own tests
+  // exercise the `readAtMs` ordering, but keeping the same shape as
+  // `buildFleetSourceWithPublisher` below means a future ordering test never
+  // has to migrate builders to get one.
+  let currentNow = 1_000;
+  return new DesktopHostFleetSource({
+    authnBaseUrl: "http://localhost:5005",
+    identity: overrides.identity,
+    authSession: overrides.authSession,
+    host: overrides.host,
+    listRegisteredHosts: overrides.listRegisteredHosts,
+    publishRegistryResponse: (push) => {
+      published.push(push);
+    },
+    now: () => currentNow,
+    log: silentLog,
+  });
+}
+
+/**
+ * Same composition as {@link buildFleetSource}, but hands back the recording
+ * array too - for the P4.1/F22 `publishRegistryResponse` assertions, which
+ * need to inspect what actually got published rather than just that the
+ * option was wired.
+ *
+ * The clock is a CONTROLLABLE double (`setNow`), not `Date.now()`: the
+ * `acceptPushedRows` ordering rule (a push's `readAtMs` versus a poll's own
+ * fetch-start stamp) is only testable against a clock the test can position
+ * precisely on both sides of the comparison.
+ */
+function buildFleetSourceWithPublisher(overrides: {
+  identity: AuthorityIdentitySource;
+  authSession: DesktopAuthSession;
+  host: FakeHostLifecycle;
+  listRegisteredHosts: (
+    authnBaseUrl: string,
+    bearerToken: string,
+  ) => Promise<HostListFetchResult>;
+}): {
+  readonly fleet: DesktopHostFleetSource;
+  readonly published: RegisteredHostsPush[];
+  readonly setNow: (value: number) => void;
+} {
+  const published: RegisteredHostsPush[] = [];
+  let currentNow = 1_000;
+  const fleet = new DesktopHostFleetSource({
+    authnBaseUrl: "http://localhost:5005",
+    identity: overrides.identity,
+    authSession: overrides.authSession,
+    host: overrides.host,
+    listRegisteredHosts: overrides.listRegisteredHosts,
+    publishRegistryResponse: (push) => {
+      published.push(push);
+    },
+    now: () => currentNow,
+    log: silentLog,
+  });
+  return {
+    fleet,
+    published,
+    setNow: (value) => {
+      currentNow = value;
+    },
+  };
+}
+
+describe("DesktopHostFleetSource", () => {
+  /**
+   * A revoked bearer must not keep polling the ACCOUNT REGISTRY.
+   *
+   * `revokeVerification` deliberately keeps `status: "signed-in"` and the
+   * token - flattening either signs sibling windows out - so the revoked
+   * session is indistinguishable from a live one by the `token !== null` test
+   * this source used, and `registered-hosts-broadcast` drives a refresh every
+   * 60 seconds. The local host is kept regardless: it was read from disk and
+   * is dialable whatever the registry says, which is the same rule the two
+   * fetch-failure arms already apply.
+   */
+  it("declines the registry read on an unverified session but keeps the local host", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    // The terminal verdict loss a renderer reports; main keeps the session.
+    authSession.revokeVerification("token-1");
+    expect(authSession.get().token).toBe("token-1");
+    expect(authSession.get().status).toBe("signed-in");
+
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    let registryCalls = 0;
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        registryCalls += 1;
+        return {
+          kind: "ok",
+          response: { hosts: [buildHostListItem("local-host")] },
+        };
+      },
+    });
+
+    await fleet.refresh();
+
+    expect(registryCalls).toBe(0);
+    // Not an empty fleet: the offline plane is exactly what an unverified
+    // session still needs, so this machine stays addressable.
+    expect(fleet.snapshot().hosts.map((entry) => entry.hostId)).toEqual([
+      "local-host",
+    ]);
+    fleet.dispose();
+  });
+
+  it("still reads the registry while the session IS verified (non-vacuity)", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    let registryCalls = 0;
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        registryCalls += 1;
+        return {
+          kind: "ok",
+          response: { hosts: [buildHostListItem("local-host")] },
+        };
+      },
+    });
+
+    await fleet.refresh();
+
+    expect(registryCalls).toBe(1);
+    fleet.dispose();
+  });
+
+  it("maps registry rows to fleet entries carrying only hostId and kind", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: { hosts: [buildHostListItem("local-host")] },
+      }),
+    });
+
+    await fleet.refresh();
+
+    expect(fleet.snapshot().hosts).toHaveLength(1);
+    for (const entry of fleet.snapshot().hosts) {
+      expect(Object.keys(entry).sort()).toEqual([
+        "hostId",
+        "kind",
+        "teamOwned",
+      ]);
+    }
+    fleet.dispose();
+  });
+
+  it("classifies the row matching this machine's durable id as local, the rest as remote", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: {
+          hosts: [
+            buildHostListItem("local-host"),
+            buildHostListItem("remote-host"),
+          ],
+        },
+      }),
+    });
+
+    await fleet.refresh();
+
+    expect(fleet.snapshot().hosts).toEqual([
+      { hostId: "local-host", kind: "local", teamOwned: false },
+      { hostId: "remote-host", kind: "remote", teamOwned: false },
+    ]);
+    fleet.dispose();
+  });
+
+  it("publishes teamOwned only for a registry row a team owns", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: {
+          hosts: [
+            buildHostListItem("local-host"),
+            {
+              ...buildHostListItem("team-host"),
+              owner: { kind: "team", id: "team-1", name: "Platform" },
+            },
+            {
+              ...buildHostListItem("own-host"),
+              owner: { kind: "user", id: "user-a" },
+            },
+            buildHostListItem("remote-host"),
+          ],
+        },
+      }),
+    });
+
+    await fleet.refresh();
+
+    expect(fleet.snapshot().hosts).toEqual([
+      { hostId: "local-host", kind: "local", teamOwned: false },
+      { hostId: "own-host", kind: "remote", teamOwned: false },
+      { hostId: "remote-host", kind: "remote", teamOwned: false },
+      { hostId: "team-host", kind: "remote", teamOwned: true },
+    ]);
+    fleet.dispose();
+  });
+
+  it("synthesizes the local host when the registry does not list it", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: { hosts: [buildHostListItem("remote-host")] },
+      }),
+    });
+
+    await fleet.refresh();
+
+    expect(fleet.snapshot().hosts).toEqual([
+      { hostId: "local-host", kind: "local", teamOwned: false },
+      { hostId: "remote-host", kind: "remote", teamOwned: false },
+    ]);
+    fleet.dispose();
+  });
+
+  it("sorts entries by hostId so a server-side reordering is not a membership change", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "m-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: {
+          hosts: [
+            buildHostListItem("z-host"),
+            buildHostListItem("a-host"),
+            buildHostListItem("m-host"),
+          ],
+        },
+      }),
+    });
+
+    await fleet.refresh();
+
+    expect(fleet.snapshot().hosts.map((entry) => entry.hostId)).toEqual([
+      "a-host",
+      "m-host",
+      "z-host",
+    ]);
+    fleet.dispose();
+  });
+
+  it("stamps the identity generation at fetch START, so a late completion carries the OLD generation", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+
+    const registry = recordingRegistryFetch();
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: registry.fetch,
+    });
+
+    const publishedGenerations: number[] = [];
+    fleet.onChanged((snapshot) => {
+      publishedGenerations.push(snapshot.identityGeneration);
+    });
+
+    const inFlight = fleet.refresh();
+    // Wait for the FACT this case depends on - refresh #1 is past its
+    // filesystem read and inside the fetch - so the identity change below
+    // cannot race ahead of it and take call #0 for itself.
+    await registry.started(0);
+    // Identity moves on WHILE the first fetch is in flight.
+    identity.set("user-b", 1);
+    await registry.started(1);
+
+    registry.calls[0]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("local-host")] },
+    });
+    await inFlight;
+    registry.calls[1]?.resolve({ kind: "ok", response: { hosts: [] } });
+    await Promise.resolve();
+
+    // The publish produced by the FIRST (stale) fetch must still carry
+    // generation 0, whatever revision it lands at.
+    expect(publishedGenerations).toContain(0);
+    const staleIndex = publishedGenerations.lastIndexOf(0);
+    expect(staleIndex).toBeGreaterThanOrEqual(0);
+    fleet.dispose();
+  });
+
+  it("never lets a late account-A completion contaminate the port's own cache after a switch to account B", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = join(dir, "enrollment.json");
+    await writeFile(
+      enrollmentFile,
+      JSON.stringify({ hostId: "local-a" }),
+      "utf8",
+    );
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+
+    const registry = recordingRegistryFetch();
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: registry.fetch,
+    });
+
+    const snapshots: HostFleetSnapshot[] = [];
+    fleet.onChanged((snapshot) => snapshots.push(snapshot));
+
+    const inFlightA = fleet.refresh(); // call #1, captured generation 0.
+    // Wait for the FACT this case depends on - refresh #1 is past its
+    // filesystem read and inside the fetch - so it cannot be mistaken for a
+    // call that has not been made yet under a loaded runner.
+    await registry.started(0);
+
+    // Switch to account B WHILE A's fetch is still in flight.
+    identity.set("user-b", 1);
+    expect(snapshots.at(-1)).toMatchObject({
+      identityGeneration: 1,
+      localHostId: null,
+      hosts: [],
+    });
+
+    // B's own auto-triggered refresh (call #2) reaches listRegisteredHosts too.
+    await registry.started(1);
+
+    // Resolve A's STALE fetch first.
+    registry.calls[0]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("host-a")] },
+    });
+    await inFlightA;
+    expect(snapshots.at(-1)).toMatchObject({ identityGeneration: 0 });
+
+    // THEN complete B's own refresh with B's rows.
+    registry.calls[1]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("host-b")] },
+    });
+    await Promise.resolve();
+
+    // A local-host republish afterwards - a DIFFERENT durable local id.
+    await writeFile(
+      enrollmentFile,
+      JSON.stringify({ hostId: "local-b" }),
+      "utf8",
+    );
+    const republished = nextSnapshotWhere(
+      fleet,
+      (snapshot) => snapshot.localHostId === "local-b",
+    );
+    host.emitChange();
+    await republished;
+
+    const finalSnapshot = snapshots.at(-1);
+    expect(finalSnapshot?.identityGeneration).toBe(1);
+    const finalHostIds = finalSnapshot?.hosts.map((entry) => entry.hostId);
+    expect(finalHostIds).not.toContain("host-a");
+    expect(finalHostIds).toContain("host-b");
+    fleet.dispose();
+  });
+
+  it("does not adopt a late account-A completion into its own cache, even when it resolves AFTER account B's refresh", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = join(dir, "enrollment.json");
+    await writeFile(
+      enrollmentFile,
+      JSON.stringify({ hostId: "local-a" }),
+      "utf8",
+    );
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+
+    const registry = recordingRegistryFetch();
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: registry.fetch,
+    });
+
+    const snapshots: HostFleetSnapshot[] = [];
+    fleet.onChanged((snapshot) => snapshots.push(snapshot));
+
+    const inFlightA = fleet.refresh(); // call #1, captured generation 0.
+    // Wait for the FACT this case depends on - refresh #1 is past its
+    // filesystem read and inside the fetch - rather than a fixed sleep that
+    // is long enough today and too short on a busier runner.
+    await registry.started(0);
+
+    // Switch to account B WHILE A's fetch is still in flight - triggers B's
+    // own auto-refresh (call #2).
+    identity.set("user-b", 1);
+    await registry.started(1);
+
+    // Resolve B's fetch FIRST...
+    registry.calls[1]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("host-b")] },
+    });
+    await Promise.resolve();
+    // B's own refresh reads the local id BEFORE the enrollment file is
+    // rewritten below, so it still synthesizes "local-a" as local here - the
+    // point of this assertion is only that host-b's row landed.
+    expect(snapshots.at(-1)?.identityGeneration).toBe(1);
+    expect(snapshots.at(-1)?.hosts).toContainEqual({
+      hostId: "host-b",
+      kind: "remote",
+      teamOwned: false,
+    });
+
+    // ...THEN resolve A's now-doubly-stale fetch LAST.
+    registry.calls[0]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("host-a")] },
+    });
+    await inFlightA;
+    // Published verbatim, stamped with the generation it was FETCHED under -
+    // this is what lets the engine itself reject it.
+    expect(snapshots.at(-1)).toMatchObject({ identityGeneration: 0 });
+
+    // Force a republish under the CURRENT generation with no new fetch: a
+    // local-host change, no listRegisteredHosts call involved at all.
+    await writeFile(
+      enrollmentFile,
+      JSON.stringify({ hostId: "local-b" }),
+      "utf8",
+    );
+    const republished = nextSnapshotWhere(
+      fleet,
+      (snapshot) => snapshot.localHostId === "local-b",
+    );
+    host.emitChange();
+    await republished;
+
+    // The republish must carry B's cached membership, NOT the late A
+    // completion that resolved after it. If the port's own cache had
+    // adopted A's rows/localHostId, this republish - stamped honestly with
+    // the CURRENT generation (1) - would carry account A's rows straight
+    // past the engine's identityGeneration guard.
+    const finalSnapshot = snapshots.at(-1);
+    expect(finalSnapshot?.identityGeneration).toBe(1);
+    const finalHostIds = finalSnapshot?.hosts.map((entry) => entry.hostId);
+    expect(finalHostIds).not.toContain("host-a");
+    expect(finalHostIds).toContain("host-b");
+    fleet.dispose();
+  });
+
+  it("publishes an EMPTY fleet for the incoming generation immediately on an identity change", () => {
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    const never = deferred<HostListFetchResult>();
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => never.promise,
+    });
+
+    const snapshots: HostFleetSnapshot[] = [];
+    fleet.onChanged((snapshot) => snapshots.push(snapshot));
+
+    identity.set("user-b", 1);
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]).toMatchObject({ identityGeneration: 1, hosts: [] });
+    fleet.dispose();
+  });
+
+  it("a failed fetch on a COLD source still publishes this machine's local host - usability does not wait on the cloud", async () => {
+    // The old pin here said "publishes nothing", and that absolutism was the
+    // regression: at cold boot the source's default is an EMPTY fleet, so a
+    // flaky registry read left `effectiveHostId` null - "No host is
+    // available" over a machine with a durable, dialable local host - until
+    // the 60s poll or a host-change event happened to rescue it. The local
+    // id was already read from disk before the fetch; a cloud failure keeps
+    // the rows unknown, not the machine.
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+
+    const failures: Array<() => Promise<HostListFetchResult>> = [
+      async () => ({ kind: "network-error" }),
+      async () => ({ kind: "unauthorized" }),
+      // The THROWN arm, distinct from a non-ok result: `refresh` contains it,
+      // and the containment must not swallow the local adoption either.
+      async () => {
+        throw new Error("socket hang up");
+      },
+    ];
+    for (const listRegisteredHosts of failures) {
+      const fleet = buildFleetSource({
+        identity,
+        authSession,
+        host,
+        listRegisteredHosts,
+      });
+      const snapshots: HostFleetSnapshot[] = [];
+      fleet.onChanged((snapshot) => snapshots.push(snapshot));
+
+      await fleet.refresh();
+
+      expect(snapshots).toHaveLength(1);
+      expect(snapshots[0]).toMatchObject({
+        localHostId: "local-host",
+        hosts: [{ hostId: "local-host", kind: "local", teamOwned: false }],
+      });
+      fleet.dispose();
+    }
+  });
+
+  it("a failed fetch AFTER adopted membership keeps the rows and publishes nothing new - known membership is not clobbered", async () => {
+    // The half of the old pin that was always right, now stated on the
+    // fixture that actually exercises it: membership has to exist before a
+    // failure can be accused of clobbering it. The failed refresh re-adopts
+    // the same local id (a no-op by the value guard) and leaves the rows
+    // alone, so no snapshot is published at all.
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+
+    let fail = false;
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        if (fail) return { kind: "network-error" };
+        return {
+          kind: "ok",
+          response: { hosts: [buildHostListItem("remote-1")] },
+        };
+      },
+    });
+    const snapshots: HostFleetSnapshot[] = [];
+    fleet.onChanged((snapshot) => snapshots.push(snapshot));
+
+    await fleet.refresh();
+    expect(snapshots).toHaveLength(1);
+
+    fail = true;
+    await fleet.refresh();
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]).toMatchObject({
+      localHostId: "local-host",
+      hosts: [
+        { hostId: "local-host", kind: "local", teamOwned: false },
+        { hostId: "remote-1", kind: "remote", teamOwned: false },
+      ],
+    });
+    fleet.dispose();
+  });
+
+  it("declines a superseded same-identity completion - an older response landing last must not resurrect removed rows", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+
+    const registry = recordingRegistryFetch();
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: registry.fetch,
+    });
+
+    // Two overlapping refreshes under ONE identity - the 60s poll racing a
+    // deregistration's fire-and-forget refresh. The generation stamp cannot
+    // order these (same generation); only the request sequence can.
+    const first = fleet.refresh();
+    await registry.started(0);
+    const second = fleet.refresh();
+    await registry.started(1);
+
+    // The NEWER response (post-deregister: the host is gone) completes first.
+    registry.calls[1]?.resolve({ kind: "ok", response: { hosts: [] } });
+    await second;
+    // The OLDER response (still carrying the deregistered host) lands last.
+    registry.calls[0]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("deregistered-host")] },
+    });
+    await first;
+
+    // Completion order must not become fleet order: the older rows are
+    // declined, and the deregistered host stays out of the authority. The
+    // synthesized LOCAL host is fleet membership of its own and stays.
+    const hostIds = fleet.snapshot().hosts.map((row) => row.hostId);
+    expect(hostIds).not.toContain("deregistered-host");
+    expect(hostIds).toContain("local-host");
+  });
+
+  it("publishes an empty fleet with localHostId: null when signed out", async () => {
+    const authSession = new DesktopAuthSession();
+    const identity = new FakeIdentitySource(null, 0);
+    const host = new FakeHostLifecycle();
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        throw new Error("must not be called when signed out");
+      },
+    });
+
+    await fleet.refresh();
+
+    expect(fleet.snapshot()).toMatchObject({ localHostId: null, hosts: [] });
+    fleet.dispose();
+  });
+
+  it("keeps revision process-lifetime monotonic across every publish, including identity changes", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: { hosts: [buildHostListItem("local-host")] },
+      }),
+    });
+
+    const revisions: number[] = [];
+    fleet.onChanged((snapshot) => revisions.push(snapshot.revision));
+
+    await fleet.refresh();
+    identity.set("user-b", 1); // publishes empty immediately, then refreshes
+    await fleet.refresh();
+
+    for (let i = 1; i < revisions.length; i += 1) {
+      expect(revisions[i]).toBeGreaterThan(revisions[i - 1]);
+    }
+    expect(revisions.length).toBeGreaterThanOrEqual(3);
+    fleet.dispose();
+  });
+
+  it("captures the generation at read START: a late enrollment read for a RETIRED account is never adopted under the CURRENT generation (A1)", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = join(dir, "enrollment.json");
+    await writeFile(
+      enrollmentFile,
+      JSON.stringify({ hostId: "local-a" }),
+      "utf8",
+    );
+    const authSession = new DesktopAuthSession();
+    // Signed IN at the start so `refreshLocalIdentity` is eligible and
+    // actually starts an enrollment read. Signed-out-throughout skipped the
+    // read (`eligible === false`), which made the contamination assertions
+    // vacuous.
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-a"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+
+    // Deterministic gate on the enrollment read (same shape as
+    // `recordingRegistryFetch`): hold the gen-0 read across the identity
+    // switch, release it while still signed out, and only then drive the
+    // valid gen-1 read. A `beforeSignIn` snapshot cutoff alone cannot prove
+    // the stale read settled - both completions can publish `local-a`.
+    const enrollmentGate = deferred<void>();
+    const enrollmentStarted = deferred<void>();
+    const enrollmentSettled = deferred<void>();
+    let gateOpen = false;
+    const actualRead = localHostIdentityTestDoubles.actual;
+    localHostIdentityTestDoubles.readLastKnownLocalHostId.mockImplementation(
+      async (files) => {
+        if (!gateOpen) {
+          enrollmentStarted.resolve();
+          await enrollmentGate.promise;
+          try {
+            return await actualRead(files);
+          } finally {
+            enrollmentSettled.resolve();
+          }
+        }
+        return actualRead(files);
+      },
+    );
+
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      // Identity-change `refresh()` may run while a bearer is briefly still
+      // present; answer empty rather than throwing.
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: { hosts: [] },
+      }),
+    });
+
+    const snapshots: HostFleetSnapshot[] = [];
+    fleet.onChanged((snapshot) => snapshots.push(snapshot));
+
+    // Start the gen-0 eligible read and wait until it is parked on the gate
+    // before switching identity - so the race is exact under any load.
+    host.emitChange();
+    await enrollmentStarted.promise;
+    // Sign out BEFORE bumping the generation so `identity.set`'s `refresh()`
+    // takes the signed-out branch (empty fleet) rather than re-adopting
+    // `local-a` under gen 1.
+    authSession.set({ status: "signed-out", token: null, profile: null });
+    identity.set("user-b", 1);
+
+    // The identity switch publishes the generation-1 shape synchronously
+    // (the empty-fleet publish plus the signed-out `refresh()` it triggers).
+    expect(snapshots.length).toBeGreaterThanOrEqual(1);
+    for (const snapshot of snapshots) {
+      expect(snapshot).toMatchObject({
+        identityGeneration: 1,
+        localHostId: null,
+        hosts: [],
+      });
+    }
+
+    // Release the stale gen-0 read WHILE STILL SIGNED OUT. Open the gate for
+    // later reads first so only this parked call was held. The generation
+    // fence must drop it - no `local-a` under gen 1.
+    gateOpen = true;
+    enrollmentGate.resolve();
+    await enrollmentSettled.promise;
+    // `enrollmentSettled` fires in the mock's `finally`, which runs before
+    // the mock promise settles for `refreshLocalIdentity`. One microtask
+    // later the generation fence has either dropped or adopted the result.
+    await Promise.resolve();
+    expect(fleet.snapshot()).toMatchObject({
+      identityGeneration: 1,
+      localHostId: null,
+      hosts: [],
+    });
+    const contaminatedAfterStaleSettled = snapshots.some(
+      (snapshot) =>
+        snapshot.identityGeneration === 1 &&
+        (snapshot.localHostId === "local-a" ||
+          snapshot.hosts.some((entry) => entry.hostId === "local-a")),
+    );
+    expect(contaminatedAfterStaleSettled).toBe(false);
+
+    // ANTI-VACUITY: sign in and drive a fresh local-host change. Wait on the
+    // observable (not a fixed sleep) so the pipeline is proven under CI load.
+    setVerifiedSession(authSession, signedInSnapshot("user-b", "token-b"));
+    host.emitChange();
+    await vi.waitFor(() => {
+      expect(fleet.snapshot()).toMatchObject({
+        identityGeneration: 1,
+        localHostId: "local-a",
+      });
+    });
+
+    // Half 2: SIGN OUT again and drive another change. The id is RETRACTED,
+    // not retained - the same rule `refresh`'s signed-out branch applies.
+    authSession.set({ status: "signed-out", token: null, profile: null });
+    host.emitChange();
+    await vi.waitFor(() => {
+      expect(fleet.snapshot()).toMatchObject({
+        identityGeneration: 1,
+        localHostId: null,
+        hosts: [],
+      });
+    });
+
+    fleet.dispose();
+  });
+
+  it("keeps a NEWER local identity when an older refresh completes after it", async () => {
+    // The two writers of `localHostId` race: `refresh()` reads the id BEFORE
+    // its registry fetch and adopts it AFTER, so a local-host change that
+    // lands during that fetch was published and then overwritten by the id the
+    // refresh had already read - the authority then called the stale host
+    // local and this machine remote until the next event or the 60s poll.
+    const dir = await makeTempDir();
+    const enrollmentFile = join(dir, "enrollment.json");
+    await writeFile(
+      enrollmentFile,
+      JSON.stringify({ hostId: "local-host-1" }),
+      "utf8",
+    );
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+
+    // Initialized with a real no-op rather than `null`: a `(() => void) | null`
+    // is narrowed to `never` at the call below, because the only assignment
+    // control flow can see is the initializer.
+    let releaseFetch = (): void => undefined;
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = () => {
+        resolve();
+      };
+    });
+    const fetchStarted = deferred<void>();
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        fetchStarted.resolve();
+        await fetchGate;
+        return { kind: "ok", response: { hosts: [] } };
+      },
+    });
+
+    // In flight, having already read `local-host-1`: `refresh` reads the id
+    // before it fetches, so a started fetch proves the read is done.
+    const refreshing = fleet.refresh();
+    await fetchStarted.promise;
+
+    // The machine re-enrolls while that fetch is outstanding.
+    await writeFile(
+      enrollmentFile,
+      JSON.stringify({ hostId: "local-host-2" }),
+      "utf8",
+    );
+    const republished = nextSnapshotWhere(
+      fleet,
+      (snapshot) => snapshot.localHostId === "local-host-2",
+    );
+    host.emitChange();
+    await republished;
+    expect(fleet.snapshot().localHostId).toBe("local-host-2");
+
+    releaseFetch();
+    await refreshing;
+
+    // The older refresh still adopts its ROWS; only its stale id is declined.
+    expect(fleet.snapshot().localHostId).toBe("local-host-2");
+    fleet.dispose();
+  });
+
+  it("re-resolves the local identity and republishes on a local-host change; a no-op id change publishes nothing", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = join(dir, "enrollment.json");
+    await writeFile(
+      enrollmentFile,
+      JSON.stringify({ hostId: "local-host-1" }),
+      "utf8",
+    );
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: { hosts: [] },
+      }),
+    });
+    await fleet.refresh();
+
+    const snapshots: HostFleetSnapshot[] = [];
+    fleet.onChanged((snapshot) => snapshots.push(snapshot));
+
+    // Observe each enrollment read the change signal starts, so the assertions
+    // wait on the read itself instead of a fixed timer (#1826's pattern).
+    let settledReads = 0;
+    const actualRead = localHostIdentityTestDoubles.actual;
+    localHostIdentityTestDoubles.readLastKnownLocalHostId.mockImplementation(
+      async (files) => {
+        try {
+          return await actualRead(files);
+        } finally {
+          settledReads += 1;
+        }
+      },
+    );
+
+    // No-op: same id on disk, `host` fires "change" anyway.
+    host.emitChange();
+    // `vi.waitFor` polls on a real timer, and a timer callback runs after
+    // every pending microtask, so by the time the poll observes the settled
+    // read the source's post-await continuation (publish or not) has
+    // already run.
+    await vi.waitFor(() => {
+      expect(settledReads).toBe(1);
+    });
+    expect(snapshots).toEqual([]);
+
+    // Real change: rewrite the enrollment file, then fire the local-host
+    // change signal again.
+    await writeFile(
+      enrollmentFile,
+      JSON.stringify({ hostId: "local-host-2" }),
+      "utf8",
+    );
+    host.emitChange();
+    await vi.waitFor(() => {
+      expect(snapshots).toHaveLength(1);
+    });
+
+    expect(snapshots[0].localHostId).toBe("local-host-2");
+    expect(settledReads).toBe(2);
+    fleet.dispose();
+  });
+});
+
+describe("DesktopHostFleetSource.refresh outcome", () => {
+  async function signedInFleet(
+    listRegisteredHosts: () => Promise<HostListFetchResult>,
+    session: { readonly verified: boolean },
+  ): Promise<{
+    readonly fleet: DesktopHostFleetSource;
+    readonly identity: FakeIdentitySource;
+  }> {
+    const dir = await makeTempDir();
+    const authSession = new DesktopAuthSession();
+    if (session.verified) {
+      setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    } else {
+      authSession.set(signedInSnapshot("user-a", "token-1"));
+    }
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = await writeEnrollment(dir, "local-host");
+    const fleet = buildFleetSource({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts,
+    });
+    return { fleet, identity };
+  }
+
+  it("reports published for an adopted registry read", async () => {
+    const { fleet } = await signedInFleet(
+      async () => ({
+        kind: "ok",
+        response: { hosts: [buildHostListItem("local-host")] },
+      }),
+      { verified: true },
+    );
+
+    await expect(fleet.refresh()).resolves.toEqual({ kind: "published" });
+    fleet.dispose();
+  });
+
+  it("reports published for a signed-out refresh, which adopts the empty fleet", async () => {
+    const fleet = buildFleetSource({
+      identity: new FakeIdentitySource(null, 0),
+      authSession: new DesktopAuthSession(),
+      host: new FakeHostLifecycle(),
+      listRegisteredHosts: async () => {
+        throw new Error("must not be called when signed out");
+      },
+    });
+
+    await expect(fleet.refresh()).resolves.toEqual({ kind: "published" });
+    fleet.dispose();
+  });
+
+  it("reports unavailable when the registry read is refused", async () => {
+    const { fleet } = await signedInFleet(
+      async () => ({ kind: "network-error" }),
+      { verified: true },
+    );
+
+    await expect(fleet.refresh()).resolves.toEqual({ kind: "unavailable" });
+    fleet.dispose();
+  });
+
+  it("reports unavailable instead of rejecting when the registry read throws", async () => {
+    const { fleet } = await signedInFleet(
+      async () => {
+        throw new Error("socket hang up");
+      },
+      { verified: true },
+    );
+
+    await expect(fleet.refresh()).resolves.toEqual({ kind: "unavailable" });
+    fleet.dispose();
+  });
+
+  it("reports unavailable for an unverified session, which never reaches the registry", async () => {
+    let registryCalls = 0;
+    const { fleet } = await signedInFleet(
+      async () => {
+        registryCalls += 1;
+        return { kind: "ok", response: { hosts: [] } };
+      },
+      { verified: false },
+    );
+
+    await expect(fleet.refresh()).resolves.toEqual({ kind: "unavailable" });
+    expect(registryCalls).toBe(0);
+    fleet.dispose();
+  });
+
+  it("reports superseded for a read that completes after its identity was retired", async () => {
+    const registry = recordingRegistryFetch();
+    const { fleet, identity } = await signedInFleet(registry.fetch, {
+      verified: true,
+    });
+
+    const inFlight = fleet.refresh();
+    await registry.started(0);
+    identity.set("user-b", 1);
+    await registry.started(1);
+    registry.calls[0]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("host-a")] },
+    });
+
+    await expect(inFlight).resolves.toEqual({ kind: "superseded" });
+    fleet.dispose();
+  });
+
+  it("reports published for a read a newer same-identity completion has already replaced", async () => {
+    const registry = recordingRegistryFetch();
+    const { fleet } = await signedInFleet(registry.fetch, { verified: true });
+
+    const older = fleet.refresh();
+    await registry.started(0);
+    const newer = fleet.refresh();
+    await registry.started(1);
+    registry.calls[1]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("local-host")] },
+    });
+    await expect(newer).resolves.toEqual({ kind: "published" });
+    registry.calls[0]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("local-host")] },
+    });
+
+    await expect(older).resolves.toEqual({ kind: "published" });
+    fleet.dispose();
+  });
+
+  /**
+   * Account A's schedule: a bearer read at 200 adopts both scopes, then A's
+   * personal push read at 300 advances the personal mark to 300. The clock is
+   * left at 300; each case positions it for what it exercises.
+   */
+  async function userAWithPersonalPushAt300(): Promise<{
+    readonly fleet: DesktopHostFleetSource;
+    readonly identity: FakeIdentitySource;
+    readonly authSession: DesktopAuthSession;
+    readonly registry: RecordingRegistry;
+    readonly published: RegisteredHostsPush[];
+    readonly setNow: (value: number) => void;
+  }> {
+    const dir = await makeTempDir();
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-a"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = await writeEnrollment(dir, "local-host");
+    const registry = recordingRegistryFetch();
+    const { fleet, published, setNow } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: registry.fetch,
+    });
+
+    setNow(200);
+    const first = fleet.refresh();
+    await registry.started(0);
+    registry.calls[0]?.resolve({
+      kind: "ok",
+      response: {
+        hosts: [buildHostListItem("host-a"), buildTeamHostListItem("team-a")],
+      },
+    });
+    await expect(first).resolves.toEqual({ kind: "published" });
+
+    setNow(300);
+    await fleet.acceptPushedRows({
+      response: { hosts: [buildHostListItem("host-a-pushed")] },
+      readAtMs: 300,
+      openedAtGeneration: 0,
+    });
+    return { fleet, identity, authSession, registry, published, setNow };
+  }
+
+  function snapshotHostIds(fleet: DesktopHostFleetSource): string[] {
+    return fleet
+      .snapshot()
+      .hosts.map((entry) => entry.hostId)
+      .sort();
+  }
+
+  it("admits a new identity's bearer read against the previous identity's read-time marks, and reports published", async () => {
+    const dir = await makeTempDir();
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-a"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = await writeEnrollment(dir, "local-host");
+    const registry = recordingRegistryFetch();
+    const { fleet, setNow } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: registry.fetch,
+    });
+
+    setNow(200);
+    const first = fleet.refresh();
+    await registry.started(0);
+    registry.calls[0]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("host-a")] },
+    });
+    await expect(first).resolves.toEqual({ kind: "published" });
+
+    // The wall clock steps back, then the account changes. The watermarks
+    // outlive the identity change while the rows are cleared, so account B's
+    // read, observed at 100, is older than account A's mark at 200: it is
+    // still B's own answer, made with B's credential.
+    setNow(100);
+    setVerifiedSession(authSession, signedInSnapshot("user-b", "token-b"));
+    // The identity change starts its own refresh (call 1); the explicit
+    // refresh below is call 2. Both observe time 100.
+    identity.set("user-b", 1);
+    await registry.started(1);
+    const second = fleet.refresh();
+    await registry.started(2);
+    const bResponse: HostListFetchResult = {
+      kind: "ok",
+      response: { hosts: [buildHostListItem("host-b")] },
+    };
+    registry.calls[1]?.resolve(bResponse);
+    registry.calls[2]?.resolve(bResponse);
+
+    await expect(second).resolves.toEqual({ kind: "published" });
+    expect(fleet.snapshot().identityGeneration).toBe(1);
+    expect(snapshotHostIds(fleet)).toEqual(["host-b", "local-host"]);
+    fleet.dispose();
+  });
+
+  it("serves a new identity's personal host when its bearer read is older than the previous identity's personal push", async () => {
+    const { fleet, identity, authSession, registry, setNow } =
+      await userAWithPersonalPushAt300();
+
+    // B's clock is behind A's personal mark (300) but ahead of A's team mark
+    // (200): before the fix the personal scope was declined, the team scope
+    // adopted, and the partial adoption was reported as published.
+    setNow(250);
+    setVerifiedSession(authSession, signedInSnapshot("user-b", "token-b"));
+    identity.set("user-b", 1);
+    await registry.started(1);
+    const bResponse: HostListFetchResult = {
+      kind: "ok",
+      response: { hosts: [buildHostListItem("host-b")] },
+    };
+    const second = fleet.refresh();
+    await registry.started(2);
+    registry.calls[1]?.resolve(bResponse);
+    registry.calls[2]?.resolve(bResponse);
+
+    await expect(second).resolves.toEqual({ kind: "published" });
+    expect(fleet.snapshot().identityGeneration).toBe(1);
+    expect(snapshotHostIds(fleet)).toEqual(["host-b", "local-host"]);
+    fleet.dispose();
+  });
+
+  it("after a switch admitted over a later mark, the new identity's next bearer read is adopted while pushes stay held to the previous identity's floor", async () => {
+    const { fleet, identity, authSession, registry, published, setNow } =
+      await userAWithPersonalPushAt300();
+
+    setNow(250);
+    setVerifiedSession(authSession, signedInSnapshot("user-b", "token-b"));
+    identity.set("user-b", 1);
+    await registry.started(1);
+    registry.calls[1]?.resolve({
+      kind: "ok",
+      response: {
+        hosts: [buildHostListItem("host-b"), buildTeamHostListItem("team-b")],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(snapshotHostIds(fleet)).toContain("host-b");
+    });
+
+    // B's own adopted time (250) orders B's reads: 260 is newer, although A's
+    // personal mark (300) is still above it.
+    setNow(260);
+    const next = fleet.refresh();
+    await registry.started(2);
+    registry.calls[2]?.resolve({
+      kind: "ok",
+      response: {
+        hosts: [
+          buildHostListItem("host-b"),
+          buildHostListItem("host-b-added"),
+          buildTeamHostListItem("team-b"),
+          buildTeamHostListItem("team-b-added"),
+        ],
+      },
+    });
+    await expect(next).resolves.toEqual({ kind: "published" });
+    expect(snapshotHostIds(fleet)).toEqual([
+      "host-b",
+      "host-b-added",
+      "local-host",
+      "team-b",
+      "team-b-added",
+    ]);
+
+    // A push read at 280 is newer than B's adopted 250/260 but older than the
+    // previous identity's 300: it is still not adopted or broadcast.
+    const publishedBefore = published.length;
+    const snapshotBefore = fleet.snapshot();
+    await fleet.acceptPushedRows({
+      response: { hosts: [buildHostListItem("host-b-pushed")] },
+      readAtMs: 280,
+      openedAtGeneration: 1,
+    });
+    expect(published).toHaveLength(publishedBefore);
+    expect(fleet.snapshot()).toBe(snapshotBefore);
+    expect(snapshotHostIds(fleet)).not.toContain("host-b-pushed");
+    fleet.dispose();
+  });
+
+  it("keeps declining pushes older than the previous identity's marks, without a broadcast or a fleet read", async () => {
+    const { fleet, identity, authSession, registry, published, setNow } =
+      await userAWithPersonalPushAt300();
+
+    setNow(250);
+    setVerifiedSession(authSession, signedInSnapshot("user-b", "token-b"));
+    // The identity change's own refresh (call 1) stays in flight, so B has
+    // adopted nothing and the only personal mark is still A's 300.
+    identity.set("user-b", 1);
+    await registry.started(1);
+    const publishedBefore = published.length;
+    const snapshotBefore = fleet.snapshot();
+
+    for (const readAtMs of [260, 270, 280]) {
+      await fleet.acceptPushedRows({
+        response: { hosts: [buildHostListItem("host-b-stale")] },
+        readAtMs,
+        openedAtGeneration: 1,
+      });
+    }
+
+    expect(published).toHaveLength(publishedBefore);
+    expect(fleet.snapshot()).toBe(snapshotBefore);
+    expect(registry.calls).toHaveLength(2);
+    fleet.dispose();
+  });
+
+  it("reports published when one scope is declined against a newer mark of the same identity", async () => {
+    const { fleet, registry, setNow } = await userAWithPersonalPushAt300();
+
+    // Same identity, clock behind its own personal push: personal is declined
+    // (300 > 250), team is adopted, and the personal rows already serving are
+    // this generation's own.
+    setNow(250);
+    const second = fleet.refresh();
+    await registry.started(1);
+    registry.calls[1]?.resolve({
+      kind: "ok",
+      response: {
+        hosts: [buildHostListItem("host-a"), buildTeamHostListItem("team-a")],
+      },
+    });
+
+    await expect(second).resolves.toEqual({ kind: "published" });
+    expect(snapshotHostIds(fleet)).toEqual([
+      "host-a-pushed",
+      "local-host",
+      "team-a",
+    ]);
+    fleet.dispose();
+  });
+
+  it("reports superseded once the source is disposed", async () => {
+    const { fleet } = await signedInFleet(
+      async () => ({ kind: "ok", response: { hosts: [] } }),
+      { verified: true },
+    );
+    fleet.dispose();
+
+    await expect(fleet.refresh()).resolves.toEqual({ kind: "superseded" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DesktopHostFleetSource / publishRegistryResponse (redesign P4.1/F22)
+// ---------------------------------------------------------------------------
+
+describe("DesktopHostFleetSource publishRegistryResponse", () => {
+  it("publishes ONCE per successful refresh, carrying the FULL response rows and the identityKey captured at fetch start", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const rows = [
+      buildHostListItem("local-host"),
+      buildHostListItem("remote-host"),
+    ];
+    const { fleet, published } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: { hosts: rows },
+      }),
+    });
+
+    await fleet.refresh();
+
+    expect(published).toHaveLength(1);
+    expect(published[0]).toEqual({
+      identityKey: "user-a",
+      response: { hosts: rows },
+    });
+    // The FULL rows, not just ids: every field `buildHostListItem` sets
+    // (the status DTO, publicKey, createdAt, ...) must survive intact - this
+    // is what lets every window skip its own fetch.
+    expect(published[0]?.response.hosts[0]).toMatchObject({
+      hostId: "local-host",
+      publicKey: "pub-key",
+      status: expect.objectContaining({ connectivity: "connectable" }),
+    });
+    fleet.dispose();
+  });
+
+  /**
+   * ONE fetch per refresh - the arithmetic the whole move rests on.
+   *
+   * Added after a probe: doubling the fetch inside `refreshWith` DID turn
+   * this suite red, but for the wrong reason. The arm it broke drives
+   * `listRegisteredHosts` with a CALL-ORDERED fake (`calls.length === 1 ? … : …`),
+   * so an extra call shifts which promise each caller gets and the failure is
+   * the fixture's sequencing, not a statement about how many requests the app
+   * makes. Nothing asserted the count itself.
+   *
+   * That distinction matters here more than usual: "N windows now produce ONE
+   * poll" is this change's entire claim, and a claim whose only guard is a
+   * fixture's call ordering would survive any refactor that kept the ordering
+   * and doubled the requests.
+   */
+  it("issues exactly ONE registry request per refresh - the claim the move rests on", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    let fetchCount = 0;
+    const { fleet } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        fetchCount += 1;
+        return { kind: "ok", response: { hosts: [] } };
+      },
+    });
+
+    await fleet.refresh();
+    expect(fetchCount).toBe(1);
+
+    // ...and a second refresh is a second request, not a cached answer - the
+    // count has to track calls, or "exactly one" above would also be satisfied
+    // by a source that never fetches again.
+    await fleet.refresh();
+    expect(fetchCount).toBe(2);
+
+    fleet.dispose();
+  });
+
+  it("publishes NOTHING when the fetch returns a non-ok result (network-error, unauthorized)", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+
+    for (const kind of ["network-error", "unauthorized"] as const) {
+      const { fleet, published } = buildFleetSourceWithPublisher({
+        identity,
+        authSession,
+        host,
+        listRegisteredHosts: async () => ({ kind }),
+      });
+
+      await fleet.refresh();
+
+      expect(published).toEqual([]);
+      fleet.dispose();
+    }
+  });
+
+  it("publishes NOTHING on a signed-out refresh (no bearer)", async () => {
+    const authSession = new DesktopAuthSession();
+    const identity = new FakeIdentitySource(null, 0);
+    const host = new FakeHostLifecycle();
+    const { fleet, published } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        throw new Error("must not be called when signed out");
+      },
+    });
+
+    await fleet.refresh();
+
+    expect(published).toEqual([]);
+    fleet.dispose();
+  });
+
+  it("stamps the push with the identityKey captured at fetch START - a late completion still publishes, under the OLD identity", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+
+    const registry = recordingRegistryFetch();
+    const { fleet, published } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: registry.fetch,
+    });
+
+    const inFlight = fleet.refresh();
+    // Wait for the FACT this case depends on - refresh #1 is past its
+    // filesystem read and inside the fetch - rather than assuming the
+    // refreshes reach the registry in the order the test started them.
+    await registry.started(0);
+    // Identity moves on WHILE the first fetch is in flight - this fires the
+    // port's own identity-change subscription, which starts a SECOND fetch
+    // (account B's own refresh) immediately.
+    identity.set("user-b", 1);
+    await registry.started(1);
+
+    registry.calls[0]?.resolve({
+      kind: "ok",
+      response: { hosts: [buildHostListItem("local-host")] },
+    });
+    await inFlight;
+    registry.calls[1]?.resolve({ kind: "ok", response: { hosts: [] } });
+    await Promise.resolve();
+
+    // The FIRST (stale) fetch's completion is still published - a late
+    // completion is published so the renderer can drop it by its own stamp -
+    // but stamped with the identity it was FETCHED under, "user-a", never
+    // the "user-b" that was current when it happened to resolve.
+    const stalePush = published.find((push) => push.identityKey === "user-a");
+    expect(stalePush).toBeDefined();
+    expect(stalePush?.response.hosts.map((row) => row.hostId)).toEqual([
+      "local-host",
+    ]);
+    fleet.dispose();
+  });
+
+  it("keeps the authority snapshot ids-only even though the publish carries the full status DTO (invariant 5)", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const { fleet, published } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: { hosts: [buildHostListItem("local-host")] },
+      }),
+    });
+
+    await fleet.refresh();
+
+    // The push carries the full row - status DTO and all.
+    expect(published[0]?.response.hosts[0]).toHaveProperty("status");
+    // The snapshot the authority itself reads carries ONLY hostId/kind/teamOwned -
+    // unchanged by this port gaining a second consumer of the same fetch.
+    expect(fleet.snapshot().hosts).toHaveLength(1);
+    for (const entry of fleet.snapshot().hosts) {
+      expect(Object.keys(entry).sort()).toEqual([
+        "hostId",
+        "kind",
+        "teamOwned",
+      ]);
+    }
+    fleet.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DesktopHostFleetSource / acceptPushedRows (local-host inventory push)
+// ---------------------------------------------------------------------------
+
+describe("DesktopHostFleetSource acceptPushedRows", () => {
+  it("C1: publishes through publishRegistryResponse with the CURRENT identity key, and the fleet snapshot carries the pushed host ids - without ever calling listRegisteredHosts", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const pushedRows = [
+      buildHostListItem("local-host"),
+      buildHostListItem("remote-host"),
+    ];
+    const { fleet, published } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        throw new Error(
+          "must not be called - acceptPushedRows adopts rows it is handed, it does not fetch",
+        );
+      },
+    });
+
+    await fleet.acceptPushedRows({
+      response: { hosts: pushedRows },
+      readAtMs: 1_000,
+      openedAtGeneration: 0,
+    });
+
+    expect(published).toHaveLength(1);
+    expect(published[0]).toEqual({
+      identityKey: "user-a",
+      response: { hosts: pushedRows },
+    });
+    expect(
+      fleet
+        .snapshot()
+        .hosts.map((entry) => entry.hostId)
+        .sort(),
+    ).toEqual(["local-host", "remote-host"]);
+    fleet.dispose();
+  });
+
+  describe("C1w: the real local-host inventory subscription feeding the real fleet source, wired as selection-authority-ipc wires them", () => {
+    async function wired() {
+      const dir = await makeTempDir();
+      const enrollmentFile = await writeEnrollment(dir, "local-host");
+      const authSession = new DesktopAuthSession();
+      setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+      const identity = new FakeIdentitySource("user-a", 0);
+      const host = new FakeHostLifecycle();
+      host.identityEnrollmentFile = enrollmentFile;
+      const sandboxRow: HostListItem = {
+        ...buildHostListItem("sbx-1"),
+        kind: "sandbox",
+        sandboxState: "awake",
+        sandboxFrozen: false,
+        profile: "agent",
+      };
+      const registry = [buildHostListItem("local-host"), sandboxRow];
+      const { fleet, published } = buildFleetSourceWithPublisher({
+        identity,
+        authSession,
+        host,
+        listRegisteredHosts: async () => ({
+          kind: "ok",
+          response: { hosts: registry },
+        }),
+      });
+      // The registry poll listed a sandbox beside the personal host.
+      await fleet.refresh();
+      const hostIds = (): string[] =>
+        fleet
+          .snapshot()
+          .hosts.map((entry) => entry.hostId)
+          .sort();
+      expect(hostIds()).toEqual(["local-host", "sbx-1"]);
+
+      const coverage: boolean[] = [];
+      const streamClient = new FakeStreamClient(true);
+      const subscription = startLocalHostInventorySubscription({
+        localHost: () => ({
+          hostId: "local-host",
+          websocketUrl: "ws://local-host",
+          version: MINIMUM_HOST_VERSION,
+        }),
+        onLocalHostChanged: () => () => undefined,
+        identity: () => ({
+          userId: identity.current().identityKey,
+          generation: identity.current().generation,
+        }),
+        onAuthChanged: () => () => undefined,
+        openStreamClient: () => streamClient,
+        onRows: (read) => {
+          void fleet.acceptPushedRows(read);
+        },
+        onPushActiveChanged: (active) => {
+          coverage.push(active);
+        },
+        log: silentLog,
+      });
+      const session = streamClient.sessions[0];
+      if (session === undefined) throw new Error("no session opened");
+      return { fleet, published, hostIds, subscription, session, coverage };
+    }
+
+    it("a @1.0 snapshot (personal hosts without their sandboxes) leaves the sandbox in the fleet and is not reported as coverage", async () => {
+      const { fleet, published, hostIds, subscription, session, coverage } =
+        await wired();
+      const publishedBefore = published.length;
+      session.negotiatedSchemaVersion = { major: 1, minor: 0 };
+
+      session.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          hosts: [buildHostListItem("local-host")],
+          fetchedAtMs: 2_000,
+          stale: false,
+        },
+        null,
+      );
+      // Anything adopted would publish; let the async adopt path run.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(hostIds()).toEqual(["local-host", "sbx-1"]);
+      expect(published).toHaveLength(publishedBefore);
+      expect(coverage).not.toContain(true);
+
+      subscription.dispose();
+      fleet.dispose();
+    });
+
+    it("control: the same personal-only snapshot on @1.1 IS adopted, so the wiring above is live", async () => {
+      const { fleet, published, hostIds, subscription, session, coverage } =
+        await wired();
+      const publishedBefore = published.length;
+      session.negotiatedSchemaVersion = { major: 1, minor: 1 };
+
+      session.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          hosts: [buildHostListItem("local-host")],
+          fetchedAtMs: 2_000,
+          stale: false,
+        },
+        null,
+      );
+      await vi.waitFor(() => {
+        expect(published.length).toBeGreaterThan(publishedBefore);
+      });
+
+      expect(hostIds()).toEqual(["local-host"]);
+      expect(coverage).toEqual([true]);
+
+      subscription.dispose();
+      fleet.dispose();
+    });
+  });
+
+  it("C2: applies the signed-out rule exactly like refresh() does - publishes nothing and the fleet stays empty", async () => {
+    const authSession = new DesktopAuthSession();
+    const identity = new FakeIdentitySource(null, 0);
+    const host = new FakeHostLifecycle();
+    const { fleet, published } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        throw new Error("must not be called when signed out");
+      },
+    });
+
+    await fleet.acceptPushedRows({
+      response: { hosts: [buildHostListItem("remote-host")] },
+      readAtMs: 1_000,
+      openedAtGeneration: 0,
+    });
+
+    expect(published).toEqual([]);
+    expect(fleet.snapshot()).toMatchObject({ localHostId: null, hosts: [] });
+    fleet.dispose();
+  });
+
+  it("C3: applies the unverified rule exactly like refresh() does - keeps the local host, publishes nothing", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    // The terminal verdict loss a renderer reports; main keeps the session.
+    authSession.revokeVerification("token-1");
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const { fleet, published } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        throw new Error("must not be called on an unverified session");
+      },
+    });
+
+    await fleet.acceptPushedRows({
+      response: { hosts: [buildHostListItem("remote-host")] },
+      readAtMs: 1_000,
+      openedAtGeneration: 0,
+    });
+
+    expect(published).toEqual([]);
+    // Not an empty fleet: the local host stays addressable, same as refresh().
+    expect(fleet.snapshot().hosts.map((entry) => entry.hostId)).toEqual([
+      "local-host",
+    ]);
+    fleet.dispose();
+  });
+
+  it("C4: is TOTAL - a throwing publishRegistryResponse still resolves rather than rejecting, and logs a warning", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const warnCalls: Array<{
+      readonly message: string;
+      readonly detail: Record<string, unknown>;
+    }> = [];
+    const fleet = new DesktopHostFleetSource({
+      authnBaseUrl: "http://localhost:5005",
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        throw new Error("must not be called - acceptPushedRows does not fetch");
+      },
+      publishRegistryResponse: () => {
+        throw new Error("publish boom");
+      },
+      now: () => 1_000,
+      log: {
+        debug: () => undefined,
+        warn: (message, detail) => {
+          warnCalls.push({ message, detail });
+        },
+      },
+    });
+
+    await expect(
+      fleet.acceptPushedRows({
+        response: { hosts: [buildHostListItem("remote-host")] },
+        readAtMs: 1_000,
+        openedAtGeneration: 0,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]?.message).toBe(
+      "[selection-fleet] pushed registry adopt threw",
+    );
+    fleet.dispose();
+  });
+
+  // Explicit, distinct read times for the two ordering cases below - the
+  // whole point of T1/T2 is which side of an already-adopted poll's own
+  // fetch-start stamp (T1_MS) a push's `readAtMs` falls on.
+  const T0_MS = 500;
+  const T1_MS = 1_000;
+  const T2_MS = 2_000;
+
+  it("T1: a push whose rows were READ before an already-adopted poll is rejected", async () => {
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    const rowA = buildHostListItem("host-a");
+    const rowB = buildHostListItem("host-b");
+    const rowC = buildHostListItem("host-c");
+    const { fleet, published, setNow } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: { hosts: [rowA, rowB] },
+      }),
+    });
+
+    // The poll observed the registry at T1_MS and its rows were adopted.
+    setNow(T1_MS);
+    await fleet.refresh();
+    expect(published).toHaveLength(1);
+    expect(
+      fleet
+        .snapshot()
+        .hosts.map((entry) => entry.hostId)
+        .sort(),
+    ).toEqual(["host-a", "host-b"]);
+
+    // The push's rows were read at T0_MS - STRICTLY BEFORE the poll already
+    // adopted above (T0_MS < T1_MS).
+    await fleet.acceptPushedRows({
+      response: { hosts: [rowA, rowB, rowC] },
+      readAtMs: T0_MS,
+      openedAtGeneration: 0,
+    });
+
+    // Declined before the publish - the renderer must not be shown a fleet
+    // the authority has refused - so the count stays at the poll's one call,
+    // and the snapshot is still the poll's rows: no "host-c".
+    expect(published).toHaveLength(1);
+    expect(
+      fleet
+        .snapshot()
+        .hosts.map((entry) => entry.hostId)
+        .sort(),
+    ).toEqual(["host-a", "host-b"]);
+    fleet.dispose();
+  });
+
+  it("T2: the reverse order adopts the push", async () => {
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    const rowA = buildHostListItem("host-a");
+    const rowB = buildHostListItem("host-b");
+    const rowC = buildHostListItem("host-c");
+    const { fleet, published, setNow } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: { hosts: [rowA, rowB] },
+      }),
+    });
+
+    // The poll observed the registry at T1_MS and its rows were adopted.
+    setNow(T1_MS);
+    await fleet.refresh();
+    expect(published).toHaveLength(1);
+
+    // The push's rows were read at T2_MS - STRICTLY AFTER the poll above
+    // (T2_MS > T1_MS).
+    await fleet.acceptPushedRows({
+      response: { hosts: [rowA, rowB, rowC] },
+      readAtMs: T2_MS,
+      openedAtGeneration: 0,
+    });
+
+    // Adopted: the publisher fires again and the snapshot carries "host-c".
+    expect(published).toHaveLength(2);
+    expect(
+      fleet
+        .snapshot()
+        .hosts.map((entry) => entry.hostId)
+        .sort(),
+    ).toEqual(["host-a", "host-b", "host-c"]);
+    fleet.dispose();
+  });
+
+  it("T3: a poll that STARTS first but completes LAST has its personal rows refused on seq before it ever publishes", async () => {
+    // The bug this closes: the same-identity seq fence used to run only
+    // inside `applyFetched`, AFTER `publishRegistryResponse` had already been
+    // called from `publishAndAdopt`. A poll that starts before a push but
+    // completes after it passes the READ-TIME check (its own `readAtMs` is
+    // genuinely newer than what the push adopted) and so reached the publish
+    // call before the seq check downstream ever got to refuse it - windows
+    // saw one fleet, the authority adopted another. The fix moved the seq
+    // fence up into `publishAndAdopt`, before the publish.
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    const rowA = buildHostListItem("host-a");
+    const rowB = buildHostListItem("host-b");
+    const rowC = buildHostListItem("host-c");
+    const poll = deferred<HostListFetchResult>();
+    const { fleet, published, setNow } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => poll.promise,
+    });
+
+    // a. Nothing adopted yet.
+    expect(published).toEqual([]);
+
+    // b. The poll starts - it takes seq 1 and stamps readAtMs = T1_MS (the
+    // clock at fetch start). Its promise does not resolve until this test
+    // releases it below.
+    setNow(T1_MS);
+    const refreshing = fleet.refresh();
+
+    // c. A push arrives with readAtMs = T0_MS, strictly before T1_MS. It
+    // takes seq 2. It passes the read-time check (nothing adopted yet), is
+    // published, and is adopted - adoptedSeq is now 2.
+    await fleet.acceptPushedRows({
+      response: { hosts: [rowA, rowB, rowC] },
+      readAtMs: T0_MS,
+      openedAtGeneration: 0,
+    });
+
+    expect(published).toHaveLength(1);
+    expect(published[0]).toEqual({
+      identityKey: "user-a",
+      response: { hosts: [rowA, rowB, rowC] },
+    });
+    expect(
+      fleet
+        .snapshot()
+        .hosts.map((entry) => entry.hostId)
+        .sort(),
+    ).toEqual(["host-a", "host-b", "host-c"]);
+
+    // d. The poll's promise resolves. Its readAtMs (T1_MS) is NEWER than the
+    // read time already adopted (T0_MS), so the read-time check alone would
+    // let it through - but the same-identity seq fence on the personal scope
+    // (seq 1 < the push's 2) must refuse its personal rows BEFORE the publish.
+    // Resolved with a DIFFERENT row set - "host-a" only - so any leak of the
+    // poll's personal rows into the publisher or the snapshot is unmistakable.
+    poll.resolve({
+      kind: "ok",
+      response: { hosts: [rowA] },
+    });
+    await refreshing;
+
+    // The poll still speaks for the team scope, which no push ever covers, so
+    // it is adopted for that scope alone and published once more: the merged
+    // fleet, whose personal rows are still the push's. The poll's [A]-only
+    // set never appeared in either place.
+    expect(published).toHaveLength(2);
+    expect(published[0]?.response.hosts).toEqual([rowA, rowB, rowC]);
+    expect(published[1]?.response.hosts).toEqual([rowA, rowB, rowC]);
+    expect(
+      fleet
+        .snapshot()
+        .hosts.map((entry) => entry.hostId)
+        .sort(),
+    ).toEqual(["host-a", "host-b", "host-c"]);
+    fleet.dispose();
+
+    // Reverse control: a poll that completes and IS the newest by both seq
+    // and read time still publishes - the fix must not have turned the seq
+    // fence into a blanket refusal.
+    const controlIdentity = new FakeIdentitySource("user-a", 0);
+    const controlHost = new FakeHostLifecycle();
+    const control = buildFleetSourceWithPublisher({
+      identity: controlIdentity,
+      authSession,
+      host: controlHost,
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: { hosts: [rowA] },
+      }),
+    });
+    control.setNow(T2_MS);
+    await control.fleet.refresh();
+
+    expect(control.published).toHaveLength(1);
+    expect(control.published[0]).toEqual({
+      identityKey: "user-a",
+      response: { hosts: [rowA] },
+    });
+    control.fleet.dispose();
+  });
+
+  // Task C: the generation fence on `acceptPushedRows` itself - distinct from
+  // T1/T2's readAtMs ordering above. Named C5/C6 rather than C1/C2 to avoid
+  // colliding with the existing C1-C4 titles in this describe block.
+  it("C5: a push whose openedAtGeneration does NOT match the current identity generation is dropped before anything is published or adopted", async () => {
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 5);
+    const host = new FakeHostLifecycle();
+    const { fleet, published } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        throw new Error(
+          "must not be called - acceptPushedRows adopts rows it is handed, it does not fetch",
+        );
+      },
+    });
+    const snapshotBefore = fleet.snapshot();
+
+    await fleet.acceptPushedRows({
+      response: { hosts: [buildHostListItem("remote-host")] },
+      readAtMs: 1_000,
+      openedAtGeneration: 4,
+    });
+
+    // Dropped before the generation-fence check reaches the fetch-vs-adopt
+    // machinery at all: no publish, and the snapshot is the exact object the
+    // port started with (nothing re-published it).
+    expect(published).toEqual([]);
+    expect(fleet.snapshot()).toBe(snapshotBefore);
+    fleet.dispose();
+  });
+
+  it("C6: a push whose openedAtGeneration MATCHES the current identity generation is adopted as usual - the control for C5", async () => {
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 5);
+    const host = new FakeHostLifecycle();
+    const { fleet, published } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        throw new Error(
+          "must not be called - acceptPushedRows adopts rows it is handed, it does not fetch",
+        );
+      },
+    });
+
+    await fleet.acceptPushedRows({
+      response: { hosts: [buildHostListItem("remote-host")] },
+      readAtMs: 1_000,
+      openedAtGeneration: 5,
+    });
+
+    expect(published).toHaveLength(1);
+    expect(fleet.snapshot().hosts.map((entry) => entry.hostId)).toEqual([
+      "remote-host",
+    ]);
+    fleet.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DesktopHostFleetSource: the registry merged by scope (personal / team)
+// ---------------------------------------------------------------------------
+
+describe("DesktopHostFleetSource merges the registry by scope", () => {
+  /**
+   * A team's sandbox as the user-bearer read lists it. The local host's own
+   * read never returns one: authn scopes its device credential to the owner's
+   * personal hosts.
+   */
+  function teamSandbox(
+    hostId: string,
+    sandboxState: HostSandboxState,
+    connectivity: HostConnectivity,
+  ): HostListItem {
+    const base = buildHostListItem(hostId);
+    return {
+      ...base,
+      kind: "sandbox",
+      status: { ...base.status, connectivity },
+      sandboxState,
+      sandboxFrozen: false,
+      profile: "agent",
+      owner: { kind: "team", id: "team-1", name: "Platform" },
+    };
+  }
+
+  /** The row the windows were last handed for `hostId`. */
+  function lastPublishedRow(
+    published: readonly RegisteredHostsPush[],
+    hostId: string,
+  ): HostListItem | undefined {
+    return published
+      .at(-1)
+      ?.response.hosts.find((row) => row.hostId === hostId);
+  }
+
+  function hostIdsOf(fleet: DesktopHostFleetSource): string[] {
+    return fleet
+      .snapshot()
+      .hosts.map((entry) => entry.hostId)
+      .sort();
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /**
+   * The real subscription feeding the real fleet source, with the real 60 s
+   * cadence driving it - wired as `selection-authority-ipc.ts` wires them.
+   * Only `setInterval` is faked, so the enrollment read and the adopt path run
+   * on real I/O.
+   */
+  async function wiredWithCadence(initialRegistry: readonly HostListItem[]) {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    let registry: readonly HostListItem[] = initialRegistry;
+    let bearerReads = 0;
+    const { fleet, published, setNow } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: async () => {
+        bearerReads += 1;
+        return { kind: "ok", response: { hosts: [...registry] } };
+      },
+    });
+    setNow(1_000);
+    await fleet.refresh();
+
+    const coverage: boolean[] = [];
+    const streamClient = new FakeStreamClient(true);
+    const subscription = startLocalHostInventorySubscription({
+      localHost: () => ({
+        hostId: "local-host",
+        websocketUrl: "ws://local",
+        version: MINIMUM_HOST_VERSION,
+      }),
+      onLocalHostChanged: () => () => undefined,
+      identity: () => ({
+        userId: identity.current().identityKey,
+        generation: identity.current().generation,
+      }),
+      onAuthChanged: () => () => undefined,
+      openStreamClient: () => streamClient,
+      onRows: (read) => {
+        void fleet.acceptPushedRows(read);
+      },
+      onPushActiveChanged: (active) => {
+        coverage.push(active);
+      },
+      log: silentLog,
+    });
+    const bridge: RegisteredHostsBroadcastBridge = {
+      disposeFns: [],
+      fanOut: () => undefined,
+    };
+    registerRegisteredHostsBroadcast(bridge, fleet);
+    const session = streamClient.sessions[0];
+    if (session === undefined) throw new Error("no session opened");
+    session.negotiatedSchemaVersion = { major: 1, minor: 1 };
+
+    return {
+      fleet,
+      published,
+      coverage,
+      bearerReads: () => bearerReads,
+      setRegistry: (next: readonly HostListItem[]) => {
+        registry = next;
+      },
+      /** One healthy snapshot from the local host, read at `fetchedAtMs`. */
+      push: async (hosts: readonly HostListItem[], fetchedAtMs: number) => {
+        const before = published.length;
+        session.emit(
+          {
+            kind: "snapshot",
+            hasBinaryPayload: false,
+            hosts: [...hosts],
+            fetchedAtMs,
+            stale: false,
+          },
+          null,
+        );
+        await vi.waitFor(() => {
+          expect(published.length).toBeGreaterThan(before);
+        });
+      },
+      /** One 60 s tick of the cadence, its bearer read stamped at `nowMs`. */
+      tick: async (nowMs: number) => {
+        setNow(nowMs);
+        vi.advanceTimersByTime(60_000);
+        // The tick's refresh runs on real I/O; give it the time a push gets.
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      },
+      dispose: () => {
+        for (const dispose of bridge.disposeFns) dispose();
+        subscription.dispose();
+        fleet.dispose();
+      },
+    };
+  }
+
+  it("while the push covers the registry, the 60 s tick still runs the user-bearer read", async () => {
+    const wired = await wiredWithCadence([
+      buildHostListItem("local-host"),
+      teamSandbox("team-sbx", "awake", "connectable"),
+    ]);
+    await wired.push([buildHostListItem("local-host")], 2_000);
+    expect(wired.coverage.at(-1)).toBe(true);
+    const readsBefore = wired.bearerReads();
+
+    await wired.tick(3_000);
+
+    expect(wired.bearerReads()).toBe(readsBefore + 1);
+    wired.dispose();
+  });
+
+  it("a team row from a bearer read survives a later push, and the next bearer read takes it offline within one interval", async () => {
+    const wired = await wiredWithCadence([
+      buildHostListItem("local-host"),
+      teamSandbox("team-sbx", "awake", "connectable"),
+    ]);
+    expect(hostIdsOf(wired.fleet)).toEqual(["local-host", "team-sbx"]);
+
+    await wired.push([buildHostListItem("local-host")], 2_000);
+
+    expect(hostIdsOf(wired.fleet)).toEqual(["local-host", "team-sbx"]);
+    expect(lastPublishedRow(wired.published, "team-sbx")?.sandboxState).toBe(
+      "awake",
+    );
+
+    // The teammate suspends it.
+    wired.setRegistry([
+      buildHostListItem("local-host"),
+      teamSandbox("team-sbx", "suspended", "offline"),
+    ]);
+    await wired.tick(3_000);
+
+    await vi.waitFor(() => {
+      expect(lastPublishedRow(wired.published, "team-sbx")).toMatchObject({
+        sandboxState: "suspended",
+        status: { connectivity: "offline" },
+      });
+    });
+    expect(hostIdsOf(wired.fleet)).toEqual(["local-host", "team-sbx"]);
+    wired.dispose();
+  });
+
+  it("a team row created while the push covers the registry appears on the next bearer read", async () => {
+    const wired = await wiredWithCadence([buildHostListItem("local-host")]);
+    await wired.push([buildHostListItem("local-host")], 2_000);
+    expect(wired.coverage.at(-1)).toBe(true);
+
+    wired.setRegistry([
+      buildHostListItem("local-host"),
+      teamSandbox("team-new", "awake", "connectable"),
+    ]);
+    await wired.tick(3_000);
+
+    await vi.waitFor(() => {
+      expect(
+        wired.fleet
+          .snapshot()
+          .hosts.find((entry) => entry.hostId === "team-new"),
+      ).toEqual({ hostId: "team-new", kind: "sandbox", teamOwned: true });
+    });
+    wired.dispose();
+  });
+
+  it("a push still replaces the personal rows, and only those", async () => {
+    const wired = await wiredWithCadence([
+      buildHostListItem("local-host"),
+      buildHostListItem("old-personal"),
+      teamSandbox("team-sbx", "awake", "connectable"),
+    ]);
+
+    await wired.push(
+      [buildHostListItem("local-host"), buildHostListItem("new-personal")],
+      2_000,
+    );
+
+    expect(hostIdsOf(wired.fleet)).toEqual([
+      "local-host",
+      "new-personal",
+      "team-sbx",
+    ]);
+    expect(
+      wired.published
+        .at(-1)
+        ?.response.hosts.map((row) => row.hostId)
+        .sort(),
+    ).toEqual(["local-host", "new-personal", "team-sbx"]);
+    wired.dispose();
+  });
+
+  it("a bearer read that started before a newer push still updates the team rows, and leaves the push's personal rows", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const registryFetch = recordingRegistryFetch();
+    const { fleet, published, setNow } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: registryFetch.fetch,
+    });
+
+    setNow(1_000);
+    const first = fleet.refresh();
+    await registryFetch.started(0);
+    registryFetch.calls[0]?.resolve({
+      kind: "ok",
+      response: {
+        hosts: [
+          buildHostListItem("local-host"),
+          buildHostListItem("personal-a"),
+          teamSandbox("team-sbx", "awake", "connectable"),
+        ],
+      },
+    });
+    await first;
+
+    // The bearer read goes to the registry at 3 000 ...
+    setNow(3_000);
+    const inFlight = fleet.refresh();
+    await registryFetch.started(1);
+    // ... and a push the host read at 4 000 lands while it is out.
+    await fleet.acceptPushedRows({
+      response: {
+        hosts: [
+          buildHostListItem("local-host"),
+          buildHostListItem("personal-b"),
+        ],
+      },
+      readAtMs: 4_000,
+      openedAtGeneration: 0,
+    });
+    expect(hostIdsOf(fleet)).toEqual(["local-host", "personal-b", "team-sbx"]);
+
+    registryFetch.calls[1]?.resolve({
+      kind: "ok",
+      response: {
+        hosts: [
+          buildHostListItem("local-host"),
+          buildHostListItem("personal-a"),
+          teamSandbox("team-sbx", "suspended", "offline"),
+        ],
+      },
+    });
+    await inFlight;
+
+    // Its team rows are the newest anyone has read; its personal rows are
+    // older than the push's, which stay.
+    expect(hostIdsOf(fleet)).toEqual(["local-host", "personal-b", "team-sbx"]);
+    expect(lastPublishedRow(published, "team-sbx")?.sandboxState).toBe(
+      "suspended",
+    );
+    expect(lastPublishedRow(published, "personal-a")).toBeUndefined();
+    fleet.dispose();
+  });
+
+  it("an older bearer read cannot overwrite newer team rows", async () => {
+    const dir = await makeTempDir();
+    const enrollmentFile = await writeEnrollment(dir, "local-host");
+    const authSession = new DesktopAuthSession();
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-1"));
+    const identity = new FakeIdentitySource("user-a", 0);
+    const host = new FakeHostLifecycle();
+    host.identityEnrollmentFile = enrollmentFile;
+    const registryFetch = recordingRegistryFetch();
+    const { fleet, published, setNow } = buildFleetSourceWithPublisher({
+      identity,
+      authSession,
+      host,
+      listRegisteredHosts: registryFetch.fetch,
+    });
+
+    setNow(2_000);
+    const older = fleet.refresh();
+    await registryFetch.started(0);
+    setNow(3_000);
+    const newer = fleet.refresh();
+    await registryFetch.started(1);
+
+    registryFetch.calls[1]?.resolve({
+      kind: "ok",
+      response: {
+        hosts: [
+          buildHostListItem("local-host"),
+          teamSandbox("team-sbx", "suspended", "offline"),
+        ],
+      },
+    });
+    await newer;
+    const publishedAfterNewer = published.length;
+
+    registryFetch.calls[0]?.resolve({
+      kind: "ok",
+      response: {
+        hosts: [
+          buildHostListItem("local-host"),
+          teamSandbox("team-sbx", "awake", "connectable"),
+          teamSandbox("team-gone", "awake", "connectable"),
+        ],
+      },
+    });
+    await older;
+
+    expect(published).toHaveLength(publishedAfterNewer);
+    expect(lastPublishedRow(published, "team-sbx")?.sandboxState).toBe(
+      "suspended",
+    );
+    expect(hostIdsOf(fleet)).toEqual(["local-host", "team-sbx"]);
+    fleet.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DesktopLocalHostOutageSignal
+// ---------------------------------------------------------------------------
+
+function buildControllerStatus(
+  mutation: HostControllerStatus["mutation"],
+): HostControllerStatus {
+  return {
+    download: null,
+    mutation,
+    installedVersion: "1.0.0",
+    latestVersion: "1.0.0",
+    stagedVersion: null,
+    installedRuntimeVersion: "1.0.0",
+    runningRuntimeVersion: "1.0.0",
+    updateReady: false,
+    activation: "activated",
+    reachable: true,
+    localAttempt: null,
+    removedByUser: false,
+    lastEnsureFailure: null,
+    updateDeferral: null,
+    checkedAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+const activeMutation: NonNullable<HostControllerStatus["mutation"]> = {
+  kind: "ensure",
+  progress: null,
+  startedAt: "2026-01-01T00:00:00.000Z",
+};
+
+describe("DesktopLocalHostOutageSignal", () => {
+  it("is true exactly while a broadcast status carries a non-null mutation lane, edge-triggered", async () => {
+    let readStatusResolve: (status: HostControllerStatus) => void = () =>
+      undefined;
+    const readStatus = () =>
+      new Promise<HostControllerStatus>((resolve) => {
+        readStatusResolve = resolve;
+      });
+    const tickListeners = new Set<(status: HostControllerStatus) => void>();
+    const subscribe = (listener: (status: HostControllerStatus) => void) => {
+      tickListeners.add(listener);
+      return () => tickListeners.delete(listener);
+    };
+
+    const signal = new DesktopLocalHostOutageSignal({
+      subscribe,
+      readStatus,
+      log: silentLog,
+    });
+    // Settle the initial read as idle so it does not interfere.
+    readStatusResolve(buildControllerStatus(null));
+    await Promise.resolve();
+
+    const seen: boolean[] = [];
+    signal.onChanged((next) => seen.push(next));
+
+    expect(signal.inExpectedOutage()).toBe(false);
+
+    for (const listener of tickListeners)
+      listener(buildControllerStatus(activeMutation));
+    expect(signal.inExpectedOutage()).toBe(true);
+    expect(seen).toEqual([true]);
+
+    // Repeated identical ticks: no duplicate notifications.
+    for (const listener of tickListeners)
+      listener(buildControllerStatus(activeMutation));
+    expect(seen).toEqual([true]);
+
+    for (const listener of tickListeners) listener(buildControllerStatus(null));
+    expect(signal.inExpectedOutage()).toBe(false);
+    expect(seen).toEqual([true, false]);
+
+    signal.dispose();
+  });
+
+  it("leaves inExpectedOutage() false when the initial read rejects, and a later tick still corrects it", async () => {
+    const readStatus = () => Promise.reject(new Error("initial read failed"));
+    const tickListeners = new Set<(status: HostControllerStatus) => void>();
+    const subscribe = (listener: (status: HostControllerStatus) => void) => {
+      tickListeners.add(listener);
+      return () => tickListeners.delete(listener);
+    };
+
+    const signal = new DesktopLocalHostOutageSignal({
+      subscribe,
+      readStatus,
+      log: silentLog,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(signal.inExpectedOutage()).toBe(false);
+
+    for (const listener of tickListeners)
+      listener(buildControllerStatus(activeMutation));
+    expect(signal.inExpectedOutage()).toBe(true);
+
+    signal.dispose();
+  });
+
+  it("ignores a STALE initial read that answers AFTER a live broadcast tick has already landed (A2)", async () => {
+    const readStatus = deferred<HostControllerStatus>();
+    const tickListeners = new Set<(status: HostControllerStatus) => void>();
+    const subscribe = (listener: (status: HostControllerStatus) => void) => {
+      tickListeners.add(listener);
+      return () => tickListeners.delete(listener);
+    };
+
+    const signal = new DesktopLocalHostOutageSignal({
+      subscribe,
+      readStatus: () => readStatus.promise,
+      log: silentLog,
+    });
+
+    const seen: boolean[] = [];
+    signal.onChanged((next) => seen.push(next));
+
+    // A live broadcast tick lands first, carrying a non-null mutation lane.
+    for (const listener of tickListeners) {
+      listener(buildControllerStatus(activeMutation));
+    }
+    expect(signal.inExpectedOutage()).toBe(true);
+    expect(seen).toEqual([true]);
+
+    // THEN the initial `readStatus()` resolves - answering `mutation: null`,
+    // i.e. stale by the time it lands.
+    readStatus.resolve(buildControllerStatus(null));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The exemption for a genuinely-under-way outage must survive: the
+    // older read must not clear it, and no onChanged(false) is delivered.
+    expect(signal.inExpectedOutage()).toBe(true);
+    expect(seen).toEqual([true]);
+
+    signal.dispose();
+  });
+
+  it("with no broadcast at all, the initial read still establishes the value (A2 mirror)", async () => {
+    const readStatus = deferred<HostControllerStatus>();
+    const tickListeners = new Set<(status: HostControllerStatus) => void>();
+    const subscribe = (listener: (status: HostControllerStatus) => void) => {
+      tickListeners.add(listener);
+      return () => tickListeners.delete(listener);
+    };
+
+    const signal = new DesktopLocalHostOutageSignal({
+      subscribe,
+      readStatus: () => readStatus.promise,
+      log: silentLog,
+    });
+
+    const seen: boolean[] = [];
+    signal.onChanged((next) => seen.push(next));
+
+    expect(signal.inExpectedOutage()).toBe(false);
+    expect(tickListeners.size).toBe(1); // subscribed, but never ticked.
+
+    readStatus.resolve(buildControllerStatus(activeMutation));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(signal.inExpectedOutage()).toBe(true);
+    expect(seen).toEqual([true]);
+
+    signal.dispose();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createDesktopLocalHostEnsurePort
+// ---------------------------------------------------------------------------
+
+class FakeHostController implements IpcHostController {
+  outcome: MutationOutcome<ConvergeReadyOk> = {
+    kind: "ok",
+    value: { running: true, version: "1.0.0" },
+  };
+  readonly convergeReadyCalls: [
+    boolean,
+    LocalHostMutationIntent,
+    ConvergeReadyVersionPolicy,
+  ][] = [];
+
+  readonly lifecycleAdmissionBlock: LifecycleAdmissionBlock | null = null;
+  async getStatus(): Promise<HostControllerStatus> {
+    return buildControllerStatus(null);
+  }
+  async convergeReady(
+    force: boolean,
+    intent: LocalHostMutationIntent,
+    versionPolicy: ConvergeReadyVersionPolicy,
+  ): Promise<MutationOutcome<ConvergeReadyOk>> {
+    this.convergeReadyCalls.push([force, intent, versionPolicy]);
+    return this.outcome;
+  }
+  async stageLatest(): Promise<void> {}
+  async applyStaged(
+    _trigger: ApplyStagedTrigger,
+    _force: boolean,
+  ): Promise<MutationOutcome<ApplyStagedOk>> {
+    return {
+      kind: "ok",
+      value: { appliedVersion: "1.0.0", runningActivated: true, applied: true },
+    };
+  }
+  async activateInstalled(
+    _force: boolean,
+  ): Promise<MutationOutcome<ActivateInstalledOk>> {
+    return { kind: "ok", value: { activated: true } };
+  }
+  async installVersion(
+    pin: string,
+    _force: boolean,
+  ): Promise<MutationOutcome<InstallVersionOk>> {
+    return {
+      kind: "ok",
+      value: { installedVersion: pin, runningActivated: true },
+    };
+  }
+  async registerService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
+    return { kind: "ok", value: { registered: true } };
+  }
+  async deregisterService(): Promise<MutationOutcome<ServiceRegistrationOk>> {
+    return { kind: "ok", value: { registered: false } };
+  }
+  async respawn(): Promise<MutationOutcome<ActivateInstalledOk>> {
+    return { kind: "ok", value: { activated: true } };
+  }
+  async recoverIfDown(): Promise<
+    MutationOutcome<ActivateInstalledOk> | { readonly kind: "suppressed" }
+  > {
+    return { kind: "suppressed" };
+  }
+  async freePortAndRestart(
+    _pid: number | null,
+    _port: number | null,
+  ): Promise<MutationOutcome<ActivateInstalledOk>> {
+    return { kind: "ok", value: { activated: true } };
+  }
+  async uninstallHost(_all: boolean): Promise<MutationOutcome<UninstallOk>> {
+    return {
+      kind: "ok",
+      value: {
+        removedInstallDir: true,
+        deregisteredService: true,
+        serviceRegistrationRetained: null,
+        serviceWarning: null,
+      },
+    };
+  }
+  async removeTraycer(): Promise<MutationOutcome<RemoveTraycerOk>> {
+    return {
+      kind: "ok",
+      value: {
+        removedHost: true,
+        deregisteredService: true,
+        serviceRegistrationRetained: null,
+        serviceWarning: null,
+        removedLoginItem: false,
+      },
+    };
+  }
+  isPendingRevisionRefreshQuarantined(): boolean {
+    return false;
+  }
+  async refreshServiceDefinition(): Promise<
+    MutationOutcome<ServiceDefinitionRefreshOk>
+  > {
+    return { kind: "ok", value: { result: "current", appliesAt: null } };
+  }
+  onMutationProgress(
+    _listener: (progress: MutationProgress) => void,
+  ): () => void {
+    return () => undefined;
+  }
+}
+
+describe("createDesktopLocalHostEnsurePort", () => {
+  // Ticket 4: the ensure port is background/liveness-only - it must never
+  // move the installed version as a side effect of proving the host alive,
+  // so it always requests `"keep-installed"`. Target-independent by design
+  // (2026-08-19), hence the `background` intent rather than a user repair.
+  it("requests convergeReady with a background intent and keep-installed", async () => {
+    const controller = new FakeHostController();
+    const port = createDesktopLocalHostEnsurePort(controller);
+
+    await port.ensureReady();
+
+    expect(controller.convergeReadyCalls).toEqual([
+      [false, { kind: "background" }, "keep-installed"],
+    ]);
+  });
+
+  it("maps an ok outcome to {ok: true}", async () => {
+    const controller = new FakeHostController();
+    controller.outcome = {
+      kind: "ok",
+      value: { running: true, version: "1.0.0" },
+    };
+    const port = createDesktopLocalHostEnsurePort(controller);
+
+    await expect(port.ensureReady()).resolves.toEqual({ ok: true });
+  });
+
+  it("refuses to call a REMOVED host alive, even though its converge answers ok", async () => {
+    const controller = new FakeHostController();
+    const port = createDesktopLocalHostEnsurePort(controller);
+    // The exact short-circuit `HostController.convergeReady` returns while the
+    // removal sentinel stands: `ok`, because nothing failed - and `running:
+    // false`, because by consent nothing ran either. The engine reads a bare
+    // `ok` as FIRSTHAND proof of life (`onHostProvedAlive` clears the refusal
+    // streak and makes the lease usable), so mapping this one to `{ok: true}`
+    // handed failover a host that is not installed, and re-cleared that streak
+    // every pacing hold. Now it is a plain failure - and NOT deferred, because
+    // nothing here changes on its own until the user reinstalls.
+    controller.outcome = {
+      kind: "ok",
+      value: { running: false, version: null },
+    };
+    await expect(port.ensureReady()).resolves.toEqual({
+      ok: false,
+      reason: "removed-by-user",
+      deferred: false,
+    });
+  });
+
+  it("does NOT treat a busy refusal as proof of life - E_HOST_BUSY is a fail-safe", async () => {
+    const controller = new FakeHostController();
+    const port = createDesktopLocalHostEnsurePort(controller);
+    // The tempting reading is "a host that is up with active work", and an
+    // earlier revision of this port resolved `{ok: true}` on it to spare a
+    // non-target local host one CLI spawn per pacing hold. `assertHostNotBusy`
+    // says otherwise in its own words: it raises `E_HOST_BUSY` when a live
+    // PID's idle state CANNOT BE DETERMINED - `/activity` timed out, refused,
+    // answered malformed, or 404'd - exactly as it does when the host reports
+    // real work. A WEDGED host is the first case, so `{ok: true}` handed
+    // `onHostProvedAlive` a host that cannot serve: refusal evidence cleared,
+    // lease usable, failover free to choose it, and each later ensure clearing
+    // the refusals its failed dials had just rebuilt.
+    controller.outcome = {
+      kind: "busy",
+      continuation: "retry-with-force",
+      message: "busy",
+    };
+    await expect(port.ensureReady()).resolves.toEqual({
+      ok: false,
+      reason: "busy",
+      deferred: true,
+    });
+  });
+
+  it("maps failed/deferred outcomes to {ok: false, reason: <kind>}, with only failed non-deferred", async () => {
+    const controller = new FakeHostController();
+    const port = createDesktopLocalHostEnsurePort(controller);
+
+    // `failed` actually ran and concluded - the one arm allowed to arm the
+    // engine's dead-lease cooldown.
+    controller.outcome = { kind: "failed", message: "boom", errorCode: null };
+    await expect(port.ensureReady()).resolves.toEqual({
+      ok: false,
+      reason: "failed",
+      deferred: false,
+    });
+
+    // `deferred` is the lane/lock being busy: nothing ran, nothing learned.
+    controller.outcome = { kind: "deferred", message: "later" };
+    await expect(port.ensureReady()).resolves.toEqual({
+      ok: false,
+      reason: "deferred",
+      deferred: true,
+    });
+  });
+});

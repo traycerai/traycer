@@ -1,0 +1,310 @@
+import { TaskAppearancePicker } from "./task-appearance-picker";
+import type { HistoryItem } from "@/components/home/data/home-page.data";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
+import {
+  Check,
+  Group,
+  Palette,
+  Pencil,
+  Plus,
+  Tag,
+  Ungroup,
+  MoreHorizontal,
+} from "lucide-react";
+import {
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+} from "@/components/ui/context-menu";
+import {
+  useOrganization,
+  useOrganizationView,
+} from "@/hooks/organization/organization-context";
+import { OrganizationDot } from "./organization-metadata";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useGroupEditorTarget } from "@/stores/tabs/group-editor-store";
+
+/** The group a task is in, as the organization view has it. */
+function useTaskGroupId(taskId: string): string | null {
+  return useOrganizationView(
+    (view) =>
+      view?.groups.memberships.find((m) => m.taskId === taskId)?.groupId ??
+      null,
+    Object.is,
+  );
+}
+
+/**
+ * "Edit group…" for a grouped task, where the menu's host can open a group's
+ * editor and the group has an anchor mounted to open it on.
+ */
+function useEditGroupAction(
+  groupId: string | null,
+  onEditGroup: ((anchorId: string) => void) | null,
+): (() => void) | null {
+  const anchorId = useGroupEditorTarget(groupId);
+  return anchorId === null || onEditGroup === null
+    ? null
+    : () => onEditGroup(anchorId);
+}
+
+export function TaskOrganizationMenu(props: {
+  readonly taskId: string;
+  readonly canEdit: boolean;
+  readonly title: string | undefined;
+  readonly dropdown?: boolean;
+  /** Opens the editor on an anchor, where the menu's host has one to open; else `null`. */
+  readonly onEditGroup: ((anchorId: string) => void) | null;
+}) {
+  const MenuItem = props.dropdown ? DropdownMenuItem : ContextMenuItem;
+  const MenuSeparator = props.dropdown
+    ? DropdownMenuSeparator
+    : ContextMenuSeparator;
+  const MenuSub = props.dropdown ? DropdownMenuSub : ContextMenuSub;
+  const MenuSubContent = props.dropdown
+    ? DropdownMenuSubContent
+    : ContextMenuSubContent;
+  const MenuSubTrigger = props.dropdown
+    ? DropdownMenuSubTrigger
+    : ContextMenuSubTrigger;
+  const organization = useOrganization();
+  const groupId = useTaskGroupId(props.taskId);
+  const editGroup = useEditGroupAction(groupId, props.onEditGroup);
+  const groups = useOrganizationView((view) => view?.groups, Object.is);
+  if (organization === null) return null;
+  // A host that has answered and does not have the RPC is the one case worth
+  // saying out loud. Everything else - no handshake yet, a readiness flap, a
+  // momentary loss of cloud authorization - keeps the account's cached groups
+  // on screen and only stops them being changed.
+  if (groups === undefined)
+    return organization.hostSupport === false ? (
+      <>
+        <MenuItem disabled>
+          <Group />
+          Update this device to organize tasks
+        </MenuItem>
+        <MenuSeparator />
+      </>
+    ) : null;
+  const canEditOrganization = organization.supported;
+  return (
+    <>
+      <MenuItem
+        disabled={!canEditOrganization}
+        onSelect={() =>
+          organization.openDialog({
+            kind: "labels",
+            taskId: props.taskId,
+            canEdit: props.canEdit,
+          })
+        }
+      >
+        <Tag />
+        Labels
+      </MenuItem>
+      <MenuSub>
+        <MenuSubTrigger
+          disabled={!canEditOrganization}
+          onPointerLeave={(event) => {
+            // A form keeps focus while the pointer crosses from its launcher.
+            // Radix's normal row-leave behavior focuses the parent menu and
+            // can dismiss the submenu before the field receives the click.
+            if (event.currentTarget.getAttribute("aria-expanded") === "true")
+              event.preventDefault();
+          }}
+        >
+          <Palette />
+          Task appearance
+        </MenuSubTrigger>
+        <MenuSubContent
+          layout="panel"
+          className="w-[var(--radix-popper-available-width)] min-w-0 max-w-xs max-h-[var(--radix-popper-available-height)] overflow-y-auto"
+          onFocus={(event) => {
+            if (event.target === event.currentTarget)
+              event.currentTarget.querySelector("input")?.focus();
+          }}
+        >
+          <TaskAppearancePicker taskId={props.taskId} />
+          {editGroup === null ? null : (
+            <MenuItem onSelect={editGroup}>
+              <Pencil />
+              Edit group…
+            </MenuItem>
+          )}
+        </MenuSubContent>
+      </MenuSub>
+      <MenuSub>
+        <MenuSubTrigger>
+          <Group />
+          {groupId ? "Move to group" : "Add to group"}
+        </MenuSubTrigger>
+        <MenuSubContent>
+          <MenuItem
+            disabled={!canEditOrganization}
+            onSelect={() =>
+              organization.openDialog({
+                kind: "new-group",
+                taskId: props.taskId,
+              })
+            }
+          >
+            <Plus />
+            New group…
+          </MenuItem>
+          {groups.groups.length ? <MenuSeparator /> : null}
+          {groups.groups.map((group) => (
+            <MenuItem
+              key={group.groupId}
+              disabled={!canEditOrganization}
+              onSelect={() => {
+                const canvas = useEpicCanvasStore.getState();
+                const openTasks = new Set(
+                  canvas.openTabOrder.flatMap((id) => {
+                    const tab = canvas.tabsById[id];
+                    return tab ? [tab.epicId] : [];
+                  }),
+                );
+                const isOpen = groups.memberships.some(
+                  (m) => m.groupId === group.groupId && openTasks.has(m.taskId),
+                );
+                void organization
+                  .command({
+                    kind: "groups",
+                    operations: [
+                      {
+                        operation: "moveTask",
+                        taskId: props.taskId,
+                        groupId: group.groupId,
+                        position: groups.memberships.filter(
+                          (m) => m.groupId === group.groupId,
+                        ).length,
+                      },
+                    ],
+                  })
+                  .then(() => {
+                    if (isOpen || openTasks.has(props.taskId)) {
+                      for (const member of groups.memberships.filter(
+                        (m) => m.groupId === group.groupId,
+                      ))
+                        useEpicCanvasStore
+                          .getState()
+                          .openEpicTabInBackground(member.taskId, undefined);
+                      useEpicCanvasStore
+                        .getState()
+                        .openEpicTabInBackground(props.taskId, props.title);
+                    }
+                  })
+                  .catch(() => undefined);
+              }}
+            >
+              <OrganizationDot color={group.color} />
+              <span className="max-w-48 truncate">{group.name}</span>
+              {groupId === group.groupId ? <Check className="ml-auto" /> : null}
+            </MenuItem>
+          ))}
+        </MenuSubContent>
+      </MenuSub>
+      {groupId ? (
+        <MenuItem
+          disabled={!canEditOrganization}
+          onSelect={() => {
+            void organization
+              .command({
+                kind: "groups",
+                operations: [{ operation: "removeTask", taskId: props.taskId }],
+              })
+              .catch(() => undefined);
+          }}
+        >
+          <Ungroup />
+          Remove from group
+        </MenuItem>
+      ) : null}
+      <MenuSeparator />
+    </>
+  );
+}
+
+export function TaskOrganizationDropdown(props: {
+  readonly taskId: string;
+  readonly canEdit: boolean;
+  readonly title: string;
+}) {
+  const organization = useOrganization();
+  const hasView = useOrganizationView((view) => view !== undefined, Object.is);
+  // The same availability question the menu inside answers, asked the same
+  // way. Hiding the trigger on `supported` alone threw away everything that
+  // change was for: a readiness or authorization flap would take the
+  // account's cached groups off screen, and a host too old for the RPC
+  // would show nothing at all rather than saying so. The trigger appears
+  // when the menu has something to put behind it, and not otherwise.
+  if (organization === null) return null;
+  if (!hasView && organization.hostSupport !== false) return null;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`Organize ${props.title}`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <MoreHorizontal />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-max min-w-40">
+        <TaskOrganizationMenu {...props} dropdown onEditGroup={null} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+export function HistoryTaskOrganizationMenu({
+  item,
+  canEdit,
+}: {
+  readonly item: HistoryItem;
+  readonly canEdit: boolean;
+}) {
+  if (item.taskType === "phase" || item.isLocalHome || item.isPreservedOrphan)
+    return null;
+  return (
+    <TaskOrganizationMenu
+      taskId={item.epicId}
+      canEdit={canEdit}
+      title={item.title}
+      onEditGroup={null}
+    />
+  );
+}
+
+export function HistoryOrganizationDropdown({
+  item,
+  canEdit,
+}: {
+  readonly item: HistoryItem;
+  readonly canEdit: boolean;
+}) {
+  if (item.taskType === "phase" || item.isLocalHome || item.isPreservedOrphan)
+    return null;
+  return (
+    <TaskOrganizationDropdown
+      taskId={item.epicId}
+      canEdit={canEdit}
+      title={item.title}
+    />
+  );
+}

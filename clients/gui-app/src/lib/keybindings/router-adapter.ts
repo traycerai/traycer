@@ -1,0 +1,176 @@
+/**
+ * Shared so `KeybindingProvider` and `CommandPaletteProvider` expose
+ * the same narrow `KeybindingRouter` seam. Kept here (not in the
+ * framework-free `dispatch.ts`) because this module is the only
+ * place that knows about the concrete TanStack `AppRouter` shape.
+ *
+ * `navigateToEpicList` / `navigateSettings` / `navigateSettingsSection`
+ * route through the system-tab modal bridge first when the modal host
+ * has published its API. That preserves the modal-first UX for
+ * keybindings + palette commands without coupling those framework-free
+ * call sites to React hooks.
+ */
+import type { RouterHistory, UseNavigateResult } from "@tanstack/react-router";
+import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
+import {
+  goBack as goBackAction,
+  goForward as goForwardAction,
+} from "@/lib/commands/actions";
+import { readConnectableHostsSnapshot } from "@/hooks/host/use-connectable-host-ids";
+import { openBotChannel } from "@/lib/bots/open-bot-channel";
+import { getHistoryController } from "@/lib/persistent-history";
+import { historyNavChromeAvailable } from "@/lib/history-navigation/use-history-nav-available";
+import { LANDING_ROUTE } from "@/lib/routes";
+import {
+  existingEpicTabIntent,
+  homeTabIntent,
+  navigateToTabIntent,
+  openOrFocusEpicIntent,
+} from "@/lib/tab-navigation";
+import { isHomeTabEnabled } from "@/stores/layout/layout-store";
+import {
+  navigateNestedFocus,
+  navigateNestedFocusToPrimaryEditor,
+} from "@/lib/epic-nested-focus-navigation";
+import { navigateToSettingsSection as navigateSettingsSection } from "@/lib/settings-navigation";
+import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
+import { routeIntentViaModalBridge } from "@/stores/tabs/system-overlay-registry";
+
+export interface KeybindingRouterSource {
+  readonly state: {
+    readonly location: {
+      readonly pathname: string;
+      readonly search?: Readonly<Record<string, unknown>>;
+    };
+  };
+  // Full `RouterHistory` (not just `subscribe`): the history-navigation seam
+  // reads the persistent-history controller brand off it (`getHistoryController`)
+  // and walks it via the shared `goBack`/`goForward` actions.
+  readonly history: RouterHistory;
+  readonly navigate: UseNavigateResult<string>;
+}
+
+export function routerAdapterFor(
+  router: KeybindingRouterSource,
+): KeybindingRouter {
+  return {
+    getPathname: () => router.state.location.pathname,
+    // "Home" means the Home tab once it exists, and the landing route before
+    // that. Both callers - the Go to Home chord and the last-Epic close - want
+    // whichever of the two this build actually has.
+    navigateHome: () => {
+      if (isHomeTabEnabled()) {
+        navigateToTabIntent(router.navigate, homeTabIntent(), undefined);
+        return;
+      }
+      void router.navigate(LANDING_ROUTE);
+    },
+    navigateSettings: () => {
+      const api = getSystemTabModalApi();
+      if (api === null) return;
+      api.openSettings({
+        section: null,
+        resetToGeneral: true,
+        tab: null,
+        draft: null,
+        hostId: null,
+      });
+    },
+    navigateToEpic: (epicId) => {
+      navigateToTabIntent(
+        router.navigate,
+        openOrFocusEpicIntent({ epicId, focus: undefined }),
+        undefined,
+      );
+    },
+    navigateToEpicTab: (tab) => {
+      navigateToTabIntent(
+        router.navigate,
+        existingEpicTabIntent({
+          epicId: tab.epicId,
+          tabId: tab.tabId,
+          focus: undefined,
+        }),
+        undefined,
+      );
+    },
+    navigateToEpicList: () => {
+      const api = getSystemTabModalApi();
+      if (api === null) return;
+      api.openHistory();
+    },
+    // When the modal is open, sub-leader / palette section picks update the
+    // in-modal section without leaving the underlying tab. Otherwise: focus or
+    // open the settings surface (modal or tab) on the requested section. Shared
+    // with the in-panel call sites so the two cannot drift apart.
+    navigateSettingsSection,
+    navigateToTabIntent: (intent) => {
+      const api = getSystemTabModalApi();
+      if (
+        api !== null &&
+        intent.kind !== "open-epic" &&
+        intent.kind !== "open-phase-migration" &&
+        intent.kind !== "new-draft" &&
+        intent.kind !== "complete-epic-migration" &&
+        routeIntentViaModalBridge(intent, api)
+      ) {
+        return;
+      }
+      navigateToTabIntent(router.navigate, intent, undefined);
+    },
+    // Read when the row runs, not when the adapter is built: the adapter
+    // outlives every directory answer, and a surface on a host this client can
+    // no longer dial moves to the window's host as Home's rows move it.
+    openBotChannel: (botId) => {
+      openBotChannel(router.navigate, botId, {
+        landing: null,
+        isConnectable: readConnectableHostsSnapshot(),
+        onRejected: null,
+      });
+    },
+    navigateNestedFocus: (epicId, tabId, prepare, provenance) =>
+      navigateNestedFocus(
+        {
+          history: router.history,
+          navigate: router.navigate,
+          getLocation: () => ({
+            pathname: router.state.location.pathname,
+            search: router.state.location.search ?? {},
+          }),
+        },
+        { epicId, tabId },
+        prepare,
+        provenance,
+      ),
+    navigateNestedFocusToPrimaryEditor: (epicId, tabId, prepare, provenance) =>
+      navigateNestedFocusToPrimaryEditor(
+        {
+          history: router.history,
+          navigate: router.navigate,
+          getLocation: () => ({
+            pathname: router.state.location.pathname,
+            search: router.state.location.search ?? {},
+          }),
+        },
+        { epicId, tabId },
+        prepare,
+        provenance,
+      ),
+    // Walk the CURRENT router's persistent history; the shared actions no-op
+    // when the history carries no controller brand (browser/web build).
+    goBack: () => goBackAction(router),
+    goForward: () => goForwardAction(router),
+    // History-navigation availability + boundary state off the live router's
+    // controller brand. The palette source reads these through `ctx.router`
+    // (it mounts above `<RouterProvider>`, where TanStack router context is null).
+    isHistoryNavAvailable: () => historyNavChromeAvailable(router.history),
+    canGoBack: () => {
+      const controller = getHistoryController(router.history);
+      return controller !== null && controller.canGoBack();
+    },
+    canGoForward: () => {
+      const controller = getHistoryController(router.history);
+      return controller !== null && controller.canGoForward();
+    },
+  };
+}

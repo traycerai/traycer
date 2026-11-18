@@ -1,0 +1,3217 @@
+/**
+ * Canonical selector + hook surface over the per-Epic projected slices
+ * owned by `OpenEpicStore`. This is the single import path for component
+ * code - there is no separate compatibility shim.
+ *
+ * Patterns:
+ *   - Plain scalar / single slot: prefer `useEpicStore(s => s.x.byId[id])`
+ *     directly. Identity stability of projector slots gives `Object.is`
+ *     skip-render automatically.
+ *   - Object-shaped selects: wrap with `useShallow` from
+ *     `zustand/react/shallow`.
+ *   - Derived / cross-slice computations: define at module scope here via
+ *     `createSelector(...)` so the cache survives across re-renders.
+ *   - Per-id factory selectors: pair with `useMemo([id])` in the caller
+ *     so the cache key is stable.
+ *
+ * Index access discipline: this codebase has `noUncheckedIndexedAccess`
+ * off, so `Record<string, X>[key]` is typed as `X`. Use
+ * `Object.hasOwn(byId, id) ? byId[id] : null` instead of `byId[id] ?? null`
+ * to satisfy `@typescript-eslint/no-unnecessary-condition` while keeping
+ * runtime safety.
+ */
+import { useLayoutEffect, useMemo, useSyncExternalStore } from "react";
+import { useStore } from "zustand";
+import { useShallow } from "zustand/react/shallow";
+import { createSelector, lruMemoize } from "reselect";
+import { v4 as uuidv4 } from "uuid";
+import * as Y from "yjs";
+import type { Awareness } from "y-protocols/awareness";
+import { artifactFolderChain } from "@/lib/artifacts/artifact-folder-chain";
+import {
+  artifactFileViewer,
+  type ArtifactFileViewer,
+} from "@/lib/files/artifact-file-viewer";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
+import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
+import type {
+  AgentSessionLastExit,
+  AgentSessionState,
+} from "@traycer/protocol/host/agent-session-state";
+import type {
+  GuiHarnessId,
+  TuiHarnessId,
+} from "@traycer/protocol/persistence/epic/schemas";
+import type { ChatRecordRemovalReason } from "@traycer/protocol/host/epic/chat-records";
+import type { WorktreeBindingOwnerKind } from "@traycer/protocol/host/worktree-schemas";
+import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import type {
+  EpicCloudFreshness,
+  EpicCloudFreshnessState,
+  EpicDurabilityStatusV15,
+  EpicLocalProtection,
+} from "@traycer/protocol/host/epic/subscribe";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
+import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
+import { displayTitle } from "@/lib/display-title";
+import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy";
+import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-commands-for-chat";
+import {
+  deriveEpicSyncPillState,
+  deriveEpicWriteCommandAlert,
+  summarizeEpicWriteCommands,
+  type ArtifactSyncReading,
+  type EpicHostDirtyState,
+  type EpicSyncPillState,
+  type EpicWriteCommandAlert,
+  type EpicWriteCommandSummary,
+} from "@/lib/epic-sync-pill-state";
+import {
+  agentActivityTiers,
+  type AgentActivityTier,
+} from "@/lib/agent-activity";
+import { useEpicAgentActivity } from "@/stores/agent-activity-store";
+import { useEpicStore, useMaybeEpicStore } from "@/hooks/use-epic-store";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import { useTerminalDisplayTitle } from "@/hooks/terminal/use-terminal-display-title";
+import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
+import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
+import { armRowNamesHeldChat } from "@/lib/chats/compose-task-chat-list";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import { useEnvironmentArmChats } from "@/hooks/environment/use-environment-arms";
+import { useAgentRolesEnabled } from "@/hooks/runner/use-runner-feature-settings-query";
+import {
+  useMaybeOpenEpicHandle,
+  useOpenEpicHandle,
+} from "@/providers/use-open-epic-handle";
+import {
+  getEpicSessionHandleHostId,
+  getOpenEpicRegistry,
+} from "@/lib/registries/epic-session-registry";
+import {
+  pendingTitleVisibleAutoPurge,
+  useEpicCanvasStore,
+} from "@/stores/epics/canvas/store";
+import {
+  isOpenableEpicNodeKind,
+  type EpicNodeRef,
+} from "@/stores/epics/canvas/types";
+import type {
+  EpicMigrationSlice,
+  OpenEpicState,
+  OpenEpicStoreHandle,
+  SnapshotFetchError,
+} from "@/stores/epics/open-epic/store";
+import type { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-registry";
+import type {
+  ArtifactProjection,
+  ArtifactsSlice,
+  ChatProjection,
+  ChatsSlice,
+  DeletedArtifactProjection,
+  EpicArtifactRoomAvailability,
+  EpicTreeNodeType,
+  TuiAgentProjection,
+  TreeNode,
+  TreeSlice,
+} from "@/stores/epics/open-epic/types";
+import { EMPTY_ARRAY, EMPTY_TREE_SLICE } from "@/stores/epics/open-epic/types";
+
+// ─── Type re-exports ──────────────────────────────────────────────────────
+
+export type EpicArtifactProjection = ArtifactProjection;
+export type EpicDeletedArtifactProjection = DeletedArtifactProjection;
+export type EpicChatProjection = ChatProjection;
+export type EpicTuiAgentProjection = TuiAgentProjection;
+export type EpicTreeIndex = TreeSlice;
+export type EpicTreeNode = TreeNode;
+export type { EpicTreeNodeType };
+
+/**
+ * Sidebar-friendly node row that merges artifacts + chats into one
+ * sequence. `name` falls back to `Untitled <kind>` so the sidebar always
+ * has a label. Identity-stable via `recordForArtifact` / `recordForChat`
+ * caches keyed by source projection identity.
+ *
+ * `hostId` is the host the opened tile binds to for life. Chat and tui-agent
+ * rows preserve their projected owner host; artifacts and legacy / optimistic
+ * chats inherit the host serving the open-epic projection.
+ */
+export interface EpicTreeRecord {
+  readonly id: string;
+  readonly parentId: string | null;
+  readonly name: string;
+  readonly type: EpicTreeNodeType;
+  readonly status: number | null;
+  readonly hostId: string;
+}
+
+const EMPTY_RECORDS: ReadonlyArray<EpicTreeRecord> = Object.freeze([]);
+const EMPTY_NODES: ReadonlyArray<TreeNode> = Object.freeze([]);
+const EMPTY_CHAT_PROJECTIONS: ReadonlyArray<ChatProjection> = Object.freeze([]);
+const EMPTY_TERMINAL_AGENT_PROJECTIONS: ReadonlyArray<TuiAgentProjection> =
+  Object.freeze([]);
+const EMPTY_NODES_AS_ARTIFACTS: ReadonlyArray<ArtifactProjection> =
+  Object.freeze([]);
+const EMPTY_NODE_RECENCY: Readonly<Record<string, number>> = Object.freeze({});
+const EMPTY_TREE_ID_ARRAY: readonly string[] = EMPTY_ARRAY;
+const EMPTY_TREE_ID_SET: ReadonlySet<string> = new Set<string>();
+const EMPTY_ROLE_CLAIMS: readonly RoleClaim[] = Object.freeze([]);
+const EMPTY_ROLE_CLAIMS_BY_AGENT_ID: Readonly<
+  Record<string, readonly RoleClaim[]>
+> = Object.freeze({});
+
+export { EMPTY_TREE_ID_ARRAY, EMPTY_TREE_ID_SET };
+
+// ─── Snapshot meta + connection state ─────────────────────────────────────
+
+export function useEpicSnapshotMeta(): SnapshotMetaEpic | null {
+  return useEpicStore((s) => s.snapshotMeta);
+}
+
+export function useEpicConnectionStatus(): StreamConnectionStatus {
+  return useEpicStore((s) => s.connectionStatus);
+}
+
+// Maybe-scoped rather than throwing outside <EpicSessionProvider>: the
+// comment sidebar renders outside the session tree in some mounts, and "no
+// session" is honestly the same answer as "the host has not said" - null.
+export function useEpicDurabilityStatus(): NonNullable<
+  OpenEpicState["durabilityStatus"]
+> | null {
+  return useMaybeEpicStore((s) => s.durabilityStatus ?? null, null);
+}
+
+export function useEpicDurabilityPauseReason(): NonNullable<
+  OpenEpicState["durabilityPauseReason"]
+> | null {
+  return useMaybeEpicStore((s) => s.durabilityPauseReason ?? null, null);
+}
+
+/**
+ * Whether this epic has no usable comment room right now.
+ *
+ * ## Why a shared predicate and not `status === "local"` at each gate
+ *
+ * Local artifact rooms have their own disconnected thread provider backed by
+ * the same WAL-persisted Y.Doc as the artifact body, so `local` is usable.
+ * `promoting` is different: the reservation is recorded but the local manager
+ * has been retired before the cloud artifact-room provider is ready. Offering
+ * comments in that interval only produces `no_active_session`.
+ *
+ * `unknown` is deliberately NOT here. It means the host could not answer, and
+ * the honest response to that is the ordinary read path plus whatever it
+ * reports - not a confident claim that comments do not exist. Guessing in
+ * either direction on `unknown` is the class of defect `s5-status-truthfulness`
+ * exists to correct.
+ */
+export function commentsHaveNoUsableCommentRoom(
+  status: NonNullable<OpenEpicState["durabilityStatus"]> | null,
+  pauseReason: string | null,
+): boolean {
+  return unavailableCommentRoomKind(status, pauseReason) !== null;
+}
+
+/**
+ * {@link commentsHaveNoUsableCommentRoom}, held across a subscription cycle's
+ * reset.
+ *
+ * ## Why the raw predicate is not enough AT A GATE
+ *
+ * The open-epic store clears `durabilityStatus` and `durabilityPauseReason`
+ * whenever a subscription cycle starts, deliberately: last cycle's answer is
+ * not evidence about this cycle's peer. So between a reconnect and the
+ * replacement `cloudSyncStatus` frame the predicate sees `null` and answers
+ * `false`.
+ *
+ * For the sync pill an unknown collapses toward silence, which is the safe
+ * direction. Here it collapses the other way: `false` re-enables the comment
+ * shortcut, toolbar, popovers and thread query against an epic that is still
+ * promoting or preserving edits after its cloud room was deleted. A draft
+ * begun in that window is wiped by the very frame that restores the gate, and
+ * a request sent from it could only fail.
+ *
+ * The latch is sound because whether comments are temporarily unavailable is
+ * a property of the epic's durability state, not of the subscription cycle.
+ * Only a POSITIVE statement writes it, `null` leaves the previous answer
+ * standing, and it is keyed by epic so a different one never inherits it.
+ *
+ * ## Why the absent statement still splits two ways
+ *
+ * Treating every `null` as "gate it" would disable comments FOREVER on any
+ * peer below `@1.4`, which cannot emit the key at all - the population that
+ * has always had working comments. `durabilityLegsNegotiated` separates a peer
+ * that has not answered YET from one that CANNOT, exactly as it does in the
+ * sync pill: the first waits behind the conservative gate, the second keeps
+ * its released behaviour.
+ */
+export type EpicCommentRoomAvailability =
+  | { readonly kind: "available" }
+  | { readonly kind: "checking" }
+  | { readonly kind: "promoting" }
+  | { readonly kind: "orphaned" }
+  /**
+   * The room is cloud-backed and the session holds no cloud verdict. An
+   * `unverified` session is admitted to the epic (its document may be on
+   * this disk), but its comment room lives in the cloud-backed artifact room
+   * and every read (`epic.listCommentThreads` poll) and write goes through
+   * the local-host context, which does not carry the renderer's verdict.
+   * A local-homed room (`local` / `promoting`) is exempt.
+   */
+  | { readonly kind: "unauthorized" };
+
+/**
+ * Whether a durability status names a LOCAL-HOMED epic - one whose rooms
+ * live on this machine's disk, so reading or writing them spends no cloud
+ * capability. `null` (cloud-backed epics leave the status unset), `offline`
+ * (a cloud mirror) and `paused` are not provably local and read as cloud.
+ * Shared by the comment-room gate, the comment write gate and the registry
+ * accessor `useRegisteredEpicLocalHome` so the exemption cannot drift.
+ */
+export function isLocalHomedDurabilityStatus(
+  status: NonNullable<OpenEpicState["durabilityStatus"]> | null,
+): boolean {
+  return status === "local" || status === "promoting";
+}
+
+function unavailableCommentRoomKind(
+  status: NonNullable<OpenEpicState["durabilityStatus"]> | null,
+  pauseReason: string | null,
+): "promoting" | "orphaned" | null {
+  if (status === "promoting") return "promoting";
+  return status === "paused" &&
+    pauseReason === "orphaned-local-edits-after-cloud-delete"
+    ? "orphaned"
+    : null;
+}
+
+interface EpicDurabilityStatement {
+  readonly status: NonNullable<OpenEpicState["durabilityStatus"]> | null;
+  readonly pauseReason: string | null;
+}
+
+/**
+ * Selects this subscription cycle's durability statement, falling back to the
+ * last positive statement retained across a reconnect only while this cycle
+ * is silent. Gates that answer a structural durability question must share
+ * this order so a reconnect cannot re-enable one of them transiently.
+ */
+function currentOrRetainedDurabilityStatement(
+  status: NonNullable<OpenEpicState["durabilityStatus"]> | null,
+  pauseReason: string | null,
+  retainedStatus: NonNullable<OpenEpicState["retainedDurabilityStatus"]> | null,
+  retainedPauseReason: string | null,
+): EpicDurabilityStatement {
+  if (status !== null) return { status, pauseReason };
+  return { status: retainedStatus, pauseReason: retainedPauseReason };
+}
+
+/**
+ * The local-home exemption, read from a session handle OUTSIDE React - the
+ * dispatch-time gates (`assertCommentWriteAuthorized`, the chat-attachment
+ * fetcher) and the registry accessor `useRegisteredEpicLocalHome`.
+ *
+ * Reads the SAME current-then-retained statement
+ * `useEpicCommentRoomAvailability` renders from, so a gate cannot disagree
+ * with the control that offered the write. During a reconnect the cycle's own
+ * status is cleared while the retained pair still stands; a gate reading only
+ * the raw status refused a local-homed epic's write for exactly the beat its
+ * surface still showed the control as available. `null` handle is "not
+ * provably local", the cloud direction.
+ */
+export function isLocalHomedEpicHandle(
+  handle: OpenEpicStoreHandle | null,
+): boolean {
+  if (handle === null) return false;
+  const state = handle.store.getState();
+  const statement = currentOrRetainedDurabilityStatement(
+    state.durabilityStatus ?? null,
+    state.durabilityPauseReason ?? null,
+    state.retainedDurabilityStatus ?? null,
+    state.retainedDurabilityPauseReason ?? null,
+  );
+  return isLocalHomedDurabilityStatus(statement.status);
+}
+
+/**
+ * The comment-room gate together with the exact closed reason that justified
+ * it. Consumers must switch on this value rather than interpret raw status
+ * and pause fields independently: during a reconnect those raw fields are
+ * intentionally cleared while the retained durability statement still owns
+ * the gate and its user-facing explanation.
+ */
+export function useEpicCommentRoomAvailability(): EpicCommentRoomAvailability {
+  const status = useEpicDurabilityStatus();
+  const pauseReason = useEpicDurabilityPauseReason();
+  // Read reactively: a demotion (`signed-in` -> `unverified`) while the epic
+  // stays mounted must close the gate on the next render, not on the next
+  // subscription cycle.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  // `useMaybeEpicStore`, matching every sibling above: this gate renders in
+  // the comments sidebar, which mounts outside an Epic session in its own
+  // tests and in any host-scoped surface that has no open epic.
+  const retainedStatus = useMaybeEpicStore(
+    (s) => s.retainedDurabilityStatus ?? null,
+    null,
+  );
+  const retainedPauseReason = useMaybeEpicStore(
+    (s) => s.retainedDurabilityPauseReason ?? null,
+    null,
+  );
+  const durabilityStatusNegotiated = useMaybeEpicStore(
+    (s) => s.durabilityStatusNegotiated,
+    false,
+  );
+  const durabilityLegsNegotiated = useMaybeEpicStore(
+    (s) => s.durabilityLegsNegotiated,
+    false,
+  );
+  const hasFreshCloudSyncStatus = useMaybeEpicStore(
+    (s) => s.hasFreshCloudSyncStatus,
+    false,
+  );
+  const durabilityStatement = currentOrRetainedDurabilityStatement(
+    status,
+    pauseReason,
+    retainedStatus,
+    retainedPauseReason,
+  );
+  // The shared helper gives this cycle's statement precedence. When that
+  // statement is absent, its retained fallback is consulted BEFORE the
+  // legacy-peer check; that order is the whole point of the latch rather than
+  // a stylistic choice.
+  //
+  // `startedSubscriptionCycle` resets the cycle's durability statement but
+  // publishes the `@1.4` negotiation result before frames arrive. It
+  // deliberately does NOT clear the retained pair. So the exact state a
+  // reconnecting promoting or preserved-orphan epic passes through - no new
+  // status, retained still standing - remains protected by that retained
+  // statement rather than re-enabling comments while the new cycle settles.
+  //
+  // Reordering cannot regress the pre-`@1.4` population the legacy arm
+  // protects: `retainedDurabilityStatus` is written only from a STATED
+  // durability status, so only a peer that has actually emitted one can have
+  // it. A host that cannot speak the key never populates it, falls through,
+  // and still gets its released behaviour from the check below. And the
+  // retained pair cannot outlive a `@1.4`/`@1.5` peer's cloud answer either:
+  // the replica clears it on such a peer's fresh frame without the key (the
+  // omission IS that peer's cloud statement, read the same way in the
+  // `hasFreshCloudSyncStatus` arm below), so a finished promotion does not
+  // keep the local-home exemption alive through the retained fallback.
+  if (durabilityStatement.status !== null) {
+    const unavailable = unavailableCommentRoomKind(
+      durabilityStatement.status,
+      durabilityStatement.pauseReason,
+    );
+    if (unavailable !== null) return { kind: unavailable };
+    // The structural answer is "there is a room"; whether this session may
+    // reach it is the second question. A local-homed room is on this disk
+    // and needs no verdict; a cloud-backed one (unset status is the cloud
+    // case, `offline` is a cloud mirror) does.
+    if (
+      !cloudAuthorized &&
+      !isLocalHomedDurabilityStatus(durabilityStatement.status)
+    ) {
+      return { kind: "unauthorized" };
+    }
+    return { kind: "available" };
+  }
+  // No statement this cycle and none ever retained. A peer that never
+  // negotiated the durability-status minor cannot produce one at all, so
+  // gating on its silence would disable comments forever on every pre-`@1.4`
+  // host - the population that has always had them. The @1.6 legs are a
+  // separate capability and say nothing about whether @1.4/@1.5 peers can
+  // still report the status that this branch is waiting for.
+  if (!durabilityStatusNegotiated) {
+    // A pre-`@1.4` host has no local homes at all, so its comment room is
+    // cloud-backed by construction: the verdict gate applies unchanged.
+    return cloudAuthorized ? { kind: "available" } : { kind: "unauthorized" };
+  }
+  // A `@1.4` / `@1.5` peer that HAS spoken this cycle (a cloud-status frame
+  // arrived) and omitted the datum. Through `@1.5` the durability enum has no
+  // positive calm member: an ordinary cloud-homed epic served by such a peer
+  // is exactly the absent key, every frame, forever - so absence beside a
+  // frame is the cloud answer, not a pending one, and reading it as pending
+  // disabled comments on every healthy cloud epic those peers serve. A
+  // `@1.6` peer (`durabilityLegsNegotiated`) states `cloud` positively and
+  // its absence means UNKNOWN (see the protocol's `@1.6` widening), which
+  // stays pending below.
+  if (hasFreshCloudSyncStatus && !durabilityLegsNegotiated) {
+    return cloudAuthorized ? { kind: "available" } : { kind: "unauthorized" };
+  }
+  // A negotiated peer that has not spoken yet, about an epic nothing has ever
+  // said anything about. Withholding the affordance is the only direction
+  // here that cannot offer an action the host will reject.
+  return { kind: "checking" };
+}
+
+export function useEpicCommentsHaveNoUsableRoom(): boolean {
+  return useEpicCommentRoomAvailability().kind !== "available";
+}
+
+/**
+ * Whether this epic has no cloud task for its chats to back up into.
+ *
+ * Related to {@link commentsHaveNoUsableCommentRoom}, but deliberately
+ * separate: local comments use a WAL-backed artifact-room provider, while
+ * chat backup still needs the cloud task row the publisher addresses. The
+ * predicates share the promoting and preserved-orphan cases only.
+ *
+ * The consumer is the sidebar's backup-status indicator: on a local-homed
+ * epic every chat is honestly `behind` forever (there is nothing to publish
+ * into), so rendering "N chats not backed up" there presents a by-design
+ * state as an actionable failure. `unknown` is deliberately NOT gated, per
+ * the `s5-status-truthfulness` rule
+ * {@link commentsHaveNoUsableCommentRoom}:
+ * the host could not answer, so the ordinary surface renders what the backup
+ * query reports.
+ */
+export function chatBackupHasNoCloudTask(
+  status: NonNullable<OpenEpicState["durabilityStatus"]> | null,
+  pauseReason: string | null,
+): boolean {
+  if (status === "local" || status === "promoting") return true;
+  // Same fact as the comments predicate: the orphan pause means the cloud
+  // TASK ROW is deleted, so there is nothing for the publisher to back a
+  // chat up into and "N chats not backed up" would present a by-design
+  // preservation state as an actionable failure.
+  return (
+    status === "paused" &&
+    pauseReason === "orphaned-local-edits-after-cloud-delete"
+  );
+}
+
+/**
+ * Tolerant of a missing session on purpose: the only caller is the Epic
+ * sidebar's backup indicator, which is a sibling of the canvas and mounts on
+ * split surfaces that have no `<EpicSessionProvider>` above them. The strict
+ * read threw straight through the surface's error boundary and blanked it.
+ *
+ * With no open epic the answer is `false` - "nothing here says there is no
+ * cloud task" - which is the same fail-open direction the host-side gate uses:
+ * a wrong `true` silently hides a real backup failure, a wrong `false` only
+ * shows an indicator that the query then finds nothing to report.
+ */
+export function useEpicChatBackupHasNoCloudTask(): boolean {
+  const status = useMaybeEpicStore((s) => s.durabilityStatus ?? null, null);
+  const pauseReason = useMaybeEpicStore(
+    (s) => s.durabilityPauseReason ?? null,
+    null,
+  );
+  const retainedStatus = useMaybeEpicStore(
+    (s) => s.retainedDurabilityStatus ?? null,
+    null,
+  );
+  const retainedPauseReason = useMaybeEpicStore(
+    (s) => s.retainedDurabilityPauseReason ?? null,
+    null,
+  );
+  const durabilityStatement = currentOrRetainedDurabilityStatement(
+    status,
+    pauseReason,
+    retainedStatus,
+    retainedPauseReason,
+  );
+  return chatBackupHasNoCloudTask(
+    durabilityStatement.status,
+    durabilityStatement.pauseReason,
+  );
+}
+
+export function useEpicDurabilityPromotionState(): NonNullable<
+  OpenEpicState["durabilityPromotionState"]
+> | null {
+  return useEpicStore((s) => s.durabilityPromotionState ?? null);
+}
+
+/**
+ * Input (i) of the sync pill on its own - the RAW GUI↔host transport, not the
+ * display blend above. The pill's cloud-link grace reads it to tell a
+ * cloud-only drop (host reachable, edits durable on the host) apart from a
+ * host-link drop (edits exist only in this window), which derive the same
+ * `reconnecting` verdict and must not get the same grace.
+ */
+export function useEpicHostTransportStatus(): StreamConnectionStatus {
+  return useEpicStore((s) => s.hostTransportStatus);
+}
+
+/**
+ * Input (iii) of the sync pill: the control lane's aggregate dirty bit, known
+ * only after this open cycle's atomic dirty snapshot. A clean-looking map
+ * before then (or on a legacy connection that cannot produce one) is unknown
+ * rather than evidence that the cloud has acknowledged everything.
+ */
+const selectHostDirtyState = createSelector(
+  (s: OpenEpicState) => s.hasDirtySnapshotForOpenCycle,
+  (s: OpenEpicState) => s.rootDirty,
+  (s: OpenEpicState) => s.artifactRoomDirtyByArtifactRoomId,
+  (
+    hasDirtySnapshotForOpenCycle,
+    rootDirty,
+    dirtyByArtifactRoomId,
+  ): EpicHostDirtyState => {
+    if (!hasDirtySnapshotForOpenCycle || rootDirty === null) return "unknown";
+    if (rootDirty) return "dirty";
+    return Object.values(dirtyByArtifactRoomId).some((dirty) => dirty)
+      ? "dirty"
+      : "clean";
+  },
+);
+
+/**
+ * Inputs (iv) and (v) of the sync pill, counted per outcome off the projected
+ * command list. Memoized at module scope so the two hooks below share one
+ * count per publication rather than walking the list twice.
+ */
+const selectWriteCommandSummary = createSelector(
+  (s: OpenEpicState) => s.writeCommands,
+  (writeCommands): EpicWriteCommandSummary =>
+    summarizeEpicWriteCommands(writeCommands),
+);
+
+/**
+ * The pill's link/durability claim, over the five inputs of wire-lane
+ * invariant 8 rather than the lossy blended `connectionStatus` the pill used
+ * to read on its own - see `@/lib/epic-sync-pill-state` for the ordering
+ * contract and why each input has to stay visible separately.
+ *
+ * Input (v) reaches the pill through {@link useEpicWriteCommandAlert}, NOT
+ * through this verdict: it is a different class, and the one thing it may
+ * never do is disappear behind this one. It is passed in here only to gate the
+ * green claim.
+ *
+ * Returns a plain string union, so an unchanged verdict is `Object.is`-equal
+ * and never re-renders the pill.
+ */
+export function useEpicSyncPillState(): EpicSyncPillState {
+  return useEpicStore(selectEpicSyncPillState);
+}
+
+function selectEpicSyncPillState(s: OpenEpicState): EpicSyncPillState {
+  return deriveEpicSyncPillState({
+    hostTransportStatus: s.hostTransportStatus,
+    cloudSyncStatus: s.cloudSyncStatus,
+    hasFreshCloudSyncStatus: s.hasFreshCloudSyncStatus,
+    hostDirtyState: selectHostDirtyState(s),
+    hasUnsyncedDocClassChanges: s.isDirty,
+    writeCommands: selectWriteCommandSummary(s),
+    hasConnectedOnce: s.hasConnectedOnce,
+    // The two legs the pill used to ignore entirely. Without them the pill
+    // could derive `synced` from a `LocalRoomConnection` and render "All
+    // changes synced" beside the durability plane's "Stored locally" -
+    // `s5-status-truthfulness` instance 1.
+    durability: s.durabilityStatus ?? undefined,
+    localProtection: s.localProtection ?? undefined,
+    durabilityLegsNegotiated: s.durabilityLegsNegotiated,
+    // The ninth leg, and the one that is about the DOCUMENT rather than
+    // about where the work is going - `s5-mirror-first-serving`.
+    cloudFreshness: s.cloudFreshness ?? undefined,
+    artifactSync: s.artifactSync ?? undefined,
+  });
+}
+
+/** The artifact sync reading of the open epic in context. */
+export function useEpicArtifactSyncReading(): ArtifactSyncReading {
+  const rooms = useEpicStore((s) => s.artifactSync?.rooms ?? null);
+  const waitingNewArtifacts = useEpicStore(
+    (s) => s.artifactSync?.waitingNewArtifacts ?? 0,
+  );
+  const pillState = useEpicStore(selectEpicSyncPillState);
+  return { rooms, waitingNewArtifacts, pillState };
+}
+
+/**
+ * The same reading of a registered epic, for a surface outside its session
+ * provider. `null` while no session is registered for it.
+ */
+export function useRegisteredEpicArtifactSyncReading(
+  epicId: string | null,
+): ArtifactSyncReading | null {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => (epicId === null ? null : registry.peek(epicId)),
+    () => null,
+  );
+  const subscribe = (listener: () => void) =>
+    handle?.store.subscribe(listener) ?? noopSubscribe;
+  const rooms = useSyncExternalStore(
+    subscribe,
+    () => handle?.store.getState().artifactSync?.rooms ?? null,
+    () => null,
+  );
+  const waitingNewArtifacts = useSyncExternalStore(
+    subscribe,
+    () => handle?.store.getState().artifactSync?.waitingNewArtifacts ?? 0,
+    () => 0,
+  );
+  const pillState = useSyncExternalStore(
+    subscribe,
+    () =>
+      handle === null ? null : selectEpicSyncPillState(handle.store.getState()),
+    () => null,
+  );
+  return pillState === null ? null : { rooms, waitingNewArtifacts, pillState };
+}
+
+/**
+ * The ONE reading of the `@1.4` durability pair, for every surface that
+ * renders it - `s5-status-truthfulness`.
+ *
+ * The class this closes is that the host derives honest state, the protocol
+ * used to drop it, and each renderer null-rendered into the calm value
+ * independently. Five instances of that were found; fixing them one at a time
+ * leaves the sixth for a user to find, so the reading lives here and the
+ * components render what it says.
+ *
+ * The `indeterminate` arm is the whole point: `unknown`, and an absence from a
+ * peer that CAN speak `@1.4`, both land there, and no surface may resolve
+ * either one as protected or synced.
+ */
+export type EpicDurabilityView =
+  /** A pre-`@1.4` peer. Renders exactly as it did before this minor. */
+  | { readonly kind: "legacy"; readonly status: EpicDurabilityStatusV15 | null }
+  /** The host stated where the epic is durable. */
+  | {
+      readonly kind: "stated";
+      readonly status: Exclude<EpicDurabilityStatusV15, "unknown" | "cloud">;
+      readonly protection: EpicLocalProtection;
+    }
+  /**
+   * Durable in the cloud. The calm arm - but calm about DURABILITY only:
+   * protection is the independent axis, and `unavailable` beside `cloud`
+   * still means offline edits die with the process, so the leg rides along
+   * for the risk copy instead of being swallowed by the calm verdict.
+   */
+  | { readonly kind: "cloudDurable"; readonly protection: EpicLocalProtection }
+  /** The host cannot say, or said it has no local protection. */
+  | {
+      readonly kind: "indeterminate";
+      readonly protection: EpicLocalProtection;
+    };
+
+export function deriveEpicDurabilityView(
+  status: EpicDurabilityStatusV15 | null,
+  protection: EpicLocalProtection | null,
+  peerSpeaksDurabilityLegs: boolean,
+): EpicDurabilityView {
+  // Which SILENCE this is, decided by the handshake rather than by the shape
+  // of the frame.
+  //
+  // The shipping host emits `localProtection` on every `@1.4` frame, so a
+  // presence probe agrees with the negotiated minor against it - but the
+  // schema marks every `@1.4` leg optional and states that an absent one means
+  // UNKNOWN, so a peer omitting one is speaking the contract, not failing it.
+  // Reading that omission as "old peer" resolves a stated unknown into the
+  // pre-`@1.4` silent rendering, which is the silence-as-reassurance inference
+  // this minor exists to break. `peerSpeaksDurabilityLegs` is `false` until the
+  // session's handshake settles, so an unheard peer still keeps its prior
+  // rendering and the additive minor stays additive.
+  //
+  // Presence is still honoured as the other direction: a peer that SENT the
+  // key demonstrably speaks it, whatever the negotiated version reader says.
+  if (protection === null && !peerSpeaksDurabilityLegs) {
+    return { kind: "legacy", status };
+  }
+  // Absence from a peer that speaks the legs is the wire contract's UNKNOWN.
+  const stated: EpicLocalProtection = protection ?? "unknown";
+  if (status === "cloud") {
+    // The POSITIVE cloud-durable statement the `@1.4` enum carries. Calm
+    // rests on this member alone - never on an absence. The protection leg is
+    // KEPT, not resolved by the calm: the axes are independent, and a stated
+    // `unavailable` beside `cloud` is exactly the "No local backup" risk the
+    // durability plane exists to surface.
+    return { kind: "cloudDurable", protection: stated };
+  }
+  if (status === null || status === "unknown") {
+    // The frame's absence rule, stated as code: an absent `durability` key
+    // from a `@1.4` peer means UNKNOWN, never synced. The
+    // earlier arm here resolving absence-beside-`armed` into the calm
+    // rendering, which let a schema-permitted omission claim "All changes
+    // synced" - the silence-as-reassurance inference this minor exists to
+    // break. The shipping host now emits `"cloud"` explicitly, so the calm
+    // case lost nothing.
+    return { kind: "indeterminate", protection: stated };
+  }
+  // `stated` KEEPS its protection leg rather than collapsing to
+  // `indeterminate` when that leg is `unavailable`: the two are separate axes,
+  // and the concrete status is what gates the paused-only remedies (Upgrade,
+  // Export). Saying both is the durability plane's job.
+  return { kind: "stated", status, protection: stated };
+}
+
+/** The composed durability reading for the open epic. */
+export function useEpicDurabilityView(): EpicDurabilityView {
+  // `useShallow` per this file's own object-select rule: the derivation builds
+  // a fresh literal on every call, so a bare select hands `useSyncExternalStore`
+  // a new snapshot each read and the status row re-renders itself to the
+  // update-depth ceiling.
+  return useEpicStore(
+    useShallow((s) =>
+      deriveEpicDurabilityView(
+        s.durabilityStatus ?? null,
+        s.localProtection ?? null,
+        s.durabilityLegsNegotiated,
+      ),
+    ),
+  );
+}
+
+/** Raw `localProtection`, for surfaces that gate on protection alone. */
+export function useEpicLocalProtection(): EpicLocalProtection | null {
+  return useEpicStore((s) => s.localProtection ?? null);
+}
+
+/**
+ * The ONE reading of `@1.4`'s `freshness` datum - `s5-mirror-first-serving`.
+ *
+ * Deliberately the same shape of answer as {@link EpicDurabilityView}, and for
+ * the same reason: the host derives an honest state, every renderer used to
+ * null-render it into the calm value independently, and the fix is one reading
+ * that the components then render.
+ *
+ * `unknown` covers BOTH an absent key and a peer that cannot speak `@1.4`, and
+ * it is deliberately calm - the host omits `freshness` for a local-homed epic
+ * (there is no cloud copy for it to be behind) and for a cloud row it has no
+ * record of. Absence here therefore means "no freshness question applies",
+ * which is why it renders exactly as it did before this minor. The one
+ * inference this type refuses to let a caller make is the opposite one: there
+ * is no arm that turns silence into `current`.
+ */
+export type EpicCloudFreshnessView =
+  | { readonly kind: "unknown" }
+  | {
+      readonly kind: "stated";
+      readonly state: EpicCloudFreshnessState;
+      /**
+       * The last SUCCESSFUL full root reconciliation, or `null` when this host
+       * has never recorded one. `null` beside `current` is structurally
+       * impossible on the wire, which is why the union carries the two
+       * together rather than as independent optionals.
+       */
+      readonly reconciledAtEpochMs: number | null;
+    };
+
+export function deriveEpicCloudFreshnessView(
+  freshness: EpicCloudFreshness | null,
+): EpicCloudFreshnessView {
+  if (freshness === null) return { kind: "unknown" };
+  return freshness.kind === "lastCloudSyncAt"
+    ? {
+        kind: "stated",
+        state: freshness.state,
+        reconciledAtEpochMs: freshness.reconciledAtEpochMs,
+      }
+    : { kind: "stated", state: freshness.state, reconciledAtEpochMs: null };
+}
+
+/** The composed freshness reading for the open epic. */
+export function useEpicCloudFreshnessView(): EpicCloudFreshnessView {
+  // Object-shaped select; see {@link useEpicDurabilityView}.
+  return useEpicStore(
+    useShallow((s) => deriveEpicCloudFreshnessView(s.cloudFreshness ?? null)),
+  );
+}
+
+/**
+ * The outstanding write commands themselves, for the surface that ACTS on them.
+ *
+ * The pill reads the same rows folded into counts; this is the list behind it.
+ * Identity is the runtime's, so an unchanged queue re-renders nobody.
+ */
+export function useEpicWriteCommands(): readonly CommandRecord<EpicWriteCommandIntent>[] {
+  return useEpicStore((s) => s.writeCommands);
+}
+
+/**
+ * Input (v) of the sync pill - a refused or superseded write - plus the
+ * ambiguous arm of input (iv), as their own verdict.
+ *
+ * Separate from {@link useEpicSyncPillState} because they are a separate
+ * class, and the pill weighs the two side by side: a rejected write is
+ * reported even while the link is down, and it can never be absorbed into a
+ * green claim about the link.
+ *
+ * Returns a string union or `null`, so an unchanged verdict re-renders nobody.
+ */
+export function useEpicWriteCommandAlert(): EpicWriteCommandAlert | null {
+  return useEpicStore((s) =>
+    deriveEpicWriteCommandAlert(selectWriteCommandSummary(s)),
+  );
+}
+
+/**
+ * Input 3 of the sync-pill derivation on its own: `true` only after a genuine
+ * `cloudSyncStatus` frame in the CURRENT subscription cycle (reset atomically
+ * with the transport reaching `open`). The pill's escalation clock reads it
+ * directly because recovery is this evidence, not a state label - a legacy
+ * host that never sends the dirty snapshot derives `connected` even for a
+ * fully evidenced recovery, and the label alone cannot tell that apart from a
+ * handshake-only `connected` with no evidence behind it.
+ */
+export function useEpicHasFreshCloudSyncStatus(): boolean {
+  return useEpicStore((s) => s.hasFreshCloudSyncStatus);
+}
+
+export function useEpicPermissionRole(): PermissionRole | null {
+  return useEpicStore((s) => s.permissionRole);
+}
+
+export function useEpicSnapshotLoaded(): boolean {
+  return useEpicStore((s) => s.snapshotLoaded);
+}
+
+export function useEpicChatRecordListAuthoritative(): boolean {
+  return useEpicStore((s) => s.chatRecordListAuthoritative);
+}
+
+export function useEpicTuiAgentRecordListAuthoritative(): boolean {
+  return useEpicStore((s) => s.tuiAgentRecordListAuthoritative);
+}
+
+/** The list has failed and has not answered since. */
+export function useEpicTuiAgentRecordListFailed(): boolean {
+  return useEpicStore(
+    (s) => s.tuiAgentRecordListFailed && !s.tuiAgentRecordListAuthoritative,
+  );
+}
+
+export function useEpicSnapshotFetchError(): SnapshotFetchError | null {
+  return useEpicStore((s) => s.snapshotFetchError);
+}
+
+export function useEpicRequestFreshSnapshot(): () => void {
+  return useEpicStore((s) => s.requestFreshSnapshot);
+}
+
+/**
+ * Reactive view of the per-epic major-migration slice. The modal subscribes
+ * here to decide between idle (don't render), running (show step list), and
+ * error (show retry/close) states. Identity-stable across snapshots that
+ * leave the slice unchanged.
+ */
+export function useEpicMigrationState(): EpicMigrationSlice {
+  return useEpicStore((s) => s.migration);
+}
+
+/**
+ * Action hook for the migration modal's Retry button. Sends a
+ * `retryMigration` client frame and snaps the slice back to running.
+ */
+export function useEpicRetryMigration(): () => void {
+  return useEpicStore((s) => s.retryMigration);
+}
+
+export function useEpicLastFocusedArtifactId(): string | null {
+  return useEpicStore((s) => s.lastFocusedArtifactId);
+}
+
+/**
+ * Stable epic id of the open-epic session (the value the surrounding
+ * `<EpicSessionProvider>` was mounted with). Reads off the handle, not
+ * the store state, so consumers do not subscribe to unrelated store
+ * field changes.
+ */
+export function useOpenEpicId(): string {
+  return useOpenEpicHandle().epicId;
+}
+
+/** {@link useOpenEpicId}, or `null` outside an open-epic session. */
+export function useMaybeOpenEpicId(): string | null {
+  return useMaybeOpenEpicHandle()?.epicId ?? null;
+}
+
+// ─── Title ────────────────────────────────────────────────────────────────
+
+export function useEpicTitle(): string {
+  return useEpicStore((s) => {
+    if (s.epic.title.length > 0) return s.epic.title;
+    return s.snapshotMeta?.epicLight?.title ?? "";
+  });
+}
+
+export function useRegisteredEpicTitle(epicId: string | null): string | null {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => (epicId === null ? null : registry.peek(epicId)),
+    () => null,
+  );
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => liveEpicTitleFromHandle(handle),
+    () => null,
+  );
+}
+
+export function useRegisteredEpicPermissionRole(
+  epicId: string | null,
+): PermissionRole | null {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => (epicId === null ? null : registry.peek(epicId)),
+    () => null,
+  );
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => liveEpicPermissionRoleFromHandle(handle),
+    () => null,
+  );
+}
+
+/**
+ * Whether the registered epic is LOCAL-HOMED (`local` or `promoting`), read
+ * through the same header-safe registry seam as the role, for surfaces that
+ * render outside the epic session tree. A local-homed epic's title lives on
+ * this machine's disk, so renaming it spends no cloud capability and stays
+ * admitted while the session is `unverified`.
+ *
+ * `false` covers a cloud-homed epic AND an unknown or `paused` status: a
+ * paused row says nothing about home, and a gate that must not spend the
+ * retained credential reads "not provably local" as cloud. Read through the
+ * current-then-retained statement ({@link isLocalHomedEpicHandle}), so a
+ * reconnect beat that clears the cycle's status does not flip the exemption
+ * off while the comment-room gate still shows the epic as available.
+ */
+export function useRegisteredEpicLocalHome(epicId: string | null): boolean {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => (epicId === null ? null : registry.peek(epicId)),
+    () => null,
+  );
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => isLocalHomedEpicHandle(handle),
+    () => false,
+  );
+}
+
+export function useRegisteredEpicTitleGenerating(
+  epicId: string | null,
+): boolean {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => (epicId === null ? null : registry.peek(epicId)),
+    () => null,
+  );
+  const currentTitle = useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => liveEpicTitleFromHandle(handle),
+    () => null,
+  );
+  const currentUpdatedAt = useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => liveEpicUpdatedAtFromHandle(handle),
+    () => null,
+  );
+  return useEpicCanvasStore((s) => {
+    if (epicId === null) return false;
+    const entry = Object.hasOwn(s.pendingEpicTitles, epicId)
+      ? s.pendingEpicTitles[epicId]
+      : undefined;
+    return pendingTitleVisibleAutoPurge(
+      entry,
+      currentTitle,
+      currentUpdatedAt,
+      () => s.clearEpicTitlePending(epicId),
+    );
+  });
+}
+
+function noopSubscribe(): () => void {
+  return noopUnsubscribe;
+}
+
+function noopUnsubscribe(): void {}
+
+/**
+ * Best-available live title for an open-epic handle: the projected Y.Doc
+ * title, falling back to the snapshot-meta epicLight title, else `null`. The
+ * single source of this precedence - reused by the header strip and the
+ * access coordinator so a title-source change can't drift between them.
+ */
+export function liveEpicTitleFromHandle(
+  handle: OpenEpicStoreHandle | null,
+): string | null {
+  if (handle === null) return null;
+  const state = handle.store.getState();
+  const title =
+    state.epic.title.length > 0
+      ? state.epic.title
+      : (state.snapshotMeta?.epicLight?.title ?? "");
+  return title.length > 0 ? title : null;
+}
+
+function liveEpicPermissionRoleFromHandle(
+  handle: OpenEpicStoreHandle | null,
+): PermissionRole | null {
+  return handle?.store.getState().permissionRole ?? null;
+}
+
+function liveEpicUpdatedAtFromHandle(
+  handle: OpenEpicStoreHandle | null,
+): number | null {
+  return handle?.store.getState().epic.updatedAt ?? null;
+}
+
+// ─── Artifact tree ────────────────────────────────────────────────────────
+
+const artifactRecordCache = new WeakMap<ArtifactProjection, EpicTreeRecord>();
+const artifactRecordByIdCache = new Map<string, EpicTreeRecord>();
+const chatRecordCache = new WeakMap<ChatProjection, EpicTreeRecord>();
+const terminalAgentRecordCache = new WeakMap<
+  TuiAgentProjection,
+  EpicTreeRecord
+>();
+
+function recordForArtifact(
+  a: ArtifactProjection,
+  hostId: string,
+): EpicTreeRecord {
+  const cached = artifactRecordCache.get(a);
+  if (cached !== undefined && cached.hostId === hostId) return cached;
+  const name = displayTitle(a.title, a.kind);
+  const cachedById = artifactRecordByIdCache.get(a.id);
+  if (
+    cachedById !== undefined &&
+    cachedById.parentId === a.parentId &&
+    cachedById.name === name &&
+    cachedById.type === a.kind &&
+    cachedById.status === a.status &&
+    cachedById.hostId === hostId
+  ) {
+    artifactRecordCache.set(a, cachedById);
+    return cachedById;
+  }
+  const record: EpicTreeRecord = {
+    id: a.id,
+    parentId: a.parentId,
+    name,
+    type: a.kind,
+    status: a.status,
+    hostId,
+  };
+  artifactRecordCache.set(a, record);
+  artifactRecordByIdCache.set(a.id, record);
+  return record;
+}
+
+function recordForChat(
+  c: ChatProjection,
+  fallbackHostId: string,
+): EpicTreeRecord {
+  const hostId = c.hostId ?? fallbackHostId;
+  const cached = chatRecordCache.get(c);
+  if (cached !== undefined && cached.hostId === hostId) return cached;
+  const record: EpicTreeRecord = {
+    id: c.id,
+    parentId: c.parentId,
+    // Durable Agent tree row: an untitled Chat-interface Agent falls back to
+    // "Untitled agent"; `type` stays the interface discriminator.
+    name: displayTitle(c.title, "agent"),
+    type: "chat",
+    status: null,
+    hostId,
+  };
+  chatRecordCache.set(c, record);
+  return record;
+}
+
+function recordForTerminalAgent(a: TuiAgentProjection): EpicTreeRecord {
+  const cached = terminalAgentRecordCache.get(a);
+  if (cached !== undefined) return cached;
+  const record: EpicTreeRecord = {
+    id: a.id,
+    parentId: a.parentId,
+    // Durable Agent tree row: an untitled Terminal-interface Agent falls back
+    // to "Untitled agent" too (harness identity is separate interface metadata,
+    // not the title fallback); `type` stays the interface discriminator.
+    name: displayTitle(a.title, "agent"),
+    type: "terminal-agent",
+    status: null,
+    hostId: a.hostId,
+  };
+  terminalAgentRecordCache.set(a, record);
+  return record;
+}
+
+export function epicTreeRecordForNodeId(
+  state: OpenEpicState,
+  nodeId: string,
+  fallbackHostId: string,
+): EpicTreeRecord | null {
+  if (Object.hasOwn(state.chats.byId, nodeId)) {
+    return recordForChat(state.chats.byId[nodeId], fallbackHostId);
+  }
+  if (Object.hasOwn(state.tuiAgents.byId, nodeId)) {
+    return recordForTerminalAgent(state.tuiAgents.byId[nodeId]);
+  }
+  if (Object.hasOwn(state.artifacts.byId, nodeId)) {
+    return recordForArtifact(state.artifacts.byId[nodeId], fallbackHostId);
+  }
+  return null;
+}
+
+export function epicNodeRefForNodeId(
+  state: OpenEpicState,
+  nodeId: string,
+  fallbackHostId: string,
+): EpicNodeRef | null {
+  const record = epicTreeRecordForNodeId(state, nodeId, fallbackHostId);
+  if (record === null || !isOpenableEpicNodeKind(record.type)) return null;
+  return {
+    id: record.id,
+    instanceId: uuidv4(),
+    type: record.type,
+    name: record.name,
+    hostId: record.hostId,
+  };
+}
+
+export function useEpicArtifactRecords(): ReadonlyArray<EpicTreeRecord> {
+  const handle = useOpenEpicHandle();
+  // Artifacts and legacy / optimistic chats fall back to the host that SERVES
+  // this projection: the Epic session's, not the app-wide addressable host.
+  // Persisted chats keep their own immutable owner host, just like tui-agents;
+  // consumers copy this field into tile refs that are bound for life.
+  const fallbackHostId =
+    getEpicSessionHandleHostId(handle) ?? UNKNOWN_HOST_PLACEHOLDER;
+  return useStore(
+    handle.store,
+    useShallow((s): ReadonlyArray<EpicTreeRecord> => {
+      if (
+        s.chats.allIds.length === 0 &&
+        s.artifacts.allIds.length === 0 &&
+        s.tuiAgents.allIds.length === 0
+      ) {
+        return EMPTY_RECORDS;
+      }
+      const records: EpicTreeRecord[] = [];
+      for (const id of s.chats.allIds) {
+        records.push(recordForChat(s.chats.byId[id], fallbackHostId));
+      }
+      for (const id of s.tuiAgents.allIds) {
+        records.push(recordForTerminalAgent(s.tuiAgents.byId[id]));
+      }
+      for (const id of s.artifacts.allIds) {
+        records.push(recordForArtifact(s.artifacts.byId[id], fallbackHostId));
+      }
+      return records;
+    }),
+  );
+}
+
+/**
+ * The last-activity clock of every agent row an epic's projection holds, keyed
+ * by node id - the whole-epic counterpart of {@link useEpicNodeUpdatedAt}, and
+ * read off the same projection for the same reason: the `TreeNode` copy lags,
+ * because `CHAT_TREE_KEYS` deliberately omits `updatedAt` so touching a chat
+ * never rebuilds the tree.
+ *
+ * Artifact rows (spec / ticket / story / review) are ABSENT rather than mapped
+ * to `0`. They have no activity clock at all, and a caller ranking rows by
+ * recency must be able to tell that apart from a row last touched at the epoch.
+ *
+ * Deliberately a plain state reader and NOT a hook. Every value in it moves on
+ * each streamed token, so a subscriber would re-render at that rate; the caller
+ * that ranks rows by recency does so at a single decision point and reads the
+ * projection there instead. A row that has to RENDER its own timestamp wants
+ * the per-id {@link useEpicNodeUpdatedAt}, which stays reference-stable through
+ * unrelated churn. See RENDER_PERF_INVARIANTS.md.
+ */
+export function epicNodeRecency(
+  state: Pick<OpenEpicState, "chats" | "tuiAgents">,
+): Readonly<Record<string, number>> {
+  if (state.chats.allIds.length === 0 && state.tuiAgents.allIds.length === 0) {
+    return EMPTY_NODE_RECENCY;
+  }
+  const recency: Record<string, number> = {};
+  for (const id of state.chats.allIds) {
+    recency[id] = state.chats.byId[id].updatedAt;
+  }
+  for (const id of state.tuiAgents.allIds) {
+    recency[id] = state.tuiAgents.byId[id].updatedAt;
+  }
+  return recency;
+}
+
+export function useEpicHasArtifactRecords(): boolean {
+  return useEpicStore(
+    (s) =>
+      s.chats.allIds.length > 0 ||
+      s.artifacts.allIds.length > 0 ||
+      s.tuiAgents.allIds.length > 0,
+  );
+}
+
+export function useEpicTerminalAgent(
+  tuiAgentId: string | null,
+): TuiAgentProjection | null {
+  return useEpicStore((s) => {
+    if (tuiAgentId === null) return null;
+    if (Object.hasOwn(s.tuiAgents.byId, tuiAgentId)) {
+      return s.tuiAgents.byId[tuiAgentId];
+    }
+    return null;
+  });
+}
+
+/**
+ * Projected chat records for the sidebar / tabs and the initial-chat-handoff
+ * adoption check. Single source of truth: the epic Y.Doc projection.
+ */
+export function useEpicChatRecords(): ReadonlyArray<ChatProjection> {
+  const handle = useOpenEpicHandle();
+  return useStore(
+    handle.store,
+    useShallow((s): ReadonlyArray<ChatProjection> => {
+      if (s.chats.allIds.length === 0) return EMPTY_CHAT_PROJECTIONS;
+      return s.chats.allIds.map((id) => s.chats.byId[id]);
+    }),
+  );
+}
+
+/**
+ * Ids of the chats + terminal-agents whose record carries `archivedAt !== null`
+ * - the archive roots the sidebar hides subtrees from. Chats and TUI agents are
+ * merged into one list because a single `epic.setChatArchived` RPC keyed by id
+ * covers both record kinds, so the tree treats them identically.
+ *
+ * Returned as a SORTED array rather than a `Set` so `useShallow` can bail the
+ * subscriber's re-render: archiving is rare while chat projections churn
+ * constantly (titles, `updatedAt`, streaming settings), and an unsorted or
+ * freshly-allocated `Set` would re-render the whole tree on every one of those.
+ */
+export function useEpicArchivedNodeIds(): ReadonlyArray<string> {
+  const handle = useOpenEpicHandle();
+  return useStore(
+    handle.store,
+    useShallow((s): ReadonlyArray<string> => {
+      const archived = [
+        ...s.chats.allIds.filter((id) => s.chats.byId[id].archivedAt !== null),
+        ...s.tuiAgents.allIds.filter(
+          (id) => s.tuiAgents.byId[id].archivedAt !== null,
+        ),
+      ];
+      if (archived.length === 0) return EMPTY_TREE_ID_ARRAY;
+      return archived.sort();
+    }),
+  );
+}
+
+const maybeArchivedNodeIdsCache = new WeakMap<
+  OpenEpicStoreHandle,
+  { readonly ids: readonly string[]; readonly key: string }
+>();
+
+/**
+ * `useShallow` is not available under `useSyncExternalStore` - the snapshot has
+ * to be reference-stable already, not stabilized after the fact - so the
+ * bail-out the strict hook gets from it is preserved here by caching the array
+ * against the handle under its own join key, the same shape as
+ * {@link useRegisteredEpicLiveAgentIds}'s snapshot. Without it the constant
+ * churn of chat projections would hand back a new array on every read and
+ * re-walk the tree downstream.
+ */
+function archivedNodeIdsSnapshot(
+  handle: OpenEpicStoreHandle | null,
+): readonly string[] {
+  if (handle === null) return EMPTY_TREE_ID_ARRAY;
+  const s = handle.store.getState();
+  const archived = [
+    ...s.chats.allIds.filter((id) => s.chats.byId[id].archivedAt !== null),
+    ...s.tuiAgents.allIds.filter(
+      (id) => s.tuiAgents.byId[id].archivedAt !== null,
+    ),
+  ];
+  if (archived.length === 0) return EMPTY_TREE_ID_ARRAY;
+  const ids = archived.sort();
+  const key = ids.join("\x00");
+  const cached = maybeArchivedNodeIdsCache.get(handle);
+  if (cached !== undefined && cached.key === key) return cached.ids;
+  const entry = { ids, key };
+  maybeArchivedNodeIdsCache.set(handle, entry);
+  return entry.ids;
+}
+
+/**
+ * The archived ids, or none when there is no open-epic session.
+ *
+ * The provider-optional sibling of {@link useEpicArchivedNodeIds}, and it
+ * exists for the same reason as {@link useMaybeEpicTreeIndex}: the chat picker
+ * resolves send targets both inside the canvas and inside a Start Page browser
+ * tile, which has no session. Same guidance - prefer the strict hook wherever
+ * the provider is structurally guaranteed.
+ */
+export function useMaybeEpicArchivedNodeIds(): readonly string[] {
+  const handle = useMaybeOpenEpicHandle();
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => archivedNodeIdsSnapshot(handle),
+    () => EMPTY_TREE_ID_ARRAY,
+  );
+}
+
+/**
+ * The held chats one of `cloudRows` already stands for (see
+ * {@link armRowNamesHeldChat}): a team host's chat, held as its creator's
+ * untitled stand-in until it first publishes, whose environment arm row is
+ * among the rows given. The sidebar draws that row in the stand-in's place,
+ * so one chat reads as one row with its title. Sorted, for the reason
+ * {@link useEpicChatIds} gives.
+ */
+export function useEpicChatIdsNamedByCloudRows(
+  cloudRows: readonly CloudChatSummary[],
+): ReadonlyArray<string> {
+  return useEpicStore(
+    useShallow((s): ReadonlyArray<string> => {
+      if (cloudRows.length === 0) return EMPTY_TREE_ID_ARRAY;
+      const ids: string[] = [];
+      for (const row of cloudRows) {
+        const { chatId } = row.identity;
+        if (!Object.hasOwn(s.chats.byId, chatId)) continue;
+        if (armRowNamesHeldChat(row, s.chats.byId[chatId])) ids.push(chatId);
+      }
+      return ids.length === 0 ? EMPTY_TREE_ID_ARRAY : ids.sort();
+    }),
+  );
+}
+
+/**
+ * Every chat id this epic's projection holds, nested ones included.
+ *
+ * The dedup set for the cloud-chat section: a chat the LOCAL tree already
+ * renders must not also appear under "on your other devices", or one chat reads
+ * as two. Deliberately the projection rather than the host's chat registry -
+ * the question is "what does this sidebar already show", and a chat the
+ * registry knows but the projection has not materialized would be hidden from
+ * both surfaces if the registry were the authority.
+ *
+ * Returned SORTED rather than as a `Set`, for the reason
+ * {@link useEpicArchivedNodeIds} gives: chat projections churn constantly
+ * (titles, `updatedAt`, streaming settings) while the id SET moves only on
+ * create/delete, and a freshly-allocated `Set` would defeat `useShallow` and
+ * re-render on every one of those.
+ */
+export function useEpicChatIds(): ReadonlyArray<string> {
+  const handle = useOpenEpicHandle();
+  return useStore(
+    handle.store,
+    useShallow((s): ReadonlyArray<string> => {
+      if (s.chats.allIds.length === 0) return EMPTY_TREE_ID_ARRAY;
+      return [...s.chats.allIds].sort();
+    }),
+  );
+}
+
+/**
+ * Ids of every chat + terminal agent this epic's projection currently holds.
+ *
+ * PRESENCE, not liveness or visibility: an archived or idle node is still here;
+ * only a DELETED one is absent. Callers use it to drop references to nodes that
+ * no longer exist - host-side records that outlive their node (a PR's owner set
+ * is one: worktree bindings cascade on epic delete but not on chat delete) name
+ * ids this epic can no longer resolve to a title or a tile.
+ *
+ * Two plain reads plus a memo, NOT one `useShallow` selector that rebuilds the
+ * combined array. `useShallow` bails the subscriber's re-render but not the
+ * selector RUN: zustand executes it once per subscriber on every notification,
+ * and the PR panel mounts one subscriber per row, so combining in there costs
+ * O(rows x agents) on every projection tick - including the title/`updatedAt`
+ * churn this membership list does not care about.
+ *
+ * Memoising on array IDENTITY is safe because the projector guarantees it:
+ * `pickStableIds` hands back the PREVIOUS array whenever the ids are
+ * shallow-equal, so these references change only when a node is really added or
+ * removed. Unordered, because every caller asks it membership questions.
+ */
+export function useEpicAgentNodeIds(): ReadonlyArray<string> {
+  const handle = useOpenEpicHandle();
+  const chatIds = useStore(handle.store, (s) => s.chats.allIds);
+  const terminalAgentIds = useStore(handle.store, (s) => s.tuiAgents.allIds);
+  return useMemo(() => {
+    if (chatIds.length === 0 && terminalAgentIds.length === 0) {
+      return EMPTY_TREE_ID_ARRAY;
+    }
+    return [...chatIds, ...terminalAgentIds];
+  }, [chatIds, terminalAgentIds]);
+}
+
+export function useEpicTerminalAgentRecords(): ReadonlyArray<TuiAgentProjection> {
+  const handle = useOpenEpicHandle();
+  return useStore(
+    handle.store,
+    useShallow((s): ReadonlyArray<TuiAgentProjection> => {
+      if (s.tuiAgents.allIds.length === 0) {
+        return EMPTY_TERMINAL_AGENT_PROJECTIONS;
+      }
+      return s.tuiAgents.allIds.map((id: string) => s.tuiAgents.byId[id]);
+    }),
+  );
+}
+
+export function useEpicArtifact(
+  artifactId: string | null,
+): ArtifactProjection | ChatProjection | TuiAgentProjection | null {
+  return useEpicStore((s) => {
+    if (artifactId === null) return null;
+    if (Object.hasOwn(s.artifacts.byId, artifactId)) {
+      return s.artifacts.byId[artifactId];
+    }
+    if (Object.hasOwn(s.chats.byId, artifactId)) {
+      return s.chats.byId[artifactId];
+    }
+    if (Object.hasOwn(s.tuiAgents.byId, artifactId)) {
+      return s.tuiAgents.byId[artifactId];
+    }
+    return null;
+  });
+}
+
+type EpicAgentProjection = ChatProjection | TuiAgentProjection;
+
+const MIN_AGENT_REFERENCE_PREFIX_LENGTH = 4;
+
+function exactEpicAgent(
+  state: Pick<OpenEpicState, "chats" | "tuiAgents">,
+  agentId: string,
+): EpicAgentProjection | null {
+  if (Object.hasOwn(state.chats.byId, agentId)) {
+    return state.chats.byId[agentId];
+  }
+  if (Object.hasOwn(state.tuiAgents.byId, agentId)) {
+    return state.tuiAgents.byId[agentId];
+  }
+  return null;
+}
+
+/**
+ * Resolves the agent-id syntax accepted by the host: exact id first, then a
+ * unique case-sensitive prefix of at least four characters. Role-claim ids and
+ * artifact ids are deliberately outside this candidate set.
+ */
+function resolveEpicAgentReference(
+  state: Pick<OpenEpicState, "chats" | "tuiAgents">,
+  referenceId: string,
+): EpicAgentProjection | null {
+  const exact = exactEpicAgent(state, referenceId);
+  if (exact !== null) return exact;
+  if (referenceId.length < MIN_AGENT_REFERENCE_PREFIX_LENGTH) return null;
+
+  let matchedId: string | null = null;
+  for (const candidateId of [
+    ...state.chats.allIds,
+    ...state.tuiAgents.allIds,
+  ]) {
+    if (!candidateId.startsWith(referenceId)) continue;
+    if (matchedId !== null && matchedId !== candidateId) return null;
+    matchedId = candidateId;
+  }
+  return matchedId === null ? null : exactEpicAgent(state, matchedId);
+}
+
+/**
+ * `null` without an open-epic session: a bot's transcript renders the same
+ * agent-message cards and has no task agents to match.
+ */
+export function useEpicAgentReference(
+  referenceId: string,
+): EpicAgentProjection | null {
+  const handle = useMaybeOpenEpicHandle();
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () =>
+      handle === null
+        ? null
+        : resolveEpicAgentReference(handle.store.getState(), referenceId),
+    () => null,
+  );
+}
+
+export function useEpicLiveArtifactTitle(
+  artifactId: string | null,
+): string | null {
+  return useEpicStore((s) => {
+    if (artifactId === null) return null;
+    if (Object.hasOwn(s.artifacts.byId, artifactId)) {
+      const title = s.artifacts.byId[artifactId].title;
+      return title.length > 0 ? title : null;
+    }
+    if (Object.hasOwn(s.chats.byId, artifactId)) {
+      const title = s.chats.byId[artifactId].title;
+      return title.length > 0 ? title : null;
+    }
+    if (Object.hasOwn(s.tuiAgents.byId, artifactId)) {
+      const title = s.tuiAgents.byId[artifactId].title;
+      return title.length > 0 ? title : null;
+    }
+    return null;
+  });
+}
+
+/**
+ * Live artifact title for an epic session that may be mounted elsewhere in
+ * the app. Global surfaces (for example, the resource monitor) live outside
+ * an `EpicSessionProvider`, but must use the same Y.Doc-backed title that a
+ * canvas tab uses instead of its persisted opening-name snapshot.
+ */
+export function useRegisteredEpicLiveArtifactTitle(
+  epicId: string,
+  artifactId: string | null,
+): string | null {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => registry.peek(epicId),
+    () => null,
+  );
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => liveArtifactTitleFromHandle(handle, artifactId),
+    () => null,
+  );
+}
+
+export interface RegisteredEpicAgentRef {
+  readonly epicId: string;
+  /** Chat or terminal-agent id; `null` for a ref with no agent to resolve. */
+  readonly agentId: string | null;
+}
+
+/**
+ * What an epic's live projection knows about one agent: which slice it lives
+ * in (`chats` → `chat`, `tuiAgents` → `terminal-agent`), its Y.Doc title
+ * (`null` while untitled), its recorded host (`null` for a legacy chat
+ * that predates the field) and its owning user.
+ */
+export interface RegisteredEpicLiveAgent {
+  readonly kind: "chat" | "terminal-agent";
+  readonly title: string | null;
+  readonly hostId: string | null;
+  /** The chat's owning user; `null` for a terminal agent, which has none. */
+  readonly userId: string | null;
+}
+
+/**
+ * Reactive live agent projections for a dynamic collection of agent refs.
+ * Global list surfaces (the resource monitor) live outside any
+ * `EpicSessionProvider` and cannot call a per-agent hook in a data-dependent
+ * loop, so this subscribes once to the registry and every currently
+ * referenced epic. `null` for a ref whose epic is not mounted in this window
+ * or whose id names no agent in that epic's projection.
+ *
+ * This is the same Y.Doc-backed source a canvas tab reads, so it is also the
+ * authority on whether an agent EXISTS - a client-local record list cannot be:
+ * an agent created by another window, device or agent never enters one.
+ */
+export function useRegisteredEpicLiveAgents(
+  refs: readonly RegisteredEpicAgentRef[],
+): readonly (RegisteredEpicLiveAgent | null)[] {
+  const registry = getOpenEpicRegistry();
+  const encodedAgents = useSyncExternalStore(
+    (listener) =>
+      subscribeToRegisteredEpics(
+        registry,
+        refs.map((ref) => ref.epicId),
+        listener,
+      ),
+    () => registeredAgentsSnapshot(registry, refs),
+    () => JSON.stringify(refs.map(() => null)),
+  );
+  return useMemo(() => decodeRegisteredAgents(encodedAgents), [encodedAgents]);
+}
+
+/**
+ * Each epic's live title, as `useRegisteredEpicTitle` reads one, for a dynamic
+ * list: `null` for an epic not mounted in this window or still untitled.
+ */
+export function useRegisteredEpicTitles(
+  epicIds: readonly string[],
+): readonly (string | null)[] {
+  const registry = getOpenEpicRegistry();
+  const encodedTitles = useSyncExternalStore(
+    (listener) => subscribeToRegisteredEpics(registry, epicIds, listener),
+    () =>
+      JSON.stringify(
+        epicIds.map((epicId) => liveEpicTitleFromHandle(registry.peek(epicId))),
+      ),
+    () => JSON.stringify(epicIds.map(() => null)),
+  );
+  return useMemo(() => {
+    const decoded: unknown = JSON.parse(encodedTitles);
+    return Array.isArray(decoded)
+      ? decoded.map((title: unknown) =>
+          typeof title === "string" ? title : null,
+        )
+      : [];
+  }, [encodedTitles]);
+}
+
+/**
+ * The `updatedAt` of each named agent in a mounted epic's projection: `0` for
+ * an agent it does not hold, or when this window has no session for the epic.
+ *
+ * A hook of its own rather than a field of {@link RegisteredEpicLiveAgent}: a
+ * chat's `updatedAt` moves on every message, and the readers of that
+ * projection that only want a name or a host would re-render on each one.
+ */
+export function useRegisteredEpicAgentUpdatedAts(
+  epicId: string | null,
+  agentIds: readonly string[],
+): readonly number[] {
+  const registry = getOpenEpicRegistry();
+  const encodedUpdatedAts = useSyncExternalStore(
+    (listener) =>
+      subscribeToRegisteredEpics(
+        registry,
+        epicId === null ? [] : [epicId],
+        listener,
+      ),
+    () =>
+      JSON.stringify(
+        agentIds.map((agentId) =>
+          agentUpdatedAtFromHandle(
+            epicId === null ? null : registry.peek(epicId),
+            agentId,
+          ),
+        ),
+      ),
+    () => JSON.stringify(agentIds.map(() => 0)),
+  );
+  return useMemo(() => {
+    const decoded: unknown = JSON.parse(encodedUpdatedAts);
+    if (!Array.isArray(decoded)) return [];
+    return decoded.map((value): number =>
+      typeof value === "number" ? value : 0,
+    );
+  }, [encodedUpdatedAts]);
+}
+
+function agentUpdatedAtFromHandle(
+  handle: OpenEpicStoreHandle | null,
+  agentId: string,
+): number {
+  if (handle === null) return 0;
+  const state = handle.store.getState();
+  if (Object.hasOwn(state.chats.byId, agentId)) {
+    return state.chats.byId[agentId].updatedAt;
+  }
+  if (Object.hasOwn(state.tuiAgents.byId, agentId)) {
+    return state.tuiAgents.byId[agentId].updatedAt;
+  }
+  return 0;
+}
+
+/**
+ * The host that serves a mounted epic's session, `null` while this window has
+ * none: the host an agent row falls back to when its record names no owner.
+ */
+export function useRegisteredEpicSessionHostId(epicId: string): string | null {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => registry.peek(epicId),
+    () => null,
+  );
+  return handle === null ? null : getEpicSessionHandleHostId(handle);
+}
+
+/**
+ * How many terminal agents each named epic has running and how many are
+ * asleep, read from the epics this window has mounted.
+ *
+ * ## Why it is not derived from the resource plane
+ *
+ * The resource monitor's own projection lists owners that own PROCESSES, and
+ * a sleeping agent owns none - that is what asleep means. Counting from there
+ * would answer zero for every agent the count exists to surface, and the only
+ * way to make one appear would be to synthesize a process row for it, which
+ * the Resource Manager must not do: it stays honest about processes. So the
+ * count comes from the RECORD plane, where a sleeping agent is a row like any
+ * other.
+ *
+ * `stopped` and `null` are in neither number, and deliberately: `stopped` is
+ * an agent that is over as a record, and `null` is a row whose serving host
+ * cannot know (a peer host, a cloud replica, a host that predates the facet).
+ * Reporting either as running or asleep would be this client guessing.
+ *
+ * Epics this window has not mounted are absent from the map rather than zero -
+ * "we hold no session for it" and "it has no agents" are different answers,
+ * and the caller renders nothing for the first.
+ *
+ * ## Scoped to `hostId`, which is not optional
+ *
+ * A count of running and sleeping agents is a fact about one MACHINE, and the
+ * session this window holds for an epic belongs to whichever host that epic
+ * is open on - which need not be the host the caller is reading under. The
+ * Resource Manager is the caller and has its own picker, so an epic open on
+ * host A and viewed under host B printed A's numbers in B's section header,
+ * beside a process list correctly attributed to B.
+ *
+ * So the session's host must MATCH, the row's host must match, and anything
+ * unattributed is refused. Every refusal omits the epic rather than reporting
+ * zero, which the paragraph above already gives the caller a rendering for.
+ * A count that is absent is a count the user does not read; a count that is
+ * wrong is one they act on.
+ */
+export interface EpicAgentSessionCounts {
+  readonly running: number;
+  readonly sleeping: number;
+}
+
+export function useRegisteredEpicAgentSessionCounts(
+  epicIds: readonly string[],
+  hostId: string | null,
+): ReadonlyMap<string, EpicAgentSessionCounts> {
+  const registry = getOpenEpicRegistry();
+  const encodedCounts = useSyncExternalStore(
+    (listener) => subscribeToRegisteredEpics(registry, epicIds, listener),
+    () => agentSessionCountsSnapshot(registry, epicIds, hostId),
+    () => JSON.stringify([]),
+  );
+  return useMemo(
+    () => decodeAgentSessionCounts(encodedCounts),
+    [encodedCounts],
+  );
+}
+
+/**
+ * Encoded `[epicId, running, sleeping]` triples, for the reason the live-agent
+ * snapshot below encodes its own: `useSyncExternalStore` compares by value,
+ * and every one of these stores notifies on changes that move neither count.
+ */
+function agentSessionCountsSnapshot(
+  registry: OpenEpicSessionRegistry,
+  epicIds: readonly string[],
+  hostId: string | null,
+): string {
+  // No host to attribute the reading to: nothing here is true of anything.
+  if (hostId === null) return JSON.stringify([]);
+  return JSON.stringify(
+    epicIds.flatMap((epicId): Array<[string, number, number]> => {
+      const handle = registry.peek(epicId);
+      if (handle === null) return [];
+      // The session must be THIS host's. One window holds one session per
+      // epic, for whichever host that epic is open on - so a caller reading
+      // under a different host is being handed another machine's view, and
+      // "2 running / 3 sleeping" under host B's picker is not a number with
+      // a correct reading. `null` is refused with it: an unattributed handle
+      // is evidence for no host in particular, and counting it under the one
+      // on screen is the same guess by another route.
+      //
+      // Omitted, not zeroed, per this map's contract: absent means "no
+      // session held for it here", which is exactly the situation, and the
+      // caller already renders no count for that.
+      if (getEpicSessionHandleHostId(handle) !== hostId) return [];
+      const agents = handle.store.getState().tuiAgents;
+      let running = 0;
+      let sleeping = 0;
+      for (const id of agents.allIds) {
+        const agent = agents.byId[id];
+        // And the ROW's own host. A session on one host can hold rows for
+        // agents bound elsewhere (a peer-host row, a replica). Their facet is
+        // `null` today, so they already fall out of both branches below -
+        // this makes the count's scope a property of this loop rather than of
+        // the facet staying null for a row this host does not run.
+        if (agent.hostId !== hostId) continue;
+        const state = agent.sessionState;
+        if (state === "running") running += 1;
+        else if (state === "sleeping") sleeping += 1;
+      }
+      return [[epicId, running, sleeping]];
+    }),
+  );
+}
+
+function decodeAgentSessionCounts(
+  encodedCounts: string,
+): ReadonlyMap<string, EpicAgentSessionCounts> {
+  const decoded: unknown = JSON.parse(encodedCounts);
+  const counts = new Map<string, EpicAgentSessionCounts>();
+  if (!Array.isArray(decoded)) return counts;
+  for (const entry of decoded) {
+    if (!Array.isArray(entry)) continue;
+    const epicId: unknown = entry[0];
+    const running: unknown = entry[1];
+    const sleeping: unknown = entry[2];
+    if (
+      typeof epicId !== "string" ||
+      typeof running !== "number" ||
+      typeof sleeping !== "number"
+    ) {
+      continue;
+    }
+    counts.set(epicId, { running, sleeping });
+  }
+  return counts;
+}
+
+/**
+ * Subscribes to the registry and to every currently-registered epic among
+ * `epicIds`, re-reconciling as sessions come and go. Shared by the cross-epic
+ * readers here, which differ only in what they read out of the stores they are
+ * watching.
+ */
+function subscribeToRegisteredEpics(
+  registry: OpenEpicSessionRegistry,
+  epicIds: readonly string[],
+  listener: () => void,
+): () => void {
+  const unsubscribeByHandle = new Map<object, () => void>();
+  const reconcileHandleSubscriptions = () => {
+    const currentHandles = new Set<object>();
+    for (const epicId of epicIds) {
+      const handle = registry.peek(epicId);
+      if (handle === null || currentHandles.has(handle)) continue;
+      currentHandles.add(handle);
+      if (!unsubscribeByHandle.has(handle)) {
+        unsubscribeByHandle.set(handle, handle.store.subscribe(listener));
+      }
+    }
+    for (const [handle, unsubscribe] of unsubscribeByHandle) {
+      if (currentHandles.has(handle)) continue;
+      unsubscribe();
+      unsubscribeByHandle.delete(handle);
+    }
+  };
+  reconcileHandleSubscriptions();
+  const unsubscribeRegistry = registry.subscribe(() => {
+    reconcileHandleSubscriptions();
+    listener();
+  });
+  return () => {
+    unsubscribeRegistry();
+    for (const unsubscribe of unsubscribeByHandle.values()) unsubscribe();
+  };
+}
+
+/**
+ * Encoded per-ref tuples (`[kind, title, hostId, userId]`, or `null`) so
+ * `useSyncExternalStore` compares by value: the registry and every store
+ * notify on unrelated changes, and a fresh array per notification would
+ * re-render the whole list surface each time.
+ */
+function registeredAgentsSnapshot(
+  registry: OpenEpicSessionRegistry,
+  refs: readonly RegisteredEpicAgentRef[],
+): string {
+  return JSON.stringify(
+    refs.map((ref) => {
+      const agent = liveAgentFromHandle(registry.peek(ref.epicId), ref.agentId);
+      return agent === null
+        ? null
+        : [agent.kind, agent.title, agent.hostId, agent.userId];
+    }),
+  );
+}
+
+function decodeRegisteredAgents(
+  encodedAgents: string,
+): readonly (RegisteredEpicLiveAgent | null)[] {
+  const decoded: unknown = JSON.parse(encodedAgents);
+  if (!Array.isArray(decoded)) return [];
+  return decoded.map((entry): RegisteredEpicLiveAgent | null => {
+    if (!Array.isArray(entry)) return null;
+    const kind: unknown = entry[0];
+    const title: unknown = entry[1];
+    const hostId: unknown = entry[2];
+    const userId: unknown = entry[3];
+    if (kind !== "chat" && kind !== "terminal-agent") return null;
+    return {
+      kind,
+      title: typeof title === "string" ? title : null,
+      hostId: typeof hostId === "string" ? hostId : null,
+      userId: typeof userId === "string" ? userId : null,
+    };
+  });
+}
+
+function liveAgentFromHandle(
+  handle: OpenEpicStoreHandle | null,
+  agentId: string | null,
+): RegisteredEpicLiveAgent | null {
+  if (handle === null || agentId === null) return null;
+  const state = handle.store.getState();
+  if (Object.hasOwn(state.chats.byId, agentId)) {
+    const chat = state.chats.byId[agentId];
+    return {
+      kind: "chat",
+      title: chat.title.length > 0 ? chat.title : null,
+      hostId: chat.hostId,
+      userId: chat.userId,
+    };
+  }
+  if (Object.hasOwn(state.tuiAgents.byId, agentId)) {
+    const agent = state.tuiAgents.byId[agentId];
+    return {
+      kind: "terminal-agent",
+      title: agent.title.length > 0 ? agent.title : null,
+      hostId: agent.hostId,
+      userId: null,
+    };
+  }
+  return null;
+}
+
+function liveArtifactTitleFromHandle(
+  handle: OpenEpicStoreHandle | null,
+  artifactId: string | null,
+): string | null {
+  if (handle === null || artifactId === null) return null;
+  const state = handle.store.getState();
+  if (Object.hasOwn(state.artifacts.byId, artifactId)) {
+    const title = state.artifacts.byId[artifactId].title;
+    return title.length > 0 ? title : null;
+  }
+  if (Object.hasOwn(state.chats.byId, artifactId)) {
+    const title = state.chats.byId[artifactId].title;
+    return title.length > 0 ? title : null;
+  }
+  if (Object.hasOwn(state.tuiAgents.byId, artifactId)) {
+    const title = state.tuiAgents.byId[artifactId].title;
+    return title.length > 0 ? title : null;
+  }
+  return null;
+}
+
+type EpicTabDisplayTitleNode = {
+  readonly id: string;
+  readonly name: string;
+  readonly type: string | undefined;
+  /** The tab's bound host, for the node kinds that have one. */
+  readonly hostId: string | null;
+};
+
+/**
+ * Whether an Agent tab's bound host is the host its projected record names.
+ * Only Agent tabs carry a binding to compare; an unbound tab or an unprojected
+ * record has nothing to disagree with.
+ */
+function tabMatchesProjectedHost(
+  node: EpicTabDisplayTitleNode,
+  projectedHostId: string | null,
+): boolean {
+  if (node.type !== "chat" && node.type !== "terminal-agent") return true;
+  if (node.hostId === null || projectedHostId === null) return true;
+  return node.hostId === projectedHostId;
+}
+
+/**
+ * The cloud-list title for a chat tab the projection holds NO record of, else
+ * `null`. "No record at all" is distinct from "a record with an empty title":
+ * the latter is the projection's own answer (untitled) and is never overridden
+ * by a cloud row, while the former is the projection not having heard of the
+ * chat yet, which is when the sidebar renders the cloud row instead.
+ */
+function useCloudChatTitleForAbsentRecord(
+  node: EpicTabDisplayTitleNode,
+  epicId: string,
+): string | null {
+  const chatRecordAbsent = useEpicStore(
+    (s) => node.type === "chat" && !Object.hasOwn(s.chats.byId, node.id),
+  );
+  const sessionHostClient = useEpicSessionHostClient();
+  const cloudChats = useCloudChatList({
+    client: sessionHostClient,
+    taskId: epicId,
+    enabled: chatRecordAbsent,
+  });
+  if (!chatRecordAbsent) return null;
+  // The OWNER is half the identity, not a refinement of the id: `chatId` is
+  // host-minted and the list carries every task-visible row including
+  // collaborators'. A local chat tile is the viewer's own by construction, so
+  // an id-only match could label this tab with a collaborator's chat. The
+  // HOST is the other half for the viewer's own rows: two of their hosts can
+  // mint the same id under one task, so a tab bound to a real host takes only
+  // the row that host minted - the same binding the projected-title path
+  // compares. A tab whose binding is still the placeholder has no host to
+  // hold the row to.
+  const boundHostId =
+    node.hostId === UNKNOWN_HOST_PLACEHOLDER ? null : node.hostId;
+  const title =
+    cloudChats.data?.chats.find(
+      (chat) =>
+        chat.identity.chatId === node.id &&
+        cloudRowIsViewersOwn(chat) &&
+        (boundHostId === null || chat.ownerHostId === boundHostId),
+    )?.title ?? null;
+  return title !== null && title.length > 0 ? title : null;
+}
+
+/** What the projection holds of a chat, as far as {@link useArmChatTitle} asks. */
+type ArmTitleHeld =
+  | { readonly kind: "titled" }
+  | { readonly kind: "absent" }
+  | {
+      readonly kind: "untitled";
+      readonly hostId: string | null;
+      readonly userId: string | null;
+    };
+
+const ARM_TITLE_HELD_TITLED: ArmTitleHeld = { kind: "titled" };
+const ARM_TITLE_HELD_ABSENT: ArmTitleHeld = { kind: "absent" };
+
+/**
+ * The environment arm's title for a team host's chat the projection has no
+ * title for, else `null`. A team host keys the chat it creates by its
+ * environment, so the creator's projection never receives its record: it holds
+ * an untitled stand-in until the chat first publishes, and nothing after that.
+ * The arm row is the one copy that carries the generated title throughout.
+ *
+ * Only an ARM row is read, never a viewer-list row: a record's own untitled
+ * answer is not overridden by its own cloud row, and a collaborator's row is
+ * not taken (see {@link useCloudChatTitleForAbsentRecord}). Every match is on
+ * the tab's bound host: an absent record, or one held on another host, matches
+ * the row by `(chatId, bound host)`, the pair a host mints; a held stand-in
+ * matches through {@link armRowNamesHeldChat}.
+ */
+function useArmChatTitle(
+  epicId: string,
+  chatId: string | null,
+  boundHostId: string | null,
+): string | null {
+  const hostId = boundHostId === UNKNOWN_HOST_PLACEHOLDER ? null : boundHostId;
+  const held = useEpicStore(
+    useShallow((s): ArmTitleHeld => {
+      if (chatId === null) return ARM_TITLE_HELD_TITLED;
+      if (!Object.hasOwn(s.chats.byId, chatId)) return ARM_TITLE_HELD_ABSENT;
+      const chat = s.chats.byId[chatId];
+      // A record on another host than the tab's is another chat with the same
+      // host-minted id (the isolation `tabMatchesProjectedHost` keeps), so for
+      // this tab the projection holds nothing.
+      if (hostId !== null && chat.hostId !== null && chat.hostId !== hostId) {
+        return ARM_TITLE_HELD_ABSENT;
+      }
+      if (chat.title.length > 0) return ARM_TITLE_HELD_TITLED;
+      return { kind: "untitled", hostId: chat.hostId, userId: chat.userId };
+    }),
+  );
+  const armChats = useEnvironmentArmChats(
+    chatId === null || held.kind === "titled" ? "" : epicId,
+  );
+  if (chatId === null || held.kind === "titled") return null;
+  const row = armChats.find((candidate) => {
+    if (held.kind === "untitled") {
+      return armRowNamesHeldChat(candidate, {
+        id: chatId,
+        hostId: hostId ?? held.hostId,
+        userId: held.userId,
+      });
+    }
+    return (
+      hostId !== null &&
+      candidate.identity.chatId === chatId &&
+      candidate.ownerHostId === hostId
+    );
+  });
+  const title = row?.title ?? null;
+  return title !== null && title.length > 0 ? title : null;
+}
+
+/**
+ * Canonical display title for a canvas tile / node. Live state is the single
+ * source of truth - the projected record title for record-backed nodes, the
+ * HOST's `terminal.list` rows for terminal tabs (via `useTerminalDisplayTitle`,
+ * keyed by the tab's bound host + session id). The tile's persisted `name`
+ * snapshot is only a fallback for tiles that have no live title (workspace
+ * files, git diff, pre-hydration, a terminal session the host no longer
+ * knows). Every render site (visible tab strip, drag overlay, ...) MUST read
+ * through this hook - never the raw `node.name` - so the resolve cannot be
+ * forgotten in one place. The tab strip also writes a record-backed tile's
+ * resolved title back into that snapshot, so a reader with no live source
+ * sees the last known title rather than the opening-time one.
+ *
+ * A chat tab whose record the projection does not hold at all reads the cloud
+ * chat list next, before the snapshot. The sidebar renders exactly such a chat
+ * as a cloud-list row carrying the cloud title, so without this arm the two
+ * surfaces disagree for as long as the record plane lags: the serving host's
+ * replica inbox starts empty after a restart and fills by reconciliation, and
+ * through that window a tile opened before its title was generated announced
+ * "Untitled agent" beside a sidebar row with the real name. The list is read
+ * on the Epic SESSION's client, the same one the sidebar fetches it on, so the
+ * TanStack cache is shared rather than split by host.
+ *
+ * `terminalHostClient` is the tab's bound-host client for terminal nodes
+ * (`null` for every other node kind). The caller resolves it so one
+ * `useHostClientForHostId` per tab serves both title resolution and the
+ * rename mutation.
+ */
+export function useEpicTabDisplayTitle(
+  node: EpicTabDisplayTitleNode,
+  epicId: string,
+  terminalHostClient: HostClient<HostRpcRegistry> | null,
+): string {
+  const projectedHostId = useEpicNodeHostId(node.id);
+  const matchesProjection = tabMatchesProjectedHost(node, projectedHostId);
+  const liveArtifactTitle = useEpicLiveArtifactTitle(
+    matchesProjection ? node.id : null,
+  );
+  const cloudChatTitle = useCloudChatTitleForAbsentRecord(node, epicId);
+  const armChatTitle = useArmChatTitle(
+    epicId,
+    node.type === "chat" ? node.id : null,
+    node.hostId,
+  );
+  const isTerminal = node.type === "terminal";
+  const liveTerminalTitle = useTerminalDisplayTitle(
+    {
+      client: isTerminal ? terminalHostClient : null,
+      epicId: isTerminal ? epicId : null,
+      sessionId: isTerminal ? node.id : null,
+    },
+    isTerminal ? node.hostId : null,
+  );
+  const liveManagedCommandTitle = useManagedCommandOutputTitle(node, epicId);
+  return (
+    liveArtifactTitle ??
+    cloudChatTitle ??
+    armChatTitle ??
+    liveTerminalTitle ??
+    liveManagedCommandTitle ??
+    node.name
+  );
+}
+
+/**
+ * An output window's live title, `null` for every other node kind. Its tile
+ * carries no label at all (its persisted shape is just the command pointer),
+ * so the kind-explicit title comes from the owning chat's live set - and
+ * follows a rename the agent makes.
+ */
+function useManagedCommandOutputTitle(
+  node: EpicTabDisplayTitleNode,
+  epicId: string,
+): string | null {
+  const isManagedCommandOutput = node.type === "managed-command-output";
+  const managedCommand = useManagedCommandOnHost({
+    epicId,
+    // The tab's own host, never the epic at large: a clone carries the source
+    // transcript's command ids, and a title read across hosts would name a
+    // shell this tab cannot open.
+    hostId: isManagedCommandOutput ? (node.hostId ?? "") : "",
+    commandId: isManagedCommandOutput ? node.id : "",
+  });
+  return managedCommand === null ? null : managedCommandTitle(managedCommand);
+}
+
+/**
+ * Whether a chat tab's title is still being generated. `epicId` and
+ * `boundHostId` name the tab's task and host, so a team host's chat, whose
+ * title reaches this client only on the environment arm's row, stops spinning
+ * when that title arrives rather than at the backstop.
+ */
+export function useEpicLiveArtifactTitleGenerating(
+  artifactId: string | null,
+  epicId: string,
+  boundHostId: string | null,
+): boolean {
+  const projectedTitle = useEpicStore((s) => {
+    if (artifactId === null) return null;
+    if (Object.hasOwn(s.chats.byId, artifactId)) {
+      const chat = s.chats.byId[artifactId];
+      return chat.title.length > 0 ? chat.title : null;
+    }
+    return null;
+  });
+  const armTitle = useArmChatTitle(epicId, artifactId, boundHostId);
+  const currentTitle = projectedTitle ?? armTitle;
+  const currentUpdatedAt = useEpicStore((s) => {
+    if (artifactId === null) return null;
+    if (Object.hasOwn(s.chats.byId, artifactId)) {
+      return s.chats.byId[artifactId].updatedAt;
+    }
+    return null;
+  });
+  return useEpicCanvasStore((s) => {
+    if (artifactId === null) return false;
+    const entry = Object.hasOwn(s.pendingChatTitles, artifactId)
+      ? s.pendingChatTitles[artifactId]
+      : undefined;
+    return pendingTitleVisibleAutoPurge(
+      entry,
+      currentTitle,
+      currentUpdatedAt,
+      () => s.clearChatTitlePending(artifactId),
+    );
+  });
+}
+
+/**
+ * Returns the live `Y.XmlFragment` backing an artifact's body. The fragment
+ * resolves through the artifact's assigned artifact-room doc (`artifact-body:{id}`),
+ * not the root Epic doc (B6).
+ *
+ * Selects the resolved fragment itself so any store write that makes the
+ * artifact-room replica available wakes the editor, even when the room id and
+ * binding counter are unchanged.
+ */
+export function useEpicArtifactFragment(
+  artifactId: string | null,
+): Y.XmlFragment | null {
+  const handle = useOpenEpicHandle();
+  // Takes the lease itself. The store's accessor is a pure read - it cannot
+  // materialize a cold room, because it runs inside a selector - so a caller
+  // that read without pinning would sit in a loading state forever. Bundling
+  // the two makes the hook correct by construction; `getArtifactFragment` on
+  // the store stays the escape hatch for non-React callers, which must lease
+  // explicitly (see `useEpicExportArtifacts`).
+  useEpicArtifactBodyLease(artifactId);
+  return useStore(handle.store, (s) => {
+    if (artifactId === null) return null;
+    return s.getArtifactFragment(artifactId);
+  });
+}
+
+/**
+ * Returns the artifact-room-scoped `Awareness` instance hosting `artifactId`'s body
+ * presence channel, or `null` until the artifactRoom transitions to `ready`. Used
+ * by `CollabTileBody` to feed CollaborationCaret an Awareness instance
+ * paired with the artifact-room doc the editor is bound to.
+ *
+ * Selects the resolved Awareness instance directly for the same reason as
+ * {@link useEpicArtifactFragment}: callers should update when a store write
+ * makes the artifact-room binding available, regardless of which public
+ * invalidation field changed.
+ */
+export function useEpicArtifactBodyAwareness(
+  artifactId: string | null,
+): Awareness | null {
+  const handle = useOpenEpicHandle();
+  // Same reasoning as `useEpicArtifactFragment`; lease counts are refcounted,
+  // so a component using both hooks simply holds two.
+  useEpicArtifactBodyLease(artifactId);
+  return useStore(handle.store, (s) => {
+    if (artifactId === null) return null;
+    return s.getArtifactBodyAwareness(artifactId);
+  });
+}
+
+/**
+ * Reports the availability of the artifact-room hosting `artifactId`'s body.
+ * Drives the editor's loading/unavailable placeholder when the artifactRoom is
+ * still opening or has failed. Selects through the store helper so artifact
+ * metadata and artifact-room state are resolved together.
+ */
+export function useEpicArtifactBodyAvailability(
+  artifactId: string | null,
+): EpicArtifactRoomAvailability {
+  const handle = useOpenEpicHandle();
+  return useStore(handle.store, (s) => {
+    if (artifactId === null) return "unavailable";
+    return s.getArtifactBodyAvailability(artifactId);
+  });
+}
+
+/**
+ * Whether the host is serving `artifactId`'s body from its local copy while it
+ * reconciles that copy with the cloud (`artifact.subscribe@1.1`'s `bodySync`).
+ *
+ * `true` only for a `ready` body: the runtime drops the entry on every reseed
+ * and every non-ready transition. `false` covers synced AND unknown - a `@1`
+ * arm, an older host, a body with no cloud side - because the only thing a
+ * reader does with this is decide whether to draw the non-blocking "Syncing…"
+ * affordance, and "nothing to show" is the right answer to all of them.
+ */
+export function useEpicArtifactBodySyncing(artifactId: string | null): boolean {
+  const handle = useOpenEpicHandle();
+  return useStore(handle.store, (s) => {
+    if (artifactId === null) return false;
+    return Object.hasOwn(s.artifactRooms.bodySyncingByArtifactId, artifactId);
+  });
+}
+
+/**
+ * Whether the body plane has said ANYTHING about `artifactId` yet.
+ *
+ * ## Why this is not the same question as `useEpicArtifactBodyAvailability`
+ *
+ * `EpicArtifactRoomAvailability` has no "not asked yet" member, so every layer
+ * that reads it collapses an ABSENT key into `"unavailable"` - the runtime
+ * (`epic-rooms-replica.ts`), the store helper (`store.ts`), and the hook above.
+ * That collapse is deliberate and correct for its callers: an editor may bind a
+ * live fragment only on `"ready"`, and every other value means "not now",
+ * whatever the reason.
+ *
+ * It is wrong for one caller: the thing that chooses the WORDS. "This document
+ * isn't available right now. It couldn't be opened on its host." is a claim
+ * about a host that refused, and for the first 100-1400 ms of every cold tile
+ * - measured - it was being shown about a subscribe that had not been answered
+ * yet. So this hook asks the question the collapse erases: is there an entry at
+ * all? `Object.hasOwn` rather than a `!== undefined` comparison because
+ * `noUncheckedIndexedAccess` is off here (see this module's header), and it
+ * genuinely is a key-presence test, not a value test - an entry's value is
+ * never `undefined`.
+ *
+ * Do NOT "simplify" this by giving the availability union a fourth member: the
+ * union is mirrored from two different wires (`epic.subscribe@1.0` room frames
+ * and `artifact.subscribe`'s ready/unavailable pair) and every member of it is
+ * a state the HOST states. "Nothing said yet" is the absence of a wire fact,
+ * which is why it lives in the shape of the map rather than in its values.
+ */
+export function useEpicArtifactBodySubscribeAnswered(
+  artifactId: string | null,
+): boolean {
+  const handle = useOpenEpicHandle();
+  return useStore(handle.store, (s) => {
+    if (artifactId === null) return false;
+    return Object.hasOwn(s.artifactRooms.stateByArtifactId, artifactId);
+  });
+}
+
+/**
+ * Materializes `artifactId`'s artifact-room and holds it materialized for as
+ * long as the calling component is mounted.
+ *
+ * Rooms the host opens are cached as encoded update bytes; taking a lease is
+ * what builds the live `Y.Doc`, and holding it is what stops the room cooling
+ * back down underneath a mounted editor. {@link useEpicArtifactFragment} and
+ * {@link useEpicArtifactBodyAwareness} call this for you - use it directly
+ * only to pin a room whose fragment this component does not itself read.
+ *
+ * The lease is re-taken when the resolved room id changes rather than only
+ * when the artifact id does: an artifact reassigned between two rooms that are
+ * both already `ready` produces no availability transition, so keying the
+ * effect on availability alone would leave the lease on the stale room.
+ */
+export function useEpicArtifactBodyLease(artifactId: string | null): void {
+  const handle = useOpenEpicHandle();
+  const bodyDocKey = useStore(handle.store, (s) =>
+    artifactId === null ? null : s.getArtifactBodyDocKey(artifactId),
+  );
+  // Layout, not passive: this is what materializes the room, and a passive
+  // effect runs after paint - the tile would show its skeleton for a frame
+  // before the fragment resolved. A layout effect lands the lease, and the
+  // resulting store update, before the browser paints.
+  useLayoutEffect(() => {
+    if (artifactId === null || bodyDocKey === null) return;
+    return handle.store.getState().acquireArtifactBodyLease(artifactId);
+  }, [handle, artifactId, bodyDocKey]);
+}
+
+// ─── Agent activity (per-user notification-room presence) ─────────────────
+//
+// The source is the awareness replica on `notifications:<userId>` - the room
+// every signed-in client subscribes to app-wide - NOT the per-epic
+// collaboration room. That is what makes these hooks correct for an epic this
+// window has never opened: the old per-epic reader could only see hosts whose
+// epic room this client had joined, so the task list, epics panel and tab strip
+// all read idle for a working agent in an epic that was never opened.
+//
+// Membership and tier semantics are unchanged from the retired per-epic fields
+// - see `agent-activity-presence.ts` for the frozen-shape reader rules - so
+// every consumer keeps reading exactly what it read before, from a source that
+// now covers the whole user rather than this window's open sessions.
+
+export type { AgentActivityTier };
+
+const registeredLiveAgentIdsCache = new WeakMap<
+  OpenEpicStoreHandle,
+  { readonly ids: ReadonlySet<string>; readonly key: string }
+>();
+
+/**
+ * The set of agents currently "working" (executing right now) anywhere in the
+ * epic, unioned across every host publishing into the user's notification room
+ * - so it is cross-host and reactive (re-renders when any host's working set
+ * changes). Replaces the `agent.list` 2s poll for the Active Agents / stop
+ * panels.
+ */
+export function useEpicActiveAgentIds(): ReadonlySet<string> {
+  const epicId = useOpenEpicHandle().epicId;
+  return useEpicAgentActivity(epicId).working;
+}
+
+/**
+ * {@link useEpicActiveAgentIds} with each working agent resolved to its
+ * {@link AgentActivityTier}. Prefer this when the caller distinguishes an
+ * active turn from background-only work; the id set alone cannot.
+ */
+export function useEpicAgentActivityTiers(): ReadonlyMap<
+  string,
+  AgentActivityTier
+> {
+  const epicId = useOpenEpicHandle().epicId;
+  return agentActivityTiers(useEpicAgentActivity(epicId));
+}
+
+/**
+ * {@link useEpicActiveAgentIds} for surfaces that render outside the open-epic
+ * provider (epic tabs, the epics panel, the task list). It no longer resolves a
+ * registered session handle - presence for an epic no longer depends on this
+ * window having a session for it - but the name is kept so these call sites
+ * still read as a set with their `useRegisteredEpic*` neighbours.
+ */
+export function useRegisteredEpicActiveAgentIds(
+  epicId: string | null,
+): ReadonlySet<string> {
+  return useEpicAgentActivity(epicId).working;
+}
+
+/**
+ * {@link useRegisteredEpicActiveAgentIds} with each working agent resolved to
+ * its {@link AgentActivityTier}.
+ */
+export function useRegisteredEpicAgentActivityTiers(
+  epicId: string | null,
+): ReadonlyMap<string, AgentActivityTier> {
+  return agentActivityTiers(useEpicAgentActivity(epicId));
+}
+
+/**
+ * The agent ids this epic's live projection currently holds, or `null` when
+ * this window has no session for the epic at all.
+ *
+ * The `null` arm is load-bearing, and is why this does not simply return an
+ * empty set: an epic with a session and no agents is authoritatively empty,
+ * while an epic with no session is UNKNOWN. Callers use this as a liveness
+ * filter over host-published presence, and filtering an unknown epic by an
+ * empty set is exactly the bug the per-user activity room removes - an agent
+ * working in an epic this window never opened would read idle again.
+ */
+export function useRegisteredEpicLiveAgentIds(
+  epicId: string | null,
+): ReadonlySet<string> | null {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => (epicId === null ? null : registry.peek(epicId)),
+    () => null,
+  );
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => liveAgentIdsSnapshot(handle),
+    () => null,
+  );
+}
+
+/**
+ * {@link useRegisteredEpicLiveAgentIds} read outside React: the chat and TUI
+ * agent ids `handle`'s projection holds, the same set while they are
+ * unchanged, or `null` for no session.
+ */
+export function liveAgentIdsSnapshot(
+  handle: OpenEpicStoreHandle | null,
+): ReadonlySet<string> | null {
+  if (handle === null) return null;
+  const state = handle.store.getState();
+  const key = [...state.chats.allIds, ...state.tuiAgents.allIds]
+    .sort()
+    .join("\x00");
+  const cached = registeredLiveAgentIdsCache.get(handle);
+  if (cached !== undefined && cached.key === key) return cached.ids;
+  const ids = new Set<string>([
+    ...state.chats.allIds,
+    ...state.tuiAgents.allIds,
+  ]);
+  const entry = { ids, key };
+  registeredLiveAgentIdsCache.set(handle, entry);
+  return entry.ids;
+}
+
+// ─── Tree slice hooks ─────────────────────────────────────────────────────
+
+export function useEpicTreeIndex(): TreeSlice {
+  return useEpicStore((s) => s.tree);
+}
+
+/**
+ * The tree, or the shared empty one when there is no open-epic session.
+ *
+ * The provider-optional sibling of {@link useEpicTreeIndex}, for the chat
+ * picker: the same picker resolves send targets inside the canvas AND inside a
+ * Start Page browser tile, which mounts at the app shell with no
+ * `<EpicSessionProvider>` because a Start Page browser tab belongs to no epic.
+ * The strict hook cannot be called conditionally to cover both, so the
+ * tolerance has to live in the read.
+ *
+ * Prefer {@link useEpicTreeIndex} anywhere the provider is structurally
+ * guaranteed - a missing session is a bug there, and the throw is how it gets
+ * found. Reach for this one only where "no epic" is a real, expected state.
+ *
+ * Returns {@link EMPTY_TREE_SLICE} rather than an empty tree of its own so the
+ * snapshot is reference-stable across renders. See RENDER_PERF_INVARIANTS.md.
+ */
+export function useMaybeEpicTreeIndex(): TreeSlice {
+  const handle = useMaybeOpenEpicHandle();
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => (handle === null ? EMPTY_TREE_SLICE : handle.store.getState().tree),
+    () => EMPTY_TREE_SLICE,
+  );
+}
+
+export function useRootIds(): readonly string[] {
+  return useEpicStore((s) => s.tree.rootIds);
+}
+
+export function useChildIds(parentId: string): readonly string[] {
+  return useEpicStore((s) =>
+    Object.hasOwn(s.tree.childrenByParent, parentId)
+      ? s.tree.childrenByParent[parentId]
+      : EMPTY_TREE_ID_ARRAY,
+  );
+}
+
+export function useEpicTreeNode(id: string): TreeNode | null {
+  return useEpicStore((s) => {
+    if (Object.hasOwn(s.tree.nodeById, id)) return s.tree.nodeById[id];
+    return null;
+  });
+}
+
+/**
+ * A node's title in the open epic's tree, `null` when the tree has no such
+ * node or there is no open epic: the read for a surface that also mounts
+ * outside an `<EpicSessionProvider>`, as a bot tab does.
+ */
+export function useMaybeEpicTreeNodeTitle(id: string): string | null {
+  return useMaybeEpicStore(
+    (s) =>
+      Object.hasOwn(s.tree.nodeById, id) ? s.tree.nodeById[id].title : null,
+    null,
+  );
+}
+
+export function useEpicAgentRoleClaims(agentId: string): readonly RoleClaim[] {
+  const enabled = useAgentRolesEnabled();
+  const claims = useEpicStore((s) =>
+    Object.hasOwn(s.agentRoles.byAgentId, agentId)
+      ? s.agentRoles.byAgentId[agentId]
+      : EMPTY_ROLE_CLAIMS,
+  );
+  return enabled ? claims : EMPTY_ROLE_CLAIMS;
+}
+
+/**
+ * One node's session facet: whether its binding host says the agent is
+ * running, asleep or over, and why the last session ended.
+ *
+ * Both fields `null` for every node that is not a terminal agent this session
+ * holds a row for, and for a terminal agent whose serving host cannot know -
+ * a peer-host row, a cloud replica, a host that predates the facet. `null`
+ * NEVER means stopped, so a consumer renders it exactly as it rendered every
+ * row before the facet shipped.
+ *
+ * A two-field VIEW rather than the projection itself, so a row that renders
+ * only the badge does not re-render when the agent's title, worktree binding
+ * or launch metadata moves.
+ */
+export interface AgentSessionFacetView {
+  readonly sessionState: AgentSessionState | null;
+  readonly lastExit: AgentSessionLastExit | null;
+}
+
+const UNKNOWN_AGENT_SESSION_FACET: AgentSessionFacetView = Object.freeze({
+  sessionState: null,
+  lastExit: null,
+});
+
+export function useEpicAgentSessionFacet(
+  nodeId: string,
+): AgentSessionFacetView {
+  return useEpicStore(
+    useShallow((s): AgentSessionFacetView => {
+      if (!Object.hasOwn(s.tuiAgents.byId, nodeId)) {
+        return UNKNOWN_AGENT_SESSION_FACET;
+      }
+      const agent = s.tuiAgents.byId[nodeId];
+      return { sessionState: agent.sessionState, lastExit: agent.lastExit };
+    }),
+  );
+}
+
+export function useEpicAgentRoleClaimsByAgentId(): Readonly<
+  Record<string, readonly RoleClaim[]>
+> {
+  const enabled = useAgentRolesEnabled();
+  const claims = useEpicStore((s) => s.agentRoles.byAgentId);
+  return enabled ? claims : EMPTY_ROLE_CLAIMS_BY_AGENT_ID;
+}
+
+/**
+ * Just this artifact's `status` scalar. Sidebar nodes need it for the status
+ * dot on every render; selecting the scalar (instead of `find`-ing it out of
+ * the full `useEpicArtifactRecords()` array) keeps the value reference-stable
+ * while OTHER records churn - e.g. the active chat streaming - so the memoized
+ * node bails. See RENDER_PERF_FINDINGS.md.
+ */
+export function useEpicArtifactStatus(id: string): number | null {
+  return useEpicStore((s) =>
+    Object.hasOwn(s.artifacts.byId, id) ? s.artifacts.byId[id].status : null,
+  );
+}
+
+/**
+ * Ancestor ids of `nodeId`, nearest first, cycle-guarded. Empty for a root, a
+ * null id, or an id the tree does not hold.
+ *
+ * ## Subscribed to the ANSWER
+ *
+ * This read the whole `tree` slice and walked it in a `useMemo`, so it returned
+ * a fresh `Set` on every store tick that re-minted the slice - which a body
+ * write does, because it stamps `updatedAt` and `TreeNode` carries it. In the
+ * sidebar that identity fed `forcedExpandedIds` -> `expandedIds` ->
+ * `toggleExpanded` -> the `expansion` controller, and re-rendered every
+ * memoized row. The ancestor CHAIN had not changed; only its container had.
+ *
+ * `useShallow` is enough despite the return being a `Set`, and needs no bespoke
+ * equality - just the same wrapper the rest of this file uses. Both zustand
+ * copies present in this tree compare Set MEMBERS: v5's `shallow` routes any
+ * iterable carrying `.entries()` through `compareEntries` and a `Set` has one;
+ * v4's has a dedicated `instanceof Set` branch that does the same. The reason
+ * to say so here is not version dependence - it is that two copies exist
+ * (`zustand@4.5.7` and `@5.0.15`), so a claim about `shallow` has to be read
+ * off the package this workspace RESOLVES (`clients/gui-app/node_modules/
+ * zustand` -> 5.0.15) rather than whichever vendored copy a grep opens first.
+ *
+ * Callers consume the members, never the identity: three read an active or
+ * revealed node's ancestors to force-expand them, and the chat tree's reveal
+ * layout effect is driven by `revealRequest`'s NONCE, not by this set's
+ * identity, so stabilizing here cannot silence a reveal.
+ */
+export function useAncestorIds(nodeId: string | null): ReadonlySet<string> {
+  return useEpicStore(
+    useShallow((state: OpenEpicState): ReadonlySet<string> => {
+      const nodeById = state.tree.nodeById;
+      if (nodeId === null) return EMPTY_TREE_ID_SET;
+      if (!Object.hasOwn(nodeById, nodeId)) return EMPTY_TREE_ID_SET;
+      const ancestors = new Set<string>();
+      let current: string | null = nodeById[nodeId].parentId;
+      while (current !== null && !ancestors.has(current)) {
+        ancestors.add(current);
+        if (!Object.hasOwn(nodeById, current)) break;
+        current = nodeById[current].parentId;
+      }
+      return ancestors.size === 0 ? EMPTY_TREE_ID_SET : ancestors;
+    }),
+  );
+}
+
+export function useDescendantIds(nodeId: string): readonly string[] {
+  const index = useEpicTreeIndex();
+  return useMemo(() => {
+    if (!Object.hasOwn(index.nodeById, nodeId)) return EMPTY_TREE_ID_ARRAY;
+    const out: string[] = [];
+    const visited = new Set<string>();
+    const stack: string[] = [];
+    if (Object.hasOwn(index.childrenByParent, nodeId)) {
+      const seed = index.childrenByParent[nodeId];
+      for (let i = seed.length - 1; i >= 0; i -= 1) {
+        stack.push(seed[i]);
+      }
+    }
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (current === undefined) break;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      out.push(current);
+      if (!Object.hasOwn(index.childrenByParent, current)) continue;
+      const children = index.childrenByParent[current];
+      for (let i = children.length - 1; i >= 0; i -= 1) {
+        stack.push(children[i]);
+      }
+    }
+    return out.length === 0 ? EMPTY_TREE_ID_ARRAY : out;
+  }, [index, nodeId]);
+}
+
+/**
+ * This artifact's own root-to-leaf on-disk folder-name chain (ending with
+ * its own `folderName`), or `null` when it can't be reconstructed (unknown
+ * id, a tree cycle, a non-artifact ancestor, or an empty folder name
+ * somewhere in the chain). Feeds `resolveArtifactRelativeLinkPath` so a
+ * relative markdown link authored inside this artifact can be rewritten into
+ * the same artifact-shaped path the absolute-link flow already resolves.
+ *
+ * Selected via `useShallow` (a plain array of primitive strings) rather than
+ * subscribing to the raw `tree`/`artifacts` slices directly: those slices get
+ * a fresh top-level identity on ANY artifact edit anywhere in the epic, which
+ * would otherwise re-render every link consumer even when THIS artifact's own
+ * chain is unchanged.
+ */
+export function useArtifactFolderChain(
+  artifactId: string,
+): readonly string[] | null {
+  return useEpicStore(
+    useShallow((s) => artifactFolderChain(s.tree, s.artifacts, artifactId)),
+  );
+}
+
+// ─── Reselect derived views (cross-slice / sorted / filtered) ─────────────
+
+const selectArtifacts = (s: OpenEpicState): ArtifactsSlice => s.artifacts;
+const selectChats = (s: OpenEpicState): ChatsSlice => s.chats;
+const selectTree = (s: OpenEpicState): TreeSlice => s.tree;
+
+/**
+ * All artifacts of a given kind, sorted by `createdAt`. Memoized on
+ * `(byId, allIds, kind)` so identity-stable sibling updates skip the
+ * recomputation.
+ */
+export const makeSelectArtifactsByKind = (kind: ArtifactProjection["kind"]) =>
+  createSelector(
+    [selectArtifacts],
+    (artifacts): ReadonlyArray<ArtifactProjection> => {
+      const out: ArtifactProjection[] = [];
+      for (const id of artifacts.allIds) {
+        if (!Object.hasOwn(artifacts.byId, id)) continue;
+        const a = artifacts.byId[id];
+        if (a.kind === kind) out.push(a);
+      }
+      out.sort((a, b) => a.createdAt - b.createdAt);
+      return out.length === 0 ? EMPTY_NODES_AS_ARTIFACTS : out;
+    },
+  );
+
+/**
+ * Top-level tree nodes. Identity stable while `tree.rootIds` and
+ * `tree.nodeById` don't change reference.
+ */
+export const selectRootNodes = createSelector(
+  [selectTree],
+  (tree): ReadonlyArray<TreeNode> => {
+    if (tree.rootIds.length === 0) return EMPTY_NODES;
+    const out: TreeNode[] = [];
+    for (const id of tree.rootIds) {
+      if (Object.hasOwn(tree.nodeById, id)) out.push(tree.nodeById[id]);
+    }
+    return out;
+  },
+);
+
+/**
+ * Per-artifact composite view: artifact + tree node. Useful when a
+ * component needs both shapes and otherwise would call two selectors.
+ * Cached per id via `lruMemoize` so multiple components subscribing to
+ * the same id share the result.
+ */
+export const makeSelectArtifactWithNode = (id: string) =>
+  createSelector(
+    [
+      (s: OpenEpicState): ArtifactProjection | null =>
+        Object.hasOwn(s.artifacts.byId, id) ? s.artifacts.byId[id] : null,
+      (s: OpenEpicState): TreeNode | null =>
+        Object.hasOwn(s.tree.nodeById, id) ? s.tree.nodeById[id] : null,
+    ],
+    (
+      artifact,
+      node,
+    ): {
+      readonly artifact: ArtifactProjection | null;
+      readonly node: TreeNode | null;
+    } => ({ artifact, node }),
+    { memoize: lruMemoize },
+  );
+
+export function useArtifactWithNode(id: string): {
+  readonly artifact: ArtifactProjection | null;
+  readonly node: TreeNode | null;
+} {
+  const selector = useMemo(() => makeSelectArtifactWithNode(id), [id]);
+  return useEpicStore(selector);
+}
+
+// ─── Convenience scalar reads (component-local one-liners) ────────────────
+
+export function useArtifactById(id: string | null): ArtifactProjection | null {
+  return useEpicStore((s) => {
+    if (id === null) return null;
+    if (Object.hasOwn(s.artifacts.byId, id)) return s.artifacts.byId[id];
+    return null;
+  });
+}
+
+/**
+ * Whether an artifact is one loose file and not a folder. A loose HTML page
+ * carries the same kind as an HTML folder, so its change is that one file's
+ * own and never a folder of files. False outside an open epic.
+ */
+export function useIsLooseFileArtifact(id: string): boolean {
+  return useMaybeEpicStore(
+    (s) =>
+      Object.hasOwn(s.artifacts.byId, id) &&
+      s.artifacts.byId[id].layout === "file",
+    false,
+  );
+}
+
+/**
+ * Reactive tombstone lookup for a deleted artifact. Returns the projected
+ * `deletedArtifacts` entry, or null when the id is not (yet) a tombstone. The
+ * chat's `artifact_operation` delete card subscribes here so it resolves the
+ * strikethrough title + deletion info as soon as the tombstone syncs in, rather
+ * than reading once.
+ */
+export function useEpicDeletedArtifact(
+  id: string | null,
+): DeletedArtifactProjection | null {
+  return useEpicStore((s) => {
+    if (id === null) return null;
+    if (Object.hasOwn(s.deletedArtifacts.byId, id)) {
+      return s.deletedArtifacts.byId[id];
+    }
+    return null;
+  });
+}
+
+export function useChatById(id: string | null): ChatProjection | null {
+  return useEpicStore((s) => {
+    if (id === null) return null;
+    if (Object.hasOwn(s.chats.byId, id)) return s.chats.byId[id];
+    return null;
+  });
+}
+
+/**
+ * WHY a chat's record was retracted from this session, or `null` if it was not.
+ *
+ * The record table can only say a row is GONE. This says which of the two
+ * honest things an open tab may claim about that: `deleted` (the chat is gone
+ * for everyone) or `revoked` (it still exists; this viewer may no longer see
+ * it). Only the push stream carries the distinction - a poll that stops
+ * returning a row cannot - so this reads `null` on any host without
+ * `host.chatRecords.subscribe`, and the tab keeps the pre-existing
+ * reachability-derived end states.
+ *
+ * A single per-id scalar, so a retraction of one chat re-renders only the tab
+ * rendering that chat.
+ */
+export function useEpicChatRetraction(
+  chatId: string | null,
+): ChatRecordRemovalReason | null {
+  return useEpicStore((s) => {
+    if (chatId === null) return null;
+    if (Object.hasOwn(s.chatRetractions, chatId)) {
+      return s.chatRetractions[chatId];
+    }
+    return null;
+  });
+}
+
+export function useEpicTuiAgentRetraction(
+  tuiAgentId: string | null,
+): ChatRecordRemovalReason | null {
+  return useEpicStore((s) => {
+    if (tuiAgentId === null) return null;
+    return Object.hasOwn(s.tuiAgentRetractions, tuiAgentId)
+      ? s.tuiAgentRetractions[tuiAgentId]
+      : null;
+  });
+}
+
+/**
+ * The host hosting a chat / terminal-agent row, read narrowly off the
+ * `chats.byId` / `tuiAgents.byId` projection so a row "+" can inherit ITS OWN
+ * host when spawning a child (Decision E). Returns `null` for artifact rows
+ * (they carry no `hostId`), for legacy chats predating the field, and for
+ * ids that resolve to nothing.
+ *
+ * Reads a single per-id scalar - NOT `TreeNode` (which has no `hostId`) and
+ * NOT `useEpicArtifactRecords()` (whose array churns every token while a chat
+ * streams). The selected string is reference-stable while unrelated rows
+ * change, so the consuming row bails the render. See RENDER_PERF_INVARIANTS.md.
+ */
+export function useEpicNodeHostId(nodeId: string): string | null {
+  return useEpicStore((s) => {
+    if (Object.hasOwn(s.chats.byId, nodeId)) {
+      return s.chats.byId[nodeId].hostId;
+    }
+    if (Object.hasOwn(s.tuiAgents.byId, nodeId)) {
+      return s.tuiAgents.byId[nodeId].hostId;
+    }
+    return null;
+  });
+}
+
+/**
+ * Batched counterpart to {@link useEpicNodeHostId} for surfaces that must
+ * group notification reads by each row's owning host. The shallow array keeps
+ * the caller stable through unrelated projection churn while preserving the
+ * input order for a direct `nodeIds[index]` pairing.
+ */
+export function useEpicNodeHostIds(
+  nodeIds: ReadonlyArray<string>,
+): ReadonlyArray<string | null> {
+  return useEpicStore(
+    useShallow((s) =>
+      nodeIds.map((nodeId) => {
+        if (Object.hasOwn(s.chats.byId, nodeId)) {
+          return s.chats.byId[nodeId].hostId;
+        }
+        if (Object.hasOwn(s.tuiAgents.byId, nodeId)) {
+          return s.tuiAgents.byId[nodeId].hostId;
+        }
+        return null;
+      }),
+    ),
+  );
+}
+
+/**
+ * The owning USER of a chat row, as a primitive for the same
+ * churn-isolation reason as {@link useEpicNodeHostId}. Chat rows only:
+ * the one consumer (the sidebar's unreachable-owner published-copy
+ * routing) needs the cloud identity triple, which only chats have.
+ */
+export function useEpicNodeOwnerUserId(nodeId: string): string | null {
+  return useEpicStore((s) => {
+    if (Object.hasOwn(s.chats.byId, nodeId)) {
+      return s.chats.byId[nodeId].userId;
+    }
+    return null;
+  });
+}
+
+/**
+ * Whether this node's record is archived, as a primitive so unrelated
+ * projection churn cannot re-render the row. Covers both record kinds - one
+ * `epic.setChatArchived` RPC keyed by id serves chats and terminal-agents
+ * alike. Ids that resolve to neither map read as not archived.
+ */
+export function useEpicNodeArchived(nodeId: string): boolean {
+  return useEpicStore((s) => {
+    if (Object.hasOwn(s.chats.byId, nodeId)) {
+      return s.chats.byId[nodeId].archivedAt !== null;
+    }
+    if (Object.hasOwn(s.tuiAgents.byId, nodeId)) {
+      return s.tuiAgents.byId[nodeId].archivedAt !== null;
+    }
+    return false;
+  });
+}
+
+/**
+ * Provider-optional counterpart to {@link useEpicNodeArchived} for canvas tab
+ * icons. The shared tab icon also renders in provider-less drag previews and
+ * graph surfaces, so it resolves the epic through the session registry and
+ * degrades to active when that epic has no mounted session.
+ *
+ * The selected boolean is narrow on purpose: streaming/title churn elsewhere
+ * in the epic must not repaint every open tab.
+ */
+export function useRegisteredEpicNodeArchived(
+  epicId: string,
+  nodeId: string,
+): boolean {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => registry.peek(epicId),
+    () => null,
+  );
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => liveEpicNodeArchivedFromHandle(handle, nodeId),
+    () => false,
+  );
+}
+
+function liveEpicNodeArchivedFromHandle(
+  handle: OpenEpicStoreHandle | null,
+  nodeId: string,
+): boolean {
+  if (handle === null) return false;
+  const state = handle.store.getState();
+  if (Object.hasOwn(state.chats.byId, nodeId)) {
+    return state.chats.byId[nodeId].archivedAt !== null;
+  }
+  if (Object.hasOwn(state.tuiAgents.byId, nodeId)) {
+    return state.tuiAgents.byId[nodeId].archivedAt !== null;
+  }
+  return false;
+}
+
+/**
+ * The viewer a file artifact opens in, decided from the same on-disk name and
+ * media type its tile decides from, so the glyph a row shows names what
+ * clicking it does. Null for every other node, for a file not yet synced, and
+ * for a null `artifactId` (a row whose artifact the caller cannot name).
+ */
+export function useEpicFileArtifactViewer(
+  artifactId: string | null,
+): ArtifactFileViewer | null {
+  return useEpicStore((s) => fileArtifactViewerFromState(s, artifactId));
+}
+
+/**
+ * Provider-optional counterpart to {@link useEpicFileArtifactViewer} for the
+ * shared artifact icon, which also renders in provider-less drag previews and
+ * mention lists: an epic with no mounted session has no file to read, and a
+ * null `artifactId` names no file, so in both the glyph stays the plain file.
+ */
+export function useRegisteredEpicFileArtifactViewer(
+  epicId: string,
+  artifactId: string | null,
+): ArtifactFileViewer | null {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => registry.peek(epicId),
+    () => null,
+  );
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () =>
+      handle === null
+        ? null
+        : fileArtifactViewerFromState(handle.store.getState(), artifactId),
+    () => null,
+  );
+}
+
+function fileArtifactViewerFromState(
+  state: OpenEpicState,
+  artifactId: string | null,
+): ArtifactFileViewer | null {
+  if (artifactId === null || !Object.hasOwn(state.artifacts.byId, artifactId))
+    return null;
+  const artifact = state.artifacts.byId[artifactId];
+  if (artifact.kind !== "file" || artifact.object === undefined) return null;
+  return artifactFileViewer(artifact.folderName, artifact.object.mediaType);
+}
+
+/**
+ * A row's last-activity time, read from the CHAT / TERMINAL-AGENT PROJECTION
+ * rather than from its `TreeNode`.
+ *
+ * The tree node carries an `updatedAt` too, and it is tempting to use since the
+ * row already holds the node - but it is a lagging copy. `CHAT_TREE_KEYS` in
+ * `epic-projector.ts` deliberately omits `updatedAt`, so touching a chat never
+ * sets `structuralTreeDirty` and never rebuilds the tree; the node keeps
+ * whatever `updatedAt` it had at the last STRUCTURAL change (rename, reparent,
+ * create). Reading it made the sidebar row disagree with the hover card, which
+ * self-sources the projection. Adding `updatedAt` to `CHAT_TREE_KEYS` would fix
+ * the disagreement the wrong way round - it would rebuild the whole tree on
+ * every message, which is precisely what that omission prevents.
+ *
+ * Selected as a primitive `number`, so `Object.is` still skips the render for
+ * every unrelated projection change.
+ */
+export function useEpicNodeUpdatedAt(nodeId: string): number {
+  return useEpicStore((s) => {
+    if (Object.hasOwn(s.chats.byId, nodeId)) {
+      return s.chats.byId[nodeId].updatedAt;
+    }
+    if (Object.hasOwn(s.tuiAgents.byId, nodeId)) {
+      return s.tuiAgents.byId[nodeId].updatedAt;
+    }
+    return 0;
+  });
+}
+
+/**
+ * A GUI chat row's persisted harness id, selected as a primitive so unrelated
+ * chat projection churn cannot re-render the sidebar icon. New chats normally
+ * persist settings at creation; legacy or optimistic records can still have
+ * no settings, in which case the caller keeps the generic chat glyph.
+ */
+export function useEpicChatHarnessId(nodeId: string): GuiHarnessId | null {
+  return useEpicStore((s) => {
+    if (!Object.hasOwn(s.chats.byId, nodeId)) return null;
+    return s.chats.byId[nodeId].settings?.harnessId ?? null;
+  });
+}
+
+/**
+ * A terminal-agent row's harness id, read narrowly off `tuiAgents.byId` so a
+ * tab / sidebar row can render the harness's brand icon (Claude, Codex, …) in
+ * place of the generic bot glyph. Returns `null` for chat / artifact rows, for
+ * ids that resolve to nothing, AND when called outside an open-epic session
+ * (e.g. the drag overlay, which mounts at the app shell with no provider). In
+ * every null case the caller falls back to the bot icon.
+ *
+ * Resolves through `useMaybeOpenEpicHandle` + `useSyncExternalStore` (the same
+ * provider-optional pattern as the `useRegistered*` hooks above) so the single
+ * `EpicNodeTabIcon` source can render it both inside the canvas tab strip and in
+ * the provider-less overlay without a conditional hook call. The selected
+ * harness id is a reference-stable primitive, so unrelated store churn does not
+ * re-render the consuming row. See RENDER_PERF_INVARIANTS.md.
+ */
+export function useMaybeEpicTuiAgentHarnessId(
+  nodeId: string,
+): TuiHarnessId | null {
+  const handle = useMaybeOpenEpicHandle();
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () => {
+      if (handle === null) return null;
+      const s = handle.store.getState();
+      return Object.hasOwn(s.tuiAgents.byId, nodeId)
+        ? s.tuiAgents.byId[nodeId].harnessId
+        : null;
+    },
+    () => null,
+  );
+}
+
+export function useEpicNodeOwnerKind(
+  nodeId: string,
+): WorktreeBindingOwnerKind | null {
+  return useEpicStore((s) => {
+    if (Object.hasOwn(s.chats.byId, nodeId)) return "chat";
+    if (Object.hasOwn(s.tuiAgents.byId, nodeId)) return "terminal-agent";
+    return null;
+  });
+}
+
+/**
+ * A terminal-agent row's persisted `workspaceFolders` (the local paths it was
+ * launched against), read narrowly off `tuiAgents.byId` so a row "+" can prefill
+ * a nested terminal-agent's workspace from its PARENT (decision 16). Returns a
+ * shared empty array for chat rows (`ChatProjection` carries no folders - prefill
+ * gracefully falls back to the default workspace) and for ids that resolve to
+ * nothing.
+ *
+ * The projection's `workspaceFolders` array is reference-stable until the agent's
+ * folders actually change, so returning it directly does not churn the consuming
+ * row's render; the empty fallback is the shared `EMPTY_ARRAY` for the same
+ * reason. See RENDER_PERF_INVARIANTS.md.
+ */
+export function useEpicNodeWorkspaceFolders(nodeId: string): readonly string[] {
+  return useEpicStore((s) => {
+    if (Object.hasOwn(s.tuiAgents.byId, nodeId)) {
+      return s.tuiAgents.byId[nodeId].workspaceFolders;
+    }
+    return EMPTY_ARRAY;
+  });
+}
+
+export function useTreeNodeById(id: string | null): TreeNode | null {
+  return useEpicStore((s) => {
+    if (id === null) return null;
+    if (Object.hasOwn(s.tree.nodeById, id)) return s.tree.nodeById[id];
+    return null;
+  });
+}
+
+export function useChildIdsOf(parentId: string): readonly string[] {
+  return useEpicStore((s) =>
+    Object.hasOwn(s.tree.childrenByParent, parentId)
+      ? s.tree.childrenByParent[parentId]
+      : EMPTY_ARRAY,
+  );
+}
+
+export function useRootIdsAll(): readonly string[] {
+  return useEpicStore((s) => s.tree.rootIds);
+}
+
+export function useEpicHeaderTitle(): string {
+  return useEpicStore((s) => s.epic.title);
+}
+
+export { selectArtifacts, selectChats, selectTree };

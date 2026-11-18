@@ -1,0 +1,202 @@
+import { renderHook } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ListGuiAgentCommandsResponse } from "@traycer/protocol/host/index";
+import { useSlashCommands } from "../use-slash-commands";
+import type { LocalSlashCommand } from "@/lib/composer/types";
+
+const mockState = vi.hoisted(() => ({
+  calls: [] as Array<{
+    harnessId: string;
+    profileId: string | null;
+    workingDirectories: ReadonlyArray<string>;
+    enabled: boolean;
+    subscribed: boolean;
+  }>,
+  data: null as ListGuiAgentCommandsResponse | null,
+  isPending: false,
+  isFetching: false,
+  error: null as Error | null,
+}));
+
+vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
+  useGuiHarnessCommandsQuery: (
+    hostClient: unknown,
+    harnessId: string,
+    workingDirectories: ReadonlyArray<string>,
+    activity: {
+      profileId: string | null;
+      enabled: boolean;
+      subscribed: boolean;
+    },
+  ) => {
+    void hostClient;
+    mockState.calls.push({
+      harnessId,
+      workingDirectories,
+      profileId: activity.profileId,
+      enabled: activity.enabled,
+      subscribed: activity.subscribed,
+    });
+    return {
+      data: mockState.data,
+      isPending: mockState.isPending,
+      isFetching: mockState.isFetching,
+      error: mockState.error,
+      refetch: () => Promise.resolve(),
+    };
+  },
+}));
+
+describe("useSlashCommands", () => {
+  beforeEach(() => {
+    mockState.calls = [];
+    mockState.data = {
+      harnessId: "codex",
+      commands: [
+        {
+          harnessId: "codex",
+          name: "review",
+          description: "Review current changes",
+          argumentHint: null,
+          kind: "slash-command",
+          metadata: {},
+        },
+        {
+          harnessId: "codex",
+          name: "frontend-design",
+          description: "Build polished frontend interfaces",
+          argumentHint: "<component>",
+          kind: "skill",
+          metadata: { path: "/repo/.agents/skills/frontend-design/SKILL.md" },
+        },
+        {
+          harnessId: "codex",
+          name: "plan",
+          description: "Run the prompt in plan mode",
+          argumentHint: null,
+          kind: "slash-command",
+          metadata: {},
+        },
+      ],
+    };
+    mockState.isPending = false;
+    mockState.isFetching = false;
+    mockState.error = null;
+  });
+
+  it("queries the selected provider and returns provider commands", () => {
+    const { result } = renderHook(() =>
+      useSlashCommands("", {
+        hostClient: null,
+        harnessId: "codex",
+        profileId: "managed-a",
+        workingDirectories: ["/repo", "/repo/packages/app"],
+        enabled: true,
+        localCommands: [],
+      }),
+    );
+
+    expect(mockState.calls.at(-1)).toEqual({
+      harnessId: "codex",
+      profileId: "managed-a",
+      workingDirectories: ["/repo", "/repo/packages/app"],
+      enabled: true,
+      subscribed: true,
+    });
+    expect(result.current.data.map((command) => command.name)).toEqual([
+      "frontend-design",
+      "plan",
+      "review",
+    ]);
+    expect(result.current.data[0]).toMatchObject({
+      source: "provider",
+      description: "Build polished frontend interfaces",
+    });
+  });
+
+  it("ranks the best fuzzy match first and exposes loading state", () => {
+    mockState.isPending = true;
+
+    const { result } = renderHook(() =>
+      useSlashCommands("front", {
+        hostClient: null,
+        harnessId: "codex",
+        profileId: null,
+        workingDirectories: ["/repo"],
+        enabled: true,
+        localCommands: [],
+      }),
+    );
+
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.data[0]).toMatchObject({
+      source: "provider",
+      name: "frontend-design",
+      kind: "skill",
+    });
+    expect(result.current.data.map((cmd) => cmd.name)).not.toContain("plan");
+  });
+
+  it("lists localCommands and lets a local row shadow a same-named provider row", () => {
+    mockState.data = {
+      harnessId: "claude",
+      commands: [
+        {
+          harnessId: "claude",
+          name: "btw",
+          description: "Provider's own btw command",
+          argumentHint: null,
+          kind: "slash-command",
+          metadata: {},
+        },
+        {
+          harnessId: "claude",
+          name: "review",
+          description: "Review current changes",
+          argumentHint: null,
+          kind: "slash-command",
+          metadata: {},
+        },
+      ],
+    };
+
+    const localBtw: LocalSlashCommand = {
+      source: "local",
+      harnessId: "claude",
+      name: "btw",
+      description: "Ask a side question in a forked copy of this chat",
+      argumentHint: "<question>",
+      kind: "slash-command",
+      metadata: {},
+      preview: {
+        kind: "text",
+        primary: "Ask a side question <question>",
+        secondary: null,
+        mono: false,
+      },
+    };
+
+    const { result } = renderHook(() =>
+      useSlashCommands("", {
+        hostClient: null,
+        harnessId: "claude",
+        profileId: null,
+        workingDirectories: ["/repo"],
+        enabled: true,
+        localCommands: [localBtw],
+      }),
+    );
+
+    const btwRows = result.current.data.filter(
+      (command) => command.name.toLowerCase() === "btw",
+    );
+    expect(btwRows).toHaveLength(1);
+    expect(btwRows[0]).toMatchObject({
+      source: "local",
+      description: "Ask a side question in a forked copy of this chat",
+    });
+    expect(result.current.data.map((command) => command.name)).toContain(
+      "review",
+    );
+  });
+});

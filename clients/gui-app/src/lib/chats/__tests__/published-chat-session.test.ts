@@ -1,0 +1,632 @@
+import { describe, expect, it } from "vitest";
+import type { PresentedChat } from "@traycer/protocol/persistence/chat-sync/presentation";
+import type {
+  JsonObject,
+  JsonValue,
+} from "@traycer/protocol/persistence/chat-sync/json";
+import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
+import type { Message } from "@traycer/protocol/persistence/epic/messages";
+import {
+  convertPublishedChat,
+  convertReplicaChat,
+  createPublishedChatSessionHandle,
+  publishedChatSessionState,
+  type PublishedChatSessionInput,
+} from "@/lib/chats/published-chat-session";
+
+/**
+ * The forward-compatibility guarantee, at the granularity it has to hold.
+ *
+ * The presentation layer preserves an unknown block IN PLACE inside an
+ * otherwise ordinary message - that is the whole reason it hands readers `raw`
+ * alongside `known`. An adapter that reparses the whole record and drops it on
+ * any failure inverts that: a single future block type deletes the known text,
+ * file changes and plan sitting beside it. The published copy then silently
+ * shows less than the chat contains, which is the one failure the fidelity
+ * rules exist to prevent.
+ *
+ * The fixture below is the shape reproduced through the real
+ * publish -> assemble -> present path: an assistant message carrying
+ * [text, file_change, plan, <future type>].
+ */
+
+function textBlock(blockId: string, text: string): JsonObject {
+  return {
+    blockId,
+    status: "completed",
+    timestamp: 1,
+    parentBlockId: null,
+    type: "text",
+    text,
+    providerNotice: null,
+  };
+}
+
+function futureBlock(blockId: string): JsonObject {
+  return {
+    blockId,
+    status: "completed",
+    timestamp: 1,
+    parentBlockId: null,
+    // A type outside this build's vocabulary - the case the whole passthrough
+    // layer exists for.
+    type: "holodeck",
+    payload: { deck: 7 },
+  };
+}
+
+/**
+ * A `JsonObject`'s values are `JsonValue`, so `String(...)` on one would
+ * happily render an object as "[object Object]" and the fixture would assert
+ * against that placeholder. Every block below really does carry string ids, so
+ * this states it by NARROWING instead of coercing - a fixture that stops
+ * carrying one fails here, loudly, rather than silently downstream.
+ */
+function jsonString(value: JsonValue | undefined, field: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`fixture block has no string '${field}'`);
+  }
+  return value;
+}
+
+function presentedChatWith(blocks: readonly JsonObject[]): PresentedChat {
+  const raw = {
+    role: "assistant",
+    messageId: "m1",
+    timestamp: 1,
+    // Required, nullable-but-not-defaulted on the live schema.
+    turnId: null,
+    usage: null,
+    sender: {
+      type: "agent",
+      harnessId: "claude",
+      agentId: "a1",
+      displayName: null,
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [...blocks],
+  };
+  // Built through the real `PresentedChat` type rather than cast into it, so a
+  // change to the presentation contract breaks this fixture instead of letting
+  // it drift into asserting a shape the pipeline no longer produces.
+  return {
+    messages: [
+      {
+        messageId: "m1",
+        variant: "assistant",
+        known: null,
+        raw,
+        timestamp: 1,
+        blocks: blocks.map((block) => ({
+          blockId: jsonString(block.blockId, "blockId"),
+          variant: jsonString(block.type, "type"),
+          known: null,
+          raw: block,
+          payloadRefs: [],
+        })),
+      },
+    ],
+    events: [],
+    fidelity: {
+      unknownMessages: 0,
+      unknownBlocks: 0,
+      unknownEvents: 0,
+      missingPayloads: 0,
+    },
+    chatId: "56254cae",
+    parentChatId: null,
+    ownerUserId: "user-1",
+    originHostId: "host-b",
+    title: "Walkthrough",
+    isTitleEditedByUser: false,
+    createdAt: 1,
+    updatedAt: 1,
+    lifecycle: {
+      state: "active",
+      archivedAt: null,
+      deletedAt: null,
+      residual: {},
+    },
+    settings: null,
+    throughRecordSeq: 1,
+    capturedAt: 1,
+    parentHeadSha256: null,
+  };
+}
+
+describe("convertPublishedChat", () => {
+  it("keeps a message's known blocks when one block is from the future", () => {
+    // The regression. Before this, the whole assistant message - and with it
+    // every known block - was deleted because one sibling was unrecognized.
+    const converted = convertPublishedChat(
+      presentedChatWith([
+        textBlock("b1", "known text"),
+        futureBlock("b2"),
+        textBlock("b3", "more known text"),
+      ]),
+    );
+    expect(converted.messages).toHaveLength(1);
+    const message = converted.messages[0];
+    expect(message.role).toBe("assistant");
+    if (message.role !== "assistant") throw new Error("expected assistant");
+    expect(message.blocks).toHaveLength(3);
+    const texts = message.blocks.flatMap((block) =>
+      block.type === "text" ? [block.text] : [],
+    );
+    expect(texts).toContain("known text");
+    expect(texts).toContain("more known text");
+  });
+
+  it("renders the unreadable block in place rather than omitting it", () => {
+    // An omitted block is indistinguishable from a message that never had one,
+    // and the composer's summary line cannot say WHERE the gap was.
+    const converted = convertPublishedChat(
+      presentedChatWith([textBlock("b1", "known text"), futureBlock("b2")]),
+    );
+    const message = converted.messages[0];
+    if (message.role !== "assistant") throw new Error("expected assistant");
+    const placeholder = message.blocks.filter(
+      (block) =>
+        block.type === "text" && /needs a newer version/.test(block.text),
+    );
+    expect(placeholder).toHaveLength(1);
+  });
+
+  it("counts each replaced block so the surface can say how many", () => {
+    const converted = convertPublishedChat(
+      presentedChatWith([
+        textBlock("b1", "known text"),
+        futureBlock("b2"),
+        futureBlock("b3"),
+      ]),
+    );
+    expect(converted.unreadableCount).toBe(2);
+  });
+
+  it("keeps a wholly ordinary message untouched", () => {
+    const converted = convertPublishedChat(
+      presentedChatWith([textBlock("b1", "known text")]),
+    );
+    expect(converted.unreadableCount).toBe(0);
+    const message = converted.messages[0];
+    if (message.role !== "assistant") throw new Error("expected assistant");
+    expect(message.blocks).toHaveLength(1);
+    expect(message.blocks[0].type).toBe("text");
+  });
+
+  it("converts a row from a harness this build does not know (an open heard-from id)", () => {
+    // A published copy can come from a host newer than this build, naming a
+    // harness this build only heard from. The row converts and carries the raw
+    // id; it is neither replaced with a placeholder nor counted unreadable.
+    const presented = presentedChatWith([textBlock("b1", "known text")]);
+    const unknownSender = {
+      type: "agent",
+      harnessId: "harness-this-build-predates",
+      agentId: "a1",
+      displayName: null,
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    };
+    const converted = convertPublishedChat({
+      ...presented,
+      messages: presented.messages.map((message) => ({
+        ...message,
+        raw: { ...message.raw, sender: unknownSender },
+      })),
+    });
+    expect(converted.unreadableCount).toBe(0);
+    expect(converted.messages).toHaveLength(1);
+    const message = converted.messages[0];
+    if (message.role !== "assistant") throw new Error("expected assistant");
+    expect(message.sender).toEqual(unknownSender);
+    expect(message.blocks).toHaveLength(1);
+    expect(message.blocks[0].type).toBe("text");
+  });
+});
+
+/**
+ * `convertReplicaChat`'s rows are raw doc records, not the split
+ * head/shard shape `PresentedChat` produces - a doc row's `blocks` sit
+ * inline on the message itself, exactly as `readMessages()` reconstructs
+ * them. The screening rule is the one `convertPublishedChat` uses, applied
+ * to that inline array instead of a parallel presented list.
+ */
+function replicaAssistantRow(
+  blocks: readonly JsonObject[],
+): Record<string, unknown> {
+  return {
+    role: "assistant",
+    messageId: "m1",
+    timestamp: 1,
+    turnId: null,
+    usage: null,
+    sender: {
+      type: "agent",
+      harnessId: "claude",
+      agentId: "a1",
+      displayName: null,
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    },
+    blocks: [...blocks],
+  };
+}
+
+describe("convertReplicaChat", () => {
+  it("keeps a wholly ordinary doc row untouched", () => {
+    const converted = convertReplicaChat(
+      [replicaAssistantRow([textBlock("b1", "known text")])],
+      [],
+    );
+    expect(converted.unreadableCount).toBe(0);
+    expect(converted.messages).toHaveLength(1);
+    const message = converted.messages[0];
+    if (message.role !== "assistant") throw new Error("expected assistant");
+    expect(message.blocks).toHaveLength(1);
+    expect(message.blocks[0].type).toBe("text");
+  });
+
+  it("swaps an unknown block for a placeholder instead of dropping the whole row", () => {
+    const converted = convertReplicaChat(
+      [replicaAssistantRow([textBlock("b1", "known text"), futureBlock("b2")])],
+      [],
+    );
+    expect(converted.messages).toHaveLength(1);
+    const message = converted.messages[0];
+    if (message.role !== "assistant") throw new Error("expected assistant");
+    expect(message.blocks).toHaveLength(2);
+    const placeholder = message.blocks.filter(
+      (block) =>
+        block.type === "text" && /needs a newer version/.test(block.text),
+    );
+    expect(placeholder).toHaveLength(1);
+    expect(converted.unreadableCount).toBe(1);
+  });
+
+  it("converts a row from a harness this build does not know (an open heard-from id)", () => {
+    const unknownSender = {
+      type: "agent",
+      harnessId: "harness-this-build-predates",
+      agentId: "a1",
+      displayName: null,
+      reply: { expectsReply: false },
+      inReplyTo: null,
+    };
+    const converted = convertReplicaChat(
+      [
+        {
+          ...replicaAssistantRow([textBlock("b1", "known text")]),
+          sender: unknownSender,
+        },
+      ],
+      [],
+    );
+    expect(converted.unreadableCount).toBe(0);
+    expect(converted.messages).toHaveLength(1);
+    const message = converted.messages[0];
+    if (message.role !== "assistant") throw new Error("expected assistant");
+    expect(message.sender).toEqual(unknownSender);
+    expect(message.blocks).toHaveLength(1);
+    expect(message.blocks[0].type).toBe("text");
+  });
+
+  it("drops and counts a row whose envelope cannot be represented at all", () => {
+    // No `blocks` array to screen, so there is nothing to rebuild through -
+    // this is the ENVELOPE failure, not a block failure.
+    const converted = convertReplicaChat(
+      [{ role: "from-the-future", messageId: "m2", timestamp: 1 }],
+      [],
+    );
+    expect(converted.messages).toHaveLength(0);
+    expect(converted.unreadableCount).toBe(1);
+  });
+
+  it("swaps null and non-object block entries for placeholders too, not just unrecognized objects", () => {
+    // `null` and a bare number are the two shapes the block-id fallback in
+    // `rebuildReplicaMessage` exists for - `typeof null === "object"` would
+    // otherwise slip past a naive object check, and a number has no
+    // `blockId` to read at all. Built as a plain row rather than through
+    // `replicaAssistantRow` (typed to `readonly JsonObject[]`) since neither
+    // shape here IS one.
+    const row: Record<string, unknown> = {
+      role: "assistant",
+      messageId: "m1",
+      timestamp: 1,
+      turnId: null,
+      usage: null,
+      sender: {
+        type: "agent",
+        harnessId: "claude",
+        agentId: "a1",
+        displayName: null,
+        reply: { expectsReply: false },
+        inReplyTo: null,
+      },
+      blocks: [textBlock("b1", "known text"), null, 42],
+    };
+    const converted = convertReplicaChat([row], []);
+    expect(converted.messages).toHaveLength(1);
+    const message = converted.messages[0];
+    if (message.role !== "assistant") throw new Error("expected assistant");
+    expect(message.blocks).toHaveLength(3);
+    const placeholders = message.blocks.filter(
+      (block) =>
+        block.type === "text" && /needs a newer version/.test(block.text),
+    );
+    expect(placeholders).toHaveLength(2);
+    expect(converted.unreadableCount).toBe(2);
+  });
+});
+
+function publishedUserMessage(
+  messageId: string,
+): Extract<Message, { role: "user" }> {
+  return {
+    role: "user",
+    messageId,
+    sender: { type: "user", userId: "user-1" },
+    message: {
+      kind: "user",
+      content: { type: "doc", content: [] },
+      browserAnnotations: [],
+    },
+    timestamp: 4,
+    sessionAnchor: null,
+  };
+}
+
+function publishedChatEvent(eventId: string): ChatEvent {
+  return {
+    eventId,
+    type: "turn.completed",
+    timestamp: 1,
+    clientActionId: null,
+    actor: null,
+    message: null,
+    turnId: null,
+    messageId: null,
+    queueItemId: null,
+    approvalId: null,
+    blockId: null,
+    severity: "info",
+    metadata: null,
+  };
+}
+
+function publishedInputWith(
+  messages: readonly Message[],
+  events: readonly ChatEvent[],
+): PublishedChatSessionInput {
+  return {
+    epicId: "epic-1",
+    chatId: "chat-1",
+    ownerUserId: "user-1",
+    title: "Published Chat",
+    createdAt: 1,
+    updatedAt: 2,
+    conversion: { messages, events, unreadableCount: 0 },
+  };
+}
+
+/**
+ * The same duplicate-retention regression `chat-session-store.test.ts` guards
+ * against the live store: `publishedChatSessionState` builds `chat` as a
+ * `ChatSessionRecord`, and the published copy is the case that made the
+ * duplicate most expensive - the whole transcript arrives materialized, so a
+ * second copy doubles the peak of an already-large read.
+ */
+describe("publishedChatSessionState", () => {
+  it("carries the transcript once: `chat` has no messages/events, and state.messages/state.events keep the full copy", () => {
+    const messages = [publishedUserMessage("m1"), publishedUserMessage("m2")];
+    const events = [publishedChatEvent("e1")];
+    const state = publishedChatSessionState(
+      publishedInputWith(messages, events),
+    );
+
+    // The regression guard: a future `{...chat, messages: [...]}` spread
+    // would silently reintroduce the duplicate.
+    expect(Object.keys(state.chat ?? {})).not.toContain("messages");
+    expect(Object.keys(state.chat ?? {})).not.toContain("events");
+
+    expect(state.messages).toEqual(messages);
+    expect(state.events).toEqual(events);
+  });
+
+  it("keeps the four scalar reads the record exists to serve", () => {
+    const state = publishedChatSessionState(publishedInputWith([], []));
+
+    if (state.chat === null) throw new Error("Expected chat");
+    expect(state.chat.title).toBe("Published Chat");
+    expect(state.chat.isTitleEditedByUser).toBe(false);
+    expect(state.chat.settings).toBeNull();
+    expect(state.chat.parentId).toBeNull();
+  });
+
+  it("D215: initializes lastFallbackOutcome to undefined - a frozen copy never confirmed an outcome", () => {
+    const state = publishedChatSessionState(publishedInputWith([], []));
+    // Falsification: seed this with a real outcome (or omit it and let a
+    // default-parameter/`??` fill something in) and this must go red - a
+    // published copy has no live traversal to have produced one.
+    expect(state.lastFallbackOutcome).toBeUndefined();
+  });
+
+  it("sets transcriptBaselineEpoch and connectionEpoch EQUAL (both 0), so a consumer gating on equality reads READY rather than stalling on a reconnect that can never come", () => {
+    const state = publishedChatSessionState(publishedInputWith([], []));
+    expect(state.transcriptBaselineEpoch).toBe(0);
+    expect(state.connectionEpoch).toBe(0);
+    // The equality itself is the pin, not the specific number: a consumer
+    // (`useChatAnnouncements` and friends) reads
+    // `transcriptBaselineEpoch === connectionEpoch` as "this connection's
+    // baseline is seated" - a live store's cold-mount reads UNEQUAL
+    // (`NO_TRANSCRIPT_BASELINE` / `0`, see
+    // `chat-session-store-connection-epoch.test.ts`) precisely because
+    // nothing has seated yet, and a published copy is the opposite case: it
+    // is COMPLETE and FROZEN, standing in for the snapshot that would have
+    // seated it. Falsification: give this pair different values (e.g. leave
+    // `connectionEpoch` at whatever the live store's cold default is) and a
+    // consumer gating on equality would wait forever for a reconnect this
+    // frozen copy will never have.
+    expect(state.transcriptBaselineEpoch).toBe(state.connectionEpoch);
+  });
+});
+
+/**
+ * `applyConversion` - the one way a published copy's handle changes after
+ * construction, applied IN PLACE on the same store so a mounted tile's
+ * subscriptions never have to be re-established. See the method's own doc
+ * comment on `PublishedChatSessionHandle` for the two facts pinned here: row
+ * identity is preserved wherever the row did not change, and
+ * `transcriptBaselineEpoch` only moves when the new list is not a strict
+ * EXTENSION of what was already shown.
+ */
+describe("applyConversion", () => {
+  it("appending a message keeps the previous message's object identity, and leaves the baseline epoch unchanged", () => {
+    const handle = createPublishedChatSessionHandle(
+      publishedInputWith([publishedUserMessage("m1")], []),
+    );
+    const firstMessage = handle.store.getState().messages[0];
+    expect(handle.store.getState().transcriptBaselineEpoch).toBe(0);
+
+    handle.applyConversion({
+      title: "Published Chat",
+      updatedAt: 2,
+      conversion: {
+        messages: [publishedUserMessage("m1"), publishedUserMessage("m2")],
+        events: [],
+        unreadableCount: 0,
+      },
+    });
+
+    const state = handle.store.getState();
+    expect(state.messages).toHaveLength(2);
+    // Ablation: gate the merge on `held === row` alone (drop the deep-equal
+    // fallback) and a fixture that mints a fresh object per call - as every
+    // caller here does - would replace every untouched row on every append.
+    expect(state.messages[0]).toBe(firstMessage);
+    expect(state.transcriptBaselineEpoch).toBe(0);
+  });
+
+  it("replaces a changed message (same id, different content) while an untouched sibling keeps identity", () => {
+    const m1 = publishedUserMessage("m1");
+    const m2 = publishedUserMessage("m2");
+    const handle = createPublishedChatSessionHandle(
+      publishedInputWith([m1, m2], []),
+    );
+    const before = handle.store.getState().messages;
+
+    const changedM1: typeof m1 = { ...m1, timestamp: 999 };
+    handle.applyConversion({
+      title: "Published Chat",
+      updatedAt: 2,
+      conversion: {
+        messages: [changedM1, m2],
+        events: [],
+        unreadableCount: 0,
+      },
+    });
+
+    const state = handle.store.getState();
+    expect(state.messages[0]).not.toBe(before[0]);
+    expect(state.messages[0].timestamp).toBe(999);
+    expect(state.messages[1]).toBe(before[1]);
+  });
+
+  it("bumps the baseline epoch when a message id is removed - not an extension of what was shown", () => {
+    const handle = createPublishedChatSessionHandle(
+      publishedInputWith(
+        [publishedUserMessage("m1"), publishedUserMessage("m2")],
+        [],
+      ),
+    );
+    handle.applyConversion({
+      title: "Published Chat",
+      updatedAt: 2,
+      conversion: {
+        messages: [publishedUserMessage("m1")],
+        events: [],
+        unreadableCount: 0,
+      },
+    });
+    expect(handle.store.getState().transcriptBaselineEpoch).toBe(1);
+  });
+
+  it("bumps the baseline epoch on a reorder - the first difference is not at the tail", () => {
+    const handle = createPublishedChatSessionHandle(
+      publishedInputWith(
+        [publishedUserMessage("m1"), publishedUserMessage("m2")],
+        [],
+      ),
+    );
+    handle.applyConversion({
+      title: "Published Chat",
+      updatedAt: 2,
+      conversion: {
+        messages: [publishedUserMessage("m2"), publishedUserMessage("m1")],
+        events: [],
+        unreadableCount: 0,
+      },
+    });
+    expect(handle.store.getState().transcriptBaselineEpoch).toBe(1);
+  });
+
+  it("writes nothing when the conversion is identical to what is already held", () => {
+    const handle = createPublishedChatSessionHandle(
+      publishedInputWith(
+        [publishedUserMessage("m1")],
+        [publishedChatEvent("e1")],
+      ),
+    );
+    const before = handle.store.getState();
+
+    handle.applyConversion({
+      title: "Published Chat",
+      updatedAt: 2,
+      conversion: {
+        messages: [publishedUserMessage("m1")],
+        events: [publishedChatEvent("e1")],
+        unreadableCount: 0,
+      },
+    });
+
+    expect(handle.store.getState()).toBe(before);
+  });
+
+  it("updates chat.title and chat.updatedAt from a later publication", () => {
+    const handle = createPublishedChatSessionHandle(publishedInputWith([], []));
+    handle.applyConversion({
+      title: "Renamed",
+      updatedAt: 99,
+      conversion: { messages: [], events: [], unreadableCount: 0 },
+    });
+    const chat = handle.store.getState().chat;
+    if (chat === null) throw new Error("expected chat");
+    expect(chat.title).toBe("Renamed");
+    expect(chat.updatedAt).toBe(99);
+  });
+
+  it("reconciles events by eventId the same way messages do", () => {
+    const e1 = publishedChatEvent("e1");
+    const handle = createPublishedChatSessionHandle(
+      publishedInputWith([], [e1]),
+    );
+    const before = handle.store.getState().events;
+
+    const changedE1: typeof e1 = { ...e1, timestamp: 55 };
+    const e2 = publishedChatEvent("e2");
+    handle.applyConversion({
+      title: "Published Chat",
+      updatedAt: 2,
+      conversion: {
+        messages: [],
+        events: [changedE1, e2],
+        unreadableCount: 0,
+      },
+    });
+
+    const state = handle.store.getState();
+    expect(state.events).toHaveLength(2);
+    expect(state.events[0]).not.toBe(before[0]);
+    expect(state.events[0].timestamp).toBe(55);
+  });
+});

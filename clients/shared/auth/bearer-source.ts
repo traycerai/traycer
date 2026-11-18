@@ -1,0 +1,172 @@
+/**
+ * The narrow bearer seam the host transport depends on.
+ *
+ * The WS clients (`WsRpcClient`, `WsStreamClient`) only need a bearer token for
+ * the `open` frame - the host derives identity from the token itself. They do
+ * NOT need a full `RequestContext`. Narrowing the dependency to this interface
+ * lets every client supply a bearer "similarly": the renderer passes its
+ * `RequestContext.credentials` (a `CredentialLease`, which satisfies this shape
+ * structurally), and the CLI passes a `MutableBearerLease` over the token it
+ * read from `~/.traycer/cli/credentials` - without fabricating an
+ * `AuthenticatedUser`.
+ */
+import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-context";
+
+/**
+ * Read side of the bearer seam used by the transport open frame.
+ *
+ * `identity.userId` is consumed only by the same-user guards (rotation,
+ * {@link bearerSourceForUser} and {@link cloudVerdictForUser}, which keep a
+ * transport on its own user); the transport never reads the rest of an
+ * identity, and it never reaches an error message — a sink that logs a whole
+ * error object would publish the id above DEBUG. `getBearerToken()` throws
+ * when no bearer is available (e.g. a released credential lease), which the
+ * transport maps to a pre-dial failure.
+ */
+export interface OpenFrameBearerSource {
+  getBearerToken(): string;
+  readonly identity: { readonly userId: string };
+}
+
+/**
+ * Injectable source for the active bearer, read by the transport per request /
+ * reconnect. `null` means "no bearer available" - the transport fails before
+ * dialing rather than sending an empty `open` frame.
+ */
+export type BearerSourceProvider = () => OpenFrameBearerSource | null;
+
+/**
+ * `provider`, answering only for `userId`: a source of any other identity
+ * reads as no bearer. A provider is usually a live read of the current
+ * context, which after an account switch returns the new user lease while a
+ * transport built for the old user is still held; bound, that transport never
+ * presents it, at a dial, an open or a credential push. Same-user rotation and
+ * a same-user re-sign-in (a fresh lease, the same `userId`) still pass.
+ */
+export function bearerSourceForUser(
+  provider: BearerSourceProvider,
+  userId: string,
+): BearerSourceProvider {
+  return () => {
+    const source = provider();
+    return source !== null && source.identity.userId === userId ? source : null;
+  };
+}
+
+/**
+ * `cloudAuthorized`, answering only for `userId`: `false` while `provider`
+ * returns no source of that user. The verdict a transport is given is usually
+ * a live read of the current session, so after an account switch it is the
+ * next user's; bound, a transport built for the old user reports `false` on
+ * its open frame and in its verdict pushes instead. Same-user promotion and
+ * demotion pass through unchanged.
+ *
+ * Exact while `cloudAuthorized` describes the session whose bearer
+ * `provider` returns at the same moment. A composition keeps that by
+ * committing an identity transition's context and verdict in one synchronous
+ * run: the GUI's `AuthService` commits the request context, then the auth
+ * store, and announces the verdict after both.
+ */
+export function cloudVerdictForUser(
+  provider: BearerSourceProvider,
+  userId: string,
+  cloudAuthorized: () => boolean,
+): () => boolean {
+  const bearer = bearerSourceForUser(provider, userId);
+  return () => bearer() !== null && cloudAuthorized();
+}
+
+/**
+ * A bearer a composition has declared fit for CLOUD use: the account's authn
+ * has confirmed this session, so spending the token on a capability (issuing a
+ * credential, reading the account's registry) is legitimate. `null` is the
+ * ordinary "not right now" channel - signed out, or holding a token with no
+ * verdict behind it.
+ *
+ * The `kind` discriminant is the whole point and it is doing exactly one job:
+ * an object literal is structurally incompatible with `() => string | null`, so
+ * a composition that wires a raw bearer reader where a cloud-authorized one is
+ * required is a `tsc` error rather than a silent egress. That catches the
+ * ACCIDENTAL mis-wire, which is the one that actually happens.
+ *
+ * BE CLEAR ABOUT WHAT THIS IS NOT. TypeScript is structural: nothing stops a
+ * caller minting `{ kind: "cloud", getBearerToken: () => token }` inline over a
+ * bearer no one has confirmed. This constrains what a consumer DECLARES AS ITS
+ * DEPENDENCY, not what any body can reach, and it is not a capability boundary
+ * on its own. The lint fence that restricts `getBearerToken` outside the
+ * host-local transport allowlist is what does that work; this type makes the
+ * requirement legible and the mis-wire loud.
+ */
+export interface CloudBearerSource {
+  readonly kind: "cloud";
+  getBearerToken(): string | null;
+}
+
+/**
+ * Mutable counterpart used by the refresh path: the active bearer can be rotated
+ * in place (same user) so the next `open` frame reads the rotated value without
+ * rebuilding the client. The renderer's `CredentialLease.rotateBearerToken(...)`
+ * plays this role on its side; the CLI uses `MutableBearerLease`.
+ */
+export interface BearerLease extends OpenFrameBearerSource {
+  rotate(token: string): void;
+}
+
+/**
+ * Minimal `BearerLease` for clients that hold a plain bearer string (the CLI).
+ * Holds the token and a fixed `userId`; `rotate` swaps the token in place so a
+ * shared transport client reading `() => lease` picks up the refreshed value on
+ * its next request / reconnect.
+ *
+ * Honors the `OpenFrameBearerSource` contract that `getBearerToken()` THROWS
+ * when no bearer is available: an empty token represents "no bearer" and raises
+ * `CredentialLeaseReleasedError`, the same signal the renderer's `CredentialLease`
+ * raises and the transport's `extractBearerForOpenFrame` already catches. So a
+ * lease that is rotated to an empty value fails closed (pre-dial) rather than
+ * sending `open { token: "" }`.
+ */
+export class MutableBearerLease implements BearerLease {
+  readonly identity: { readonly userId: string };
+  private token: string;
+
+  constructor(token: string, userId: string) {
+    this.token = token;
+    this.identity = { userId };
+  }
+
+  getBearerToken(): string {
+    if (this.token.length === 0) {
+      throw new CredentialLeaseReleasedError(
+        "No bearer available for this credential lease",
+      );
+    }
+    return this.token;
+  }
+
+  rotate(token: string): void {
+    this.token = token;
+  }
+}
+
+/**
+ * Reads a lease's current bearer, mapping the "no bearer" throw
+ * (`CredentialLeaseReleasedError`, raised on an empty token) to `null` so
+ * callers can treat it as "signed out, nothing to do".
+ *
+ * Lives here rather than in either command that needs it: `monitor` and
+ * `worktree-delete` both feed this into the CLI's host-credential mint flow,
+ * and two copies of a fail-closed auth predicate are exactly the thing that
+ * drifts. Only the signed-out signal maps to `null`; any other lease failure is
+ * a real bug and is rethrown rather than being masked as a benign signed-out
+ * state.
+ */
+export function readLeaseBearer(lease: BearerLease): string | null {
+  try {
+    return lease.getBearerToken();
+  } catch (cause) {
+    if (cause instanceof CredentialLeaseReleasedError) {
+      return null;
+    }
+    throw cause;
+  }
+}

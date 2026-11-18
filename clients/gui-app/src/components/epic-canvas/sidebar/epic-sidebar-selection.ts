@@ -1,0 +1,922 @@
+import {
+  createContext,
+  createElement,
+  use,
+  useCallback,
+  useMemo,
+  useReducer,
+  type ReactNode,
+} from "react";
+import {
+  useMaybeEpicArchivedNodeIds,
+  useMaybeEpicTreeIndex,
+  type EpicTreeIndex,
+} from "@/lib/epic-selectors";
+import {
+  isDefaultSort,
+  makeNodeComparator,
+  sortNodeIdsWithClock,
+  type NodeComparator,
+  type NodeSortClock,
+} from "@/lib/epic-sort";
+import { withMemberToggled } from "@/lib/immutable-set";
+import { useEpicChatSortClock } from "@/components/epic-canvas/sidebar/epic-sidebar-filter";
+import { useChatArchiveSupportState } from "@/hooks/epic/use-chat-archive-support";
+import {
+  CHAT_ARCHIVE_VISIBILITY,
+  useChatArchiveVisibility,
+  useChatSort,
+} from "@/stores/epics/left-panel-store";
+
+export type SidebarBulkSelectionPanelId = "chats" | "artifacts";
+
+export type SidebarTreeFilterFn = (type: string | null | undefined) => boolean;
+
+interface SidebarBulkSelectionProviderProps {
+  readonly panelId: SidebarBulkSelectionPanelId;
+  readonly children: ReactNode;
+}
+
+interface SidebarBulkSelectionState {
+  readonly selectionMode: boolean;
+  readonly selectedIds: ReadonlySet<string>;
+  readonly selectableIds: readonly string[];
+  /** Settled mutation roots whose later projection may prune the last selection. */
+  readonly exitOnSelectablePruneIds: ReadonlySet<string>;
+  readonly pendingDeleteIds: readonly string[] | null;
+  readonly deletePending: boolean;
+}
+
+type SidebarBulkSelectionAction =
+  | { readonly type: "enter" }
+  | { readonly type: "cancel" }
+  | { readonly type: "toggle"; readonly id: string }
+  | { readonly type: "selectAll" }
+  | { readonly type: "deselectAll" }
+  | { readonly type: "setSelectable"; readonly ids: readonly string[] }
+  | { readonly type: "requestDelete"; readonly ids: readonly string[] }
+  | { readonly type: "closeDelete" }
+  | { readonly type: "setDeletePending"; readonly pending: boolean }
+  | { readonly type: "clearSelected"; readonly ids: readonly string[] }
+  | {
+      readonly type: "armSelectablePruneExit";
+      readonly ids: readonly string[];
+    }
+  | { readonly type: "reset" };
+
+export interface SidebarBulkSelectionValue {
+  readonly panelId: SidebarBulkSelectionPanelId;
+  readonly selectionMode: boolean;
+  readonly selectedIds: ReadonlySet<string>;
+  readonly selectableIds: readonly string[];
+  readonly selectedVisibleIds: readonly string[];
+  readonly selectedCount: number;
+  readonly canSelect: boolean;
+  readonly allVisibleSelected: boolean;
+  readonly pendingDeleteIds: readonly string[] | null;
+  readonly deletePending: boolean;
+  readonly enterSelectionMode: () => void;
+  readonly cancelSelection: () => void;
+  readonly toggleSelection: (id: string) => void;
+  readonly selectAllVisible: () => void;
+  readonly deselectAllVisible: () => void;
+  readonly setSelectableIds: (ids: readonly string[]) => void;
+  readonly requestDeleteSelected: () => void;
+  readonly closeDeleteDialog: () => void;
+  readonly setDeletePending: (pending: boolean) => void;
+  readonly clearSelectedIds: (ids: readonly string[]) => void;
+  /** Exit if projection of these mutation roots removes the final selection. */
+  readonly armSelectablePruneExit: (ids: readonly string[]) => void;
+  readonly resetSelection: () => void;
+}
+
+const EMPTY_SELECTED_IDS: ReadonlySet<string> = new Set();
+const EMPTY_SELECTABLE_IDS: readonly string[] = Object.freeze([]);
+const EMPTY_SELECTABLE_PRUNE_IDS: ReadonlySet<string> = new Set();
+const EMPTY_TREE_IDS: readonly string[] = Object.freeze([]);
+
+const INITIAL_SELECTION_STATE: SidebarBulkSelectionState = {
+  selectionMode: false,
+  selectedIds: EMPTY_SELECTED_IDS,
+  selectableIds: EMPTY_SELECTABLE_IDS,
+  exitOnSelectablePruneIds: EMPTY_SELECTABLE_PRUNE_IDS,
+  pendingDeleteIds: null,
+  deletePending: false,
+};
+
+const SidebarBulkSelectionContext =
+  createContext<SidebarBulkSelectionValue | null>(null);
+
+export function isSidebarBulkSelectionPanelId(
+  panelId: string,
+): panelId is SidebarBulkSelectionPanelId {
+  return panelId === "chats" || panelId === "artifacts";
+}
+
+export function SidebarBulkSelectionProvider(
+  props: SidebarBulkSelectionProviderProps,
+): ReactNode {
+  const [state, dispatch] = useReducer(
+    sidebarBulkSelectionReducer,
+    INITIAL_SELECTION_STATE,
+  );
+
+  const selectedVisibleIds = useMemo(
+    () =>
+      state.selectableIds.reduce<string[]>((ids, id) => {
+        if (state.selectedIds.has(id)) ids.push(id);
+        return ids;
+      }, []),
+    [state.selectableIds, state.selectedIds],
+  );
+
+  const enterSelectionMode = useCallback(() => {
+    dispatch({ type: "enter" });
+  }, []);
+
+  const cancelSelection = useCallback(() => {
+    dispatch({ type: "cancel" });
+  }, []);
+
+  const toggleSelection = useCallback((id: string) => {
+    dispatch({ type: "toggle", id });
+  }, []);
+
+  const selectAllVisible = useCallback(() => {
+    dispatch({ type: "selectAll" });
+  }, []);
+
+  const deselectAllVisible = useCallback(() => {
+    dispatch({ type: "deselectAll" });
+  }, []);
+
+  const setSelectableIds = useCallback((ids: readonly string[]) => {
+    dispatch({ type: "setSelectable", ids });
+  }, []);
+
+  const requestDeleteSelected = useCallback(() => {
+    dispatch({ type: "requestDelete", ids: selectedVisibleIds });
+  }, [selectedVisibleIds]);
+
+  const closeDeleteDialog = useCallback(() => {
+    dispatch({ type: "closeDelete" });
+  }, []);
+
+  const setDeletePending = useCallback((pending: boolean) => {
+    dispatch({ type: "setDeletePending", pending });
+  }, []);
+
+  const clearSelectedIds = useCallback((ids: readonly string[]) => {
+    dispatch({ type: "clearSelected", ids });
+  }, []);
+
+  const armSelectablePruneExit = useCallback((ids: readonly string[]) => {
+    dispatch({ type: "armSelectablePruneExit", ids });
+  }, []);
+
+  const resetSelection = useCallback(() => {
+    dispatch({ type: "reset" });
+  }, []);
+
+  const value = useMemo<SidebarBulkSelectionValue>(
+    () => ({
+      panelId: props.panelId,
+      selectionMode: state.selectionMode,
+      selectedIds: state.selectedIds,
+      selectableIds: state.selectableIds,
+      selectedVisibleIds,
+      selectedCount: selectedVisibleIds.length,
+      canSelect: state.selectableIds.length > 0,
+      allVisibleSelected:
+        state.selectableIds.length > 0 &&
+        selectedVisibleIds.length === state.selectableIds.length,
+      pendingDeleteIds: state.pendingDeleteIds,
+      deletePending: state.deletePending,
+      enterSelectionMode,
+      cancelSelection,
+      toggleSelection,
+      selectAllVisible,
+      deselectAllVisible,
+      setSelectableIds,
+      requestDeleteSelected,
+      closeDeleteDialog,
+      setDeletePending,
+      clearSelectedIds,
+      armSelectablePruneExit,
+      resetSelection,
+    }),
+    [
+      props.panelId,
+      state.selectionMode,
+      state.selectedIds,
+      state.selectableIds,
+      selectedVisibleIds,
+      state.pendingDeleteIds,
+      state.deletePending,
+      enterSelectionMode,
+      cancelSelection,
+      toggleSelection,
+      selectAllVisible,
+      deselectAllVisible,
+      setSelectableIds,
+      requestDeleteSelected,
+      closeDeleteDialog,
+      setDeletePending,
+      clearSelectedIds,
+      armSelectablePruneExit,
+      resetSelection,
+    ],
+  );
+
+  return createElement(
+    SidebarBulkSelectionContext.Provider,
+    { value },
+    props.children,
+  );
+}
+
+export function useSidebarBulkSelection(): SidebarBulkSelectionValue {
+  const context = use(SidebarBulkSelectionContext);
+  if (context === null) {
+    throw new Error(
+      "useSidebarBulkSelection must be used inside SidebarBulkSelectionProvider",
+    );
+  }
+  return context;
+}
+
+export function useMaybeSidebarBulkSelection(): SidebarBulkSelectionValue | null {
+  return use(SidebarBulkSelectionContext);
+}
+
+/**
+ * The node types the chats panel's tree is BUILT from. Terminal agents belong
+ * to it even for a caller that only wants chats: a chat can be nested under
+ * one, so dropping the agent from the walk takes its children with it.
+ */
+export const CHATS_TREE_FILTER: SidebarTreeFilterFn = (type) =>
+  type === "chat" || type === "terminal-agent";
+
+/** Chats alone - the rows a message can actually be sent to. */
+const CHAT_NODE_FILTER: SidebarTreeFilterFn = (type) => type === "chat";
+
+/**
+ * The top-level rows of one sidebar tree, in the panel's sort order.
+ * `tree.rootIds` already carries the projector's default
+ * (most-recent-activity) order, so a default sort (`comparator === null`)
+ * re-sorts nothing.
+ */
+export function sidebarTreeRootIds(args: {
+  readonly tree: EpicTreeIndex;
+  readonly treeFilter: SidebarTreeFilterFn;
+  readonly comparator: NodeComparator | null;
+  /**
+   * The per-node content clock these roots sort by in place of `updatedAt`
+   * (see `NodeSortClock`), or `null` for a caller with none. Required rather
+   * than defaulted: a caller that forgets it silently orders foreign roots by
+   * a metadata stamp no publication moves, which is invisible until someone
+   * compares this list against the rendered panel.
+   */
+  readonly clock: NodeSortClock | null;
+}): readonly string[] {
+  const roots = args.tree.rootIds.filter(
+    (id) =>
+      Object.hasOwn(args.tree.nodeById, id) &&
+      args.treeFilter(args.tree.nodeById[id].type),
+  );
+  return sortNodeIdsWithClock(
+    roots,
+    args.tree.nodeById,
+    args.comparator,
+    args.clock,
+  );
+}
+
+const EMPTY_ARCHIVE_HIDDEN_IDS: ReadonlySet<string> = new Set<string>();
+
+/**
+ * Every node hidden by archiving: the archived nodes themselves plus their
+ * whole subtrees, i.e. exactly "some ancestor-or-self carries `archivedAt`".
+ *
+ * Descends from the archive roots through `childrenByParent` rather than
+ * walking each node's parent chain upward - the archived set is normally tiny
+ * and the walk then costs O(hidden subtree) instead of O(nodes x depth).
+ *
+ * This is what makes the SINGLE-FLAG model work without cascade writes:
+ * archiving stamps only the target, and unarchiving clears only the target, so
+ * the subtree reappears in one step - except for descendants that were archived
+ * in their own right, which stay in `archivedIds` and keep hiding their own
+ * subtrees. `hidden` doubles as the cycle guard.
+ */
+export function collectArchiveHiddenIds(
+  archivedIds: ReadonlyArray<string>,
+  tree: EpicTreeIndex,
+): ReadonlySet<string> {
+  if (archivedIds.length === 0) return EMPTY_ARCHIVE_HIDDEN_IDS;
+  const hidden = new Set<string>();
+  const stack = [...archivedIds];
+  while (stack.length > 0) {
+    const id = stack.pop();
+    if (id === undefined || hidden.has(id)) continue;
+    hidden.add(id);
+    if (Object.hasOwn(tree.childrenByParent, id)) {
+      for (const childId of tree.childrenByParent[id]) stack.push(childId);
+    }
+  }
+  return hidden;
+}
+
+/**
+ * Archived-only is a tree projection rather than a flat list: unarchived
+ * ancestors remain as navigational context for archived descendants, while
+ * unrelated branches and unarchived descendants are hidden.
+ */
+function collectArchivedOnlyHiddenIds(
+  archivedIds: ReadonlyArray<string>,
+  tree: EpicTreeIndex,
+): ReadonlySet<string> {
+  const visible = new Set<string>();
+  for (const archivedId of archivedIds) {
+    const visited = new Set<string>();
+    let currentId: string | null = archivedId;
+    while (currentId !== null && !visited.has(currentId)) {
+      visited.add(currentId);
+      if (!Object.hasOwn(tree.nodeById, currentId)) break;
+      visible.add(currentId);
+      currentId = tree.nodeById[currentId].parentId;
+    }
+  }
+  const hidden = new Set<string>();
+  for (const id of Object.keys(tree.nodeById)) {
+    if (!visible.has(id)) hidden.add(id);
+  }
+  return hidden.size === 0 ? EMPTY_ARCHIVE_HIDDEN_IDS : hidden;
+}
+
+/**
+ * The archive-hidden set for this epic, or empty when nothing should be hidden.
+ *
+ * The selected visibility mode determines which archive partition is hidden.
+ * `Archived only` retains unarchived ancestors solely as tree context.
+ * Nothing is hidden in two cases, and the second is load-bearing:
+ *
+ * 1. "All chats" is selected - archived rows render dimmed alongside active.
+ * 2. The host is KNOWN to lack `epic.setChatArchived`. Every way back to an
+ *    archived row is capability-gated (the archive visibility filter, the
+ *    Unarchive entry, the empty-state hint), so continuing to hide on such a
+ *    host would leave rows invisible with nothing left to recover them - a real
+ *    path, since a host can be rolled back under a live session or the default
+ *    host can simply be an older machine. Archived records must never become
+ *    unreachable, so a known-absent host stops hiding entirely.
+ *
+ * The support state is deliberately the TRI-STATE, not the fail-closed boolean:
+ * `null` (no handshake yet) keeps hiding, because revealing on unknown would
+ * flash archived rows on every cold start and hide them again a moment later.
+ * Only a positive `false` reveals.
+ *
+ * Provider-optional for the reason given on {@link useSidebarChatOrder}, its
+ * only caller outside the panel: with no session there are no archived rows and
+ * nothing to hide, so the hidden set is empty.
+ */
+export function useSidebarArchiveHiddenIds(
+  epicId: string,
+): ReadonlySet<string> {
+  const archiveVisibility = useChatArchiveVisibility(epicId);
+  const archiveSupport = useChatArchiveSupportState();
+  const archivedIds = useMaybeEpicArchivedNodeIds();
+  const tree = useMaybeEpicTreeIndex();
+  return useMemo(() => {
+    if (
+      archiveVisibility === CHAT_ARCHIVE_VISIBILITY.All ||
+      archiveSupport === false
+    ) {
+      return EMPTY_ARCHIVE_HIDDEN_IDS;
+    }
+    if (archiveVisibility === CHAT_ARCHIVE_VISIBILITY.Archived) {
+      return collectArchivedOnlyHiddenIds(archivedIds, tree);
+    }
+    return collectArchiveHiddenIds(archivedIds, tree);
+  }, [archiveVisibility, archiveSupport, archivedIds, tree]);
+}
+
+/**
+ * In the default unarchived view, reveals exceptional archived rows without
+ * changing the mode to "All chats". An open, working, or unread row needs its
+ * ancestor path to remain navigable, but siblings and descendants that have no
+ * such signal stay hidden. Walking parent links also handles an active
+ * unarchived descendant whose archived ancestor would otherwise prune the
+ * whole branch.
+ */
+export function revealArchiveHiddenIds(
+  archiveHiddenIds: ReadonlySet<string>,
+  alwaysVisibleIds: readonly string[],
+  tree: EpicTreeIndex,
+): ReadonlySet<string> {
+  if (archiveHiddenIds.size === 0 || alwaysVisibleIds.length === 0) {
+    return archiveHiddenIds;
+  }
+  const hidden = new Set(archiveHiddenIds);
+  for (const id of alwaysVisibleIds) {
+    const visited = new Set<string>();
+    let currentId: string | null = id;
+    while (currentId !== null && !visited.has(currentId)) {
+      visited.add(currentId);
+      hidden.delete(currentId);
+      if (!Object.hasOwn(tree.nodeById, currentId)) break;
+      currentId = tree.nodeById[currentId].parentId;
+    }
+  }
+  return hidden.size === 0 ? EMPTY_ARCHIVE_HIDDEN_IDS : hidden;
+}
+
+/**
+ * Intersects the origin filter's visible-id set with archive hiding, for the
+ * consumers that walk tree DATA rather than the rendered tree (the collapsed
+ * parent's status rollup, the bulk-selection id sweep, the send-to-chat
+ * picker). Those must not surface a row the user cannot reach by expanding.
+ *
+ * Deliberately NOT fed to `mergeForcedExpanded`: that force-expands every id in
+ * a non-null set, so publishing an archive-derived set there would expand the
+ * entire tree the moment anything was archived. Forced expansion stays keyed
+ * off the origin filter alone.
+ */
+export function combineSidebarVisibleIds(
+  originVisibleIds: ReadonlySet<string> | null,
+  archiveHiddenIds: ReadonlySet<string>,
+  tree: EpicTreeIndex,
+): ReadonlySet<string> | null {
+  if (archiveHiddenIds.size === 0) return originVisibleIds;
+  const source =
+    originVisibleIds === null ? Object.keys(tree.nodeById) : originVisibleIds;
+  const combined = new Set<string>();
+  for (const id of source) {
+    if (!archiveHiddenIds.has(id)) combined.add(id);
+  }
+  return combined;
+}
+
+export function collectVisibleSidebarTreeIds(args: {
+  readonly rootIds: readonly string[];
+  readonly expandedIds: ReadonlySet<string>;
+  readonly tree: EpicTreeIndex;
+  /** Node types this tree is made of. Anything else prunes its whole subtree. */
+  readonly treeFilter: SidebarTreeFilterFn;
+  /**
+   * Node types to EMIT. Narrower than `treeFilter` for a caller that needs a
+   * node's descendants but not the node itself - the send-to-chat picker walks
+   * THROUGH a terminal agent to reach the chats under it while offering only
+   * chats. Pass the same predicate as `treeFilter` to emit every row walked.
+   */
+  readonly emitFilter: SidebarTreeFilterFn;
+  readonly visibleIds: ReadonlySet<string> | null;
+  readonly comparator: NodeComparator | null;
+  /**
+   * The per-node clock the panel sorts by in place of `updatedAt` (see
+   * `NodeSortClock`), applied at every child level so this walk lists nested
+   * siblings in the order the rendered panel shows them. `null` for a caller
+   * with no such clock.
+   */
+  readonly clock: NodeSortClock | null;
+}): readonly string[] {
+  const results: string[] = [];
+  const visit = (nodeId: string): void => {
+    if (!Object.hasOwn(args.tree.nodeById, nodeId)) return;
+    const node = args.tree.nodeById[nodeId];
+    if (!args.treeFilter(node.type)) return;
+    if (args.visibleIds !== null && !args.visibleIds.has(nodeId)) return;
+    if (args.emitFilter(node.type)) results.push(nodeId);
+    if (!args.expandedIds.has(nodeId)) return;
+    const childIds = args.tree.childrenByParent[nodeId] ?? EMPTY_TREE_IDS;
+    const visibleChildIds = childIds.reduce<string[]>((ids, childId) => {
+      if (!Object.hasOwn(args.tree.nodeById, childId)) return ids;
+      if (!args.treeFilter(args.tree.nodeById[childId].type)) return ids;
+      if (args.visibleIds !== null && !args.visibleIds.has(childId)) {
+        return ids;
+      }
+      ids.push(childId);
+      return ids;
+    }, []);
+    sortNodeIdsWithClock(
+      visibleChildIds,
+      args.tree.nodeById,
+      args.comparator,
+      args.clock,
+    ).forEach(visit);
+  };
+  args.rootIds.forEach(visit);
+  return results;
+}
+
+/**
+ * Every chat the chats sidebar would show for this Task, flattened into the
+ * order it lists them in. Not a lookalike of that panel - the same
+ * {@link sidebarTreeRootIds} roots, the same {@link useSidebarArchiveHiddenIds}
+ * subtree pruning, the same {@link collectVisibleSidebarTreeIds} walk with the
+ * same comparator AND the same publication clock at every level. Any surface
+ * that offers "pick one of this Task's chats" reads the order from here, or the
+ * two drift the first time either the sort mode or the hiding rules change.
+ *
+ * Two deliberate departures from the rendered panel, both because this is a
+ * flat list of destinations rather than a tree of rows:
+ *
+ *   - Expansion is a tree affordance and a flat list has nothing to expand, so
+ *     the walk runs as if every parent were open and a nested chat keeps its
+ *     place directly under its parent.
+ *   - The panel's origin filter (GUI chats vs TUI agents) is a view the user
+ *     put on that panel, not a statement about which chats exist. Narrowing
+ *     the picker by it would hide send targets the user never meant to rule
+ *     out.
+ *
+ * Terminal agents are walked through but never emitted: they have no composer,
+ * so an agent is not somewhere a message can be sent - while the chats nested
+ * UNDER one are, and are exactly what a chat-rooted walk would have missed.
+ *
+ * Reads the tree through the PROVIDER-OPTIONAL selectors, so this resolves to
+ * an empty order outside an open-epic session instead of throwing. The picker
+ * is not a canvas-only surface: a browser tile on the Start Page renders the
+ * same annotation route, and a Start Page browser tab belongs to no epic, so
+ * "no session" is an expected state here rather than a missing provider. An
+ * empty order is the right answer for it - there is no composer to send to.
+ */
+export function useSidebarChatOrder(epicId: string): readonly string[] {
+  const tree = useMaybeEpicTreeIndex();
+  const sort = useChatSort(epicId);
+  const archiveHiddenIds = useSidebarArchiveHiddenIds(epicId);
+  // The same publication clock the rendered panel sorts by - taken from the
+  // panel's context when this picker is opened inside one, and derived from
+  // the same store inputs when it is not (a terminal quote, an artifact
+  // quote, a browser annotation). Applied at BOTH levels, because a foreign
+  // chat can be a root as easily as a child: `sidebarTreeRootIds` orders the
+  // roots and `collectVisibleSidebarTreeIds` orders every level under them,
+  // and clocking only one of the two leaves the list half-corrected.
+  const clock = useEpicChatSortClock();
+  return useMemo(() => {
+    const comparator = isDefaultSort(sort) ? null : makeNodeComparator(sort);
+    const rootIds = sidebarTreeRootIds({
+      tree,
+      treeFilter: CHATS_TREE_FILTER,
+      comparator,
+      clock,
+    }).filter((id) => !archiveHiddenIds.has(id));
+    return collectVisibleSidebarTreeIds({
+      rootIds,
+      expandedIds: new Set(Object.keys(tree.nodeById)),
+      tree,
+      treeFilter: CHATS_TREE_FILTER,
+      emitFilter: CHAT_NODE_FILTER,
+      visibleIds: combineSidebarVisibleIds(null, archiveHiddenIds, tree),
+      comparator,
+      clock,
+    });
+  }, [archiveHiddenIds, clock, sort, tree]);
+}
+
+export function rootmostSelectedSidebarIds(args: {
+  readonly ids: readonly string[];
+  readonly tree: EpicTreeIndex;
+}): readonly string[] {
+  const selectedIds = new Set(args.ids);
+  return args.ids.filter(
+    (id) => !hasSelectedAncestor(id, selectedIds, args.tree),
+  );
+}
+
+/**
+ * The rows a confirmed bulk delete dispatches, deepest agents first.
+ *
+ * An artifact's delete cascades to its subtree, so a selected descendant of a
+ * selected artifact is dropped: deleting it too would be a second delete of a
+ * row the first already removes. An agent's delete removes only that record -
+ * its nested agents survive and move to the top level - so every selected
+ * agent is its own delete, whatever else is selected above it.
+ */
+export function sidebarBulkDeleteIds(args: {
+  readonly ids: readonly string[];
+  readonly tree: EpicTreeIndex;
+  readonly isAgentId: (id: string) => boolean;
+}): readonly string[] {
+  const agentIds = args.ids.filter((id) => args.isAgentId(id));
+  const artifactIds = rootmostSelectedSidebarIds({
+    ids: args.ids.filter((id) => !args.isAgentId(id)),
+    tree: args.tree,
+  });
+  const depthOf = (id: string): number => {
+    let depth = 0;
+    let parentId = Object.hasOwn(args.tree.nodeById, id)
+      ? args.tree.nodeById[id].parentId
+      : null;
+    while (parentId !== null && Object.hasOwn(args.tree.nodeById, parentId)) {
+      depth += 1;
+      parentId = args.tree.nodeById[parentId].parentId;
+    }
+    return depth;
+  };
+  const deepestFirst = agentIds
+    .map((id, index) => ({ id, index, depth: depthOf(id) }))
+    .sort((a, b) => b.depth - a.depth || a.index - b.index)
+    .map((entry) => entry.id);
+  return [...deepestFirst, ...artifactIds];
+}
+
+/**
+ * Of `ids`, each beneath `rootId` when it was captured, the ones `tree` still
+ * places beneath it: `rootId` itself, and every row that is present with an
+ * ancestor chain passing `rootId`. A row missing from the tree, or beneath a
+ * missing row, is not counted - archived records stay in the tree, so a
+ * missing row was deleted, not hidden by the root's archive.
+ */
+export function sidebarIdsStillWithinRoot(args: {
+  readonly ids: readonly string[];
+  readonly rootId: string;
+  readonly tree: EpicTreeIndex;
+}): readonly string[] {
+  return args.ids.filter((id) => {
+    let currentId: string | null = id;
+    while (currentId !== null) {
+      if (currentId === args.rootId) return true;
+      if (!Object.hasOwn(args.tree.nodeById, currentId)) return false;
+      currentId = args.tree.nodeById[currentId].parentId;
+    }
+    return false;
+  });
+}
+
+export function sidebarIdsWithinRoots(args: {
+  readonly ids: readonly string[];
+  readonly rootIds: readonly string[];
+  readonly tree: EpicTreeIndex;
+}): readonly string[] {
+  if (args.rootIds.length === 0) return [];
+  const rootIds = new Set(args.rootIds);
+  return args.ids.filter((id) => {
+    let currentId: string | null = id;
+    while (currentId !== null) {
+      if (rootIds.has(currentId)) return true;
+      if (!Object.hasOwn(args.tree.nodeById, currentId)) return false;
+      currentId = args.tree.nodeById[currentId].parentId;
+    }
+    return false;
+  });
+}
+
+function sidebarBulkSelectionReducer(
+  state: SidebarBulkSelectionState,
+  action: SidebarBulkSelectionAction,
+): SidebarBulkSelectionState {
+  if (action.type === "setSelectable") {
+    return setSelectableSidebarIds(state, action.ids);
+  }
+  if (action.type === "armSelectablePruneExit") {
+    return armSelectablePruneExit(state, action.ids);
+  }
+  switch (action.type) {
+    case "enter":
+      return enterSidebarBulkSelection(state);
+    case "cancel":
+      return {
+        ...state,
+        selectionMode: false,
+        selectedIds: new Set(),
+        exitOnSelectablePruneIds: EMPTY_SELECTABLE_PRUNE_IDS,
+        pendingDeleteIds: null,
+      };
+    case "toggle": {
+      if (!state.selectableIds.includes(action.id)) return state;
+      const nextSelectedIds = withMemberToggled(state.selectedIds, action.id);
+      return {
+        ...state,
+        selectionMode: true,
+        selectedIds: nextSelectedIds,
+        exitOnSelectablePruneIds: retainSelectablePruneExitIds(
+          state.exitOnSelectablePruneIds,
+          nextSelectedIds,
+        ),
+        pendingDeleteIds: null,
+      };
+    }
+    case "selectAll":
+      return { ...state, selectedIds: new Set(state.selectableIds) };
+    case "deselectAll":
+      // Clear every check but stay in selection mode (unlike `clearSelected`,
+      // which exits when the set empties) so the toolbar's "Deselect all" is a
+      // pure toggle back to "Select all" without dropping the user out.
+      if (state.selectedIds.size === 0) return state;
+      return {
+        ...state,
+        selectedIds: new Set(),
+        exitOnSelectablePruneIds: EMPTY_SELECTABLE_PRUNE_IDS,
+      };
+    case "requestDelete":
+      if (action.ids.length === 0) return state;
+      return { ...state, pendingDeleteIds: [...action.ids] };
+    case "closeDelete":
+      return { ...state, pendingDeleteIds: null };
+    case "setDeletePending":
+      return { ...state, deletePending: action.pending };
+    case "clearSelected":
+      return clearSelectedIds(state, action.ids);
+    case "reset":
+      return INITIAL_SELECTION_STATE;
+  }
+}
+
+function armSelectablePruneExit(
+  state: SidebarBulkSelectionState,
+  ids: readonly string[],
+): SidebarBulkSelectionState {
+  if (
+    !state.selectionMode ||
+    state.selectedIds.size === 0 ||
+    ids.length === 0
+  ) {
+    return state;
+  }
+  const selectableIdSet = new Set(state.selectableIds);
+  const nextIds = ids.reduce<Set<string>>((result, id) => {
+    if (selectableIdSet.has(id)) result.add(id);
+    return result;
+  }, new Set(state.exitOnSelectablePruneIds));
+  if (nextIds.size === state.exitOnSelectablePruneIds.size) return state;
+  return { ...state, exitOnSelectablePruneIds: nextIds };
+}
+
+function retainSelectablePruneExitIds(
+  ids: ReadonlySet<string>,
+  selectedIds: ReadonlySet<string>,
+): ReadonlySet<string> {
+  return selectedIds.size > 0 ? ids : EMPTY_SELECTABLE_PRUNE_IDS;
+}
+
+function setSelectableSidebarIds(
+  state: SidebarBulkSelectionState,
+  ids: readonly string[],
+): SidebarBulkSelectionState {
+  if (sameStringArray(state.selectableIds, ids)) {
+    return state;
+  }
+  const nextSelectedIds = idsVisibleIn(ids, state.selectedIds);
+  const nextSelectablePruneIds = idsVisibleIn(
+    ids,
+    state.exitOnSelectablePruneIds,
+  );
+  const archiveProjectionSettled =
+    nextSelectablePruneIds.size < state.exitOnSelectablePruneIds.size;
+  const projectionPrunedLastSelection =
+    archiveProjectionSettled &&
+    state.selectedIds.size > 0 &&
+    nextSelectedIds.size === 0;
+  return {
+    ...state,
+    selectableIds: ids,
+    selectedIds: nextSelectedIds,
+    selectionMode: projectionPrunedLastSelection ? false : state.selectionMode,
+    exitOnSelectablePruneIds: nextSelectablePruneIds,
+  };
+}
+
+function enterSidebarBulkSelection(
+  state: SidebarBulkSelectionState,
+): SidebarBulkSelectionState {
+  if (state.selectableIds.length === 0) return state;
+  return {
+    ...state,
+    selectionMode: true,
+    selectedIds: new Set(),
+    pendingDeleteIds: null,
+  };
+}
+
+function clearSelectedIds(
+  state: SidebarBulkSelectionState,
+  ids: readonly string[],
+): SidebarBulkSelectionState {
+  if (ids.length === 0) return state;
+  const idsToRemove = new Set(ids);
+  const nextSelectedIds = [...state.selectedIds].reduce<Set<string>>(
+    (next, id) => {
+      if (!idsToRemove.has(id)) next.add(id);
+      return next;
+    },
+    new Set(),
+  );
+  const nextSelectionMode = nextSelectedIds.size > 0;
+  if (
+    nextSelectedIds.size === state.selectedIds.size &&
+    state.selectionMode === nextSelectionMode
+  ) {
+    return state;
+  }
+  return {
+    ...state,
+    selectedIds: nextSelectedIds,
+    selectionMode: nextSelectionMode,
+    exitOnSelectablePruneIds: nextSelectionMode
+      ? state.exitOnSelectablePruneIds
+      : EMPTY_SELECTABLE_PRUNE_IDS,
+    pendingDeleteIds: null,
+  };
+}
+
+function idsVisibleIn(
+  selectableIds: readonly string[],
+  candidateIds: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const selectableIdSet = new Set(selectableIds);
+  return [...candidateIds].reduce<Set<string>>((next, id) => {
+    if (selectableIdSet.has(id)) next.add(id);
+    return next;
+  }, new Set());
+}
+
+/**
+ * How many SELECTED rows each dispatched delete of
+ * {@link sidebarBulkDeleteIds} stands for: 1 for an agent, and for an
+ * artifact itself plus every selected artifact under it, whose rows its
+ * cascade removes with it. A batch notice counts selected rows, so a
+ * cascaded child counts as selected and as deleted (or not) with its root.
+ */
+export function sidebarBulkDeleteSelectedRows(args: {
+  readonly ids: readonly string[];
+  readonly tree: EpicTreeIndex;
+  readonly isAgentId: (id: string) => boolean;
+}): ReadonlyMap<string, number> {
+  const artifactIds = args.ids.filter((id) => !args.isAgentId(id));
+  const selectedArtifacts = new Set(artifactIds);
+  const rows = new Map<string, number>();
+  for (const id of args.ids) {
+    if (args.isAgentId(id)) rows.set(id, 1);
+  }
+  for (const id of artifactIds) {
+    const root = topmostSelectedAncestor(id, selectedArtifacts, args.tree);
+    const target = root ?? id;
+    rows.set(target, (rows.get(target) ?? 0) + 1);
+  }
+  return rows;
+}
+
+/**
+ * Where each dispatched delete of {@link sidebarBulkDeleteIds} first appears
+ * in the selection: its earliest selected row, which for an artifact can be a
+ * selected descendant its cascade removes. Dispatch order puts agents deepest
+ * first and artifacts last, which the deletes need; a batch notice lists
+ * refusal advice in selection order, so it sorts its outcomes by this.
+ */
+export function sidebarBulkDeleteSelectionOrder(args: {
+  readonly ids: readonly string[];
+  readonly tree: EpicTreeIndex;
+  readonly isAgentId: (id: string) => boolean;
+}): ReadonlyMap<string, number> {
+  const selectedArtifacts = new Set(
+    args.ids.filter((id) => !args.isAgentId(id)),
+  );
+  const order = new Map<string, number>();
+  args.ids.forEach((id, index) => {
+    const target = args.isAgentId(id)
+      ? id
+      : (topmostSelectedAncestor(id, selectedArtifacts, args.tree) ?? id);
+    if (!order.has(target)) order.set(target, index);
+  });
+  return order;
+}
+
+/** The highest ancestor of `id` that is in `selectedIds`, or `null`. */
+function topmostSelectedAncestor(
+  id: string,
+  selectedIds: ReadonlySet<string>,
+  tree: EpicTreeIndex,
+): string | null {
+  let topmost: string | null = null;
+  if (!Object.hasOwn(tree.nodeById, id)) return null;
+  let parentId = tree.nodeById[id].parentId;
+  while (parentId !== null) {
+    if (selectedIds.has(parentId)) topmost = parentId;
+    if (!Object.hasOwn(tree.nodeById, parentId)) break;
+    parentId = tree.nodeById[parentId].parentId;
+  }
+  return topmost;
+}
+
+function hasSelectedAncestor(
+  id: string,
+  selectedIds: ReadonlySet<string>,
+  tree: EpicTreeIndex,
+): boolean {
+  if (!Object.hasOwn(tree.nodeById, id)) return false;
+  let parentId = tree.nodeById[id].parentId;
+  while (parentId !== null) {
+    if (selectedIds.has(parentId)) return true;
+    if (!Object.hasOwn(tree.nodeById, parentId)) return false;
+    parentId = tree.nodeById[parentId].parentId;
+  }
+  return false;
+}
+
+function sameStringArray(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((id, index) => id === right[index])
+  );
+}

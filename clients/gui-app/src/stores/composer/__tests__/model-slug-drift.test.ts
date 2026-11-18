@@ -1,0 +1,337 @@
+import { describe, expect, it } from "vitest";
+import {
+  findSelectedModel,
+  type ModelOption,
+} from "@/components/home/data/landing-options";
+import {
+  createComposerToolbarStore,
+  type ComposerToolbarCatalog,
+} from "@/stores/composer/composer-toolbar-store";
+
+function model(
+  slug: string,
+  resolvedModel: string | null,
+  label: string,
+): ModelOption {
+  return {
+    harnessId: "claude",
+    slug,
+    label,
+    description: null,
+    contextWindow: null,
+    maxOutputTokens: null,
+    defaultReasoningEffort: null,
+    supportedReasoningEfforts: [],
+    defaultServiceTier: null,
+    supportedServiceTiers: [],
+    deprecationNotice: null,
+    metadata: resolvedModel === null ? {} : { resolvedModel },
+  };
+}
+
+function catalog(models: ReadonlyArray<ModelOption>): ComposerToolbarCatalog {
+  return {
+    // This file is only exercising model-slug resolution, not host-scoped
+    // memory, so a hostless catalog keeps the fixtures focused.
+    hostId: null,
+    harnesses: [
+      {
+        id: "claude",
+        label: "Claude Code",
+        enabled: true,
+        available: true,
+        error: null,
+        modes: ["gui", "tui"],
+        requiresApiKey: false,
+        supportedPermissionModes: ["supervised", "full_access"],
+        nativeAutoJudge: false,
+        availabilityPending: false,
+      },
+    ],
+    modelsHarnessId: "claude",
+    modelsProfileId: null,
+    models,
+    modelsLoaded: true,
+    modelsFailed: false,
+    tuiOnly: false,
+    chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
+    keepsUnavailablePick: false,
+  };
+}
+
+function createStore(
+  modelSlug: string,
+  onSettingsChange: ((model: string) => void) | null,
+) {
+  return createComposerToolbarStore({
+    purpose: "run",
+    reasoningFallback: "model-default",
+    seedKey: `model-slug-${modelSlug}`,
+    values: {
+      ultracode: false,
+      permission: "supervised",
+      selection: { harnessId: "claude", modelSlug, profileId: null },
+      reasoning: "",
+      serviceTier: "",
+    },
+    onSettingsChange:
+      onSettingsChange === null
+        ? null
+        : (settings) => onSettingsChange(settings.model),
+    tuiOnly: false,
+    chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
+    hostId: null,
+  });
+}
+
+describe("composer toolbar model slug drift", () => {
+  it("resolves forward drift through an unambiguous alias without rewriting the stored slug", () => {
+    const emitted: string[] = [];
+    const store = createStore("claude-fable-5", (modelSlug) => {
+      emitted.push(modelSlug);
+    });
+
+    const decorated = model(
+      "claude-fable-5[1m]",
+      "claude-fable-5",
+      "Fable 5 (1M)",
+    );
+    const models = [
+      decorated,
+      model("default", "claude-opus-5[1m]", "Default"),
+    ];
+    store.getState().setCatalog(catalog(models));
+
+    // The pre-fix failure was healing to Default. The fix is NOT to heal to the
+    // decorated row instead: the read resolves it, so the stored slug is left
+    // exactly as the user pinned it.
+    expect(store.getState().selection.modelSlug).toBe("claude-fable-5");
+    expect(store.getState().values.selection.modelSlug).toBe("claude-fable-5");
+    expect(store.getState().selection.modelSlug).not.toBe("default");
+    expect(emitted).toEqual([]);
+    expect(findSelectedModel(models, store.getState().selection)).toMatchObject(
+      { slug: "claude-fable-5[1m]", label: "Fable 5 (1M)" },
+    );
+  });
+
+  it("never converts a version pin into the floating row slug that aliases it", () => {
+    const emitted: string[] = [];
+    // `sonnet` publishes `claude-sonnet-5`, so the pin alias-matches exactly one
+    // row. Persisting that row's slug would swap a pinned version for a pointer
+    // that follows the account to the next Sonnet — the same floating-pointer
+    // harm as the ambiguous case, arriving through the unambiguous door.
+    const store = createStore("claude-sonnet-5", (modelSlug) => {
+      emitted.push(modelSlug);
+    });
+    const models = [
+      model("default", "claude-opus-5[1m]", "Default"),
+      model("sonnet", "claude-sonnet-5", "Sonnet"),
+    ];
+
+    store.getState().setCatalog(catalog(models));
+
+    expect(store.getState().values.selection.modelSlug).toBe("claude-sonnet-5");
+    expect(store.getState().selection.modelSlug).not.toBe("sonnet");
+    expect(emitted).toEqual([]);
+    expect(findSelectedModel(models, store.getState().selection)).toMatchObject(
+      { slug: "sonnet" },
+    );
+  });
+
+  it("confirms a held alias against the catalog so settings are still recorded", () => {
+    // Coverage and write-permission are different questions. Holding the slug
+    // must not leave the selection in the same unconfirmed state as a dead one,
+    // or every downstream memory write for it is silently skipped.
+    const store = createStore("claude-opus-5[1m]", null);
+    store
+      .getState()
+      .setCatalog(
+        catalog([
+          model("default", "claude-opus-5[1m]", "Default"),
+          model("opus[1m]", "claude-opus-5[1m]", "Opus (1M)"),
+        ]),
+      );
+
+    expect(store.getState().selectionCatalogConfirmed).toBe(true);
+  });
+
+  it("holds a decorated slug the catalog has since undecorated instead of presenting Default", () => {
+    const emitted: string[] = [];
+    const store = createStore("claude-fable-5-1[1m]", (modelSlug) => {
+      emitted.push(modelSlug);
+    });
+
+    const models = [
+      model("default", "claude-opus-5-5", "Default"),
+      model("opus", "claude-opus-5-5", "Opus"),
+      model("claude-fable-5-1", "claude-fable-5-1", "Fable 5.1"),
+    ];
+    store.getState().setCatalog(catalog(models));
+
+    // Claude CLI 2.1.282 dropped the `[1m]` decoration: a chat pinned to
+    // `claude-fable-5-1[1m]` under 2.1.280 must keep showing and launching
+    // Fable 5.1, not silently become Default (Opus). The stored slug is held
+    // verbatim - the CLI still accepts it - and nothing is written back.
+    expect(store.getState().selection.modelSlug).toBe("claude-fable-5-1[1m]");
+    expect(store.getState().selectionHealedForDisplay).toBe(false);
+    expect(store.getState().selectionCatalogConfirmed).toBe(true);
+    expect(store.getState().values.selection.modelSlug).toBe(
+      "claude-fable-5-1[1m]",
+    );
+    expect(emitted).toEqual([]);
+    expect(findSelectedModel(models, store.getState().selection)).toMatchObject(
+      { slug: "claude-fable-5-1", label: "Fable 5.1" },
+    );
+  });
+
+  it("still presents Default for a slug no row claims, even with a tier marker", () => {
+    const emitted: string[] = [];
+    const store = createStore("retired-model[1m]", (modelSlug) => {
+      emitted.push(modelSlug);
+    });
+
+    store
+      .getState()
+      .setCatalog(
+        catalog([
+          model("default", "claude-opus-5-5", "Default"),
+          model("opus", "claude-opus-5-5", "Opus"),
+        ]),
+      );
+
+    // The tier-tolerant match must not turn "a model the catalog dropped" into
+    // "any model": only an id that agrees once the marker is ignored is held.
+    expect(store.getState().selection.modelSlug).toBe("default");
+    expect(store.getState().selectionHealedForDisplay).toBe(true);
+    expect(store.getState().values.selection.modelSlug).toBe(
+      "retired-model[1m]",
+    );
+    expect(emitted).toEqual([]);
+  });
+
+  it("does not rewrite an ambiguous alias, while the read side still resolves a row", () => {
+    const emitted: string[] = [];
+    const store = createStore("claude-opus-5[1m]", (modelSlug) => {
+      emitted.push(modelSlug);
+    });
+    const models = [
+      model("default", "claude-opus-5[1m]", "Default"),
+      model("opus[1m]", "claude-opus-5[1m]", "Opus (1M)"),
+    ];
+
+    store.getState().setCatalog(catalog(models));
+
+    expect(store.getState().values.selection.modelSlug).toBe(
+      "claude-opus-5[1m]",
+    );
+    expect(store.getState().selection.modelSlug).toBe("claude-opus-5[1m]");
+    expect(emitted).toEqual([]);
+    expect(findSelectedModel(models, store.getState().selection)).toMatchObject(
+      { slug: "default", label: "Default" },
+    );
+  });
+
+  it("lets an exact slug win over an alias match", () => {
+    const exact = model("shared-id", "other-wire-id", "Exact row");
+    const alias = model("alias-row", "shared-id", "Alias row");
+    const store = createStore("shared-id", null);
+
+    store.getState().setCatalog(catalog([alias, exact]));
+
+    expect(store.getState().selection.modelSlug).toBe("shared-id");
+    expect(store.getState().selectedModel).toBe(exact);
+  });
+
+  it("keeps a remembered slug while the catalog is loading", () => {
+    // The catalog deliberately does NOT carry the remembered slug. With it
+    // present, coverage returns first and the `catalogLoadedForHarness` guard
+    // this test is named for never executes - it would pass with the guard
+    // deleted. An unresolvable slug is held ONLY because the catalog is still
+    // loading; "heals a genuinely delisted slug" below feeds an equally
+    // unresolvable slug to a loaded catalog and gets Default, so the two pin
+    // opposite directions of the same guard.
+    const emitted: string[] = [];
+    const store = createStore("remembered-slug", (modelSlug) => {
+      emitted.push(modelSlug);
+    });
+
+    store.getState().setCatalog({
+      ...catalog([model("default", null, "Default")]),
+      modelsLoaded: false,
+      modelsFailed: false,
+    });
+
+    expect(store.getState().selection.modelSlug).toBe("remembered-slug");
+    expect(store.getState().values.selection.modelSlug).toBe("remembered-slug");
+    expect(emitted).toEqual([]);
+  });
+
+  it("resolves an empty slug to the preferred first model", () => {
+    const store = createStore("", null);
+
+    store
+      .getState()
+      .setCatalog(
+        catalog([
+          model("preferred", null, "Preferred"),
+          model("other", null, "other"),
+        ]),
+      );
+
+    expect(store.getState().selection.modelSlug).toBe("preferred");
+    expect(store.getState().values.selection.modelSlug).toBe("");
+  });
+
+  it("presents a genuinely delisted slug as Default for display only", () => {
+    // The substitute is what renders and what a Send launches on; the raw
+    // sticky slug is untouched and nothing is emitted, so one catalog that
+    // fails to list the model never rewrites the chat's persisted model.
+    const emitted: string[] = [];
+    const store = createStore("delisted-slug", (modelSlug) => {
+      emitted.push(modelSlug);
+    });
+
+    store
+      .getState()
+      .setCatalog(
+        catalog([
+          model("default", null, "Default"),
+          model("current", null, "current"),
+        ]),
+      );
+
+    expect(store.getState().selection.modelSlug).toBe("default");
+    expect(store.getState().selectionHealedForDisplay).toBe(true);
+    expect(store.getState().selectionCatalogConfirmed).toBe(false);
+    expect(store.getState().values.selection.modelSlug).toBe("delisted-slug");
+    expect(emitted).toEqual([]);
+  });
+
+  it("keeps a display-only substitute out of a deferred emit until the user picks a model", () => {
+    const emitted: string[] = [];
+    const store = createStore("delisted-slug", (modelSlug) => {
+      emitted.push(modelSlug);
+    });
+    store.getState().setCatalog(catalog([model("default", null, "Default")]));
+    expect(store.getState().selection.modelSlug).toBe("default");
+
+    // An edit made while the substitute is presented is deferred, exactly like
+    // an edit under a surface reroute: emitting it would carry the substitute
+    // into the chat's persisted model.
+    store.getState().setPermission("full_access");
+    expect(store.getState().permission).toBe("full_access");
+    expect(store.getState().pendingSettingsEmit).toBe(true);
+    expect(emitted).toEqual([]);
+
+    // The user's explicit pick flushes it with the real choice.
+    store.getState().setSelection({
+      harnessId: "claude",
+      modelSlug: "default",
+      profileId: null,
+    });
+    expect(store.getState().pendingSettingsEmit).toBe(false);
+    expect(emitted).toEqual(["default"]);
+  });
+});

@@ -1,0 +1,1187 @@
+import "../../../../../__tests__/test-browser-apis";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { EditorView } from "@uiw/react-codemirror";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { EnvironmentSecretV12 } from "@traycer/protocol/host/environment-schemas";
+import {
+  grantedEnvironmentRole,
+  type EnvironmentMembersResponseV12,
+} from "@traycer/protocol/host/environment/contracts";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
+import { TeamPermissions } from "@/components/settings/environment/team-permissions";
+import { TeamProviderKeys } from "@/components/settings/environment/team-provider-keys";
+import { SecretsSettingsPanel } from "@/components/settings/panels/secrets-settings-panel";
+import { SecretsPage } from "@/components/settings/secrets/secrets-page";
+import { useSettingsEnvironmentPickStore } from "@/stores/settings/settings-environment-pick-store";
+import { environmentStatusFixture } from "@/lib/environment/__tests__/environment-test-support";
+import {
+  answerTeamHostList,
+  authnAnswer,
+  configurationItem,
+  mountTeamPage,
+  mountTeamPageNegotiating,
+  personalPoolSource,
+  poolSource,
+  requireTeamEnvironmentAuthnBinding,
+  requireTeamHostClient,
+  resetTeamPageHarness,
+  type TeamPageHarness,
+} from "./team-configuration-test-support";
+import { SECRETS_EMPTY_TEXT } from "@/lib/sandboxes/secrets-page-copy";
+import {
+  RETIRED_PROVIDER_VARIABLES,
+  RETIRED_SECRET_ROW_FIELDS,
+} from "@traycer/protocol/host/released-wire-rows";
+
+vi.mock(
+  "@/components/settings/environment/use-hosts-running-configuration",
+  () => ({
+    useHostsRunningPersonal: () => ({
+      hosts: [],
+      state: "ready",
+      collisions: [],
+      retry: () => undefined,
+    }),
+  }),
+);
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostClient: () => requireTeamHostClient(),
+  useHostBinding: () => requireTeamEnvironmentAuthnBinding(),
+}));
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-me",
+}));
+
+// Resolving a client for the picked viewing host needs the app's host directory.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: (hostId: string | null) =>
+    hostId === null ? null : requireTeamHostClient(),
+}));
+
+afterEach(() => {
+  cleanup();
+  resetTeamPageHarness();
+  resetNegotiatedManifests();
+  useSettingsEnvironmentPickStore.setState({ pick: null });
+});
+
+function namedSecret(
+  id: string,
+  name: string,
+  kind: "api_key" | "provider",
+  revoked: boolean,
+): EnvironmentSecretV12 {
+  return {
+    ...RETIRED_SECRET_ROW_FIELDS,
+    providerVariables: [...RETIRED_PROVIDER_VARIABLES],
+    secretId: id,
+    name,
+    kind,
+    protocol: "https",
+    destinations: ["api.example.com"],
+    currentVersionId: "ver-1",
+    revoked,
+    updatedAt: 1,
+    variables: [],
+  };
+}
+
+function secret(name: string, revoked: boolean): EnvironmentSecretV12 {
+  return namedSecret(`sec-${name}`, name, "api_key", revoked);
+}
+
+function removedSecret(id: string, name: string) {
+  return {
+    id,
+    name,
+    removal: {
+      outcome: "revoked" as const,
+      revokedAt: 1,
+      destroyedAt: null,
+      targets: [],
+    },
+  };
+}
+
+const environments = {
+  environments: [
+    {
+      environmentId: "env-personal",
+      ownerKind: "user" as const,
+      ownerId: "user-me",
+      roomId: "room-personal",
+      label: "Personal",
+      effectiveRole: "owner" as const,
+      kind: "personal" as const,
+      hostCount: 1,
+      providerHandle: null,
+    },
+  ],
+};
+
+function renderSecrets(harness: TeamPageHarness): void {
+  const client = requireTeamHostClient();
+  render(
+    <SecretsPage
+      client={client}
+      hostId={client.getActiveHostId()}
+      emptyText={SECRETS_EMPTY_TEXT}
+      hostName={(hostId) => hostId}
+    />,
+    { wrapper: harness.Wrapper },
+  );
+}
+
+describe("SecretsPage on a team", () => {
+  function teamHandlers() {
+    return {
+      "environment.secrets.list": () => ({
+        secrets: [secret("OPENAI_API_KEY", false)],
+        removed: [removedSecret("sec-OLD_TOKEN", "OLD_TOKEN")],
+      }),
+      "environment.list": () => environments,
+    } as const;
+  }
+
+  it("reads a team's secret names without a computer's version in the way", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const harness = mountTeamPageNegotiating(
+      poolSource("viewer"),
+      teamHandlers(),
+      { "environment.secrets.list": { major: 1, minor: 0 } },
+    );
+    renderSecrets(harness);
+
+    expect(await screen.findByText("OPENAI_API_KEY")).toBeTruthy();
+    expect(harness.paramsOf("environment.secrets.list")).toEqual([
+      { environmentId: "env-a" },
+    ]);
+    expect(
+      screen.queryByText("These secrets need an updated host."),
+    ).toBeNull();
+    expect(
+      harness.messenger.calls.some(
+        (entry) => entry.method === "environment.secrets.list",
+      ),
+    ).toBe(false);
+  });
+
+  it("gives a viewer the names but no secret verbs or credential fields", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const harness = mountTeamPage(poolSource("viewer"), teamHandlers());
+    renderSecrets(harness);
+
+    expect(await screen.findByText("OPENAI_API_KEY")).toBeTruthy();
+    expect(screen.getByText("Removing · no longer usable")).toBeTruthy();
+    for (const verb of ["Add a secret", "Verify", "Replace", "Remove"]) {
+      expect(screen.queryByRole("button", { name: verb })).toBeNull();
+    }
+    expect(screen.queryAllByRole("textbox")).toHaveLength(0);
+    expect(screen.queryByTestId("secrets-add")).toBeNull();
+  });
+
+  it("gives an editor the secret verbs", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const harness = mountTeamPage(poolSource("editor"), teamHandlers());
+    renderSecrets(harness);
+
+    const list = await screen.findByTestId("secrets-list");
+    expect(within(list).getByText("OPENAI_API_KEY")).toBeTruthy();
+    expect(
+      within(list)
+        .getAllByTestId("secret-row-line")
+        .map((line) => line.textContent),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          "OPENAI_API_KEY · Set · sent to api.example.com",
+        ),
+      ]),
+    );
+    const removed = within(list).getByTestId("removed-secret-row");
+    expect(removed.getAttribute("data-secret-name")).toBe("OLD_TOKEN");
+    expect(removed.textContent).toContain("Removing · no longer usable");
+    expect(screen.getByRole("button", { name: "Add a secret" })).toBeTruthy();
+    // Verify lives in a secret's Details, with Replace and Remove on the row.
+    expect(
+      within(list)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(expect.arrayContaining(["Replace", "Remove", "Details"]));
+    expect(within(list).queryByRole("button", { name: "Verify" })).toBeNull();
+  });
+
+  it("names the team in the page description, and keeps Personal's shared one", async () => {
+    const harness = mountTeamPage(poolSource("viewer"), {
+      ...teamHandlers(),
+      "environment.list": () => ({
+        environments: [
+          ...environments.environments,
+          {
+            environmentId: "env-a",
+            ownerKind: "organization" as const,
+            ownerId: "team-a",
+            roomId: "room-a",
+            label: "Acme",
+            effectiveRole: "viewer" as const,
+            kind: "team" as const,
+            hostCount: 1,
+            providerHandle: "handle-a",
+          },
+        ],
+      }),
+      "environment.host.list": () => ({ hosts: [] }),
+    });
+    render(<SecretsSettingsPanel />, { wrapper: harness.Wrapper });
+    expect(
+      await screen.findByText(
+        "Values and logins Acme's agents use, on its sandboxes without being seen.",
+      ),
+    ).toBeTruthy();
+    cleanup();
+    resetTeamPageHarness();
+
+    const personal = mountTeamPage(personalPoolSource(), {
+      ...teamHandlers(),
+      "environment.host.list": () => ({ hosts: [] }),
+    });
+    render(<SecretsSettingsPanel />, { wrapper: personal.Wrapper });
+    await screen.findByTestId("secrets-list");
+    expect(screen.getByText("Values and logins your agents use.")).toBeTruthy();
+    expect(screen.queryByText(/Acme/)).toBeNull();
+  });
+
+  it("reads Personal's secrets without a computer's version in the way, and waits for its id", async () => {
+    useSettingsEnvironmentPickStore.setState({ pick: { kind: "personal" } });
+    const harness = mountTeamPageNegotiating({ kind: "host" }, teamHandlers(), {
+      "environment.secrets.list": { major: 1, minor: 0 },
+    });
+    renderSecrets(harness);
+
+    expect(await screen.findByTestId("secrets-list")).toBeTruthy();
+    expect(harness.paramsOf("environment.secrets.list")).toEqual([
+      { environmentId: "env-personal" },
+    ]);
+    expect(
+      screen.queryByText("These secrets need an updated host."),
+    ).toBeNull();
+    expect(
+      harness.messenger.calls.some(
+        (entry) => entry.method === "environment.secrets.list",
+      ),
+    ).toBe(false);
+  });
+
+  it("resolves a Local pick to the host's Personal environment through authn", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "local", hostId: "host-local", hostName: "dev-box" },
+    });
+    const harness = mountTeamPage(
+      { kind: "host" },
+      {
+        ...teamHandlers(),
+        "environment.status": () =>
+          environmentStatusFixture({ principal: { kind: "personal" } }),
+      },
+    );
+    const hostId = requireTeamHostClient().getActiveHostId();
+    if (hostId === null) {
+      throw new Error("the host Secrets page has no selected host");
+    }
+    recordNegotiatedHostMethods(hostId, ["environment.status"]);
+    renderSecrets(harness);
+
+    expect(await screen.findByTestId("secrets-list")).toBeTruthy();
+    expect(harness.paramsOf("environment.secrets.list")).toEqual([
+      { environmentId: "env-personal" },
+    ]);
+    expect(
+      harness.messenger.calls.some(
+        (entry) => entry.method === "environment.secrets.list",
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("TeamProviderKeys", () => {
+  it("lists every provider-kind key once for a provider that has no key name", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.secrets.list": () => ({
+        secrets: [
+          namedSecret("sec-cursor", "CURSOR_API_KEY", "provider", false),
+        ],
+        removed: [],
+      }),
+      "environment.list": () => environments,
+    });
+    const { unmount } = render(<TeamProviderKeys providerId="claude-code" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    const claude = await screen.findByRole("region", { name: "Key" });
+    expect(within(claude).getByRole("heading", { name: "Key" })).toBeTruthy();
+    const claudeRows = await within(claude).findAllByTestId("secret-row");
+    expect(claudeRows).toHaveLength(1);
+    expect(claudeRows[0].getAttribute("data-secret-name")).toBe(
+      "CURSOR_API_KEY",
+    );
+    unmount();
+
+    render(<TeamProviderKeys providerId="codex" />, {
+      wrapper: harness.Wrapper,
+    });
+    const codex = await screen.findByRole("region", { name: "Key" });
+    const codexRows = await within(codex).findAllByTestId("secret-row");
+    expect(codexRows).toHaveLength(1);
+    expect(codexRows[0].getAttribute("data-secret-name")).toBe(
+      "CURSOR_API_KEY",
+    );
+  });
+
+  it("does not list a provider key that is in the removed response", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.secrets.list": () => ({
+        secrets: [
+          namedSecret("sec-live", "CURSOR_API_KEY", "provider", false),
+          namedSecret("sec-other-kind", "CURSOR_API_KEY", "api_key", false),
+          namedSecret("sec-router", "OPENROUTER_API_KEY", "provider", false),
+          namedSecret("sec-openai", "OPENAI_API_KEY", "api_key", false),
+        ],
+        removed: [removedSecret("sec-revoked", "CURSOR_API_KEY")],
+      }),
+      "environment.list": () => environments,
+    });
+    render(<TeamProviderKeys providerId="cursor" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    const key = await screen.findByRole("region", { name: "Key" });
+    expect(within(key).getByRole("heading", { name: "Key" })).toBeTruthy();
+    const rows = await within(key).findAllByTestId("secret-row");
+    expect(rows.map((row) => row.getAttribute("data-secret-name"))).toEqual([
+      "CURSOR_API_KEY",
+      "OPENROUTER_API_KEY",
+    ]);
+    expect(key.textContent).not.toContain("Revoked");
+    for (const live of rows) {
+      expect(
+        within(live).getByRole("button", { name: "Replace" }),
+      ).toBeTruthy();
+      expect(within(live).getByRole("button", { name: "Remove" })).toBeTruthy();
+    }
+    expect(key.textContent).not.toContain("OPENAI_API_KEY");
+  });
+
+  it("shows a viewer live key names and withholds Replace and Remove", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const harness = mountTeamPage(poolSource("viewer"), {
+      "environment.secrets.list": () => ({
+        secrets: [
+          namedSecret("sec-live", "HF_TOKEN", "provider", false),
+          namedSecret("sec-other", "CURSOR_API_KEY", "provider", false),
+        ],
+        removed: [],
+      }),
+      "environment.list": () => environments,
+    });
+    render(<TeamProviderKeys providerId="huggingface" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    const key = await screen.findByRole("region", { name: "Key" });
+    const items = await within(key).findAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(within(items[0]).getByText("HF_TOKEN")).toBeTruthy();
+    expect(within(items[0]).getByText("Set")).toBeTruthy();
+    expect(within(items[1]).getByText("CURSOR_API_KEY")).toBeTruthy();
+    expect(within(items[1]).getByText("Set")).toBeTruthy();
+    expect(within(key).queryByRole("button", { name: "Replace" })).toBeNull();
+    expect(within(key).queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(within(key).queryByRole("button", { name: "Add a key" })).toBeNull();
+  });
+
+  it("opens an editor's Add a key straight on the provider key form, without the kind picker", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+      "environment.list": () => environments,
+    });
+    render(<TeamProviderKeys providerId="cursor" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Add a key" }),
+    );
+
+    const dialog = await screen.findByTestId("add-secret-dialog");
+    const name = within(dialog).getByTestId("secret-form-name");
+    const value = within(dialog).getByTestId("secret-form-value");
+    if (!(name instanceof HTMLInputElement)) {
+      throw new Error("secret name field missing");
+    }
+    if (!(value instanceof HTMLInputElement)) {
+      throw new Error("secret value field missing");
+    }
+    expect(name.value).toBe("CURSOR_API_KEY");
+    expect(value.value).toBe("");
+    expect(screen.queryByTestId("secret-kind-picker")).toBeNull();
+    expect(screen.queryByTestId("secret-provider-keys-line")).toBeNull();
+  });
+
+  it("keeps Add a key hidden until the secrets read has data", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const answer = Promise.withResolvers<void>();
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.secrets.list": async () => {
+        await answer.promise;
+        return { secrets: [], removed: [] };
+      },
+      "environment.list": () => environments,
+    });
+    render(<TeamProviderKeys providerId="amp" />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByRole("heading", { name: "Key" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add a key" })).toBeNull();
+    answer.resolve();
+    expect(
+      await screen.findByRole("button", { name: "Add a key" }),
+    ).toBeTruthy();
+  });
+
+  it("reads a provider key without a computer's version in the way", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const harness = mountTeamPageNegotiating(
+      poolSource("editor"),
+      {
+        "environment.secrets.list": () => ({
+          secrets: [
+            namedSecret("sec-droid", "DROID_API_KEY", "provider", false),
+          ],
+          removed: [],
+        }),
+        "environment.list": () => environments,
+      },
+      { "environment.secrets.list": { major: 1, minor: 0 } },
+    );
+    render(<TeamProviderKeys providerId="droid" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    const key = await screen.findByRole("region", { name: "Key" });
+    expect(await within(key).findByTestId("secret-row")).toBeTruthy();
+    expect(within(key).getByText("DROID_API_KEY")).toBeTruthy();
+    expect(
+      within(key).queryByText("These keys need an updated host."),
+    ).toBeNull();
+    expect(harness.paramsOf("environment.secrets.list")).toEqual([
+      { environmentId: "env-a" },
+    ]);
+    expect(
+      harness.messenger.calls.some(
+        (entry) => entry.method === "environment.secrets.list",
+      ),
+    ).toBe(false);
+  });
+
+  // "No secrets." is a claim about the configuration, and a read that failed
+  // supports no claim about it. Worse, the page says on the same screen that
+  // the keys could not be read, so the two lines would contradict each other.
+  it("says nothing to a viewer about a list it could not read", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const harness = mountTeamPage(poolSource("viewer"), {
+      "environment.secrets.list": () => {
+        throw new Error("down");
+      },
+      "environment.list": () => environments,
+    });
+    render(<TeamProviderKeys providerId="kiro" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    const key = await screen.findByRole("region", { name: "Key" });
+    expect(await within(key).findByText(/Couldn't read .*keys\./)).toBeTruthy();
+    expect(within(key).queryByTestId("secrets-none")).toBeNull();
+  });
+
+  // And it says nothing before the answer, either: an empty list and an
+  // unanswered read look the same from here, and only one of them means there
+  // are none.
+  it("says nothing to a viewer until the read answers, then says there are none", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const answer = Promise.withResolvers<void>();
+    const harness = mountTeamPage(poolSource("viewer"), {
+      "environment.secrets.list": async () => {
+        await answer.promise;
+        return { secrets: [], removed: [] };
+      },
+      "environment.list": () => environments,
+    });
+    render(<TeamProviderKeys providerId="openrouter" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    const key = await screen.findByRole("region", { name: "Key" });
+    expect(within(key).getByRole("heading", { name: "Key" })).toBeTruthy();
+    expect(within(key).queryByTestId("secrets-none")).toBeNull();
+
+    answer.resolve();
+
+    expect(await screen.findByTestId("secrets-none")).toBeTruthy();
+  });
+
+  // The state the other two do not cover: a read that fails AFTER one
+  // succeeded. TanStack keeps the data it already has and sets the error, so a
+  // guard on "is there data" still shows the last list — "No secrets." among
+  // them — next to the line saying the keys could not be read. What the viewer
+  // is shown has to follow the LATEST settled read, not the newest data.
+  it("withdraws the list from a viewer when a re-read fails", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const failing = { current: false };
+    const harness = mountTeamPage(poolSource("viewer"), {
+      "environment.secrets.list": () => {
+        if (failing.current) throw new Error("down");
+        return { secrets: [], removed: [] };
+      },
+      "environment.list": () => environments,
+    });
+    render(<TeamProviderKeys providerId="openrouter" />, {
+      wrapper: harness.Wrapper,
+    });
+
+    const key = await screen.findByRole("region", { name: "Key" });
+    expect(await within(key).findByTestId("secrets-none")).toBeTruthy();
+
+    failing.current = true;
+    await harness.queryClient.invalidateQueries({
+      predicate: (query) => query.queryKey.includes("environment.secrets.list"),
+    });
+
+    expect(await within(key).findByText(/Couldn't read .*keys\./)).toBeTruthy();
+    expect(within(key).queryByTestId("secrets-none")).toBeNull();
+  });
+});
+
+describe("TeamPermissions", () => {
+  const policy = (revision: number, body: string) =>
+    configurationItem({
+      kind: "auto_policy",
+      key: "policy",
+      value: { body },
+      revision,
+    });
+  const members: EnvironmentMembersResponseV12 = {
+    members: [
+      {
+        userId: "u-1",
+        displayName: "Ada",
+        email: "ada@acme.test",
+        avatarUrl: null,
+        effectiveRole: "admin",
+        linkedPlan: false,
+        inviteState: "accepted",
+        invitedAddress: null,
+      },
+    ],
+    nextCursor: null,
+    legacyRoleNoticeSeenAt: null,
+    legacyMembers: [],
+  };
+  // The roster is read only once the list has a row for the team.
+  const listsTheTeam = () => ({
+    environments: [
+      {
+        environmentId: "env-a",
+        ownerKind: "organization" as const,
+        ownerId: "team-a",
+        roomId: "room-a",
+        label: "Acme",
+        effectiveRole: "viewer" as const,
+        kind: "team" as const,
+        hostCount: 1,
+        providerHandle: "handle-a",
+      },
+    ],
+  });
+
+  it.each([
+    { role: "an Admin", source: poolSource("admin"), canChange: true },
+    { role: "an Editor", source: poolSource("editor"), canChange: true },
+    { role: "a Viewer", source: poolSource("viewer"), canChange: false },
+    {
+      role: "a role not known",
+      source: {
+        ...poolSource("editor"),
+        effectiveRole: grantedEnvironmentRole("auditor"),
+      },
+      canChange: false,
+    },
+  ])(
+    "lets $role change the policy: $canChange",
+    async ({ source, canChange }) => {
+      const harness = mountTeamPage(source, {
+        "environment.configuration.items": () => ({
+          items: [policy(3, "Allow reads")],
+        }),
+        "environment.members": () => members,
+      });
+      render(<TeamPermissions>{null}</TeamPermissions>, {
+        wrapper: harness.Wrapper,
+      });
+
+      await screen.findByRole("textbox", { name: "Approval policy" });
+      expect(screen.queryByRole("button", { name: "Save" }) !== null).toBe(
+        canChange,
+      );
+    },
+  );
+
+  it("shows a viewer the policy read-only and names the admins and editors who change it", async () => {
+    const ada = members.members[0];
+    const harness = mountTeamPage(poolSource("viewer"), {
+      "environment.list": listsTheTeam,
+      "environment.configuration.items": () => ({
+        items: [policy(3, "Allow reads")],
+      }),
+      "environment.members": () => ({
+        ...members,
+        members: [
+          ada,
+          {
+            ...ada,
+            userId: "u-2",
+            displayName: "Sam",
+            effectiveRole: "editor",
+          },
+          { ...ada, userId: "u-3", displayName: "Kit", inviteState: "pending" },
+        ],
+      }),
+    });
+    render(<TeamPermissions>{null}</TeamPermissions>, {
+      wrapper: harness.Wrapper,
+    });
+
+    expect(await screen.findByText("Ada, Sam can change this.")).toBeTruthy();
+    expect(
+      screen.getByRole("textbox", { name: "Approval policy" }).textContent,
+    ).toContain("Allow reads");
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Reset to default" }),
+    ).toBeNull();
+    expect(harness.paramsOf("environment.configuration.items")[0]).toEqual({
+      environmentId: "env-a",
+    });
+  });
+
+  it.each(["admin", "editor"] as const)(
+    "lets a team %s edit and save the approval policy",
+    async (role) => {
+      const harness = mountTeamPage(poolSource(role), {
+        "environment.configuration.items": () => ({
+          items: [policy(3, "Allow reads")],
+        }),
+        "environment.members": () => members,
+        "environment.configuration.policy.put": () => ({
+          outcome: "saved",
+          reason: null,
+        }),
+      });
+      render(<TeamPermissions>{null}</TeamPermissions>, {
+        wrapper: harness.Wrapper,
+      });
+
+      const editor = await screen.findByRole("textbox", {
+        name: "Approval policy",
+      });
+      const initialView = EditorView.findFromDOM(editor);
+      if (initialView === null) throw new Error("no approval policy editor");
+      expect(initialView.state.readOnly).toBe(false);
+      expect(
+        screen.getByRole("button", { name: "Reset to default" }),
+      ).toBeTruthy();
+      await userEvent.click(screen.getByRole("tab", { name: "Preview" }));
+      expect(
+        await within(
+          screen.getByTestId("team-approval-policy-preview"),
+        ).findByText("Allow reads"),
+      ).toBeTruthy();
+      await userEvent.click(screen.getByRole("tab", { name: "Edit" }));
+
+      const activeEditor = await screen.findByRole("textbox", {
+        name: "Approval policy",
+      });
+      const activeView = EditorView.findFromDOM(activeEditor);
+      if (activeView === null)
+        throw new Error("no active approval policy editor");
+      act(() => {
+        activeView.dispatch({
+          changes: {
+            from: 0,
+            to: activeView.state.doc.length,
+            insert: "Ask first",
+          },
+        });
+      });
+      const save = screen.getByRole("button", { name: "Save" });
+      expect(save.hasAttribute("disabled")).toBe(false);
+      await userEvent.click(save);
+
+      expect(harness.paramsOf("environment.configuration.policy.put")).toEqual([
+        { environmentId: "env-a", body: "Ask first", policyVersion: "3" },
+      ]);
+    },
+  );
+
+  it("keeps an unrecognized team role read-only", async () => {
+    const viewerSource = poolSource("viewer");
+    if (viewerSource.kind !== "pool")
+      throw new Error("the team source was not a pool configuration");
+    const harness = mountTeamPage(
+      { ...viewerSource, effectiveRole: null },
+      {
+        "environment.list": listsTheTeam,
+        "environment.configuration.items": () => ({
+          items: [policy(3, "Allow reads")],
+        }),
+        "environment.members": () => members,
+      },
+    );
+    render(<TeamPermissions>{null}</TeamPermissions>, {
+      wrapper: harness.Wrapper,
+    });
+
+    expect(await screen.findByText("Ada can change this.")).toBeTruthy();
+    expect(
+      screen.getByRole("textbox", { name: "Approval policy" }).textContent,
+    ).toContain("Allow reads");
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Reset to default" }),
+    ).toBeNull();
+    expect(harness.paramsOf("environment.configuration.policy.put")).toEqual(
+      [],
+    );
+  });
+
+  it("draws the page's regions below the policy", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => ({
+        items: [policy(3, "Allow reads")],
+      }),
+      "environment.members": () => members,
+    });
+    render(
+      <TeamPermissions>
+        <div data-testid="below-the-policy" />
+      </TeamPermissions>,
+      { wrapper: harness.Wrapper },
+    );
+
+    const policyBox = await screen.findByRole("textbox", {
+      name: "Approval policy",
+    });
+    expect(
+      policyBox.compareDocumentPosition(
+        screen.getByTestId("below-the-policy"),
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+  });
+
+  it("names the team in the subtitle, and a failed policy read shows one line whose Retry reads again", async () => {
+    let fail = true;
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.configuration.items": () => {
+        if (fail) throw new Error("host unavailable");
+        return { items: [policy(3, "Allow reads")] };
+      },
+      "environment.members": () => members,
+      "environment.list": () => ({
+        environments: [
+          {
+            environmentId: "env-a",
+            ownerKind: "organization" as const,
+            ownerId: "team-a",
+            roomId: "room-a",
+            label: "Acme",
+            effectiveRole: "editor" as const,
+            kind: "team" as const,
+            hostCount: 1,
+            providerHandle: "handle-a",
+          },
+        ],
+      }),
+    });
+    render(<TeamPermissions>{null}</TeamPermissions>, {
+      wrapper: harness.Wrapper,
+    });
+
+    const failure = await screen.findByText(
+      "Couldn't read Acme's permissions.",
+    );
+    expect(
+      await screen.findByText(
+        "What agents may do without asking, on every host running Acme.",
+      ),
+    ).toBeTruthy();
+    const reads = harness.paramsOf("environment.configuration.items").length;
+
+    fail = false;
+    await userEvent.click(
+      within(failure.closest("p") ?? failure).getByRole("button", {
+        name: "Retry",
+      }),
+    );
+
+    expect(
+      (await screen.findByRole("textbox", { name: "Approval policy" }))
+        .textContent,
+    ).toContain("Allow reads");
+    expect(
+      harness.paramsOf("environment.configuration.items").length,
+    ).toBeGreaterThan(reads);
+  });
+
+  it.each([
+    [
+      "a team",
+      poolSource("admin"),
+      "This removes Acme's custom rules and goes back to the default approval policy for every member's agents.",
+    ],
+    [
+      "Personal",
+      personalPoolSource(),
+      "This removes your custom rules and goes back to the default approval policy on every computer and sandbox running Personal.",
+    ],
+  ])(
+    "confirms a reset for %s in that configuration's words",
+    async (_name, source, sentence) => {
+      const harness = mountTeamPage(source, {
+        "environment.configuration.items": () => ({
+          items: [policy(3, "Allow reads")],
+        }),
+        "environment.members": () => members,
+        "environment.list": () => ({
+          environments: [
+            {
+              environmentId: "env-a",
+              ownerKind: "organization" as const,
+              ownerId: "team-a",
+              roomId: "room-a",
+              label: "Acme",
+              effectiveRole: "admin" as const,
+              kind: "team" as const,
+              hostCount: 1,
+              providerHandle: "handle-a",
+            },
+            {
+              environmentId: "env-personal",
+              ownerKind: "user" as const,
+              ownerId: "user-me",
+              roomId: "room-personal",
+              label: "Me",
+              effectiveRole: "owner" as const,
+              kind: "personal" as const,
+              hostCount: 1,
+              providerHandle: null,
+            },
+          ],
+        }),
+      });
+      render(<TeamPermissions>{null}</TeamPermissions>, {
+        wrapper: harness.Wrapper,
+      });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Reset to default" }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      await waitFor(() => {
+        expect(within(dialog).getByText(sentence)).toBeTruthy();
+      });
+      expect(
+        within(dialog).getByRole("button", { name: "Cancel" }),
+      ).toBeTruthy();
+      expect(
+        within(dialog).getByRole("button", { name: "Reset to default" }),
+      ).toBeTruthy();
+    },
+  );
+
+  it("names Personal when its policy cannot be read, and Retry reads again", async () => {
+    const harness = mountTeamPage(personalPoolSource(), {
+      "environment.configuration.items": () => {
+        throw new Error("host unavailable");
+      },
+      "environment.members": () => members,
+      "environment.list": () => ({
+        environments: [
+          {
+            environmentId: "env-personal",
+            ownerKind: "user" as const,
+            ownerId: "user-me",
+            roomId: "room-personal",
+            label: "Me",
+            effectiveRole: "owner" as const,
+            kind: "personal" as const,
+            hostCount: 1,
+            providerHandle: null,
+          },
+        ],
+      }),
+    });
+    render(<TeamPermissions>{null}</TeamPermissions>, {
+      wrapper: harness.Wrapper,
+    });
+
+    const failure = await screen.findByText(
+      "Couldn't read Personal's permissions.",
+    );
+    const reads = harness.paramsOf("environment.configuration.items").length;
+    await userEvent.click(
+      within(failure.closest("p") ?? failure).getByRole("button", {
+        name: "Retry",
+      }),
+    );
+    await waitFor(() => {
+      expect(
+        harness.paramsOf("environment.configuration.items").length,
+      ).toBeGreaterThan(reads);
+    });
+  });
+
+  it("still shows the policy when the member roster fails to load", async () => {
+    const harness = mountTeamPage(poolSource("viewer"), {
+      "environment.configuration.items": () => ({
+        items: [policy(3, "Allow reads")],
+      }),
+      "environment.members": () => Promise.reject(new Error("roster down")),
+    });
+    render(<TeamPermissions>{null}</TeamPermissions>, {
+      wrapper: harness.Wrapper,
+    });
+
+    expect(
+      await screen.findByText("Editors and admins can change this."),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("textbox", { name: "Approval policy" }).textContent,
+    ).toContain("Allow reads");
+  });
+
+  it("quotes the displayed policy version, and a stale refusal rereads the current policy", async () => {
+    let current = policy(3, "Allow reads");
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.configuration.items": () => ({ items: [current] }),
+      "environment.members": () => members,
+      "environment.configuration.policy.put": () => {
+        current = policy(4, "Ask before writes");
+        return { outcome: "refused", reason: "policy_stale" };
+      },
+    });
+    render(<TeamPermissions>{null}</TeamPermissions>, {
+      wrapper: harness.Wrapper,
+    });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Reset to default" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Reset to default" }),
+    );
+
+    expect(harness.paramsOf("environment.configuration.policy.put")).toEqual([
+      { environmentId: "env-a", body: "", policyVersion: "3" },
+    ]);
+    expect(
+      await screen.findByText("Changed by another member a moment ago"),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("textbox", { name: "Approval policy" }).textContent,
+      ).toContain("Ask before writes");
+    });
+  });
+
+  it("shows the policy-specific permission line when authn answers 403", async () => {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.configuration.items": () => ({
+        items: [policy(3, "Allow reads")],
+      }),
+      "environment.members": () => members,
+      "environment.configuration.policy.put": () => ({
+        outcome: "forbidden",
+        reason: null,
+      }),
+    });
+    render(<TeamPermissions>{null}</TeamPermissions>, {
+      wrapper: harness.Wrapper,
+    });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Reset to default" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Reset to default" }),
+    );
+
+    expect((await screen.findByRole("status")).textContent).toBe(
+      "You no longer have access to change this policy.",
+    );
+    expect(harness.paramsOf("environment.configuration.policy.put")).toEqual([
+      { environmentId: "env-a", body: "", policyVersion: "3" },
+    ]);
+  });
+});
+
+describe("the team's secrets panel when authn answers the host list again", () => {
+  async function mountWaitingOnMacMini() {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.secrets.list": () => ({
+        secrets: [],
+        removed: [
+          {
+            ...removedSecret("sec-OLD_TOKEN", "OLD_TOKEN"),
+            removal: {
+              outcome: "revoked" as const,
+              revokedAt: 1,
+              destroyedAt: null,
+              targets: [
+                {
+                  target: "host" as const,
+                  hostId: "host-a",
+                  hostName: null,
+                  state: "requested" as const,
+                  at: 1,
+                  failedAt: null,
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      "environment.list": () => ({
+        environments: [
+          ...environments.environments,
+          {
+            environmentId: "env-a",
+            ownerKind: "organization" as const,
+            ownerId: "team-a",
+            roomId: "room-a",
+            label: "Acme",
+            effectiveRole: "editor" as const,
+            kind: "team" as const,
+            hostCount: 1,
+            providerHandle: "handle-a",
+          },
+        ],
+      }),
+      "environment.host.list": () => ({
+        hosts: [
+          {
+            hostId: "host-a",
+            hostLabel: "Mac mini",
+            hostPlatform: "darwin",
+            enrolledByUserId: "u-1",
+            kind: "personal",
+            boundAt: 1,
+            reachable: true,
+            lastReportedAt: 1,
+            applied: [],
+            hasLocalRow: false,
+          },
+        ],
+      }),
+    });
+    render(<SecretsSettingsPanel />, { wrapper: harness.Wrapper });
+    expect(
+      await screen.findByText(/waiting for Mac mini to delete its copy/),
+    ).toBeTruthy();
+    return harness;
+  }
+
+  it.each([
+    ["a 403 environment_action_forbidden", 403, "environment_action_forbidden"],
+    ["a 404 environment_not_found", 404, "environment_not_found"],
+  ])(
+    'names a secret\'s host "a host" after %s',
+    async (_label, status, code) => {
+      const harness = await mountWaitingOnMacMini();
+
+      answerTeamHostList(harness, "env-a", authnAnswer(status, { code }));
+      await act(() =>
+        invalidateEnvironmentReads(harness.queryClient, [
+          "environment.host.list",
+        ]),
+      );
+
+      expect(
+        await screen.findByText(/waiting for a host to delete its copy/),
+      ).toBeTruthy();
+      expect(screen.queryByText(/Mac mini/)).toBeNull();
+    },
+  );
+
+  it("still names the secret's host through a 503", async () => {
+    const harness = await mountWaitingOnMacMini();
+
+    answerTeamHostList(
+      harness,
+      "env-a",
+      authnAnswer(503, { error: "temporarily unavailable" }),
+    );
+    await act(() =>
+      invalidateEnvironmentReads(harness.queryClient, [
+        "environment.host.list",
+      ]),
+    );
+
+    expect(
+      screen.getByText(/waiting for Mac mini to delete its copy/),
+    ).toBeTruthy();
+  });
+});

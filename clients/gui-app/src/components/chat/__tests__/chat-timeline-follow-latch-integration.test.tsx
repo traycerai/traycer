@@ -1,0 +1,1800 @@
+/**
+ * Real-`@legendapp/list` integration coverage for the chat-timeline follow
+ * latch wiring.
+ *
+ * The pure/hook-level latch suite (`chat-timeline-follow-latch.test.ts`) already
+ * proves the latch itself is sound against a hand-constructed `LegendListRef`.
+ * This file mounts the real `LegendList` via `ChatTimeline` and asserts the
+ * production wiring at actual callback boundaries - especially the
+ * no-rerender item/footer/viewport ordering that the rejected render-gated
+ * design could not close.
+ *
+ * Assertions target real DOM geometry (scrollTop at/away from the true end),
+ * never `scrollToEnd` call counts. Production may skip a redundant
+ * `scrollToEnd` when already at the strict edge (destructive-clamp contract).
+ * The latch ResizeObserver is a maintain trigger. It may reconcile a fresh
+ * strict-bottom landing, but non-bottom geometry never grants permission or
+ * moves a detached reader.
+ *
+ * Do not duplicate the hook-level numeric sequences; only real-library wiring
+ * proofs belong here.
+ */
+import { act, cleanup, render } from "@testing-library/react";
+import { createRef, type ReactNode, type RefObject } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LegendListRef } from "@legendapp/list/react";
+import { ChatTimeline } from "@/components/chat/chat-timeline";
+import {
+  CHAT_TIMELINE_SCROLLER_MOVED_EVENT,
+  moveChatTimelineScroller,
+  type ChatTimelineFollowLatch,
+} from "@/components/chat/chat-timeline-follow-latch";
+import {
+  transcriptListRows,
+  type TranscriptListRow,
+} from "@/stores/chats/transcript-list-rows";
+import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
+import { makeMessage, makeMessages } from "./chat-message-fixtures";
+import {
+  advanceLegendListFrames,
+  installLegendListTestClock,
+  installLegendListViewportMetrics,
+  setLegendListMessageRowHeightOverrides,
+  setLegendListScrollContainerScrollHeightOverride,
+  settleLegendList,
+} from "./legend-list-test-environment";
+
+const VIEWPORT_HEIGHT_PX = 700;
+const VIEWPORT_WIDTH_PX = 800;
+const ITEM_HEIGHT_PX = 90;
+// Matches `legend-list-test-environment.ts` spacer shells (header + footer).
+const LEGEND_LIST_HEADER_PX = 40;
+const LEGEND_LIST_FOOTER_PX = 40;
+const PIXEL_STABILITY_EPSILON_PX = 1;
+
+function contentHeightForRowCount(rowCount: number): number {
+  return (
+    LEGEND_LIST_HEADER_PX + rowCount * ITEM_HEIGHT_PX + LEGEND_LIST_FOOTER_PX
+  );
+}
+
+function maxScrollTop(node: HTMLElement): number {
+  return Math.max(0, node.scrollHeight - node.clientHeight);
+}
+
+function requireScrollNode(
+  listRef: RefObject<LegendListRef | null>,
+): HTMLElement {
+  const node = listRef.current?.getScrollableNode();
+  if (!node) {
+    throw new Error("LegendList scrollable node is not mounted");
+  }
+  return node;
+}
+
+/** The latch's announced move, read back from its own event. */
+function scrollerMoveFrom(
+  event: Event,
+): { readonly from: number; readonly to: number } | null {
+  if (!(event instanceof CustomEvent)) return null;
+  const detail: unknown = event.detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  if (!("from" in detail) || !("to" in detail)) return null;
+  const { from, to } = detail;
+  if (typeof from !== "number" || typeof to !== "number") return null;
+  return { from, to };
+}
+
+/** Real native `scroll` dispatch - matches the latch's direct passive listener. */
+function fireNativeScroll(node: HTMLElement): void {
+  node.dispatchEvent(new Event("scroll", { bubbles: true }));
+}
+
+function parkAtStrictBottom(node: HTMLElement): number {
+  const max = maxScrollTop(node);
+  node.scrollTop = max;
+  fireNativeScroll(node);
+  return node.scrollTop;
+}
+
+/**
+ * Detach via recognized wheel intent, a real DOM scrollTop write, and a
+ * native scroll event.
+ * Deliberately no React re-render - this is the silent-detach
+ * ordering that must leave the latch denying follow on the next callback.
+ */
+function detachReader(node: HTMLElement, scrollTop: number): number {
+  node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+  node.scrollTop = scrollTop;
+  fireNativeScroll(node);
+  return node.scrollTop;
+}
+
+async function settleOneFrame(): Promise<void> {
+  await advanceLegendListFrames(1);
+}
+
+function expectPixelStable(node: HTMLElement, parked: number): void {
+  expect(Math.abs(node.scrollTop - parked)).toBeLessThanOrEqual(
+    PIXEL_STABILITY_EPSILON_PX,
+  );
+}
+
+function expectAtTrueEnd(node: HTMLElement): void {
+  expect(node.scrollTop).toBeGreaterThanOrEqual(maxScrollTop(node) - 1);
+}
+
+// --- Controllable ResizeObserver ------------------------------------------
+// The global MockResizeObserver from test-browser-apis is a total no-op.
+// The latch installs its OWN observer on the scroll node for the viewport-
+// layout trigger; we need that callback to fire on demand. LegendList also
+// uses a module-scoped global observer for footer/header layout - when this
+// controllable class is installed before the first LegendList mount in the
+// file, that singleton is controllable too.
+
+interface ControllableResizeObserverInstance extends ResizeObserver {
+  readonly callback: ResizeObserverCallback;
+  readonly observed: Set<Element>;
+}
+
+let controllableObservers: ControllableResizeObserverInstance[] = [];
+
+class ControllableResizeObserver implements ControllableResizeObserverInstance {
+  readonly callback: ResizeObserverCallback;
+  readonly observed = new Set<Element>();
+
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+    controllableObservers.push(this);
+  }
+
+  observe(target: Element): void {
+    this.observed.add(target);
+  }
+
+  unobserve(target: Element): void {
+    this.observed.delete(target);
+  }
+
+  disconnect(): void {
+    this.observed.clear();
+  }
+}
+
+function installControllableResizeObserver(): void {
+  controllableObservers = [];
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    configurable: true,
+    writable: true,
+    value: ControllableResizeObserver,
+  });
+}
+
+/**
+ * Fire every captured ResizeObserver. Prefer entry-shaped payloads for
+ * observers that care about contentRect (LegendList footer/header layout);
+ * the latch's own callback ignores entries entirely.
+ */
+function fireAllResizeObservers(
+  buildEntry: (target: Element) => ResizeObserverEntry | null,
+): void {
+  for (const observer of [...controllableObservers]) {
+    const entries: ResizeObserverEntry[] = [];
+    for (const target of observer.observed) {
+      const entry = buildEntry(target);
+      if (entry) entries.push(entry);
+    }
+    // Latch ignores entries; still invoke with whatever we have (possibly []).
+    observer.callback(entries, observer);
+  }
+}
+
+function makeResizeEntry(
+  target: Element,
+  width: number,
+  height: number,
+): ResizeObserverEntry {
+  const contentRect = {
+    x: 0,
+    y: 0,
+    width,
+    height,
+    top: 0,
+    left: 0,
+    right: width,
+    bottom: height,
+    toJSON: () => ({}),
+  } as DOMRectReadOnly;
+  return {
+    target,
+    contentRect,
+    borderBoxSize: [{ inlineSize: width, blockSize: height }],
+    contentBoxSize: [{ inlineSize: width, blockSize: height }],
+    devicePixelContentBoxSize: [{ inlineSize: width, blockSize: height }],
+  };
+}
+
+/**
+ * Instance-level clientHeight override. The shared viewport-metrics shim
+ * spies the prototype; an own-property getter on the node wins, so this is
+ * how a single scroll container can report unmeasurable 0x0 geometry without
+ * restacking the prototype spy (which recurses).
+ */
+function setNodeClientHeight(node: HTMLElement, height: number): void {
+  Object.defineProperty(node, "clientHeight", {
+    configurable: true,
+    enumerable: true,
+    get: () => height,
+  });
+}
+
+function clearNodeClientHeight(node: HTMLElement): void {
+  Reflect.deleteProperty(node, "clientHeight");
+}
+
+interface RenderTimelineOptions {
+  readonly messages: ReadonlyArray<ChatMessageModel>;
+  readonly listRef: RefObject<LegendListRef | null> | undefined;
+  readonly initialScrollAtEnd: boolean | undefined;
+  readonly contentInsetEndAdjustment: number | undefined;
+  readonly onItemSizeChanged: (() => void) | undefined;
+  readonly onListMetricsChange:
+    | ((metrics: {
+        readonly headerSize: number;
+        readonly footerSize: number;
+      }) => void)
+    | undefined;
+  readonly onFollowIntentChange: ((isFollowing: boolean) => void) | undefined;
+  readonly followLatchRef:
+    | RefObject<ChatTimelineFollowLatch | null>
+    | undefined;
+  readonly isReattachSuppressed: (() => boolean) | undefined;
+}
+
+interface RerenderTimelineOptions {
+  readonly contentInsetEndAdjustment: number | undefined;
+  readonly initialScrollAtEnd: boolean | undefined;
+}
+
+interface RenderTimelineResult {
+  readonly listRef: RefObject<LegendListRef | null>;
+  readonly rerenderMessages: (
+    messages: ReadonlyArray<ChatMessageModel>,
+    next: RerenderTimelineOptions | undefined,
+  ) => void;
+  readonly unmount: () => void;
+}
+
+function renderTimeline(
+  options: Partial<RenderTimelineOptions> & {
+    readonly messages: ReadonlyArray<ChatMessageModel>;
+  },
+): RenderTimelineResult {
+  const listRef = options.listRef ?? createRef<LegendListRef | null>();
+
+  const jsx = (
+    messages: ReadonlyArray<ChatMessageModel>,
+    contentInsetEndAdjustment: number,
+    initialScrollAtEnd: boolean,
+  ): ReactNode => (
+    <div
+      style={{
+        height: VIEWPORT_HEIGHT_PX,
+        width: VIEWPORT_WIDTH_PX,
+      }}
+    >
+      <ChatTimeline
+        rows={transcriptListRows({
+          window: null,
+          rendered: messages,
+          splitLongTurns: true,
+        })}
+        taskTitle="follow-latch integration"
+        backgroundToolBlockIds={new Set()}
+        getMessageActions={() => null}
+        nextStepActions={null}
+        listRef={listRef}
+        isTranscriptWindowInvalidated={false}
+        className="h-full"
+        initialScrollAtEnd={initialScrollAtEnd}
+        contentInsetEndAdjustment={contentInsetEndAdjustment}
+        onItemSizeChanged={options.onItemSizeChanged}
+        onListMetricsChange={options.onListMetricsChange}
+        onFollowIntentChange={options.onFollowIntentChange}
+        followLatchRef={options.followLatchRef}
+        isReattachSuppressed={options.isReattachSuppressed}
+      />
+    </div>
+  );
+
+  let currentInset = options.contentInsetEndAdjustment ?? 0;
+  let currentInitialScrollAtEnd = options.initialScrollAtEnd ?? true;
+
+  const result = render(
+    jsx(options.messages, currentInset, currentInitialScrollAtEnd),
+  );
+
+  return {
+    listRef,
+    unmount: result.unmount,
+    rerenderMessages: (
+      messages: ReadonlyArray<ChatMessageModel>,
+      next: RerenderTimelineOptions | undefined,
+    ) => {
+      if (next?.contentInsetEndAdjustment !== undefined) {
+        currentInset = next.contentInsetEndAdjustment;
+      }
+      if (next?.initialScrollAtEnd !== undefined) {
+        currentInitialScrollAtEnd = next.initialScrollAtEnd;
+      }
+      result.rerender(jsx(messages, currentInset, currentInitialScrollAtEnd));
+    },
+  };
+}
+
+function appendAssistantRows(
+  messages: ReadonlyArray<ChatMessageModel>,
+  count: number,
+  idPrefix: string,
+): ReadonlyArray<ChatMessageModel> {
+  const start = messages.length;
+  const extras = Array.from({ length: count }, (_unused, index) => {
+    const absolute = start + index;
+    return {
+      ...makeMessage(absolute, "assistant"),
+      id: `${idPrefix}-${index}`,
+      createdAt: 100_000 + absolute,
+      content: `streamed ${idPrefix} ${index}`,
+    };
+  });
+  return [...messages, ...extras];
+}
+
+function growAssistantInPlace(
+  messages: ReadonlyArray<ChatMessageModel>,
+  messageId: string,
+  extraText: string,
+): ReadonlyArray<ChatMessageModel> {
+  return messages.map((message) =>
+    message.id === messageId
+      ? { ...message, content: `${message.content}${extraText}` }
+      : message,
+  );
+}
+
+describe("ChatTimeline follow-latch real-LegendList integration", () => {
+  beforeEach(() => {
+    installControllableResizeObserver();
+    installLegendListViewportMetrics();
+    installLegendListTestClock();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    // Restore the setup-file no-op ResizeObserver so sibling suites in the
+    // same worker are not left with a live controllable class.
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      configurable: true,
+      writable: true,
+      value: class MockResizeObserver {
+        observe(): void {}
+        unobserve(): void {}
+        disconnect(): void {}
+      },
+    });
+    controllableObservers = [];
+  });
+
+  // -----------------------------------------------------------------------
+  // 1. Production-order owned correction and reader reattachment
+  // -----------------------------------------------------------------------
+
+  it("converges through a no-settle user/assistant/reasoning/text/tool/inset burst, then honors reader detach and strict-end reacquisition", async () => {
+    const rowCount = 36;
+    const composerInset = 160;
+    const baseMessages = makeMessages(rowCount);
+    setLegendListScrollContainerScrollHeightOverride(
+      contentHeightForRowCount(rowCount) + composerInset,
+    );
+    const followLatchRef = createRef<ChatTimelineFollowLatch | null>();
+    const onFollowIntentChange = vi.fn();
+    const { listRef, rerenderMessages } = renderTimeline({
+      messages: baseMessages,
+      contentInsetEndAdjustment: composerInset,
+      followLatchRef,
+      onFollowIntentChange,
+    });
+    await settleLegendList();
+
+    const node = requireScrollNode(listRef);
+    parkAtStrictBottom(node);
+    const list = listRef.current;
+    if (!list) throw new Error("LegendList ref not mounted");
+    const ownedUnderLanding = vi
+      .spyOn(list, "scrollToEnd")
+      .mockImplementation((): Promise<void> => {
+        moveChatTimelineScroller(
+          node,
+          Math.max(0, maxScrollTop(node) - 72),
+          () => {
+            node.scrollTop = Math.max(0, maxScrollTop(node) - 72);
+          },
+        );
+        fireNativeScroll(node);
+        return Promise.resolve();
+      });
+
+    const userAppend = [
+      ...baseMessages,
+      {
+        ...makeMessage(rowCount, "user"),
+        id: "burst-user",
+        content: "send with composer chrome present",
+      },
+    ];
+    setLegendListScrollContainerScrollHeightOverride(
+      contentHeightForRowCount(userAppend.length) + composerInset,
+    );
+    rerenderMessages(userAppend, undefined);
+
+    const assistantBase = {
+      ...makeMessage(rowCount + 1, "assistant"),
+      id: "burst-assistant",
+    };
+    const assistantAppend = [...userAppend, assistantBase];
+    setLegendListScrollContainerScrollHeightOverride(
+      contentHeightForRowCount(assistantAppend.length) + composerInset + 40,
+    );
+    rerenderMessages(assistantAppend, undefined);
+
+    const withReasoning = [
+      ...userAppend,
+      {
+        ...assistantBase,
+        content: "Thinking through the request",
+      },
+    ];
+    setLegendListScrollContainerScrollHeightOverride(
+      contentHeightForRowCount(withReasoning.length) + composerInset + 180,
+    );
+    rerenderMessages(withReasoning, undefined);
+    act(() => {
+      list.setItemSize("burst-assistant", {
+        height: 270,
+        width: VIEWPORT_WIDTH_PX,
+      });
+    });
+
+    const withText = withReasoning.map((message) =>
+      message.id === "burst-assistant"
+        ? {
+            ...message,
+            content: `${message.content}\nStreaming answer text`,
+          }
+        : message,
+    );
+    setLegendListScrollContainerScrollHeightOverride(
+      contentHeightForRowCount(withText.length) + composerInset + 300,
+    );
+    rerenderMessages(withText, undefined);
+
+    const withToolStatus = withText.map((message) =>
+      message.id === "burst-assistant"
+        ? {
+            ...message,
+            content: `${message.content}\nTool output`,
+            statusLabel: "Running tool",
+          }
+        : message,
+    );
+    setLegendListScrollContainerScrollHeightOverride(
+      contentHeightForRowCount(withToolStatus.length) + composerInset + 440,
+    );
+    rerenderMessages(withToolStatus, {
+      contentInsetEndAdjustment: composerInset + 120,
+      initialScrollAtEnd: undefined,
+    });
+    // The appends reshaped the rows, so the whole burst sits in the layout
+    // hold: its one correction is issued in the frame after the commit's.
+    await advanceLegendListFrames(2);
+
+    expect(ownedUnderLanding).toHaveBeenCalled();
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    ownedUnderLanding.mockRestore();
+    const correctionLanding = vi
+      .spyOn(list, "scrollToEnd")
+      .mockImplementation((): Promise<void> => {
+        moveChatTimelineScroller(node, maxScrollTop(node), () => {
+          node.scrollTop = maxScrollTop(node);
+        });
+        fireNativeScroll(node);
+        return Promise.resolve();
+      });
+    act(() => {
+      followLatchRef.current?.followEndIfPermitted();
+    });
+    await settleLegendList();
+    expectAtTrueEnd(node);
+
+    act(() => {
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+      node.scrollTop = Math.max(0, maxScrollTop(node) - 240);
+      fireNativeScroll(node);
+    });
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+    act(() => {
+      node.scrollTop = maxScrollTop(node);
+      fireNativeScroll(node);
+    });
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+
+    setLegendListScrollContainerScrollHeightOverride(
+      contentHeightForRowCount(withToolStatus.length) + composerInset + 560,
+    );
+    rerenderMessages(
+      withToolStatus.map((message) =>
+        message.id === "burst-assistant"
+          ? { ...message, statusLabel: "Tool completed" }
+          : message,
+      ),
+      undefined,
+    );
+    await settleLegendList();
+    expectAtTrueEnd(node);
+    correctionLanding.mockRestore();
+  });
+
+  it("retains follow through disclosure shrink and Todo inset growth without reader input", async () => {
+    const rowCount = 36;
+    const baseInset = 140;
+    const baseMessages = makeMessages(rowCount);
+    const baseHeight = contentHeightForRowCount(rowCount) + baseInset;
+    setLegendListScrollContainerScrollHeightOverride(baseHeight);
+    const followLatchRef = createRef<ChatTimelineFollowLatch | null>();
+    const onFollowIntentChange = vi.fn();
+    const { listRef, rerenderMessages } = renderTimeline({
+      messages: baseMessages,
+      contentInsetEndAdjustment: baseInset,
+      followLatchRef,
+      onFollowIntentChange,
+    });
+    await settleLegendList();
+
+    const node = requireScrollNode(listRef);
+    parkAtStrictBottom(node);
+    const list = listRef.current;
+    if (!list) throw new Error("LegendList ref not mounted");
+
+    // Expanded disclosure/stream growth moves the end. The first owned
+    // landing intentionally stops short so correction remains active.
+    const expandedHeight = baseHeight + 360;
+    setLegendListScrollContainerScrollHeightOverride(expandedHeight);
+    const scrollToEnd = vi
+      .spyOn(list, "scrollToEnd")
+      .mockImplementation((): Promise<void> => {
+        moveChatTimelineScroller(
+          node,
+          Math.max(0, maxScrollTop(node) - 40),
+          () => {
+            node.scrollTop = Math.max(0, maxScrollTop(node) - 40);
+          },
+        );
+        fireNativeScroll(node);
+        return Promise.resolve();
+      });
+    act(() => {
+      followLatchRef.current?.followEndIfPermitted();
+    });
+    expect(scrollToEnd).toHaveBeenCalled();
+
+    // LegendList's deferred web shrink/MVCP path may report a lower
+    // scrollTop after the disclosure's non-publishing pointer preflight has
+    // cancelled correction ownership. This is still layout motion, not a
+    // reader departure.
+    act(() => {
+      followLatchRef.current?.noteReaderGesture({
+        direction: "indeterminate",
+        freezeInFlightScroll: true,
+        publishesReaderPosition: false,
+      });
+      moveChatTimelineScroller(node, Math.max(0, node.scrollTop - 180), () => {
+        node.scrollTop = Math.max(0, node.scrollTop - 180);
+      });
+      fireNativeScroll(node);
+    });
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+
+    // Collapse settles at the new browser-clamped strict edge. A maintain
+    // callback must heal/reconcile it without issuing a semantic jump.
+    setLegendListScrollContainerScrollHeightOverride(baseHeight);
+    act(() => {
+      node.scrollTop = maxScrollTop(node);
+      followLatchRef.current?.followEndIfPermitted();
+    });
+    expectAtTrueEnd(node);
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+
+    // The Todo dock now increases the lower-surface inset. Following must
+    // remain live and land at the new end instead of surfacing the pill.
+    scrollToEnd.mockImplementation((): Promise<void> => {
+      moveChatTimelineScroller(node, maxScrollTop(node), () => {
+        node.scrollTop = maxScrollTop(node);
+      });
+      fireNativeScroll(node);
+      return Promise.resolve();
+    });
+    const todoInset = baseInset + 180;
+    setLegendListScrollContainerScrollHeightOverride(
+      contentHeightForRowCount(rowCount) + todoInset,
+    );
+    rerenderMessages(baseMessages, {
+      contentInsetEndAdjustment: todoInset,
+      initialScrollAtEnd: undefined,
+    });
+    await settleLegendList();
+
+    expectAtTrueEnd(node);
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    scrollToEnd.mockRestore();
+  });
+
+  // The list patch stops compensating for an end command's target row once a
+  // write that command did not make has moved the view - the write that
+  // otherwise leaves a reader at the top they pressed Home for. A row above the
+  // target collapsing is such a write, made by the list itself when it clamps
+  // its offset to the shortened content, and the reply then streams the height
+  // back. Nothing stands in for `scrollToEnd` here: this is the real latch over
+  // the real patched list, and a reader who never touched the scroller ends the
+  // turn at the end.
+  it("holds a following reader at the end when a row collapses under them and the reply grows back", async () => {
+    const rowCount = 36;
+    const shrinkPx = 28;
+    const messages = makeMessages(rowCount);
+    const collapsingRowId = messages[rowCount - 2]?.id ?? "";
+    const streamingRowId = messages[rowCount - 1]?.id ?? "";
+    const fullHeight = contentHeightForRowCount(rowCount);
+    setLegendListScrollContainerScrollHeightOverride(fullHeight);
+    const onFollowIntentChange = vi.fn();
+    const { listRef } = renderTimeline({ messages, onFollowIntentChange });
+    await settleLegendList();
+
+    const node = requireScrollNode(listRef);
+    // Latch and list both announce the writes they make, so the landing is
+    // observable without standing in for `scrollToEnd`. Which of the two
+    // lands it is deliberately not asserted: either is a correct repair, and
+    // removing one leaves the other to do it.
+    const landings: { readonly from: number; readonly to: number }[] = [];
+    node.addEventListener(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, (event) => {
+      const move = scrollerMoveFrom(event);
+      if (move) landings.push(move);
+    });
+    parkAtStrictBottom(node);
+    await settleLegendList();
+    expectAtTrueEnd(node);
+
+    const remeasureEveryRow = (): void => {
+      act(() => {
+        fireAllResizeObservers((target) =>
+          target instanceof HTMLElement
+            ? makeResizeEntry(
+                target,
+                VIEWPORT_WIDTH_PX,
+                target.getBoundingClientRect().height,
+              )
+            : null,
+        );
+      });
+    };
+
+    // The row above the streaming reply collapses. The content now ends above
+    // the reader, so the list clamps its own offset to the shortened content
+    // and the browser clamps its scroller to the same place and reports it.
+    setLegendListMessageRowHeightOverrides(
+      new Map([[collapsingRowId, ITEM_HEIGHT_PX - shrinkPx]]),
+    );
+    setLegendListScrollContainerScrollHeightOverride(fullHeight - shrinkPx);
+    remeasureEveryRow();
+    node.scrollTop = maxScrollTop(node);
+    fireNativeScroll(node);
+    await settleLegendList();
+    expectAtTrueEnd(node);
+
+    // The reply streams the height back, and this is the turn's last content
+    // change: nothing follows it to correct a view left short of the end.
+    setLegendListMessageRowHeightOverrides(
+      new Map([
+        [collapsingRowId, ITEM_HEIGHT_PX - shrinkPx],
+        [streamingRowId, ITEM_HEIGHT_PX + shrinkPx],
+      ]),
+    );
+    setLegendListScrollContainerScrollHeightOverride(fullHeight);
+    remeasureEveryRow();
+    await settleLegendList();
+    await settleOneFrame();
+
+    expectAtTrueEnd(node);
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    // And an announced correction took them there, from the offset the
+    // collapse left them at - the reader was never yanked silently.
+    expect(
+      landings.filter(
+        (move) =>
+          move.from < maxScrollTop(node) && move.to === maxScrollTop(node),
+      ),
+    ).not.toHaveLength(0);
+  });
+
+  // -----------------------------------------------------------------------
+  // 2. Core no-rerender proof
+  // -----------------------------------------------------------------------
+
+  describe("silent detach then layout callbacks with no ChatTimeline rerender", () => {
+    it("attaches the latch when an initially empty transcript receives its first rows", async () => {
+      const rowCount = 40;
+      const messages = makeMessages(rowCount);
+      const { listRef, rerenderMessages } = renderTimeline({ messages: [] });
+      await settleLegendList();
+
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(rowCount),
+      );
+      rerenderMessages(messages, undefined);
+      await settleLegendList();
+
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+      const parked = detachReader(node, 180);
+      const next = appendAssistantRows(messages, 1, "after-empty");
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(next.length),
+      );
+      rerenderMessages(next, undefined);
+      await settleLegendList();
+
+      expectPixelStable(node, parked);
+    });
+
+    it("setItemSize alone does not yank a detached reader (no preparatory rerender)", async () => {
+      const rowCount = 40;
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(rowCount),
+      );
+      const messages = makeMessages(rowCount);
+      const onItemSizeChanged = vi.fn();
+      const { listRef } = renderTimeline({ messages, onItemSizeChanged });
+      await settleLegendList();
+
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+      const parked = detachReader(node, 180);
+      expect(parked).toBe(180);
+
+      // CRITICAL: no rerenderMessages / no React commit between detach and
+      // setItemSize - this is the ordering the rejected gate tests avoided.
+      onItemSizeChanged.mockClear();
+      act(() => {
+        listRef.current?.setItemSize("message-6", {
+          height: 260,
+          width: VIEWPORT_WIDTH_PX,
+        });
+      });
+      await settleLegendList();
+
+      expect(onItemSizeChanged).toHaveBeenCalled();
+      expectPixelStable(node, parked);
+    });
+
+    it("footer/header metrics change via real RO does not yank a detached reader", async () => {
+      const rowCount = 40;
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(rowCount),
+      );
+      const onListMetricsChange = vi.fn();
+      const { listRef } = renderTimeline({
+        messages: makeMessages(rowCount),
+        onListMetricsChange,
+      });
+      await settleLegendList();
+
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+      const parked = detachReader(node, 220);
+      onListMetricsChange.mockClear();
+
+      // Fire LegendList's footer/header layout observers with a NEW size so
+      // setFooterSize/setHeaderSize change and onMetricsChange (our
+      // handleMetricsChange → followEndIfPermitted) runs - still no React
+      // re-render of ChatTimeline.
+      act(() => {
+        fireAllResizeObservers((target) => {
+          // Skip the scroll container itself here; the next test covers it.
+          if (target === node) return null;
+          return makeResizeEntry(target, VIEWPORT_WIDTH_PX, 96);
+        });
+      });
+      await settleLegendList();
+
+      expectPixelStable(node, parked);
+    });
+
+    it("viewport ResizeObserver on the scroll node does not yank a detached reader", async () => {
+      const rowCount = 40;
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(rowCount),
+      );
+      const { listRef } = renderTimeline({ messages: makeMessages(rowCount) });
+      await settleLegendList();
+
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+      const parked = detachReader(node, 150);
+
+      // Latch's own ResizeObserver is a maintain TRIGGER only (does not
+      // refresh permission from post-resize geometry). With permission
+      // already false from the detach scroll, a pure container resize must
+      // not yank - and no ChatTimeline re-render accompanies it.
+      act(() => {
+        fireAllResizeObservers((target) =>
+          target === node
+            ? makeResizeEntry(target, VIEWPORT_WIDTH_PX, VIEWPORT_HEIGHT_PX)
+            : null,
+        );
+      });
+      await settleLegendList();
+
+      expectPixelStable(node, parked);
+    });
+
+    it("setItemSize while strictly at bottom retains follow so a subsequent append lands at the newest end", async () => {
+      // Item-layout alone is the no-rerender trigger under test; a pure
+      // setItemSize against the DOM scrollHeight override does not give the
+      // library's scrollToEnd a new measurable end that matches our shim, so
+      // the discriminating proof here is: (1) item-size at the edge does not
+      // clear permission / yank the reader off the edge, and (2) the next
+      // data-change maintain trigger still follows. Detached setItemSize is
+      // covered above; full growth-follow for data is covered by the matrix.
+      const rowCount = 40;
+      const baseHeight = contentHeightForRowCount(rowCount);
+      setLegendListScrollContainerScrollHeightOverride(baseHeight);
+      const messages = makeMessages(rowCount);
+      const { listRef, rerenderMessages } = renderTimeline({ messages });
+      await settleLegendList();
+
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+
+      act(() => {
+        listRef.current?.setItemSize("message-8", {
+          height: 280,
+          width: VIEWPORT_WIDTH_PX,
+        });
+      });
+      await settleLegendList();
+      // Still at the DOM edge after the item-layout trigger (no detach).
+      expectAtTrueEnd(node);
+
+      const next = appendAssistantRows(messages, 2, "after-item-size");
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(next.length),
+      );
+      rerenderMessages(next, undefined);
+      await settleLegendList();
+
+      expectAtTrueEnd(node);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 2. Mutation matrix: append / in-place / footer-inset / short-height
+  // -----------------------------------------------------------------------
+
+  describe("mutation matrix: detached pixel-stable; strict-bottom follows", () => {
+    type MutationKind =
+      | "append"
+      | "in-place-growth"
+      | "footer-inset"
+      | "item-size"
+      | "short-height";
+
+    const mutationKinds: ReadonlyArray<MutationKind> = [
+      "append",
+      "in-place-growth",
+      "footer-inset",
+      "item-size",
+      "short-height",
+    ];
+
+    async function applyMutation(
+      kind: MutationKind,
+      ctx: {
+        readonly messages: ReadonlyArray<ChatMessageModel>;
+        readonly listRef: RefObject<LegendListRef | null>;
+        readonly rerenderMessages: RenderTimelineResult["rerenderMessages"];
+        readonly rowCount: number;
+      },
+    ): Promise<void> {
+      const { messages, listRef, rerenderMessages, rowCount } = ctx;
+      switch (kind) {
+        case "append": {
+          const next = appendAssistantRows(messages, 2, `append-${rowCount}`);
+          setLegendListScrollContainerScrollHeightOverride(
+            contentHeightForRowCount(next.length),
+          );
+          rerenderMessages(next, undefined);
+          break;
+        }
+        case "in-place-growth": {
+          const targetId = messages[messages.length - 1]?.id;
+          if (!targetId) throw new Error("no target row");
+          const next = growAssistantInPlace(
+            messages,
+            targetId,
+            "\n\nmore streamed tokens that grow the card",
+          );
+          setLegendListScrollContainerScrollHeightOverride(
+            contentHeightForRowCount(rowCount) + 180,
+          );
+          // In-place content change is a data identity change for the stable-
+          // rows cache, so ChatTimeline re-renders; also remeasure the row
+          // the way a real streaming card resize would.
+          rerenderMessages(next, undefined);
+          act(() => {
+            listRef.current?.setItemSize(targetId, {
+              height: 270,
+              width: VIEWPORT_WIDTH_PX,
+            });
+          });
+          break;
+        }
+        case "footer-inset": {
+          // contentInsetEndAdjustment is a real prop path (layout effect
+          // wiring in chat-timeline.tsx) covering the footer/inset maintain
+          // trigger that production uses for the composer overlay.
+          rerenderMessages(messages, {
+            contentInsetEndAdjustment: 180,
+            initialScrollAtEnd: undefined,
+          });
+          break;
+        }
+        case "item-size": {
+          act(() => {
+            listRef.current?.setItemSize("message-4", {
+              height: 240,
+              width: VIEWPORT_WIDTH_PX,
+            });
+          });
+          break;
+        }
+        case "short-height": {
+          // Near-end short content growth: only a few px of height change.
+          const next = appendAssistantRows(messages, 1, `short-${rowCount}`);
+          // Keep the same scrollHeight delta tiny even with one more row so
+          // the case stays "short-height" rather than a full append.
+          setLegendListScrollContainerScrollHeightOverride(
+            contentHeightForRowCount(rowCount) + 8,
+          );
+          rerenderMessages(next, undefined);
+          break;
+        }
+        default: {
+          const _exhaustive: never = kind;
+          throw new Error(`unhandled mutation: ${String(_exhaustive)}`);
+        }
+      }
+      await settleLegendList();
+    }
+
+    for (const kind of mutationKinds) {
+      it(`detached remains pixel-stable across ${kind}`, async () => {
+        const rowCount = 36;
+        setLegendListScrollContainerScrollHeightOverride(
+          contentHeightForRowCount(rowCount),
+        );
+        const messages = makeMessages(rowCount);
+        const { listRef, rerenderMessages } = renderTimeline({ messages });
+        await settleLegendList();
+
+        const node = requireScrollNode(listRef);
+        parkAtStrictBottom(node);
+        const parked = detachReader(node, 240);
+        // `detachReader`'s native `scroll` dispatch reaches the library's own
+        // `handleScroll`, which only flushes `state.scroll` synchronously
+        // while already `scrollingTo` / mid initial-scroll / MVCP-active -
+        // otherwise it goes through `scrollEventCoalescer.schedule()`, an
+        // rAF-coalesced update (see `@legendapp/list/react.mjs`'s
+        // `handleScroll`/`useRafCoalescer`). Without a settle here, a
+        // mutation whose own maintain compensation reads `state.scroll`
+        // (footer-inset's `contentInsetEndAdjustment` path, in particular)
+        // computes its delta against the stale pre-detach value instead of
+        // the DOM's actual `parked` position.
+        await settleLegendList();
+
+        await applyMutation(kind, {
+          messages,
+          listRef,
+          rerenderMessages,
+          rowCount,
+        });
+
+        expectPixelStable(node, parked);
+      });
+
+      it(`strict-bottom follows newest end across ${kind}`, async () => {
+        const rowCount = 36;
+        setLegendListScrollContainerScrollHeightOverride(
+          contentHeightForRowCount(rowCount),
+        );
+        const messages = makeMessages(rowCount);
+        const { listRef, rerenderMessages } = renderTimeline({ messages });
+        await settleLegendList();
+
+        const node = requireScrollNode(listRef);
+        parkAtStrictBottom(node);
+
+        await applyMutation(kind, {
+          messages,
+          listRef,
+          rerenderMessages,
+          rowCount,
+        });
+
+        // After follow, geometry must be at the true end. For mutations that
+        // do not grow max-scroll (item-size alone with fixed scrollHeight
+        // override), "at end" still means the same max; for growth cases the
+        // end has moved and we must have moved with it.
+        expectAtTrueEnd(node);
+      });
+    }
+  });
+
+  // -----------------------------------------------------------------------
+  // 3. Hidden 0x0 → reveal restored free-reading → growth
+  // -----------------------------------------------------------------------
+
+  describe("hidden 0x0 reveal restored free-reading", () => {
+    it("does not overwrite a restored non-bottom position after reveal, and growth stays parked", async () => {
+      const rowCount = 40;
+      const fullHeight = contentHeightForRowCount(rowCount);
+      setLegendListScrollContainerScrollHeightOverride(fullHeight);
+
+      // Mount as free-reading (not following-end). initialScrollAtEnd=false
+      // seeds the latch permission as false - the restored free-reading
+      // intent required.
+      const { listRef, rerenderMessages } = renderTimeline({
+        messages: makeMessages(rowCount),
+        initialScrollAtEnd: false,
+      });
+      await settleLegendList();
+
+      const node = requireScrollNode(listRef);
+
+      // Simulate the inactive display:none pane reporting 0x0. Unmeasurable
+      // geometry must not be treated as a confirmed edge. Scroll while 0x0 is
+      // ignored by the latch (clientHeight===0); ResizeObserver is trigger-
+      // only and never rewrites permission from post-resize geometry.
+      setNodeClientHeight(node, 0);
+      setLegendListScrollContainerScrollHeightOverride(0);
+      node.scrollTop = 0;
+      fireNativeScroll(node);
+      act(() => {
+        fireAllResizeObservers((target) =>
+          target === node ? makeResizeEntry(target, 0, 0) : null,
+        );
+      });
+
+      // Reveal at a restored free-reading coordinate far from the tail.
+      // A real scroll event at that coordinate is the only permission source.
+      clearNodeClientHeight(node);
+      setLegendListScrollContainerScrollHeightOverride(fullHeight);
+      const restoredTop = 500;
+      node.scrollTop = restoredTop;
+      fireNativeScroll(node);
+      act(() => {
+        fireAllResizeObservers((target) =>
+          target === node
+            ? makeResizeEntry(target, VIEWPORT_WIDTH_PX, VIEWPORT_HEIGHT_PX)
+            : null,
+        );
+      });
+      await settleLegendList();
+
+      expectPixelStable(node, restoredTop);
+      expect(node.scrollTop).toBeLessThan(maxScrollTop(node) - 1);
+
+      // Immediate subsequent growth must still not yank.
+      const grown = appendAssistantRows(
+        makeMessages(rowCount),
+        3,
+        "post-reveal",
+      );
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(grown.length),
+      );
+      rerenderMessages(grown, undefined);
+      await settleLegendList();
+
+      expectPixelStable(node, restoredTop);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 4. Downward scroll that stops short of true bottom cannot reacquire
+  // -----------------------------------------------------------------------
+
+  describe("downward-but-not-bottom cannot reacquire follow", () => {
+    it("real native scroll steps that never reach the edge leave append growth parked", async () => {
+      const rowCount = 40;
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(rowCount),
+      );
+      const messages = makeMessages(rowCount);
+      const { listRef, rerenderMessages } = renderTimeline({ messages });
+      await settleLegendList();
+
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+
+      // Detach far above, then crawl downward with real native scroll events
+      // at each step - still hundreds of px from the true end (the
+      // counter-example against a numeric baseline heuristic).
+      detachReader(node, 200);
+      for (const top of [400, 700, 1000, 1500]) {
+        node.scrollTop = top;
+        fireNativeScroll(node);
+        expect(maxScrollTop(node) - node.scrollTop).toBeGreaterThan(1);
+      }
+      const parked = node.scrollTop;
+
+      const next = appendAssistantRows(messages, 2, "downward-no-reacq");
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(next.length),
+      );
+      rerenderMessages(next, undefined);
+      await settleLegendList();
+
+      expectPixelStable(node, parked);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 5. MVCP / virtualization coordinate remap does not grant permission
+  // -----------------------------------------------------------------------
+
+  describe("virtualization / MVCP coordinate remap", () => {
+    it("a large structural data remap that moves scrollTop does not re-enable follow on its own", async () => {
+      const rowCount = 80;
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(rowCount),
+      );
+      const messages = makeMessages(rowCount);
+      const { listRef, rerenderMessages } = renderTimeline({ messages });
+      await settleLegendList();
+
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+      const parked = detachReader(node, 300);
+
+      // Large prepend-like rewrite: replace the data array with a different
+      // identity set of the same length so LegendList recalculates item
+      // positions (MVCP/virtualization path) while the reader is free.
+      // maintainVisibleContentPosition may adjust scrollTop; that adjustment
+      // must not be read as "reader returned to the edge".
+      const remapped = messages.map((message, index) => ({
+        ...message,
+        id: `remapped-${index}`,
+        content: `remapped body ${index}`,
+      }));
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(remapped.length) + 400,
+      );
+      rerenderMessages(remapped, undefined);
+      await settleLegendList();
+
+      // Whatever MVCP did to scrollTop, we must not be yanked to the true
+      // end. A follow would land within 1px of max; free-reading after a
+      // remap stays clearly away from it.
+      const afterRemap = node.scrollTop;
+      expect(afterRemap).toBeLessThan(maxScrollTop(node) - 1);
+
+      // A subsequent growth must still not follow - remap alone never
+      // reacquired permission.
+      const grown = appendAssistantRows(remapped, 2, "post-remap");
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(grown.length) + 400,
+      );
+      rerenderMessages(grown, undefined);
+      await settleLegendList();
+
+      expectPixelStable(node, afterRemap);
+      // Sanity: we started detached and never intentionally returned.
+      expect(parked).toBe(300);
+    });
+
+    it("declared programmatic non-bottom navigation preserves its free-reading position", async () => {
+      const rowCount = 40;
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(rowCount),
+      );
+      const messages = makeMessages(rowCount);
+      const followLatchRef = createRef<ChatTimelineFollowLatch | null>();
+      const { listRef, rerenderMessages } = renderTimeline({
+        messages,
+        followLatchRef,
+      });
+      await settleLegendList();
+
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+
+      act(() => {
+        // Non-bottom navigation declares its destination explicitly. Bare
+        // scrollTop movement is not reader intent because MVCP and layout use
+        // the same browser signal.
+        followLatchRef.current?.beginOwnedFreeNavigation();
+        void listRef.current?.scrollToOffset({ offset: 350, animated: false });
+        // Mirror production: programmatic navigation also lands a real DOM
+        // scrollTop the latch observes via its direct listener.
+        node.scrollTop = 350;
+        fireNativeScroll(node);
+      });
+      await settleLegendList();
+      const parked = node.scrollTop;
+      expect(parked).toBeLessThan(maxScrollTop(node) - 1);
+
+      const next = appendAssistantRows(messages, 2, "prog-nav");
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(next.length),
+      );
+      rerenderMessages(next, undefined);
+      await settleLegendList();
+
+      expectPixelStable(node, parked);
+    });
+  });
+
+  describe("a reader an owned navigation detached with no scroll report", () => {
+    it("stays where the navigation landed them when the end shrinks onto them and the content regrows", async () => {
+      const rowCount = 40;
+      const fullHeight = contentHeightForRowCount(rowCount);
+      setLegendListScrollContainerScrollHeightOverride(fullHeight);
+      const messages = makeMessages(rowCount);
+      const followLatchRef = createRef<ChatTimelineFollowLatch | null>();
+      const { listRef, rerenderMessages } = renderTimeline({
+        messages,
+        followLatchRef,
+      });
+      await settleLegendList();
+
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+
+      // The landing is written without a scroll report of the reader's own.
+      const landedAt = 500;
+      act(() => {
+        followLatchRef.current?.beginOwnedFreeNavigation();
+        node.scrollTop = landedAt;
+        followLatchRef.current?.completeOwnedFreeNavigation();
+      });
+      await settleLegendList();
+
+      // The end shrinks onto the landing, and a report of the clamp follows.
+      setLegendListScrollContainerScrollHeightOverride(
+        landedAt + VIEWPORT_HEIGHT_PX,
+      );
+      fireNativeScroll(node);
+      act(() => {
+        fireAllResizeObservers(() => null);
+      });
+      await settleLegendList();
+
+      // The content regrows past them.
+      setLegendListScrollContainerScrollHeightOverride(fullHeight);
+      rerenderMessages(appendAssistantRows(messages, 2, "regrown"), undefined);
+      await settleLegendList();
+
+      expectPixelStable(node, landedAt);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 6. A recovering transcript's clamp does not reattach a detached reader
+  // -----------------------------------------------------------------------
+
+  describe("a detached reader clamped to the end while the transcript recovers", () => {
+    /** The browser clamps an offset past the new end to that end, and says
+     *  so with a scroll report. */
+    function clampToEnd(node: HTMLElement): number {
+      node.scrollTop = maxScrollTop(node);
+      fireNativeScroll(node);
+      return node.scrollTop;
+    }
+
+    it("stays detached and unmoved through the store's recovery and after it lifts", async () => {
+      const rowCount = 40;
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(rowCount),
+      );
+      const messages = makeMessages(rowCount);
+      const onFollowIntentChange = vi.fn();
+      let recovering = false;
+      const { listRef, rerenderMessages } = renderTimeline({
+        messages,
+        onFollowIntentChange,
+        isReattachSuppressed: () => recovering,
+      });
+      await settleLegendList();
+
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+      detachReader(node, 900);
+      onFollowIntentChange.mockClear();
+      recovering = true;
+
+      // Rows collapse under the reader: the content now ends above the
+      // reader's offset, and every maintain trigger sees the strict bottom.
+      setLegendListScrollContainerScrollHeightOverride(
+        VIEWPORT_HEIGHT_PX + 300,
+      );
+      const clamped = clampToEnd(node);
+      expect(clamped).toBe(300);
+      act(() => {
+        fireAllResizeObservers((target) =>
+          target === node
+            ? makeResizeEntry(target, VIEWPORT_WIDTH_PX, VIEWPORT_HEIGHT_PX)
+            : null,
+        );
+      });
+      await settleLegendList();
+
+      // The recovery restores the content, and streaming grows it.
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(rowCount),
+      );
+      const grown = growAssistantInPlace(
+        messages,
+        messages[rowCount - 1]?.id ?? "",
+        " streamed during recovery",
+      );
+      rerenderMessages(grown, undefined);
+      await settleLegendList();
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expectPixelStable(node, clamped);
+
+      // Recovery lifts while the content still ends at the reader: the end
+      // met them, so the next maintain pass leaves them where they are.
+      recovering = false;
+      setLegendListScrollContainerScrollHeightOverride(
+        VIEWPORT_HEIGHT_PX + 300,
+      );
+      act(() => {
+        fireAllResizeObservers((target) =>
+          target === node
+            ? makeResizeEntry(target, VIEWPORT_WIDTH_PX, VIEWPORT_HEIGHT_PX)
+            : null,
+        );
+      });
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      const next = appendAssistantRows(grown, 1, "after-recovery");
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(next.length),
+      );
+      rerenderMessages(next, undefined);
+      await settleLegendList();
+      expectPixelStable(node, clamped);
+    });
+
+    it("stays detached through a structural commit's clamp and after its layout settles", async () => {
+      const rowCount = 40;
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(rowCount),
+      );
+      const messages = makeMessages(rowCount);
+      const onFollowIntentChange = vi.fn();
+      const { listRef, rerenderMessages } = renderTimeline({
+        messages,
+        onFollowIntentChange,
+      });
+      await settleLegendList();
+
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+      detachReader(node, 900);
+      onFollowIntentChange.mockClear();
+
+      // A commit that changes the key sequence shortens the transcript past
+      // the reader, and the browser clamps them to its new end before the
+      // list has settled.
+      const shortened = messages.slice(0, 8);
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(shortened.length),
+      );
+      rerenderMessages(shortened, undefined);
+      const clamped = clampToEnd(node);
+
+      // Its layout keeps moving until after the list's own callbacks have
+      // gone quiet.
+      const settledHeight = contentHeightForRowCount(shortened.length);
+      for (let frame = 0; frame < 20; frame += 1) {
+        setLegendListScrollContainerScrollHeightOverride(
+          settledHeight - (frame % 2) * 10,
+        );
+        await settleOneFrame();
+      }
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      // The settle leaves them where the clamp put them.
+      setLegendListScrollContainerScrollHeightOverride(settledHeight);
+      await settleLegendList();
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      const next = appendAssistantRows(shortened, 1, "after-settle");
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(next.length),
+      );
+      rerenderMessages(next, undefined);
+      await settleLegendList();
+      expectPixelStable(node, clamped);
+    });
+  });
+  // jsdom lays nothing out: these show the patched list announces each write
+  // with its offsets, not that the latch tells a browser's clamp from a pan
+  // (the composer cells of `chat-send-follow.spec.ts` do).
+  describe("the list announces the writes it makes to its scroller", () => {
+    async function mountDetachedAt(scrollTop: number) {
+      const rowCount = 36;
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(rowCount),
+      );
+      const { listRef } = renderTimeline({
+        messages: makeMessages(rowCount),
+      });
+      await settleLegendList();
+      const node = requireScrollNode(listRef);
+      const list = listRef.current;
+      if (!list) throw new Error("LegendList ref not mounted");
+      parkAtStrictBottom(node);
+      act(() => {
+        detachReader(node, scrollTop);
+      });
+      const moves: unknown[] = [];
+      node.addEventListener(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, (event) => {
+        if (!(event instanceof CustomEvent)) return;
+        const detail: unknown = event.detail;
+        moves.push(detail);
+      });
+      return { node, list, moves };
+    }
+
+    it("announces a visible-content adjustment with where it started, where the end was, where it landed, where it asked for and that it wrote the offset", async () => {
+      const { node, list, moves } = await mountDetachedAt(1500);
+      const end = maxScrollTop(node);
+
+      act(() => {
+        list.setVisibleContentAnchorOffset(120);
+      });
+
+      // `cause: "offset"`: the list wrote the offset to hold content still as
+      // it grew, so the content came along and a content-relative reference
+      // has already netted this out.
+      expect(moves).toEqual([
+        { from: 1500, fromEnd: end, to: 1620, intended: 1620, cause: "offset" },
+      ]);
+    });
+
+    it("announces a scroll to the end from where the reader was", async () => {
+      const { node, list, moves } = await mountDetachedAt(2000);
+      const end = maxScrollTop(node);
+
+      act(() => {
+        void list.scrollToEnd({ animated: false });
+      });
+      await settleLegendList();
+
+      expect(moves).toContainEqual({
+        from: 2000,
+        fromEnd: end,
+        to: end,
+        intended: end,
+        cause: "offset",
+      });
+    });
+  });
+  describe("a send's layout hold keeps the latch's end writes out of its frames", () => {
+    const ROW_COUNT = 12;
+
+    function rowsOf(
+      messages: ReadonlyArray<ChatMessageModel>,
+    ): ReadonlyArray<TranscriptListRow> {
+      return transcriptListRows({
+        window: null,
+        rendered: messages,
+        splitLongTurns: true,
+      });
+    }
+
+    function timelineOf(
+      listRef: RefObject<LegendListRef | null>,
+      rows: ReadonlyArray<TranscriptListRow>,
+      isTranscriptWindowInvalidated: boolean,
+      onFollowIntentChange: (isFollowing: boolean) => void,
+    ): ReactNode {
+      return (
+        <div style={{ height: VIEWPORT_HEIGHT_PX, width: VIEWPORT_WIDTH_PX }}>
+          <ChatTimeline
+            rows={rows}
+            taskTitle="layout hold"
+            backgroundToolBlockIds={new Set()}
+            getMessageActions={() => null}
+            nextStepActions={null}
+            listRef={listRef}
+            isTranscriptWindowInvalidated={isTranscriptWindowInvalidated}
+            className="h-full"
+            onFollowIntentChange={onFollowIntentChange}
+          />
+        </div>
+      );
+    }
+
+    /** A following reader parked at the end of a settled transcript. One
+     *  list ref serves every commit: the committed row shape is cached per
+     *  ref. `scrollToEnd` is the latch's queued end command, spied on the
+     *  handle; the list's own writes never go through it. */
+    async function mountFollowing(messages: ReadonlyArray<ChatMessageModel>) {
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(messages.length),
+      );
+      const listRef = createRef<LegendListRef | null>();
+      const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
+      const view = render(
+        timelineOf(listRef, rowsOf(messages), false, onFollowIntentChange),
+      );
+      await settleLegendList();
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+      const list = listRef.current;
+      if (!list) throw new Error("LegendList ref not mounted");
+      const scrollToEnd = vi
+        .spyOn(list, "scrollToEnd")
+        .mockImplementation((): Promise<void> => Promise.resolve());
+      const commitRows = (
+        nextRows: ReadonlyArray<TranscriptListRow>,
+        isTranscriptWindowInvalidated: boolean,
+        scrollHeight: number,
+      ): void => {
+        setLegendListScrollContainerScrollHeightOverride(scrollHeight);
+        act(() => {
+          view.rerender(
+            timelineOf(
+              listRef,
+              nextRows,
+              isTranscriptWindowInvalidated,
+              onFollowIntentChange,
+            ),
+          );
+        });
+      };
+      const commit = (
+        next: ReadonlyArray<ChatMessageModel>,
+        isTranscriptWindowInvalidated: boolean,
+      ): void => {
+        commitRows(
+          rowsOf(next),
+          isTranscriptWindowInvalidated,
+          contentHeightForRowCount(next.length),
+        );
+      };
+      return { node, scrollToEnd, commit, commitRows, onFollowIntentChange };
+    }
+
+    it("an ordinary row-shape commit corrects before its first paint", async () => {
+      const messages = makeMessages(ROW_COUNT);
+      const { node, scrollToEnd, commit, onFollowIntentChange } =
+        await mountFollowing(messages);
+      const parked = node.scrollTop;
+
+      commit(appendAssistantRows(messages, 1, "sent"), false);
+
+      // No void occurred, so the prompt can be followed in this commit.
+      expect(node.scrollTop).toBeGreaterThan(parked);
+      expect(scrollToEnd).toHaveBeenCalledTimes(1);
+      expectAtTrueEnd(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    });
+
+    it("a placeholder replaced by its hydrated row follows without a void", async () => {
+      const messages = makeMessages(ROW_COUNT);
+      const hydrated = rowsOf(messages);
+      const placeholder = hydrated.map((row, index): TranscriptListRow =>
+        index === 2
+          ? {
+              kind: "placeholder",
+              key: row.key,
+              ordinal: index,
+              entry: null,
+              provenance: "index",
+            }
+          : row,
+      );
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(ROW_COUNT),
+      );
+      const listRef = createRef<LegendListRef | null>();
+      const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
+      const view = render(
+        timelineOf(listRef, placeholder, false, onFollowIntentChange),
+      );
+      await settleLegendList();
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+      const list = listRef.current;
+      if (!list) throw new Error("LegendList ref not mounted");
+      const scrollToEnd = vi
+        .spyOn(list, "scrollToEnd")
+        .mockImplementation((): Promise<void> => Promise.resolve());
+
+      // The hydrated row is taller than its placeholder was.
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(ROW_COUNT) + 200,
+      );
+      act(() => {
+        view.rerender(
+          timelineOf(listRef, hydrated, false, onFollowIntentChange),
+        );
+      });
+      // The list re-anchors on a hydration by itself, so only the latch's own
+      // command tells its write from the list's.
+      expect(scrollToEnd).toHaveBeenCalledTimes(1);
+      await advanceLegendListFrames(2);
+      expectAtTrueEnd(node);
+    });
+
+    it("a streaming token with no row-shape change is corrected in its own frame", async () => {
+      const messages = makeMessages(ROW_COUNT);
+      const { node, scrollToEnd, commit } = await mountFollowing(messages);
+      const parked = node.scrollTop;
+
+      const last = messages[messages.length - 1];
+      const streamed = [
+        ...messages.slice(0, -1),
+        { ...last, content: `${last.content} more` },
+      ];
+      commit(streamed, false);
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(messages.length) + 120,
+      );
+      await advanceLegendListFrames(1);
+
+      expect(scrollToEnd).toHaveBeenCalled();
+      expect(node.scrollTop).toBeGreaterThan(parked);
+    });
+
+    it("a snapshot that lands in a commit which also reshapes the rows is corrected once, in the frame after", async () => {
+      const messages = makeMessages(ROW_COUNT);
+      const { node, scrollToEnd, commit, onFollowIntentChange } =
+        await mountFollowing(messages);
+      const parked = node.scrollTop;
+
+      // The void: the window bit holds, the reader is owed a correction.
+      commit(messages, true);
+      expect(scrollToEnd).not.toHaveBeenCalled();
+
+      // The index returns in the commit that re-keys the rows: the window
+      // bit clears as the structural bit opens, so nothing flushes here.
+      commit(appendAssistantRows(messages, 1, "snapshot"), false);
+      expect(scrollToEnd).not.toHaveBeenCalled();
+      expect(node.scrollTop).toBe(parked);
+      await advanceLegendListFrames(1);
+      expect(scrollToEnd).not.toHaveBeenCalled();
+
+      await advanceLegendListFrames(1);
+      expect(scrollToEnd).toHaveBeenCalledTimes(1);
+      expectAtTrueEnd(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    });
+
+    it("corrects again when the browser drops the close write and the view falls back to where it was written from", async () => {
+      const messages = makeMessages(ROW_COUNT);
+      const { node, scrollToEnd, commit, onFollowIntentChange } =
+        await mountFollowing(messages);
+      const parked = node.scrollTop;
+
+      commit(messages, true);
+      commit(appendAssistantRows(messages, 1, "snapshot"), false);
+      await advanceLegendListFrames(2);
+      expect(scrollToEnd).toHaveBeenCalledTimes(1);
+      expectAtTrueEnd(node);
+      // The write's own report reaches the latch.
+      fireNativeScroll(node);
+
+      // The browser drops the write a frame after it landed: the view is
+      // back at the offset it was written from, the content end unmoved.
+      node.scrollTop = parked;
+      fireNativeScroll(node);
+      await advanceLegendListFrames(1);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expectAtTrueEnd(node);
+      expect(scrollToEnd).toHaveBeenCalledTimes(2);
+    });
+
+    it("corrects again when the browser drops the write an ordinary row-shape commit made", async () => {
+      const messages = makeMessages(ROW_COUNT);
+      const { node, scrollToEnd, commit, onFollowIntentChange } =
+        await mountFollowing(messages);
+      const parked = node.scrollTop;
+
+      commit(appendAssistantRows(messages, 1, "sent"), false);
+      expectAtTrueEnd(node);
+      expect(scrollToEnd).toHaveBeenCalledTimes(1);
+      // The write's own report reaches the latch.
+      fireNativeScroll(node);
+
+      // The browser drops the write a frame after it landed: the view is
+      // back at the offset it was written from, the content end unmoved.
+      node.scrollTop = parked;
+      fireNativeScroll(node);
+      await advanceLegendListFrames(1);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      expectAtTrueEnd(node);
+      expect(scrollToEnd).toHaveBeenCalledTimes(2);
+    });
+
+    for (const restart of ["append", "hydrate"] as const) {
+      it(`closes a void replacement's hold after ${restart === "append" ? "an append" : "hydration"} restarts its settle loop`, async () => {
+        const messages = makeMessages(ROW_COUNT);
+        const { node, scrollToEnd, commit, commitRows, onFollowIntentChange } =
+          await mountFollowing(messages);
+        const replacement = appendAssistantRows(messages, 1, "snapshot");
+        const replacementRows = rowsOf(replacement);
+
+        commit(messages, true);
+        if (restart === "append") {
+          commit(replacement, false);
+        } else {
+          const placeholder = replacementRows.map(
+            (row, index): TranscriptListRow =>
+              index === replacementRows.length - 1
+                ? {
+                    kind: "placeholder",
+                    key: row.key,
+                    ordinal: index,
+                    entry: null,
+                    provenance: "index",
+                  }
+                : row,
+          );
+          commitRows(
+            placeholder,
+            false,
+            contentHeightForRowCount(replacement.length),
+          );
+        }
+
+        await advanceLegendListFrames(1);
+        if (restart === "append") {
+          commit(appendAssistantRows(replacement, 1, "restart"), false);
+        } else {
+          commitRows(
+            replacementRows,
+            false,
+            contentHeightForRowCount(replacement.length) + 200,
+          );
+        }
+        await advanceLegendListFrames(2);
+        expect(scrollToEnd).toHaveBeenCalled();
+        expectAtTrueEnd(node);
+
+        const grown = appendAssistantRows(replacement, 2, "later");
+        commit(grown, false);
+        await advanceLegendListFrames(2);
+        expectAtTrueEnd(node);
+        expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      });
+    }
+  });
+});

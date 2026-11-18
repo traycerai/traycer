@@ -1,0 +1,55 @@
+/* Fixed size is the gesture icon's footprint, never a content/layout surface. */
+.desktop-history-cap {
+  width: 72px;
+  height: 72px;
+  will-change: transform;
+  transition:
+    border-color 100ms ease-out,
+    color 100ms ease-out;
+}
+
+.desktop-history-tint {
+  transition: opacity 100ms ease-out;
+}
+
+.desktop-history-arrow {
+  transition:
+    scale 100ms ease-out,
+    color 100ms ease-out;
+}
+
+[data-phase="committed"].desktop-history-overlay {
+  animation: desktop-history-complete 220ms ease-out forwards;
+}
+
+@keyframes desktop-history-complete {
+  0%,
+  35% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+[data-reduce-panel-motion] .desktop-history-cap,
+[data-reduce-panel-motion] .desktop-history-tint,
+[data-reduce-panel-motion] .desktop-history-arrow {
+  transition: none;
+}
+
+[data-reduce-panel-motion] [data-phase="committed"].desktop-history-overlay {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .desktop-history-cap,
+  .desktop-history-tint,
+  .desktop-history-arrow {
+    transition: none !important;
+  }
+
+  [data-phase="committed"].desktop-history-overlay {
+    animation: none;
+  }
+}

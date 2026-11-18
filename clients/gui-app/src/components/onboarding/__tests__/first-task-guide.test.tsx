@@ -1,0 +1,913 @@
+import { useState, type ReactNode } from "react";
+import type { QueryClient } from "@tanstack/react-query";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  waitFor,
+  within,
+  type RenderResult,
+} from "@testing-library/react";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import type {
+  EnvironmentReviewEntryV12,
+  EnvironmentStatusResponseV13,
+} from "@traycer/protocol/host/environment-schemas";
+import { reviewEntryFixture } from "@/components/settings/host-scope/__tests__/host-access-test-support";
+import type { ThisComputer } from "@/components/settings/move/this-computer";
+import {
+  buildEnvironmentClient,
+  environmentStatusFixture,
+} from "@/lib/environment/__tests__/environment-test-support";
+import {
+  mountTeamPage,
+  personalPoolSource,
+  resetTeamPageHarness,
+  setTeamEnvironmentCloudOverride,
+  type TeamPageHarness,
+} from "@/components/settings/environment/__tests__/team-configuration-test-support";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import {
+  moveInvitationIsOutstanding,
+  retireOnboardingReminder,
+} from "@/lib/toast/onboarding-reminder-toast";
+import { useMoveSheetStore } from "@/stores/settings/move-sheet-store";
+import { FirstTaskLandingGuide } from "@/components/onboarding/first-task-guide";
+import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
+import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
+import { useAuthStore } from "@/stores/auth/auth-store";
+
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-1",
+}));
+
+interface ToastButton {
+  readonly label: string;
+  readonly onClick: () => void;
+}
+
+/** The options this app passes `toast()`, as the double reads them back. */
+interface ToastOptions {
+  readonly id: string | undefined;
+  readonly description: ReactNode | null | undefined;
+  readonly duration: number;
+  readonly action: ToastButton | undefined;
+  readonly cancel: ToastButton | null | undefined;
+  readonly onDismiss: (() => void) | undefined;
+  readonly onAutoClose: (() => void) | undefined;
+}
+
+const MOVE_INVITATION_TOAST_ID = "traycer-move-invitation";
+
+const toastState = vi.hoisted(() => {
+  const renderedMessages = new Map<string, HTMLElement>();
+  /** The options each toast was last shown under, by the id it carries. */
+  const byId = new Map<string, ToastOptions>();
+  const toast = Object.assign(
+    vi.fn((_message: ReactNode, options: ToastOptions) => {
+      if (options.id !== undefined) {
+        byId.set(options.id, options);
+        renderedMessages.delete(options.id);
+      }
+    }),
+    {
+      // A dismissed toast is GONE, so the id leaves `byId` with it: that is
+      // what makes `optionsFor` an answer about what is on screen rather than
+      // about what was once shown, and it is what lets a case claim an
+      // invitation is still standing.
+      dismiss: vi.fn((id: string) => {
+        const handler = byId.get(id)?.onDismiss;
+        byId.delete(id);
+        handler?.();
+      }),
+      invokeDismiss: (id: string): void => byId.get(id)?.onDismiss?.(),
+      /** The options of the toast shown under `id`, or `null` for none. */
+      optionsFor: (id: string): ToastOptions | null => byId.get(id) ?? null,
+      invokeActionFor: (id: string): void => {
+        const container = toastState.renderMessage(id);
+        fireEvent.click(
+          within(container).getByRole("button", { name: "Move to Personal" }),
+        );
+      },
+      invokeCancelFor: (id: string): void => {
+        const container = toastState.renderMessage(id);
+        fireEvent.click(
+          within(container).getByRole("button", { name: "Later" }),
+        );
+      },
+      renderMessage: (id: string): HTMLElement => {
+        const rendered = renderedMessages.get(id);
+        if (rendered !== undefined) return rendered;
+        const call = toast.mock.calls.find(([, options]) => options.id === id);
+        const message = call?.[0];
+        const container = render(message ?? null).container;
+        renderedMessages.set(id, container);
+        return container;
+      },
+      reset: () => {
+        byId.clear();
+        renderedMessages.clear();
+      },
+    },
+  );
+  return toast;
+});
+
+async function expectMoveInvitation(): Promise<ToastOptions> {
+  await waitFor(() =>
+    expect(toastState.optionsFor(MOVE_INVITATION_TOAST_ID)).not.toBeNull(),
+  );
+  const options = toastState.optionsFor(MOVE_INVITATION_TOAST_ID);
+  if (options === null) throw new Error("Move invitation was not shown");
+  expect(options.description).toBeNull();
+  expect(options.cancel).toBeNull();
+  expect(options.action).toBeUndefined();
+  expect(
+    toastState.renderMessage(MOVE_INVITATION_TOAST_ID).textContent,
+  ).toContain("Move to Personal");
+  return options;
+}
+
+// The host directory is the boundary: which computer this is. Its reads stay
+// real, over a fake host. Personal's holds and the environment list are the
+// app's own reads from authn on the person's sign-in, served by the fake authn
+// the page harness mounts.
+const thisComputer = vi.hoisted((): { current: ThisComputer } => ({
+  current: { hostId: null, hostName: "this computer", client: null },
+}));
+vi.mock("@/components/settings/move/this-computer", () => ({
+  useThisComputer: (): ThisComputer => thisComputer.current,
+}));
+
+vi.mock("sonner", () => ({ toast: toastState }));
+vi.mock("@/lib/settings-navigation", () => ({
+  navigateToSettingsSection: vi.fn(),
+}));
+
+function renderGuide(): RenderResult {
+  return mountGuide().view;
+}
+
+const authnHolds = vi.hoisted(
+  (): { current: readonly Record<string, unknown>[]; reads: number } => ({
+    current: [],
+    reads: 0,
+  }),
+);
+
+function authnReviewEntry(
+  entry: EnvironmentReviewEntryV12,
+): Record<string, unknown> {
+  if (entry.reason !== "executable_entry") {
+    return {
+      type: "needs_link",
+      key: entry.key,
+      harnessId: "harness-1",
+      name: "Harness",
+      hostId: null,
+      hostName: "Old laptop",
+    };
+  }
+  return {
+    type: "held",
+    heldId: entry.entryId,
+    revision: 1,
+    kind: entry.kind,
+    key: entry.key,
+    os: null,
+    hostId: "old",
+    sharingGeneration: null,
+    hostName: "Old laptop",
+    heldAt: entry.heldAt,
+    op: "put",
+    value:
+      entry.kind === "mcp_server"
+        ? {
+            definition: { transport: "stdio", command: "run-server", args: [] },
+          }
+        : { value: "setting" },
+    live: null,
+  };
+}
+
+function mountAuthn(): TeamPageHarness {
+  const harness = mountTeamPage(personalPoolSource(), {
+    "environment.list": () => ({
+      environments: [
+        {
+          environmentId: "env-personal",
+          ownerKind: "user",
+          ownerId: "user-1",
+          roomId: "room-personal",
+          label: "Personal",
+          effectiveRole: "owner",
+          kind: "personal",
+          hostCount: 1,
+          providerHandle: null,
+        },
+      ],
+    }),
+  });
+  const cloud = harness.auth.environmentCloud();
+  setTeamEnvironmentCloudOverride({
+    ...cloud,
+    transport: async (request) => {
+      if (
+        request.method === "GET" &&
+        new URL(request.url).pathname.endsWith("/review")
+      ) {
+        authnHolds.reads += 1;
+        return {
+          status: 200,
+          text: JSON.stringify({
+            review: { hosts: [], needsYou: authnHolds.current },
+          }),
+        };
+      }
+      return cloud.transport(request);
+    },
+  });
+  return harness;
+}
+
+function mountGuide(): {
+  readonly view: RenderResult;
+  readonly queryClient: QueryClient;
+} {
+  const harness = mountAuthn();
+  const view = render(
+    <harness.Wrapper>
+      <FirstTaskLandingGuide
+        enabled
+        rootRef={{ current: null }}
+        workspaceFolders={null}
+      />
+    </harness.Wrapper>,
+  );
+  return { view, queryClient: harness.queryClient };
+}
+
+function mountGuideWithLifecycleBridge(): {
+  readonly view: RenderResult;
+  readonly hideGuide: () => void;
+} {
+  let setGuideVisible: (visible: boolean) => void = () => undefined;
+  function LifecycleGuide(): ReactNode {
+    const [visible, setVisible] = useState(true);
+    setGuideVisible = setVisible;
+    return (
+      <EpicSessionLifecycleBridge>
+        {visible ? (
+          <FirstTaskLandingGuide
+            enabled
+            rootRef={{ current: null }}
+            workspaceFolders={null}
+          />
+        ) : null}
+      </EpicSessionLifecycleBridge>
+    );
+  }
+
+  const harness = mountAuthn();
+  const view = render(
+    <harness.Wrapper>
+      <LifecycleGuide />
+    </harness.Wrapper>,
+  );
+  return { view, hideGuide: () => setGuideVisible(false) };
+}
+
+/** This computer, with a fake host answering `environment.status` with `status`. */
+function computerWithStatus(status: EnvironmentStatusResponseV13): void {
+  const { client } = buildEnvironmentClient({
+    hostId: "old",
+    handlers: {
+      "environment.status": () => status,
+    },
+  });
+  recordNegotiatedHostManifest("old", {
+    "environment.status": { major: 1, minor: 1 },
+  });
+  thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
+}
+
+/**
+ * This computer, whose `environment.status` answers `status` once and then
+ * fails. `statusReads` counts the reads the host has been asked.
+ */
+function computerWhoseStatusFailsAfterOneRead(
+  status: EnvironmentStatusResponseV13,
+): { readonly statusReads: () => number } {
+  let reads = 0;
+  const { client } = buildEnvironmentClient({
+    hostId: "old",
+    handlers: {
+      "environment.status": () => {
+        reads += 1;
+        if (reads > 1) throw new Error("status read failed");
+        return status;
+      },
+    },
+  });
+  recordNegotiatedHostManifest("old", {
+    "environment.status": { major: 1, minor: 1 },
+  });
+  thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
+  return { statusReads: () => reads };
+}
+
+const NOT_MOVED_STATUS = environmentStatusFixture({
+  planes: { records: "local", broker: "local", room: "local" },
+  consent: null,
+  pendingUploads: [],
+});
+
+describe("FirstTaskLandingGuide getting-started toast", () => {
+  beforeEach(() => {
+    toastState.mockClear();
+    toastState.dismiss.mockClear();
+    toastState.reset();
+    useFirstTaskGuideStore.setState({
+      status: "inactive",
+      imports: new Map(),
+      workspaceReviewed: false,
+    });
+    useOnboardingStore.setState({
+      completedAt: Date.now(),
+      setupReminderDismissed: false,
+      moveInvitationAnswered: false,
+      setupProgress: { agents: -1, appearance: -1, cookies: -1 },
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    // The app's own teardown: it is what clears an outstanding invitation,
+    // which outlives any one mount by design.
+    retireOnboardingReminder();
+    resetNegotiatedManifests();
+    resetTeamPageHarness();
+    authnHolds.current = [];
+    authnHolds.reads = 0;
+    thisComputer.current = {
+      hostId: null,
+      hostName: "this computer",
+      client: null,
+    };
+    useMoveSheetStore.setState({ target: null });
+    toastState.reset();
+    useOnboardingStore.getState().reset();
+    useFirstTaskGuideStore.getState().prepare();
+    useAuthStore.setState({
+      status: "signed-out",
+      profile: null,
+      contextMetadata: null,
+    });
+  });
+
+  it("dismisses only when the toast is dismissed while mounted", () => {
+    const view = renderGuide();
+
+    expect(toastState).toHaveBeenCalledOnce();
+    const [message, options] = toastState.mock.calls[0];
+    expect(message).toBe("You're all set");
+    expect(render(options.description).container.textContent).toBe(
+      "More setup is in Settings.",
+    );
+    expect(options.action?.label).toBe("Open");
+    act(() => toastState.invokeDismiss("traycer-getting-started"));
+    expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
+    expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(false);
+
+    void act(() =>
+      useOnboardingStore.setState({ setupReminderDismissed: false }),
+    );
+    expect(toastState).toHaveBeenCalledTimes(2);
+    view.unmount();
+    expect(toastState.dismiss).toHaveBeenCalledWith("traycer-getting-started");
+    expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
+  });
+
+  it("shows the usual Start toast with a held command and does not read the review", async () => {
+    let reviewReads = 0;
+    const entry: EnvironmentReviewEntryV12 = {
+      ...reviewEntryFixture({}),
+      command: null,
+      event: null,
+      description: null,
+      harness: null,
+      value: null,
+      reason: "executable_entry",
+      kind: "mcp_server",
+      key: "github",
+    };
+    authnHolds.current = [authnReviewEntry(entry)];
+    const { client } = buildEnvironmentClient({
+      hostId: "old",
+      handlers: {
+        "environment.review": () => {
+          reviewReads += 1;
+          return {
+            entries: [entry],
+            shownAt: null,
+            acknowledgedAt: null,
+            evidence: { version: null, at: null },
+          };
+        },
+        "environment.status": () => NOT_MOVED_STATUS,
+      },
+    });
+    recordNegotiatedHostManifest("old", {
+      "environment.review": { major: 1, minor: 2 },
+      "environment.status": { major: 1, minor: 1 },
+    });
+    thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
+    const mounted = mountGuide();
+
+    await expectMoveInvitation();
+
+    expect(toastState).not.toHaveBeenCalledWith(
+      "An earlier version shared this computer's settings",
+      expect.anything(),
+    );
+    expect(
+      toastState.mock.calls.some(
+        ([, options]) => options.action?.label === "Review",
+      ),
+    ).toBe(false);
+    await act(async () => {
+      await mounted.queryClient.refetchQueries({}, { throwOnError: true });
+      mounted.view.unmount();
+    });
+    expect(reviewReads).toBe(0);
+    expect(authnHolds.reads).toBe(0);
+  });
+
+  it("offers to move this computer to Personal and opens its move sheet", async () => {
+    computerWithStatus(
+      environmentStatusFixture({
+        planes: { records: "local", broker: "local", room: "local" },
+        consent: null,
+        pendingUploads: [],
+      }),
+    );
+    renderGuide();
+
+    const options = await expectMoveInvitation();
+    expect(toastState).not.toHaveBeenCalledWith(
+      "You're all set",
+      expect.anything(),
+    );
+    expect(
+      toastState.renderMessage(MOVE_INVITATION_TOAST_ID).textContent,
+    ).toContain("So your settings follow you to every computer and sandbox.");
+    expect(options.duration).toBe(Infinity);
+
+    act(() => toastState.invokeActionFor(MOVE_INVITATION_TOAST_ID));
+    expect(useMoveSheetStore.getState().target).toEqual({
+      hostId: "old",
+      hostName: "Old laptop",
+    });
+    expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(true);
+    expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
+    expect(moveInvitationIsOutstanding()).toBe(false);
+  });
+
+  it("invites an unbound computer even when there is nothing to move", async () => {
+    computerWithStatus(NOT_MOVED_STATUS);
+    renderGuide();
+
+    await expectMoveInvitation();
+    expect(toastState).not.toHaveBeenCalledWith(
+      "You're all set",
+      expect.anything(),
+    );
+  });
+
+  it("does not invite a team-owned computer to move its settings", async () => {
+    computerWithStatus(
+      environmentStatusFixture({
+        principal: { kind: "team", teamName: "Designers" },
+        planes: { records: "local", broker: "local", room: "local" },
+      }),
+    );
+    renderGuide();
+
+    await waitFor(() =>
+      expect(toastState).toHaveBeenCalledWith(
+        "You're all set",
+        expect.anything(),
+      ),
+    );
+    expect(toastState).not.toHaveBeenCalledWith(
+      "Move this computer to Personal",
+      expect.anything(),
+    );
+  });
+
+  it("invites an existing user whose setup reminder was already dismissed", async () => {
+    computerWithStatus(NOT_MOVED_STATUS);
+    useOnboardingStore.setState({ setupReminderDismissed: true });
+    renderGuide();
+
+    await waitFor(() =>
+      expect(toastState.optionsFor(MOVE_INVITATION_TOAST_ID)).not.toBeNull(),
+    );
+  });
+
+  it("does not invite a computer after the invitation has been answered", async () => {
+    computerWithStatus(NOT_MOVED_STATUS);
+    useOnboardingStore.setState({ moveInvitationAnswered: true });
+    renderGuide();
+
+    await waitFor(() =>
+      expect(toastState).toHaveBeenCalledWith(
+        "You're all set",
+        expect.anything(),
+      ),
+    );
+    expect(toastState).not.toHaveBeenCalledWith(
+      "Move this computer to Personal",
+      expect.anything(),
+    );
+  });
+
+  describe("on a phone on its side", () => {
+    const stubShortLandscape = (shortLandscape: boolean): void => {
+      vi.stubGlobal(
+        "matchMedia",
+        (
+          query: string,
+        ): Pick<
+          MediaQueryList,
+          "matches" | "addEventListener" | "removeEventListener"
+        > => ({
+          matches: query.includes("orientation: landscape") && shortLandscape,
+          addEventListener: () => undefined,
+          removeEventListener: () => undefined,
+        }),
+      );
+    };
+    const moveStatus = () =>
+      environmentStatusFixture({
+        planes: { records: "local", broker: "local", room: "local" },
+        consent: null,
+        pendingUploads: [],
+      });
+
+    beforeEach(() => {
+      setPhoneLayoutOnly(true);
+    });
+
+    afterEach(() => {
+      setPhoneLayoutOnly(false);
+      vi.unstubAllGlobals();
+    });
+
+    it("keeps the move invitation waiting in a short window on the desktop layout", async () => {
+      setPhoneLayoutOnly(false);
+      stubShortLandscape(true);
+      computerWithStatus(moveStatus());
+      renderGuide();
+      const options = await expectMoveInvitation();
+      expect(options.duration).toBe(Infinity);
+    });
+
+    it.each([
+      { shortLandscape: true, duration: 8000 },
+      { shortLandscape: false, duration: Infinity },
+    ])(
+      "gives the move invitation a duration of $duration when short landscape is $shortLandscape",
+      async ({ shortLandscape, duration }) => {
+        stubShortLandscape(shortLandscape);
+        computerWithStatus(moveStatus());
+        renderGuide();
+        const options = await expectMoveInvitation();
+        expect(options.duration).toBe(duration);
+      },
+    );
+
+    it.each([
+      { shortLandscape: true, duration: 8000 },
+      { shortLandscape: false, duration: Infinity },
+    ])(
+      "gives the setup reminder a duration of $duration when short landscape is $shortLandscape",
+      async ({ shortLandscape, duration }) => {
+        stubShortLandscape(shortLandscape);
+        computerWithStatus(environmentStatusFixture({}));
+        renderGuide();
+
+        await waitFor(() =>
+          expect(toastState).toHaveBeenCalledWith(
+            "You're all set",
+            expect.objectContaining({ duration }),
+          ),
+        );
+      },
+    );
+
+    it("stops an expired invitation holding the reminder back, and records no answer", async () => {
+      stubShortLandscape(true);
+      computerWithStatus(moveStatus());
+      renderGuide();
+      await expectMoveInvitation();
+      expect(moveInvitationIsOutstanding()).toBe(true);
+      const [, options] =
+        toastState.mock.calls[toastState.mock.calls.length - 1];
+
+      act(() => options.onAutoClose?.());
+
+      expect(moveInvitationIsOutstanding()).toBe(false);
+      expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(false);
+      expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
+    });
+  });
+
+  it("keeps the setup reminder once this computer's settings are in Personal", async () => {
+    computerWithStatus(environmentStatusFixture({}));
+    renderGuide();
+
+    await waitFor(() =>
+      expect(toastState).toHaveBeenCalledWith(
+        "You're all set",
+        expect.anything(),
+      ),
+    );
+    expect(toastState).not.toHaveBeenCalledWith(
+      "Move this computer to Personal",
+      expect.anything(),
+    );
+  });
+
+  describe("the move toast", () => {
+    // The two toasts the Start page shows, each under its own id: the
+    // invitation is not the setup reminder's other wording.
+    const SETUP_REMINDER_TOAST_ID = "traycer-getting-started";
+
+    function computerWhoseStatusChanges(
+      answer: () => EnvironmentStatusResponseV13,
+    ): void {
+      const { client } = buildEnvironmentClient({
+        hostId: "old",
+        handlers: {
+          "environment.status": () => answer(),
+        },
+      });
+      recordNegotiatedHostManifest("old", {
+        "environment.status": { major: 1, minor: 1 },
+      });
+      thisComputer.current = { hostId: "old", hostName: "Old laptop", client };
+    }
+
+    it("carries its own id, so the setup reminder never stands in its place", async () => {
+      computerWithStatus(NOT_MOVED_STATUS);
+      mountGuide();
+
+      await expectMoveInvitation();
+
+      expect(toastState.optionsFor(MOVE_INVITATION_TOAST_ID)).not.toBeNull();
+      expect(toastState.optionsFor(SETUP_REMINDER_TOAST_ID)).toBeNull();
+    });
+
+    it("stays up when the status stops naming a move to make, pressed or × only", async () => {
+      let answer = NOT_MOVED_STATUS;
+      computerWhoseStatusChanges(() => answer);
+      const { queryClient } = mountGuide();
+      await expectMoveInvitation();
+      toastState.dismiss.mockClear();
+
+      // The read stops naming a move: an accepted move, a host swap, a
+      // version without the planes. The invitation is nobody's to withdraw.
+      answer = environmentStatusFixture({});
+      await act(async () => {
+        await queryClient.refetchQueries();
+      });
+
+      expect(toastState.dismiss).not.toHaveBeenCalledWith(
+        MOVE_INVITATION_TOAST_ID,
+      );
+      expect(toastState).not.toHaveBeenCalledWith(
+        "You're all set",
+        expect.anything(),
+      );
+      // Its action still opens the sheet it named.
+      act(() => toastState.invokeActionFor(MOVE_INVITATION_TOAST_ID));
+      expect(useMoveSheetStore.getState().target).toEqual({
+        hostId: "old",
+        hostName: "Old laptop",
+      });
+    });
+
+    it("records its dismissal when Later is pressed", async () => {
+      computerWithStatus(NOT_MOVED_STATUS);
+      mountGuide();
+      await expectMoveInvitation();
+
+      act(() => toastState.invokeCancelFor(MOVE_INVITATION_TOAST_ID));
+
+      expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
+      expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(true);
+      expect(toastState).not.toHaveBeenCalledWith(
+        "You're all set",
+        expect.anything(),
+      );
+    });
+
+    it("is still the thing being asked when the Start page is left and comes back", async () => {
+      // The invitation outlives this surface: the person leaves Start, the
+      // move is accepted from the Getting started card or another window, and
+      // they come back. The toast is still up, unanswered, so no reminder may
+      // take its turn beside it.
+      let answer = NOT_MOVED_STATUS;
+      computerWhoseStatusChanges(() => answer);
+      const first = mountGuide();
+      await expectMoveInvitation();
+
+      first.view.unmount();
+      answer = environmentStatusFixture({});
+      const second = mountGuide();
+
+      // The second mount publishes nothing of its own - the invitation is
+      // already up and the reminder is held back - so there is no toast to
+      // wait on. Await a successful status refetch and flush its committed
+      // effects before checking that a regressed reminder did not run here.
+      await act(async () => {
+        await second.queryClient.refetchQueries({}, { throwOnError: true });
+      });
+
+      // Still on screen - `optionsFor` loses an id the moment it is
+      // dismissed - and nothing took it down on the way through.
+      expect(toastState.optionsFor(MOVE_INVITATION_TOAST_ID)).not.toBeNull();
+      expect(toastState.dismiss).not.toHaveBeenCalledWith(
+        MOVE_INVITATION_TOAST_ID,
+      );
+      expect(toastState).not.toHaveBeenCalledWith(
+        "You're all set",
+        expect.anything(),
+      );
+    });
+
+    it("stops the Start page nudging for good once the person answers it", async () => {
+      // One dismissal covers the Start page, as it did when both wordings
+      // shared one toast: Later is an answer to being nudged here, not only
+      // to the move, so the reminder does not take the invitation's turn.
+      let answer = NOT_MOVED_STATUS;
+      computerWhoseStatusChanges(() => answer);
+      const { queryClient } = mountGuide();
+      await expectMoveInvitation();
+
+      act(() => toastState.invokeCancelFor(MOVE_INVITATION_TOAST_ID));
+      answer = environmentStatusFixture({});
+      await act(async () => {
+        await queryClient.refetchQueries();
+      });
+
+      expect(toastState).not.toHaveBeenCalledWith(
+        "You're all set",
+        expect.anything(),
+      );
+    });
+
+    async function mountedMoveToast(): Promise<RenderResult> {
+      computerWithStatus(NOT_MOVED_STATUS);
+      const mounted = mountGuide();
+      await expectMoveInvitation();
+      return mounted.view;
+    }
+
+    it("stays shown when a later read of the status fails", async () => {
+      const host = computerWhoseStatusFailsAfterOneRead(NOT_MOVED_STATUS);
+      const { queryClient } = mountGuide();
+      await expectMoveInvitation();
+
+      await act(async () => {
+        await queryClient.refetchQueries();
+      });
+      await waitFor(() => expect(host.statusReads()).toBeGreaterThan(1));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+
+      expect(toastState.dismiss).not.toHaveBeenCalled();
+      expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
+    });
+
+    it("is not dismissed when the guide unmounts", async () => {
+      const view = await mountedMoveToast();
+
+      view.unmount();
+
+      expect(toastState.dismiss).not.toHaveBeenCalled();
+    });
+
+    it("records its dismissal when × is pressed after the guide unmounted", async () => {
+      const view = await mountedMoveToast();
+      view.unmount();
+
+      act(() => toastState.invokeDismiss(MOVE_INVITATION_TOAST_ID));
+
+      expect(useOnboardingStore.getState().setupReminderDismissed).toBe(true);
+      expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(true);
+    });
+
+    it("retires the reminder and invalidates its retained action on sign-out after navigation", async () => {
+      computerWithStatus(NOT_MOVED_STATUS);
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: {
+          userId: "user-a",
+          userName: "alice@example.test",
+          email: "alice@example.test",
+        },
+        contextMetadata: {
+          userId: "user-a",
+          username: "alice@example.test",
+        },
+      });
+      const { view, hideGuide } = mountGuideWithLifecycleBridge();
+
+      await expectMoveInvitation();
+      act(() => hideGuide());
+      expect(toastState.dismiss).not.toHaveBeenCalled();
+
+      act(() => {
+        useAuthStore.setState({
+          status: "signed-out",
+          profile: null,
+          contextMetadata: null,
+        });
+      });
+      await waitFor(() =>
+        expect(toastState.dismiss).toHaveBeenCalledWith(
+          MOVE_INVITATION_TOAST_ID,
+        ),
+      );
+      // Both ids go: the retire does not have to know which one was up.
+      expect(toastState.dismiss).toHaveBeenCalledWith(SETUP_REMINDER_TOAST_ID);
+
+      act(() => toastState.invokeActionFor(MOVE_INVITATION_TOAST_ID));
+      expect(useMoveSheetStore.getState().target).toBeNull();
+      expect(useOnboardingStore.getState().setupReminderDismissed).toBe(false);
+      expect(useOnboardingStore.getState().moveInvitationAnswered).toBe(false);
+      view.unmount();
+    });
+
+    it("lets the reminder show again for whoever signs in next", async () => {
+      // The retire takes the invitation down without the person answering it,
+      // so it also has to forget that one was outstanding. Left standing, the
+      // next identity's Start page would hold its reminder back for ever,
+      // waiting on an answer to a toast nobody can see.
+      computerWithStatus(NOT_MOVED_STATUS);
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: {
+          userId: "user-a",
+          userName: "alice@example.test",
+          email: "alice@example.test",
+        },
+        contextMetadata: {
+          userId: "user-a",
+          username: "alice@example.test",
+        },
+      });
+      const { view } = mountGuideWithLifecycleBridge();
+      await expectMoveInvitation();
+      act(() => {
+        useAuthStore.setState({
+          status: "signed-out",
+          profile: null,
+          contextMetadata: null,
+        });
+      });
+      await waitFor(() =>
+        expect(toastState.dismiss).toHaveBeenCalledWith(
+          MOVE_INVITATION_TOAST_ID,
+        ),
+      );
+      view.unmount();
+
+      // Whoever signs in next is on a computer that has moved: no invitation
+      // to make, so the reminder is the toast this Start page owes them.
+      toastState.reset();
+      toastState.mockClear();
+      computerWithStatus(environmentStatusFixture({}));
+      mountGuide();
+
+      await waitFor(() =>
+        expect(toastState).toHaveBeenCalledWith(
+          "You're all set",
+          expect.anything(),
+        ),
+      );
+    });
+  });
+});

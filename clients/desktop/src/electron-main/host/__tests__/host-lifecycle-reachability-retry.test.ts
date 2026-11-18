@@ -1,0 +1,855 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { performance } from "node:perf_hooks";
+
+vi.mock("electron", () => ({
+  app: { isPackaged: false, getAppPath: (): string => "/fake/app/path" },
+}));
+
+vi.mock("electron-log", () => ({
+  default: {
+    transports: { file: { level: "info" }, console: { level: "info" } },
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
+vi.mock("../../cli/traycer-cli", () => ({
+  streamTraycerCliJson: vi.fn(async () => ({ data: {} })),
+}));
+
+import { HostLifecycle, PRODUCTION_LABEL } from "../host-lifecycle";
+import {
+  __setAsyncProcessLivenessReaderForTest,
+  __setAsyncProcessStartIdentityReaderForTest,
+  type ProcessLivenessVerdict,
+} from "../process-identity";
+import type { DesktopLocalHostSnapshot } from "../../../ipc-contracts/host-types";
+import type { HostFsLayout } from "../host-paths";
+
+// The retry scenarios use a stable synthetic pid while the test controls the
+// endpoint probe, so every scenario that reads it also sets what the OS says
+// about that pid. Left to the real reader, the verdict depends on the machine:
+// a CI runner where pid 18841 happened to be alive published the host as busy.
+// Most scenarios model the indeterminate branch, where the handshake stays
+// authoritative. A dead process is the only verdict that keeps a parsed,
+// unreachable file unpublished while the ladder retries it.
+function useProcessLiveness(
+  verdictOf: () => ProcessLivenessVerdict,
+): () => void {
+  const restore = __setAsyncProcessLivenessReaderForTest(async () =>
+    verdictOf(),
+  );
+  return () => __setAsyncProcessLivenessReaderForTest(restore);
+}
+
+/** The ladder's first rung, mirrored from `host-lifecycle.ts`. */
+const REACHABILITY_RETRY_INITIAL_MS_FOR_TEST = 250;
+
+/**
+ * Lets the REAL work a fired ladder timer starts actually finish.
+ * `advanceTimersByTimeAsync` only drains microtasks, and a reload does real
+ * libuv-threadpool filesystem reads (`pid.json`, host-name settings) - so the
+ * probe fires, and the NEXT ladder rung is re-armed, only after real
+ * event-loop turns whose count depends on machine load. A fixed number of
+ * turns is therefore a race on a slow CI runner; instead, yield real turns
+ * until the reload has observably settled: the expected probe count was
+ * reached AND the ladder re-armed its next fake timer. These tests never call
+ * `bootstrap()` (no watcher, no readiness wait), so the ladder owns the only
+ * fake `setTimeout` and `vi.getTimerCount()` is exactly "next rung armed".
+ * The deadline reads `performance.now()` because `Date` is faked here.
+ */
+async function settleLadderReload(probeSettled: () => boolean): Promise<void> {
+  const deadline = performance.now() + 10_000;
+  while (!(probeSettled() && vi.getTimerCount() > 0)) {
+    if (performance.now() > deadline) {
+      throw new Error("settleLadderReload: reload did not settle in time");
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitUntil(
+  predicate: () => boolean,
+  timeoutMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) {
+      throw new Error("waitUntil: condition not met in time");
+    }
+    await sleep(25);
+  }
+}
+
+function layoutIn(dir: string): HostFsLayout {
+  return {
+    rootDir: dir,
+    pidMetadataFile: join(dir, "pid.json"),
+    identityEnrollmentFile: join(dir, "identity", "enrollment.json"),
+    logFile: join(dir, "host.log"),
+    installDir: join(dir, "install"),
+    installRecordFile: join(dir, "install", "install.json"),
+    stagedDir: join(dir, "staged"),
+    stagedRecordFile: join(dir, "staged", "staged.json"),
+    pendingLoginItemRevisionFile: join(dir, "pending-login-item-revision.json"),
+    substrateFile: join(dir, "substrate.json"),
+    transitionJournalFile: join(dir, "transition.json"),
+    browserTelemetryFile: join(dir, "browser-telemetry.jsonl"),
+    browserTelemetryRotatedFile: join(dir, "browser-telemetry.jsonl.1"),
+    browserTraceFile: join(dir, "browser-trace.jsonl"),
+    browserTraceRotatedFile: join(dir, "browser-trace.jsonl.1"),
+    environment: "production" as const,
+  };
+}
+
+const PID_METADATA = JSON.stringify({
+  hostId: "3be7933d-bcaa-478b-b914-e625b5d2a777",
+  websocketUrl: "ws://127.0.0.1:55555/rpc",
+  version: "production.1784044433971.435b4f59c",
+  pid: 18841,
+});
+
+/** The same endpoint published by a DIFFERENT process - a replacement host. */
+const REPLACEMENT_PID_METADATA = JSON.stringify({
+  hostId: "3be7933d-bcaa-478b-b914-e625b5d2a777",
+  websocketUrl: "ws://127.0.0.1:55555/rpc",
+  version: "production.1784044433971.435b4f59c",
+  pid: 4242,
+});
+
+/**
+ * A liveness reader that COUNTS, which is what makes the identity throttle
+ * observable: `getPublishedProcessIdentityVerdict` asks liveness first and
+ * every verdict read therefore lands here exactly once. In production the same
+ * read continues into a child process (`ps` / `tasklist` + `powershell`) - the
+ * cost the throttle exists to bound.
+ */
+function countingProcessLiveness(verdictOf: () => ProcessLivenessVerdict): {
+  readonly reads: () => number;
+  readonly restore: () => void;
+} {
+  let reads = 0;
+  const previous = __setAsyncProcessLivenessReaderForTest(() => {
+    reads += 1;
+    return Promise.resolve(verdictOf());
+  });
+  return {
+    reads: () => reads,
+    restore: () => __setAsyncProcessLivenessReaderForTest(previous),
+  };
+}
+
+/**
+ * Regression guard for the 2026-07-14 incident (production desktop log,
+ * first launch after a reinstall): bootstrap timed out with HOST_NOT_READY,
+ * the host then published pid.json and became reachable 7s later - and the
+ * snapshot stayed null for the rest of the session because the pid.json
+ * watcher is edge-triggered on file WRITES while reachability is
+ * time-varying. A single probe failure at the only watcher edge used to be
+ * terminal ("Bound host is offline" on every chat until an app restart).
+ *
+ * The fix is the retry-until-reachable ladder in `reloadSnapshot`: whenever
+ * pid metadata exists but its endpoint didn't answer, a backoff timer keeps
+ * re-probing until the endpoint answers (or the metadata disappears).
+ */
+describe("HostLifecycle reachability retry ladder", () => {
+  it(
+    "converges after the host outlives a failed probe at the only watcher " +
+      "edge, then stops probing",
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), "lifecycle-retry-"));
+      const layout = layoutIn(dir);
+      let probeResult = false;
+      let probeCalls = 0;
+      const lifecycle = new HostLifecycle({
+        layout,
+        bundledBinaryPath: null,
+        label: PRODUCTION_LABEL,
+        readyTimeoutMs: 300,
+        reachabilityProbe: async () => {
+          probeCalls += 1;
+          return probeResult;
+        },
+      });
+      const restoreLiveness = useProcessLiveness(() => "indeterminate");
+      const changes: (DesktopLocalHostSnapshot | null)[] = [];
+      lifecycle.on("change", (snapshot: DesktopLocalHostSnapshot | null) => {
+        changes.push(snapshot);
+      });
+      const errors: { code: string }[] = [];
+      lifecycle.on("error", (err: { code: string }) =>
+        errors.push({ code: err.code }),
+      );
+
+      try {
+        // The incident's opening state: app boots while the host is down.
+        await lifecycle.bootstrap({ hostInstalled: true });
+        expect(errors).toEqual([{ code: "HOST_NOT_READY" }]);
+        expect(lifecycle.getSnapshot()).toBeNull();
+
+        // Host publishes pid.json, but the probe fails at the watcher edge
+        // (a just-spawned host exceeding the 750ms connect budget). The
+        // process is live, so the host is published as BUSY rather than
+        // withheld - int #48. Withholding it is what let the registry twin
+        // stand in as a hardcoded-unavailable row and lock every chat.
+        await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
+        await waitUntil(() => lifecycle.getSnapshot() !== null, 10_000);
+        expect(lifecycle.getSnapshot()?.availability).toBe("busy");
+        expect(lifecycle.getSnapshot()?.hostId).toBe(
+          "3be7933d-bcaa-478b-b914-e625b5d2a777",
+        );
+        expect(changes.at(-1)?.pid).toBe(18841);
+
+        // The host is now genuinely reachable. No further fs event will
+        // fire - only the retry ladder can converge. The ladder has to be
+        // armed by the DEGRADED verdict, not by a null snapshot, which is the
+        // state that no longer occurs here.
+        probeResult = true;
+        await waitUntil(
+          () => lifecycle.getSnapshot()?.availability === "available",
+          10_000,
+        );
+
+        // Convergence clears the ladder: no further probes fire once the
+        // snapshot is available (the max retry delay is 5s, so a lingering
+        // timer would show up well within this window).
+        const settledCalls = probeCalls;
+        await sleep(1_200);
+        expect(probeCalls).toBe(settledCalls);
+      } finally {
+        restoreLiveness();
+        lifecycle.dispose();
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+    20_000,
+  );
+
+  it("clears the ARMED ladder on a deliberate stop and never resurfaces the host", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-retry-"));
+    const layout = layoutIn(dir);
+    let reachable = false;
+    let probeCalls = 0;
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 300,
+      reachabilityProbe: async () => {
+        probeCalls += 1;
+        return reachable;
+      },
+    });
+    const changes: (DesktopLocalHostSnapshot | null)[] = [];
+    lifecycle.on("change", (snapshot: DesktopLocalHostSnapshot | null) => {
+      changes.push(snapshot);
+    });
+    lifecycle.on("error", () => {});
+    const restoreLiveness = useProcessLiveness(() => "dead");
+
+    try {
+      // pid.json is present but the endpoint refuses: bootstrap times out and
+      // the ladder ARMS, so the stop below lands on a live ladder. What this
+      // pins is that the stop never resurfaces the host. Every read after the
+      // unlink finds no file, so it would pass even if the ladder kept running;
+      // that the ladder stops re-reading is pinned by "clears on absence and
+      // does not resurface a later valid file without a new reload" below.
+      await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
+      await lifecycle.bootstrap({ hostInstalled: true });
+      expect(lifecycle.getSnapshot()).toBeNull();
+      await waitUntil(() => probeCalls >= 2, 5_000);
+
+      // `traycer host stop` unlinks pid.json on graceful teardown. Even if an
+      // unrelated process now answers on that port, an ABSENT file must clear
+      // the ladder and never resurface a host the user deliberately stopped.
+      await unlink(layout.pidMetadataFile);
+      reachable = true;
+      await sleep(1_500);
+      expect(lifecycle.getSnapshot()).toBeNull();
+      expect(changes.every((snapshot) => snapshot === null)).toBe(true);
+    } finally {
+      restoreLiveness();
+      lifecycle.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+});
+
+/**
+ * The tests above drive the ladder through real `fs.watch` edges. These
+ * exercise the retry PREDICATE directly - no `bootstrap()`, no watcher - by
+ * calling `reloadSnapshotFromDisk()` ourselves and advancing fake timers, so a
+ * regression that made the predicate arm/clear on the wrong condition fails
+ * here even if a stray watcher edge would otherwise have masked it.
+ */
+describe("HostLifecycle reachability retry ladder (predicate, no bootstrap)", () => {
+  it("converges via the retry timer when malformed metadata becomes valid", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-retry-direct-"));
+    const layout = layoutIn(dir);
+    let probeCalls = 0;
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 300,
+      reachabilityProbe: async () => {
+        probeCalls += 1;
+        return true;
+      },
+    });
+    const restoreLiveness = useProcessLiveness(() => "indeterminate");
+    try {
+      // Malformed: present but INDETERMINATE, not absent - the ladder must
+      // arm without ever reaching the probe (there is no URL to probe yet).
+      await writeFile(layout.pidMetadataFile, '{"hostId":"partial', "utf8");
+      const first = await lifecycle.reloadSnapshotFromDisk();
+      expect(first).toBeNull();
+      expect(probeCalls).toBe(0);
+
+      // The file becomes valid before the armed timer fires. Only the
+      // ladder's own scheduled reload can pick this up - bootstrap()/the
+      // watcher were never installed in this test.
+      await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
+      await waitUntil(() => lifecycle.getSnapshot() !== null, 8_000);
+      expect(lifecycle.getSnapshot()?.hostId).toBe(
+        "3be7933d-bcaa-478b-b914-e625b5d2a777",
+      );
+      expect(probeCalls).toBeGreaterThanOrEqual(1);
+    } finally {
+      restoreLiveness();
+      lifecycle.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("clears on absence and does not resurface a later valid file without a new reload", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-retry-direct-"));
+    const layout = layoutIn(dir);
+    let reachable = false;
+    let probeCalls = 0;
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 300,
+      reachabilityProbe: async () => {
+        probeCalls += 1;
+        return reachable;
+      },
+    });
+    let liveness: ProcessLivenessVerdict = "dead";
+    const restoreLiveness = useProcessLiveness(() => liveness);
+    try {
+      // Parsed but unreachable: arms the ladder.
+      await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
+      const first = await lifecycle.reloadSnapshotFromDisk();
+      expect(first).toBeNull();
+      await waitUntil(() => probeCalls >= 1, 5_000);
+
+      // Deliberate stop before the next armed reload: it must observe an
+      // absent file and clear, not reschedule.
+      await unlink(layout.pidMetadataFile);
+      await sleep(1_000);
+      expect(lifecycle.getSnapshot()).toBeNull();
+
+      // A later valid, reachable file appears - but with the ladder cleared
+      // and no watcher installed (bootstrap() was never called), nothing
+      // re-reads it. The snapshot must stay null; only an explicit reload (a
+      // real watcher event in production) would surface it. The process is no
+      // longer dead, so a stray re-read WOULD publish it and fail this test.
+      liveness = "indeterminate";
+      reachable = true;
+      await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
+      await sleep(1_500);
+      expect(lifecycle.getSnapshot()).toBeNull();
+    } finally {
+      restoreLiveness();
+      lifecycle.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+});
+
+/**
+ * `process.kill`, captured before any test in this file has a chance to spy on
+ * it, so the fake-pid spy below can delegate every OTHER pid to the real
+ * syscall instead of swallowing it.
+ */
+const realProcessKill = process.kill.bind(process);
+
+/**
+ * `readIdentityVerdict`'s cache now checks
+ * `probeProcessExistenceWithoutSpawn` before reusing a cached verdict, which
+ * calls the REAL, unmocked `process.kill(pid, 0)` - unlike the liveness reader
+ * above, which is a test seam. `PID_METADATA`'s pid (18841) names no process on
+ * the machine running this suite, so without this spy every reload the tests
+ * below expect to be served from cache instead forces a fresh read: the exact
+ * fixture hazard the fix itself documents ("a pid the OS has handed to another
+ * process reads `exists`... never stand in for [a full identity read]").
+ * Spied here so that ONE fake pid reads as existing, exactly as it did before
+ * the cache grew this guard, while every other pid still gets the real
+ * syscall - so a genuinely dead pid used elsewhere in this file is still
+ * reported dead.
+ */
+function spyProcessKillExists(pid: number): () => void {
+  const spy = vi
+    .spyOn(process, "kill")
+    .mockImplementation(
+      (target: number, signal: string | number | undefined): true => {
+        if (target === pid && (signal === 0 || signal === undefined)) {
+          return true;
+        }
+        return realProcessKill(target, signal);
+      },
+    );
+  return () => spy.mockRestore();
+}
+
+/**
+ * The ladder's re-probe is cheap; the IDENTITY read behind it is not - it
+ * spawns a child process. Since int #48 the busy hold no longer expires, so a
+ * host that wedges for an afternoon keeps the ladder running at its 5s cap for
+ * as long as the wedge lasts: ~720 spawns an hour, for an answer that changes
+ * at most once. The health monitor already throttles this exact cost at 120s
+ * (`ALIVE_RECHECK_INTERVAL_MS`); these pin the same shape here.
+ *
+ * Time is faked, timers are not advanced: every reload below is driven
+ * explicitly, so what is counted is the throttle's decision and never a ladder
+ * tick that happened to fire.
+ */
+describe("HostLifecycle process-identity throttle", () => {
+  const cleanups: (() => void)[] = [];
+
+  afterEach(() => {
+    while (cleanups.length > 0) cleanups.pop()?.();
+    vi.useRealTimers();
+  });
+
+  async function lifecycleWithSilentEndpoint(
+    probeAnswers: () => boolean,
+  ): Promise<{
+    readonly lifecycle: HostLifecycle;
+    readonly probeCalls: () => number;
+    readonly dir: string;
+  }> {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    // PID_METADATA's pid names no real process on this machine - see
+    // `spyProcessKillExists`'s comment.
+    cleanups.push(spyProcessKillExists(18841));
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-identity-"));
+    const layout = layoutIn(dir);
+    await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
+    let probeCalls = 0;
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 300,
+      reachabilityProbe: () => {
+        probeCalls += 1;
+        return Promise.resolve(probeAnswers());
+      },
+    });
+    cleanups.push(() => lifecycle.dispose());
+    cleanups.push(() => {
+      void rm(dir, { recursive: true, force: true });
+    });
+    return { lifecycle, probeCalls: () => probeCalls, dir };
+  }
+
+  it("asks the OS about the published process at most once per window while the endpoint stays silent", async () => {
+    const identity = countingProcessLiveness(() => "alive");
+    cleanups.push(identity.restore);
+    const { lifecycle, probeCalls } = await lifecycleWithSilentEndpoint(
+      () => false,
+    );
+
+    const startedAt = Date.now();
+    for (let tick = 0; tick < 5; tick += 1) {
+      vi.setSystemTime(startedAt + tick * 20_000);
+      await lifecycle.reloadSnapshotFromDisk();
+    }
+
+    // Every tick still probes the endpoint - that is the cheap half, and it is
+    // what converges the verdict. Only the child-process read is throttled.
+    expect(probeCalls()).toBe(5);
+    expect(identity.reads()).toBe(1);
+    expect(lifecycle.getSnapshot()?.availability).toBe("busy");
+
+    // Bounded, not abandoned: past the window the OS is asked afresh, so a host
+    // that dies while wedged is still noticed within one interval.
+    vi.setSystemTime(startedAt + 200_000);
+    await lifecycle.reloadSnapshotFromDisk();
+    expect(identity.reads()).toBe(2);
+  });
+
+  it("never serves a cached verdict on a probe that ANSWERED", async () => {
+    const identity = countingProcessLiveness(() => "alive");
+    cleanups.push(identity.restore);
+    let answers = false;
+    const { lifecycle } = await lifecycleWithSilentEndpoint(() => answers);
+
+    await lifecycle.reloadSnapshotFromDisk();
+    await lifecycle.reloadSnapshotFromDisk();
+    expect(identity.reads()).toBe(1);
+
+    // The identity check is the only thing between an impostor listener on the
+    // host's port and a published `available`, so the handshake path always
+    // asks the OS itself - no cache, whatever the window says.
+    answers = true;
+    await lifecycle.reloadSnapshotFromDisk();
+    expect(identity.reads()).toBe(2);
+    expect(lifecycle.getSnapshot()?.availability).toBe("available");
+  });
+
+  it("re-reads a DEAD process every tick - a positive death is never cached", async () => {
+    const identity = countingProcessLiveness(() => "dead");
+    cleanups.push(identity.restore);
+    const { lifecycle } = await lifecycleWithSilentEndpoint(() => false);
+
+    for (let tick = 0; tick < 3; tick += 1) {
+      await lifecycle.reloadSnapshotFromDisk();
+    }
+
+    // `dead`/`mismatch` are what `readPublishedHostPresence` turns into
+    // `absent`, and absence is positive evidence with no hysteresis behind it -
+    // it must never come from a cache. It is also free: a dead pid loses the
+    // liveness probe before any child process is spawned.
+    expect(identity.reads()).toBe(3);
+    expect(lifecycle.getSnapshot()).toBeNull();
+  });
+});
+
+/**
+ * The defect this whole file's throttle
+ * exists to close: a cached `current` verdict used to be served for up to
+ * 120s off nothing but its own age, so a host SIGKILLed with its `pid.json`
+ * left behind - the file the fix's own comment cites - kept reading as
+ * `busy` (reachable) for as long as the cache lived, and the health monitor
+ * (`host-health-monitor.test.ts`) had the same shape of shield in two more
+ * places. `readIdentityVerdict` now gates reuse on
+ * `probeProcessExistenceWithoutSpawn` finding the SAME pid still there; these
+ * pin the cache honoring a live pid, losing it the moment the pid dies
+ * (the regression itself, reproduced directly against the cache rather
+ * than inferred from a probe-call count), and losing it for an EPERM the
+ * platform check can't turn into positive evidence either.
+ *
+ * A dedicated pid.json (with a `processStartIdentity` field the stubbed
+ * identity reader can match) is used here, rather than this file's shared
+ * `PID_METADATA`, so the cached verdict is genuinely `current` - the exact
+ * value found being served past a pid's death -
+ * and not merely `indeterminate`, which every row above already covers.
+ */
+describe("HostLifecycle identity-verdict cache vs process existence", () => {
+  const cleanups: (() => void)[] = [];
+  const CACHE_TEST_PID = 27182;
+  const CACHE_TEST_IDENTITY = "linux:boot-cache 27182";
+  const CACHE_TEST_PID_METADATA = JSON.stringify({
+    hostId: "5b6b0e2b-0f0a-4c2a-9d0a-9d6f9c9b6a11",
+    websocketUrl: "ws://127.0.0.1:55555/rpc",
+    version: "production.1784044433971.435b4f59c",
+    pid: CACHE_TEST_PID,
+    processStartIdentity: CACHE_TEST_IDENTITY,
+  });
+
+  afterEach(() => {
+    while (cleanups.length > 0) cleanups.pop()?.();
+    vi.useRealTimers();
+  });
+
+  async function lifecycleForCacheTest(): Promise<HostLifecycle> {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-cache-"));
+    const layout = layoutIn(dir);
+    await writeFile(layout.pidMetadataFile, CACHE_TEST_PID_METADATA, "utf8");
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 300,
+      // The endpoint never answers: only the identity-verdict cache's own
+      // reuse decision is under test here, never the reachability ladder.
+      reachabilityProbe: () => Promise.resolve(false),
+    });
+    cleanups.push(() => lifecycle.dispose());
+    cleanups.push(() => {
+      void rm(dir, { recursive: true, force: true });
+    });
+    return lifecycle;
+  }
+
+  /** Counts full identity reads the same way `countingProcessLiveness` does. */
+  function countingLivenessReader(verdictOf: () => ProcessLivenessVerdict): {
+    readonly reads: () => number;
+  } {
+    let reads = 0;
+    const previous = __setAsyncProcessLivenessReaderForTest(() => {
+      reads += 1;
+      return Promise.resolve(verdictOf());
+    });
+    cleanups.push(() => __setAsyncProcessLivenessReaderForTest(previous));
+    return { reads: () => reads };
+  }
+
+  function stubStartIdentity(identityOf: () => string | null): void {
+    const previous = __setAsyncProcessStartIdentityReaderForTest(() =>
+      Promise.resolve(identityOf()),
+    );
+    cleanups.push(() => __setAsyncProcessStartIdentityReaderForTest(previous));
+  }
+
+  it("a live pid keeps the cache - the full identity reader runs exactly once across two reads", async () => {
+    const identity = countingLivenessReader(() => "alive");
+    stubStartIdentity(() => CACHE_TEST_IDENTITY);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    cleanups.push(() => killSpy.mockRestore());
+
+    const lifecycle = await lifecycleForCacheTest();
+
+    // First read: nothing cached yet, so this is unconditionally a full
+    // read - the cached verdict this test is about does not exist before it.
+    await lifecycle.reloadSnapshotFromDisk();
+    expect(identity.reads()).toBe(1);
+    expect(lifecycle.getSnapshot()?.availability).toBe("busy");
+
+    // `process.kill(P, 0)` succeeds, so the second read - still within the
+    // 120s window, endpoint still silent - is served straight from the
+    // cache: the full identity reader is not consulted again.
+    await lifecycle.reloadSnapshotFromDisk();
+    expect(identity.reads()).toBe(1);
+    expect(lifecycle.getSnapshot()?.availability).toBe("busy");
+  });
+
+  it("a pid that dies between reads forces a fresh read and is never served stale as busy", async () => {
+    let livenessVerdict: ProcessLivenessVerdict = "alive";
+    const identity = countingLivenessReader(() => livenessVerdict);
+    stubStartIdentity(() => CACHE_TEST_IDENTITY);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    cleanups.push(() => killSpy.mockRestore());
+
+    const lifecycle = await lifecycleForCacheTest();
+
+    await lifecycle.reloadSnapshotFromDisk();
+    expect(identity.reads()).toBe(1);
+    expect(lifecycle.getSnapshot()?.availability).toBe("busy");
+
+    // The host is SIGKILLed between reads, `pid.json` left behind exactly as
+    // the defect found it: `process.kill` now reports
+    // ESRCH, and a fresh liveness read would find the same pid gone too.
+    killSpy.mockImplementation(() => {
+      throw Object.assign(new Error("simulated ESRCH"), { code: "ESRCH" });
+    });
+    livenessVerdict = "dead";
+
+    await lifecycle.reloadSnapshotFromDisk();
+    // Before the fix, `probeProcessExistenceWithoutSpawn` did not gate reuse
+    // at all, so this second read was served the FIRST read's cached
+    // `current` verdict and the pid's death was never noticed - exactly the
+    // "reachable three times over 114s for a dead pid" finding.
+    expect(identity.reads()).toBe(2);
+    // `dead` folds to `absent` (`readPublishedHostPresence`), which publishes
+    // no host at all - never `busy`, never anything that reads as alive for
+    // this pid.
+    expect(lifecycle.getSnapshot()).toBeNull();
+  });
+
+  it("EPERM on win32 is not positive evidence either - unknown existence forces a fresh read", async () => {
+    const identity = countingLivenessReader(() => "alive");
+    stubStartIdentity(() => CACHE_TEST_IDENTITY);
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    cleanups.push(() => killSpy.mockRestore());
+    const originalPlatform = Object.getOwnPropertyDescriptor(
+      process,
+      "platform",
+    );
+    cleanups.push(() => {
+      if (originalPlatform !== undefined) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    });
+
+    const lifecycle = await lifecycleForCacheTest();
+
+    await lifecycle.reloadSnapshotFromDisk();
+    expect(identity.reads()).toBe(1);
+    expect(lifecycle.getSnapshot()?.availability).toBe("busy");
+
+    // A higher-integrity process that may or may not still be there,
+    // observed from win32: EPERM only says an object exists that this token
+    // cannot open, not that the pid is still the host - so
+    // `probeProcessExistenceWithoutSpawn` reads it as `unknown`, not
+    // `exists`, on this platform alone.
+    Object.defineProperty(process, "platform", {
+      value: "win32",
+      configurable: true,
+    });
+    killSpy.mockImplementation(() => {
+      throw Object.assign(new Error("simulated EPERM"), { code: "EPERM" });
+    });
+    // The liveness verdict is left `alive`: a live pid that merely answers
+    // EPERM is exactly the case `unknown` must still let the full read reach
+    // the truth for, rather than the existence probe deciding it alone.
+
+    await lifecycle.reloadSnapshotFromDisk();
+    expect(identity.reads()).toBe(2);
+    expect(lifecycle.getSnapshot()?.availability).toBe("busy");
+  });
+});
+
+/**
+ * `readPidMetadataState` separates "the file is gone" from "I could not read
+ * it". Only the first is evidence about the HOST; the second is a failed
+ * observation, and folding it as `absent` runs it through the one arm of
+ * `foldHostAvailability` with no hysteresis at all - momentarily publishing a
+ * live host as dead over a transient EACCES/EIO or a read that landed
+ * mid-write, faults which cluster with exactly the load that makes a host slow
+ * to answer.
+ */
+describe("HostLifecycle pid.json read outcomes", () => {
+  it("HOLDS the published verdict on an unreadable pid.json, and keeps the ladder armed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-indeterminate-"));
+    const layout = layoutIn(dir);
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 300,
+      reachabilityProbe: () => Promise.resolve(true),
+    });
+    const restoreLiveness = useProcessLiveness(() => "indeterminate");
+    const changes: (DesktopLocalHostSnapshot | null)[] = [];
+    lifecycle.on("change", (snapshot: DesktopLocalHostSnapshot | null) => {
+      changes.push(snapshot);
+    });
+
+    try {
+      await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
+      expect((await lifecycle.reloadSnapshotFromDisk())?.availability).toBe(
+        "available",
+      );
+      expect(changes).toHaveLength(1);
+
+      // A partially-written file parses as invalid JSON: present, unreadable,
+      // and saying nothing about the host that is still answering.
+      await writeFile(layout.pidMetadataFile, '{"hostId":"partial', "utf8");
+      const held = await lifecycle.reloadSnapshotFromDisk();
+
+      expect(held?.pid).toBe(18841);
+      expect(held?.availability).toBe("available");
+      expect(lifecycle.getSnapshot()?.availability).toBe("available");
+      // Nothing was published: the renderer never saw the live host blink out.
+      expect(changes).toHaveLength(1);
+
+      // The hold is temporary because the ladder was armed by it. No watcher is
+      // installed here (bootstrap was never called), so a replacement host
+      // surfacing on its own proves the timer, not an fs edge.
+      await writeFile(layout.pidMetadataFile, REPLACEMENT_PID_METADATA, "utf8");
+      await waitUntil(() => lifecycle.getSnapshot()?.pid === 4242, 8_000);
+    } finally {
+      restoreLiveness();
+      lifecycle.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it("still folds a CONFIRMED-absent pid.json to no host, immediately", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-indeterminate-"));
+    const layout = layoutIn(dir);
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 300,
+      reachabilityProbe: () => Promise.resolve(true),
+    });
+    const restoreLiveness = useProcessLiveness(() => "indeterminate");
+    const changes: (DesktopLocalHostSnapshot | null)[] = [];
+    lifecycle.on("change", (snapshot: DesktopLocalHostSnapshot | null) => {
+      changes.push(snapshot);
+    });
+
+    try {
+      await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
+      await lifecycle.reloadSnapshotFromDisk();
+      expect(lifecycle.getSnapshot()).not.toBeNull();
+
+      // ENOENT is the one read outcome that IS about the host: `traycer host
+      // stop` unlinks the file, and a stopped host must lock promptly rather
+      // than serve out a hold (the 2026-08-08 two-slot lesson).
+      await unlink(layout.pidMetadataFile);
+      expect(await lifecycle.reloadSnapshotFromDisk()).toBeNull();
+      expect(lifecycle.getSnapshot()).toBeNull();
+      expect(changes.at(-1)).toBeNull();
+    } finally {
+      restoreLiveness();
+      lifecycle.dispose();
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+});
+
+/**
+ * `notifyRespawning` is a hand-written demotion: the caller knows the current
+ * host is going away and a replacement is coming. The ladder it arms is the
+ * only thing scheduled to find that replacement, so it has to start at the
+ * BOTTOM - an arm that inherits the outage's own ratcheted delay makes the new
+ * host's first probe wait up to the 5s cap.
+ */
+describe("HostLifecycle respawn re-arm", () => {
+  it("re-arms the ladder at its initial delay when a respawn is announced", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const dir = await mkdtemp(join(tmpdir(), "lifecycle-respawn-"));
+    const layout = layoutIn(dir);
+    let probeCalls = 0;
+    const lifecycle = new HostLifecycle({
+      layout,
+      bundledBinaryPath: null,
+      label: PRODUCTION_LABEL,
+      readyTimeoutMs: 300,
+      reachabilityProbe: () => {
+        probeCalls += 1;
+        return Promise.resolve(false);
+      },
+    });
+    const restoreLiveness = useProcessLiveness(() => "indeterminate");
+
+    try {
+      await writeFile(layout.pidMetadataFile, PID_METADATA, "utf8");
+      // Walk the ladder up: 250ms, then 500ms, leaving a 1s timer pending.
+      // Awaiting the reload settles it fully - probe fired, next rung armed -
+      // so each advance below finds its timer already scheduled.
+      await lifecycle.reloadSnapshotFromDisk();
+      await vi.advanceTimersByTimeAsync(250);
+      await settleLadderReload(() => probeCalls >= 2);
+      await vi.advanceTimersByTimeAsync(500);
+      await settleLadderReload(() => probeCalls >= 3);
+      // Exactly one probe per rung: fake timers only fire inside an advance,
+      // so nothing can have raced the count past 3 between settles.
+      const beforeRespawn = probeCalls;
+      expect(beforeRespawn).toBe(3);
+
+      lifecycle.notifyRespawning();
+
+      // The inherited 1s timer must have been replaced, not left to run out:
+      // advancing only the INITIAL delay must fire a probe (the settle throws
+      // if none does), and it must be exactly one.
+      await vi.advanceTimersByTimeAsync(REACHABILITY_RETRY_INITIAL_MS_FOR_TEST);
+      await settleLadderReload(() => probeCalls >= beforeRespawn + 1);
+      expect(probeCalls).toBe(beforeRespawn + 1);
+    } finally {
+      restoreLiveness();
+      lifecycle.dispose();
+      vi.useRealTimers();
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+});

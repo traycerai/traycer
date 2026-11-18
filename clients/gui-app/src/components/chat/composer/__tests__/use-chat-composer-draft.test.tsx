@@ -1,0 +1,505 @@
+import {
+  act,
+  cleanup,
+  render,
+  renderHook,
+  screen,
+} from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import type { JsonContent } from "@traycer/protocol/common/registry";
+
+import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import { STUB_ANNOTATION_ELEMENT } from "@/lib/browser-view/annotation/__tests__/browser-annotation-fixtures";
+import {
+  buildQuoteBlockquote,
+  appendQuoteToDraft,
+} from "../../quote/append-quote-to-draft";
+
+import { useChatComposerDraft } from "../use-chat-composer-draft";
+import type { ComposerPromptEditorHandle } from "../composer-prompt-editor";
+import { createFakeComposerPromptEditorHandle } from "./composer-prompt-editor-handle-fixtures";
+import { ComposerDraftEditorHarness } from "./composer-draft-test-support";
+
+afterEach(() => {
+  cleanup();
+  useComposerDraftStore.setState({ drafts: {} });
+});
+
+function doc(text: string): JsonContent {
+  return {
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+  };
+}
+
+const EMPTY_DOC: JsonContent = {
+  type: "doc",
+  content: [{ type: "paragraph" }],
+};
+
+const EMPTY_SELECTION = { from: 1, to: 1 } as const;
+
+function fakeHandle(ready: boolean) {
+  const { handle, setContent, syncContent, markReady } =
+    createFakeComposerPromptEditorHandle({
+      ready,
+      content: doc(""),
+      selection: null,
+      isEmpty: true,
+      onFocus: null,
+      onClear: null,
+    });
+  return {
+    handle,
+    setContent,
+    syncContent,
+    markReady: () => {
+      markReady(true);
+    },
+  };
+}
+
+interface BridgeHookProps {
+  readonly chatId: string;
+  readonly editorRef: { current: ComposerPromptEditorHandle | null };
+  readonly editorReadyTick: number;
+}
+
+function renderBridgeHook(initial: BridgeHookProps) {
+  return renderHook(
+    (props: BridgeHookProps) =>
+      useChatComposerDraft({
+        chatId: props.chatId,
+        epicId: "epic-1",
+        hostId: "host-1",
+        editorRef: props.editorRef,
+        editorReadyTick: props.editorReadyTick,
+        chatTitle: null,
+        epicTitle: null,
+      }),
+    { initialProps: initial },
+  );
+}
+
+describe("useChatComposerDraft bridge", () => {
+  it("applies a resetEpoch bump immediately when the handle is already ready (normal epoch-change path)", () => {
+    const taskId = "task-1";
+    const { handle, syncContent } = fakeHandle(true);
+    const editorRef = { current: handle as ComposerPromptEditorHandle | null };
+
+    renderBridgeHook({ chatId: taskId, editorRef, editorReadyTick: 1 });
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .replaceDraft(taskId, doc("quoted"), null);
+    });
+
+    expect(syncContent).toHaveBeenCalledTimes(1);
+    expect(syncContent).toHaveBeenCalledWith(doc("quoted"), null);
+  });
+
+  it("defers an external replaceDraft while the handle is null and applies it exactly once on the editor-ready tick", () => {
+    const taskId = "task-2";
+    const editorRef: { current: ComposerPromptEditorHandle | null } = {
+      current: null,
+    };
+
+    const { rerender } = renderBridgeHook({
+      chatId: taskId,
+      editorRef,
+      editorReadyTick: 0,
+    });
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .replaceDraft(taskId, doc("quoted"), null);
+    });
+
+    const { handle, syncContent } = fakeHandle(true);
+    expect(syncContent).not.toHaveBeenCalled();
+
+    // The editor finishes construction: ComposerPromptEditor fires
+    // onEditorReady, which the owner turns into an editorReadyTick bump.
+    editorRef.current = handle;
+    rerender({ chatId: taskId, editorRef, editorReadyTick: 1 });
+
+    expect(syncContent).toHaveBeenCalledTimes(1);
+    expect(syncContent).toHaveBeenCalledWith(doc("quoted"), null);
+
+    // A further rerender with nothing new must not replay the same epoch.
+    rerender({ chatId: taskId, editorRef, editorReadyTick: 1 });
+    expect(syncContent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not stamp a pending epoch into a not-yet-ready handle (whose methods silently no-op)", () => {
+    const taskId = "task-not-ready";
+    const { handle, syncContent, markReady } = fakeHandle(false);
+    // The handle EXISTS from the owner's first commit - only the editor
+    // behind it is still constructing. Applying now would no-op inside the
+    // handle and permanently swallow the reset.
+    const editorRef = { current: handle as ComposerPromptEditorHandle | null };
+
+    const { rerender } = renderBridgeHook({
+      chatId: taskId,
+      editorRef,
+      editorReadyTick: 0,
+    });
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .replaceDraft(taskId, doc("quoted"), null);
+    });
+    expect(syncContent).not.toHaveBeenCalled();
+
+    markReady();
+    rerender({ chatId: taskId, editorRef, editorReadyTick: 1 });
+
+    expect(syncContent).toHaveBeenCalledTimes(1);
+    expect(syncContent).toHaveBeenCalledWith(doc("quoted"), null);
+  });
+
+  it("applies exactly once per epoch across repeated external replaceDraft calls (queue-edit / failed-send restore path)", () => {
+    const taskId = "task-3";
+    const { handle, syncContent } = fakeHandle(true);
+    const editorRef = { current: handle as ComposerPromptEditorHandle | null };
+
+    renderBridgeHook({ chatId: taskId, editorRef, editorReadyTick: 1 });
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .replaceDraft(taskId, doc("first restore"), null);
+    });
+    expect(syncContent).toHaveBeenCalledTimes(1);
+    expect(syncContent).toHaveBeenLastCalledWith(doc("first restore"), null);
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .replaceDraft(taskId, doc("second restore"), null);
+    });
+    expect(syncContent).toHaveBeenCalledTimes(2);
+    expect(syncContent).toHaveBeenLastCalledWith(doc("second restore"), null);
+  });
+
+  /**
+   * clearDraft reuses the resetEpoch broadcast. Old clearDraft deleted the
+   * map entry, so a sibling composer's Tiptap document kept the just-
+   * submitted text (split panes / keep-alive tabs sharing one taskId).
+   */
+  it("broadcasts clearDraft empty content into every ready sibling composer for the same taskId", () => {
+    const taskId = "task-multi-surface";
+    const a = fakeHandle(true);
+    const b = fakeHandle(true);
+    const editorRefA = {
+      current: a.handle as ComposerPromptEditorHandle | null,
+    };
+    const editorRefB = {
+      current: b.handle as ComposerPromptEditorHandle | null,
+    };
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .setSnapshot(taskId, doc("queued steer text"), null);
+    });
+
+    renderBridgeHook({
+      chatId: taskId,
+      editorRef: editorRefA,
+      editorReadyTick: 1,
+    });
+    renderBridgeHook({
+      chatId: taskId,
+      editorRef: editorRefB,
+      editorReadyTick: 1,
+    });
+
+    act(() => {
+      useComposerDraftStore.getState().clearDraft(taskId);
+    });
+
+    // Both surfaces must push empty content into their local Tiptap docs.
+    // Old clearDraft deleted the map entry and never called syncContent on B.
+    expect(a.syncContent).toHaveBeenCalledWith(EMPTY_DOC, EMPTY_SELECTION);
+    expect(b.syncContent).toHaveBeenCalledWith(EMPTY_DOC, EMPTY_SELECTION);
+  });
+
+  it("defers clearDraft apply until the handle becomes ready (readiness-deferred empty push)", () => {
+    const taskId = "task-clear-deferred";
+    const { handle, syncContent, markReady } = fakeHandle(false);
+    const editorRef = { current: handle as ComposerPromptEditorHandle | null };
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .setSnapshot(taskId, doc("stale text"), null);
+    });
+
+    const { rerender } = renderBridgeHook({
+      chatId: taskId,
+      editorRef,
+      editorReadyTick: 0,
+    });
+
+    act(() => {
+      useComposerDraftStore.getState().clearDraft(taskId);
+    });
+    // Handle exists but methods no-op until useEditor resolves - must not
+    // stamp the epoch yet or the empty content would be swallowed forever.
+    expect(syncContent).not.toHaveBeenCalled();
+
+    markReady();
+    rerender({ chatId: taskId, editorRef, editorReadyTick: 1 });
+
+    expect(syncContent).toHaveBeenCalledTimes(1);
+    expect(syncContent).toHaveBeenCalledWith(EMPTY_DOC, EMPTY_SELECTION);
+  });
+});
+
+interface QuoteFocusHarnessProps {
+  readonly taskId: string;
+  readonly editorRef: { current: ComposerPromptEditorHandle | null };
+  readonly selectionRef: {
+    current: { readonly from: number; readonly to: number } | null;
+  };
+}
+
+function QuoteFocusHarness(props: QuoteFocusHarnessProps) {
+  return (
+    <ComposerDraftEditorHarness
+      chatId={props.taskId}
+      epicId="epic-1"
+      hostId="host-1"
+      editorRef={props.editorRef}
+      selectionRef={props.selectionRef}
+    />
+  );
+}
+
+function nodeSize(node: JsonContent): number {
+  if (node.type === "text") return (node.text ?? "").length;
+  const children = node.content;
+  if (children === undefined) return 1;
+  return 2 + children.reduce((sum, child) => sum + nodeSize(child), 0);
+}
+
+function docEndPosition(content: JsonContent): number {
+  return (content.content ?? []).reduce(
+    (sum, child) => sum + nodeSize(child),
+    0,
+  );
+}
+
+describe("appendQuoteToDraft + useChatComposerDraft integration", () => {
+  it("preserves focus in the submitting composer when clearDraft broadcasts to a sibling", async () => {
+    const taskId = "task-clear-focus";
+    const editorRefA: { current: ComposerPromptEditorHandle | null } = {
+      current: null,
+    };
+    const editorRefB: { current: ComposerPromptEditorHandle | null } = {
+      current: null,
+    };
+    const selectionRefA: {
+      current: { readonly from: number; readonly to: number } | null;
+    } = { current: null };
+    const selectionRefB: {
+      current: { readonly from: number; readonly to: number } | null;
+    } = { current: null };
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .setSnapshot(taskId, doc("queued steer text"), null);
+    });
+
+    render(
+      <>
+        <QuoteFocusHarness
+          taskId={taskId}
+          editorRef={editorRefA}
+          selectionRef={selectionRefA}
+        />
+        <QuoteFocusHarness
+          taskId={taskId}
+          editorRef={editorRefB}
+          selectionRef={selectionRefB}
+        />
+      </>,
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const handleA = editorRefA.current;
+    const handleB = editorRefB.current;
+    expect(handleA).not.toBeNull();
+    expect(handleB).not.toBeNull();
+    if (handleA === null || handleB === null) {
+      throw new Error("editor handle missing");
+    }
+
+    act(() => {
+      handleA.focus();
+    });
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+
+    const editorDoms = screen.getAllByRole("textbox", { name: "test" });
+    expect(editorDoms).toHaveLength(2);
+    expect(document.activeElement).toBe(editorDoms[0]);
+
+    act(() => {
+      useComposerDraftStore.getState().clearDraft(taskId);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+
+    expect(handleA.getJSON()).toEqual(EMPTY_DOC);
+    expect(handleB.getJSON()).toEqual(EMPTY_DOC);
+    expect(document.activeElement).toBe(editorDoms[0]);
+  });
+
+  it("focuses the mounted editor with the caret at doc end after appending a quote", async () => {
+    const taskId = "task-focus";
+    const editorRef: { current: ComposerPromptEditorHandle | null } = {
+      current: null,
+    };
+    const selectionRef: {
+      current: { readonly from: number; readonly to: number } | null;
+    } = { current: null };
+
+    render(
+      <QuoteFocusHarness
+        taskId={taskId}
+        editorRef={editorRef}
+        selectionRef={selectionRef}
+      />,
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const quote = buildQuoteBlockquote({ text: "quoted", fenceLanguage: null });
+    act(() => {
+      appendQuoteToDraft(taskId, quote);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    // Tiptap's `focus` command dispatches the selection change synchronously
+    // but defers the actual DOM `view.focus()` to a `requestAnimationFrame`
+    // callback - wait a frame before asserting `document.activeElement`.
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const handle = editorRef.current;
+    expect(handle).not.toBeNull();
+    if (handle === null) throw new Error("editor handle missing");
+
+    const finalContent = handle.getJSON();
+    expect(finalContent).toEqual({
+      type: "doc",
+      content: [quote, { type: "paragraph" }],
+    });
+
+    const editorDom = document.querySelector("[data-composer-editor]");
+    expect(editorDom).not.toBeNull();
+    expect(document.activeElement).toBe(editorDom);
+
+    const expectedEnd = docEndPosition(finalContent);
+    expect(selectionRef.current).toEqual({
+      from: expectedEnd,
+      to: expectedEnd,
+    });
+  });
+});
+
+function draftAnnotation(annotationId: string): BrowserAnnotationRecord {
+  return {
+    kind: "browser-annotation",
+    annotationId,
+    tabId: "t-1",
+    sessionId: "s-1",
+    origin: "https://example.com",
+    pageUrl: "https://example.com/",
+    pageTitle: "Example Domain",
+    source: {
+      kind: "browser",
+      tabId: "t-1",
+      sessionId: "s-1",
+      origin: "https://example.com",
+      pageUrl: "https://example.com/",
+      pageTitle: "Example Domain",
+    },
+    capturedAt: 1_700_000_000_000,
+    comment: "annotate",
+    counts: { elements: 1, regions: 0, strokes: 0 },
+    elements: [STUB_ANNOTATION_ELEMENT],
+    imageFileName: `browser-annotation-${annotationId}.png`,
+    imageHash: `hash-${annotationId}`,
+    droppedElementCount: 0,
+  };
+}
+
+describe("useChatComposerDraft browser annotation image gating", () => {
+  it("sets draftHasImages when the draft has a browser annotation and no editor images", () => {
+    const taskId = "task-ann-images";
+    const { handle } = fakeHandle(true);
+    const editorRef = { current: handle as ComposerPromptEditorHandle | null };
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .addBrowserAnnotation(taskId, draftAnnotation("ann-gate"));
+    });
+
+    const { result } = renderBridgeHook({
+      chatId: taskId,
+      editorRef,
+      editorReadyTick: 1,
+    });
+
+    expect(result.current.draftHasText).toBe(false);
+    expect(result.current.draftHasImages).toBe(true);
+  });
+
+  it("clears draftHasImages when the last browser annotation is removed", () => {
+    const taskId = "task-ann-remove";
+    const { handle } = fakeHandle(true);
+    const editorRef = { current: handle as ComposerPromptEditorHandle | null };
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .addBrowserAnnotation(taskId, draftAnnotation("ann-remove"));
+    });
+
+    const { result } = renderBridgeHook({
+      chatId: taskId,
+      editorRef,
+      editorReadyTick: 1,
+    });
+    expect(result.current.draftHasImages).toBe(true);
+
+    act(() => {
+      useComposerDraftStore
+        .getState()
+        .removeBrowserAnnotation(taskId, "ann-remove");
+    });
+    expect(result.current.draftHasImages).toBe(false);
+  });
+});

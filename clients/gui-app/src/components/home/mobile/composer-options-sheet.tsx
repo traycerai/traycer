@@ -1,0 +1,264 @@
+import type { ReactNode } from "react";
+import { Check, ChevronRight } from "lucide-react";
+
+import {
+  AUTO_JUDGE_UNAVAILABLE_DESCRIPTION,
+  AUTO_MID_TURN_NOTICE,
+  PERMISSION_PICKER_OPTIONS,
+  composerOffersPermissionMode,
+  normalizePermissionMode,
+  unsupportedPermissionModeCopy,
+  type PermissionMode,
+} from "@/components/home/data/landing-options";
+import {
+  autoJudgeMaxModeListedForRow,
+  autoModeMidTurnLock,
+  type AutoJudgeBilling,
+} from "@/lib/auto-mode/auto-judge-billing";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/components/ui/drawer";
+import { useResolvedTheme } from "@/providers/use-resolved-theme";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
+import "@/components/layout/shell/mobile-shell-touch-targets.css";
+
+interface ComposerOptionsSheetProps {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly permission: PermissionMode;
+  readonly onPermissionChange: (next: PermissionMode) => void;
+  /** See `PermissionsPicker`: `null` (or empty) means "no harness scope". */
+  readonly supportedPermissionModes: ReadonlyArray<PermissionMode> | null;
+  readonly harnessLabel: string | null;
+  /** See `PermissionsPicker`: the union across the host's whole catalog. */
+  readonly catalogSupportedModes: ReadonlyArray<PermissionMode> | null;
+  /** See `PermissionsPicker`'s prop of the same name. */
+  readonly hostKnowsAutoMode: boolean | null;
+  /** See `PermissionsPicker`: drives the `auto` row's mid-turn notice. */
+  readonly turnActive: boolean;
+  /** See `PermissionsPicker`: determines Auto's mid-turn availability. */
+  readonly judgeBilling: AutoJudgeBilling | null;
+  readonly settingsLocked: boolean;
+  /** The trailing "Permission settings…" row - see `PermissionsPicker`. */
+  readonly onOpenPermissionSettings: () => void;
+}
+
+/**
+ * Phone-width picker for agent mode and permissions, opened from the toolbar's
+ * permission pill. Everything else the desktop toolbar shows stays inline on
+ * the row; only these two need more width than a ~21rem row can give.
+ *
+ * A flat one-level list, deliberately NOT the desktop dropdowns: those hide
+ * their labels under `@max-lg`, and nesting a Radix dropdown inside a vaul
+ * drawer is the layering that made the terminal Launch button inert on this
+ * branch. Rows read the same option registries the desktop pickers do, so the
+ * copy and the supported-mode gating stay in one place.
+ */
+export function ComposerOptionsSheet(props: ComposerOptionsSheetProps) {
+  // Drawer content portals to <body>; re-assert the resolved theme so
+  // `--popover` / `--background` resolve inside the portal instead of falling
+  // back to the light `:root` (same treatment as `TabSwitcherSheet`).
+  const { resolvedTheme, themePreset } = useResolvedTheme();
+  // Mirror the desktop picker: display the mode the harness will actually run,
+  // never a stale sticky the active harness doesn't honor.
+  const effectivePermission = normalizePermissionMode(
+    props.permission,
+    props.supportedPermissionModes,
+    props.hostKnowsAutoMode,
+  );
+  const supported = props.supportedPermissionModes;
+  // The desktop picker's mid-turn lock on the Auto row, through the same
+  // helper, so the two surfaces refuse the same flip with the same words.
+  const autoMidTurnLock = autoModeMidTurnLock({
+    turnActive: props.turnActive,
+    currentModeIsAuto: effectivePermission === "auto",
+    judgeBilling: props.judgeBilling,
+  });
+
+  return (
+    <Drawer
+      direction="bottom"
+      open={props.open}
+      onOpenChange={props.onOpenChange}
+    >
+      <DrawerContent
+        data-mobile-shell-touch-scope=""
+        data-testid="composer-options-sheet"
+        data-theme={themePreset}
+        className={cn(resolvedTheme === "dark" && "dark", "max-h-[85dvh]")}
+      >
+        <DrawerHeader>
+          <DrawerTitle>Task options</DrawerTitle>
+        </DrawerHeader>
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-2 pb-safe-bottom-gutter">
+          <div role="radiogroup" aria-label="Permissions">
+            <OptionsSectionLabel>Permissions</OptionsSectionLabel>
+            {PERMISSION_PICKER_OPTIONS.map((option) => {
+              const Icon = option.icon;
+              // Through the shared predicate, which is where the "empty means
+              // unconstrained" rule AND the host's own line live now - see
+              // `composerOffersPermissionMode`. The row alone would offer
+              // `auto` on a host that cannot carry it.
+              const isSupported = composerOffersPermissionMode(
+                supported,
+                option.id,
+                props.hostKnowsAutoMode,
+              );
+              // Supported, but not for THIS turn - see the desktop picker.
+              const lockedMidTurn =
+                isSupported && option.id === "auto" && autoMidTurnLock !== null;
+              let description: string;
+              if (!isSupported) {
+                description = unsupportedPermissionModeCopy({
+                  mode: option.id,
+                  harnessLabel: props.harnessLabel,
+                  catalogSupportedModes: props.catalogSupportedModes,
+                  hostKnowsAutoMode: props.hostKnowsAutoMode,
+                });
+              } else if (lockedMidTurn) {
+                description = autoMidTurnLock;
+              } else if (
+                option.id === "auto" &&
+                props.judgeBilling?.kind === "blocked"
+              ) {
+                description = AUTO_JUDGE_UNAVAILABLE_DESCRIPTION;
+              } else {
+                description = option.description;
+              }
+              return (
+                <OptionRow
+                  key={option.id}
+                  icon={
+                    <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                  }
+                  label={option.label}
+                  experimental={option.id === "auto"}
+                  description={description}
+                  maxModeListed={autoJudgeMaxModeListedForRow({
+                    isAuto: option.id === "auto",
+                    supported: isSupported,
+                    lockedMidTurn,
+                    billing: props.judgeBilling,
+                  })}
+                  notice={
+                    isSupported &&
+                    !lockedMidTurn &&
+                    option.id === "auto" &&
+                    props.turnActive &&
+                    effectivePermission !== "auto"
+                      ? AUTO_MID_TURN_NOTICE
+                      : null
+                  }
+                  selected={option.id === effectivePermission}
+                  disabled={
+                    props.settingsLocked || !isSupported || lockedMidTurn
+                  }
+                  testId={`composer-options-permission-${option.id}`}
+                  onSelect={() => {
+                    // Defense-in-depth, mirroring `PermissionsPicker`: the
+                    // disabled attribute already blocks activation, but a
+                    // programmatic dispatch must not escalate permissions.
+                    if (props.settingsLocked) return;
+                    if (!isSupported) return;
+                    if (lockedMidTurn) return;
+                    props.onPermissionChange(option.id);
+                  }}
+                />
+              );
+            })}
+          </div>
+          {/* The desktop picker's trailing item, after the same separator.
+              Deliberately not disabled by `settingsLocked`: it changes
+              nothing about this conversation, it only opens Settings. The
+              sheet closes first so the Settings route is not under it. */}
+          <div className="border-t border-border/60 pt-2">
+            <button
+              type="button"
+              data-testid="composer-options-permission-settings"
+              className="flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-ui-sm text-foreground transition-colors active:bg-accent/60"
+              onClick={() => {
+                props.onOpenChange(false);
+                props.onOpenPermissionSettings();
+              }}
+            >
+              <span className="min-w-0 flex-1">Permission settings…</span>
+              <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+            </button>
+          </div>
+        </div>
+      </DrawerContent>
+    </Drawer>
+  );
+}
+
+function OptionsSectionLabel(props: { readonly children: ReactNode }) {
+  return (
+    <p className="px-3 pb-1 text-overline uppercase tracking-wide text-muted-foreground/70">
+      {props.children}
+    </p>
+  );
+}
+
+interface OptionRowProps {
+  readonly icon: ReactNode;
+  readonly label: string;
+  readonly experimental: boolean;
+  readonly description: string;
+  readonly maxModeListed: boolean;
+  /** The `auto` row's mid-turn notice; `null` on every other row. */
+  readonly notice: string | null;
+  readonly selected: boolean;
+  readonly disabled: boolean;
+  readonly testId: string;
+  readonly onSelect: () => void;
+}
+
+function OptionRow(props: OptionRowProps) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={props.selected}
+      disabled={props.disabled}
+      data-testid={props.testId}
+      className={cn(
+        "flex w-full items-start gap-3 rounded-md px-3 py-2.5 text-left transition-colors active:bg-accent/60 disabled:cursor-not-allowed disabled:opacity-50",
+        props.selected && "bg-accent/40",
+      )}
+      onClick={props.onSelect}
+    >
+      {props.icon}
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="flex flex-wrap items-center gap-2">
+          <span className="text-ui-sm font-medium text-foreground">
+            {props.label}
+          </span>
+          {props.experimental ? (
+            <Badge variant="muted" size="xs">
+              Experimental
+            </Badge>
+          ) : null}
+        </span>
+        <span className="text-ui-xs text-muted-foreground">
+          {props.description}
+          {props.maxModeListed ? " · Max Mode" : null}
+        </span>
+        {props.notice !== null ? (
+          <span
+            data-testid="composer-options-permission-mid-turn-notice"
+            className="text-pretty text-ui-xs text-muted-foreground"
+          >
+            {props.notice}
+          </span>
+        ) : null}
+      </span>
+      {props.selected ? (
+        <Check className="mt-0.5 size-4 shrink-0 text-foreground" />
+      ) : null}
+    </button>
+  );
+}

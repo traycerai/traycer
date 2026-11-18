@@ -1,0 +1,374 @@
+import { describe, expect, it } from "vitest";
+import { z } from "zod";
+import {
+  defineRpcContract,
+  defineVersionedRpcRegistry,
+} from "@traycer/protocol/framework/index";
+import {
+  MockHostMessenger,
+  type MockPhaseEvent,
+} from "../mock/mock-host-messenger";
+import {
+  HostRpcError,
+  type HostRequestAuthority,
+} from "../../host-transport/host-messenger";
+
+const echoV10 = defineRpcContract({
+  method: "host.echo",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: z.object({ message: z.string() }),
+  responseSchema: z.object({ echoed: z.string() }),
+});
+
+const registry = defineVersionedRpcRegistry({
+  "host.echo": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: { contract: echoV10, upgradeFromPreviousVersion: null },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+});
+
+function authority(): HostRequestAuthority {
+  return {
+    endpoint: { hostId: "test-host", websocketUrl: "ws://test-host/rpc" },
+    bearer: {
+      identity: { userId: "u1" },
+      getBearerToken: () => "token",
+    },
+    abortSignal: new AbortController().signal,
+  };
+}
+
+describe("MockHostMessenger", () => {
+  it("returns canonical responses for registered handlers", async () => {
+    const messenger = new MockHostMessenger<typeof registry>({
+      registry,
+      handlers: {
+        "host.echo": ({ message }) => ({ echoed: message.toUpperCase() }),
+      },
+      requestId: () => "req-1",
+    });
+
+    const result = await messenger.request(
+      "host.echo",
+      { message: "hi" },
+      {
+        idempotencyKey: null,
+        authority: authority(),
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+      },
+    );
+    expect(result).toEqual({ echoed: "HI" });
+    expect(messenger.calls).toHaveLength(1);
+    expect(messenger.calls[0]).toMatchObject({
+      method: "host.echo",
+      params: { message: "hi" },
+      requestId: "req-1",
+      authority: {
+        endpoint: { hostId: "test-host", websocketUrl: "ws://test-host/rpc" },
+      },
+    });
+  });
+
+  it("surfaces missing handlers as HostRpcError", async () => {
+    const messenger = new MockHostMessenger<typeof registry>({
+      registry,
+      handlers: {},
+      requestId: () => "req-missing",
+    });
+
+    await expect(
+      messenger.request(
+        "host.echo",
+        { message: "x" },
+        {
+          idempotencyKey: null,
+          authority: authority(),
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+        },
+      ),
+    ).rejects.toSatisfy(
+      (err: unknown) =>
+        err instanceof HostRpcError &&
+        err.code === "RPC_ERROR" &&
+        err.requestId === "req-missing",
+    );
+  });
+
+  it("wraps handler throws as HostRpcError", async () => {
+    const messenger = new MockHostMessenger<typeof registry>({
+      registry,
+      handlers: {
+        "host.echo": () => {
+          throw new Error("boom");
+        },
+      },
+      requestId: () => "req-err",
+    });
+
+    await expect(
+      messenger.request(
+        "host.echo",
+        { message: "x" },
+        {
+          idempotencyKey: null,
+          authority: authority(),
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+        },
+      ),
+    ).rejects.toSatisfy(
+      (err: unknown) => err instanceof HostRpcError && err.message === "boom",
+    );
+  });
+
+  it("rewraps handler HostRpcError with the current request metadata", async () => {
+    const fatalDetails = {
+      code: "INCOMPATIBLE",
+      reason: "host protocol mismatch",
+      incompatibleMethods: [],
+      upgradeGuidance: null,
+    };
+    const messenger = new MockHostMessenger<typeof registry>({
+      registry,
+      handlers: {
+        "host.echo": () => {
+          throw new HostRpcError({
+            code: "INCOMPATIBLE",
+            message: "handler supplied metadata",
+            requestId: "handler-req",
+            method: "handler.method",
+            fatalDetails,
+          });
+        },
+      },
+      requestId: () => "req-current",
+    });
+
+    await expect(
+      messenger.request(
+        "host.echo",
+        { message: "x" },
+        {
+          idempotencyKey: null,
+          authority: authority(),
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+        },
+      ),
+    ).rejects.toSatisfy(
+      (err: unknown) =>
+        err instanceof HostRpcError &&
+        err.code === "INCOMPATIBLE" &&
+        err.message === "handler supplied metadata" &&
+        err.requestId === "req-current" &&
+        err.method === "host.echo" &&
+        err.fatalDetails === fatalDetails &&
+        err.holders === null,
+    );
+
+    const responseEvent = messenger.phases[4];
+    if (responseEvent.kind !== "response") {
+      throw new Error("expected response phase at index 4");
+    }
+    expect(responseEvent.error?.requestId).toBe("req-current");
+    expect(responseEvent.error?.method).toBe("host.echo");
+  });
+
+  it("preserves WORKTREE_BUSY holders when re-stamping a handler HostRpcError", async () => {
+    const holders = [
+      {
+        ownerRef: {
+          epicId: "epic-1",
+          ownerKind: "terminal-agent" as const,
+          ownerId: "agent-1",
+        },
+        holdKind: "terminal-agent-pty" as const,
+        activity: "idle" as const,
+        label: "Claude Code",
+      },
+    ];
+    const messenger = new MockHostMessenger<typeof registry>({
+      registry,
+      handlers: {
+        "host.echo": () => {
+          throw new HostRpcError({
+            code: "WORKTREE_BUSY",
+            message: "in use",
+            requestId: "handler-req",
+            method: "handler.method",
+            fatalDetails: null,
+            holders,
+          });
+        },
+      },
+      requestId: () => "req-holders",
+    });
+
+    await expect(
+      messenger.request(
+        "host.echo",
+        { message: "x" },
+        {
+          idempotencyKey: null,
+          authority: authority(),
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+        },
+      ),
+    ).rejects.toSatisfy(
+      (err: unknown) =>
+        err instanceof HostRpcError &&
+        err.code === "WORKTREE_BUSY" &&
+        err.requestId === "req-holders" &&
+        err.method === "host.echo" &&
+        err.holders !== null &&
+        JSON.stringify(err.holders) === JSON.stringify(holders),
+    );
+  });
+
+  it("emits phase hooks in the WS lifecycle order on the happy path", async () => {
+    const messenger = new MockHostMessenger<typeof registry>({
+      registry,
+      handlers: {
+        "host.echo": ({ message }) => ({ echoed: message.toUpperCase() }),
+      },
+      requestId: () => "req-phase",
+    });
+
+    const seen: MockPhaseEvent[] = [];
+    const unsubscribe = messenger.subscribe((event) => {
+      seen.push(event);
+    });
+
+    await messenger.request(
+      "host.echo",
+      { message: "hi" },
+      {
+        idempotencyKey: null,
+        authority: authority(),
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+      },
+    );
+    unsubscribe();
+
+    const kinds = seen.map((event) => event.kind);
+    expect(kinds).toEqual([
+      "open",
+      "auth",
+      "manifest",
+      "request",
+      "response",
+      "close",
+    ]);
+    expect(messenger.phases.map((event) => event.kind)).toEqual(kinds);
+
+    const requestEvent = seen[3];
+    if (requestEvent.kind !== "request") {
+      throw new Error("expected request phase at index 3");
+    }
+    expect(requestEvent.params).toEqual({ message: "hi" });
+    expect(requestEvent.requestId).toBe("req-phase");
+    expect(requestEvent.method).toBe("host.echo");
+
+    const responseEvent = seen[4];
+    if (responseEvent.kind !== "response") {
+      throw new Error("expected response phase at index 4");
+    }
+    expect(responseEvent.error).toBeNull();
+    expect(responseEvent.result).toEqual({ echoed: "HI" });
+  });
+
+  it("emits response then close even when the handler throws", async () => {
+    const messenger = new MockHostMessenger<typeof registry>({
+      registry,
+      handlers: {
+        "host.echo": () => {
+          throw new Error("boom");
+        },
+      },
+      requestId: () => "req-phase-err",
+    });
+
+    await expect(
+      messenger.request(
+        "host.echo",
+        { message: "x" },
+        {
+          idempotencyKey: null,
+          authority: authority(),
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+        },
+      ),
+    ).rejects.toBeInstanceOf(HostRpcError);
+
+    const kinds = messenger.phases.map((event) => event.kind);
+    expect(kinds).toEqual([
+      "open",
+      "auth",
+      "manifest",
+      "request",
+      "response",
+      "close",
+    ]);
+
+    const responseEvent = messenger.phases[4];
+    if (responseEvent.kind !== "response") {
+      throw new Error("expected response phase at index 4");
+    }
+    expect(responseEvent.error).toBeInstanceOf(HostRpcError);
+    expect(responseEvent.result).toBeNull();
+  });
+
+  it("rejects a held handler when request authority is aborted", async () => {
+    const controller = new AbortController();
+    const messenger = new MockHostMessenger<typeof registry>({
+      registry,
+      handlers: {
+        "host.echo": () => new Promise(() => undefined),
+      },
+      requestId: () => "req-abort",
+    });
+    const request = messenger.request(
+      "host.echo",
+      { message: "x" },
+      {
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+        idempotencyKey: null,
+        authority: {
+          ...authority(),
+          abortSignal: controller.signal,
+        },
+      },
+    );
+
+    controller.abort();
+
+    // The handler - the mock's host - already ran, so the write may have
+    // applied: the abort must not read as one that never left
+    // (traycerai/traycer#2546, round 11).
+    await expect(request).rejects.toMatchObject({
+      name: "HostRequestAbortedError",
+      requestId: "req-abort",
+      method: "host.echo",
+      mayHaveDispatched: true,
+    });
+    expect(messenger.phases.map((event) => event.kind)).toEqual([
+      "open",
+      "auth",
+      "manifest",
+      "request",
+      "response",
+      "close",
+    ]);
+  });
+});

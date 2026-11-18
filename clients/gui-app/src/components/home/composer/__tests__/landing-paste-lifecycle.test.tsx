@@ -1,0 +1,1907 @@
+/**
+ * Round-5 landing paste lifecycle seams.
+ *
+ * Drives the REAL LandingComposer + REAL per-window draft-runtime registry
+ * (`draftRuntimeRegistry`) + REAL landing-draft-store through the HomePage
+ * mount-key boundary (pre-minted id while `activeDraftId` is null; the mount
+ * key only changes when switching between existing drafts, so the null→id
+ * flip does not remount the editor). Fakes only idb-keyval timing (putImage
+ * durable write). Does NOT re-implement ingest on a bare Editor — that is
+ * exactly why the store/remount defect was missed.
+ */
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as renderComponent,
+  renderHook,
+  screen,
+  waitFor,
+  type RenderResult,
+} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStore } from "zustand/vanilla";
+import type { ModelOption } from "@/components/home/data/landing-options";
+import { useState, type ComponentProps, type ReactElement } from "react";
+import { v4 as uuidv4 } from "uuid";
+import type { JsonContent } from "@traycer/protocol/common/registry";
+
+import {
+  buildComposerClipboardHtml,
+  composerClipboardPlainText,
+} from "@/lib/composer/composer-clipboard";
+import { bytesToBase64 } from "@/lib/composer/image-base64";
+import { collectImageAtoms } from "@/lib/composer/image-atoms";
+import { pngBytesOfSize } from "@/lib/composer/__tests__/composer-image-preparation-fixtures";
+import {
+  deleteImageBytesUnchecked,
+  imageHashKeys,
+  releaseSession,
+} from "@/lib/composer/landing-image-store";
+import {
+  LANDING_IMAGE_BUDGET_BYTES,
+  reserveLandingImageBudget,
+  resetLandingImageBudgetReservationsForTesting,
+} from "@/lib/composer/landing-image-budget";
+import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
+import {
+  emptyLandingDraftWorkspaceSnapshot,
+  freshLandingMirrorState,
+  LANDING_DRAFT_PERSIST_KEY,
+  setLandingDraftDesktopProjectionBridge,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
+import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
+import type { FileAttachmentUploadClient } from "@/lib/composer/file-attachment-upload";
+import { putOnlyRequester } from "@/lib/composer/__tests__/file-attachment-fixtures";
+import {
+  attachedFileNames,
+  fileTransfer,
+  pdfFile,
+  typedPathSpans,
+} from "@/lib/composer/__tests__/file-drop-fixtures";
+import { useComposerSurfaceHostKey } from "@/hooks/host/use-composer-surface-host-pin";
+import {
+  useStagedSandboxStore,
+  type StagedSandboxTarget,
+} from "@/stores/composer/staged-sandbox-store";
+import {
+  STAGED_NEW_TARGET,
+  stagedExistingTarget,
+} from "@/stores/composer/__tests__/staged-sandbox-fixtures";
+import type { DesktopPerWindowStatePatch } from "@/lib/windows/types";
+import * as idb from "idb-keyval";
+
+const mocks = vi.hoisted(() => ({
+  reportableErrorToast: vi.fn(),
+  scheduleLandingImageReconcile: vi.fn(() => undefined),
+  actualScheduleLandingImageReconcile: null as null | (() => void),
+  actualReconcile: null as null | (() => Promise<void>),
+  rewriteResults: [] as boolean[],
+  capturedHandle: {
+    current: null as ComposerPromptEditorHandle | null,
+  },
+  /** What the renderer's file drop host resolves a dropped file to. */
+  resolveDroppedFilePaths: vi.fn<
+    (files: ReadonlyArray<File>) => Promise<string[]>
+  >(() => Promise.resolve([])),
+  /** This renderer's own host id, which the placement host is compared with. */
+  localHostId: null as string | null,
+  /** The placement host's client; `null` leaves the composer with nowhere to upload. */
+  placementClient: null as FileAttachmentUploadClient | null,
+  /** The `drafts.putBlob` request the placement client received. */
+  putBlob: vi.fn<FileAttachmentUploadClient["requestWithOptions"]>(),
+}));
+
+vi.mock("@/components/settings/host-scope/use-host-options", async () => {
+  const { hostOptionsFixture } =
+    await import("@/components/settings/host-scope/host-scope-fixture");
+  const options = hostOptionsFixture({ hosts: [] });
+  return { useHostOptions: () => options };
+});
+vi.mock("@/hooks/providers/use-provider-pack-gate", () => ({
+  // Host-backed readiness hook, stubbed to its fail-open answer - the same
+  // treatment this suite already gives every other host-dependent hook. It
+  // renders `LandingComposer`, which now consults the managed-pack gate.
+  useProviderPackGateForClient: () => ({
+    blocked: false,
+    hint: null,
+    preparing: null,
+  }),
+}));
+
+vi.mock("@/components/chat/composer/use-profile-eligibility-gate", () => ({
+  useProfileEligibilityGate: () => ({
+    disabled: false,
+    profileLabel: null,
+    enablePending: false,
+    enableProfile: vi.fn(),
+  }),
+}));
+
+vi.mock("@/lib/reportable-error-toast", () => ({
+  reportableErrorToast: mocks.reportableErrorToast,
+}));
+
+vi.mock("@/lib/composer/landing-image-gc", async (importActual) => {
+  const actual =
+    await importActual<typeof import("@/lib/composer/landing-image-gc")>();
+  mocks.actualScheduleLandingImageReconcile =
+    actual.scheduleLandingImageReconcile;
+  mocks.actualReconcile = actual.reconcile;
+  mocks.scheduleLandingImageReconcile.mockImplementation(() => undefined);
+  return {
+    ...actual,
+    scheduleLandingImageReconcile: mocks.scheduleLandingImageReconcile,
+  };
+});
+
+const idbData = vi.hoisted(() => new Map<string, unknown>());
+
+function idbStringKey(key: IDBValidKey): string {
+  if (typeof key !== "string") {
+    throw new Error("landing image store keys are string hashes");
+  }
+  return key;
+}
+
+/** Gate durable writes by content hash (not call order) so OOO completion is real. */
+const setGates = vi.hoisted(
+  () =>
+    new Map<string, { release: () => void; reject: (error: Error) => void }>(),
+);
+
+vi.mock("idb-keyval", () => {
+  const dummyStore = () => Promise.reject(new Error("unused"));
+  return {
+    createStore: vi.fn(() => dummyStore),
+    get: vi.fn((key: string) => Promise.resolve(idbData.get(key))),
+    set: vi.fn((key: string, value: unknown) => {
+      const hash = typeof key === "string" ? key : String(key);
+      return new Promise<void>((resolve, reject) => {
+        setGates.set(hash, {
+          release: () => {
+            idbData.set(hash, value);
+            setGates.delete(hash);
+            resolve();
+          },
+          reject: (error: Error) => {
+            setGates.delete(hash);
+            reject(error);
+          },
+        });
+      });
+    }),
+    del: vi.fn((key: string) => {
+      idbData.delete(typeof key === "string" ? key : String(key));
+      return Promise.resolve();
+    }),
+    keys: vi.fn(() => Promise.resolve(Array.from(idbData.keys()))),
+  };
+});
+
+// Capture the real editor handle so tests can assert rewrite return values and
+// drive remove-by-id without re-implementing paste ingest on a bare Editor.
+// Forward a wrapped handle to LandingComposer so rewrite return values are
+// observed on the same object the production code calls.
+vi.mock(
+  "@/components/chat/composer/composer-prompt-editor",
+  async (importActual) => {
+    const React = await import("react");
+    const actual =
+      await importActual<
+        typeof import("@/components/chat/composer/composer-prompt-editor")
+      >();
+    const wrapHandle = (
+      instance: ComposerPromptEditorHandle,
+    ): ComposerPromptEditorHandle => ({
+      isReady: () => instance.isReady(),
+      getEditorIncarnation: () => instance.getEditorIncarnation(),
+      hasFocus: () => false,
+      focus: () => instance.focus(),
+      focusAtEnd: (scroll) => instance.focusAtEnd(scroll),
+      getJSON: () => instance.getJSON(),
+      isEmpty: () => instance.isEmpty(),
+      clear: () => instance.clear(),
+      setContent: (content, selection) =>
+        instance.setContent(content, selection),
+      syncContent: (content, selection) =>
+        instance.syncContent(content, selection),
+      insertFileAttachment: (attrs) => instance.insertFileAttachment(attrs),
+      settleFileAttachment: (id, settlement) =>
+        instance.settleFileAttachment(id, settlement),
+      insertImageAttachments: (attrs, at) =>
+        instance.insertImageAttachments(attrs, at),
+      insertMentionAttachment: (mention) =>
+        instance.insertMentionAttachment(mention),
+      beginPathInsertion: () => instance.beginPathInsertion(),
+      removeImageAttachmentById: (id) => instance.removeImageAttachmentById(id),
+      rewriteImageAttachmentHashById: (id, rewrite) => {
+        const result = instance.rewriteImageAttachmentHashById(id, rewrite);
+        mocks.rewriteResults.push(result);
+        return result;
+      },
+      insertDictatedText: (text) => instance.insertDictatedText(text),
+      draftGeneration: () => instance.draftGeneration(),
+      dismissActiveSuggestion: () => instance.dismissActiveSuggestion(),
+    });
+    const Forwarded = React.forwardRef<
+      ComposerPromptEditorHandle,
+      ComponentProps<typeof actual.ComposerPromptEditor>
+    >((props, ref) => {
+      const setRef = (instance: ComposerPromptEditorHandle | null): void => {
+        const next = instance === null ? null : wrapHandle(instance);
+        mocks.capturedHandle.current = next;
+        if (typeof ref === "function") {
+          ref(next);
+        } else if (ref) {
+          ref.current = next;
+        }
+      };
+      return React.createElement(actual.ComposerPromptEditor, {
+        ...props,
+        ref: setRef,
+      });
+    });
+    Forwarded.displayName = "ComposerPromptEditorTestCapture";
+    return {
+      ...actual,
+      ComposerPromptEditor: Forwarded,
+    };
+  },
+);
+
+// Peripheral LandingComposer deps — NOT the stores under test, and NOT the
+// editor / paste / draft write path.
+// The agent gates read the placement host's own lists; nothing here stages a
+// sandbox or sits on one, so none of them holds or refuses a send.
+vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
+  useSandboxAgentGate: () => ({ blocked: false, hint: null, notice: null }),
+}));
+vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
+  useStagedSendSignInCheck: () => ({
+    check: () => null,
+    beforeSend: () => Promise.resolve(null),
+  }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-list-query", () => ({
+  useProvidersListForClient: () => ({
+    status: "pending",
+    data: undefined,
+    isStale: true,
+    fetchStatus: "idle",
+  }),
+}));
+
+vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
+  type ToolbarAccount = {
+    readonly harnessId: string;
+    readonly profileId: string;
+  };
+  type ToolbarSelection = {
+    readonly harnessId: string;
+    readonly modelSlug: string;
+    readonly profileId: string | null;
+  };
+  type ToolbarMockState = {
+    readonly accountChosen: boolean;
+    readonly defaultAccount: ToolbarAccount | null;
+    readonly setAccountChosen: (chosen: boolean) => void;
+    readonly setDefaultAccount: (account: ToolbarAccount | null) => void;
+    readonly ultracode: boolean;
+    readonly selection: ToolbarSelection;
+    readonly values: {
+      readonly selection: ToolbarSelection;
+      readonly ultracode?: boolean;
+      readonly permission?: string;
+      readonly reasoning?: string;
+      readonly serviceTier?: string;
+    };
+    readonly selectedModel: ModelOption | null;
+    readonly permission: string;
+    readonly reasoning: string;
+    readonly serviceTier: string;
+    readonly agentMode: string;
+    readonly catalog: {
+      readonly hostId?: string | null;
+      readonly harnesses: ReadonlyArray<string> | undefined;
+      readonly modelsLoaded?: boolean;
+      readonly modelsHarnessId?: string;
+      readonly modelsProfileId?: string | null;
+      readonly models?: ReadonlyArray<never>;
+      readonly modelsFailed?: boolean;
+    };
+  };
+  const emptyDefaultAccount: ToolbarAccount | null = null;
+  const toolbarStore = createStore<ToolbarMockState>((set, get) => ({
+    accountChosen: false,
+    defaultAccount: emptyDefaultAccount,
+    setAccountChosen: (chosen: boolean) => {
+      const state = get();
+      const rawSelection = state.values.selection;
+      const defaultAccount = state.defaultAccount;
+      const defaultApplies =
+        !chosen &&
+        defaultAccount !== null &&
+        rawSelection.profileId === null &&
+        rawSelection.harnessId === defaultAccount.harnessId &&
+        state.selection.harnessId === defaultAccount.harnessId;
+      let presentedSelection = state.selection;
+      if (defaultApplies) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: defaultAccount.profileId,
+        };
+      } else if (
+        defaultAccount !== null &&
+        state.selection.profileId === defaultAccount.profileId
+      ) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: rawSelection.profileId,
+        };
+      }
+      set({
+        accountChosen: chosen,
+        selection: presentedSelection,
+      });
+    },
+    setDefaultAccount: (
+      account: {
+        readonly harnessId: string;
+        readonly profileId: string;
+      } | null,
+    ) => {
+      const state = get();
+      const rawSelection = state.values.selection;
+      const defaultApplies =
+        !state.accountChosen &&
+        account !== null &&
+        rawSelection.profileId === null &&
+        rawSelection.harnessId === account.harnessId &&
+        state.selection.harnessId === account.harnessId;
+      let presentedSelection = state.selection;
+      if (defaultApplies) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: account.profileId,
+        };
+      } else if (
+        state.defaultAccount !== null &&
+        state.selection.profileId === state.defaultAccount.profileId
+      ) {
+        presentedSelection = {
+          ...state.selection,
+          profileId: rawSelection.profileId,
+        };
+      }
+      set({
+        defaultAccount: account,
+        selection: presentedSelection,
+      });
+    },
+    ultracode: false,
+    selection: {
+      harnessId: "claude",
+      modelSlug: "claude-sonnet",
+      profileId: null,
+    },
+    values: {
+      selection: {
+        harnessId: "claude",
+        modelSlug: "claude-sonnet",
+        profileId: null,
+      },
+    },
+    selectedModel: {
+      harnessId: "claude",
+      slug: "claude-sonnet",
+      label: "Sonnet",
+      description: null,
+      contextWindow: null,
+      maxOutputTokens: null,
+      defaultReasoningEffort: null,
+      supportedReasoningEfforts: [],
+      defaultServiceTier: null,
+      supportedServiceTiers: [],
+      metadata: {},
+    },
+    // No catalog answered: this suite stages no sandbox to hand off.
+    catalog: { hostId: null, harnesses: undefined, modelsLoaded: false },
+    permission: "supervised",
+    reasoning: "medium",
+    serviceTier: "",
+    agentMode: "regular",
+  }));
+  return { useComposerToolbarStore: () => toolbarStore };
+});
+
+vi.mock("@/components/home/hooks/use-landing-composer-actions", () => ({
+  useLandingComposerActions: () => ({
+    submit: vi.fn(),
+    selectTerminalAgent: vi.fn(),
+    attachmentUpload: null,
+  }),
+}));
+
+vi.mock("@/providers/use-runner-host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/providers/use-runner-host")>()),
+  useRunnerHost: () => ({
+    fileDrops: {
+      resolveDroppedFilePaths: (files: ReadonlyArray<File>) =>
+        mocks.resolveDroppedFilePaths(files),
+      copyDroppedFilePaths: (paths: readonly string[]) =>
+        Promise.resolve([...paths]),
+      readNativeClipboardFilePaths: () => Promise.resolve([]),
+    },
+  }),
+}));
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => mocks.localHostId,
+}));
+// The drafts control a first edit brings up navigates to a row it opens; no
+// router is mounted here.
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => vi.fn(),
+}));
+
+// The staged sandbox's send reads the account and the catalogue; this suite
+// has no auth runtime.
+vi.mock("@/hooks/auth/use-auth-user-query", () => ({
+  useAuthUser: () => ({ data: null }),
+}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-catalogue-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/sandboxes/use-sandbox-catalogue-query")
+    >()),
+    useSandboxCatalogue: () => ({ data: null }),
+  }),
+);
+// The setup line prices a resting sandbox from the account's list.
+vi.mock("@/hooks/sandboxes/use-sandbox-list-query", () => ({
+  useSandboxList: () => ({ data: undefined }),
+}));
+
+vi.mock("@/lib/host", () => ({
+  useHostBinding: () => null,
+  useHostClient: () => null,
+  // The staged send's terminal launcher reads the new host's row.
+  useHostDirectory: () => ({
+    findById: () => null,
+    onChange: () => ({ dispose: () => undefined }),
+  }),
+  // The SPINE, a separate export.
+  useHostRuntimeClient: () => null,
+}));
+
+vi.mock(
+  "@/components/chat/composer/use-profile-rate-limit-switch-prompt",
+  () => ({
+    useProfileRateLimitSwitchPrompt: () => ({
+      kind: "hidden",
+      dismiss: vi.fn(),
+    }),
+  }),
+);
+
+vi.mock("@/hooks/providers/use-refresh-providers-list-on-turn", () => ({
+  useRefreshProvidersListOnTurn: () => undefined,
+}));
+
+vi.mock("@/hooks/workspace/use-resolved-workspace-folders-query", () => ({
+  useResolvedWorkspaceFolders: () => ({
+    folders: [],
+    isLoading: false,
+    isError: false,
+  }),
+}));
+
+vi.mock("@/lib/composer/workspace-composer-availability", () => ({
+  deriveFolderlessAllowedWorkspaceAvailability: () => ({
+    status: "ready",
+    disabledHint: null,
+  }),
+  workspaceComposerCanStart: () => true,
+}));
+
+vi.mock("@/components/chat/composer/picker/use-composer-picker-items", () => ({
+  useComposerPickerItems: () => undefined,
+}));
+
+vi.mock("@/hooks/composer/use-workspace-mention-roots", () => ({
+  useLandingComposerMentionRoots: () => [],
+  useLandingRunWorkingDirectory: () => null,
+}));
+
+vi.mock("@/hooks/composer/use-composer-dictation", () => ({
+  useComposerDictation: () => ({
+    dictationControl: null,
+    dictationPreparing: null,
+  }),
+}));
+
+vi.mock("@/hooks/epic/use-epic-create-mutation", () => ({
+  useEpicCreateForClient: () => ({ isPending: false }),
+}));
+
+vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
+  useCreateTuiAgentForClient: () => ({ isPending: false }),
+}));
+// The composer resolves its placement (pin ?? effective) through this
+// one hook. These suites are about paste/gating/banner behaviour, not
+// selection derivation, so it is stubbed at that single boundary - the same
+// treatment the other host-backed hooks above get.
+vi.mock("@/hooks/host/use-composer-placement", () => ({
+  useComposerPlacement: () => ({
+    pin: {
+      selection: null,
+      setSelection: () => undefined,
+      resolvedHostId: "host-test",
+      isPinned: false,
+      latchOnFirstUse: () => undefined,
+    },
+    target: {
+      resolvedHostId: "host-test",
+      client: mocks.placementClient,
+      hostLabel: "Local",
+      isPinned: false,
+      namedHostDead: false,
+    },
+    hostLabelFor: () => "Local",
+  }),
+}));
+
+// Keep the toolbar thin so catalog/query noise does not obscure attachmentPending.
+vi.mock("@/components/home/toolbar/composer-toolbar", () => ({
+  ComposerToolbar: (props: {
+    readonly attachmentPending: boolean;
+    readonly canSubmit: boolean;
+  }) => (
+    <div data-testid="lifecycle-toolbar">
+      <span data-testid="lifecycle-attachment-pending">
+        {String(props.attachmentPending)}
+      </span>
+      <span data-testid="lifecycle-can-submit">{String(props.canSubmit)}</span>
+    </div>
+  ),
+}));
+
+vi.mock("@/components/home/composer/terminal-launch-panel", () => ({
+  TerminalLaunchPanel: () => null,
+}));
+
+vi.mock("@/components/home/composer/composer-workspace-mode-row", () => ({
+  ComposerWorkspaceRow: () => null,
+}));
+
+// Import AFTER mocks so LandingComposer sees the wrapped editor + idb gates.
+import { LandingComposer } from "../landing-composer";
+
+let urlCounter = 0;
+
+beforeEach(async () => {
+  URL.createObjectURL = vi.fn(() => `blob:mock/${++urlCounter}`);
+  URL.revokeObjectURL = vi.fn();
+  // Reinstall working idb (prior cases may have left rejecting overrides).
+  vi.mocked(idb.set).mockImplementation((key, value) => {
+    const hash = idbStringKey(key);
+    return new Promise<void>((resolve, reject) => {
+      setGates.set(hash, {
+        release: () => {
+          idbData.set(hash, value);
+          setGates.delete(hash);
+          resolve();
+        },
+        reject: (error: Error) => {
+          setGates.delete(hash);
+          reject(error);
+        },
+      });
+    });
+  });
+  vi.mocked(idb.get).mockImplementation((key) =>
+    Promise.resolve(idbData.get(idbStringKey(key))),
+  );
+  vi.mocked(idb.del).mockImplementation((key) => {
+    idbData.delete(idbStringKey(key));
+    return Promise.resolve();
+  });
+  vi.mocked(idb.keys).mockImplementation(() =>
+    Promise.resolve(Array.from(idbData.keys())),
+  );
+  for (const hash of await imageHashKeys()) {
+    await deleteImageBytesUnchecked(hash);
+    releaseSession(hash);
+  }
+  idbData.clear();
+  setGates.clear();
+  mocks.reportableErrorToast.mockClear();
+  mocks.scheduleLandingImageReconcile.mockClear();
+  mocks.scheduleLandingImageReconcile.mockImplementation(() => undefined);
+  mocks.rewriteResults.length = 0;
+  mocks.capturedHandle.current = null;
+  mocks.resolveDroppedFilePaths.mockReset();
+  mocks.resolveDroppedFilePaths.mockResolvedValue([]);
+  mocks.localHostId = null;
+  mocks.placementClient = null;
+  mocks.putBlob.mockReset();
+  window.localStorage.clear();
+  setLandingDraftDesktopProjectionBridge(null);
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  draftRuntimeRegistry.resetForTesting();
+  resetLandingImageBudgetReservationsForTesting();
+});
+
+// `useDraftAuthorityControl` no longer claims anything (the fork rule is a
+// synchronous local re-key, no host RPC) - the Query client here is kept
+// for the other host-RPC hooks `LandingComposer` still uses. Shadows RTL's
+// `render` so each case below keeps reading as a plain render.
+function render(ui: ReactElement): RenderResult {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return renderComponent(ui, {
+    wrapper: ({ children }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+}
+
+const originalCreateImageBitmap = globalThis.createImageBitmap;
+
+afterEach(() => {
+  cleanup();
+  useStagedSandboxStore.setState({ bySurface: {} });
+  draftRuntimeRegistry.resetForTesting();
+  resetLandingImageBudgetReservationsForTesting();
+  setLandingDraftDesktopProjectionBridge(null);
+  useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+  vi.useRealTimers();
+  // Only the queue-serialization controls install a createImageBitmap
+  // double; restoring it unconditionally after every test is a no-op for
+  // every other case (they use magic-byte-mismatched fixtures that never
+  // reach decode at all).
+  Object.defineProperty(globalThis, "createImageBitmap", {
+    configurable: true,
+    writable: true,
+    value: originalCreateImageBitmap,
+  });
+});
+
+/**
+ * Pre-mint only — covers the null→id seam for real Tiptap (the draft is
+ * created under the SAME id used as the `pendingCreateId` mount key, so the
+ * editor is not remounted). Bound→null rotation is pinned against production
+ * HomePage in home-page.test.tsx (not duplicated here).
+ */
+function KeyedLandingComposerHarness(): ReactElement {
+  const draftId = useLandingDraftStore((state) => state.activeDraftId);
+  const [pendingCreateId] = useState(() => uuidv4());
+  const mountId = draftId ?? pendingCreateId;
+  return (
+    <LandingComposer
+      key={mountId}
+      draftId={draftId}
+      pendingCreateId={draftId === null ? pendingCreateId : null}
+      initialSettings={null}
+      workspaceControls={() => null}
+    />
+  );
+}
+
+describe("landing paste lifecycle (real draft-runtime registry + keyed LandingComposer)", () => {
+  // Pre-mint mount identity: the null→id activeDraftId flip must not remount
+  // the editor. Assert DOM node identity survives the first image-atom
+  // snapshot that creates the draft (the exact seam the pre-mint fix targets).
+  it("preserves the editor DOM node across the null→id activeDraftId flip", async () => {
+    render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+
+    const editorBefore = screen.getByRole("textbox", {
+      name: "Ask Traycer anything. @ mention for context",
+    });
+
+    const bytes = bytesOf([8, 8, 8]);
+    pasteComposerContent(imageOnlyContent(bytesToBase64(bytes), "stable.png"));
+
+    await waitFor(() => {
+      expect(useLandingDraftStore.getState().activeDraftId).not.toBeNull();
+    });
+
+    const editorAfter = screen.getByRole("textbox", {
+      name: "Ask Traycer anything. @ mention for context",
+    });
+    expect(editorAfter).toBe(editorBefore);
+  });
+
+  // Seam 1: null-bound paste → pre-minted draft create (no remount) →
+  // pending survives → resolve write → hash-only in editor, draft store, and
+  // both serializers.
+  it("null-bound mixed paste creates a draft without remounting and converges to hash-only everywhere", async () => {
+    // localStorage is only written when NO desktop bridge is installed
+    // (`setLandingDraftDesktopProjectionBridge` disables local persistence).
+    // Exercise localStorage first, then the desktop seam, then settle.
+    const bytes1 = bytesOf([1, 1, 1]);
+    const bytes2 = bytesOf([2, 2, 2]);
+    const hash1 = await sha256Hex(bytes1);
+    const hash2 = await sha256Hex(bytes2);
+
+    render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+
+    pasteComposerContent(
+      mixedContent(bytesToBase64(bytes1), bytesToBase64(bytes2)),
+    );
+
+    // Synchronous draft creation for image-bearing null-bound edit.
+    await waitFor(() => {
+      expect(useLandingDraftStore.getState().activeDraftId).not.toBeNull();
+    });
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+    expect(draftId).not.toBeNull();
+
+    // The pre-minted id becomes the draft's real id (no remount): the
+    // in-memory draft is written directly from the live edit and keeps the
+    // still-pending b64 nodes verbatim (canonical in-memory content).
+    await waitFor(() => {
+      const draft = useLandingDraftStore
+        .getState()
+        .drafts.find((entry) => entry.id === draftId);
+      const atoms = collectImageAtoms(draft?.content ?? emptyDoc());
+      expect(atoms).toHaveLength(2);
+      expect(atoms.every((atom) => atom.b64content !== null)).toBe(true);
+      expect(atoms.every((atom) => atom.hash === null)).toBe(true);
+    });
+
+    // Seam 2a (localStorage partialize while pending): drops still-pending nodes.
+    await waitFor(() => {
+      const raw = window.localStorage.getItem(LANDING_DRAFT_PERSIST_KEY);
+      expect(raw).not.toBeNull();
+      expect(serializedHasStringB64(raw)).toBe(false);
+      // Pending-only paste: both images stripped → no imageAttachment remains.
+      expect(raw).not.toContain("imageAttachment");
+    });
+
+    // Seam 2b (desktop projection while pending): same strip.
+    // Installing the bridge disables further localStorage writes (desktop mode).
+    const desktopPatches: DesktopPerWindowStatePatch[] = [];
+    setLandingDraftDesktopProjectionBridge({
+      update: (patch) => {
+        desktopPatches.push(patch);
+        return Promise.resolve();
+      },
+      flush: () => Promise.resolve(),
+      dispose: () => undefined,
+    });
+    // Touch the draft so the store subscription projects outbound.
+    const pendingContent = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === draftId)?.content;
+    expect(pendingContent).toBeDefined();
+    useLandingDraftStore
+      .getState()
+      .setDraftContent(draftId ?? "", pendingContent ?? emptyDoc(), null);
+    await waitFor(() => {
+      expect(desktopPatches.length).toBeGreaterThan(0);
+    });
+    const latestDesktop = desktopPatches.at(-1)?.landingDrafts?.[0]?.content;
+    expect(serializedHasStringB64(JSON.stringify(latestDesktop ?? {}))).toBe(
+      false,
+    );
+    expect(JSON.stringify(latestDesktop ?? {})).not.toContain(
+      "imageAttachment",
+    );
+
+    // Submit stays gated while ingest is in flight (across the flip).
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("lifecycle-attachment-pending").textContent,
+      ).toBe("true");
+    });
+
+    // Release durable writes (order reversed) and wait for rewrite.
+    await waitFor(() => {
+      expect(setGates.has(hash1)).toBe(true);
+      expect(setGates.has(hash2)).toBe(true);
+    });
+    setGates.get(hash2)?.release();
+    setGates.get(hash1)?.release();
+
+    // Live per-draft runtime mirror (replaces the deleted global
+    // `useLandingComposerStore`) converges synchronously with the editor.
+    await waitFor(() => {
+      const atoms = collectImageAtoms(
+        draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+          emptyDoc(),
+      );
+      expect(atoms.map((atom) => atom.hash)).toEqual([hash1, hash2]);
+      expect(atoms.every((atom) => atom.b64content === null)).toBe(true);
+    });
+
+    // Draft store (after debounce flush) holds hash-only.
+    await act(async () => {
+      draftRuntimeRegistry.flush(draftId);
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      const draft = useLandingDraftStore
+        .getState()
+        .drafts.find((entry) => entry.id === draftId);
+      const atoms = collectImageAtoms(draft?.content ?? emptyDoc());
+      expect(atoms.map((atom) => atom.hash)).toEqual([hash1, hash2]);
+      expect(atoms.every((atom) => atom.b64content === null)).toBe(true);
+    });
+
+    // Desktop projection after settle is hash-only (no string b64 payload).
+    await waitFor(() => {
+      const projected = desktopPatches.at(-1)?.landingDrafts?.[0]?.content;
+      const text = JSON.stringify(projected ?? {});
+      expect(text).toContain(hash1);
+      expect(text).toContain(hash2);
+      expect(serializedHasStringB64(text)).toBe(false);
+    });
+
+    // localStorage after settle: re-enable local persistence (drop bridge) and
+    // force one write so the partialize path records the hash-only draft.
+    setLandingDraftDesktopProjectionBridge(null);
+    const settledContent = useLandingDraftStore
+      .getState()
+      .drafts.find((entry) => entry.id === draftId)?.content;
+    useLandingDraftStore
+      .getState()
+      .setDraftContent(draftId ?? "", settledContent ?? emptyDoc(), null);
+    await waitFor(() => {
+      const raw = window.localStorage.getItem(LANDING_DRAFT_PERSIST_KEY);
+      expect(raw).toContain(hash1);
+      expect(raw).toContain(hash2);
+      expect(serializedHasStringB64(raw)).toBe(false);
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("lifecycle-attachment-pending").textContent,
+      ).toBe("false");
+    });
+
+    // Editor handle converges too (read-back path through the live runtime).
+    const handle = mocks.capturedHandle.current;
+    expect(handle).not.toBeNull();
+    const editorAtoms = collectImageAtoms(handle?.getJSON() ?? emptyDoc());
+    expect(editorAtoms.map((atom) => atom.hash)).toEqual([hash1, hash2]);
+  });
+
+  it("null-bound image-only paste creates a draft without remounting and converges hash-only", async () => {
+    const bytes = bytesOf([9, 9, 9]);
+    const hash = await sha256Hex(bytes);
+
+    render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+
+    pasteComposerContent(imageOnlyContent(bytesToBase64(bytes), "only.png"));
+
+    await waitFor(() => {
+      expect(useLandingDraftStore.getState().activeDraftId).not.toBeNull();
+    });
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+
+    await waitFor(() => {
+      const draft = useLandingDraftStore
+        .getState()
+        .drafts.find((entry) => entry.id === draftId);
+      const atoms = collectImageAtoms(draft?.content ?? emptyDoc());
+      expect(atoms).toHaveLength(1);
+      expect(atoms[0]?.b64content).not.toBeNull();
+      expect(atoms[0]?.hash).toBeNull();
+    });
+
+    await waitFor(() => expect(setGates.has(hash)).toBe(true));
+    setGates.get(hash)?.release();
+
+    await waitFor(() => {
+      const atoms = collectImageAtoms(
+        draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+          emptyDoc(),
+      );
+      expect(atoms).toHaveLength(1);
+      expect(atoms[0]?.hash).toBe(hash);
+      expect(atoms[0]?.b64content).toBeNull();
+    });
+  });
+
+  it("leaves a non-storable format INLINE and stores no bytes for it", async () => {
+    // The landing composer long carried its own copy of the pending-image
+    // ingest, and that copy had no notion of a storable format: it started a
+    // store job for any decodable image, so a pasted BMP was hashed here and
+    // then refused by the host's writer, while its budget reservation was taken
+    // and never released.
+    //
+    // The shared hook's rule - a format the host refuses stays INLINE, reserves
+    // nothing and starts no job - is what this asserts on the landing surface.
+    const bytes = bytesOf([7, 7, 7]);
+    const hash = await sha256Hex(bytes);
+
+    render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+
+    pasteComposerContent(nonStorableContent(bytesToBase64(bytes)));
+
+    await waitFor(() => {
+      expect(useLandingDraftStore.getState().activeDraftId).not.toBeNull();
+    });
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+
+    // The DISCRIMINATOR, and the reason this is not merely a same-tick read:
+    // an ingest job in flight holds the pending indicator true, and this test
+    // releases no gate, so a BMP job that wrongly started would hold it true
+    // until this `waitFor` gave up. Settling to "false" is therefore positive
+    // evidence that no job is outstanding - not just that none had registered
+    // yet when the assertion ran.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("lifecycle-attachment-pending").textContent,
+      ).toBe("false");
+    });
+
+    // And nothing reached the store under its hash. `setGates` records every
+    // `putImage` that got that far, so an entry here would mean a job ran.
+    expect(setGates.has(hash)).toBe(false);
+
+    // Inline is the ACCEPTED outcome, not a rejection: the draft still sends
+    // this image, just not hash-only.
+    const atoms = collectImageAtoms(
+      draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+        emptyDoc(),
+    );
+    expect(atoms).toHaveLength(1);
+    expect(atoms[0]?.b64content).not.toBeNull();
+    expect(atoms[0]?.hash).toBeNull();
+  });
+
+  // Seam 2 standalone (also covered above while pending): partialize + desktop.
+  it("serialization seams strip pending b64 while the in-memory draft keeps it", async () => {
+    const desktopPatches: DesktopPerWindowStatePatch[] = [];
+    setLandingDraftDesktopProjectionBridge({
+      update: (patch) => {
+        desktopPatches.push(patch);
+        return Promise.resolve();
+      },
+      flush: () => Promise.resolve(),
+      dispose: () => undefined,
+    });
+
+    const bytes = bytesOf([3, 3, 3]);
+    render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+    pasteComposerContent(imageOnlyContent(bytesToBase64(bytes), "pending.png"));
+
+    await waitFor(() => {
+      expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+      const atoms = collectImageAtoms(
+        useLandingDraftStore.getState().drafts[0]?.content ?? emptyDoc(),
+      );
+      expect(atoms[0]?.b64content).not.toBeNull();
+    });
+
+    // In-memory keeps a real string b64 payload.
+    const inMemoryAtoms = collectImageAtoms(
+      useLandingDraftStore.getState().drafts[0]?.content ?? emptyDoc(),
+    );
+    expect(inMemoryAtoms[0]?.b64content).not.toBeNull();
+
+    // localStorage partialize strips the pending node entirely.
+    await waitFor(() => {
+      const raw = window.localStorage.getItem(LANDING_DRAFT_PERSIST_KEY);
+      expect(raw).not.toBeNull();
+      expect(serializedHasStringB64(raw)).toBe(false);
+      expect(raw).not.toContain("imageAttachment");
+    });
+
+    // Desktop projection strips the pending node entirely.
+    const outbound = desktopPatches.at(-1)?.landingDrafts?.[0]?.content;
+    expect(serializedHasStringB64(JSON.stringify(outbound ?? {}))).toBe(false);
+    expect(JSON.stringify(outbound ?? {})).not.toContain("imageAttachment");
+  });
+
+  // Seam 3: unmount mid-ingest → remount restarts job, stays gated, converges.
+  it("unmount mid-ingest remount restarts ingest, gates submit, and converges", async () => {
+    const bytes = bytesOf([4, 4, 4]);
+    const hash = await sha256Hex(bytes);
+
+    const view = render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+    pasteComposerContent(imageOnlyContent(bytesToBase64(bytes), "mid.png"));
+
+    await waitFor(() => {
+      expect(useLandingDraftStore.getState().activeDraftId).not.toBeNull();
+    });
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+
+    // Hold the durable write open so remount must start a NEW job.
+    await waitFor(() => expect(setGates.has(hash)).toBe(true));
+    expect(screen.getByTestId("lifecycle-attachment-pending").textContent).toBe(
+      "true",
+    );
+
+    // Full unmount of the keyed composer (navigate-away).
+    view.unmount();
+    // Aborting the first mount schedules reclaim; keep that as a spy only so
+    // we don't race a deleting sweep against the still-pending remount.
+    mocks.scheduleLandingImageReconcile.mockClear();
+
+    // Remount on the same draft id (navigate-back) — the registry runtime
+    // (and the real draft store it mirrors) still holds the pending b64 node.
+    render(
+      <LandingComposer
+        key={draftId}
+        draftId={draftId}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    await waitForEditorReady();
+
+    await waitFor(() => {
+      const atoms = collectImageAtoms(
+        draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+          emptyDoc(),
+      );
+      expect(atoms).toHaveLength(1);
+      expect(atoms[0]?.b64content).not.toBeNull();
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("lifecycle-attachment-pending").textContent,
+      ).toBe("true");
+    });
+
+    // Remount re-entry started a new putImage flight; release it.
+    await waitFor(() => expect(setGates.has(hash)).toBe(true));
+    setGates.get(hash)?.release();
+
+    await waitFor(() => {
+      const atoms = collectImageAtoms(
+        draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+          emptyDoc(),
+      );
+      expect(atoms[0]?.hash).toBe(hash);
+      expect(atoms[0]?.b64content).toBeNull();
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("lifecycle-attachment-pending").textContent,
+      ).toBe("false");
+    });
+  });
+
+  it("releases each pasted image reservation before staggered remount re-entry", async () => {
+    const bytesA = bytesOf([1, 2, 3]);
+    const bytesB = bytesOf([4, 5, 6]);
+    const hashA = await sha256Hex(bytesA);
+    const hashB = await sha256Hex(bytesB);
+    const competing = reserveLandingImageBudget("near-cap", [
+      { hash: null, bytes: LANDING_IMAGE_BUDGET_BYTES - 6 },
+    ]);
+    expect(competing).not.toBeNull();
+
+    const view = render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+    pasteComposerContent(
+      mixedContent(bytesToBase64(bytesA), bytesToBase64(bytesB)),
+    );
+    await waitFor(() => {
+      expect(setGates.has(hashA)).toBe(true);
+      expect(setGates.has(hashB)).toBe(true);
+    });
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+    expect(draftId).not.toBeNull();
+
+    view.unmount();
+    render(
+      <LandingComposer
+        key={draftId}
+        draftId={draftId}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    await waitForEditorReady();
+
+    // Settle only A. Its original job must release A's anonymous share before
+    // the remounted job reserves the hash-aware share; B remains fully pending
+    // and keeps its own reservation throughout.
+    setGates.get(hashA)?.release();
+    await waitFor(() => {
+      const atoms = collectImageAtoms(
+        draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+          emptyDoc(),
+      );
+      expect(atoms).toHaveLength(2);
+      expect(atoms[0]?.hash).toBe(hashA);
+      expect(atoms[0]?.b64content).toBeNull();
+      expect(atoms[1]?.hash).toBeNull();
+      expect(atoms[1]?.b64content).not.toBeNull();
+    });
+
+    setGates.get(hashB)?.release();
+    await waitFor(() => {
+      const atoms = collectImageAtoms(
+        draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+          emptyDoc(),
+      );
+      expect(atoms[1]?.hash).toBe(hashB);
+      expect(atoms[1]?.b64content).toBeNull();
+    });
+    competing?.release();
+  });
+
+  it("re-reserves a pending image after an inactive gap and KEEPS it when capacity was consumed", async () => {
+    const bytes = bytesOf([6, 6, 6]);
+    const hash = await sha256Hex(bytes);
+
+    const view = render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+    pasteComposerContent(imageOnlyContent(bytesToBase64(bytes), "gap.png"));
+
+    await waitFor(() => expect(setGates.has(hash)).toBe(true));
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+    expect(draftId).not.toBeNull();
+
+    view.unmount();
+    await act(async () => {
+      setGates.get(hash)?.release();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const competingReservation = reserveLandingImageBudget("other-draft", [
+      { hash: null, bytes: LANDING_IMAGE_BUDGET_BYTES },
+    ]);
+    expect(competingReservation).not.toBeNull();
+
+    render(
+      <LandingComposer
+        key={draftId}
+        draftId={draftId}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    await waitForEditorReady();
+
+    // The user is TOLD - the refusal still toasts - and the image STAYS.
+    //
+    // This is a migration of bytes the draft already holds inline, not a paste
+    // being admitted: `b64content` is the durable copy and the draft sends with
+    // it exactly as it is. Deleting the node here destroyed an attachment the
+    // user may no longer have anywhere, for no reason but a full budget at the
+    // moment they reopened the draft.
+    //
+    // The accepted cost, stated because it is real: an inline node keeps this
+    // draft out of `collectDirtyWrites` (`containsPendingInlineImageNode`), so
+    // the row does not SYNC until a later mount migrates it. The draft is still
+    // local, still editable, still sendable - and the toast names the exact
+    // action that clears it. Every mount retries.
+    await waitFor(() => {
+      expect(mocks.reportableErrorToast).toHaveBeenCalledWith(
+        "Couldn't add the image.",
+        expect.objectContaining({
+          description:
+            "Remove images or close a draft yourself, then try again.",
+        }),
+        expect.objectContaining({
+          message: "The image storage budget was exceeded.",
+        }),
+      );
+    });
+    const atoms = collectImageAtoms(
+      draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+        emptyDoc(),
+    );
+    expect(atoms).toHaveLength(1);
+    // Still INLINE: not rewritten to a hash whose bytes were never charged.
+    expect(atoms[0]?.b64content).not.toBeNull();
+    competingReservation?.release();
+  });
+
+  // Seam 4: delete-before-write → rewrite false, reconcile, zero unrooted keys.
+  it("delete-before-write returns rewrite false, schedules reconcile, and sweeps IDB", async () => {
+    // Call through to the real scheduler so the sweep actually reclaims.
+    mocks.scheduleLandingImageReconcile.mockImplementation(() => {
+      mocks.actualScheduleLandingImageReconcile?.();
+    });
+
+    const bytes = bytesOf([5, 5, 5]);
+    const hash = await sha256Hex(bytes);
+
+    render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+    pasteComposerContent(imageOnlyContent(bytesToBase64(bytes), "delete.png"));
+
+    await waitFor(() => {
+      expect(useLandingDraftStore.getState().activeDraftId).not.toBeNull();
+    });
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+    await waitFor(() => expect(setGates.has(hash)).toBe(true));
+
+    const pendingAtoms = collectImageAtoms(
+      draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+        emptyDoc(),
+    );
+    expect(pendingAtoms).toHaveLength(1);
+    const pendingId = pendingAtoms[0].id;
+
+    mocks.rewriteResults.length = 0;
+    mocks.scheduleLandingImageReconcile.mockClear();
+    // Re-arm call-through after clear.
+    mocks.scheduleLandingImageReconcile.mockImplementation(() => {
+      mocks.actualScheduleLandingImageReconcile?.();
+    });
+
+    // Remove the pending node before the durable write settles.
+    const handle = mocks.capturedHandle.current;
+    expect(handle).not.toBeNull();
+    handle?.removeImageAttachmentById(pendingId);
+
+    await waitFor(() => {
+      expect(
+        collectImageAtoms(
+          draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState()
+            .content ?? emptyDoc(),
+        ),
+      ).toHaveLength(0);
+    });
+
+    setGates.get(hash)?.release();
+
+    await waitFor(() => {
+      expect(mocks.rewriteResults).toContain(false);
+    });
+    await waitFor(() => {
+      expect(mocks.scheduleLandingImageReconcile).toHaveBeenCalled();
+    });
+
+    // Session release + follow-up IDB delete (debounced reconcile chain).
+    await waitFor(
+      async () => {
+        // Force any pending debounced reconcile to run under real timers.
+        await act(async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 300));
+        });
+        // A second pass clears keys that were session-protected on the first.
+        await mocks.actualReconcile?.();
+        await mocks.actualReconcile?.();
+        const keys = await imageHashKeys();
+        expect(keys).toEqual([]);
+      },
+      { timeout: 3000 },
+    );
+  });
+
+  // Seam 5: budget rejection → exactly one toast with the budget copy.
+  it("budget rejection toasts exactly once with the budget copy (no double toast)", async () => {
+    // Fill the partition budget with a large hash-only atom on an inactive draft
+    // while activeDraftId stays null (unattributed paste cannot evict).
+    const bigSize = 64 * 1024 * 1024;
+    useLandingDraftStore.setState({
+      drafts: [
+        {
+          id: "budget-filler",
+          content: {
+            type: "doc",
+            content: [
+              {
+                type: "paragraph",
+                content: [
+                  {
+                    type: "imageAttachment",
+                    attrs: {
+                      id: "filler",
+                      fileName: "filler.png",
+                      hash: "a".repeat(64),
+                      mimeType: "image/png",
+                      size: bigSize,
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+          selection: null,
+          lastTouchedAt: 1,
+          settings: null,
+          composerMode: "chat",
+          workspace: emptyLandingDraftWorkspaceSnapshot(),
+          ...freshLandingMirrorState(),
+        },
+      ],
+      activeDraftId: null,
+    });
+
+    render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+
+    const bytes = bytesOf([6, 6, 6]);
+    pasteComposerContent(imageOnlyContent(bytesToBase64(bytes), "blocked.png"));
+
+    await waitFor(() => {
+      expect(mocks.reportableErrorToast).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.reportableErrorToast).toHaveBeenCalledWith(
+      "Couldn't add the image.",
+      {
+        description: "Create a draft or remove images before trying again.",
+      },
+      {
+        title: "Could not add image",
+        message: "The image storage budget was exceeded.",
+        code: null,
+        source: "Chat composer",
+      },
+    );
+    // No pending image was admitted — read back through the live editor
+    // handle (a null-bound paste never attaches a registry runtime to
+    // inspect, since no draft was created for it).
+    const handle = mocks.capturedHandle.current;
+    expect(handle).not.toBeNull();
+    expect(collectImageAtoms(handle?.getJSON() ?? emptyDoc())).toHaveLength(0);
+    // Budget path must not also fire the generic corrupted/too-large toast.
+    expect(mocks.reportableErrorToast).toHaveBeenCalledTimes(1);
+  });
+
+  // Seam 6: restart simulation — rehydrate from stripped serialized state;
+  // the pending image is absent (accepted imperfection: process exit mid-ingest).
+  it("restart from serialized stripped state drops the pending image (accepted imperfection)", async () => {
+    const bytes = bytesOf([7, 7, 7]);
+
+    render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+    pasteComposerContent(imageOnlyContent(bytesToBase64(bytes), "restart.png"));
+
+    await waitFor(() => {
+      expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+      expect(
+        collectImageAtoms(
+          useLandingDraftStore.getState().drafts[0]?.content ?? emptyDoc(),
+        )[0]?.b64content,
+      ).not.toBeNull();
+    });
+
+    // Capture the serialized (stripped) payload — process-exit durable form.
+    await waitFor(() => {
+      const raw = window.localStorage.getItem(LANDING_DRAFT_PERSIST_KEY);
+      expect(raw).not.toBeNull();
+      expect(raw).not.toContain("b64content");
+    });
+    const serialized = window.localStorage.getItem(LANDING_DRAFT_PERSIST_KEY);
+    expect(serialized).not.toBeNull();
+
+    // Simulate restart: wipe live stores, keep only the serialized form.
+    cleanup();
+    draftRuntimeRegistry.resetForTesting();
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    window.localStorage.setItem(LANDING_DRAFT_PERSIST_KEY, serialized ?? "{}");
+    await useLandingDraftStore.persist.rehydrate();
+
+    const rehydrated = useLandingDraftStore.getState().drafts;
+    expect(rehydrated).toHaveLength(1);
+    // Accepted imperfection: pending b64 was never in the serialized form, so
+    // the image is gone after process restart mid-ingest.
+    expect(
+      collectImageAtoms(rehydrated[0]?.content ?? emptyDoc()),
+    ).toHaveLength(0);
+    expect(
+      serializedHasStringB64(JSON.stringify(rehydrated[0]?.content ?? {})),
+    ).toBe(false);
+  });
+
+  // Concurrency fix: structured paste launches ONE background job per pending
+  // image node, synchronously and without awaiting one another
+  // (`runPendingImageJob`/`trackPendingImageJob`). Before the mount's
+  // preparation session serialized `prepare` calls, two pasted inline images
+  // both called `createImageBitmap` in the SAME tick. `mixedContent` below
+  // uses PNG-magic-but-header-less bytes (`distinctPngBytes`, via
+  // `pngBytesOfSize`) specifically so the fallback DECODE path is reached -
+  // the file's other fixtures (`bytesOf([...])`) deliberately mismatch their
+  // declared MIME and never reach `createImageBitmap` at all.
+  it("serializes structured-paste decodes: two pasted images never hold two bitmaps at once", async () => {
+    const bytesA = distinctPngBytes(1);
+    const bytesB = distinctPngBytes(2);
+    const hashA = await sha256Hex(bytesA);
+    const hashB = await sha256Hex(bytesB);
+    const double = installDecodeOrderDouble();
+
+    render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+    pasteComposerContent(
+      mixedContent(bytesToBase64(bytesA), bytesToBase64(bytesB)),
+    );
+
+    // Both images were accepted into the document, but the OLD code would
+    // have called `createImageBitmap` for BOTH in this same tick. With the
+    // session queue, only the first has started.
+    await waitFor(() => expect(double.gates).toHaveLength(1));
+    expect(double.events).toEqual(["decode-call:0"]);
+
+    double.gates[0]?.();
+    await waitFor(() => expect(double.gates).toHaveLength(2));
+    // The second decode only starts after the first bitmap's close ran -
+    // this is the assertion an unserialized (both-in-one-tick) launch fails.
+    expect(double.events).toEqual([
+      "decode-call:0",
+      "close:0",
+      "decode-call:1",
+    ]);
+
+    double.gates[1]?.();
+
+    // Drive the rest to completion through the existing durable-write gate
+    // (both images are verbatim after decode: small dims, under the output
+    // ceiling, so the prepared bytes equal the source bytes and hash the
+    // same as `bytesOf`-based cases elsewhere in this file).
+    await waitFor(() => {
+      expect(setGates.has(hashA)).toBe(true);
+      expect(setGates.has(hashB)).toBe(true);
+    });
+    setGates.get(hashA)?.release();
+    setGates.get(hashB)?.release();
+
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+    await waitFor(() => {
+      const atoms = collectImageAtoms(
+        draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+          emptyDoc(),
+      );
+      expect(atoms.map((atom) => atom.hash)).toEqual([hashA, hashB]);
+    });
+  });
+
+  // Same defect, the remount re-entry path: `reingestPendingImages` loops
+  // synchronously over every still-pending atom and calls
+  // `startPendingImageIngest` for each - the second mount's own launch site
+  // that does not await between jobs.
+  it("serializes remount re-entry decodes: two still-pending images decode one at a time on the new mount", async () => {
+    const bytesA = distinctPngBytes(3);
+    const bytesB = distinctPngBytes(4);
+    const double = installDecodeOrderDouble();
+
+    const view = render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+    pasteComposerContent(
+      mixedContent(bytesToBase64(bytesA), bytesToBase64(bytesB)),
+    );
+
+    // Only the first mount's first decode has started; leave it (and the
+    // still-queued second image) unsettled and navigate away, exactly like
+    // "unmount mid-ingest remount restarts ingest" above.
+    await waitFor(() => expect(double.gates).toHaveLength(1));
+    expect(double.events).toEqual(["decode-call:0"]);
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+    expect(draftId).not.toBeNull();
+
+    view.unmount();
+    mocks.scheduleLandingImageReconcile.mockClear();
+
+    render(
+      <LandingComposer
+        key={draftId}
+        draftId={draftId}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    await waitForEditorReady();
+
+    // The remount's re-entry has two still-pending atoms (both b64, neither
+    // hashed) and launches a job for each. The OLD code would have started
+    // BOTH new decodes in this same tick; the queue means only one more.
+    await waitFor(() => expect(double.gates).toHaveLength(2));
+    expect(double.events).toEqual(["decode-call:0", "decode-call:1"]);
+
+    double.gates[1]?.();
+    await waitFor(() => expect(double.gates).toHaveLength(3));
+    expect(double.events).toEqual([
+      "decode-call:0",
+      "decode-call:1",
+      "close:1",
+      "decode-call:2",
+    ]);
+  });
+
+  // Follow-on defect in the queue itself: `startPendingImageIngest` used to
+  // release a paste's anonymous batch reservation only in `finally` -
+  // i.e. once preparation/storage settled. With the per-mount queue, a
+  // second job can't even START preparing until the first job's decode
+  // settles, so unmounting while the first is still pending held BOTH
+  // anonymous charges far longer than before the queue existed. Anonymous
+  // charges can't dedupe against the successor's hash-keyed charge, so near
+  // the cap the remount's post-store reservation fails and the job REMOVES
+  // an image the user already had. The fix binds release to the job's abort,
+  // not its settlement. The byte math below is exact (no slack): the budget
+  // is seeded so the two pasted images fill it precisely, so the remount's
+  // two hash-aware reservations can succeed ONLY if both original anonymous
+  // charges are gone by the time it reserves - proving the abort release
+  // actually ran, not merely that capacity happened to be available.
+  it("keeps a remounted image whose anonymous reservation was released on abort, at the exact budget cap", async () => {
+    const IMAGE_BYTES = 3 * 1024 * 1024;
+    const bytesA = distinctPngBytesOfSize(1, IMAGE_BYTES);
+    const bytesB = distinctPngBytesOfSize(2, IMAGE_BYTES);
+    const hashA = await sha256Hex(bytesA);
+    const hashB = await sha256Hex(bytesB);
+    const double = installDecodeOrderDouble();
+
+    const competing = reserveLandingImageBudget("near-cap-abort-release", [
+      { hash: null, bytes: LANDING_IMAGE_BUDGET_BYTES - IMAGE_BYTES * 2 },
+    ]);
+    expect(competing).not.toBeNull();
+
+    const view = render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+    pasteComposerContent(
+      mixedContent(bytesToBase64(bytesA), bytesToBase64(bytesB)),
+    );
+
+    // Only the first image's decode has started - the second job's own
+    // `prepare` call is queued behind it on the same mount's session,
+    // so NEITHER original job has settled, and both still
+    // hold their own anonymous reservation.
+    await waitFor(() => expect(double.gates).toHaveLength(1));
+    expect(double.events).toEqual(["decode-call:0"]);
+    const draftId = useLandingDraftStore.getState().activeDraftId;
+    expect(draftId).not.toBeNull();
+
+    // Tightness check: the budget is exactly full right now - a third byte
+    // cannot be reserved.
+    const probeBeforeUnmount = reserveLandingImageBudget("probe-before", [
+      { hash: null, bytes: 1 },
+    ]);
+    expect(probeBeforeUnmount).toBeNull();
+
+    view.unmount();
+    mocks.scheduleLandingImageReconcile.mockClear();
+
+    // Tightness check: unmounting aborts both original jobs, and with the
+    // abort-bound release BOTH anonymous charges free immediately - neither
+    // job's decode or store had to settle first. Exactly `IMAGE_BYTES * 2`
+    // fits now; not one byte more was freed, and not one byte less.
+    const probeAfterUnmount = reserveLandingImageBudget("probe-after-unmount", [
+      { hash: null, bytes: IMAGE_BYTES * 2 },
+    ]);
+    expect(probeAfterUnmount).not.toBeNull();
+    const probeOverAfterUnmount = reserveLandingImageBudget("probe-over", [
+      { hash: null, bytes: 1 },
+    ]);
+    expect(probeOverAfterUnmount).toBeNull();
+    probeAfterUnmount?.release();
+
+    render(
+      <LandingComposer
+        key={draftId}
+        draftId={draftId}
+        pendingCreateId={null}
+        initialSettings={null}
+        workspaceControls={() => null}
+      />,
+    );
+    await waitForEditorReady();
+
+    // Remount re-entry launches a new job for each still-pending atom.
+    await waitFor(() => expect(double.gates).toHaveLength(2));
+
+    double.gates[1]?.();
+    await waitFor(() => expect(setGates.has(hashA)).toBe(true));
+    setGates.get(hashA)?.release();
+
+    await waitFor(() => expect(double.gates).toHaveLength(3));
+    double.gates[2]?.();
+    await waitFor(() => expect(setGates.has(hashB)).toBe(true));
+    setGates.get(hashB)?.release();
+
+    // Both images SURVIVE remount: rewritten to a hash and still in the
+    // document, never removed by a `postStoreReservation === null` refusal.
+    await waitFor(() => {
+      const atoms = collectImageAtoms(
+        draftRuntimeRegistry.getOrHydrate(draftId)?.store.getState().content ??
+          emptyDoc(),
+      );
+      expect(atoms.map((atom) => atom.hash)).toEqual([hashA, hashB]);
+      expect(atoms.every((atom) => atom.b64content === null)).toBe(true);
+    });
+    // Budget is exactly full again (no slack) after both hash-aware charges.
+    const probeAfterRemount = reserveLandingImageBudget("probe-after-remount", [
+      { hash: null, bytes: 1 },
+    ]);
+    expect(probeAfterRemount).toBeNull();
+
+    competing?.release();
+  });
+});
+
+// A staged sandbox is where the staged send runs the draft, though the
+// placement has not moved. The placement host is this machine here, so a path
+// typed into the draft would be one the placement can read and the sandbox
+// cannot: the dropped file travels as an attachment instead.
+describe("landing composer: a file dropped while a sandbox is staged", () => {
+  const REPORT_PATH = "/Users/me/report.pdf";
+
+  beforeEach(() => {
+    mocks.localHostId = "host-test";
+    mocks.placementClient = putOnlyRequester(mocks.putBlob);
+    mocks.putBlob.mockResolvedValue({ ok: true });
+    mocks.resolveDroppedFilePaths.mockResolvedValue([REPORT_PATH]);
+  });
+
+  it("is typed as a path, and not uploaded, when nothing is staged", async () => {
+    render(<KeyedLandingComposerHarness />);
+    await waitForEditorReady();
+
+    dropReport();
+    await waitForPasteToSettle();
+
+    expect(typedPathSpans(editorDocument())).toEqual([REPORT_PATH]);
+    expect(attachedFileNames(editorDocument())).toEqual([]);
+    expect(mocks.putBlob).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { staged: "a new sandbox", target: STAGED_NEW_TARGET },
+    {
+      staged: "a resting sandbox on another computer",
+      target: stagedExistingTarget("sandbox-host"),
+    },
+  ])(
+    "is uploaded as an attachment, with no path typed, when $staged is staged",
+    async ({ target }) => {
+      render(<KeyedLandingComposerHarness />);
+      await waitForEditorReady();
+      stageOnLandingSurface(target);
+
+      dropReport();
+      await waitForPasteToSettle();
+
+      expect(typedPathSpans(editorDocument())).toEqual([]);
+      expect(attachedFileNames(editorDocument())).toEqual(["report.pdf"]);
+      expect(mocks.putBlob).toHaveBeenCalledTimes(1);
+      expect(mocks.putBlob.mock.calls[0][1]).toMatchObject({
+        kind: "file",
+        fileName: "report.pdf",
+        mediaType: "application/pdf",
+      });
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+async function waitForEditorReady(): Promise<void> {
+  await waitFor(() => {
+    expect(screen.getByTestId("composer-editor")).toBeTruthy();
+    expect(mocks.capturedHandle.current?.isReady()).toBe(true);
+  });
+}
+
+function pasteComposerContent(content: JsonContent): void {
+  const html = buildComposerClipboardHtml(
+    content,
+    composerClipboardPlainText(content),
+  );
+  fireEvent.paste(screen.getByTestId("composer-editor"), {
+    clipboardData: {
+      files: [],
+      items: [],
+      types: ["text/html"],
+      getData: (type: string) => (type === "text/html" ? html : ""),
+    },
+  });
+}
+
+function editorDocument(): JsonContent {
+  const handle = mocks.capturedHandle.current;
+  if (handle === null) throw new Error("the composer's editor is not mounted");
+  return handle.getJSON();
+}
+
+function dropReport(): void {
+  fireEvent.drop(screen.getByTestId("composer-editor"), {
+    dataTransfer: fileTransfer([pdfFile("report.pdf")]),
+  });
+}
+
+/** Resolves once the drop's path resolution and upload are over: send is no longer held. */
+async function waitForPasteToSettle(): Promise<void> {
+  await waitFor(() => {
+    expect(screen.getByTestId("lifecycle-attachment-pending").textContent).toBe(
+      "false",
+    );
+  });
+}
+
+/** Stages `target` under the key the landing composer stages under. */
+function stageOnLandingSurface(target: StagedSandboxTarget): void {
+  const surfaceKey = renderHook(() => useComposerSurfaceHostKey());
+  act(() => {
+    useStagedSandboxStore.getState().stage(surfaceKey.result.current, target);
+  });
+  surfaceKey.unmount();
+}
+
+function mixedContent(b64a: string, b64b: string): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          { type: "text", text: "A" },
+          {
+            type: "imageAttachment",
+            attrs: {
+              id: "src-1",
+              fileName: "one.png",
+              b64content: b64a,
+              mimeType: "image/png",
+              size: 3,
+            },
+          },
+          { type: "text", text: "B" },
+          {
+            type: "imageAttachment",
+            attrs: {
+              id: "src-2",
+              fileName: "two.png",
+              b64content: b64b,
+              mimeType: "image/png",
+              size: 3,
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function imageOnlyContent(b64: string, fileName: string): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "imageAttachment",
+            attrs: {
+              id: `src-${fileName}`,
+              fileName,
+              b64content: b64,
+              mimeType: "image/png",
+              size: 3,
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/** A single non-storable (BMP) image node - a format the host's writer refuses. */
+function nonStorableContent(b64: string): JsonContent {
+  return {
+    type: "doc",
+    content: [
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "imageAttachment",
+            attrs: {
+              id: "src-bmp",
+              fileName: "shot.bmp",
+              b64content: b64,
+              mimeType: "image/bmp",
+              size: 3,
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function emptyDoc(): JsonContent {
+  return { type: "doc", content: [{ type: "paragraph" }] };
+}
+
+/** True when any image atom carries a non-null string `b64content` payload. */
+function serializedHasStringB64(serialized: string | null): boolean {
+  if (serialized === null) return false;
+  // Match only real base64 payloads, not the `"b64content":null` attr that a
+  // hash-only node may still carry after rewrite.
+  return /"b64content"\s*:\s*"[^"]+"/.test(serialized);
+}
+
+function bytesOf(values: readonly number[]): Uint8Array<ArrayBuffer> {
+  return new Uint8Array(values);
+}
+
+async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+/** Distinct valid-PNG-magic, header-less bytes so two pasted images hash
+ * differently while both still reach the DECODE fallback (no parseable
+ * IHDR), unlike this file's other `bytesOf([...])` fixtures, whose bytes
+ * mismatch their declared MIME and never reach `createImageBitmap`. */
+function distinctPngBytes(tag: number): Uint8Array<ArrayBuffer> {
+  const bytes = pngBytesOfSize(16);
+  bytes[15] = tag;
+  return bytes;
+}
+
+/** Same as `distinctPngBytes`, at a caller-chosen size - for budget-math
+ * cases that need the pasted (SOURCE, pre-preparation) byte count to land on
+ * an exact number. */
+function distinctPngBytesOfSize(
+  tag: number,
+  byteLength: number,
+): Uint8Array<ArrayBuffer> {
+  const bytes = pngBytesOfSize(byteLength);
+  bytes[byteLength - 1] = tag;
+  return bytes;
+}
+
+interface DecodeOrderDouble {
+  readonly events: string[];
+  readonly gates: Array<() => void>;
+}
+
+/**
+ * Doubles `createImageBitmap` so a decode's START is recorded synchronously
+ * (before its promise resolves) and its settlement is held open until the
+ * test releases it - the shape needed to prove call ORDER, not just eventual
+ * completion. Canvas encode is never reached by these fixtures (small
+ * headerless-PNG bytes that fit the edge/ceiling verbatim after decode), so
+ * no canvas double is needed.
+ */
+function installDecodeOrderDouble(): DecodeOrderDouble {
+  const events: string[] = [];
+  const gates: Array<() => void> = [];
+  let index = 0;
+  const createImageBitmapDouble = vi.fn(
+    (
+      _source: ImageBitmapSource,
+      _opts: ImageBitmapOptions | undefined,
+    ): Promise<{ width: number; height: number; close: () => void }> => {
+      const label = index;
+      index += 1;
+      events.push(`decode-call:${label}`);
+      return new Promise((resolve) => {
+        gates.push(() =>
+          resolve({
+            width: 100,
+            height: 100,
+            close: () => events.push(`close:${label}`),
+          }),
+        );
+      });
+    },
+  );
+  Object.defineProperty(globalThis, "createImageBitmap", {
+    configurable: true,
+    writable: true,
+    value: createImageBitmapDouble,
+  });
+  return { events, gates };
+}

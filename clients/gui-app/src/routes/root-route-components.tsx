@@ -1,0 +1,293 @@
+import { SampleSceneProvider } from "@/components/sample-workspace/sample-scene-provider";
+import { OrganizationProvider } from "@/hooks/organization/organization-provider";
+import type { ReactNode } from "react";
+import { Outlet, useRouterState } from "@tanstack/react-router";
+import { HostTrayCommandListener } from "@/components/layout/bridges/host-tray-command-listener";
+import { HostUnresponsivePrompt } from "@/components/layout/bridges/host-unresponsive-prompt";
+import { HostLifecycleAnalyticsBridge } from "@/components/layout/bridges/host-lifecycle-analytics-bridge";
+import { HostQuitDecisionBridge } from "@/components/layout/bridges/host-quit-decision-bridge";
+import { DesktopDialogHost } from "@/components/layout/dialogs/desktop-dialog-host";
+import { SandboxDetailsDrawerHost } from "@/components/hosts/sandbox-details-drawer";
+import { HostReadyGate } from "@/components/layout/host-ready-gate";
+import { GATE_BYPASS_PATH_PREFIX } from "@/lib/host/gate-bypass-path";
+import { HostScopeReady } from "@/components/layout/host-readiness-controller";
+import { AppShell } from "@/components/layout/app-shell";
+import { useStatusBarTapScrollToTop } from "@/components/layout/shell/use-status-bar-tap-scroll-to-top";
+import { DesktopMenuHeader } from "@/components/layout/header/desktop-menu-header";
+import { useDesktopMenuBarActive } from "@/components/layout/header/use-desktop-menu-bar-active";
+import { MenuCommandListener } from "@/components/layout/bridges/menu-command-listener";
+import { ChatSessionWakeRetryController } from "@/components/layout/bridges/chat-session-wake-retry-controller";
+import { PreventSleepController } from "@/components/layout/bridges/prevent-sleep-controller";
+import {
+  SoundtrackSignalsBridge,
+  SoundtrackWarmupBridge,
+} from "@/components/layout/bridges/soundtrack-signals-bridge";
+import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
+import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
+import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
+import { SweepReviewDialogHost } from "@/components/epics/sweep-review-dialog-host";
+import { ChatSearchDialogHost } from "@/components/chat-search/chat-search-dialog-host";
+import { NotificationsMobileSheet } from "@/components/notifications/notifications-mobile-sheet";
+import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
+import { LocalStoreRepairDialogHost } from "@/components/local-store/local-store-repair-dialog-host";
+import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
+import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-bridge";
+import { ProviderProfileAddFlowHost } from "@/components/providers/provider-profile-add-flow-host";
+import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
+import { TeamRemovalTileCloser } from "@/providers/team-removal-tile-closer";
+import { ClaimedComputerNotifier } from "@/providers/claimed-computer-notifier";
+import { OnboardingPage } from "@/components/onboarding/onboarding-page";
+import { FirstTaskImportBridge } from "@/components/onboarding/first-task-guide";
+import { EnvironmentSheetsHost } from "@/components/settings/move/environment-sheets-host";
+import { TabDetachOwner } from "@/components/layout/tabs/tab-detach-owner";
+import { AuthLandingPage } from "@/components/auth/auth-landing-page";
+import {
+  useShellLocalPlaneAdmission,
+  type ShellAdmissionRefusal,
+} from "@/hooks/auth/use-shell-local-plane-admission";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
+
+export function RootComponent() {
+  const authStatus = useAuthStore((state) => state.status);
+  const onboardingCompletedAt = useOnboardingStore(
+    (state) => state.completedAt,
+  );
+  const isOnboardingRoute = useRouterState({
+    select: (state) => state.location.pathname === "/onboarding",
+  });
+  // The ONE routing-aware computation the window narrator consumes, so the
+  // modal itself stays router-free (and mountable in host-lifecycle trees that
+  // have no router). Same prefix the readiness gate bypasses on: `/settings`
+  // works without a running host, and the narrator's own "Open settings"
+  // action is what sends people there.
+  const isHostIndependentRoute = useRouterState({
+    select: (state) =>
+      state.location.pathname.startsWith(GATE_BYPASS_PATH_PREFIX),
+  });
+  // A signed-in user who hasn't finished onboarding sees the tour on any route.
+  // Deliberately `signed-in` and not `admitsLocalPlane`: the tour walks through
+  // account-backed setup, so an unverified session has no business starting it
+  // (and a user with no stored credentials at all is `signed-out`, never
+  // `unverified`, so nobody loses their first-run tour to this).
+  const showOnboarding =
+    authStatus === "signed-in" && onboardingCompletedAt === null;
+  // Sign-in and the tour render bare, without the app shell. This is the
+  // structural half of renderer admission - `RootLandingPage` decides what the
+  // route BODY renders, this decides whether the shell exists around it at all
+  // - so it reads the SAME predicate, which admits `unverified` for the same
+  // reason and refuses it on a shell with no local host (see
+  // `admitsLocalPlaneOnShell`).
+  const admission = useShellLocalPlaneAdmission();
+  const isStandalone =
+    !admission.admitted || showOnboarding || isOnboardingRoute;
+  // The iOS status-bar tap scrolls whatever is in front back to its top. Here
+  // rather than in AppShell so sign-in and the tour, which render without it,
+  // answer too, and outside HostReadyGate like the bridges below. Self-gated
+  // on the shell capability, so every other shell attaches nothing.
+  useStatusBarTapScrollToTop();
+
+  return (
+    <>
+      {/* Host-independent chrome: these are the ONLY surfaces pulled outside
+          HostReadyGate so they keep working while the page is gated on host
+          readiness (the "Setting up Traycer Host…" screen). The menu command
+          listener routes native menu items; the dialog host renders
+          host-independent About/Logs dialogs; notification emission drains
+          app-local persisted rows; the wake-retry bridge revives
+          terminally-closed warm chat sessions (it must live OUTSIDE the gate:
+          a wake pulse arriving while the gate shows its fallback would
+          otherwise find no listener and never be replayed, leaving the warm
+          session dead after the host comes back). Always-mounted shell
+          bridges like these remain available while any individual surface
+          projects its own readiness fallback. All only depend on the
+          runner host + auth + local stores/registries, which are available
+          without a ready host. */}
+      <MenuCommandListener />
+      <HostTrayCommandListener />
+      {/* Offers a force restart while the shell reports this machine's host
+          alive but not responding; outside the gate, which a wedged host
+          keeps closed. */}
+      <HostUnresponsivePrompt />
+      <DesktopDialogHost />
+      <SandboxDetailsDrawerHost />
+      {/* The host quit modal: on every route, signed in or not, so a quit is
+          always answered in-window rather than by main's native prompt. */}
+      <HostQuitDecisionBridge />
+      {/* Reports a lifecycle mode once it is written (main's change push),
+          whoever wrote it; see `HostLifecycleModeSetAnalytics`. */}
+      <HostLifecycleAnalyticsBridge />
+      <NotificationEmissionController />
+      {/* This is the permanent route -> layout authority. It must observe
+          commits while HostReadyGate swaps its children; only materialization
+          is hydration-gated inside the controller.
+
+          It does NOT exist during the first boot surface (`HostRuntimeProvider`
+          renders its fallback above `RouterProvider`), so it cannot observe a
+          navigation made there - the boot card's `Open settings` escape hatch
+          is exactly that. That navigation survives anyway because it DECLARES
+          itself in history state and this bridge reads the marker off the
+          CURRENT location at hydration; see `startup-navigation-intent.ts`.
+          Mounting this earlier is not the fix and was measured to cost more
+          than it buys: from up there it also sees the transient `/` that a cold
+          launch redirects ITSELF to (`requireSignedIn` fires while stored
+          tokens are still validating), which is not user intent. */}
+      {admission.admitted ? <TabNavigationRouteBridge /> : null}
+      {/* The window narrator (D10). It MUST be outside HostReadyGate: the gate
+          replaces its children during cold start, so a modal mounted inside it
+          could never narrate the cold start it exists for. Signed-in only -
+          which is also what resets its "this window has been served" latch,
+          since signing out unmounts it. */}
+      {admission.admitted ? (
+        <WindowHostModalHost bypassed={isHostIndependentRoute} />
+      ) : null}
+      {/* The local-store repair. Mounted BESIDE the window narrator rather
+          than inside any composer: it answers a refused `epic.create`, and the
+          population it exists for is a user with no openable epic - the only
+          other route to the rebind hangs off `SnapshotErrorBanner`, which
+          requires opening an epic that fails to load. Signed-in only, like its
+          neighbour; an unadmitted shell has no create to refuse. */}
+      {admission.admitted ? <LocalStoreRepairDialogHost /> : null}
+      <ChatSessionWakeRetryController />
+      {/* Everything host-dependent stays BEHIND the gate, preserving the exact
+          mount timing it had when the gate wrapped the whole RouterProvider -
+          these bridges + the page only mount once the host is reachable (or the
+          route is a /settings bypass). One controller (`HostScopeReady`) now
+          owns readiness subscriptions for the bridges below: the shell and
+          top-level host are always mounted, and host-dependent bridges opt
+          into their declared default-host scope rather than each creating its
+          own route gate. */}
+      <HostReadyGate>
+        <OrganizationProvider>
+          <FirstTaskImportBridge />
+          <HostScopeReady scope="default-host">
+            <PreventSleepController />
+            <SoundtrackSignalsBridge />
+            <SoundtrackWarmupBridge />
+            <TrayOpenEpicBridge />
+            <NotificationFocusBridge />
+            <EpicAccessCoordinator />
+            <TeamRemovalTileCloser />
+            <ClaimedComputerNotifier />
+            <ProviderProfileAddFlowHost />
+          </HostScopeReady>
+          <RootSurface
+            showOnboarding={showOnboarding}
+            isStandalone={isStandalone}
+            admissionRefusal={admission.refusal}
+          />
+          {isStandalone ? null : (
+            <>
+              <SystemTabModalHost />
+              <ChatSearchDialogHost />
+              <SweepReviewDialogHost />
+              {/* The retrospective and move sheets. Here rather than in
+                  Settings: the retrospective sheet opens by itself once on
+                  the first launch after the update, whatever the window
+                  shows. */}
+              <EnvironmentSheetsHost />
+              {/* Mobile-only full-screen notifications surface (renders null on
+                desktop, where the header bell + popover are used instead). */}
+              <NotificationsMobileSheet />
+            </>
+          )}
+        </OrganizationProvider>
+      </HostReadyGate>
+    </>
+  );
+}
+
+function RootSurface(props: {
+  readonly showOnboarding: boolean;
+  readonly isStandalone: boolean;
+  /**
+   * Set when the SHELL turned away a session the status would have admitted -
+   * today, `unverified` on a shell with no local host.
+   *
+   * It is handled here rather than left to the route bodies because it has to
+   * hold for EVERY route, and only `/`, `/draft` and `/settings` render
+   * `RootLandingPage` at all. Without this arm an `unverified` phone deep-linked
+   * into `/epics/…` sat in a standalone shell rendering an epic route that no
+   * host could serve - the same empty screen, minus even the app chrome.
+   *
+   * `null` covers signed-out and signing-in, which reach the standalone shell
+   * for the ordinary reason and whose route bodies already answer for
+   * themselves. That path is unchanged.
+   */
+  readonly admissionRefusal: ShellAdmissionRefusal | null;
+}) {
+  if (!props.isStandalone) {
+    return (
+      <SampleSceneProvider>
+        <AppShell>
+          {/*
+           * Mounted HERE and not inside AppShell or RootDndProvider, on purpose.
+           * It owns the tear-off flow, which reaches `useRouterState` and so
+           * throws without a router. This is a route component - it renders under
+           * `<Outlet />` and cannot exist outside `RouterProvider` - which makes
+           * the router requirement structural rather than a runtime check.
+           * Rendered by the provider instead, it would mount wherever the
+           * provider mounts, which is the provider-light case the move fixes.
+           */}
+          <TabDetachOwner />
+          <Outlet />
+        </AppShell>
+      </SampleSceneProvider>
+    );
+  }
+  // Sign-in and the onboarding tour render without AppShell, so they lose the
+  // Windows/Linux title bar the app header provides. Give them the same
+  // full-width band - menu strip, drag region, native window controls in one
+  // strip - instead of floating a chip over the artwork.
+  return (
+    <StandaloneShell>
+      <StandaloneBody
+        showOnboarding={props.showOnboarding}
+        admissionRefusal={props.admissionRefusal}
+      />
+    </StandaloneShell>
+  );
+}
+
+/**
+ * Which of the three standalone bodies this is, in precedence order: the tour
+ * (a `signed-in` user, so no refusal can coexist with it), a shell refusal,
+ * and otherwise the route's own body - which for a signed-out user is
+ * `RootLandingPage` and its `AuthLandingPage`.
+ */
+function StandaloneBody(props: {
+  readonly showOnboarding: boolean;
+  readonly admissionRefusal: ShellAdmissionRefusal | null;
+}) {
+  if (props.showOnboarding) return <OnboardingPage />;
+  if (props.admissionRefusal !== null) {
+    return <AuthLandingPage refusal={props.admissionRefusal} />;
+  }
+  return <Outlet />;
+}
+
+// Owns the viewport for standalone surfaces, which size themselves with
+// h-full/min-h-full: on Windows/Linux a title-bar band takes the
+// top and the content gets the rest; elsewhere the band collapses and the
+// content keeps the full height.
+//
+// `fixed inset-0` is the app's ONE sanctioned full-bleed surface, and the only
+// thing that opts out of `#root`'s safe-area reservation. Sign-in and the tour
+// are edge-to-edge artwork, and artwork stopping below the status bar reads as
+// a mismatched band rather than as respect for the bar. Taking the viewport
+// directly is what reaches it: `fixed` resolves against the viewport and not
+// against `#root`'s padding box, so there is no reservation to cancel and no
+// second copy of the inset to keep in sync.
+//
+// The exception is the BACKGROUND only. Content on these surfaces still starts
+// below the bar, applied by each surface to its own content layer - artwork and
+// content are siblings there, so the shell cannot inset one without the other.
+function StandaloneShell(props: { readonly children: ReactNode }) {
+  const menuBarActive = useDesktopMenuBarActive();
+  return (
+    <div data-full-bleed-surface="" className="fixed inset-0 flex flex-col">
+      {menuBarActive ? <DesktopMenuHeader variant="boot" /> : null}
+      <div className="min-h-0 flex-1 overflow-y-auto">{props.children}</div>
+    </div>
+  );
+}

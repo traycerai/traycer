@@ -1,0 +1,1051 @@
+import { canonicalChord, type ChordString } from "@/lib/keybindings/chord";
+import { isMac } from "@/lib/keybindings/platform";
+import { isMobileApp } from "@/lib/mobile-app";
+import { soundtrackOffered } from "@/lib/soundtrack/manifest";
+
+/**
+ * Stable identifiers for every keyboard-bindable action in the app. Adding
+ * a new action: append to `ACTION_IDS`, define metadata in
+ * `ACTION_META`, and wire the handler in `dispatch.ts` (or register at
+ * runtime via `registerDynamicActionHandler` from a context-aware bridge).
+ *
+ * Action `kind`:
+ *  - `"chord"`: bound to a full chord like `mod+shift+h`. One binding
+ *    triggers one handler.
+ *  - `"digit"`: bound to a modifier-only chord like `mod`. At runtime the
+ *    dispatcher pairs the held modifier with a concurrently-pressed digit
+ *    (0..9) and calls a single handler that receives the digit. Used by
+ *    `epic.switch.byDigit` (multi-digit header tab numbers) and scoped
+ *    single-digit actions such as `tab.switch.byDigit`.
+ */
+export const ACTION_IDS = [
+  "epic.switch.byDigit",
+  "tab.switch.byDigit",
+  "epic.new",
+  "epic.duplicate-tab",
+  "epic.next",
+  "epic.prev",
+  "epic.close",
+  "tab.reopen",
+  "tab.new",
+  "tab.close",
+  "tab.close-others",
+  "tab.close-right",
+  "tab.close-all",
+  "tab.next",
+  "tab.prev",
+  "tab.split.add",
+  "tab.split.swap",
+  "tab.split.separate",
+  "tab.split.close-left",
+  "tab.split.close-right",
+  "group.split.horizontal",
+  "group.split.vertical",
+  "group.split-right",
+  "group.focus.up",
+  "group.focus.down",
+  "group.focus.left",
+  "group.focus.right",
+  "group.focus-editor",
+  "tile.find.open",
+  "tile.find.next",
+  "tile.find.replace",
+  "app.sidebar.toggle",
+  "app.status-bar.toggle",
+  "app.tabs.vertical.toggle",
+  "app.tabs.vertical.collapse",
+  "nav.back",
+  "nav.forward",
+  "app.resources.open",
+  "app.rate-limits.open",
+  "app.notifications.open",
+  "app.history.open",
+  "app.chat-search.open",
+  "app.home.open",
+  "app.settings.open",
+  "app.settings.section.byDigit",
+  "app.palette.open",
+  "app.terminal.toggle",
+  "app.terminal.new",
+  "app.browser.new",
+  "app.terminal.maximize",
+  "app.zoom.in",
+  "app.zoom.out",
+  "app.zoom.reset",
+  "composer.dictation.toggle",
+  "soundtrack.toggle",
+  "composer.suggestion.accept",
+  "composer.drafts",
+  "composer.model-picker.toggle",
+  "model.provider.byDigit",
+  "model.reasoning.byDigit",
+  "model.profile.byDigit",
+] as const;
+
+export type ActionId = (typeof ACTION_IDS)[number];
+
+export type ActionCategory = "epics" | "tabs" | "groups" | "app";
+
+export type ActionKind = "chord" | "digit";
+
+export type TerminalPolicy = "app" | "shell";
+
+/**
+ * An action's default chord. A bare string (or `null` for "unbound") is the
+ * same on every platform. A `{ mac, other }` pair declares per-platform
+ * defaults, resolved through `resolveActionDefaultChord` - used when a chord
+ * must differ by OS (e.g. ⌃⌥M on macOS vs an AltGr-safe Alt+Shift+M elsewhere).
+ */
+export type ActionDefaultChord =
+  | ChordString
+  | null
+  | { readonly mac: ChordString; readonly other: ChordString };
+
+export interface ActionMeta {
+  readonly id: ActionId;
+  readonly label: string;
+  readonly description: string;
+  readonly category: ActionCategory;
+  readonly kind: ActionKind;
+  readonly defaultChord: ActionDefaultChord;
+  readonly secondaryChord: ActionDefaultChord | undefined;
+  /**
+   * When a terminal is focused on Windows/Linux, only mark default Ctrl chords
+   * as "shell" if @xterm/xterm's evaluateKeyboardEvent actually emits PTY
+   * bytes. Plain Ctrl covers A-Z, space, 3-8, /, [, \, and ]; Ctrl+Alt letters
+   * and space use xterm's Escape-prefixed Alt path. Other Ctrl chords must stay
+   * app-owned or the key becomes a terminal no-op.
+   */
+  readonly terminalPolicy: TerminalPolicy;
+  readonly secondaryTerminalPolicy: TerminalPolicy | undefined;
+  /**
+   * Whether the surface this action acts on exists only outside the installed
+   * mobile app (`isMobileApp()`), which makes the action itself unavailable
+   * there: the command palette omits its row and its handler is never
+   * registered, so invoking it is impossible rather than silently inert.
+   *
+   * Both halves READ this field - `isPaletteEligible` in `actions.source.ts`
+   * for the row, and the action's own bridge for the handler (see
+   * `status-bar-keybinding-bridge.tsx`). Neither hard-codes `isMobileApp()`,
+   * so setting the flag on a new action is enough to get both.
+   *
+   * Required rather than optional so every action states the answer - a new
+   * action's author has to decide whether a phone can act on it, and the
+   * common answer (`false`, it works everywhere) is the one being asserted
+   * rather than the one that happened to be left out.
+   *
+   * The Keybindings settings section is already omitted on mobile
+   * (`MOBILE_APP_OMITTED_SECTION_IDS`), so nothing there needs this flag: a
+   * desktop-only action cannot be bound to a chord on a phone in the first
+   * place.
+   */
+  readonly desktopOnly: boolean;
+}
+
+/**
+ * The platform-effective default chord for an action (`null` when unbound), in
+ * canonical form for a `chord` action (a `digit` action's is a modifier mask).
+ */
+export function resolveActionDefaultChord(
+  meta: ActionMeta,
+): ChordString | null {
+  return resolveChord(meta, meta.defaultChord);
+}
+
+/** The platform-effective secondary chord for an action, if one exists. */
+export function resolveActionSecondaryChord(
+  meta: ActionMeta,
+): ChordString | null {
+  return resolveChord(meta, meta.secondaryChord ?? null);
+}
+
+function resolveChord(
+  meta: ActionMeta,
+  def: ActionDefaultChord,
+): ChordString | null {
+  if (def === null) return null;
+  if (typeof def === "string") return canonicalBinding(meta, def);
+  return canonicalBinding(meta, isMac() ? def.mac : def.other);
+}
+
+/** A binding for this action in the form the dispatcher compares. */
+export function canonicalBinding(
+  meta: ActionMeta,
+  chord: ChordString,
+): ChordString {
+  return meta.kind === "chord" ? canonicalChord(chord) : chord;
+}
+
+export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
+  "epic.switch.byDigit": {
+    id: "epic.switch.byDigit",
+    label: "Switch epic by number",
+    description:
+      "Hold the configured modifiers and type a tab number to jump to that Epic-level tab.",
+    category: "epics",
+    kind: "digit",
+    defaultChord: "alt",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "tab.switch.byDigit": {
+    id: "tab.switch.byDigit",
+    label: "Switch tab by number",
+    description:
+      "Hold the primary leader modifier and press 1-9 to jump to that tab in the active Epic group, or in the start page's terminal panel.",
+    category: "tabs",
+    kind: "digit",
+    defaultChord: "mod",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "epic.new": {
+    id: "epic.new",
+    label: "New task",
+    description: "Open the landing page to start a new task.",
+    category: "epics",
+    kind: "chord",
+    defaultChord: "mod+n",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "epic.duplicate-tab": {
+    id: "epic.duplicate-tab",
+    label: "Duplicate tab",
+    description: "Duplicate the active Epic tab and its current tiling layout.",
+    category: "epics",
+    kind: "chord",
+    defaultChord: "mod+shift+k",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "epic.next": {
+    id: "epic.next",
+    label: "Next Epic tab",
+    description: "Activate the next Epic-level tab in the header strip.",
+    category: "epics",
+    kind: "chord",
+    defaultChord: "mod+shift+]",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "epic.prev": {
+    id: "epic.prev",
+    label: "Previous Epic tab",
+    description: "Activate the previous Epic-level tab in the header strip.",
+    category: "epics",
+    kind: "chord",
+    defaultChord: "mod+shift+[",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "epic.close": {
+    id: "epic.close",
+    label: "Close active tab",
+    description:
+      "Close the active strip tab regardless of kind - epic, draft, history, or settings.",
+    category: "epics",
+    kind: "chord",
+    defaultChord: "mod+shift+w",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "tab.reopen": {
+    id: "tab.reopen",
+    label: "Reopen closed tab",
+    description:
+      "Restore the last closed task, draft, or group of tabs in this window.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: "mod+shift+t",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "tab.new": {
+    id: "tab.new",
+    label: "New tab",
+    description:
+      "Open a new blank tab in the active group; the inline opener is focused so you can pick what to open. On the start page, opens a new terminal tab instead.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: "mod+t",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "tab.close": {
+    id: "tab.close",
+    label: "Close tab",
+    description:
+      "Close the active tab. On the last tab in a non-root group, the group collapses and the sibling absorbs. On the start page, closes the active terminal tab.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: "mod+w",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "tab.close-others": {
+    id: "tab.close-others",
+    label: "Close other tabs",
+    description: "Close every tab in the focused group except the active one.",
+    category: "tabs",
+    kind: "chord",
+    // ⌘⌥W - matches Safari's "Close Other Tabs".
+    defaultChord: "mod+alt+w",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "tab.close-right": {
+    id: "tab.close-right",
+    label: "Close tabs to the right",
+    description:
+      "Close every tab to the right of the active tab in the focused group.",
+    category: "tabs",
+    kind: "chord",
+    // ⌘⇧⌥] - the `]` echoes "Next tab" (⌘⇧]); ⌥ marks the destructive variant.
+    defaultChord: "mod+shift+alt+]",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "tab.close-all": {
+    id: "tab.close-all",
+    label: "Close all tabs in group",
+    description:
+      "Close every tab in the focused group. Non-root groups collapse afterwards. On the start page, closes every terminal tab.",
+    category: "tabs",
+    kind: "chord",
+    // ⌘⇧⌥W - the "close" W family; all three modifiers signal the widest scope.
+    defaultChord: "mod+shift+alt+w",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "tab.next": {
+    id: "tab.next",
+    label: "Next tab",
+    description:
+      "Activate the next tab in the focused group, or in the start page's terminal panel.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: "mod+]",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "tab.prev": {
+    id: "tab.prev",
+    label: "Previous tab",
+    description:
+      "Activate the previous tab in the focused group, or in the start page's terminal panel.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: "mod+[",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "tab.split.add": {
+    id: "tab.split.add",
+    label: "Add current tab to new split view",
+    description:
+      "Create a split with the current tab on the left and focus its fillable right side.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: { mac: "mod+alt+n", other: "ctrl+alt+n" },
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "tab.split.swap": {
+    id: "tab.split.swap",
+    label: "Swap split sides",
+    description: "Swap the left and right members of the active split.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: null,
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "tab.split.separate": {
+    id: "tab.split.separate",
+    label: "Separate split view",
+    description: "Return the active split members to adjacent ordinary tabs.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: null,
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "tab.split.close-left": {
+    id: "tab.split.close-left",
+    label: "Close left split view",
+    description: "Close the left member through its normal close flow.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: null,
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "tab.split.close-right": {
+    id: "tab.split.close-right",
+    label: "Close right split view",
+    description: "Close the right member through its normal close flow.",
+    category: "tabs",
+    kind: "chord",
+    defaultChord: null,
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "group.split.horizontal": {
+    id: "group.split.horizontal",
+    label: "Split group horizontally",
+    description:
+      "Split the focused group horizontally with an empty group on the right.",
+    category: "groups",
+    kind: "chord",
+    defaultChord: "mod+d",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "group.split.vertical": {
+    id: "group.split.vertical",
+    label: "Split group vertically",
+    description:
+      "Split the focused group vertically with an empty group on the bottom.",
+    category: "groups",
+    kind: "chord",
+    defaultChord: "mod+shift+d",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "group.split-right": {
+    id: "group.split-right",
+    label: "Split group to the right",
+    description:
+      "Create an empty new group on the right of the focused group; the new group becomes active.",
+    category: "groups",
+    kind: "chord",
+    defaultChord: "mod+\\",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "group.focus.up": {
+    id: "group.focus.up",
+    label: "Focus group above",
+    description: "Move group focus to the nearest group above.",
+    category: "groups",
+    kind: "chord",
+    defaultChord: "mod+alt+arrowup",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "group.focus.down": {
+    id: "group.focus.down",
+    label: "Focus group below",
+    description: "Move group focus to the nearest group below.",
+    category: "groups",
+    kind: "chord",
+    defaultChord: "mod+alt+arrowdown",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "group.focus.left": {
+    id: "group.focus.left",
+    label: "Focus group left",
+    description: "Move group focus to the nearest group on the left.",
+    category: "groups",
+    kind: "chord",
+    defaultChord: "mod+alt+arrowleft",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "group.focus.right": {
+    id: "group.focus.right",
+    label: "Focus group right",
+    description: "Move group focus to the nearest group on the right.",
+    category: "groups",
+    kind: "chord",
+    defaultChord: "mod+alt+arrowright",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "group.focus-editor": {
+    id: "group.focus-editor",
+    label: "Focus active tab editor",
+    description:
+      "Place cursor in the editor of the active tab in the focused group.",
+    category: "groups",
+    kind: "chord",
+    defaultChord: "mod+l",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  // ⌘F / ⌘G mirror the Edit menu's Find and Find Next. Off macOS the menu
+  // leaves those accelerators unregistered (`menu-builder.ts`) so a focused
+  // terminal keeps Ctrl+F and Ctrl+G, which makes these bindings the only
+  // keyboard path to the find bar there.
+  "tile.find.open": {
+    id: "tile.find.open",
+    label: "Find in active tile",
+    description: "Open the active tile's find bar.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+f",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "tile.find.next": {
+    id: "tile.find.next",
+    label: "Find next in active tile",
+    description: "Go to the next match in the active tile.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+g",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "tile.find.replace": {
+    id: "tile.find.replace",
+    label: "Find and replace in active tile",
+    description:
+      "Open the active tile's find bar and expand the Replace row when the tile supports replacement.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+alt+f",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "app.sidebar.toggle": {
+    id: "app.sidebar.toggle",
+    label: "Toggle left panel",
+    description: "Show or hide the Epic left panel; the rail stays visible.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+b",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "app.status-bar.toggle": {
+    id: "app.status-bar.toggle",
+    label: "Toggle status bar",
+    description:
+      "Send the status bar's readings to the header, and bring the same ones back on the next press.",
+    category: "app",
+    kind: "chord",
+    // Unbound by default: the surfaces it moves between are both always
+    // reachable, so it earns a palette row rather than one of the few chords
+    // left that a terminal does not want.
+    defaultChord: null,
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    // The footer is never drawn in the installed mobile app - its header keeps
+    // the usage gauge and the resource monitor - so the placement this flips
+    // has only one reachable value there. See the Layout page's own mobile
+    // collapse (`layout-settings-panel.tsx`), which states the same fact.
+    desktopOnly: true,
+  },
+  "app.tabs.vertical.toggle": {
+    id: "app.tabs.vertical.toggle",
+    label: "Toggle vertical tabs",
+    description:
+      "Move the task tabs from the top to a vertical strip at the left, or from either side back to the top.",
+    category: "app",
+    kind: "chord",
+    // Unbound by default: a layout change made now and then earns a palette
+    // row, not one of the few chords left that a terminal does not want.
+    defaultChord: null,
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    // The installed mobile app always draws its own header, so the placement
+    // this flips has no effect there.
+    desktopOnly: true,
+  },
+  "app.tabs.vertical.collapse": {
+    id: "app.tabs.vertical.collapse",
+    label: "Collapse vertical tabs",
+    description:
+      "Collapse the vertical tab strip to its icon rail, or expand it back. Available while the tabs are at the side.",
+    category: "app",
+    kind: "chord",
+    // S for strip: every B chord is taken (⌘B the left panel, ⌘⇧B the
+    // notification center, ⌘⌥B a new browser tab). ⌘⌃S on macOS; elsewhere
+    // Shift+Alt+S, because Ctrl+Alt is AltGr there (AltGr+S types a letter on
+    // several layouts).
+    defaultChord: { mac: "mod+ctrl+s", other: "shift+alt+s" },
+    secondaryChord: undefined,
+    // `app`, like the panel toggles that must work from a focused terminal
+    // (`app.browser.new`): the strip sits beside every terminal.
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    // The installed mobile app draws the strip where its width allows; the
+    // strip registers the handler only where the expanded form fits.
+    desktopOnly: false,
+  },
+  "nav.back": {
+    id: "nav.back",
+    label: "Go back",
+    description: "Go back through the app's navigation history.",
+    category: "app",
+    kind: "chord",
+    // `<` / `>` mnemonic without stealing arrow or Option-word navigation.
+    defaultChord: "mod+shift+,",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "nav.forward": {
+    id: "nav.forward",
+    label: "Go forward",
+    description: "Go forward through the app's navigation history.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+shift+.",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "app.resources.open": {
+    id: "app.resources.open",
+    label: "Open Resource Monitor",
+    description: "Open the global Resource Monitor.",
+    category: "app",
+    kind: "chord",
+    // Chromium's task-manager shortcut on Windows/Linux; kept on macOS for
+    // cross-platform consistency. Clearing the binding lets Shift+Esc pass
+    // through to a focused terminal.
+    defaultChord: "shift+escape",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "app.rate-limits.open": {
+    id: "app.rate-limits.open",
+    label: "Open usage limits",
+    description: "Open the provider usage and rate-limit monitor.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+shift+u",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "app.notifications.open": {
+    id: "app.notifications.open",
+    label: "Open notifications",
+    description:
+      "Open the notification center, then use Up/Down to move between notifications. Pressing the chord again closes it.",
+    category: "app",
+    kind: "chord",
+    // ⌘⇧B - B for the bell, in the same ⌘⇧ family as the other global panel
+    // openers (⌘⇧U usage limits). ⌘N is "New task" and ⌘⇧N is the desktop
+    // File → New Window accelerator (menu-builder.ts), which the main process
+    // consumes before the renderer ever sees the keystroke - so any chord
+    // here must also avoid the native menu's accelerators, not just this map.
+    defaultChord: "mod+shift+b",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "app.history.open": {
+    id: "app.history.open",
+    label: "Open history",
+    description: "Open the Epic history, or focus the History tab if present.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+y",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "app.chat-search.open": {
+    id: "app.chat-search.open",
+    label: "Search chats",
+    description:
+      "Search chat titles and messages on the active host, in this task or across every task.",
+    category: "app",
+    kind: "chord",
+    // ⌘⇧F: "find everywhere" in most editors, the wide twin of the in-tile ⌘F
+    // finder. Free across this map and not a native-menu accelerator
+    // (menu-builder.ts binds ⌘F/⌘G/⇧⌘G only).
+    defaultChord: "mod+shift+f",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "app.home.open": {
+    id: "app.home.open",
+    label: "Go to Home",
+    description:
+      "Show the Home tab: everything running, and everything waiting on you, across every task.",
+    category: "app",
+    kind: "chord",
+    // Free across this map and not a native-menu accelerator on any platform,
+    // in the same mod+shift family as the other global surface openers.
+    defaultChord: "mod+shift+h",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    // The mobile app draws Home too - as the first entry in the nav drawer -
+    // so the surface this opens exists there, and the palette gates the row on
+    // the Home setting rather than on the platform.
+    desktopOnly: false,
+  },
+  "app.settings.open": {
+    id: "app.settings.open",
+    label: "Open settings",
+    description: "Navigate to the settings screen.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+,",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "app.settings.section.byDigit": {
+    id: "app.settings.section.byDigit",
+    label: "Switch settings section by number",
+    description:
+      "While on the settings screen, hold the configured modifiers and press a digit to jump to that section. Settings takes precedence over the header tab strip while frontmost.",
+    category: "app",
+    kind: "digit",
+    defaultChord: "alt",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "app.palette.open": {
+    id: "app.palette.open",
+    label: "Open command palette",
+    description:
+      "Open the command palette to search commands, navigation targets, and recent actions.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+k",
+    secondaryChord: { mac: "ctrl+shift+p", other: "mod+shift+p" },
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: "app",
+    desktopOnly: false,
+  },
+  "app.terminal.toggle": {
+    id: "app.terminal.toggle",
+    label: "Toggle terminal panel",
+    description:
+      "Show or hide the terminal panel on the start page. When several directories are attached, choose where to open it.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+j",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "app.terminal.new": {
+    id: "app.terminal.new",
+    label: "New terminal",
+    description:
+      "Open a new terminal tab in the start page's terminal panel, choosing a directory when several are attached.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+shift+j",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "app.browser.new": {
+    id: "app.browser.new",
+    label: "New browser tab",
+    description:
+      "Open a new browser tab in the start page's panel, on the selected device.",
+    category: "app",
+    kind: "chord",
+    // ⌘⌥B: B for browser, in the ⌘⌥ family the panel already uses (⌘⌥J
+    // above). Not ⌘⇧B - that is the notification center's
+    // (`app.notifications.open`), and `findActionMatchForChord` answers the
+    // first action in `ACTION_IDS` bound to a chord, so a shared default
+    // leaves the later one unreachable.
+    defaultChord: "mod+alt+b",
+    secondaryChord: undefined,
+    // `app`, like its terminal twin: the chord has to reach the panel from
+    // inside a focused terminal, which is the whole point of opening a second
+    // kind of tab beside one.
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    // Same answer as `app.terminal.new` above, and for the same reason: the
+    // surface both act on is the start page's panel, which the installed
+    // mobile app does render. Whether a browser tab can actually RUN there is
+    // a host-capability question the panel answers at open time, not a reason
+    // to withhold the palette row and the handler.
+    desktopOnly: false,
+  },
+  "app.terminal.maximize": {
+    id: "app.terminal.maximize",
+    label: "Maximize terminal panel",
+    description:
+      "Toggle the start page's terminal panel between maximized and its docked width, revealing the panel if it is collapsed.",
+    category: "app",
+    kind: "chord",
+    // ⌘⌥J extends the ⌘J terminal family; ⌥ marks the layout variant, the
+    // same convention as ⌘⌥W (close others) and ⌘⌥F (find and replace).
+    defaultChord: "mod+alt+j",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "app.zoom.in": {
+    id: "app.zoom.in",
+    label: "Zoom in",
+    description: "Increase the whole-app display zoom.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+=",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "app.zoom.out": {
+    id: "app.zoom.out",
+    label: "Zoom out",
+    description: "Decrease the whole-app display zoom.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+-",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "app.zoom.reset": {
+    id: "app.zoom.reset",
+    label: "Reset zoom",
+    description: "Reset whole-app display zoom to 100%.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+0",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "composer.dictation.toggle": {
+    id: "composer.dictation.toggle",
+    label: "Voice input",
+    description:
+      "Dictate into the composer. Tap to toggle, or hold to talk. In a bot's channel or thread, starts or ends a call.",
+    category: "app",
+    kind: "chord",
+    // Control+Shift+M - uses the Control key specifically (the separate ⌃ key on
+    // macOS), avoiding the Command-based conflicts: ⌘Space (Spotlight), ⌘⇧V
+    // (split group vertically). The desktop global summon shortcut is checked
+    // live by conflict detection rather than hand-avoided here.
+    defaultChord: "ctrl+shift+m",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "soundtrack.toggle": {
+    id: "soundtrack.toggle",
+    label: "Soundtrack",
+    description: "Play or stop the soundtrack.",
+    category: "app",
+    kind: "chord",
+    // Unbound by default: it is a setting, in Sounds, so it earns a palette
+    // row rather than one of the few chords left.
+    defaultChord: null,
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    // Background audio and autoplay on the phone are still to be settled.
+    desktopOnly: true,
+  },
+  "composer.suggestion.accept": {
+    id: "composer.suggestion.accept",
+    label: "Accept suggested reply",
+    description:
+      "Fill the empty composer with the suggested reply it is showing. The message is not sent.",
+    category: "app",
+    kind: "chord",
+    // A bare →, the inline-autosuggestion convention. It is only consulted
+    // over an empty composer with a suggestion showing, where → has nothing
+    // else to do; the composer matches it itself (`isExternallyHandled`), so
+    // the provider never reserves the key for every other field in the app.
+    // Not Tab by default: Tab moves focus out of the composer, and a person
+    // who prefers it opts in here.
+    defaultChord: "arrowright",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "composer.drafts": {
+    id: "composer.drafts",
+    label: "Drafts",
+    description: "Open the start-page drafts list.",
+    category: "app",
+    kind: "chord",
+    defaultChord: "mod+s",
+    secondaryChord: undefined,
+    terminalPolicy: "shell",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "composer.model-picker.toggle": {
+    id: "composer.model-picker.toggle",
+    label: "Toggle model picker",
+    description:
+      "Open or close the model picker for the composer you're editing. Default ⌃⌥M on macOS; Alt+Shift+M on Windows/Linux (Alt+Shift dodges the Ctrl+Alt=AltGr trap).",
+    category: "app",
+    kind: "chord",
+    // Per-platform: ⌃⌥M keeps Control distinct from ⌘ on macOS (so it matches
+    // via the Control-aware encoder), while Alt+Shift+M avoids the Windows/Linux
+    // Ctrl+Alt=AltGr conflict and doesn't collide with dictation's ⌃⇧M.
+    defaultChord: { mac: "ctrl+alt+m", other: "alt+shift+m" },
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "model.provider.byDigit": {
+    id: "model.provider.byDigit",
+    label: "Switch model provider by number",
+    description:
+      "While the model picker is open, hold the leader modifier and press a digit to switch the browsed provider rail. Suppresses epic-tab switching for as long as the picker is open.",
+    category: "app",
+    kind: "digit",
+    defaultChord: "mod",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "model.reasoning.byDigit": {
+    id: "model.reasoning.byDigit",
+    label: "Change model settings by number",
+    description:
+      "While the model picker is open, hold the configured modifiers and press 1–9 to set thinking effort, or 0 to toggle Fast when available.",
+    category: "app",
+    kind: "digit",
+    defaultChord: "alt",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+  "model.profile.byDigit": {
+    id: "model.profile.byDigit",
+    label: "Switch profile by number",
+    description:
+      "While the model picker is open and the active provider has 2+ profiles, hold the configured modifiers and press a digit to switch to that profile chip.",
+    category: "app",
+    kind: "digit",
+    defaultChord: "mod+shift",
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    desktopOnly: false,
+  },
+};
+/**
+ * Whether `id` can run in this app: it is not a desktop-only action in the
+ * installed mobile app, where its handler is never registered, nor the
+ * soundtrack's in a build with nothing to play. One that cannot is bound to
+ * nothing, whatever a profile stored for it: it matches no key, reserves no
+ * chord, is forwarded from no browser tile, conflicts with no rebind and has no
+ * Settings row. The stored chord itself is kept, so an app
+ * that can run the action again finds it where the person left it.
+ */
+export function isActionAvailable(id: ActionId): boolean {
+  if (id === "soundtrack.toggle" && !soundtrackOffered()) return false;
+  return !(ACTION_META[id].desktopOnly && isMobileApp());
+}
+
+/** The chord `id` is bound to in this app: the stored one, or none. */
+export function effectiveBinding(
+  bindings: Readonly<Record<ActionId, ChordString | null>>,
+  id: ActionId,
+): ChordString | null {
+  return isActionAvailable(id) ? (bindings[id] ?? null) : null;
+}
+
+export function getDefaultBindings(): Readonly<
+  Record<ActionId, ChordString | null>
+> {
+  const entries = ACTION_IDS.map((id) => [
+    id,
+    resolveActionDefaultChord(ACTION_META[id]),
+  ]);
+  return Object.fromEntries(entries) as Record<ActionId, ChordString | null>;
+}

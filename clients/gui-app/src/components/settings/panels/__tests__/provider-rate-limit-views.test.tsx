@@ -1,0 +1,1830 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  NO_EPISODE,
+  type ProviderRateLimitEnvelope,
+} from "@/lib/rate-limits/rate-limit-envelope";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
+import type {
+  ProviderRateLimits,
+  RateLimitChatCredential,
+} from "@traycer/protocol/host";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { formatSettingsDate } from "@/lib/settings/settings-date";
+import { useLayoutStore } from "@/stores/layout/layout-store";
+import {
+  AntigravityRateLimitView,
+  ClaudeRateLimitView,
+  CodexRateLimitView,
+  CursorRateLimitView,
+  GrokRateLimitView,
+  HuggingFaceRateLimitView,
+  KiloCodeRateLimitView,
+  OpenCodeRateLimitView,
+  OpenRouterRateLimitView,
+  ProviderRateLimitBody,
+  ProviderRateLimitDetail,
+} from "../provider-rate-limit-views";
+
+const openLinkMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => openLinkMock,
+}));
+
+type CodexRateLimits = Extract<ProviderRateLimits, { provider: "codex" }>;
+type ClaudeRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "claude-code" }
+>;
+type OpenRouterRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "openrouter" }
+>;
+type KiloCodeRateLimits = Extract<ProviderRateLimits, { provider: "kilocode" }>;
+type GrokRateLimits = Extract<ProviderRateLimits, { provider: "grok" }>;
+type CursorRateLimits = Extract<ProviderRateLimits, { provider: "cursor" }>;
+type HuggingFaceRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "huggingface" }
+>;
+type OpenCodeRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "opencode"; available: true }
+>;
+type AntigravityRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "antigravity" }
+>;
+type KimiRateLimits = Extract<
+  ProviderRateLimits,
+  { provider: "kimi"; available: true }
+>;
+
+const NOW = Date.now();
+
+afterEach(() => {
+  cleanup();
+  openLinkMock.mockClear();
+  useLayoutStore.setState(useLayoutStore.getInitialState(), true);
+});
+
+describe("CodexRateLimitView (extended fields)", () => {
+  const codex: CodexRateLimits = {
+    provider: "codex",
+    available: true,
+    planType: "pro_5x",
+    limitId: "base",
+    limitName: null,
+    primary: {
+      usedPercent: 4,
+      resetsAt: NOW + 60 * 60 * 1000,
+      durationMinutes: 300,
+    },
+    secondary: {
+      usedPercent: 68,
+      resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+      durationMinutes: 10080,
+    },
+    extraWindows: [
+      {
+        limitId: "gpt5",
+        limitName: "GPT-5",
+        primary: {
+          usedPercent: 20,
+          resetsAt: NOW + 2 * 60 * 60 * 1000,
+          durationMinutes: 300,
+        },
+        secondary: null,
+      },
+    ],
+    credits: null,
+    individualLimit: null,
+    resetCredits: { availableCount: 3, credits: null },
+    rateLimitReachedType: null,
+  };
+
+  it("labels windows from their real duration (not a hardcoded 5-hour/Weekly)", () => {
+    render(<CodexRateLimitView data={codex} variant="settings" />);
+    expect(screen.getByText("Current session")).toBeTruthy();
+    expect(screen.getByText("4% used")).toBeTruthy();
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("68% used")).toBeTruthy();
+  });
+
+  it.each([
+    ["rate_limit_reached", "Usage limit reached"],
+    ["a_value_from_a_newer_host", "A Value From A Newer Host"],
+    ["constructor", "Constructor"],
+  ])(
+    "badges a reached limit of type %s as %s",
+    (rateLimitReachedType, label) => {
+      render(
+        <CodexRateLimitView
+          data={{ ...codex, rateLimitReachedType }}
+          variant="settings"
+        />,
+      );
+      expect(screen.getByText(label)).toBeTruthy();
+    },
+  );
+
+  it("never renders the plan/tier label itself - the header popover owns that chip", () => {
+    // `resolveProviderPlanLabel` (provider-rate-limit-content.test.ts) covers the
+    // planType -> "Pro 5x" mapping; the popover header's own test coverage
+    // (rate-limit-popover.test.tsx) covers the chip actually rendering.
+    render(<CodexRateLimitView data={codex} variant="popover-detail" />);
+    expect(screen.queryByText("Pro 5x")).toBeNull();
+  });
+
+  /**
+   * The words follow Layout's Used / Remaining setting through the strip's
+   * `windowPercentText`; the fill does not, because the strip's mini bars
+   * stay used-based too and a bar that inverted here alone would be two
+   * readings of one fact.
+   */
+  describe("Layout's Used / Remaining setting", () => {
+    function barWidths(): ReadonlyArray<string> {
+      return Array.from(
+        document.querySelectorAll<HTMLElement>(".rounded-full > .h-full"),
+      ).map((fill) => fill.style.width);
+    }
+
+    it("prints '% used' under percentMode 'used'", () => {
+      useLayoutStore
+        .getState()
+        .setRegionValues("usageLimits", { amount: "used" });
+      render(<CodexRateLimitView data={codex} variant="settings" />);
+      expect(screen.getByText("4% used")).toBeTruthy();
+      expect(screen.getByText("68% used")).toBeTruthy();
+      expect(screen.getByText("20% used")).toBeTruthy();
+      expect(barWidths()).toEqual(["4%", "68%", "20%"]);
+    });
+
+    it("prints the complement as '% remaining' under percentMode 'remaining', with the bar fill unchanged", () => {
+      useLayoutStore
+        .getState()
+        .setRegionValues("usageLimits", { amount: "remaining" });
+      render(<CodexRateLimitView data={codex} variant="settings" />);
+      expect(screen.getByText("96% remaining")).toBeTruthy();
+      expect(screen.getByText("32% remaining")).toBeTruthy();
+      expect(screen.getByText("80% remaining")).toBeTruthy();
+      expect(screen.queryByText(/% used/)).toBeNull();
+      expect(barWidths()).toEqual(["4%", "68%", "20%"]);
+    });
+
+    it("re-renders the rows when the store flips, on the popover variant too", () => {
+      render(<CodexRateLimitView data={codex} variant="popover-detail" />);
+      expect(screen.getByText("4% used")).toBeTruthy();
+      act(() => {
+        useLayoutStore
+          .getState()
+          .setRegionValues("usageLimits", { amount: "remaining" });
+      });
+      expect(screen.getByText("96% remaining")).toBeTruthy();
+      expect(screen.queryByText("4% used")).toBeNull();
+      expect(barWidths()).toEqual(["4%", "68%", "20%"]);
+    });
+  });
+
+  it("renders each extraWindow as its own labeled row (limit name + duration)", () => {
+    render(<CodexRateLimitView data={codex} variant="settings" />);
+    expect(screen.getByText("GPT-5 · Current session")).toBeTruthy();
+    expect(screen.getByText("20% used")).toBeTruthy();
+  });
+
+  it("renders the manual reset-credits block", () => {
+    render(<CodexRateLimitView data={codex} variant="settings" />);
+    expect(screen.getByText("Manual resets")).toBeTruthy();
+    expect(screen.getByText("3 available")).toBeTruthy();
+  });
+
+  const soonExpiry = NOW + 2 * 60 * 60 * 1000;
+  const laterExpiry = NOW + 3 * 24 * 60 * 60 * 1000;
+  const detailedCodex: CodexRateLimits = {
+    ...codex,
+    resetCredits: {
+      availableCount: 3,
+      credits: [
+        {
+          id: "later",
+          resetType: "codexRateLimits",
+          status: "available",
+          grantedAt: NOW,
+          expiresAt: laterExpiry,
+          title: "Later reset",
+          description: null,
+        },
+        {
+          id: "soon",
+          resetType: "codexRateLimits",
+          status: "available",
+          grantedAt: NOW,
+          expiresAt: soonExpiry,
+          title: "Soon reset",
+          description: null,
+        },
+      ],
+    },
+  };
+
+  it("lists reset expiries soonest first in Settings, and discloses a capped remainder", () => {
+    render(<CodexRateLimitView data={detailedCodex} variant="settings" />);
+
+    const resetLabels = screen.getAllByText(/reset$/);
+    expect(resetLabels.map((label) => label.textContent)).toEqual([
+      "Soon reset",
+      "Later reset",
+    ]);
+    expect(screen.getByText(/^Expires in /)).toBeTruthy();
+    expect(
+      screen.getByText(`Expires ${formatSettingsDate(laterExpiry, true)}`),
+    ).toBeTruthy();
+    expect(screen.getByText("+1 more not shown")).toBeTruthy();
+    // Nothing to hover in Settings - the list is already on screen.
+    expect(screen.getByText("3 available").className).not.toContain(
+      "cursor-help",
+    );
+  });
+
+  it("tints a reset expiring inside 48h in the Settings list, but not the far one", () => {
+    render(<CodexRateLimitView data={detailedCodex} variant="settings" />);
+    // `soonExpiry` is 2h out (inside the warning window); `laterExpiry` is 3d out.
+    expect(screen.getByText(/^Expires in /).className).toContain(
+      "text-destructive",
+    );
+    expect(
+      screen.getByText(`Expires ${formatSettingsDate(laterExpiry, true)}`)
+        .className,
+    ).not.toContain("text-destructive");
+  });
+
+  it("drops the warning tint in the tooltip, whose inverted surface can't carry it", async () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <CodexRateLimitView data={detailedCodex} variant="popover-detail" />
+      </TooltipProvider>,
+    );
+
+    fireEvent.pointerMove(screen.getByText("3 available"));
+
+    const tooltip = await screen.findByRole("tooltip");
+    expect(within(tooltip).getByText(/^Expires in /).className).not.toContain(
+      "text-destructive",
+    );
+  });
+
+  it("collapses the popover to a bare count - no expiries, no per-credit rows", () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <CodexRateLimitView data={detailedCodex} variant="popover-detail" />
+      </TooltipProvider>,
+    );
+    expect(screen.getByText("3 available")).toBeTruthy();
+    expect(screen.queryByText("Soon reset")).toBeNull();
+    expect(screen.queryByText(/^Expires/)).toBeNull();
+    expect(screen.queryByText("+1 more not shown")).toBeNull();
+  });
+
+  it("reveals the popover's expiries soonest first, plus the capped remainder, on hovering the count", async () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <CodexRateLimitView data={detailedCodex} variant="popover-detail" />
+      </TooltipProvider>,
+    );
+
+    fireEvent.pointerMove(screen.getByText("3 available"));
+
+    const tooltip = await screen.findByRole("tooltip");
+    const resetLabels = within(tooltip).getAllByText(/reset$/);
+    expect(resetLabels.map((label) => label.textContent)).toEqual([
+      "Soon reset",
+      "Later reset",
+    ]);
+    expect(within(tooltip).getByText(/^Expires in /)).toBeTruthy();
+    expect(
+      within(tooltip).getByText(
+        `Expires ${formatSettingsDate(laterExpiry, true)}`,
+      ),
+    ).toBeTruthy();
+    expect(within(tooltip).getByText("+1 more not shown")).toBeTruthy();
+  });
+
+  it("reveals the popover's tooltip on keyboard focus, not just hover", async () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <CodexRateLimitView data={detailedCodex} variant="popover-detail" />
+      </TooltipProvider>,
+    );
+
+    // A native `<button>`, not a `span` + `tabIndex`: natively
+    // keyboard-focusable, and valid without an ARIA role.
+    const count = screen.getByRole("button", { name: "3 available" });
+    fireEvent.focus(count);
+
+    expect(await screen.findByRole("tooltip")).toBeTruthy();
+  });
+
+  it("leaves the popover count out of tab order when the host sends no credit detail", () => {
+    render(<CodexRateLimitView data={codex} variant="popover-detail" />);
+    expect(screen.queryByRole("button", { name: "3 available" })).toBeNull();
+    expect(screen.getByText("3 available").tagName).toBe("SPAN");
+  });
+
+  it("leaves the popover count un-hoverable when the host sends no credit detail", () => {
+    render(<CodexRateLimitView data={codex} variant="popover-detail" />);
+    expect(screen.getByText("3 available").className).not.toContain(
+      "cursor-help",
+    );
+  });
+
+  it("names a calendar-month window rather than counting its days", () => {
+    render(
+      <CodexRateLimitView
+        data={{
+          ...codex,
+          limitName: null,
+          extraWindows: [],
+          primary: null,
+          secondary: {
+            usedPercent: 68,
+            resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+            durationMinutes: 30 * 24 * 60,
+          },
+        }}
+        variant="settings"
+      />,
+    );
+    expect(screen.getByText("Monthly")).toBeTruthy();
+  });
+
+  it("renders a generic day/hour duration for an off-standard window", () => {
+    render(
+      <CodexRateLimitView
+        data={{
+          ...codex,
+          limitName: null,
+          extraWindows: [],
+          primary: {
+            usedPercent: 4,
+            resetsAt: NOW + 60 * 60 * 1000,
+            durationMinutes: 360,
+          },
+          secondary: {
+            usedPercent: 68,
+            resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+            // 14 days: a real duration that names no cadence, so it is still
+            // counted rather than given a word.
+            durationMinutes: 14 * 24 * 60,
+          },
+        }}
+        variant="settings"
+      />,
+    );
+    expect(screen.getByText("6h")).toBeTruthy();
+    expect(screen.getByText("4% used")).toBeTruthy();
+    expect(screen.getByText("14d")).toBeTruthy();
+    expect(screen.getByText("68% used")).toBeTruthy();
+  });
+
+  it("renders the popover variant as '% used' with the shared semantic bar color", () => {
+    const { container } = render(
+      <CodexRateLimitView data={codex} variant="popover-detail" />,
+    );
+    // primary 4% used and secondary 68% used both stay blue.
+    expect(screen.getByText("Current session")).toBeTruthy();
+    expect(screen.getByText("4% used")).toBeTruthy();
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("68% used")).toBeTruthy();
+    expect(container.querySelectorAll(".bg-info").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".bg-warning").length).toBe(0);
+  });
+
+  it("uses the same Healthy, Running low, and Limited tones in Settings and Usage Limits", () => {
+    const severityFixture: CodexRateLimits = {
+      ...codex,
+      primary: {
+        usedPercent: 80,
+        resetsAt: NOW + 60 * 60 * 1000,
+        durationMinutes: 300,
+      },
+      secondary: {
+        usedPercent: 95,
+        resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+        durationMinutes: 10_080,
+      },
+      extraWindows: [
+        {
+          limitId: "limited",
+          limitName: "Limited",
+          primary: {
+            usedPercent: 100,
+            resetsAt: NOW + 60 * 60 * 1000,
+            durationMinutes: 300,
+          },
+          secondary: {
+            usedPercent: 40,
+            resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+            durationMinutes: 10_080,
+          },
+        },
+      ],
+    };
+
+    const settings = render(
+      <CodexRateLimitView data={severityFixture} variant="settings" />,
+    );
+    expect(settings.container.querySelectorAll(".bg-warning")).toHaveLength(2);
+    expect(settings.container.querySelectorAll(".bg-destructive")).toHaveLength(
+      1,
+    );
+    expect(settings.container.querySelectorAll(".bg-info")).toHaveLength(1);
+    cleanup();
+
+    const usageLimits = render(
+      <CodexRateLimitView data={severityFixture} variant="popover-detail" />,
+    );
+    expect(usageLimits.container.querySelectorAll(".bg-warning")).toHaveLength(
+      2,
+    );
+    expect(
+      usageLimits.container.querySelectorAll(".bg-destructive"),
+    ).toHaveLength(1);
+    expect(usageLimits.container.querySelectorAll(".bg-info")).toHaveLength(1);
+  });
+
+  it("draws every popover window track with a foreground-opacity fill so an empty bar stays visible", () => {
+    // Regression (Issue 3): several dark presets set --muted == --popover, so
+    // a `bg-muted` track vanished at 0% fill. The track now fills with
+    // `bg-foreground/15` instead, which contrasts against any background
+    // regardless of theme - a 0%-used window must still show a visible,
+    // empty track, with no border needed to keep it that way.
+    const { container } = render(
+      <CodexRateLimitView
+        data={{
+          ...codex,
+          secondary: null,
+          extraWindows: [],
+          resetCredits: null,
+          primary: {
+            usedPercent: 0,
+            resetsAt: NOW + 60 * 60 * 1000,
+            durationMinutes: 300,
+          },
+        }}
+        variant="popover-detail"
+      />,
+    );
+    expect(screen.getByText("Current session")).toBeTruthy();
+    expect(screen.getByText("0% used")).toBeTruthy();
+    const tracks = container.querySelectorAll(".bg-foreground\\/15");
+    expect(tracks.length).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".bg-green-500").length).toBe(0);
+    const fill = container.querySelector(".bg-info");
+    expect(fill).toBeInstanceOf(HTMLElement);
+    if (!(fill instanceof HTMLElement)) {
+      throw new Error("Expected a blue rate-limit fill");
+    }
+    expect(fill.style.width).toBe("0%");
+  });
+
+  it("shows a relative countdown for a short popover window", () => {
+    // The popover reverts to the same relative-for-short /
+    // exact-for-weekly split as the Settings card. `primary` is a 5h window, so
+    // it reads as a relative countdown ("Resets in 4h 7m"), not an absolute date.
+    render(
+      <CodexRateLimitView
+        data={{ ...codex, secondary: null, extraWindows: [] }}
+        variant="popover-detail"
+      />,
+    );
+    expect(screen.getByText(/^Resets in /)).toBeTruthy();
+    expect(screen.queryByText(/^Resets [A-Za-z]{3} \d{1,2}:\d{2}/)).toBeNull();
+  });
+
+  it("shows an absolute calendar date and time for a weekly popover window", () => {
+    // The weekly (10080-min) `secondary` window keeps the absolute reset line
+    // with its full date, since "Resets in 3d" is too coarse and a weekday
+    // alone is ambiguous.
+    render(
+      <CodexRateLimitView
+        data={{ ...codex, primary: null, extraWindows: [] }}
+        variant="popover-detail"
+      />,
+    );
+    expect(
+      screen.getByText(
+        `Resets ${formatSettingsDate(NOW + 3 * 24 * 60 * 60 * 1000, true)}`,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/^Resets in /)).toBeNull();
+  });
+
+  it("condenses the popover Overview to only the 5h/Weekly windows (credits dropped)", () => {
+    // Item 3 feedback: Overview drops Credits too, along with per-model
+    // extraWindows, the reset-credits block, and the plan label; it keeps only
+    // the primary/secondary windows.
+    render(
+      <CodexRateLimitView
+        data={{
+          ...codex,
+          credits: { unlimited: true, hasCredits: true, balance: null },
+        }}
+        variant="popover-overview"
+      />,
+    );
+    // Kept: primary (4% used) + secondary (68% used) windows.
+    expect(screen.getByText("Current session")).toBeTruthy();
+    expect(screen.getByText("4% used")).toBeTruthy();
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("68% used")).toBeTruthy();
+    // Dropped: plan label, per-model extraWindow row, reset-credits block, and
+    // Credits.
+    expect(screen.queryByText("Pro 5x")).toBeNull();
+    expect(screen.queryByText("GPT-5 · Current session")).toBeNull();
+    expect(screen.queryByText("Manual resets")).toBeNull();
+    expect(screen.queryByText("Credits")).toBeNull();
+  });
+});
+
+describe("ClaudeRateLimitView", () => {
+  it("shows an absolute calendar date and time for a far per-model reset, even though modelScoped carries no durationMinutes", () => {
+    // Regression: `modelScoped` entries never carry a `durationMinutes` (the
+    // SDK's per-model usage has no separate duration field), so a
+    // duration-based "is this weekly-scale" check always fell back to the
+    // relative countdown for these rows, no matter how far away the real
+    // reset was ("Fable" usage showed "Resets in 3d" instead of a precise
+    // date/time). The reset-format decision is now based on the real
+    // `resetsAt` delta instead, so a 3-day-out per-model reset gets the same
+    // absolute treatment a weekly window does.
+    const claude: ClaudeRateLimits = {
+      provider: "claude-code",
+      available: true,
+      subscriptionType: "max",
+      fiveHour: null,
+      sevenDay: null,
+      sevenDayOpus: null,
+      sevenDaySonnet: null,
+      modelScoped: [
+        {
+          displayName: "Fable",
+          usedPercent: 12,
+          resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+          durationMinutes: null,
+        },
+      ],
+      extraUsage: null,
+    };
+    render(<ClaudeRateLimitView data={claude} variant="settings" />);
+    expect(screen.getByText("Fable")).toBeTruthy();
+    expect(
+      screen.getByText(
+        `Resets ${formatSettingsDate(NOW + 3 * 24 * 60 * 60 * 1000, true)}`,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/^Resets in /)).toBeNull();
+  });
+
+  it("sets the model-scoped rows off with a divider, not a 'Per-model' heading", () => {
+    // Same header-less group treatment CodexRateLimitView gives its per-model
+    // (Spark) extraWindows: the rows' own display names already say which
+    // model each is, so the group gets a hairline divider instead of a label.
+    const claude: ClaudeRateLimits = {
+      provider: "claude-code",
+      available: true,
+      subscriptionType: "max",
+      fiveHour: {
+        usedPercent: 12,
+        resetsAt: NOW + 60 * 60 * 1000,
+        durationMinutes: 300,
+      },
+      sevenDay: {
+        usedPercent: 55,
+        resetsAt: NOW + 2 * 24 * 60 * 60 * 1000,
+        durationMinutes: 10080,
+      },
+      sevenDayOpus: null,
+      sevenDaySonnet: null,
+      modelScoped: [
+        {
+          displayName: "Fable",
+          usedPercent: 12,
+          resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+          durationMinutes: null,
+        },
+      ],
+      extraUsage: null,
+    };
+    const { container } = render(
+      <ClaudeRateLimitView data={claude} variant="settings" />,
+    );
+    expect(screen.queryByText("Per-model")).toBeNull();
+    // Exactly one divider: between the fixed windows and the model-scoped
+    // group (extraUsage is null, so no second one).
+    expect(container.querySelectorAll('[class*="bg-border/70"]').length).toBe(
+      1,
+    );
+    expect(screen.getByText("Fable")).toBeTruthy();
+  });
+
+  it("renders no divider when only the fixed windows are present", () => {
+    const claude: ClaudeRateLimits = {
+      provider: "claude-code",
+      available: true,
+      subscriptionType: "max",
+      fiveHour: {
+        usedPercent: 12,
+        resetsAt: NOW + 60 * 60 * 1000,
+        durationMinutes: 300,
+      },
+      sevenDay: null,
+      sevenDayOpus: null,
+      sevenDaySonnet: null,
+      modelScoped: [],
+      extraUsage: null,
+    };
+    const { container } = render(
+      <ClaudeRateLimitView data={claude} variant="settings" />,
+    );
+    expect(container.querySelectorAll('[class*="bg-border/70"]').length).toBe(
+      0,
+    );
+  });
+
+  it("formats extra usage cents as dollar amounts", () => {
+    const claude: ClaudeRateLimits = {
+      provider: "claude-code",
+      available: true,
+      subscriptionType: "max",
+      fiveHour: null,
+      sevenDay: null,
+      sevenDayOpus: null,
+      sevenDaySonnet: null,
+      modelScoped: [],
+      extraUsage: {
+        isEnabled: true,
+        monthlyLimit: 10000,
+        usedCredits: 2360,
+        utilization: 24,
+      },
+    };
+    render(<ClaudeRateLimitView data={claude} variant="settings" />);
+    expect(screen.getByText("Extra usage")).toBeTruthy();
+    expect(screen.getByText("$23.60 / $100.00")).toBeTruthy();
+    expect(screen.queryByText("2360.00 / 10000.00")).toBeNull();
+  });
+});
+
+describe("OpenRouterRateLimitView", () => {
+  const openRouter: OpenRouterRateLimits = {
+    provider: "openrouter",
+    available: true,
+    limit: 100,
+    limitRemaining: 40,
+    dailySpend: 5,
+    weeklySpend: 12,
+    monthlySpend: 30,
+    totalCredits: 100,
+    totalUsage: 60,
+    balance: 40,
+  };
+
+  it("renders a usage bar from limit/limitRemaining", () => {
+    render(<OpenRouterRateLimitView data={openRouter} variant="settings" />);
+    expect(screen.getByText("Credits")).toBeTruthy();
+    expect(screen.getByText("$60.00 / $100.00")).toBeTruthy();
+  });
+
+  it("renders the uncapped spend/credit figures as plain rows", () => {
+    render(<OpenRouterRateLimitView data={openRouter} variant="settings" />);
+    expect(screen.getByText("Balance")).toBeTruthy();
+    expect(screen.getByText("Spent this month")).toBeTruthy();
+    expect(screen.getByText("$30.00")).toBeTruthy();
+  });
+
+  it("omits the bar when there is no hard limit", () => {
+    render(
+      <OpenRouterRateLimitView
+        data={{ ...openRouter, limit: null, limitRemaining: null }}
+        variant="settings"
+      />,
+    );
+    expect(screen.queryByText("Credits")).toBeNull();
+    // The uncapped figures still render.
+    expect(screen.getByText("Balance")).toBeTruthy();
+  });
+
+  it("condenses the Overview to only the Credits bar and Balance", () => {
+    // Issue 2d: Overview keeps the balance-shaped fields, drops the total /
+    // per-period spend rows.
+    render(
+      <OpenRouterRateLimitView data={openRouter} variant="popover-overview" />,
+    );
+    expect(screen.getByText("Credits")).toBeTruthy();
+    expect(screen.getByText("Balance")).toBeTruthy();
+    expect(screen.queryByText("Spent this month")).toBeNull();
+    expect(screen.queryByText("Total credits")).toBeNull();
+  });
+});
+
+describe("HuggingFaceRateLimitView", () => {
+  const huggingFace: HuggingFaceRateLimits = {
+    provider: "huggingface",
+    available: true,
+    includedUsd: 2,
+    usedUsd: 0.5,
+    remainingIncludedUsd: 1.5,
+    limitUsd: 10,
+    remainingLimitUsd: 9.5,
+    numRequests: 42,
+    periodStart: "2026-08-01T00:00:00.000Z",
+    periodEnd: "2026-09-01T00:00:00.000Z",
+  };
+
+  // A pay-as-you-go account: no included allowance, so no denominator exists.
+  const spendOnly: HuggingFaceRateLimits = {
+    ...huggingFace,
+    includedUsd: null,
+    remainingIncludedUsd: null,
+    limitUsd: null,
+    remainingLimitUsd: null,
+  };
+
+  it("renders a credits bar from the included allowance", () => {
+    render(<HuggingFaceRateLimitView data={huggingFace} variant="settings" />);
+    expect(screen.getAllByText("Included credits").length).toBeGreaterThan(0);
+    expect(screen.getByText("$0.50 / $2.00")).toBeTruthy();
+  });
+
+  it("leads with remaining included credits", () => {
+    render(<HuggingFaceRateLimitView data={huggingFace} variant="settings" />);
+    expect(screen.getByText("Included credits left")).toBeTruthy();
+    expect(screen.getByText("$1.50")).toBeTruthy();
+  });
+
+  it("renders the spend-limit and request detail rows", () => {
+    render(<HuggingFaceRateLimitView data={huggingFace} variant="settings" />);
+    expect(screen.getByText("Spend limit")).toBeTruthy();
+    expect(screen.getByText("$10.00")).toBeTruthy();
+    expect(screen.getByText("Requests")).toBeTruthy();
+  });
+
+  it("falls back to spend-only wording with no bar when there is no included allowance", () => {
+    render(<HuggingFaceRateLimitView data={spendOnly} variant="settings" />);
+    // No denominator, so no bar and no invented "0 of unknown" row.
+    expect(screen.queryByText("$0.50 / $2.00")).toBeNull();
+    expect(screen.queryByText("Included credits left")).toBeNull();
+    expect(screen.getByText("Spent this period")).toBeTruthy();
+    expect(screen.getByText("$0.50")).toBeTruthy();
+  });
+
+  it("clamps the bar when spend has run past the included allowance", () => {
+    render(
+      <HuggingFaceRateLimitView
+        data={{ ...huggingFace, usedUsd: 5, remainingIncludedUsd: 0 }}
+        variant="settings"
+      />,
+    );
+    // Clamped to the allowance rather than overflowing the meter.
+    expect(screen.getByText("$2.00 / $2.00")).toBeTruthy();
+  });
+
+  it("renders the billing period the figures cover", () => {
+    render(<HuggingFaceRateLimitView data={huggingFace} variant="settings" />);
+    expect(
+      screen.getByText(
+        `${formatSettingsDate(Date.parse(huggingFace.periodStart ?? ""), false)} - ${formatSettingsDate(Date.parse(huggingFace.periodEnd ?? ""), false)}`,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("drops the billing period rather than rendering Invalid Date", () => {
+    // The endpoint is schema-less, so an unparseable bound degrades to no row.
+    render(
+      <HuggingFaceRateLimitView
+        data={{ ...huggingFace, periodEnd: "not-a-date" }}
+        variant="settings"
+      />,
+    );
+    expect(screen.queryByText("Billing period")).toBeNull();
+  });
+
+  it("condenses the Overview to the bar and the headline figure", () => {
+    render(
+      <HuggingFaceRateLimitView
+        data={huggingFace}
+        variant="popover-overview"
+      />,
+    );
+    expect(screen.getByText("Included credits left")).toBeTruthy();
+    expect(screen.queryByText("Spend limit")).toBeNull();
+    expect(screen.queryByText("Requests")).toBeNull();
+  });
+});
+
+describe("KiloCodeRateLimitView", () => {
+  const kilo: KiloCodeRateLimits = {
+    provider: "kilocode",
+    available: true,
+    creditBalance: 25.5,
+    passState: "active",
+  };
+
+  it("renders the credit balance and pass state as plain rows (no bar)", () => {
+    const { container } = render(
+      <KiloCodeRateLimitView data={kilo} variant="settings" />,
+    );
+    expect(screen.getByText("Credit balance")).toBeTruthy();
+    expect(screen.getByText("$25.50")).toBeTruthy();
+    expect(screen.getByText("Kilo Pass")).toBeTruthy();
+    expect(screen.getByText("Active")).toBeTruthy();
+    // No computable percentage -> no fill bar.
+    expect(container.querySelectorAll(".bg-primary").length).toBe(0);
+  });
+
+  it("condenses the Overview to only the credit balance (drops Kilo Pass)", () => {
+    render(<KiloCodeRateLimitView data={kilo} variant="popover-overview" />);
+    expect(screen.getByText("Credit balance")).toBeTruthy();
+    expect(screen.queryByText("Kilo Pass")).toBeNull();
+  });
+});
+
+describe("GrokRateLimitView", () => {
+  // The wire's UTC midnights are displayed in the reader's local timezone.
+  const periodStart = Date.UTC(2026, 6, 22);
+  const periodEnd = Date.UTC(2026, 6, 29);
+  const expectedBillingPeriod = `${formatSettingsDate(periodStart, false)} - ${formatSettingsDate(periodEnd, false)}`;
+
+  const grokWithPeriod: GrokRateLimits = {
+    provider: "grok",
+    available: true,
+    subscriptionTier: "SuperGrok",
+    periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+    periodStart,
+    periodEnd,
+    period: {
+      usedPercent: 12,
+      resetsAt: periodEnd,
+      durationMinutes: 10_080,
+    },
+    monthlyLimit: 100,
+    onDemandCap: 50,
+    onDemandUsed: 5.5,
+    prepaidBalance: 25,
+  };
+
+  const grokPeriodLess: GrokRateLimits = {
+    provider: "grok",
+    available: true,
+    subscriptionTier: "SuperGrok",
+    periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+    periodStart,
+    periodEnd,
+    period: null,
+    monthlyLimit: null,
+    onDemandCap: null,
+    onDemandUsed: null,
+    prepaidBalance: null,
+  };
+
+  it("renders a Weekly usage bar when period is present", () => {
+    const { container } = render(
+      <GrokRateLimitView data={grokWithPeriod} variant="settings" />,
+    );
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("12% used")).toBeTruthy();
+    // Real bar fill (MeterRow track + severity color), not a plain text row.
+    expect(container.querySelectorAll(".bg-foreground\\/15").length).toBe(1);
+    expect(container.querySelectorAll(".bg-info").length).toBe(1);
+    // Fallback plan/date rows stay off when a real period window exists.
+    expect(screen.queryByText("Plan")).toBeNull();
+    expect(screen.queryByText("Billing period")).toBeNull();
+  });
+
+  // The period-type table and the fallback word are the CALLER's, so this page
+  // says "Weekly" and "Usage" where the strip says `wk` and `period`.
+  it("names an unmeasured period from its type, in the page's own words", () => {
+    render(
+      <GrokRateLimitView
+        data={{
+          ...grokWithPeriod,
+          periodType: "USAGE_PERIOD_TYPE_MONTHLY",
+          period: {
+            usedPercent: 44,
+            resetsAt: periodEnd,
+            durationMinutes: null,
+          },
+        }}
+        variant="settings"
+      />,
+    );
+    expect(screen.getByText("Monthly")).toBeTruthy();
+  });
+
+  // A MEASURED day names its own cadence, so the duration wins over the type
+  // table - and it has to win in the page's vocabulary. `1d` is the compact
+  // strip's word, and it read as a stray abbreviation in a column of
+  // "Weekly" / "Monthly" / "Current session".
+  it("names a measured one-day period 'Daily', not '1d'", () => {
+    render(
+      <GrokRateLimitView
+        data={{
+          ...grokWithPeriod,
+          // Deliberately disagreeing with the duration: the measurement is the
+          // more trustworthy source, and this asserts the row takes it.
+          periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+          period: {
+            usedPercent: 44,
+            resetsAt: periodEnd,
+            durationMinutes: 1440,
+          },
+        }}
+        variant="settings"
+      />,
+    );
+    expect(screen.getByText("Daily")).toBeTruthy();
+    expect(screen.queryByText("1d")).toBeNull();
+    expect(screen.queryByText("Weekly")).toBeNull();
+  });
+
+  // Two days name no cadence at all, so the plain count survives this change.
+  it("keeps the plain day count for a multi-day period that names no cadence", () => {
+    render(
+      <GrokRateLimitView
+        data={{
+          ...grokWithPeriod,
+          periodType: null,
+          period: {
+            usedPercent: 44,
+            resetsAt: periodEnd,
+            durationMinutes: 2 * 1440,
+          },
+        }}
+        variant="settings"
+      />,
+    );
+    expect(screen.getByText("2d")).toBeTruthy();
+  });
+
+  it("falls back to 'Usage' for a period with neither a duration nor a known type", () => {
+    render(
+      <GrokRateLimitView
+        data={{
+          ...grokWithPeriod,
+          periodType: null,
+          period: {
+            usedPercent: 44,
+            resetsAt: periodEnd,
+            durationMinutes: null,
+          },
+        }}
+        variant="settings"
+      />,
+    );
+    // Sentence case, matching the rows it sits among - and the exact string
+    // `formatWindowDuration(null)` answered before the helper existed.
+    expect(screen.getByText("Usage")).toBeTruthy();
+  });
+
+  it("renders Plan + Billing period fallback when period is null (no bar)", () => {
+    const { container } = render(
+      <GrokRateLimitView data={grokPeriodLess} variant="settings" />,
+    );
+    expect(screen.getByText("Plan")).toBeTruthy();
+    // Branded tier is shown verbatim, not title-cased ("Supergrok").
+    expect(screen.getByText("SuperGrok")).toBeTruthy();
+    expect(screen.getByText("Billing period")).toBeTruthy();
+    expect(screen.getByText(expectedBillingPeriod)).toBeTruthy();
+    expect(screen.queryByText("Weekly")).toBeNull();
+    expect(screen.queryByText("% used", { exact: false })).toBeNull();
+    expect(container.querySelectorAll(".bg-foreground\\/15").length).toBe(0);
+  });
+
+  it("suppresses the fallback Plan row on popover-detail (the header owns the tier chip), keeping the billing period", () => {
+    // In the single-provider popover tab the header already renders the tier as
+    // a chip (resolveProviderPlanLabel), so the body's Plan row would duplicate
+    // it - same reason Codex/Claude keep the tier out of their card bodies. The
+    // billing-period row, which the chip doesn't carry, still shows.
+    render(
+      <GrokRateLimitView data={grokPeriodLess} variant="popover-detail" />,
+    );
+    expect(screen.queryByText("Plan")).toBeNull();
+    expect(screen.queryByText("SuperGrok")).toBeNull();
+    expect(screen.getByText("Billing period")).toBeTruthy();
+    expect(screen.getByText(expectedBillingPeriod)).toBeTruthy();
+  });
+
+  it("keeps the fallback Plan row on the Overview tab, which renders no tier chip", () => {
+    render(
+      <GrokRateLimitView data={grokPeriodLess} variant="popover-overview" />,
+    );
+    expect(screen.getByText("Plan")).toBeTruthy();
+    expect(screen.getByText("SuperGrok")).toBeTruthy();
+    expect(screen.getByText("Billing period")).toBeTruthy();
+  });
+
+  it("renders credit rows only when non-null", () => {
+    render(
+      <GrokRateLimitView
+        data={{
+          ...grokWithPeriod,
+          prepaidBalance: 25,
+          monthlyLimit: 100,
+          onDemandUsed: 5.5,
+          onDemandCap: null,
+        }}
+        variant="settings"
+      />,
+    );
+    expect(screen.getByText("Prepaid balance")).toBeTruthy();
+    expect(screen.getByText("$25.00")).toBeTruthy();
+    expect(screen.getByText("Monthly limit")).toBeTruthy();
+    expect(screen.getByText("$100.00")).toBeTruthy();
+    expect(screen.getByText("On-demand used")).toBeTruthy();
+    expect(screen.getByText("$5.50")).toBeTruthy();
+    // Null onDemandCap drops the On-demand limit row entirely.
+    expect(screen.queryByText("On-demand limit")).toBeNull();
+  });
+
+  it("condenses the Overview to period + Prepaid balance (drops monthly/on-demand)", () => {
+    render(
+      <GrokRateLimitView data={grokWithPeriod} variant="popover-overview" />,
+    );
+    // Kept: period bar + prepaid.
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("12% used")).toBeTruthy();
+    expect(screen.getByText("Prepaid balance")).toBeTruthy();
+    expect(screen.getByText("$25.00")).toBeTruthy();
+    // Dropped: monthly + on-demand (detail/settings only).
+    expect(screen.queryByText("Monthly limit")).toBeNull();
+    expect(screen.queryByText("On-demand used")).toBeNull();
+    expect(screen.queryByText("On-demand limit")).toBeNull();
+  });
+});
+
+describe("OpenCodeRateLimitView", () => {
+  const openCode: OpenCodeRateLimits = {
+    provider: "opencode",
+    available: true,
+    credentialGeneration: "gen-1",
+    fiveHour: {
+      status: "ok",
+      usedPercent: 12,
+      resetsAt: NOW + 60 * 60 * 1000,
+      durationMinutes: 300,
+    },
+    weekly: {
+      status: "ok",
+      usedPercent: 20,
+      resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+      durationMinutes: 10_080,
+    },
+    monthly: {
+      status: "ok",
+      usedPercent: 30,
+      resetsAt: NOW + 20 * 24 * 60 * 60 * 1000,
+      durationMinutes: null,
+    },
+  };
+
+  it("renders the 5-hour, Weekly, and Monthly rows", () => {
+    render(<OpenCodeRateLimitView data={openCode} />);
+    expect(screen.getByText("5-hour")).toBeTruthy();
+    expect(screen.getByText("12% used")).toBeTruthy();
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("20% used")).toBeTruthy();
+    expect(screen.getByText("Monthly")).toBeTruthy();
+    expect(screen.getByText("30% used")).toBeTruthy();
+    expect(screen.queryByText("Go limit reached")).toBeNull();
+  });
+
+  it("lets rate-limited status win over a low percentage", () => {
+    const { container } = render(
+      <OpenCodeRateLimitView
+        data={{
+          ...openCode,
+          fiveHour: { ...openCode.fiveHour, status: "rate-limited" },
+        }}
+      />,
+    );
+    expect(screen.getByText("Go limit reached")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Go quota is exhausted. Free models or Zen balance may still work.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("12% used")).toBeTruthy();
+    expect(
+      container.querySelectorAll(".bg-destructive").length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("does not retain a rate-limited badge or red bar after that window expires", () => {
+    const { container } = render(
+      <OpenCodeRateLimitView
+        data={{
+          ...openCode,
+          fiveHour: {
+            ...openCode.fiveHour,
+            status: "rate-limited",
+            resetsAt: NOW - 1,
+          },
+        }}
+      />,
+    );
+    expect(screen.queryByText("Go limit reached")).toBeNull();
+    expect(container.querySelector(".bg-destructive")).toBeNull();
+  });
+
+  it("opens the OpenCode auth page through openLink when Manage Go is clicked", () => {
+    // The app owns every URL egress (A6): Manage Go is a plain button, not an
+    // anchor, and the runner-pending disabled state it used to grow is gone.
+    render(<OpenCodeRateLimitView data={openCode} />);
+    const action = screen.getByRole("button", { name: "Manage Go" });
+    expect(action.tagName).toBe("BUTTON");
+
+    fireEvent.click(action);
+    expect(openLinkMock).toHaveBeenCalledWith(
+      "https://opencode.ai/auth",
+      "account",
+      expect.objectContaining({ type: "click" }),
+    );
+  });
+});
+
+describe("AntigravityRateLimitView", () => {
+  const antigravity: AntigravityRateLimits = {
+    provider: "antigravity",
+    available: true,
+    planName: "Google AI Pro",
+    groups: [
+      {
+        displayName: "Gemini Models",
+        description: "Gemini 3 Pro and Gemini 3 Flash",
+        windows: [
+          {
+            usedPercent: 12,
+            resetsAt: NOW + 60 * 60 * 1000,
+            durationMinutes: 300,
+            bucketId: "gemini-5h",
+            windowKind: "5h",
+          },
+          {
+            usedPercent: 40,
+            resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+            durationMinutes: 10_080,
+            bucketId: "gemini-weekly",
+            windowKind: "weekly",
+          },
+        ],
+      },
+      {
+        displayName: "Claude and GPT models",
+        description: null,
+        windows: [
+          {
+            usedPercent: 8,
+            resetsAt: null,
+            durationMinutes: null,
+            bucketId: "3p-mystery",
+            windowKind: "beta",
+          },
+        ],
+      },
+    ],
+  };
+
+  it("renders both group headings, the first group's caption, and one row per window labelled by duration", () => {
+    render(<AntigravityRateLimitView data={antigravity} variant="settings" />);
+    expect(screen.getByText("Gemini Models")).toBeTruthy();
+    expect(screen.getByText("Gemini 3 Pro and Gemini 3 Flash")).toBeTruthy();
+    expect(screen.getByText("Current session")).toBeTruthy();
+    expect(screen.getByText("12% used")).toBeTruthy();
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("40% used")).toBeTruthy();
+    expect(screen.getByText("Claude and GPT models")).toBeTruthy();
+    // A window with no duration falls back to Google's raw windowKind.
+    expect(screen.getByText("beta")).toBeTruthy();
+    expect(screen.getByText("8% used")).toBeTruthy();
+    // The plan is a header chip (resolveProviderPlanLabel), not part of this body.
+    expect(screen.queryByText("Google AI Pro")).toBeNull();
+  });
+
+  it("renders only the first group in the overview variant", () => {
+    render(
+      <AntigravityRateLimitView
+        data={antigravity}
+        variant="popover-overview"
+      />,
+    );
+    expect(screen.getByText("Gemini Models")).toBeTruthy();
+    expect(screen.getByText("Current session")).toBeTruthy();
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.queryByText("Claude and GPT models")).toBeNull();
+    expect(screen.queryByText("beta")).toBeNull();
+  });
+
+  it("renders a group with no windows as heading + caption only", () => {
+    const withEmptyGroup: AntigravityRateLimits = {
+      ...antigravity,
+      groups: [
+        ...antigravity.groups,
+        {
+          displayName: "Informational group",
+          description: "No windows reported for this group",
+          windows: [],
+        },
+      ],
+    };
+    render(
+      <AntigravityRateLimitView data={withEmptyGroup} variant="settings" />,
+    );
+    expect(screen.getByText("Informational group")).toBeTruthy();
+    expect(screen.getByText("No windows reported for this group")).toBeTruthy();
+  });
+
+  it("falls back to the bucket id when a window carries neither a duration nor a windowKind", () => {
+    const noKind: AntigravityRateLimits = {
+      provider: "antigravity",
+      available: true,
+      planName: null,
+      groups: [
+        {
+          displayName: "Gemini Models",
+          description: null,
+          windows: [
+            {
+              usedPercent: 5,
+              resetsAt: null,
+              durationMinutes: null,
+              bucketId: "gemini-mystery",
+              windowKind: null,
+            },
+          ],
+        },
+      ],
+    };
+    render(<AntigravityRateLimitView data={noKind} variant="settings" />);
+    expect(screen.getByText("gemini-mystery")).toBeTruthy();
+    expect(screen.getByText("5% used")).toBeTruthy();
+  });
+});
+
+describe("ProviderRateLimitDetail (Kimi)", () => {
+  const kimi: KimiRateLimits = {
+    provider: "kimi",
+    available: true,
+    fiveHour: {
+      usedPercent: 12,
+      resetsAt: NOW + 60 * 60 * 1000,
+      durationMinutes: 300,
+    },
+    weekly: {
+      usedPercent: 20,
+      resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+      durationMinutes: 10_080,
+    },
+    monthly: {
+      usedPercent: 30,
+      resetsAt: NOW + 20 * 24 * 60 * 60 * 1000,
+      durationMinutes: 43_200,
+    },
+  };
+
+  it("renders the 5-hour, Weekly, and Monthly rows", () => {
+    render(
+      <ProviderRateLimitDetail
+        data={kimi}
+        variant="settings"
+        codexResetAction={null}
+      />,
+    );
+    expect(screen.getByText("5-hour")).toBeTruthy();
+    expect(screen.getByText("12% used")).toBeTruthy();
+    expect(screen.getByText("Weekly")).toBeTruthy();
+    expect(screen.getByText("20% used")).toBeTruthy();
+    expect(screen.getByText("Monthly")).toBeTruthy();
+    expect(screen.getByText("30% used")).toBeTruthy();
+  });
+
+  it("renders no row for a window the backend left out", () => {
+    render(
+      <ProviderRateLimitDetail
+        data={{ ...kimi, weekly: null }}
+        variant="settings"
+        codexResetAction={null}
+      />,
+    );
+    expect(screen.getByText("5-hour")).toBeTruthy();
+    expect(screen.getByText("Monthly")).toBeTruthy();
+    expect(screen.queryByText("Weekly")).toBeNull();
+    expect(screen.queryByText("20% used")).toBeNull();
+  });
+});
+
+describe("ProviderRateLimitDetail dispatch", () => {
+  it("dispatches to the Hugging Face view", () => {
+    render(
+      <ProviderRateLimitDetail
+        data={{
+          provider: "huggingface",
+          available: true,
+          includedUsd: 2,
+          usedUsd: 0.5,
+          remainingIncludedUsd: 1.5,
+          limitUsd: null,
+          remainingLimitUsd: null,
+          numRequests: null,
+          periodStart: null,
+          periodEnd: null,
+        }}
+        variant="settings"
+        codexResetAction={null}
+      />,
+    );
+    expect(screen.getByText("Included credits left")).toBeTruthy();
+  });
+
+  it("dispatches to the OpenRouter view", () => {
+    render(
+      <ProviderRateLimitDetail
+        data={{
+          provider: "openrouter",
+          available: true,
+          limit: null,
+          limitRemaining: null,
+          dailySpend: null,
+          weeklySpend: null,
+          monthlySpend: null,
+          totalCredits: null,
+          totalUsage: null,
+          balance: 12,
+        }}
+        variant="settings"
+        codexResetAction={null}
+      />,
+    );
+    expect(screen.getByText("Balance")).toBeTruthy();
+    expect(screen.getByText("$12.00")).toBeTruthy();
+  });
+
+  it("dispatches to the Kilo Code view", () => {
+    render(
+      <ProviderRateLimitDetail
+        data={{
+          provider: "kilocode",
+          available: true,
+          creditBalance: 7,
+          passState: null,
+        }}
+        variant="settings"
+        codexResetAction={null}
+      />,
+    );
+    expect(screen.getByText("Credit balance")).toBeTruthy();
+    expect(screen.getByText("$7.00")).toBeTruthy();
+  });
+
+  it("dispatches to the Grok view", () => {
+    render(
+      <ProviderRateLimitDetail
+        data={{
+          provider: "grok",
+          available: true,
+          subscriptionTier: "SuperGrok",
+          periodType: null,
+          periodStart: null,
+          periodEnd: null,
+          period: null,
+          monthlyLimit: null,
+          onDemandCap: null,
+          onDemandUsed: null,
+          prepaidBalance: 8,
+        }}
+        variant="settings"
+        codexResetAction={null}
+      />,
+    );
+    expect(screen.getByText("Plan")).toBeTruthy();
+    expect(screen.getByText("SuperGrok")).toBeTruthy();
+    expect(screen.getByText("Prepaid balance")).toBeTruthy();
+    expect(screen.getByText("$8.00")).toBeTruthy();
+  });
+
+  it("dispatches to the OpenCode view", () => {
+    render(
+      <ProviderRateLimitDetail
+        data={{
+          provider: "opencode",
+          available: true,
+          credentialGeneration: "gen-1",
+          fiveHour: {
+            status: "ok",
+            usedPercent: 12,
+            resetsAt: NOW + 60 * 60 * 1000,
+            durationMinutes: 300,
+          },
+          weekly: {
+            status: "ok",
+            usedPercent: 20,
+            resetsAt: NOW + 3 * 24 * 60 * 60 * 1000,
+            durationMinutes: 10_080,
+          },
+          monthly: {
+            status: "ok",
+            usedPercent: 30,
+            resetsAt: NOW + 20 * 24 * 60 * 60 * 1000,
+            durationMinutes: null,
+          },
+        }}
+        variant="settings"
+        codexResetAction={null}
+      />,
+    );
+    expect(screen.getByText("5-hour")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Manage Go" })).toBeTruthy();
+  });
+
+  it("dispatches to the Antigravity view", () => {
+    render(
+      <ProviderRateLimitDetail
+        data={{
+          provider: "antigravity",
+          available: true,
+          planName: "Google AI Pro",
+          groups: [
+            {
+              displayName: "Gemini Models",
+              description: null,
+              windows: [
+                {
+                  usedPercent: 12,
+                  resetsAt: NOW + 60 * 60 * 1000,
+                  durationMinutes: 300,
+                  bucketId: "gemini-5h",
+                  windowKind: "5h",
+                },
+              ],
+            },
+          ],
+        }}
+        variant="settings"
+        codexResetAction={null}
+      />,
+    );
+    expect(screen.getByText("Gemini Models")).toBeTruthy();
+    expect(screen.getByText("Current session")).toBeTruthy();
+  });
+});
+
+const CHAT_CREDENTIAL_COPY: ReadonlyArray<
+  readonly [string, RateLimitChatCredential, string, string | null]
+> = [
+  [
+    "an API key variable",
+    { kind: "api-key", source: "ANTHROPIC_API_KEY" },
+    "Chats here are billed to ANTHROPIC_API_KEY, not your Claude plan, so there are no plan limits to show.",
+    "ANTHROPIC_API_KEY",
+  ],
+  [
+    "an apiKeyHelper",
+    { kind: "api-key", source: "apiKeyHelper" },
+    "Chats here are billed to the key from your apiKeyHelper, not your Claude plan, so there are no plan limits to show.",
+    "apiKeyHelper",
+  ],
+  [
+    "the Console managed key",
+    { kind: "api-key", source: "/login managed key" },
+    "Chats here are billed to your Anthropic Console key, not your Claude plan, so there are no plan limits to show.",
+    null,
+  ],
+  [
+    "another api-key source",
+    { kind: "api-key", source: "user" },
+    "Chats here are billed to user, not your Claude plan, so there are no plan limits to show.",
+    "user",
+  ],
+  [
+    "a token",
+    { kind: "token", source: "CLAUDE_CODE_OAUTH_TOKEN" },
+    "Chats here sign in with CLAUDE_CODE_OAUTH_TOKEN instead of your Claude login.",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+  ],
+  [
+    "Bedrock",
+    { kind: "cloud-provider", source: "bedrock" },
+    "Chats here run on Amazon Bedrock, so there are no plan limits to show.",
+    null,
+  ],
+  [
+    "Vertex",
+    { kind: "cloud-provider", source: "vertex" },
+    "Chats here run on Google Vertex AI, so there are no plan limits to show.",
+    null,
+  ],
+  [
+    "Foundry",
+    { kind: "cloud-provider", source: "foundry" },
+    "Chats here run on Microsoft Foundry, so there are no plan limits to show.",
+    null,
+  ],
+  [
+    "an unknown cloud provider",
+    { kind: "cloud-provider", source: "gateway" },
+    "Chats here run on gateway, so there are no plan limits to show.",
+    null,
+  ],
+];
+
+function chatCredentialEnvelope(
+  chatCredential: RateLimitChatCredential,
+): ProviderRateLimitEnvelope {
+  return {
+    latest: {
+      provider: "claude-code",
+      available: false,
+      reason: "rate_limits_not_available",
+      chatCredential,
+    },
+    lastGood: null,
+    lastGoodAt: null,
+    lastFailureAt: NOW,
+    credentialGeneration: null,
+    episode: NO_EPISODE,
+  };
+}
+
+describe("ProviderRateLimitBody (chat credential notice)", () => {
+  it.each(CHAT_CREDENTIAL_COPY)(
+    "says %s in place of 'Usage limits unavailable'",
+    (_name, credential, text, codeText) => {
+      const { container } = render(
+        <ProviderRateLimitBody
+          isPending={false}
+          isFetching={false}
+          isError={false}
+          envelope={chatCredentialEnvelope(credential)}
+          codexResetAction={null}
+          openModelProvidersAction={null}
+        />,
+      );
+      expect(container.textContent).toBe(text);
+      expect(
+        Array.from(container.querySelectorAll("code")).map(
+          (node) => node.textContent,
+        ),
+      ).toEqual(codeText === null ? [] : [codeText]);
+      expect(screen.queryByText(/Usage limits unavailable/)).toBeNull();
+    },
+  );
+});
+
+describe("ProviderRateLimitBody (unavailable state)", () => {
+  it("prefixes the reason with 'Usage limits unavailable', not a bare dash", () => {
+    render(
+      <ProviderRateLimitBody
+        isPending={false}
+        isFetching={false}
+        isError={false}
+        envelope={{
+          latest: {
+            provider: "codex",
+            available: false,
+            reason: "rate_limits_not_available",
+          },
+          lastGood: null,
+          lastGoodAt: null,
+          lastFailureAt: NOW,
+          credentialGeneration: null,
+          episode: NO_EPISODE,
+        }}
+        codexResetAction={null}
+        openModelProvidersAction={null}
+      />,
+    );
+    expect(
+      screen.getByText(
+        "Usage limits unavailable - not available for this account",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("offers Open Model Providers for an OpenCode 401 and hides it for a missing-key 403", () => {
+    const openModelProviders = vi.fn();
+    render(
+      <ProviderRateLimitBody
+        isPending={false}
+        isFetching={false}
+        isError={false}
+        envelope={{
+          latest: {
+            provider: "opencode",
+            available: false,
+            reason: "insufficient_permissions",
+          },
+          lastGood: null,
+          lastGoodAt: null,
+          lastFailureAt: NOW,
+          credentialGeneration: null,
+          episode: NO_EPISODE,
+        }}
+        codexResetAction={null}
+        openModelProvidersAction={openModelProviders}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open Model Providers" }),
+    );
+    expect(openModelProviders).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    render(
+      <ProviderRateLimitBody
+        isPending={false}
+        isFetching={false}
+        isError={false}
+        envelope={{
+          latest: {
+            provider: "opencode",
+            available: false,
+            reason: "rate_limits_not_available",
+          },
+          lastGood: null,
+          lastGoodAt: null,
+          lastFailureAt: NOW,
+          credentialGeneration: null,
+          episode: NO_EPISODE,
+        }}
+        codexResetAction={null}
+        openModelProvidersAction={openModelProviders}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Open Model Providers" }),
+    ).toBeNull();
+  });
+});
+
+describe("ProviderRateLimitBody (empty state)", () => {
+  it("says no rate limits were reported when there is no reading and nothing in flight", () => {
+    render(
+      <ProviderRateLimitBody
+        isPending={false}
+        isFetching={false}
+        isError={false}
+        envelope={null}
+        codexResetAction={null}
+        openModelProvidersAction={null}
+      />,
+    );
+    expect(screen.getByText("No rate limits reported.")).toBeTruthy();
+  });
+});
+
+describe("ProviderRateLimitBody (Codex reset action)", () => {
+  it("places the supplied action beside a positive manual-reset count", () => {
+    render(
+      <ProviderRateLimitBody
+        isPending={false}
+        isFetching={false}
+        isError={false}
+        envelope={{
+          latest: {
+            provider: "codex",
+            available: true,
+            planType: "pro_5x",
+            limitId: "codex",
+            limitName: "Codex",
+            primary: null,
+            secondary: null,
+            extraWindows: [],
+            credits: null,
+            individualLimit: null,
+            resetCredits: { availableCount: 3, credits: null },
+            rateLimitReachedType: null,
+          },
+          lastGood: null,
+          lastGoodAt: null,
+          lastFailureAt: null,
+          credentialGeneration: null,
+          episode: NO_EPISODE,
+        }}
+        codexResetAction={() => <button type="button">Use reset</button>}
+        openModelProvidersAction={null}
+      />,
+    );
+
+    expect(screen.getByText("3 available")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Use reset" })).toBeTruthy();
+  });
+});
+
+describe("CursorRateLimitView", () => {
+  const CYCLE_END = NOW + 29 * 24 * 60 * 60 * 1000;
+  const cursor: CursorRateLimits = {
+    provider: "cursor",
+    available: true,
+    cycleStart: NOW - 2 * 24 * 60 * 60 * 1000,
+    cycleEnd: CYCLE_END,
+    cursorModels: {
+      usedPercent: 6,
+      resetsAt: CYCLE_END,
+      durationMinutes: 31 * 24 * 60,
+    },
+    otherModels: {
+      usedPercent: 40,
+      resetsAt: CYCLE_END,
+      durationMinutes: 31 * 24 * 60,
+    },
+    includedLimitUsd: 400,
+    usedUsd: 325.37,
+    remainingUsd: 74.63,
+    bonusUsedUsd: null,
+    onDemandLimitType: "user",
+    onDemandLimitUsd: 1,
+    onDemandUsedUsd: 0.25,
+    onDemandRemainingUsd: 0.75,
+    displayMessage: "You've used 81% of your included usage",
+  };
+
+  it("pairs the Overview's dollars with their own included-usage meter", () => {
+    // Live-account regression, second round: the bucket bars are each
+    // measured against their own unpublished (bonus-inflated) limit, while
+    // the dollars describe Cursor's BLENDED $400 purchased pool (~81%
+    // consumed on the same payload). A bare "$74.63 left of $400" under bars
+    // reading 6% / 40% presented as a broken calculation even though
+    // `remaining` is Cursor's own server-computed field - and dropping the
+    // rows was the wrong fix (the money is the actionable number). The
+    // dollars stay, carried by a credit meter whose fill shares their
+    // denominator, so the row explains itself.
+    render(<CursorRateLimitView data={cursor} variant="popover-overview" />);
+    expect(screen.getByText("Cursor Models")).toBeTruthy();
+    expect(screen.getByText("6% used")).toBeTruthy();
+    expect(screen.getByText("Other Models")).toBeTruthy();
+    expect(screen.getByText("40% used")).toBeTruthy();
+    expect(screen.getByText("Included usage")).toBeTruthy();
+    expect(screen.getByText("$325.37 / $400.00")).toBeTruthy();
+    expect(screen.getByText("Included usage left")).toBeTruthy();
+    expect(screen.getByText("$74.63")).toBeTruthy();
+  });
+
+  it("anchors the detail's money to Cursor's own sentence about the blended pool", () => {
+    render(<CursorRateLimitView data={cursor} variant="settings" />);
+    // The sentence names the pool the meter measures, in Cursor's own words.
+    expect(
+      screen.getByText("You've used 81% of your included usage"),
+    ).toBeTruthy();
+    expect(screen.getByText("Included usage left")).toBeTruthy();
+    expect(screen.getByText("$74.63")).toBeTruthy();
+    expect(screen.getByText("Included usage")).toBeTruthy();
+    expect(screen.getByText("$325.37 / $400.00")).toBeTruthy();
+    // On-demand in real dollars: a $1 limit renders as $1.00, never $100.
+    expect(screen.getByText("On-demand limit")).toBeTruthy();
+    expect(screen.getByText("$1.00")).toBeTruthy();
+    expect(screen.queryByText("$100.00")).toBeNull();
+  });
+
+  it("shows overflow honestly once spend runs past the purchased allowance", () => {
+    // Past $400 the account is on Cursor's bonus grant - nothing is limited
+    // and nothing is billed, so the meter must NOT dress this up as a limit
+    // event: fill pins at 100% in the amber running-low tone (red stays
+    // reserved for the bucket bars, the actual gates), the detail keeps the
+    // REAL spend, "left" clamps at $0.00 instead of going negative, and the
+    // bonus spend gets its own row.
+    const { container } = render(
+      <CursorRateLimitView
+        data={{
+          ...cursor,
+          usedUsd: 412.1,
+          remainingUsd: -12.1,
+          bonusUsedUsd: 12.1,
+        }}
+        variant="popover-overview"
+      />,
+    );
+    expect(screen.getByText("$412.10 / $400.00")).toBeTruthy();
+    expect(screen.getByText("Included usage left")).toBeTruthy();
+    expect(screen.getByText("$0.00")).toBeTruthy();
+    expect(screen.queryByText("-$12.10")).toBeNull();
+    expect(screen.getByText("Bonus usage")).toBeTruthy();
+    expect(screen.getByText("$12.10")).toBeTruthy();
+    expect(container.querySelector(".bg-warning")).toBeTruthy();
+    expect(container.querySelector(".bg-destructive")).toBeNull();
+  });
+
+  it("falls back to the billing-cycle range when no bucket was reported", () => {
+    render(
+      <CursorRateLimitView
+        data={{ ...cursor, cursorModels: null, otherModels: null }}
+        variant="settings"
+      />,
+    );
+    expect(screen.getByText("Billing cycle")).toBeTruthy();
+  });
+});

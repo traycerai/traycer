@@ -1,0 +1,298 @@
+import type { CommandFn, CommandResult } from "../runner/runner";
+import {
+  createServiceController,
+  resolveServiceCliInvocation,
+  serviceLabelFor,
+  serviceManifestPath,
+  windowsTaskName,
+  type DesktopRegistrationTakeover,
+} from "../service";
+import { withCliUpdateContender } from "../host/update-contender";
+import type { WithCliUpdateContenderOptions } from "../host/update-contender";
+import { resolveAttemptAdoptionFromNonce } from "../host/update-adoption";
+import { hostHomeDir } from "../store/paths";
+import {
+  installHostServiceWithAttempt,
+  takeoverDesktopRegistrationWithAttempt,
+} from "../host/update-mutation";
+import { attestInstallRuntime } from "../host/attested-install-runtime";
+import { runAsExplicitRegistrationRepair } from "../service/registration-repair";
+import {
+  refuseDesktopDisruptionOfForegroundRun,
+  refuseForegroundHostRun,
+} from "../host/foreground-host-run";
+import type { HostStartOrigin } from "../host/lifecycle-origin";
+import { refuseUnlessRestartTarget } from "../host/restart-target-guard";
+import { noteStopTargetProgress, withStopTarget } from "../service/stop-target";
+import type { RestartTargetHost } from "@traycer-clients/shared/host-lock/restart-target";
+import {
+  formatCredentialProvisionNote,
+  maybeProvisionCredential,
+  runSignInPreflight,
+} from "../host/install-auth";
+import {
+  defaultResolveHostStartTargetDeps,
+  resolveHostStartTarget,
+} from "./host-start";
+
+// `traycer host service install [--no-linger] [--takeover]` - register the
+// OS service for the current environment. `--no-linger` skips `loginctl
+// enable-linger` on Linux. `--takeover` (macOS) moves host management from
+// the Traycer Desktop app to the CLI: the Desktop-managed host is stopped
+// cooperatively, its agent registration booted out, and the CLI-owned
+// service registered in its place.
+//
+// This command STARTS a host (systemd `enable --now`, launchd bootstrap), so
+// it owns the same sign-in pre-flight and post-start credential provisioning
+// as `host install` - it is the deferred half of the documented
+// `host install --no-service-register` split flow, whose bytes-only first
+// half deliberately skipped both on the promise that "the actor that later
+// starts the service owns the sign-in question". That actor is this command.
+export interface ServiceInstallArgs {
+  readonly enableLinger: boolean;
+  readonly allowSelfInvocation: boolean;
+  readonly takeover: boolean;
+  /**
+   * The one host process this command may stop or boot out, or null for
+   * whichever runs (`host/restart-target-guard.ts`). Desktop passes it on the
+   * takeover its force restart's re-register fallback can reach.
+   */
+  readonly expectedHost: RestartTargetHost | null;
+  /** See `HostApplyArgs.attemptAdoption`. `null` for an ordinary invocation. */
+  readonly attemptAdoption: string | null;
+  /**
+   * `--lifecycle-origin`, recorded in the adoption proof the registration's
+   * start publishes (`host/lifecycle-origin.ts`). `desktop` also refuses a
+   * `--takeover` over a host started in a terminal
+   * (`refuseDesktopDisruptionOfForegroundRun`); a plain registration over one
+   * is refused whatever the origin.
+   */
+  readonly lifecycleOrigin: HostStartOrigin;
+}
+
+export function buildServiceInstallCommand(
+  args: ServiceInstallArgs,
+): CommandFn {
+  return async (ctx): Promise<CommandResult> => {
+    ctx.runtime.logger.info("Service install command started", {
+      environment: ctx.runtime.environment,
+      enableLinger: args.enableLinger,
+      allowSelfInvocation: args.allowSelfInvocation,
+    });
+    // Before the lock: the inline device-flow sign-in can take as long as a
+    // human takes, and nothing it touches (the credentials file) is guarded
+    // by the CLI lock.
+    const authPreflight = await runSignInPreflight(ctx, false);
+    const adoption = await resolveAttemptAdoptionFromNonce(
+      hostHomeDir(ctx.runtime.environment),
+      args.attemptAdoption,
+      Date.now(),
+    );
+    // ONE options value for acquisition and every in-attempt revalidation:
+    // three literals that must stay identical are how admission policies
+    // drift.
+    const contenderOptions: WithCliUpdateContenderOptions = {
+      environment: ctx.runtime.environment,
+      reason: "service-install",
+      waitMs: 30_000,
+      pollIntervalMs: 100,
+      admission: "service-maintenance",
+      adoption,
+    };
+    const locked = await withCliUpdateContender(
+      contenderOptions,
+      async (capability) => {
+        // First, before any probe, launcher, plist, unit, task or claim, and
+        // under the lock that keeps the answer true: a new host is spawned
+        // only under this same lock.
+        //
+        // A plain registration over a host a person started in a terminal
+        // cannot complete, whoever asks: the service's supervisor declines to
+        // that host as the incumbent (`runHostStart`), and this command would
+        // wait out the spawn acknowledgement and fail with the registration
+        // already written. It refuses instead.
+        //
+        // A takeover's cooperative claim follows `pid.json`, so it would stop
+        // that host as readily as the Desktop agent's. A desktop takeover
+        // leaves it alone and refuses; a terminal's is unchanged.
+        if (args.takeover) {
+          await refuseDesktopDisruptionOfForegroundRun(
+            "host service install",
+            ctx.runtime.environment,
+            args.lifecycleOrigin,
+          );
+        } else {
+          await refuseForegroundHostRun(
+            "host service install",
+            ctx.runtime.environment,
+            args.lifecycleOrigin,
+          );
+        }
+        if (args.expectedHost !== null) {
+          await refuseUnlessRestartTarget(
+            "host service install",
+            ctx.runtime.environment,
+            args.expectedHost,
+            null,
+          );
+        }
+        // Registration starts the installed host. Check the supervisor's
+        // prerequisite under the install lock before writing a registration
+        // or stopping the host managed by Desktop; otherwise a missing install
+        // leaves a task behind and surfaces only as a spawn timeout.
+        await resolveHostStartTarget(
+          { environment: ctx.runtime.environment, cwd: null },
+          defaultResolveHostStartTargetDeps,
+        );
+        const label = serviceLabelFor(ctx.runtime.environment);
+        const cli = await resolveServiceCliInvocation({
+          environment: ctx.runtime.environment,
+          override: null,
+          allowSelfInvocation: args.allowSelfInvocation,
+        });
+        ctx.runtime.logger.debug("Service install CLI invocation resolved", {
+          environment: ctx.runtime.environment,
+          label: label.id,
+          argCount: cli.args.length,
+        });
+        const controller = createServiceController();
+        // The takeover stops and boots out the host it finds, and the install
+        // after it boots out a loaded registration - twice when it races
+        // another registrar. One scope holds every one of those edges to the
+        // confirmed host, up to the install's own launch
+        // (`service/stop-target.ts`).
+        const takeover = await withStopTarget(
+          "host service install",
+          ctx.runtime.environment,
+          args.expectedHost,
+          async (): Promise<DesktopRegistrationTakeover | null> => {
+            let takenOver: DesktopRegistrationTakeover | null = null;
+            if (args.takeover) {
+              ctx.progress({
+                stage: "register",
+                message: `taking over host management from Traycer Desktop`,
+                percent: null,
+                bytes: null,
+                totalBytes: null,
+                workUnits: null,
+              });
+              takenOver = await takeoverDesktopRegistrationWithAttempt(
+                capability,
+                contenderOptions,
+                controller,
+                label,
+              );
+              noteStopTargetProgress("stop-ran");
+              ctx.runtime.logger.info(
+                "Service install takeover step completed",
+                {
+                  environment: ctx.runtime.environment,
+                  label: label.id,
+                  outcome: takenOver.kind,
+                },
+              );
+            }
+            ctx.progress({
+              stage: "register",
+              message: `registering service '${label.id}'`,
+              percent: null,
+              bytes: null,
+              totalBytes: null,
+              workUnits: null,
+            });
+            // THE named repair, typed at a terminal or pressed as Doctor's
+            // Register service: the one install that writes a task its owner
+            // disabled back to enabled and starts it. Every other install carries
+            // the owner's setting over (`runAsExplicitRegistrationRepair`).
+            await runAsExplicitRegistrationRepair(() =>
+              installHostServiceWithAttempt(
+                capability,
+                contenderOptions,
+                args.lifecycleOrigin,
+                controller,
+                {
+                  label,
+                  cli,
+                  enableLinger: args.enableLinger,
+                },
+              ),
+            );
+            return takenOver;
+          },
+        );
+        const platform = process.platform;
+        const manifestPath =
+          platform === "win32"
+            ? windowsTaskName(label)
+            : serviceManifestPath(label);
+        ctx.runtime.logger.info("Service install command completed", {
+          environment: ctx.runtime.environment,
+          label: label.id,
+          platform,
+          enableLinger: args.enableLinger,
+        });
+        // Attested HERE, not in the post-lock assembly: the attestation's
+        // contract is a read of the exact record whose service this cycle
+        // just started (attested-install-runtime.ts) - after the lock
+        // releases, a concurrent bytes-only install can commit a new record,
+        // and attesting THAT generation would let Desktop stamp the new
+        // record with the runtime version of a host still running old bytes.
+        return {
+          label,
+          cli,
+          takeover,
+          manifestPath,
+          attestation: await attestInstallRuntime(ctx.runtime.environment),
+        };
+      },
+    );
+    // After the lock releases, mirroring `host install`: the probe waits up
+    // to 30s for the host to come up and touches nothing the cli-lock guards
+    // (the credentials file and a short-lived stream connection). Holding
+    // the shared lock through that wait would hand every concurrent CLI
+    // command - and the Desktop mutation lane behind them - a 30s contention
+    // window for no benefit.
+    //
+    // The registration above started the host, so this command owns the
+    // credential handoff too - "install" mirrors host-install's
+    // register+start path. Best-effort: failures are notes, never a
+    // failed registration.
+    const credentialProvision = await maybeProvisionCredential(
+      ctx,
+      "install",
+      authPreflight,
+    );
+    const { label, cli, takeover, manifestPath } = locked;
+    let human =
+      takeover !== null && takeover.kind === "took-over"
+        ? `service '${label.id}' registered (environment=${label.environment}); host management taken over from Traycer Desktop (agent '${takeover.agentLabelId}' deregistered, host ${takeover.cooperativeStop === "stopped" ? "stopped cooperatively" : takeover.cooperativeStop === "no-host" ? "was not running" : "was unreachable and booted out"})`
+        : takeover !== null && takeover.kind === "cli-host-stopped"
+          ? `service '${label.id}' registered (environment=${label.environment}); ${takeover.cooperativeStop === "no-host" ? "the job already loaded under this label had no host running and was unloaded before the reload" : `the host already running under this label ${takeover.cooperativeStop === "stopped" ? "stood down cooperatively before the reload" : "was unreachable and booted out"}`}`
+          : `service '${label.id}' registered (environment=${label.environment})`;
+    // Restate the unauthenticated warning on the terminal line - the
+    // pre-flight's copy printed before the registration output and may
+    // have scrolled away.
+    if (authPreflight.state === "unauthenticated") {
+      human = `${human}; not signed in - the host is unprovisioned until you run \`traycer login\``;
+    }
+    const provisionNote = formatCredentialProvisionNote(credentialProvision);
+    if (provisionNote !== null) {
+      human = `${human}; ${provisionNote}`;
+    }
+    return {
+      data: {
+        label: label.id,
+        displayName: label.displayName,
+        environment: label.environment,
+        manifestPath,
+        cli: { command: cli.command, args: cli.args },
+        ...(takeover === null ? {} : { takeover }),
+        ...locked.attestation,
+        authPreflight,
+        credentialProvision,
+      },
+      human,
+      exitCode: 0,
+    };
+  };
+}

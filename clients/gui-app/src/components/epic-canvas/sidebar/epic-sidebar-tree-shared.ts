@@ -1,0 +1,342 @@
+/**
+ * Shared tree utilities and constants for chat-tree and artifact-tree.
+ * Extracted from the original monolithic epic-sidebar.tsx to eliminate duplication.
+ */
+
+import { useSyncExternalStore, type CSSProperties } from "react";
+import type { TargetAndTransition, Transition } from "motion/react";
+import type { EpicNodeKind } from "@/lib/artifacts/node-display";
+import { useReducedMotion } from "@/lib/animation/status-animation-clock";
+import { cn } from "@/lib/utils";
+import { useSettingsStore } from "@/stores/settings/settings-store";
+import { SIDEBAR_NODE_REVEAL_VISIBILITY_MS } from "@/stores/epics/sidebar-node-reveal-store";
+
+export const INDENT_PX = 16;
+export const BASE_PAD_LEFT = 8;
+
+/**
+ * The expansion state a tree row reads and drives: whether ITS branch is open,
+ * and the toggle action. One instance per panel, with a stable identity for the
+ * panel's life.
+ *
+ * Rows used to receive the whole effective expanded `Set` as a prop. Every
+ * toggle rebuilt that set, so the callbacks closed over it and the controller
+ * object holding them were re-minted too, and the `memo` on every row in the
+ * tree compared unequal: one chevron click re-rendered all of them, and
+ * Motion re-measured every `m.li` for the layout animation. The rows that
+ * actually change on a toggle are the toggled one and the children it shows
+ * or hides. So the set lives behind a subscription instead, and a row reads
+ * one boolean, its own id's membership, through `useTreeRowExpanded`: only a
+ * row whose boolean flips re-renders.
+ */
+export interface TreeRowExpansion {
+  readonly subscribe: (listener: () => void) => () => void;
+  readonly isExpanded: (id: string) => boolean;
+  readonly toggleExpanded: (id: string) => void;
+}
+
+/** The panel-held store behind `TreeRowExpansion`. */
+export interface ExpandedIdsStore {
+  readonly subscribe: (listener: () => void) => () => void;
+  readonly get: () => ReadonlySet<string>;
+  /** Publishes a new effective set; a same-identity set notifies no one. */
+  readonly set: (next: ReadonlySet<string>) => void;
+}
+
+export function createExpandedIdsStore(
+  initial: ReadonlySet<string>,
+): ExpandedIdsStore {
+  let current = initial;
+  const listeners = new Set<() => void>();
+  return {
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    get: () => current,
+    set: (next) => {
+      if (next === current) return;
+      current = next;
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
+/** Whether `id`'s branch is open: re-renders this row only when that flips. */
+export function useTreeRowExpanded(
+  expansion: TreeRowExpansion,
+  id: string,
+): boolean {
+  return useSyncExternalStore(
+    expansion.subscribe,
+    () => expansion.isExpanded(id),
+    () => expansion.isExpanded(id),
+  );
+}
+
+/**
+ * The motion props of one chat-tree row, local or cloud: a position-only
+ * layout animation so the row slides when rows around it come and go, a short
+ * exit, and one shared timing. Every row in the tree takes these, because a
+ * row that snaps to its new place while its neighbours slide is drawn through
+ * by them for the length of the transition.
+ *
+ * Reduced motion is read live, so a preference flipped while rows are mounted
+ * reaches the next layout change; the motion library's own hook holds the
+ * value it read at mount.
+ */
+export function useTreeRowMotion(): {
+  readonly layout: "position" | false;
+  readonly exit: TargetAndTransition | undefined;
+  readonly transition: Transition;
+} {
+  const shouldReduceMotion = useReducedMotion();
+  return {
+    layout: shouldReduceMotion ? false : "position",
+    exit: shouldReduceMotion ? undefined : { opacity: 0, x: -8 },
+    transition: { duration: 0.16, ease: "easeOut" },
+  };
+}
+
+/** Same visual treatment and lifetime as a communication-graph transcript jump. */
+export const SIDEBAR_REVEAL_HIGHLIGHT_CLASS =
+  "data-[sidebar-reveal-highlighted=true]:bg-primary/15 data-[sidebar-reveal-highlighted=true]:ring-2 data-[sidebar-reveal-highlighted=true]:ring-inset data-[sidebar-reveal-highlighted=true]:ring-primary/80 motion-safe:data-[sidebar-reveal-highlighted=true]:animate-pulse";
+
+export function flashSidebarElement(element: HTMLElement, nonce: number): void {
+  const revealNonce = String(nonce);
+  element.dataset.sidebarRevealHighlighted = "true";
+  element.dataset.sidebarRevealNonce = revealNonce;
+  window.setTimeout(() => {
+    if (element.dataset.sidebarRevealNonce !== revealNonce) return;
+    delete element.dataset.sidebarRevealHighlighted;
+    delete element.dataset.sidebarRevealNonce;
+  }, SIDEBAR_NODE_REVEAL_VISIBILITY_MS);
+}
+
+export function revealSidebarNode(
+  region: HTMLElement,
+  nodeId: string,
+  nonce: number,
+): boolean {
+  const row = Array.from(
+    region.querySelectorAll<HTMLElement>("[data-sidebar-node-id]"),
+  ).find((element) => element.dataset.sidebarNodeId === nodeId);
+  if (row === undefined) return false;
+  row.scrollIntoView({ block: "nearest", inline: "nearest" });
+  flashSidebarElement(row, nonce);
+  return true;
+}
+
+/**
+ * Horizontal offset (from a row's own padding-left edge) to the center of its
+ * chevron/icon column. Indent guide rails are drawn at the parent depth plus
+ * this offset so each rail sits under the column it descends from.
+ */
+export const TREE_GUIDE_OFFSET_PX = 7;
+
+export const EMPTY_PENDING_LIST: ReadonlyArray<{ id: string; name: string }> =
+  [];
+export const EMPTY_PRE_ACK_LIST: ReadonlyArray<{
+  tempId: string;
+  name: string;
+}> = [];
+
+/**
+ * Reveal-on-hover styling for panel section header action buttons (filter,
+ * selection, collapse-all). Hidden until the `group/panel-section` is hovered
+ * or a child is focused, so the header stays quiet at rest. The filter trigger
+ * layers its own active-state override so an applied filter remains visible.
+ *
+ * Disabled shadcn buttons carry `disabled:opacity-50`, which would otherwise
+ * pin these controls visible at rest because the pseudo-class outranks the base
+ * `opacity-0`. The disabled overrides keep them hidden until the section is
+ * revealed, then show them dimmed to signal that they are unavailable.
+ */
+export const PANEL_HEADER_ACTION_REVEAL_CLASS =
+  "opacity-0 transition-opacity disabled:opacity-0 focus-visible:opacity-100 group-hover/panel-section:opacity-100 group-focus-within/panel-section:opacity-100 disabled:group-hover/panel-section:opacity-50 disabled:group-focus-within/panel-section:opacity-50";
+
+/**
+ * Reveal-on-hover styling for a tree row's inline "+" add control. Hidden at
+ * rest, shown when the `group/tree-item` row is hovered / focused or the menu
+ * is open - mirroring the "⋯" more-menu trigger beside it.
+ *
+ * The `disabled:*` overrides are load-bearing: shadcn `Button`'s base
+ * `disabled:opacity-50` is a `:disabled` pseudo-class (specificity 0,2,0) and
+ * outweighs the plain `opacity-0` rest rule (0,1,0), which would otherwise pin
+ * a *disabled* control visible at 50% even when the row is not hovered.
+ * `disabled:opacity-0` restores hidden-at-rest (`cn` keeps it over
+ * the base rule), and `disabled:group-hover/tree-item:opacity-50` keeps the
+ * control dimmed once the row reveals it, signalling it is non-interactive.
+ *
+ * While a child create is pending the control instead stays pinned visible (at
+ * the base 50% dim) so its inline spinner reads as progress regardless of hover.
+ */
+export function rowAddControlRevealClass(addChildIsPending: boolean): string {
+  if (addChildIsPending) return "transition-opacity disabled:opacity-50";
+  return "opacity-0 transition-opacity disabled:opacity-0 focus-visible:opacity-100 group-hover/tree-item:opacity-100 aria-expanded:opacity-100 disabled:group-hover/tree-item:opacity-50";
+}
+
+export const STATUS_DOT_CLASSES: Record<number, string> = {
+  0: "bg-muted-foreground",
+  1: "bg-warning",
+  2: "bg-success",
+};
+
+export const STATUS_LABELS: Record<number, string> = {
+  0: "Todo",
+  1: "In Progress",
+  2: "Done",
+};
+
+export function computeArtifactNodeStatusDot(
+  artifactType: EpicNodeKind,
+  statusValue: number | null,
+): boolean {
+  if (statusValue === null) return false;
+  return artifactType === "ticket" || artifactType === "story";
+}
+
+export function computeArtifactNodeAddChildPending(args: {
+  pendingChildName: string | null;
+  pendingChildRealId: string | null;
+  createArtifactPending: boolean;
+}): boolean {
+  return (
+    args.pendingChildName !== null ||
+    args.pendingChildRealId !== null ||
+    args.createArtifactPending
+  );
+}
+
+export function anyMutationPending(values: ReadonlyArray<boolean>): boolean {
+  return values.some(Boolean);
+}
+
+/**
+ * Per-type icon color customization for a sidebar row's leading glyph, read
+ * here rather than threaded from the tree root so the leading icon stays a
+ * leaf concern. `ChatProgressIcon` already subscribes to exactly these two
+ * settings internally for chat rows; every OTHER sidebar row glyph (terminal
+ * agents, cloud rows, static node icons) mirrors it through this hook so one
+ * row kind cannot drift muted while another picks up "color by type" in the
+ * same column - a chat glyph's tint must depend on the user's icon-color
+ * setting, never on which list the row arrived from.
+ */
+export function useNodeIconDisplay(artifactType: EpicNodeKind): {
+  readonly className: string;
+  readonly style: CSSProperties | undefined;
+} {
+  const colorMode = useSettingsStore((s) => s.artifactIconColorMode);
+  const color = useSettingsStore((s) => s.artifactIconColors[artifactType]);
+  return {
+    className: cn(
+      "size-3.5 shrink-0",
+      // The tint travels as a custom property rather than as `color`, the same
+      // way the six call sites that resolve this setting inline do (the
+      // add-node dropdown, the node tab icon, the artifact child index, the
+      // view menu, the colour picker, the file icons). Two idioms for one
+      // concept is how a setting ends up half-applied; a literal colour in
+      // `--swatch` also still fails `no-inline-styles`, where a literal in
+      // `color` would not.
+      colorMode === "byType" && "text-[var(--swatch)]",
+      colorMode === "none" && "text-muted-foreground/70",
+    ),
+    style:
+      colorMode === "byType"
+        ? ({ "--swatch": color } as CSSProperties)
+        : undefined,
+  };
+}
+
+/**
+ * Right padding a row reserves for its hover-revealed controls.
+ *
+ * `revealed` is for a surface whose controls never wait for hover (touch has no
+ * hover to wait for): the row must then hold the wider pad at rest, because the
+ * controls are already sitting in it. A `pointer-coarse:` variant would say the
+ * same thing less reliably - it would have to out-order the `group-hover`
+ * rules rather than replace them - so the branch is taken here, in the one
+ * place the string is built.
+ */
+export function nodePadRightClass(
+  canEdit: boolean,
+  showAdd: boolean,
+  revealed: boolean,
+): string {
+  if (!canEdit) return "pr-2";
+  if (showAdd) {
+    if (revealed) return "pr-14";
+    return "pr-2 group-hover/tree-item:pr-14 group-focus-within/tree-item:pr-14 group-has-[[data-state=open]]/tree-item:pr-14";
+  }
+  if (revealed) return "pr-8";
+  return "pr-2 group-hover/tree-item:pr-8 group-focus-within/tree-item:pr-8 group-has-[[data-state=open]]/tree-item:pr-8";
+}
+
+/**
+ * Dimming for an archived row included by the selected visibility mode or by
+ * the narrow open/activity/unread exception in the default view.
+ */
+export const ARCHIVED_ROW_CLASS = "opacity-55";
+
+/**
+ * The row's own class list, lifted out of the chat tree's row button so its five
+ * state modifiers stop counting against that component's complexity ceiling.
+ * Pure and unchanged - same operands, same order.
+ *
+ * `min-h-7` is a FLOOR, not a height: the row is a horizontal flex - chevron,
+ * leading icon, then the text column - and `items-center` centers the short
+ * children against whatever height the column takes. Kept as a floor rather
+ * than a fixed height so a row whose title wraps, or which regains a second
+ * line, grows instead of clipping.
+ */
+export function chatRowClassName(state: {
+  readonly isDragging: boolean;
+  readonly showRowControls: boolean;
+  readonly reserveArchiveSlot: boolean;
+  readonly selectionMode: boolean;
+  readonly isArchived: boolean;
+  readonly isActive: boolean;
+  readonly revealRowControls: boolean;
+}): string {
+  return cn(
+    "flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md py-1 text-left text-ui-sm font-normal transition-colors",
+    "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
+    state.isDragging && "cursor-grabbing opacity-60",
+    nodePadRightClass(
+      state.showRowControls,
+      state.reserveArchiveSlot,
+      state.revealRowControls,
+    ),
+    state.selectionMode && "cursor-pointer",
+    state.isArchived && ARCHIVED_ROW_CLASS,
+    state.isActive
+      ? "bg-accent text-accent-foreground"
+      : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
+    SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
+  );
+}
+
+/**
+ * An artifact row's class list, shared by the tree's row button and the
+ * sample workspace's sidebar so the two draw one row.
+ */
+export function artifactRowClassName(state: {
+  readonly isDragging: boolean;
+  readonly padRightClass: string;
+  readonly selectionMode: boolean;
+  readonly isActive: boolean;
+}): string {
+  return cn(
+    "flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md text-left text-ui-sm font-normal transition-colors",
+    "focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
+    state.isDragging && "cursor-grabbing opacity-60",
+    state.padRightClass,
+    state.selectionMode && "cursor-pointer",
+    state.isActive
+      ? "bg-accent text-accent-foreground"
+      : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
+    SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
+  );
+}
