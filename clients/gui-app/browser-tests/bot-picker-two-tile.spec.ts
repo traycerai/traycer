@@ -28,6 +28,7 @@ const PICKER = '[data-testid="bot-channel-picker"]';
 const TRIGGER = '[data-testid="bot-channel-picker-trigger"]';
 const COLUMN = '[data-testid="bot-channel-sidebar-pane"]';
 const RAIL = '[data-testid="bot-memory-panel"]';
+const CHANNEL = '[data-testid="bot-channel"]';
 
 interface Size {
   readonly width: number;
@@ -43,9 +44,13 @@ async function openPage(
   await page.goto(`${fixture("bot-picker-two-tile")}?strip=${strip}`);
 }
 
-/** The two-tile menu form: the title is the picker, there is no column, and the rail is drawn. */
+/**
+ * The two-tile menu form: the title is the picker, there is no column, and
+ * both panes (the channel and the rail beside it) are drawn.
+ */
 async function expectTwoTileMenu(page: Page): Promise<void> {
   await expect(page.locator(TRIGGER)).toBeVisible();
+  await expect(page.locator(CHANNEL)).toBeVisible();
   await expect(page.locator(RAIL)).toBeVisible();
   await expect(page.locator(COLUMN)).toHaveCount(0);
 }
@@ -54,20 +59,27 @@ function openAndFollow(page: Page): Promise<SurfaceEntry> {
   return followSurface(page, { surface: PICKER, trigger: TRIGGER });
 }
 
-/** What the picker rests across, whichever panes sit beneath it. */
+/**
+ * What the picker rests across, whichever panes sit beneath it: every edge in
+ * one comparison, so a failure prints them all.
+ */
 function expectRestsAcross(
   entry: SurfaceEntry,
   size: Size,
   insets: Insets,
   bottom: number,
 ): void {
-  expect(entry.settled.left).toBeCloseTo(insets.left, 0);
-  expect(entry.settled.right).toBeCloseTo(size.width - insets.right, 0);
-  expect(entry.settled.width).toBeCloseTo(
-    size.width - insets.left - insets.right,
-    0,
-  );
-  expect(entry.settled.bottom).toBeCloseTo(bottom, 0);
+  expect({
+    top: Math.round(entry.settled.top),
+    left: Math.round(entry.settled.left),
+    right: Math.round(entry.settled.right),
+    bottom: Math.round(entry.settled.bottom),
+  }).toEqual({
+    top: insets.top,
+    left: insets.left,
+    right: size.width - insets.right,
+    bottom,
+  });
 }
 
 const NO_INSETS: Insets = { top: 0, left: 0, right: 0 };
@@ -144,16 +156,19 @@ test("on a 1024 by 768 device with the expanded strip the picker rests across th
 });
 
 // One pixel under the boundary the same page, with the same rail open, is the
-// one-tile form: the rail takes the pane on its own (the channel beside it is
-// hidden), the column draws, and there is no picker trigger to measure. The
-// rail being drawn is what shows it was set, so the case cannot pass on a page
-// where the rail never opened.
+// one-tile form: the rail takes the pane on its own, the column draws, and there
+// is no picker trigger to measure. The channel stays mounted but hidden: with a
+// tile count from the installed app's placement that is `channelBesideRailClass`
+// answering "hidden" for one tile (the column drawing, which only the installed
+// form does, shows the count is not null). The rail being drawn is what shows it
+// was set, so the case cannot pass on a page where the rail never opened.
 test("one pixel under the boundary the rail does not make the form two-tile", async ({
   page,
 }) => {
   await openPage(page, { width: 827, height: 600 }, "collapsed");
 
   await expect(page.locator(RAIL)).toBeVisible();
+  await expect(page.locator(CHANNEL)).toBeHidden();
   await expect(page.locator(COLUMN)).toBeVisible();
   await expect(page.locator(TRIGGER)).toHaveCount(0);
 });
