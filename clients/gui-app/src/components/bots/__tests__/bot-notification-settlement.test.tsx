@@ -52,6 +52,9 @@ import {
 } from "@/components/bots/__tests__/bot-turn-test-support";
 import { MountedLandingChannel } from "@/components/bots/__tests__/bot-turn-channel-harness";
 import { botMember } from "@/components/notifications/__tests__/notification-bot-members-test-support";
+import { parseNotificationActivationPayload } from "@/lib/notifications/notification-activation-envelope";
+import type { NotificationPayload } from "@/lib/notifications/payload";
+import { activationPayloadFromPushData } from "../../../../../mobile/src/push-registration";
 import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
 import {
   rowFromHostEntry,
@@ -301,20 +304,28 @@ async function activateMessage(
   threadId: string | null,
   onResult: (outcome: "success" | "failure") => void,
 ): Promise<{ readonly notificationToken: string | undefined }> {
+  const row = postRow(messageId, threadId);
+  if (row.payload === null) throw new Error("the bot row carried no payload");
+  return activatePayload(row.payload, row.feedId, onResult);
+}
+
+/** The opening of `payload` by the reader: resolves once it has navigated, with the token it staged. */
+async function activatePayload(
+  payload: NotificationPayload,
+  feedId: string,
+  onResult: (outcome: "success" | "failure") => void,
+): Promise<{ readonly notificationToken: string | undefined }> {
   let staged: { readonly notificationToken?: string } | undefined;
   navigateSpy.mockImplementation(() => {
     staged = useBotTabLandingStore.getState().byBotId[BOT_ID];
     return Promise.resolve();
   });
-  const row = postRow(messageId, threadId);
-  const { payload } = row;
-  if (payload === null) throw new Error("the bot row carried no payload");
   const hook = renderHook(() => useNotificationActivation(), { wrapper });
   act(() => {
     hook.result.current.activate({
       payload,
       receivedAt: 2_000,
-      feedId: row.feedId,
+      feedId,
       originHostId: null,
       onResult,
     });
@@ -410,6 +421,38 @@ describe("a bot notification's opening", () => {
   it("is not acknowledged by routing, and is once the channel shows the exact message it named", async () => {
     const onResult = vi.fn();
     const landing = await activateMessage(NAMED, null, onResult);
+    await mountChannelOn(
+      {
+        messageId: NAMED,
+        threadId: null,
+        notificationToken: landing.notificationToken,
+      },
+      true,
+    );
+
+    expect(onResult).not.toHaveBeenCalled();
+    settleScroll("landed");
+
+    expect(onResult.mock.calls).toEqual([["success"]]);
+  });
+
+  it("is acknowledged once the channel shows the exact message a mobile push of the channel named, by the mapping, the envelope and the opening", async () => {
+    const parsed = parseNotificationActivationPayload(
+      activationPayloadFromPushData({
+        entryId: "entry-1",
+        epicId: BOT_ID,
+        chatId: CHANNEL_ID,
+        botId: BOT_ID,
+        messageId: NAMED,
+      }),
+    );
+    if (parsed.kind !== "v1") throw new Error("the push is not an envelope");
+    const onResult = vi.fn();
+    const landing = await activatePayload(
+      parsed.envelope.route,
+      "cloud:entry-1",
+      onResult,
+    );
     await mountChannelOn(
       {
         messageId: NAMED,

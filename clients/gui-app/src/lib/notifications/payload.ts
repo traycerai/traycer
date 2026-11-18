@@ -250,6 +250,12 @@ function parseChatPayload(
   const messageId = readString(value.messageId);
   const eventId = readString(value.eventId);
   const botId = readString(value.botId);
+  const threadId = readString(value.threadId);
+  // Flat mobile push routes carry the channel identity in chatId.
+  const conversationId =
+    value.conversationId === undefined && threadId === null
+      ? chatId
+      : readString(value.conversationId);
   const scrollToEnd =
     value.outcome === "completed" && value.backgroundWorkRunning !== true;
   const includeTranscriptAnchor = !scrollToEnd;
@@ -262,8 +268,8 @@ function parseChatPayload(
       : {
           bot: {
             botId,
-            conversationId: readString(value.conversationId),
-            threadId: readString(value.threadId),
+            conversationId,
+            threadId,
             messageId,
           },
         }),

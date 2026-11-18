@@ -79,6 +79,8 @@ import {
 import { botMember } from "@/components/notifications/__tests__/notification-bot-members-test-support";
 import { homeTabIntent } from "@/lib/tab-navigation/intents";
 import type { NotificationPayload } from "@/lib/notifications/payload";
+import { parseNotificationActivationPayload } from "@/lib/notifications/notification-activation-envelope";
+import { activationPayloadFromPushData } from "../../../../../mobile/src/push-registration";
 import {
   rowFromHostEntry,
   type MergedNotificationRow,
@@ -710,4 +712,121 @@ describe("an activation validated while the tabs were still hydrating", () => {
       expect(landedMessages()).toEqual(["message-later"]);
     },
   );
+});
+
+describe("a mobile push of a bot's channel", () => {
+  /** The route the app opens a tapped push on: the mobile mapping, then the activation envelope's own parse. */
+  function pushRoute(data: Record<string, string>): NotificationPayload {
+    const parsed = parseNotificationActivationPayload(
+      activationPayloadFromPushData({
+        entryId: "entry-1",
+        epicId: BOT_ID,
+        ...data,
+      }),
+    );
+    if (parsed.kind !== "v1")
+      throw new Error("the push did not parse as an envelope");
+    return parsed.envelope.route;
+  }
+
+  const ANCHORED: Summary = {
+    threadId: "thread-1",
+    conversationId: MAIN,
+    anchor: { messageId: "anchor-1" },
+  };
+
+  function threadsAre(summaries: ReadonlyArray<Summary>): void {
+    host.answers["bot.thread.list"] = () =>
+      Promise.resolve(threadList(summaries));
+  }
+
+  function activatePush(
+    data: Record<string, string>,
+    onResult: ActivationResultSpy,
+  ): void {
+    activatePayload(pushRoute(data), "cloud:entry-1", onResult);
+  }
+
+  it("opens the main channel on the message its carried chat is, and reports no success before the channel shows it", async () => {
+    const onResult: ActivationResultSpy = vi.fn();
+
+    activatePush(
+      { chatId: MAIN, botId: BOT_ID, messageId: "message-1" },
+      onResult,
+    );
+    await waitFor(() => {
+      expect(navigateSpy).toHaveBeenCalledTimes(1);
+    });
+
+    expect(landedMessages()).toEqual(["message-1"]);
+    expect(onResult.mock.calls).not.toContainEqual(["success"]);
+  });
+
+  it("refuses in place when the row names its conversation as none, even with a valid carried chat", async () => {
+    const parsed = parseNotificationActivationPayload({
+      kind: "chat",
+      epicId: BOT_ID,
+      chatId: MAIN,
+      botId: BOT_ID,
+      conversationId: null,
+      messageId: "message-1",
+    });
+    if (parsed.kind !== "legacy") throw new Error("the row is not a route");
+    const onResult: ActivationResultSpy = vi.fn();
+
+    activatePayload(parsed.payload, "cloud:entry-1", onResult);
+    await reported(onResult);
+
+    expectRefusedInPlace(onResult);
+  });
+
+  it("refuses in place when the carried chat is not the bot's main channel", async () => {
+    const onResult: ActivationResultSpy = vi.fn();
+
+    activatePush(
+      { chatId: SIDE, botId: BOT_ID, messageId: "message-1" },
+      onResult,
+    );
+    await reported(onResult);
+
+    expectRefusedInPlace(onResult);
+  });
+
+  it("opens a reply push on the thread the authorized summary places in the main channel", async () => {
+    threadsAre([ANCHORED]);
+    const onResult: ActivationResultSpy = vi.fn();
+
+    activatePush(
+      {
+        chatId: "thread-1",
+        threadId: "thread-1",
+        botId: BOT_ID,
+        messageId: "message-1",
+      },
+      onResult,
+    );
+    await waitFor(() => {
+      expect(navigateSpy).toHaveBeenCalledTimes(1);
+    });
+
+    expect(landedMessages()).toEqual(["message-1"]);
+  });
+
+  it("refuses a reply push whose authorized summary is not in the main channel", async () => {
+    threadsAre([{ ...ANCHORED, conversationId: SIDE }]);
+    const onResult: ActivationResultSpy = vi.fn();
+
+    activatePush(
+      {
+        chatId: "thread-1",
+        threadId: "thread-1",
+        botId: BOT_ID,
+        messageId: "message-1",
+      },
+      onResult,
+    );
+    await reported(onResult);
+
+    expectRefusedInPlace(onResult);
+  });
 });
