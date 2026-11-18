@@ -577,9 +577,12 @@ describe("HostDirectoryService", () => {
 
     expect(directory.getCardinality()).toBe("zero");
     // The FIRST listing changes no entry when the registry is empty, so the
-    // snapshot-equality guard would swallow the one emit that moves the
-    // readiness gate off its searching state.
-    expect(emits).toEqual([0]);
+    // snapshot-equality guard would swallow the emit that moves the readiness
+    // gate off its searching state. The second is the failed first fetch
+    // ending: that listing re-requests the fleet, and its `published` clears
+    // the failure the narrator reads.
+    expect(emits).toEqual([0, 0]);
+    expect(directory.hasFailedDiscovery()).toBe(false);
   });
 
   it("does not treat a bearer-less 'signed-out' fetch as a delivered listing", async () => {

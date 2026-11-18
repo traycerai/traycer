@@ -57,6 +57,7 @@ vi.mock("@/hooks/host/use-host-provisioning-progress", () => ({
 // is known and unreachable.
 vi.mock("@/hooks/host/use-host-discovery-concluded", () => ({
   useHostDiscoveryConcluded: () => true,
+  useHostDiscoveryFailed: () => false,
 }));
 
 const REMOTE_HOST_ID = "remote-host";
