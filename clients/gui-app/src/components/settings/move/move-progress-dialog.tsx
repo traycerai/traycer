@@ -1,5 +1,11 @@
-import { useEffect, useRef, type ReactNode } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { UpdateProgressBar } from "@/components/host/update-progress-bar";
 import { OverviewCardDetailsLine } from "@/components/settings/details/overview-card-details-line";
@@ -73,7 +79,19 @@ function MoveProgressDialogBody(props: {
   const { target, onClose } = props;
   const client = useHostClientForHostId(target.hostId);
   const status = useEnvironmentStatusRead(client, target.hostId, true);
-  const data = status.data;
+  const queryClient = useQueryClient();
+  const statusHash = useHostQueryEntryHash<
+    HostRpcRegistry,
+    "environment.status"
+  >({
+    client,
+    method: "environment.status",
+    params: {},
+    cacheKeyIdentity: undefined,
+  });
+  // The status cached when the dialog opened is from before the accept: a
+  // finish, a stop or a count is read only from an answer since.
+  const data = useAnsweredSinceMount(queryClient, statusHash, status.data);
   const state = data === null ? null : hostSettingsCardState(data);
   const moved = state?.kind === "moved";
   const finishedAt = useRef<number | null>(null);
@@ -97,16 +115,6 @@ function MoveProgressDialogBody(props: {
   // While the finished view waits on its count, this host's status is asked
   // again, until MOVE_DONE_LAST_REREAD_MS after the finish, and never over a
   // read in flight.
-  const queryClient = useQueryClient();
-  const statusHash = useHostQueryEntryHash<
-    HostRpcRegistry,
-    "environment.status"
-  >({
-    client,
-    method: "environment.status",
-    params: {},
-    cacheKeyIdentity: undefined,
-  });
   const rereadInFlight = useRef(false);
   useEffect(() => {
     if (!awaitingCount) return;
@@ -188,6 +196,33 @@ function MoveProgressDialogBody(props: {
       {view}
     </DialogContent>
   );
+}
+
+/** The answers, data or refusal, a cache entry has taken; 0 for none. */
+function answerCount(queryClient: QueryClient, hash: string): number {
+  const state = queryClient.getQueryCache().get(hash)?.state;
+  return state === undefined
+    ? 0
+    : state.dataUpdateCount + state.errorUpdateCount;
+}
+
+/** `data`, once the entry `hash` names has answered since this component first read it; null before. */
+function useAnsweredSinceMount<Data>(
+  queryClient: QueryClient,
+  hash: string,
+  data: Data | null,
+): Data | null {
+  const [start, setStart] = useState(() => ({
+    hash,
+    count: answerCount(queryClient, hash),
+  }));
+  if (start.hash !== hash)
+    setStart({ hash, count: answerCount(queryClient, hash) });
+  const count = useSyncExternalStore(
+    (onChange) => queryClient.getQueryCache().subscribe(onChange),
+    () => answerCount(queryClient, hash),
+  );
+  return start.hash === hash && count > start.count ? data : null;
 }
 
 /** Also before the status shows the move under way: the accept was taken. */

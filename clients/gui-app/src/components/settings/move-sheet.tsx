@@ -33,6 +33,7 @@ import { TeamReadFailed } from "@/components/settings/environment/team-read-fail
 import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
 import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
 import { moveRowLabel } from "@/components/settings/personal/personal-page-status";
+import { answeredThisOpening } from "@/components/settings/move/answered-this-opening";
 import { useMoveRerun } from "@/components/settings/move/use-move-rerun";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -140,6 +141,8 @@ function MoveSheetBody(props: {
         personalRead.data !== undefined &&
         rerun.planReadable,
       refetchOnWindowFocus: false,
+      // Every opening reads the plan again, however recent the cached one.
+      staleTime: 0,
     },
   });
   // Held here, above the `Details` fold, so a choice made inside it outlives
@@ -205,7 +208,10 @@ function MoveSheetBody(props: {
   // read again: rows read now give the plan a new request, which it reads by
   // itself; a read that fails again asks the same plan again.
   // A re-run that stopped again before asking is the refused plan it came from.
-  const refusal = plan.isError ? plan.error.message : rerun.stoppedAgain;
+  // Only this opening's answered read counts: the cache still holds the last
+  // opening's plan or refusal while this one's read is out.
+  const planAnswered = answeredThisOpening(plan);
+  const refusal = planRefusal(plan, planAnswered, rerun.stoppedAgain);
   const retryPlan = (): void => {
     if (rerun.stopped && refusal !== null) {
       rerun.rerun(refusal, () => {
@@ -228,12 +234,13 @@ function MoveSheetBody(props: {
     .map((host) => host.name);
   // Who the settings reach is said, and the plan offered, only once the
   // host list has answered: an unread list is not "no other computer".
-  const shownPlan = planOnceReachKnown(
-    runningPersonal,
-    plan.data,
-    refusal !== null,
-    rerun.planReadable,
-  );
+  const shownPlan = planOnceReachKnown({
+    running: runningPersonal,
+    plan: plan.data,
+    refused: refusal !== null,
+    readable: rerun.planReadable,
+    answered: planAnswered,
+  });
   const environmentId = personal.environmentId;
   const versionDiffers = disclosureDiffers(shownPlan);
   return (
@@ -366,17 +373,32 @@ function MoveAcceptButton(props: {
 /**
  * The plan, once the host list has answered: its lines name where it reaches.
  * A refused read keeps the last plan in the cache, which is not the plan the
- * computer would move now; nor is one read for a consent wait that is over.
+ * computer would move now; nor is one read for a consent wait that is over,
+ * nor one cached before this opening's own read answered.
  */
-function planOnceReachKnown(
-  running: HostsRunningConfiguration,
-  plan: MovePlan | undefined,
-  refused: boolean,
-  readable: boolean,
-): MovePlan | null {
-  return running.state === "ready" && plan !== undefined && !refused && readable
-    ? plan
+function planOnceReachKnown(read: {
+  readonly running: HostsRunningConfiguration;
+  readonly plan: MovePlan | undefined;
+  readonly refused: boolean;
+  readonly readable: boolean;
+  readonly answered: boolean;
+}): MovePlan | null {
+  return read.running.state === "ready" &&
+    read.plan !== undefined &&
+    !read.refused &&
+    read.readable &&
+    read.answered
+    ? read.plan
     : null;
+}
+
+/** This opening's refused plan read, else the re-run's own refusal. */
+function planRefusal(
+  plan: { readonly error: { readonly message: string } | null },
+  answered: boolean,
+  stoppedAgain: string | null,
+): string | null {
+  return plan.error !== null && answered ? plan.error.message : stoppedAgain;
 }
 
 /** A refused plan's line and its Retry. */
