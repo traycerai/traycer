@@ -1214,7 +1214,7 @@ describe("the Channel actions trigger's active count in the compact header", () 
     useTabsStore.setState(useTabsStore.getInitialState(), true);
   });
 
-  it("shows the active count on the closed trigger and names it by prefix, matching what the Activity list shows", async () => {
+  it("draws no count on the trigger, which keeps its name, and shows the Activity item's own count matching the Activity list", async () => {
     const user = userEvent.setup();
     signInAda();
     await admitBotDrafts();
@@ -1233,28 +1233,32 @@ describe("the Channel actions trigger's active count in the compact header", () 
     );
     renderOverCloudFeedUnderHeader();
 
-    const trigger = screen.getByRole("button", { name: /^Channel actions/ });
-    const badge = within(trigger).getByTestId(
-      "bot-channel-actions-activity-count",
-    );
-    expect(screen.queryByRole("menu")).toBeNull();
+    const trigger = screen.getByRole("button", {
+      name: /^Channel actions,?\s*\d+\s*active/,
+    });
+    expect(
+      within(trigger).queryByTestId("bot-channel-actions-activity-count"),
+    ).toBeNull();
+    expect(trigger.textContent).not.toMatch(/\d/);
 
     await user.click(trigger);
-    await user.click(
-      await screen.findByRole("menuitemradio", { name: /^Activity/ }),
+    const item = await screen.findByRole("menuitemradio", {
+      name: /^Activity/,
+    });
+    const itemCount = within(item).getByTestId(
+      "bot-channel-actions-menu-activity-count",
     );
+    await user.click(item);
     const count = screen
       .getByTestId("stub-activity")
       .dataset.rowIds?.split(",").length;
     expect(count).toBeGreaterThan(0);
-    expect(badge.textContent).toContain(String(count));
+    expect(itemCount.textContent).toContain(String(count));
     expect(
-      within(
-        screen.getByRole("button", {
-          name: new RegExp(`^Channel actions,?\\s*${String(count)}\\s*active`),
-        }),
-      ).getByTestId("bot-channel-actions-activity-count"),
-    ).toBeTruthy();
+      screen.getByRole("button", {
+        name: new RegExp(`^Channel actions,?\\s*${String(count)}\\s*active`),
+      }).textContent,
+    ).not.toMatch(/\d/);
   });
 
   it("draws no count and the plain name when no task is active", async () => {

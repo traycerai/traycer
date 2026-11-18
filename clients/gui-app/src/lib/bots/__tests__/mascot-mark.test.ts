@@ -912,7 +912,7 @@ describe("glasses, drawn as wide eyes", () => {
   );
 
   it.each(SMALL_CASES)(
-    "joins a %s's two eyes at 16 px on the glance as white then pupil across columns 2 to 5, with the body as bare outside them",
+    "keeps a %s's two eyes at 16 px on the glance to columns 1, 2, 4 and 5 of their row, with the body as bare outside them",
     (shape) => {
       const { ramp } = lookOf(shape, "glasses", "none");
       const wide = drawn(shape, "glasses", 16, GLANCE);
@@ -925,15 +925,73 @@ describe("glasses, drawn as wide eyes", () => {
       expect([...rowY]).toHaveLength(1);
       const column = (x: number): number => 1 + x * 2;
       expect(row.map(([x]) => x).toSorted((a, b) => a - b)).toEqual(
-        [2, 3, 4, 5].map(column),
+        [1, 2, 4, 5].map(column),
       );
       const outside = [...rowY].flatMap((y) =>
-        [0, 1, 6].map((x) => `${String(column(x))},${String(y)}`),
+        [0, 6].map((x) => `${String(column(x))},${String(y)}`),
       );
       const wideFills = fillsByOrigin(wide);
       expect(outside.map((origin) => wideFills.get(origin))).toEqual(
         outside.map((origin) => bare.get(origin)),
       );
+    },
+  );
+
+  /**
+   * Where each pupil sits within its own eye, as columns and rows from the
+   * eye's top left cell, read from the drawing: an eye is a run of white and
+   * pupil cells on adjacent columns, and the two are told apart by the gap
+   * between them.
+   */
+  function pupilsInTheirEyes(
+    at: {
+      readonly shape: MascotShape;
+      readonly size: MascotMarkSize;
+      readonly cell: number;
+      readonly offset: number;
+    },
+    pose: MascotPose,
+  ): Array<readonly [number, number]> {
+    const { shape, size, cell, offset } = at;
+    const { ramp } = lookOf(shape, "glasses", "none");
+    const drawing = drawn(shape, "glasses", size, pose);
+    const unit = ([x, y]: readonly [number, number]): [number, number] => [
+      (x - offset) / cell,
+      (y - offset) / cell,
+    ];
+    const pupils = originsOf(drawing, ramp.eye).map(unit);
+    const eyeCells = [...originsOf(drawing, ramp.white).map(unit), ...pupils];
+    const columns = [...new Set(eyeCells.map(([x]) => x))].toSorted(
+      (a, b) => a - b,
+    );
+    const split = columns.findIndex(
+      (column, at) => at > 0 && column - columns[at - 1] > 1,
+    );
+    const eyes = [columns.slice(0, split), columns.slice(split)];
+    return eyes.map((span) => {
+      const own = eyeCells.filter(([x]) => span.includes(x));
+      const [pupil] = pupils.filter(([x]) => span.includes(x));
+      return [
+        pupil[0] - Math.min(...span),
+        pupil[1] - Math.min(...own.map(([, y]) => y)),
+      ] as const;
+    });
+  }
+
+  it.each(CASES)(
+    "has both pupils of a %s at %i px on the same side of their whites, down and right at rest and up and left on the glance: the eyes are a translation of each other, never mirrored",
+    (shape, size, cell, offset) => {
+      const down = size === 16 ? 0 : 1;
+      for (const rest of [MASCOT_AT_REST, working(0), working(2)]) {
+        expect(pupilsInTheirEyes({ shape, size, cell, offset }, rest)).toEqual([
+          [1, down],
+          [1, down],
+        ]);
+      }
+      expect(pupilsInTheirEyes({ shape, size, cell, offset }, GLANCE)).toEqual([
+        [0, 0],
+        [0, 0],
+      ]);
     },
   );
 

@@ -326,7 +326,9 @@ type Stamp = readonly [number, number, MascotTone];
  * cell inside each, so eyewear never widens the face; behind a dark lens the
  * eyes are hidden and its glint carries the pose instead. `glasses` is drawn
  * as wide eyes: a white around each pupil with nothing joining the two, and
- * no white while the eye is shut.
+ * no white while the eye is shut. Both pupils sit on the same side of their
+ * whites, so the eyes look one way: down and right at rest, up and left on
+ * the glance.
  */
 function faceOf(
   eyes: MascotEyes,
@@ -355,12 +357,12 @@ function faceOf(
   if (eyewear === "glasses") {
     const pupils: readonly Stamp[] = glance
       ? [
-          [left + 1, y, "eye"],
-          [right, y, "eye"],
+          [left, y, "eye"],
+          [right - 1, y, "eye"],
         ]
       : [
           [left + 1, y + 1, "eye"],
-          [right - 1, y + 1, "eye"],
+          [right, y + 1, "eye"],
         ];
     return shut || blink ? closed : [...lenses("white"), ...pupils];
   }
@@ -547,7 +549,10 @@ function smallEyesOf(
   ];
 }
 
-/** The small face: one row, the eyes a cell each either side of the middle. */
+/**
+ * The small face: one row. Bare eyes sit a cell either side of the middle;
+ * wide eyes are a white and a pupil each, the pupils on the same side.
+ */
 function smallFaceOf(
   eyewear: BotMascotEyewear,
   pose: MascotPose,
@@ -565,18 +570,22 @@ function smallFaceOf(
     return shut ? band("lens") : [...band("lens"), [2 + beat, "white"]];
   }
   const glance = beat === 1;
-  const eyes = smallEyesOf(shut, blink, glance);
-  if (eyewear === "none" || shut || blink) return eyes;
-  const whites: ReadonlyArray<readonly [number, MascotTone]> = glance
+  if (eyewear === "none" || shut || blink) {
+    return smallEyesOf(shut, blink, glance);
+  }
+  return glance
     ? [
+        [1, "eye"],
         [2, "white"],
-        [4, "white"],
+        [4, "eye"],
+        [5, "white"],
       ]
     : [
         [1, "white"],
-        [5, "white"],
+        [2, "eye"],
+        [4, "white"],
+        [5, "eye"],
       ];
-  return [...whites, ...eyes];
 }
 
 /** What the small drawing carries, on its top row. */

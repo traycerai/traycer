@@ -33,7 +33,7 @@ import { useRegionShown } from "@/lib/layout-overrides";
 import { homeHeaderTab } from "@/stores/tabs/kinds/home";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
 import { draftTabIntent, navigateToTabIntent } from "@/lib/tab-navigation";
-import { newestLandingDraftId } from "@/stores/home/landing-draft-store";
+import { resumableLandingDraftId } from "@/stores/home/landing-draft-store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { subscribeTabStructuralLocks } from "@/stores/tabs/tab-structural-lock";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -454,7 +454,7 @@ function useHomeTabDisabledFallback(
     const previouslyEnabled = previouslyEnabledRef.current;
     previouslyEnabledRef.current = enabled;
     if (enabled || !previouslyEnabled || activeItemId !== null) return;
-    const existingDraftId = newestLandingDraftId();
+    const existingDraftId = resumableLandingDraftId();
     navigateToTabIntent(
       navigate,
       existingDraftId === null
