@@ -65,20 +65,19 @@ import type { CommandContext } from "../runner/runner";
 import { config } from "../config";
 import { probeHostHealth } from "../service/health-probe";
 
-// Install, ensure and service-install share the sign-in pre-flight and the
-// post-start credential probe, run only when a host was started.
-//
-// Explicit starts and service cycles probe on the stored sign-in alone, without
-// prompting. The host receives only its delegated credential; one already active
-// is not reminted.
+// Install, ensure and service-install share the sign-in pre-flight and the post-start credential
+// probe, run only when a host was started. Explicit starts and service cycles probe on the stored
+// sign-in alone, without prompting. The host receives only its delegated credential; one already
+// active is not reminted. An attended team install signs in before staging: with no host identity
+// the sign-in mints the team's install token, staged before the first start; with a registered host
+// it authorizes the give. A piped token reads no CLI sign-in.
 //
 // Without --team, a signed-out interactive run is offered the device-flow
 // sign-in inline; a run that cannot prompt (JSON mode, CI, non-TTY stdout)
 // warns and continues, and so does a declined or failed sign-in. A later
 // `traycer login` can authorize the installed host without a reinstall.
-// An attended team install signs in before staging: with no host identity the
-// sign-in mints the team's install token, staged before the first start; with a
-// registered host it authorizes the give. A piped token reads no CLI sign-in.
+// An attended team install requires sign-in before staging. A piped install
+// token instead authorizes the host directly, without reading the CLI sign-in.
 //
 // Provisioning: a signed-in run that started a host follows up with a
 // short-lived stream connection carrying the CLI mint flow

@@ -6009,8 +6009,10 @@ export const providersSetEnabledUpgradeV21ToV22 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-// Used directly by `provider-profiles-compat.test.ts`; the registered bridge is
-// `providersSetEnabledDowngradeV22ToV10`.
+// Used directly by
+// `provider-profiles-compat.test.ts` to assert `profileAction` never reaches a
+// v1.0 caller; the registered `downgradePathsFromLatest` bridge is
+// `providersSetEnabledDowngradeV22ToV10` below.
 export const providersSetEnabledDowngradeV2ToV1 = defineDowngradePath<
   typeof providersSetEnabledV21,
   typeof providersSetEnabledV10

@@ -642,7 +642,10 @@ export interface IRunnerHost {
     bearerToken: string,
     request: SlackAppDmsRequest,
   ): Promise<SlackAppWriteResult>;
-  /** No host in the path. Never throws. */
+  /**
+   * No host in the path. Never throws. Never
+   * throw.
+   */
   updateBotRunSettings(
     bearerToken: string,
     request: BotUpdateRunSettingsRequest,

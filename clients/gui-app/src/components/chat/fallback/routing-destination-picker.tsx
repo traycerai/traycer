@@ -798,10 +798,10 @@ function useRoutingVerbs(input: {
         // answer finds the announcer through the verb's own reporting when
         // nothing here is left to show it. A refused write leaves the row as
         // it was and is said inline; unmounted, there is no line to say it.
-        // The write is the app's own server call; only the retry needs this chat's
-        // host. Both belong to the sign-in of the press: a write answered after it
-        // ended returns `null` and publishes nothing, and the retry is sent only while
-        // that sign-in is current (a token rotation keeps it).
+        // The write is the app's own server call; only the retry needs this chat's host. Both
+        // belong to the sign-in of the press: a write answered after it ended returns `null` and
+        // publishes nothing, and the retry is sent only while that sign-in is current (a token
+        // rotation keeps it).
         void writeBot.mutateAsync(request.write).then(
           (written) => {
             if (written === null || !written.signIn.isCurrent()) return;

@@ -141,7 +141,10 @@ export function deriveHarnessModelPickerPresentation(
   });
   const isLoading =
     harnessesPending || (selectedHarnessAvailable && modelsPending);
-  // A removed profileId that resolves to no row omits the badge rather than guessing.
+  // The profile a send will actually burn: the committed selection's profile
+  // (or the row it is an alias of), named wherever the account dropdown is
+  // drawn (`profileDropdownShown`). A stale/removed profileId that resolves to
+  // no row silently omits the badge rather than guessing.
   const activeProfile = profileDropdownShown(
     guiHarnessIdToProviderId(selection.harnessId),
     selectedHarnessProfiles,

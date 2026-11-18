@@ -195,6 +195,7 @@ describe("desktop bearer verifier", () => {
     expect(harness.urls).toHaveLength(1);
     expect(log.warn).toHaveBeenCalledTimes(1);
 
+    // And nothing at all until the cooldown has passed: no fetch, no warning.
     expect(await harness.verifier.verify(token, USER_ID)).toBe(
       "key-source-unavailable",
     );

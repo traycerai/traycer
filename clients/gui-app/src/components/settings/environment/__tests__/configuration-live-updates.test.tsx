@@ -727,6 +727,7 @@ describe("returning to an earlier secret version", () => {
 });
 
 describe("a Variables page while its own write is in flight", () => {
+  /** Holds authn's answer to the write, apart from the read that observes it. */
   function holdWrite(
     world: World,
   ): Deferred<EnvironmentConfigurationItemWriteResponse> {

@@ -100,9 +100,11 @@ function membersPageKey(
 }
 
 /**
- * Keyed by viewer, so an account switch never serves the previous viewer's
- * invitedAddress rows. The id is never rewritten to Personal, whose page lists the
- * reader alone, so a page is asked only once the environment list says whose it is.
+ * How every surface reads pages of `environment.members`, so they all ask
+ * for and cache the same pages: the app's own read of authn on the viewer's
+ * sign-in, keyed by viewer so an account switch cannot serve the previous
+ * viewer's invitedAddress rows. The id is never rewritten to Personal, whose page lists the reader
+ * alone, so a page is asked only once the environment list says whose it is.
  */
 export interface EnvironmentMembersPages {
   readonly viewerUserId: string;

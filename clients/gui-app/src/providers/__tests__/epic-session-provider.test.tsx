@@ -128,8 +128,11 @@ const resolveSessionHostClient = vi.hoisted(
     },
 );
 
-// The suite setup mocks this module for every file; naming it with its original
-// puts the real opener back here.
+// The provider opens its own durable transport through the REAL
+// `useDurableStreamTransportFactory` and `openDurableStreamTransport`, so a row
+// below the floor is refused by the opener exactly as in the app
+// (`buildHostStreamClient`). The suite setup mocks this module for every file; naming it with its
+// original puts the real opener back here.
 vi.mock("@/lib/host/use-durable-stream-transport", (importOriginal) =>
   importOriginal<typeof import("@/lib/host/use-durable-stream-transport")>(),
 );
@@ -872,6 +875,8 @@ function installOwnerIdentityRows(): (
 ) => void {
   const emitRowChanged = installOwnerIdentityRowSource();
   return (hostId, publicKey) => {
+    // `null` removes the row - a deregistration, after which the owner
+    // reading for that host is absent rather than rotated.
     if (publicKey === null) {
       sessionHostRows.byHostId.delete(hostId);
     } else {

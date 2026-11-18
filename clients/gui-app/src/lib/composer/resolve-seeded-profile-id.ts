@@ -16,19 +16,11 @@ import {
  * - `settled: false` (the `providers.list` query for this provider hasn't
  *   loaded yet) holds the input verbatim - never resets a valid selection
  *   mid-load.
- * - `settled: true` resolves the id through `resolveProfilePin`, an absent
- *   list reading as no rows:
- *   - a listed id passes, and an alias becomes the id of the row it folded
- *     into (the same account);
- *   - an id whose account a person removed (`removedProfiles`) is kept as it
- *     is, even when the provider has no row left: the picker shows "Was
- *     removed" on it and nothing starts on the Terminal login without the
- *     person choosing it;
- *   - an id found in no row, alias or removed account resolves to ambient
- *     (`null`). A settled-empty list (an old host, or a host without
- *     multi-profile support for this provider) is judged "unsupported here"
- *     the same way: a kept id would run the account on ambient while the UI
- *     claimed the managed profile.
+ * - `settled: true` resolves the id through `resolveProfilePin`, an absent list reading as no rows: - a listed id passes, and an alias becomes the id of the row it folded into (the same account); - an id whose account a person removed (`removedProfiles`) is kept as it is, even when the provider has no row left: the picker shows "Was removed" on it and nothing starts on the Terminal login without the person choosing it; - an id found in no row, alias or removed account resolves to ambient (`null`).
+ *     A settled-empty list (an old host, or a
+ *     host without multi-profile support for this provider) is judged
+ *     "unsupported here" the same way: preserving such an id silently ran
+ *     the account on ambient while the UI kept claiming the managed profile.
  */
 export function resolveSeededProfileId(
   profileId: string | null,

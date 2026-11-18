@@ -462,9 +462,12 @@ export const configEnvSetUpgradeV10ToV11 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-// A 1.1 caller's request is upgraded with `not_stated`. A 1.0 `config.shell.get`
-// host has no remembered arguments, so the app states `defaultShellArgs(path)` and
-// a difference waits in the review list.
+// A 1.0 `config.shell.get` host has no remembered arguments, so the app states
+// `defaultShellArgs(path)` and a difference waits in the review list.
+//
+// A 1.1 caller states no selection, so its request is upgraded with
+// `not_stated`; a 1.2 request to a 1.1 host is re-parsed onto the 1.1
+// request, whose non-strict object strips the key.
 
 const NOT_STATED = { kind: "not_stated" } as const;
 

@@ -215,7 +215,10 @@ export interface ComposerToolbarState extends ComposerToolbarDerived {
    * resolve so `model: ""` never reaches a draft.
    */
   readonly keptPickUnwritten: boolean;
-  /** A presentation layer: `values` keep the Terminal login, and no emit carries it (`withoutDefaultAccount`). */
+  /**
+   * A presentation layer: `values` keep the Terminal login, and no emit carries it
+   * (`withoutDefaultAccount`).
+   */
   readonly defaultAccount: DefaultAccount | null;
   /** Set by an account commit; the surface restores it per draft. */
   readonly accountChosen: boolean;

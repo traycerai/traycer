@@ -151,6 +151,7 @@ interface UseHostScopedMutationArgs<
   readonly followSettingsSave?:
     | SettingsSaveFollow<HostRpcRegistry, Method>
     | undefined;
+  /** See `UseHostMutationOptions.prepareRequest`. */
   readonly prepareRequest?:
     | ((
         request: RequestOfMethod<HostRpcRegistry, Method>,

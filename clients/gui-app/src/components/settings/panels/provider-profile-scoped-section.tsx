@@ -114,7 +114,9 @@ function ownLoginLabel(providerLabel: string, hostName: string | null): string {
     : `${providerLabel}'s own login on ${hostName}`;
 }
 
-/** A pin reaches the selection only through a focus intent. */
+/**
+ * A pin reaches the selection only through a focus intent.
+ */
 function settingsProfileSelection(
   profiles: readonly ProviderProfile[],
   removedProfiles: readonly RemovedProviderProfile[],

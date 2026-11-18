@@ -722,7 +722,8 @@ describe("task create: a refusal answered after an earlier send", () => {
   });
   it("keeps the intent when a sent attempt may have committed, so a rerun sends nothing", async () => {
     delegateCreatesToRealSend();
-    // Sent under the negotiated key with its answer lost: the host may have committed the Task.
+    // The one attempt went out under the negotiated key and its answer was
+    // lost: the host may have committed the Task.
     socketRequest.mockRejectedValueOnce(
       new RetryableTransportError({
         code: "RPC_ERROR",

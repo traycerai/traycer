@@ -523,6 +523,7 @@ function SandboxProvenance(props: {
   readonly viewerUserId: string | null;
 }): ReactNode {
   const { summary } = props;
+  // A team row's creator; a personal row is the viewer's own.
   const creator = props.teamOwned
     ? sandboxCreatorName(summary, props.viewerUserId)
     : null;

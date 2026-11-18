@@ -12986,7 +12986,10 @@ function cancelRestorationSettlementForAck(
   };
 }
 
-/** The removed-account code is never said in the parenthesis. */
+/**
+ * The host's refusal as a parenthesis, or nothing when it gave no reason. The removed-account code
+ * is never said in the parenthesis.
+ */
 function hostReasonClause(
   hostReason: string | null,
   hostCode: string | null,

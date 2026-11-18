@@ -23,20 +23,28 @@ export function createStreamAuthRevalidator(
   const revalidate = async (): Promise<RevalidateOutcome> => {
     const outcome = await authService.revalidateCurrentContext();
     if (outcome === null) {
-      // Re-dialing without a credential is futile.
+      // No live signed-in context to revalidate (signed out / provider
+      // torn down). Re-dialing without a credential is futile, and the
+      // provider rebuilds dependent clients on sign-out anyway.
       appLogger.warn("[stream-auth] reconnect revalidation rejected", {
         reason: "no-context",
       });
       return "rejected";
     }
     if (outcome.kind === "valid") {
+      // AuthnV3 accepts the credential (it may have rotated the bearer in
+      // place). Re-dial; the open frame reads the live, possibly-fresh
+      // bearer.
       appLogger.debug("[stream-auth] reconnect revalidation accepted", {
         outcome: "valid",
       });
       return "rotated";
     }
     if (outcome.kind === "superseded") {
-      // Stay in backoff, where the next re-dial revalidates; `rejected` would close this stream for good.
+      // The answer is stale under a live context: something newer overtook
+      // the check, or an interactive sign-in is settling the session. Stay
+      // in the reconnect backoff, where the next re-dial revalidates the
+      // live state; `rejected` would close this stream for good.
       appLogger.debug("[stream-auth] reconnect revalidation superseded", {});
       return "network-error";
     }
@@ -44,14 +52,37 @@ export function createStreamAuthRevalidator(
       appLogger.warn("[stream-auth] reconnect revalidation network error", {});
       return "network-error";
     }
-    // A terminal verdict on a held identity demotes rather than clears, so `rejected` is
-    // the credential's verdict: a session that still admits the local plane keeps the
-    // local stream open.
+    // outcome.kind === "rejected". This used to be read as "revalidate has
+    // already signed out", which was true of every terminal verdict until
+    // `unverified` arrived. It no longer is: a terminal verdict on a held
+    // identity DEMOTES rather than clears, keeping the session and its
+    // local-plane admission (`demoteVerifiedSessionToUnverified`), and that
+    // demotion is deliberately silent on the context so nothing else here
+    // can observe it. Reporting it as terminal closed the local host's own
+    // stream on the one state that exists to keep it open.
+    //
+    // Read the projected status rather than the outcome kind, because the
+    // two arms are indistinguishable in the value: `rejected` is the
+    // CREDENTIAL's verdict, and what happened to the SESSION is a separate
+    // fact that the kind deliberately does not carry. The store is committed
+    // before `revalidateCurrentContext` resolves, so this read is settled by
+    // the time it runs.
+    //
+    // `admitsLocalPlane` rather than an inlined `=== "unverified"`, and the
+    // wider predicate is the correct one rather than a convenient one: the
+    // question this branch asks is "did the revalidator leave a session with
+    // a local plane", and demotion is only its commonest yes. A store-
+    // unavailable rotate also reports `rejected` while leaving the session
+    // `signed-in` outright, and closing a local stream on that is the same
+    // mistake for a different reason. Classifying the state once, here, is
+    // also what `auth-store` asks of every new `AuthStatus` member.
     if (admitsLocalPlane(useAuthStore.getState().status)) {
       appLogger.warn("[stream-auth] reconnect revalidation demoted", {
         reason: "cloud-verdict-withdrawn",
       });
-      // The service decides whether that ends the local plane, so unary and stream apply one rule.
+      // A host refused (or, pre-dial, would refuse) the held bearer. The
+      // service decides whether that ends the local plane, so the unary path
+      // and this one apply one rule.
       authService.noteHostRefusedHeldBearer();
       return "local-plane-retained";
     }

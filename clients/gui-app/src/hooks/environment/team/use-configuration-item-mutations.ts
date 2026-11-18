@@ -8,7 +8,10 @@ import { environmentMutationKeys } from "@/lib/query-keys";
 /** Every save addresses the row revision the editor read, including creates. */
 export function useConfigurationItemMutations() {
   const queries = useQueryClient();
-  // A `forbidden` answer rereads the reader's role, which `environment.list` carries.
+  // Every page projection of this configuration, on every scope that read it,
+  // and no other configuration. A conflict rereads the current value just as a
+  // successful save does; a `forbidden` answer rereads the reader's role,
+  // which `environment.list` carries and this invalidation includes.
   const reread = (environmentId: string): void => {
     invalidateConfigurationReads(queries, environmentId, [
       "environment.configuration.items",

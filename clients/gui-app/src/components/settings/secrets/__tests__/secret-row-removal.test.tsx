@@ -143,6 +143,7 @@ interface Host {
   finishesOnDestroy: boolean;
   destroyAnswer: EnvironmentSecretsDestroyResponseV11;
   onDestroy: (() => void) | null;
+  /** The versions read fails: set by `onDestroy` to fail the read after destroy. */
   versionsFail: boolean;
   secrets: EnvironmentSecretV12[];
   /** The list's `removed`: secrets revoked within the last 30 days. */
@@ -375,6 +376,7 @@ describe("Remove on a team secret", () => {
         `Added on ${dayMonth(AT - 1_000)}. Version 2.`,
       );
     });
+    // authn answers revoked and the next versions read carries the removal.
     host.removal = removal("revoked");
     await user.click(within(dialog).getByRole("button", { name: "Remove" }));
 

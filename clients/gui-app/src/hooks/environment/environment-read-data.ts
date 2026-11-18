@@ -33,8 +33,8 @@ const AUTHORITY_LOST_REASONS: ReadonlySet<HostDoorReason> = new Set([
 ]);
 
 /**
- * Kept through outages, never through lost authority. A recognised reason decides
- * alone; the code decides only when the reason is absent or unrecognised.
+ * Keep the last answer through outages, but never through lost authority. A recognised reason
+ * decides alone; the code decides only when the reason is absent or unrecognised.
  */
 export function environmentReadData<T>(query: {
   readonly data: T | undefined;

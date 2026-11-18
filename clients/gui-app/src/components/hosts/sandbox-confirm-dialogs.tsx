@@ -98,7 +98,9 @@ interface SandboxDialogProps {
   readonly onOpenChange: (open: boolean) => void;
 }
 
-/** `null` while ownership is unknown: the dialog then says nothing about whose credits. */
+/**
+ * `null` while ownership is unknown: the dialog then says nothing about whose credits.
+ */
 function useDialogConfiguration(
   sandbox: SandboxSummary,
 ): SandboxPageConfiguration | null {

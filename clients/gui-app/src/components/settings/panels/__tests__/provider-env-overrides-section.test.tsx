@@ -487,6 +487,7 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
         removed: [],
       }),
       "environment.review": () => ({
+        // The `@1.2` facts each row carries, none of them known here.
         entries: review.map((entry) => ({
           command: null,
           event: null,

@@ -118,7 +118,9 @@ function ChatAutoArchiveSettingsRowBody(): ReactNode {
   );
 }
 
-/** `bounds` is null until the read lands; the options wait for it. */
+/**
+ * `bounds` is null until the read lands; the options wait for it.
+ */
 export function ChatAutoArchiveRowView(props: {
   readonly row: SettingsRowDefinition;
   readonly status: ReactNode;

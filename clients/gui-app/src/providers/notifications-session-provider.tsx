@@ -1222,7 +1222,8 @@ function NotificationsSessionBody(
       }
       if (servingHostId === null) return;
       const streamHostId = servingHostId;
-      // For a stream that presented the sign-in only: the serving host's lanes present a host-only token.
+      // For a stream that presented the sign-in only: the serving host's lanes present a host-only
+      // token.
       const onAuthError = signInRecoveryForStream(
         streamHostId,
         onStreamAuthError,

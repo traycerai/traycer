@@ -5109,6 +5109,7 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     const line = await screen.findByTestId("sandbox-stopped-line");
     expect(line.textContent).toContain("Couldn't start build-box");
     expect(within(line).getByTestId("sandbox-row-retry")).toBeDefined();
+    // No mirror of this tile's drafts was mounted for the sandbox's host.
     expect(mirrorMountHosts).not.toContain(SANDBOX_HOST);
   });
 

@@ -3974,6 +3974,7 @@ describe("<HarnessModelPicker />", () => {
         profiles: claudeProfilesForDropdown(),
       }),
     ];
+    // Target host: no OAuth login capability.
     queryMock.providerStatesByClient.set("tab-host-1", [
       providerCliStateWithProfiles({
         providerId: "claude-code",

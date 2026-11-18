@@ -139,6 +139,7 @@ interface MountedMembers {
   ) => Promise<void>;
   /** Refetches the first page, as an invalidation would. */
   readonly refetchFirstPage: () => Promise<void>;
+  /** Every members page query the hook observes, by status. */
   readonly pageQueries: () => ReadonlyArray<{
     readonly status: string;
     readonly fetchStatus: string;
@@ -427,8 +428,10 @@ describe("useEnvironmentMembers", () => {
       ).toBe(true);
     });
 
-    // The page after the refetched first one ends where the old first page did, so the
-    // rest is cached.
+    // A page of members joined ahead of everyone: the refetched first page
+    // is all new members, the page after it holds the old first page's
+    // members, and that page ends where the old first page did, so the rest
+    // is cached.
     const joined = Array.from(
       { length: PAGE_SIZE },
       (_, index) => `user-00-new-${String(index).padStart(3, "0")}`,
@@ -477,7 +480,8 @@ describe("useEnvironmentMembers", () => {
       ]),
     );
 
-    // No third page query exists, so nothing more can be asked.
+    // Both pages are settled and no third page query exists, so nothing more
+    // can be asked.
     await waitFor(() => {
       expect(mounted.pageQueries()).toEqual([
         { status: "success", fetchStatus: "idle" },

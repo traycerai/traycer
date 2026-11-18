@@ -625,7 +625,10 @@ export const environmentMoveStopPreviewUpgradeV10ToV11 = defineUpgradePath<
   }),
 });
 
-/** Two folders of one account stay separate entries; credential kind decides whether sign-in is offered. */
+/**
+ * Two folders of one account stay separate entries; credential kind decides whether sign-in is
+ * offered.
+ */
 export const environmentMovePersonalProfileSchema = lazySchema(() =>
   z.object({
     providerId: providerIdSchema,

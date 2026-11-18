@@ -109,7 +109,7 @@ export function hostRejectedBeforeRequest(error: unknown): boolean {
  * whose bearer is no longer current comes back `"superseded"`.
  *
  * A revalidation that rotated the bearer is followed by one more `request`
- * attempt, whose failure propagates (see `reportRefusedAgain`). One that did not rotate rethrows the
+ * attempt, whose failure propagates. One that did not rotate rethrows the
  * original error; an abort during recovery rejects with
  * `HostRequestAbortedError`, and a superseded recovery with
  * `HostAuthoritySupersededError`.

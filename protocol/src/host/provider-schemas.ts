@@ -1724,8 +1724,10 @@ const providerProfileProjectionSchemaV1010 = lazySchema(() =>
 );
 
 /**
- * A future row is one disabled, explained row, never a lost inventory. The four 10.11
- * keys live only here, so mutation echoes and released lines never carry them; each
+ * Read projection: a future row is one disabled, explained row, never a lost
+ * inventory.
+ *
+ * The four 10.11 keys live only here, so mutation echoes and released lines never carry them; each
  * falls back at its own field.
  */
 export const providerProfileProjectionSchema = lazySchema(() =>
@@ -3822,7 +3824,8 @@ export type ProvidersSetEnabledRequestV22 = z.infer<
   typeof providersSetEnabledRequestSchemaV22
 >;
 
-// No released `providers.setEnabled@2.2` carries a `mode`: one that did was withdrawn.
+// No released `providers.setEnabled@2.2` carries a `mode`: one that did was withdrawn. `enabled` -
+// a required boolean since 2.0 - stays the whole enable request.
 
 export const providersSetApiKeyRequestSchema = lazySchema(() =>
   z.object({

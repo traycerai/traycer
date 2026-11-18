@@ -88,6 +88,7 @@ export type ClientHostUnaryRpcMethod = Exclude<
 >;
 export type HostStreamRpcMethod = keyof HostStreamRpcRegistry & string;
 
+/** The client route of `method`, unary or stream; `null` when none is declared. */
 export function hostRpcRouteOf(method: string): HostRpcRoute | null {
   return ROUTE_BY_METHOD.get(method) ?? null;
 }

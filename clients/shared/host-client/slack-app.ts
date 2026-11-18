@@ -223,6 +223,10 @@ async function post<T>(
   return { kind: "ok", value: parsed.data };
 }
 
+/**
+ * An empty or non-JSON body (a proxy's HTML page) reads as `null`, as does a
+ * failure's body over the transport's cap.
+ */
 function parseJsonOrNull(text: string | null): unknown {
   if (text === null || text.length === 0) return null;
   try {
@@ -233,7 +237,11 @@ function parseJsonOrNull(text: string | null): unknown {
   }
 }
 
-/** `transport` is the shell's, which never follows a redirect: the body carries two secrets. */
+/**
+ * `POST /api/slack/apps/register`: stores the app's credentials; a new
+ * registration replaces the old one. `transport` is the shell's, which never follows a redirect:
+ * the body carries two secrets.
+ */
 export async function registerSlackAppViaHttp(
   serverBaseUrl: string,
   bearerToken: string,

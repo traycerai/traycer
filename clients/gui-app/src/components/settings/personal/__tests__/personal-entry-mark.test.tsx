@@ -18,6 +18,8 @@ vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
   return { useHostScope, usePersonalHostScope: useHostScope };
 });
 
+// The app-wide host client is a real `HostClient` over an in-memory
+// messenger (`buildEnvironmentClient`): only the host on the far side is faked.
 const hostMock = vi.hoisted((): { client: unknown } => ({ client: null }));
 // A host that runs environments, the one the Personal mark is drawn on.
 vi.mock("@/components/settings/panels/use-skill-environment-route", () => ({
