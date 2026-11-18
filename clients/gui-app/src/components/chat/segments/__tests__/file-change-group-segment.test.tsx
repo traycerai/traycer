@@ -508,7 +508,7 @@ describe("<FileChangeGroupSegment /> html and canvas artifacts", () => {
   });
 
   function pageRow(
-    fileName: string,
+    filePath: string,
     operation: ArtifactChangeRow["operation"],
   ): ArtifactChangeRow {
     return {
@@ -516,7 +516,7 @@ describe("<FileChangeGroupSegment /> html and canvas artifacts", () => {
       artifactKind: "html",
       title: "Checkout",
       operation,
-      filePath: `/repo/artifacts/checkout/${fileName}`,
+      filePath,
       beforeHash: null,
       afterHash: "b".repeat(64),
     };
@@ -536,39 +536,48 @@ describe("<FileChangeGroupSegment /> html and canvas artifacts", () => {
     layout: "folder",
   };
 
-  function renderArtifacts(epicArtifacts: ReadonlyArray<ArtifactProjection>) {
+  function renderArtifacts(
+    artifactRows: ReadonlyArray<ArtifactChangeRow>,
+    epicArtifacts: ReadonlyArray<ArtifactProjection>,
+  ) {
     renderGroup({
       ...baseInput(vi.fn(() => "action-1")),
       files: [],
-      artifactRows: [
-        pageRow("index.html", "create"),
-        pageRow("style.css", "create"),
-      ],
+      artifactRows,
       epicArtifacts,
     });
   }
 
   it("counts an artifact folder once and expands to its changed files", () => {
-    renderArtifacts([PAGE_PROJECTION]);
+    renderArtifacts(
+      [
+        pageRow("/repo/artifacts/checkout/index.html", "create"),
+        pageRow("/repo/artifacts/checkout/style.css", "create"),
+      ],
+      [PAGE_PROJECTION],
+    );
 
     expect(screen.getByText("1 artifact")).toBeTruthy();
-    fireEvent.click(screen.getByText("Changes"));
+    fireEvent.click(screen.getByRole("button", { name: /^Changes/ }));
     expect(screen.getByText("Checkout")).toBeTruthy();
-    expect(screen.getByText("2 files")).toBeTruthy();
 
-    fireEvent.click(screen.getByText("2 files"));
+    fireEvent.click(screen.getByRole("button", { name: /Checkout.*2 files/ }));
 
-    expect(screen.getByText("index.html")).toBeTruthy();
-    expect(screen.getByText("style.css")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /index\.html/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /style\.css/ })).toBeTruthy();
   });
 
   it("shows a loose page as one artifact row with its own verb", () => {
-    renderArtifacts([{ ...PAGE_PROJECTION, layout: "file" }]);
+    renderArtifacts(
+      [pageRow("/repo/artifacts/checkout.html", "create")],
+      [{ ...PAGE_PROJECTION, layout: "file" }],
+    );
 
-    fireEvent.click(screen.getByText("Changes"));
+    fireEvent.click(screen.getByRole("button", { name: /^Changes/ }));
 
     expect(screen.getByText("Checkout")).toBeTruthy();
     expect(screen.getByText("Created")).toBeTruthy();
+    expect(screen.queryByText("1 file")).toBeNull();
     expect(screen.queryByText("2 files")).toBeNull();
   });
 });

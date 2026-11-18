@@ -367,8 +367,8 @@ function RestoreFileRow(props: {
 /**
  * One html or canvas artifact's changed files as a single restore row; a
  * loose HTML page is its own single file and reads as any artifact entry. A
- * folder is skipped only when none of its files can be undone; a partly
- * undoable artifact still restores the files that can be.
+ * folder restores the files that can be undone, and each file that cannot is
+ * listed under it with its own reason.
  */
 function RestoreArtifactBundleRow(props: {
   readonly bundle: ArtifactFolderBundle<TurnCheckpointManifestEntry>;
@@ -387,7 +387,7 @@ function RestoreArtifactFolderRow(props: {
   const { bundle } = props;
   const anyUndoable = bundle.members.some((member) => member.item.undoable);
   const memberCount = bundle.members.length;
-  return (
+  const artifactRow = (
     <div
       className={cn(
         "flex min-w-0 items-center gap-2.5 border-t border-border/40 px-3 py-1.5 first:border-t-0",
@@ -406,8 +406,27 @@ function RestoreArtifactFolderRow(props: {
       <span className="shrink-0 text-ui-xs text-muted-foreground">
         {memberCount} {fileLabel(memberCount)}
       </span>
-      {anyUndoable ? null : <SkippedIndicator entry={bundle.members[0].item} />}
     </div>
+  );
+  return (
+    <>
+      {artifactRow}
+      {bundle.members
+        .filter((member) => !member.item.undoable)
+        .map((member) => (
+          <div
+            key={member.item.filePath}
+            className="flex min-w-0 items-center gap-2.5 border-t border-border/40 py-1.5 pr-3 pl-8 text-muted-foreground/70"
+          >
+            <FilePathTooltip content={member.item.filePath} side="bottom">
+              <StartTruncatedText className="min-w-0 flex-1 font-mono text-code-xs">
+                {member.label}
+              </StartTruncatedText>
+            </FilePathTooltip>
+            <SkippedIndicator entry={member.item} />
+          </div>
+        ))}
+    </>
   );
 }
 

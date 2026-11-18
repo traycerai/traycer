@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   disposeArtifactEpicSessions,
@@ -59,20 +59,21 @@ describe("RestoreCheckpointDialog scroll layout", () => {
 });
 
 describe("RestoreCheckpointDialog artifact bundles", () => {
-  function canvasManifest(undoable: boolean): TurnCheckpointManifest {
-    const canvasFile = (fileName: string): TurnCheckpointManifestEntry => ({
-      filePath: `/repo/artifacts/board/${fileName}`,
-      operation: "edit",
-      beforeHash: "before",
-      afterHash: "after",
-      undoable,
-      reason: undoable ? null : "binary",
-      artifact: { artifactId: "c1", kind: "canvas", title: "Board" },
-    });
-    return {
-      ...MANIFEST,
-      entries: [canvasFile("canvas.json"), canvasFile("notes.md")],
-    } satisfies TurnCheckpointManifest;
+  function canvasManifest(
+    undoableByFileName: Readonly<Record<string, boolean>>,
+  ): TurnCheckpointManifest {
+    const entries = Object.entries(undoableByFileName).map(
+      ([fileName, undoable]): TurnCheckpointManifestEntry => ({
+        filePath: `/repo/artifacts/board/${fileName}`,
+        operation: "edit",
+        beforeHash: "before",
+        afterHash: "after",
+        undoable,
+        reason: undoable ? null : "binary",
+        artifact: { artifactId: "c1", kind: "canvas", title: "Board" },
+      }),
+    );
+    return { ...MANIFEST, entries } satisfies TurnCheckpointManifest;
   }
 
   function renderDialog(manifest: TurnCheckpointManifest) {
@@ -90,7 +91,7 @@ describe("RestoreCheckpointDialog artifact bundles", () => {
   }
 
   it("lists a canvas's files as one row and counts it as one artifact", () => {
-    renderDialog(canvasManifest(true));
+    renderDialog(canvasManifest({ "canvas.json": true, "notes.md": true }));
 
     expect(screen.getByText("Board")).toBeDefined();
     expect(screen.getByText("2 files")).toBeDefined();
@@ -98,10 +99,25 @@ describe("RestoreCheckpointDialog artifact bundles", () => {
     expect(screen.getByText("Also revert 1 artifact")).toBeDefined();
   });
 
-  it("marks a bundle none of whose files can be undone as skipped", () => {
-    renderDialog(canvasManifest(false));
+  it("lists only the file that cannot be undone as skipped when the rest can", () => {
+    renderDialog(canvasManifest({ "canvas.json": true, "notes.md": false }));
+
+    expect(screen.getByText("Also revert 1 artifact")).toBeDefined();
+    const skipped = screen.getAllByText("Skipped");
+    expect(skipped).toHaveLength(1);
+    const skippedRow = skipped[0].closest("div");
+    expect(skippedRow?.textContent).toContain("notes.md");
+    expect(skippedRow?.textContent).not.toContain("canvas.json");
+  });
+
+  it("lists every file as skipped when none of them can be undone", () => {
+    renderDialog(canvasManifest({ "canvas.json": false, "notes.md": false }));
 
     expect(screen.getByText("2 files")).toBeDefined();
-    expect(screen.getByText("Skipped")).toBeDefined();
+    for (const fileName of ["canvas.json", "notes.md"]) {
+      const row = screen.getByText(fileName).closest("div");
+      expect(within(row as HTMLElement).getByText("Skipped")).toBeDefined();
+    }
+    expect(screen.getAllByText("Skipped")).toHaveLength(2);
   });
 });

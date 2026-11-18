@@ -416,32 +416,34 @@ export function FileChangeHeader(props: FileChangeHeaderProps) {
         // CollapsibleTrigger <button>; nesting buttons is invalid HTML
         // and triggers a hydration error. role=button + keydown keep
         // keyboard activation so the path is still openable.
-        <StartTruncatedText
-          role="button"
-          tabIndex={0}
-          onClick={(event) => {
-            event.stopPropagation();
-            clickHandlers.onClick();
-          }}
-          onDoubleClick={(event) => {
-            event.stopPropagation();
-            clickHandlers.onDoubleClick();
-          }}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" && event.key !== " ") return;
-            event.preventDefault();
-            event.stopPropagation();
-            clickHandlers.onClick();
-          }}
-          className={cn(
-            "min-w-0 flex-1 font-mono text-code-sm text-foreground/85",
-            "hover:text-foreground hover:underline underline-offset-2",
-            "focus-visible:outline-none focus-visible:underline",
-            "cursor-pointer",
-          )}
-        >
-          {label}
-        </StartTruncatedText>
+        <FilePathTooltip content={filePath} side="bottom">
+          <StartTruncatedText
+            role="button"
+            tabIndex={0}
+            onClick={(event) => {
+              event.stopPropagation();
+              clickHandlers.onClick();
+            }}
+            onDoubleClick={(event) => {
+              event.stopPropagation();
+              clickHandlers.onDoubleClick();
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              event.stopPropagation();
+              clickHandlers.onClick();
+            }}
+            className={cn(
+              "min-w-0 flex-1 font-mono text-code-sm text-foreground/85",
+              "hover:text-foreground hover:underline underline-offset-2",
+              "focus-visible:outline-none focus-visible:underline",
+              "cursor-pointer",
+            )}
+          >
+            {label}
+          </StartTruncatedText>
+        </FilePathTooltip>
       )}
       {statusLabel !== null ? (
         <span className="shrink-0 rounded border border-destructive/40 bg-destructive/10 px-1 text-overline font-medium uppercase text-destructive">

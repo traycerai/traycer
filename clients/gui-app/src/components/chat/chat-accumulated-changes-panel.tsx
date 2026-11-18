@@ -75,6 +75,13 @@ interface RevertGate {
   readonly tooltip: string;
 }
 
+const LOADING_CHANGES_TOOLTIP = "Still loading the full list of changes.";
+
+const LOADING_CHANGES_GATE: RevertGate = {
+  enabled: false,
+  tooltip: LOADING_CHANGES_TOOLTIP,
+};
+
 interface DiffCounts {
   readonly additions: number;
   readonly deletions: number;
@@ -169,9 +176,7 @@ export function ChatAccumulatedChangesPanel(
   // stronger claim. (Line 255 already treats a non-zero `undelivered` as "the
   // set is a prefix"; this keeps the two controls saying one thing about it.)
   const undoableTooltip =
-    undelivered > 0
-      ? "Still loading the full list of changes."
-      : "Nothing here can be reverted.";
+    undelivered > 0 ? LOADING_CHANGES_TOOLTIP : "Nothing here can be reverted.";
   const fileCount = changes.length + undelivered;
   const artifactCount = useMemo(
     () => distinctArtifactCount(changes.filter((change) => change.undoable)),
@@ -264,6 +269,11 @@ export function ChatAccumulatedChangesPanel(
             key={`artifact:${grouped.artifactId}`}
             bundle={grouped}
             gate={gate}
+            artifactUndoGate={
+              // The artifact's Undo reverts the files listed under it, so a
+              // list still arriving would revert only part of the artifact.
+              restore.accumulatedSetComplete ? gate : LOADING_CHANGES_GATE
+            }
             pending={restore.restoreActionPending}
             opener={opener}
             onUndo={(filePaths) =>
@@ -514,6 +524,7 @@ function AccumulatedChangeRow(props: AccumulatedChangeRowProps) {
 interface AccumulatedArtifactBundleRowProps {
   readonly bundle: ArtifactFolderBundle<AccumulatedChangeRow>;
   readonly gate: RevertGate;
+  readonly artifactUndoGate: RevertGate;
   readonly pending: boolean;
   readonly opener: ChatSnapshotDiffOpener | null;
   readonly onUndo: (filePaths: ReadonlyArray<string>) => void;
@@ -590,7 +601,7 @@ function AccumulatedArtifactFolderRow(
         </Button>
         <RowUndoButton
           undoable={memberChanges.some((change) => change.undoable)}
-          gate={gate}
+          gate={props.artifactUndoGate}
           pending={pending}
           ariaLabel="Undo changes to this artifact"
           testId="accumulated-undo-artifact"

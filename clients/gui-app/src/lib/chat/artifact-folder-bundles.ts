@@ -147,16 +147,12 @@ function bundleOperation(
   artifactKind: FolderArtifactKind,
   items: ReadonlyArray<GroupableChange>,
 ): CheckpointFileOperation {
-  // The shallowest match, so a nested page's `about/index.html` does not stand
-  // in for the artifact's own lead file.
-  let lead: { operation: CheckpointFileOperation; depth: number } | null = null;
-  for (const item of items) {
-    const segments = pathSegments(item.filePath);
-    if (segments.at(-1) !== LEAD_FILE_BASENAME[artifactKind]) continue;
-    if (lead === null || segments.length < lead.depth) {
-      lead = { operation: item.operation, depth: segments.length };
-    }
-  }
+  // A nested folder holding its own lead file is a child artifact with its
+  // own id, so at most one member carries the lead file's name.
+  const lead = items.find(
+    (item) =>
+      pathSegments(item.filePath).at(-1) === LEAD_FILE_BASENAME[artifactKind],
+  );
   return lead?.operation ?? "edit";
 }
 

@@ -379,8 +379,11 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
       counts: { additions: index + 1, deletions: 1 },
     })) satisfies ReadonlyArray<AccumulatedChangeRow>;
 
-    function renderCanvasPanel() {
-      const restore = baseRestore(canvasChanges, null);
+    function renderCanvasPanel(accumulatedSetComplete: boolean) {
+      const restore = {
+        ...baseRestore(canvasChanges, null),
+        accumulatedSetComplete,
+      };
       render(
         <TooltipProvider delayDuration={0}>
           <ChatDiffTargetContext.Provider value={null}>
@@ -397,28 +400,36 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
     }
 
     it("shows one row with the summed counts that expands to its files", () => {
-      renderCanvasPanel();
+      renderCanvasPanel(true);
 
-      expect(screen.getAllByTestId("accumulated-artifact-toggle")).toHaveLength(
-        1,
-      );
+      const toggle = screen.getByRole("button", { name: "Show changed files" });
       expect(screen.getByText("3 files")).not.toBeNull();
       expect(screen.getByText("Board")).not.toBeNull();
+      expect(toggle.parentElement?.textContent).toBe(
+        "Updated·Board3 files+6−3",
+      );
       expect(
-        screen.getByTestId("accumulated-artifact-toggle").parentElement
-          ?.textContent,
-      ).toBe("Updated·Board3 files+6−3");
-      expect(screen.queryAllByTestId("accumulated-undo-file")).toHaveLength(0);
+        screen.queryAllByRole("button", { name: /^Undo changes to \// }),
+      ).toHaveLength(0);
 
-      fireEvent.click(screen.getByTestId("accumulated-artifact-toggle"));
+      fireEvent.click(toggle);
 
-      expect(screen.getAllByTestId("accumulated-undo-file")).toHaveLength(3);
+      expect(
+        screen.getByRole("button", { name: "Hide changed files" }),
+      ).not.toBeNull();
+      for (const filePath of canvasPaths) {
+        expect(
+          screen.getByRole("button", { name: `Undo changes to ${filePath}` }),
+        ).not.toBeNull();
+      }
     });
 
     it("reverts every file of the artifact from its own Undo", () => {
-      const restore = renderCanvasPanel();
+      const restore = renderCanvasPanel(true);
 
-      fireEvent.click(screen.getByTestId("accumulated-undo-artifact"));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Undo changes to this artifact" }),
+      );
 
       expect(restore.revertFileChanges).toHaveBeenCalledTimes(1);
       expect(restore.revertFileChanges).toHaveBeenCalledWith(
@@ -428,10 +439,31 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
       );
     });
 
-    it("counts the artifact once in the Undo all opt-out", () => {
-      renderCanvasPanel();
+    it("disables the artifact's Undo, not a file's, while the list is still loading", () => {
+      renderCanvasPanel(false);
 
-      fireEvent.click(screen.getByTestId("accumulated-undo-all"));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Show changed files" }),
+      );
+
+      expect(
+        screen
+          .getByRole("button", { name: "Undo changes to this artifact" })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+      expect(
+        screen
+          .getByRole("button", {
+            name: `Undo changes to ${canvasPaths[0]}`,
+          })
+          .hasAttribute("disabled"),
+      ).toBe(false);
+    });
+
+    it("counts the artifact once in the Undo all opt-out", () => {
+      renderCanvasPanel(true);
+
+      fireEvent.click(screen.getByRole("button", { name: "Undo all changes" }));
 
       expect(screen.getByTestId("undo-all-dialog").textContent).toContain(
         "Also revert 1 artifact",
