@@ -438,6 +438,7 @@ function renderGiveDialog(harness: Harness): void {
         currentEnvironmentId={null}
         team={TEAM}
         onClose={() => undefined}
+        onStarted={() => undefined}
         onGiven={() => undefined}
       />
     </QueryClientProvider>,
