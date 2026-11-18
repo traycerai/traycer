@@ -8,6 +8,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useInsertionEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -613,9 +614,15 @@ function BotChatTranscriptBody(props: {
   // in between would lose its scroll or its jump. So a settle is passed on
   // only for the request the last commit holds (`onScrollRequestSettled`),
   // and a pending jump is written outside render only through
-  // `setJumpOutsideRender`, which ends no jump when none waits.
+  // `setJumpOutsideRender`, which ends no jump when none waits. `seek` can be
+  // given such a write too and needs no guard: render only ever clears a
+  // stale one, and does so again after a replay.
+  // The list settles a request this commit replaced from its own layout
+  // effect, which runs before this component's, so the id is published in
+  // the insertion phase, ahead of every layout effect of the commit (as the
+  // list's own `listRowsRef` is).
   const committedRequestIdRef = useRef<number | null>(null);
-  useLayoutEffect(() => {
+  useInsertionEffect(() => {
     committedRequestIdRef.current = scrollRequest?.requestId ?? null;
   }, [scrollRequest]);
   const { ordinal: seekOrdinal, seek: setSeekOrdinal } = useUnreadOrdinal(
@@ -718,7 +725,10 @@ function BotChatTranscriptBody(props: {
   // through `setJumpOutsideRender`, which clears this first, and the timer
   // asks here before it acts. The writes made during render (a landing, a
   // reported miss, a send's fallback, a landing's new jump) never touch
-  // this: a render may be discarded or run twice.
+  // this: a render may be discarded or run twice. Nothing reads it from
+  // inside a commit (its readers run from input, a click, the timer and a
+  // passive effect), so the layout phase, where the timer is armed, is early
+  // enough.
   const liveJumpRef = useRef<PendingJump | null>(null);
   useLayoutEffect(() => {
     liveJumpRef.current = pendingJump;
