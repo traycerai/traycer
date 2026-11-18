@@ -683,9 +683,7 @@ function BotRow(props: {
           onOpenChange={sheet.setOpen}
           name={presentation.botTitle}
           text={text}
-          // Joined as the app's other copies of a reply are, a blank line
-          // between text parts.
-          copyText={collectAssistantReplyText(message.segments)}
+          copyText={botRowCopyText(message)}
           reply={reply}
           thread={thread}
           failed={null}
@@ -738,6 +736,19 @@ function botRowText(message: ChatMessageModel): string {
   return message.segments
     .flatMap((segment) => (segment.kind === "text" ? [segment.markdown] : []))
     .join("\n");
+}
+
+/**
+ * What "Copy text" copies from a bot's row: every text part the row shows
+ * (`BotMessageText`), a blank line apart as the app's other copies of a
+ * reply join them. Not `collectAssistantReplyText`, which leaves out the
+ * text a browser session wrote.
+ */
+function botRowCopyText(message: ChatMessageModel): string {
+  return message.segments
+    .flatMap((segment) => (segment.kind === "text" ? [segment.markdown] : []))
+    .join("\n\n")
+    .trim();
 }
 
 /** The receipt under a row of the bot, by the turn that wrote it; `null` where none did. */
