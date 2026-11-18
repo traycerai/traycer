@@ -1,4 +1,5 @@
 import { createPortal } from "react-dom";
+import { TracyPlaybackSlot } from "@/components/bots/tracy-playback-slot";
 import { isEditableEventTarget } from "@/lib/keybindings/editable-target";
 import { BotChannelTitle } from "@/components/bots/bot-channel-level2";
 import { useMobileBotHeaderSlot } from "@/components/layout/header/mobile-bot-header-context";
@@ -179,7 +180,14 @@ export function BotThreadsView(props: {
               {`Back to ${props.channelTitle}`}
             </Button>
           )}
-          <h1 className="text-ui-md font-bold text-foreground">Threads</h1>
+          {/* As tall as a channel's title row, whose buttons set its height,
+              so the playback controls change nothing here by arriving. */}
+          <div className="@container/title-strip flex min-h-7 min-w-0 items-center gap-2">
+            <h1 className="min-w-0 truncate text-ui-md font-bold text-foreground">
+              Threads
+            </h1>
+            <TracyPlaybackSlot />
+          </div>
           <p className="text-ui-xs text-muted-foreground">
             Threads you follow, across every bot.
           </p>
