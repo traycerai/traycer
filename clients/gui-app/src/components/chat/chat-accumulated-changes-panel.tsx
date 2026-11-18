@@ -603,7 +603,7 @@ function AccumulatedArtifactFolderRow(
           undoable={memberChanges.some((change) => change.undoable)}
           gate={props.artifactUndoGate}
           pending={pending}
-          ariaLabel="Undo changes to this artifact"
+          ariaLabel={`Undo changes to ${bundle.title ?? "this artifact"}`}
           testId="accumulated-undo-artifact"
           onUndo={() => onUndo(memberChanges.map((change) => change.filePath))}
         />

@@ -428,7 +428,7 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
       const restore = renderCanvasPanel(true);
 
       fireEvent.click(
-        screen.getByRole("button", { name: "Undo changes to this artifact" }),
+        screen.getByRole("button", { name: "Undo changes to Board" }),
       );
 
       expect(restore.revertFileChanges).toHaveBeenCalledTimes(1);
@@ -448,7 +448,7 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
 
       expect(
         screen
-          .getByRole("button", { name: "Undo changes to this artifact" })
+          .getByRole("button", { name: "Undo changes to Board" })
           .hasAttribute("disabled"),
       ).toBe(true);
       expect(
