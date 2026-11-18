@@ -33,6 +33,10 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import {
+  installHostConnectionRegistrySource,
+  resetHostConnectionRegistryForTest,
+} from "@traycer-clients/shared/host-client/host-connection-registry";
 import type { EnvironmentHostReadResponseV11 } from "@traycer/protocol/host/environment/contracts";
 import type {
   ProviderCliState,
@@ -69,9 +73,11 @@ import type { HostRuntimeBinding } from "@/providers/host-runtime-provider";
 import {
   buildEnvironmentClient,
   environmentStatusFixture,
+  hostEntryFixture,
   type EnvironmentClientFixture,
 } from "@/lib/environment/__tests__/environment-test-support";
 import { settingsSaveMemoryKey } from "@/lib/persist";
+import { recordMapStorageKey } from "@/lib/persist/keys";
 import {
   useSettingsSaveMemoryStore,
   type SettingsSaveMemoryRecord,
@@ -333,7 +339,10 @@ interface SaveHarness {
   readonly cloud: EnvironmentCloud;
   readonly environmentCloud: () => EnvironmentCloud;
   readonly rotateBearerToken: () => void;
-  readonly setLocalHostId: (hostId: string | null) => void;
+  /** Takes the host's address out of its row and tells the registry the row moved. */
+  readonly disconnectHost: () => void;
+  /** Puts the host's address back in its row and tells the registry the row moved. */
+  readonly connectHost: () => void;
   readonly dispose: () => void;
 }
 
@@ -507,7 +516,7 @@ function makeSaveHarness(overrides: {
     canUnbind: false,
     sharingGeneration: SHARING_GENERATION,
   };
-  const { client } = buildEnvironmentClient({
+  const { client, hosts } = buildEnvironmentClient({
     hostId: HOST_ID,
     handlers: {
       "environment.status": () => {
@@ -623,6 +632,20 @@ function makeSaveHarness(overrides: {
     "providers.usePackVersion": { major: 1, minor: 2 },
     "providers.setEnabled": { major: 2, minor: 2 },
   });
+  const setHostRow = (websocketUrl: string | null): void => {
+    hosts.set(HOST_ID, { ...hostEntryFixture(HOST_ID), websocketUrl });
+    for (const listener of listeners) listener();
+  };
+  installHostConnectionRegistrySource({
+    directory: {
+      findById: (hostId) => hosts.get(hostId) ?? null,
+      onDirectoryChanged: (listener) => {
+        listeners.add(listener);
+        return { dispose: () => void listeners.delete(listener) };
+      },
+    },
+    leases: null,
+  });
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false, gcTime: 60_000 },
@@ -651,10 +674,6 @@ function makeSaveHarness(overrides: {
   });
   const directory = Object.assign(directoryService, {
     getLocalHostId: () => state.localHostId,
-    onChange: (callback: () => void) => {
-      listeners.add(callback);
-      return { dispose: () => listeners.delete(callback) };
-    },
   });
   let requestSequence = 0;
   const runtime = new HostRuntime<HostRpcRegistry>({
@@ -708,10 +727,8 @@ function makeSaveHarness(overrides: {
     rotateBearerToken: () => {
       bearerToken = "rotated-test-token";
     },
-    setLocalHostId: (hostId) => {
-      state.localHostId = hostId;
-      for (const listener of listeners) listener();
-    },
+    disconnectHost: () => setHostRow(null),
+    connectHost: () => setHostRow(hostEntryFixture(HOST_ID).websocketUrl),
     dispose: () => {
       runtime.dispose();
       directory.dispose();
@@ -1062,6 +1079,7 @@ afterEach(() => {
   addressableHostMock.id = HOST_ID;
   vi.restoreAllMocks();
   resetNegotiatedManifests();
+  resetHostConnectionRegistryForTest();
   useSettingsSaveMemoryStore.persist.clearStorage();
   useSettingsSaveMemoryStore.setState({ records: {}, inFlight: {} });
   useAuthStore.setState(useAuthStore.getInitialState(), true);
@@ -1274,6 +1292,80 @@ describe("settings-save callers", () => {
     expect(
       harness.authnRequests.some((request) => request.method === "POST"),
     ).toBe(false);
+  });
+
+  describe("on a runner with no local host id", () => {
+    const PROPOSAL_ID = "00000000-0000-4000-8000-000000000021";
+
+    it("applies the hold of a save to a host the transport serves over the local socket", async () => {
+      const harness = makeSaveHarness({
+        localHostId: null,
+        proposals: proposalForEdit(PROPOSAL_ID),
+        reviewAnswer: reviewAnswerForEdit(
+          "held-own-save",
+          "new-value",
+          3,
+          "old-value",
+        ),
+      });
+      const { result } = renderHook(() => useEnvOverrideEditor(), {
+        wrapper: harness.wrapper,
+      });
+      await waitForPreparedReads(harness, "env_override");
+
+      await act(async () => {
+        await result.current.mutateAsync(setTarget("new-value"));
+      });
+
+      await waitFor(() => expect(reviewApplyRequests(harness)).toHaveLength(1));
+      expect(reviewApplyRequests(harness).map(requestBody)).toMatchObject([
+        { revision: 9, expectedLiveRevision: 3 },
+      ]);
+      await waitFor(() => expect(records()).toEqual([]));
+    });
+
+    it("applies a remembered hold when the window opens, with no save", async () => {
+      const harness = makeSaveHarness({
+        localHostId: null,
+        proposals: proposalForEdit(PROPOSAL_ID),
+        reviewAnswer: reviewAnswerForEdit(
+          "held-remembered-save",
+          "new-value",
+          3,
+          "old-value",
+        ),
+      });
+      const remembered: SettingsSaveMemoryRecord = {
+        editId: "edit-remembered",
+        environmentId: ENVIRONMENT_ID,
+        hostId: HOST_ID,
+        sharingGeneration: SHARING_GENERATION,
+        kind: "env_override",
+        key: ITEM_KEY,
+        os: "macos",
+        operation: "put",
+        valueDigest: await settingValueDigest({ value: "new-value" }),
+        expectedLiveRevision: 3,
+        writtenAt: Date.now(),
+        unanswered: null,
+      };
+      window.localStorage.setItem(
+        recordMapStorageKey(
+          settingsSaveMemoryKey(ACCOUNT_A),
+          remembered.editId,
+        ),
+        JSON.stringify(remembered),
+      );
+
+      render(harness.wrapper({ children: null }));
+
+      await waitFor(() => expect(reviewApplyRequests(harness)).toHaveLength(1));
+      expect(reviewApplyRequests(harness).map(requestBody)).toMatchObject([
+        { revision: 9, expectedLiveRevision: 3 },
+      ]);
+      expect(harness.saveRequests).toEqual([]);
+      await waitFor(() => expect(records()).toEqual([]));
+    });
   });
 
   it("aborts silently if the account switches while a put is hashed", async () => {
@@ -2071,7 +2163,7 @@ describe("settings-save callers", () => {
     };
     const harness = makeSaveHarness({
       rows: [row("macos", "old-value", 3)],
-      localHostId: null,
+      localHostId: HOST_ID,
       proposals: proposal,
       reviewAnswer,
     });
@@ -2091,6 +2183,7 @@ describe("settings-save callers", () => {
     await waitForPreparedReads(harness, "env_override");
     expect(harness.hostRequests).not.toContain("environment.proposals");
 
+    act(() => harness.disconnectHost());
     await act(async () => {
       await reopenedEditor.result.current.mutateAsync(setTarget("new-value"));
     });
@@ -2098,7 +2191,7 @@ describe("settings-save callers", () => {
     expect(remembered.expectedLiveRevision).toBe(4);
     expect(harness.hostRequests).not.toContain("environment.proposals");
 
-    act(() => harness.setLocalHostId(HOST_ID));
+    act(() => harness.connectHost());
     await waitFor(() => {
       expect(harness.hostRequests).toContain("environment.proposals");
       expect(
@@ -2423,7 +2516,7 @@ describe("settings-save callers", () => {
   });
 
   it("moves the editor base only when a later reconcile applies its own hold", async () => {
-    const harness = makeSaveHarness({ localHostId: null });
+    const harness = makeSaveHarness({ localHostId: HOST_ID });
     const { result } = renderHook(() => useEnvOverrideEditor(), {
       wrapper: harness.wrapper,
     });
@@ -2445,6 +2538,7 @@ describe("settings-save callers", () => {
     );
     harness.state.revisionAfterApply = 4;
     harness.state.valueAfterApply = "first-value";
+    act(() => harness.disconnectHost());
     await act(async () => {
       await result.current.mutateAsync(setTarget("first-value"));
     });
@@ -2464,7 +2558,7 @@ describe("settings-save callers", () => {
     );
     const ownRowRead = deferred<EnvironmentTransportAnswer>();
     harness.state.itemReadGates.push(ownRowRead);
-    act(() => harness.setLocalHostId(HOST_ID));
+    act(() => harness.connectHost());
     await waitFor(() => {
       expect(reviewApplyRequests(harness)).toHaveLength(1);
       expect(itemReadCount()).toBeGreaterThan(readsAtOpen);
