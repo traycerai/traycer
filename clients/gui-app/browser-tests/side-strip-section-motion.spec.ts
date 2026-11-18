@@ -330,6 +330,35 @@ test.describe("when another task is opened with the pointer in the list", () => 
     await expect.poll(() => laneOf(release)).toBe("idle");
   });
 
+  test("keeps a waiting row under the pointer drawn in a folded section when the window loses focus", async ({
+    page,
+  }) => {
+    await holdReleaseAboveWatcher(page);
+    await page.getByTestId("side-strip-section-to-review").click();
+    await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+    await expect(row(page, "migration")).toHaveCount(0);
+    const release = row(page, "release");
+    const at = await centreOf(release);
+    await page.mouse.move(at.x, at.y);
+
+    await page.evaluate(
+      'window.__sideTabStripProbe.activate("fixture-watcher")',
+    );
+    await expect(row(page, "watcher")).toHaveAttribute("data-active", "true");
+    await expect(release).toBeVisible();
+    expect(await laneOf(release)).toBe("to-review");
+
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    await nextFrames(page, 3);
+
+    await expect(release).toBeVisible();
+    expect(await laneOf(release)).toBe("to-review");
+
+    await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+
+    await expect.poll(() => laneOf(release)).toBe("idle");
+  });
+
   test("moves the previous row to its section once the pointer leaves the list", async ({
     page,
   }) => {
@@ -419,7 +448,8 @@ test("moves the previous row to its section at once when another task is opened 
 
   await page.evaluate('window.__sideTabStripProbe.activate("fixture-watcher")');
 
-  await expect.poll(() => laneOf(row(page, "release"))).toBe("idle");
+  await expect(row(page, "watcher")).toHaveAttribute("data-active", "true");
+  expect(await laneOf(row(page, "release"))).toBe("idle");
 });
 
 test.describe("on a touch screen", () => {
@@ -434,7 +464,7 @@ test.describe("on a touch screen", () => {
     await page.touchscreen.tap(at.x, at.y);
 
     await expect(row(page, "watcher")).toHaveAttribute("data-active", "true");
-    await expect.poll(() => laneOf(row(page, "release"))).toBe("idle");
+    expect(await laneOf(row(page, "release"))).toBe("idle");
   });
 });
 

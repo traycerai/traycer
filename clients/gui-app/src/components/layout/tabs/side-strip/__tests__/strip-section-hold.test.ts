@@ -538,24 +538,22 @@ describe("useReleasedSectionHolds", () => {
     expect(list.holds()).toEqual([]);
   });
 
-  it("drops a waiting hold when its task is current again", () => {
+  it("drops a waiting hold when its task is current again, and the row it replaces waits", () => {
     const list = released(openingA);
     list.set({ current: HELD_B });
 
     list.set({ current: HELD_A });
 
-    expect(list.holds()).toEqual([]);
+    expect(list.holds()).toEqual([HELD_B]);
   });
 
-  it("keeps nothing for a row held in the section it really is in", () => {
-    const list = released({
-      ...openingA,
-      current: { itemId: ID_A, section: "idle" },
-    });
+  it("adds the previous row's hold when its section is its own", () => {
+    const heldInOwn: StripSectionHold = { itemId: ID_A, section: "idle" };
+    const list = released({ ...openingA, current: heldInOwn });
 
     list.set({ current: HELD_B });
 
-    expect(list.holds()).toEqual([]);
+    expect(list.holds()).toEqual([heldInOwn]);
   });
 
   it("keeps nothing for an item that has no row any more", () => {
@@ -574,7 +572,7 @@ describe("useReleasedSectionHolds", () => {
     expect(list.holds()).toEqual([]);
   });
 
-  it("lets a waiting row go when its own section becomes the one it waits in", () => {
+  it("keeps a waiting row where it waits when its own section becomes that one and moves on", () => {
     const list = released(openingA);
     list.set({ current: HELD_B });
     expect(list.holds()).toEqual([HELD_A]);
@@ -585,7 +583,7 @@ describe("useReleasedSectionHolds", () => {
         [ID_B, "idle"],
       ]),
     });
-    expect(list.holds()).toEqual([]);
+    expect(list.holds()).toEqual([HELD_A]);
 
     list.set({
       sections: sectionsOf([
@@ -593,6 +591,9 @@ describe("useReleasedSectionHolds", () => {
         [ID_B, "idle"],
       ]),
     });
+    expect(list.holds()).toEqual([HELD_A]);
+
+    list.set({ pointerInside: false });
     expect(list.holds()).toEqual([]);
   });
 });

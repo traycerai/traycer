@@ -10,8 +10,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TabStripController } from "@/components/layout/tabs/tab-strip-controller";
 import { SideStripSections } from "../side-strip-sections";
 import type { SideStripHandlers } from "../side-strip-item-input";
+import type { HeaderTab } from "@/stores/tabs/types";
 import {
   groupEntriesBySection,
+  needsYouRowOf,
+  needsYouTaskCountOf,
   type StripSection,
   type StripSectionGroup,
 } from "../strip-sections";
@@ -92,6 +95,37 @@ function sectionsOf(
   );
 }
 
+const MEMBER_TAB: Extract<HeaderTab, { kind: "settings" }> = {
+  kind: "settings",
+  id: "settings",
+  route: "/settings/general",
+  name: "Settings",
+  icon: null,
+  canDuplicate: false,
+  canOpenInNewWindow: false,
+  lastPath: null,
+};
+
+/** `needsYouItemId` is held in its section by a member that really needs the person. */
+function sectionsWithNeedsYouMember(
+  rows: ReadonlyArray<readonly [string, StripSection]>,
+  needsYouItemId: string,
+): ReadonlyArray<StripSectionGroup> {
+  return groupEntriesBySection(
+    rows.map(([itemId, section], stripIndex) => ({
+      kind: "tabs",
+      itemId,
+      stripIndex,
+      section,
+      group: null,
+      members:
+        itemId === needsYouItemId
+          ? [{ tab: MEMBER_TAB, row: needsYouRowOf([], "reply") }]
+          : [],
+    })),
+  );
+}
+
 function Strip(props: {
   readonly sections: ReadonlyArray<StripSectionGroup>;
   readonly activeItemId: string;
@@ -111,7 +145,17 @@ function Strip(props: {
   );
 }
 
-afterEach(cleanup);
+// The fold lives in a session store with no reset, so a test that left To
+// review folded unfolds it through the real header before unmounting.
+afterEach(() => {
+  const header = screen.queryByTestId("side-strip-section-to-review");
+  if (header?.getAttribute("aria-expanded") === "false") {
+    act(() => {
+      header.click();
+    });
+  }
+  cleanup();
+});
 
 const ROWS: ReadonlyArray<readonly [string, StripSection]> = [
   ["old", "idle"],
@@ -130,12 +174,9 @@ function renderOldHeldInFoldedToReview() {
     />,
     { container: scroller },
   );
-  // The fold lives in a session store the tests share: fold only when open.
-  if (screen.queryByTestId("row-other-review") !== null) {
-    act(() => {
-      screen.getByTestId("side-strip-section-to-review").click();
-    });
-  }
+  act(() => {
+    screen.getByTestId("side-strip-section-to-review").click();
+  });
   view.rerender(
     <Strip
       scroller={scroller}
@@ -150,6 +191,25 @@ function renderOldHeldInFoldedToReview() {
         activeItemId="next"
         sections={sectionsOf(ROWS)}
       />,
+    );
+  };
+  return { scroller, view, openNext };
+}
+
+/** `old` is current and really in the folded To review, as is another row. */
+function renderOldReallyInFoldedToReview() {
+  const scroller = document.body.appendChild(document.createElement("div"));
+  const sections = sectionsOf([["old", "to-review"], ...ROWS.slice(1)]);
+  const view = render(
+    <Strip scroller={scroller} activeItemId="old" sections={sections} />,
+    { container: scroller },
+  );
+  act(() => {
+    screen.getByTestId("side-strip-section-to-review").click();
+  });
+  const openNext = (): void => {
+    view.rerender(
+      <Strip scroller={scroller} activeItemId="next" sections={sections} />,
     );
   };
   return { scroller, openNext };
@@ -197,5 +257,126 @@ describe("a folded section when another task is opened with the pointer in the l
     });
 
     expect(screen.getByTestId("row-old").dataset.stripLane).toBe("idle");
+  });
+
+  it("keeps a waiting row drawn when its own section becomes the folded one it waits in", () => {
+    const { scroller, view, openNext } = renderOldHeldInFoldedToReview();
+    act(() => {
+      scroller.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    });
+    openNext();
+
+    expect(screen.getByTestId("row-old").dataset.stripLane).toBe("to-review");
+
+    act(() => {
+      view.rerender(
+        <Strip
+          scroller={scroller}
+          activeItemId="next"
+          sections={sectionsOf([["old", "to-review"], ...ROWS.slice(1)])}
+        />,
+      );
+    });
+
+    expect(screen.getByTestId("row-old").dataset.stripLane).toBe("to-review");
+    expect(screen.queryByTestId("row-other-review")).toBeNull();
+
+    act(() => {
+      scroller.dispatchEvent(new Event("pointerleave"));
+    });
+
+    expect(screen.queryByTestId("row-old")).toBeNull();
+    expect(screen.queryByTestId("row-other-review")).toBeNull();
+  });
+
+  it("keeps the previous row drawn when it was really in the folded section", () => {
+    const { scroller, openNext } = renderOldReallyInFoldedToReview();
+    act(() => {
+      scroller.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    });
+    openNext();
+
+    expect(screen.getByTestId("row-old").dataset.stripLane).toBe("to-review");
+    expect(screen.queryByTestId("row-other-review")).toBeNull();
+
+    act(() => {
+      scroller.dispatchEvent(new Event("pointerleave"));
+    });
+
+    expect(screen.queryByTestId("row-old")).toBeNull();
+  });
+});
+
+describe("an unfolded section when another task is opened with the pointer in the list", () => {
+  it("keeps a waiting row in its section through a change of its own, until the pointer leaves", () => {
+    const { scroller, view, openNext } = renderOldHeldInFoldedToReview();
+    act(() => {
+      screen.getByTestId("side-strip-section-to-review").click();
+    });
+    act(() => {
+      scroller.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    });
+    openNext();
+    expect(screen.getByTestId("row-old").dataset.stripLane).toBe("to-review");
+
+    const settle = (section: StripSection): void => {
+      act(() => {
+        view.rerender(
+          <Strip
+            scroller={scroller}
+            activeItemId="next"
+            sections={sectionsOf([["old", section], ...ROWS.slice(1)])}
+          />,
+        );
+      });
+    };
+    settle("to-review");
+    expect(screen.getByTestId("row-old").dataset.stripLane).toBe("to-review");
+
+    settle("needs-you");
+    expect(screen.getByTestId("row-old").dataset.stripLane).toBe("to-review");
+
+    act(() => {
+      scroller.dispatchEvent(new Event("pointerleave"));
+    });
+
+    expect(screen.getByTestId("row-old").dataset.stripLane).toBe("needs-you");
+  });
+});
+
+describe("a row that needs the person while it waits in another section", () => {
+  it("counts it in the notification count and not in a Needs you header", () => {
+    const { scroller, view, openNext } = renderOldHeldInFoldedToReview();
+    act(() => {
+      screen.getByTestId("side-strip-section-to-review").click();
+    });
+    act(() => {
+      scroller.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    });
+    openNext();
+
+    const sections = sectionsWithNeedsYouMember(
+      [["old", "needs-you"], ...ROWS.slice(1)],
+      "old",
+    );
+    act(() => {
+      view.rerender(
+        <Strip scroller={scroller} activeItemId="next" sections={sections} />,
+      );
+    });
+
+    expect(screen.getByTestId("row-old").dataset.stripLane).toBe("to-review");
+    expect(screen.queryByTestId("side-strip-section-needs-you")).toBeNull();
+    // The count the Notifications pill and the bell show.
+    expect(needsYouTaskCountOf(sections)).toBe(1);
+
+    act(() => {
+      scroller.dispatchEvent(new Event("pointerleave"));
+    });
+
+    expect(screen.getByTestId("row-old").dataset.stripLane).toBe("needs-you");
+    expect(
+      screen.getByTestId("side-strip-section-needs-you").textContent,
+    ).toContain("1");
   });
 });

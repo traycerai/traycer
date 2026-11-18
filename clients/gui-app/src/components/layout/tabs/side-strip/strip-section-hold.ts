@@ -296,13 +296,16 @@ function releasedHoldsOf(
     prev.current !== null && prev.current.itemId !== current?.itemId
       ? [prev.current]
       : [];
-  // A row with nowhere else to go is not waiting, and neither is one whose
-  // item is gone: a pair that lost a member has a new item id.
-  const waiting = [...prev.released, ...left].filter((held) => {
-    if (held.itemId === current?.itemId) return false;
-    const now = sectionOfItem(sections, held.itemId);
-    return now !== null && now !== held.section;
-  });
+  // A row waits even where its own section is the one it is drawn in: a
+  // folded section draws it only while it waits, and a wait that ended when
+  // the two met would let the row move on under the pointer. It stops only as
+  // the current row again, or with its item gone: a pair that lost a member
+  // has a new item id.
+  const waiting = [...prev.released, ...left].filter(
+    (held) =>
+      held.itemId !== current?.itemId &&
+      sectionOfItem(sections, held.itemId) !== null,
+  );
   if (waiting.length === 0) return NO_HOLDS;
   return waiting.length === prev.released.length &&
     waiting.every((held, index) => held === prev.released[index])
@@ -314,8 +317,9 @@ function releasedHoldsOf(
  * The holds of rows that stopped being the current one while the pointer was
  * inside the list. Letting such a row go to its own section at once would
  * move the rows under the pointer, the one just clicked among them, so it
- * waits where it was drawn until the pointer is no longer inside. A change
- * made with the pointer elsewhere lets it go at once.
+ * waits where it was drawn, whatever its own section becomes, until the
+ * pointer is no longer inside. A change made with the pointer elsewhere lets
+ * it go at once.
  */
 export function useReleasedSectionHolds(
   current: StripSectionHold | null,
