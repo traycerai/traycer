@@ -399,8 +399,7 @@ class FakeRelay {
 
   /**
    * A host-sent session FATAL on stream 0, sealed in order like any host
-   * frame. `doorReason` rides in the details where the host puts it; `null`
-   * is a host that names no reason.
+   * frame.
    */
   async sendSessionFatal(
     code: string,

@@ -6012,7 +6012,7 @@ export const providersSetEnabledUpgradeV21ToV22 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-// Bridges from v2.1 down to the frozen v1.0. Used directly by
+// Used directly by
 // `provider-profiles-compat.test.ts` to assert `profileAction` never reaches a
 // v1.0 caller; the registered `downgradePathsFromLatest` bridge is
 // `providersSetEnabledDowngradeV22ToV10` below.

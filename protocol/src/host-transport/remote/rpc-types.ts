@@ -94,10 +94,7 @@ export class HostRpcError extends Error {
    */
   readonly staleWrite: EnvironmentStaleWrite | null;
   /**
-   * A persistent session's refusal of this one request at or after its token
-   * step (the answer's `doorReason`), in the shape a door refusal takes, so
-   * recovery reads it the way it reads {@link fatalDetails}. `null` on every
-   * other answer: the socket stays up and nothing here is fatal.
+   * In the shape a door refusal takes; `null` on every other answer: the socket stays up.
    */
   readonly doorRefusal: FatalErrorDetails | null;
 
