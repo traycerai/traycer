@@ -562,7 +562,8 @@ describe("bot settings controls with an unavailable tab host", () => {
     expect(queryClient.getQueryState(secondList)?.isInvalidated).toBe(true);
     expect(tabHost.messenger.calls).toEqual([]);
     for (const cached of queryClient.getQueryCache().getAll()) {
-      expect(JSON.stringify(cached.state.data) ?? "").not.toContain(
+      const data = cached.state.data;
+      expect(data === undefined ? "" : JSON.stringify(data)).not.toContain(
         "bot deleted notice",
       );
     }
