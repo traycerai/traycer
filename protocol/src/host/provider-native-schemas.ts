@@ -1523,6 +1523,25 @@ export const nativeMutationSchemaV12 = lazySchema(() =>
 );
 export type NativeMutationV12 = z.infer<typeof nativeMutationSchemaV12>;
 
+/**
+ * `@1.3`'s arm plus `intentOperationId`, the app's `mcp_promote` intent or null; read
+ * only for `mcp`. Null, and every `@1.3` or `@1.4` caller, takes the path without one.
+ */
+export const nativePromoteToPersonalMutationSchemaV15 = lazySchema(() =>
+  nativePromoteToPersonalMutationSchema.safeExtend({
+    intentOperationId: z.uuid().nullable().default(null),
+  }),
+);
+export type NativePromoteToPersonalMutationV15 = z.infer<
+  typeof nativePromoteToPersonalMutationSchemaV15
+>;
+
+/** The v1.5 mutation: every v1.2 arm plus the v1.5 `promoteToPersonal`. */
+export const nativeMutationSchemaV15 = lazySchema(() =>
+  z.union([nativeMutationSchema, nativePromoteToPersonalMutationSchemaV15]),
+);
+export type NativeMutationV15 = z.infer<typeof nativeMutationSchemaV15>;
+
 const providersMcpMutateActionSchemaV10Preimage = lazySchema(() =>
   z.discriminatedUnion("action", [
     z.object({
@@ -1652,6 +1671,41 @@ export const nativeMutationResultSchemaV14 = lazySchema(() =>
 );
 export type NativeMutationResultV14 = z.infer<
   typeof nativeMutationResultSchemaV14
+>;
+
+/**
+ * `@1.4`'s codes plus seven only the `promoteToPersonal` arm answers, with a null
+ * `detail` and never to a `@1.4` or older caller. `needs_grant`: a null intent and a
+ * null executable-write grant; the arm's other refusals stay `unsupported_action`.
+ */
+export const providerNativeMutateErrorCodeSchemaV15 = lazySchema(() =>
+  z.enum([
+    ...providerNativeMutateErrorCodeSchema.options,
+    "needs_connection",
+    "upload_refused",
+    "needs_grant",
+    "environment_not_served",
+    "not_global_scope",
+    "bound_to_this_computer",
+    "invalid_entry",
+  ]),
+);
+export type ProviderNativeMutateErrorCodeV15 = z.infer<
+  typeof providerNativeMutateErrorCodeSchemaV15
+>;
+
+export const nativeMutationResultSchemaV15 = lazySchema(() =>
+  z.union([
+    nativeMutationSuccessResultSchema,
+    z.object({
+      ok: z.literal(false),
+      code: providerNativeMutateErrorCodeSchemaV15,
+      detail: z.string().nullable(),
+    }),
+  ]),
+);
+export type NativeMutationResultV15 = z.infer<
+  typeof nativeMutationResultSchemaV15
 >;
 
 /** MCP mutation result published on nativeMutate@1.1. */

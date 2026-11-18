@@ -1,4 +1,5 @@
 import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
   useCallback,
@@ -10,6 +11,7 @@ import {
   type RefObject,
 } from "react";
 import { useStore } from "zustand";
+import { useProfilePinRemoved } from "@/hooks/providers/use-profile-pin-removed";
 import { v4 as uuidv4 } from "uuid";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { CreateChatForkSourceV11 } from "@traycer/protocol/host/epic/unary-schemas";
@@ -50,6 +52,7 @@ import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { useEpicCreateChatForHostClient } from "@/hooks/epic/use-epic-chat-mutations";
 import {
+  pressedSignInCurrent,
   isAttachEnvironmentUnsupported,
   toastAttachEnvironmentNeedsOwnHost,
   useEpicAttachEnvironment,
@@ -637,6 +640,13 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   // A harness a team sandbox does not offer holds Fork shut on that host, and
   // the dialog says so.
   const forkHarnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
+  const forkProfileId = useStore(toolbarStore, (s) => s.selection.profileId);
+  const forkProfileRemoved = useProfilePinRemoved(
+    selectedHostClient,
+    forkHarnessId,
+    forkProfileId,
+    open,
+  );
   const pickedHarnessId = useStore(
     toolbarStore,
     (s) => s.values.selection.harnessId,
@@ -727,6 +737,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   const attachClient =
     tabHostTeamId === null ? tabHostClient : personalAppWideClient;
   const attachEnvironment = useEpicAttachEnvironment(attachClient, "fork");
+  const takeOperation = useEnvironmentCloud();
   const sourceOwnerUserId = useCloneSourceOwnerUserId({
     client: appWideClient,
     epicId,
@@ -806,6 +817,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     createPending: createChat.isPending || attachEnvironment.isPending,
     hostClientResolved: selectedHostClient !== null,
     teamSandboxHarnessBlocked,
+    forkProfileRemoved,
     // Not a host-build fact any more, and the name says so. This one boolean
     // now carries the SOURCE CHAT's publication too - a frozen publication and
     // a boundary the published head does not cover both hold Fork shut, the
@@ -905,6 +917,8 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       const attempt = Symbol();
       stagedSubmitAttempt.current = attempt;
       const account = signedInUserId();
+      // The sign-in taken at the press.
+      const operation = takeOperation === null ? null : takeOperation();
       const settings = pickedRunSettings(toolbarStore.getState());
       const settingsKey = JSON.stringify(settings);
 
@@ -935,9 +949,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 current: true,
                 owns: true,
                 epicConfirmed: true,
-                accountActive:
-                  (useAuthStore.getState().profile?.userId ?? null) ===
-                  ownerUserId,
+                accountActive: pressedSignInCurrent(operation, ownerUserId),
                 stageCurrent: readStagedSandbox(forkSurfaceKey) === staged,
               },
             );
@@ -975,7 +987,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
             return;
           }
           attachEnvironment.mutate(
-            { epicId, teamId: stagedTeamId },
+            { epicId, teamId: stagedTeamId, operation },
             {
               onSuccess: hand,
               onError: (error) => {
@@ -999,6 +1011,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       stagedSignInCheck,
       tabHostTeamId,
       tabId,
+      takeOperation,
       toolbarStore,
       trimmedTitle,
     ],
@@ -1006,6 +1019,8 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
 
   const submit = useCallback(() => {
     if (!canSubmit || target === null) return;
+    // The sign-in taken at the press.
+    const operation = takeOperation === null ? null : takeOperation();
     // A staged sandbox: the fork is handed to the task, which creates the
     // sandbox, waits for the agent there and forks onto it, through a reload.
     const staged = readStagedSandbox(forkSurfaceKey);
@@ -1070,8 +1085,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
           current: true,
           owns: true,
           epicConfirmed: true,
-          accountActive:
-            (useAuthStore.getState().profile?.userId ?? null) === submittedBy,
+          accountActive: pressedSignInCurrent(operation, submittedBy),
           stageCurrent: readStagedSandbox(forkSurfaceKey) === staged,
         },
       );
@@ -1093,10 +1107,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
         },
         {
           onSuccess: (result) => {
-            if (
-              (useAuthStore.getState().profile?.userId ?? null) !== submittedBy
-            )
-              return;
+            if (!pressedSignInCurrent(operation, submittedBy)) return;
             Analytics.getInstance().track(AnalyticsEvent.ChatForked, {
               source: "direct_ui",
               include_history: true,
@@ -1141,7 +1152,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       return;
     }
     attachEnvironment.mutate(
-      { epicId, teamId: attachTeamId },
+      { epicId, teamId: attachTeamId, operation },
       {
         onSuccess: createForkChat,
         // A host that predates the attachment creates as it always has.
@@ -1161,6 +1172,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     forkSurfaceKey,
     navigateNestedFocus,
     submitStagedFork,
+    takeOperation,
     sandboxAgentGate.notice,
     onOpenChange,
     seedIntent,
@@ -1560,6 +1572,7 @@ function canSubmitFork(input: {
   readonly hostClientResolved: boolean;
   /** The selected host is a team sandbox that does not offer the harness. */
   readonly teamSandboxHarnessBlocked: boolean;
+  readonly forkProfileRemoved: boolean;
   /**
    * The combined Layer-1 verdict allows a submit - see `chat-fork-target`. It
    * spans BOTH subjects the dialog gates on: the selected host's build, and the
@@ -1575,6 +1588,7 @@ function canSubmitFork(input: {
   if (input.createPending) return false;
   if (!input.hostClientResolved) return false;
   if (input.teamSandboxHarnessBlocked) return false;
+  if (input.forkProfileRemoved) return false;
   if (!input.verdictAllowsSubmit) return false;
   if (input.requiresStagedPreselection && !input.hasStagedPreselection) {
     return false;

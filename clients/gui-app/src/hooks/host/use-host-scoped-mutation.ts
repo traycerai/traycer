@@ -18,7 +18,10 @@ import {
   readProcessHostRpcTierPlan,
 } from "@traycer-clients/shared/host-client/host-rpc-routing";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import { useHostMutation } from "@/hooks/host/use-host-query";
+import {
+  useHostMutation,
+  type SettingsSaveFollow,
+} from "@/hooks/host/use-host-query";
 import {
   agentMutationKeys,
   hostQueryKeys,
@@ -89,7 +92,8 @@ interface UseHostScopedMutationArgs<
    * `Mutation.execute`. Anything whose omission would leave the HOST and the
    * UI disagreeing - a resource the host created that nothing else will ever
    * surface - belongs here, not in a `mutate(vars, { onSuccess })` at the call
-   * site.
+   * site. A returned promise keeps the save pending; its rejection fails the
+   * mutation, including required work after the host's answer.
    *
    * `hostId` is the one captured in `onMutate` - the host this request was
    * SENT on, which is not necessarily the one the client addresses by the time
@@ -103,7 +107,7 @@ interface UseHostScopedMutationArgs<
         variables: RequestOfMethod<HostRpcRegistry, Method>,
         hostId: string | null,
         captured: Captured,
-      ) => void)
+      ) => void | Promise<void>)
     | undefined;
   /** Settlement work tied to the captured request, including a lost reply. */
   readonly onSettled?:
@@ -144,11 +148,10 @@ interface UseHostScopedMutationArgs<
    * serializes unrelated calls that happen to use the same hook.
    */
   readonly scope?: MutationScope | undefined;
-  /**
-   * Completes the request at dispatch: the executable-write grant
-   * (`useExecutableWriteGrant`) on a write that can reach an execution sink.
-   * See `UseHostMutationOptions.prepareRequest`.
-   */
+  readonly followSettingsSave?:
+    | SettingsSaveFollow<HostRpcRegistry, Method>
+    | undefined;
+  /** See `UseHostMutationOptions.prepareRequest`. */
   readonly prepareRequest?:
     | ((
         request: RequestOfMethod<HostRpcRegistry, Method>,
@@ -200,6 +203,7 @@ export function useHostScopedMutationForClient<
     requiredHostMethodVersion: args.requiredHostMethodVersion,
     mapVariables: (variables) => variables,
     prepareRequest: args.prepareRequest,
+    followSettingsSave: args.followSettingsSave,
     options: {
       mutationKey: args.mutationKey,
       scope: args.scope,
@@ -215,9 +219,9 @@ export function useHostScopedMutationForClient<
       // The analytics event and the caller's own work are the SUCCESS half and
       // stay here: one reports a write that landed, the other files a response
       // this arm is the only one to receive.
-      onSuccess: (data, variables, ctx) => {
+      onSuccess: async (data, variables, ctx) => {
+        await args.onSuccess?.(data, variables, ctx.hostId, ctx.captured);
         trackScopedMutationSuccess(args.mutationKey, variables);
-        args.onSuccess?.(data, variables, ctx.hostId, ctx.captured);
       },
       // The sweep, on every settle - see `invalidateMethods`. `ctx` is
       // optional on this signature because `onMutate` need not have run (a

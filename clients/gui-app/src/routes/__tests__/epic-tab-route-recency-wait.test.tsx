@@ -151,6 +151,13 @@ vi.mock("@/components/layout/bridges/host-lifecycle-analytics-bridge", () => ({
 vi.mock("@/providers/team-removal-tile-closer", () => ({
   TeamRemovalTileCloser: () => null,
 }));
+vi.mock("@/providers/claimed-computer-notifier", () => ({
+  ClaimedComputerNotifier: () => null,
+}));
+// This harness has no QueryClientProvider, so the cover is stubbed.
+vi.mock("@/components/layout/dialogs/window-host-modal-host", () => ({
+  WindowHostModalHost: () => null,
+}));
 
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({ tasks: [] }),

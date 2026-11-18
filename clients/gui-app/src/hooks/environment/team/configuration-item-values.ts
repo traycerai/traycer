@@ -5,10 +5,6 @@ export const configurationShellValueSchema = z.object({
   path: z.string(),
   args: z.array(z.string()),
 });
-export const configurationMcpValueSchema = z.object({
-  mcpServerId: z.string(),
-  toolToggles: z.record(z.string(), z.record(z.string(), z.boolean())),
-});
 export const configurationProfileValueSchema = z.object({
   name: z.string(),
   color: z.string().nullable(),

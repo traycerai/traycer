@@ -11,6 +11,7 @@ import {
 } from "@testing-library/react";
 import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import { HOST_OLDER_THAN_DATA_FATAL_CODE } from "@traycer/protocol/host/store-formats";
+import { MINIMUM_HOST_VERSION } from "@traycer-clients/shared/host-client/minimum-host-version";
 import type { HostReachability } from "@/hooks/agent/use-host-reachability";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
@@ -38,6 +39,17 @@ import {
 vi.mock("../use-chat-tile-host-update", () => ({
   useChatTileHostUpdate: vi.fn(),
 }));
+
+vi.mock(
+  "@traycer-clients/shared/host-client/minimum-host-version",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/minimum-host-version")
+      >();
+    return { ...actual, MINIMUM_HOST_VERSION: "1.3.0" };
+  },
+);
 
 // The lease is keyed by the tab's host. The real hook reads a context this
 // suite has no reason to mount a provider for.
@@ -580,7 +592,7 @@ describe("<ChatTilePreContent />: escalation and Try again", () => {
   });
 
   it("offers the host update on a stalled load only when the versions prove the host is behind", () => {
-    stubHostUpdate("1.2.0", "1.3.0");
+    stubHostUpdate("1.2.0", MINIMUM_HOST_VERSION);
     const { unmount } = renderPreContent(
       frameFor(firstRenderWait(), "reachable", vi.fn()),
       session({
@@ -594,7 +606,7 @@ describe("<ChatTilePreContent />: escalation and Try again", () => {
     );
     unmount();
 
-    stubHostUpdate("1.3.0", "1.3.0");
+    stubHostUpdate(MINIMUM_HOST_VERSION, MINIMUM_HOST_VERSION);
     renderPreContent(
       frameFor(firstRenderWait(), "reachable", vi.fn()),
       session({

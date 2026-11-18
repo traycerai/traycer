@@ -1,3 +1,4 @@
+import { reportedSaveFailure } from "@/lib/environment/settings-save-follow";
 import { useLayoutEffect, useRef, useState } from "react";
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import {
@@ -21,6 +22,8 @@ import {
 } from "@/components/onboarding/onboarding-memory-save";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import { useSettingsSave } from "@/hooks/environment/use-settings-save";
+import { useEnvironmentCloud } from "@/hooks/environment/use-environment-cloud";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import {
   useHostMethodSchemaVersion,
@@ -35,6 +38,7 @@ import { configMutationKeys, providersMutationKeys } from "@/lib/query-keys";
 
 const AGENT_MEMORIES_GET = "config.agentMemories.get";
 const AGENT_MEMORIES_SET = "config.agentMemories.set";
+const SAVED_KINDS = ["agent_memory"] as const;
 /** The act's own cache entries, apart from every other reader of the same methods. */
 const ACT_IDENTITY = ["onboarding-agent-memories"];
 
@@ -97,6 +101,8 @@ export function useOnboardingAgentMemories(input: {
   readonly pickedHostId: string | null;
 }): OnboardingAgentMemories {
   const client = useOptionalHostClient();
+  const prepareSave = useSettingsSave(client, SAVED_KINDS);
+  const cloudSource = useEnvironmentCloud();
   // The host the tour's binding addresses, read off the same client every
   // read and write below goes through.
   const readiness = useReactiveHostReadiness(client);
@@ -167,6 +173,16 @@ export function useOnboardingAgentMemories(input: {
   });
   const setTraycerMemories = useHostScopedMutationForClient(client, {
     method: AGENT_MEMORIES_SET,
+    followSettingsSave: {
+      source: cloudSource,
+      follow: (request, sentOn, pressedOn) =>
+        prepareSave(
+          { method: AGENT_MEMORIES_SET, request },
+          sentOn.getActiveHostId(),
+          pressedOn,
+        ),
+      proposes: (answer) => answer.state !== "local_only",
+    },
     mutationKey: configMutationKeys.agentMemoriesSet(),
     // Reported on the act, beside the change it is about.
     errorMessage: null,
@@ -258,8 +274,8 @@ export function useOnboardingAgentMemories(input: {
           if (answer.state !== "queued")
             trackSettingChanged("agent-memories", "useTraycerMemories");
           return answer;
-        } catch {
-          return null;
+        } catch (error) {
+          return reportedSaveFailure(error) === null ? "unsent" : null;
         }
       },
       writeProvider: (row) => writeProvider(target, row),
@@ -314,7 +330,11 @@ export function useOnboardingAgentMemories(input: {
     // without a catch, and would leave this whole hook unmemoized.
     return runMemorySave(saveIo(target), rows)
       .then((result) => {
-        if (result !== "moved" && result !== "undiscovered")
+        if (
+          result !== "moved" &&
+          result !== "undiscovered" &&
+          result !== "unsent"
+        )
           record(target.hostId, (current) => ({
             ...current,
             traycerUnreached: result === "unreached",

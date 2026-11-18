@@ -1464,6 +1464,7 @@ export function WindowedFixture(): ReactElement {
               taskId={TASK_ID}
               epicId={EPIC_ID}
               hostId={null}
+              payerHostId={null}
               messages={messages}
               transcriptWindow={transcriptWindow}
               onVisibleOrdinalRangeChange={reportVisibleRange}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   seatsManagementPath,
-  teamPlanPath,
+  teamBillingPath,
 } from "@/components/settings/members/dashboard-urls";
 import { billingPathFor } from "@/lib/auth/platform-base-url";
 import { teamGithubDashboardUrl } from "@/lib/sandboxes/secrets-dashboard";
@@ -31,7 +31,7 @@ describe("the dashboard's team routes", () => {
       }),
     ).toBe(`${ORIGIN}/team/acme/billing`);
     expect(seatsManagementPath("acme")).toBe("/team/acme/seat-management");
-    expect(teamPlanPath("acme")).toBe("/team/acme/environment/plan");
+    expect(teamBillingPath("acme")).toBe("/team/acme/billing");
     expect(teamGithubDashboardUrl(SIGN_IN, "acme")).toBe(
       `${ORIGIN}/team/acme/environment/github`,
     );

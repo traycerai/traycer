@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
   fireEvent,
-  render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
+import { renderWithQueryClient } from "@/components/composer/__tests__/composer-query-wrapper";
 import { toast } from "sonner";
 import {
   SandboxSetupLine,
@@ -139,7 +139,7 @@ function mountRefusal(
   smallerShapeAffordable: boolean,
   actions: SandboxSetupLineActions,
 ): HTMLElement {
-  render(
+  renderWithQueryClient(
     <SandboxSetupLine
       stage={refused(configuration, failure)}
       name="api-refactor"
@@ -182,7 +182,7 @@ describe("withdrawing a message from every refusal or failure", () => {
       const stage = created();
       const onCancel = vi.fn();
       const onOpenTerminal = vi.fn();
-      render(
+      renderWithQueryClient(
         <SandboxSetupLine
           stage={{
             ...stage,
@@ -272,13 +272,13 @@ describe("SandboxSetupLine's refusal for credits", () => {
     {
       creditSource: "team",
       shortfallMc: null,
-      expected: "Your acme credits don't cover an hour of this sandbox.",
+      expected: "acme's credits don't cover an hour of this sandbox.",
     },
     {
       creditSource: "team",
       shortfallMc: 120,
       expected:
-        "Your acme credits are short $0.12. $0.12 more wakes it for an hour.",
+        "acme's credits are short $0.12. $0.12 more wakes it for an hour.",
     },
   ])(
     "capitalizes a resumed sandbox's $creditSource refusal with shortfall $shortfallMc",
@@ -288,7 +288,7 @@ describe("SandboxSetupLine's refusal for credits", () => {
         teamId: "team-1",
         teamName: "acme",
       };
-      render(
+      renderWithQueryClient(
         <SandboxSetupLine
           stage={{
             ...refused(configuration, {
@@ -332,7 +332,7 @@ describe("SandboxSetupLine's refusal for credits", () => {
     ]);
   });
 
-  it("offers Add credits, host choice and Cancel on a team's allowance", () => {
+  it("offers host choice and Cancel, and no Add credits to a reader not known to be the team's Admin, on a team's allowance", () => {
     const line = mountRefusal(
       { kind: "team", teamId: "team-1", teamName: "acme" },
       { kind: "credits", creditSource: "team-allowance", shortfallMc: 120 },
@@ -346,7 +346,6 @@ describe("SandboxSetupLine's refusal for credits", () => {
       ),
     ).toBeDefined();
     expect(buttonLabels(line)).toEqual([
-      "Add credits ↗",
       "Use This computer",
       "Cancel the message",
     ]);
@@ -474,7 +473,7 @@ describe("SandboxSetupLine's failed start", () => {
   const RAW_CODE = "create:kube-create-service-account";
 
   function mountFailed(): void {
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{
           ...refused(
@@ -515,7 +514,7 @@ describe("SandboxSetupLine's failed start", () => {
       configurable: true,
       value: { writeText },
     });
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={refused(
           { kind: "personal" },
@@ -588,7 +587,7 @@ describe("SandboxSetupLine when the sandbox rested on its own", () => {
   ] as const)(
     "draws nothing for a stage at step %s with failure %j",
     (step, failure) => {
-      const { container } = render(
+      const { container } = renderWithQueryClient(
         <SandboxSetupLine
           stage={{ ...created(), step, failure }}
           name="api-refactor"
@@ -604,7 +603,7 @@ describe("SandboxSetupLine when the sandbox rested on its own", () => {
   it.each([true, undefined])(
     "draws nothing for a rested stage whose send can go back (withdrawalAllowed %s)",
     (withdrawalAllowed) => {
-      const { container } = render(
+      const { container } = renderWithQueryClient(
         <SandboxSetupLine
           stage={{ ...created(), step: "applying" }}
           name="api-refactor"
@@ -620,7 +619,7 @@ describe("SandboxSetupLine when the sandbox rested on its own", () => {
 
   it("says the message is still pending, with Retry, when this window can't give it back", () => {
     const onRetry = vi.fn();
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{ ...created(), step: "applying" }}
         name="api-refactor"
@@ -638,7 +637,7 @@ describe("SandboxSetupLine when the sandbox rested on its own", () => {
   });
 
   it("keeps waiting on the progress line, not an alert, for a recorded rest once the row no longer rests", () => {
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{
           ...created(),
@@ -662,7 +661,7 @@ describe("SandboxSetupLine when the sandbox rested on its own", () => {
   });
 
   it("still draws the settings failure's own line", () => {
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{
           ...created(),
@@ -683,7 +682,7 @@ describe("SandboxSetupLine when the sandbox rested on its own", () => {
   });
 
   it("still says Resuming for a wake under way at the booting step", () => {
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{
           ...created(),
@@ -717,7 +716,7 @@ describe("SandboxProgressLine's queued state", () => {
   const NOT_STOPPABLE = { ...facts(false), sandboxStoppable: false };
 
   it("says Queued, with the retry time, while the vendor's quota wait is still ahead, even past the ordinary taking-longer threshold", () => {
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{
           ...created(),
@@ -745,7 +744,7 @@ describe("SandboxProgressLine's queued state", () => {
   ])(
     "falls back to the ordinary elapsed rule for %s, taking longer past the threshold exactly as before",
     (_label, rateLimit) => {
-      render(
+      renderWithQueryClient(
         <SandboxSetupLine
           stage={{
             ...created(),
@@ -766,7 +765,7 @@ describe("SandboxProgressLine's queued state", () => {
   );
 
   it("stays on the ordinary not-yet-taking-longer line for an expired quota wait before the elapsed threshold", () => {
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{
           ...created(),
@@ -787,7 +786,7 @@ describe("SandboxProgressLine's queued state", () => {
   it("stays Queued past the elapsed threshold, and expanding it by hand still offers Cancel and keep the draft and Choose another host", () => {
     const onCancel = vi.fn();
     const onChooseAnotherHost = vi.fn();
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{
           ...created(),
@@ -837,7 +836,7 @@ describe("SandboxProgressLine's queued retry label across a local midnight", () 
   });
 
   it("includes the date, not only the time, when the recorded retry falls on a different local day", () => {
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{
           ...created(),
@@ -860,7 +859,7 @@ describe("SandboxProgressLine's queued retry label across a local midnight", () 
 describe("SandboxSetupLine's Stop action", () => {
   it("stays available while the created sandbox's line is collapsed or expanded", () => {
     onStop.mockClear();
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={created()}
         name="api-refactor"
@@ -881,7 +880,7 @@ describe("SandboxSetupLine's Stop action", () => {
   });
 
   it("hides Stop in both line states when withdrawal is unavailable", () => {
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={created()}
         name="api-refactor"
@@ -901,7 +900,7 @@ describe("SandboxSetupLine when the settings did not apply", () => {
   const STEPS = { applied: ["Secrets"], notApplied: ["Providers"] };
 
   function mountSettings(sendTaken: boolean, actions: SandboxSetupLineActions) {
-    render(
+    renderWithQueryClient(
       <SandboxSetupLine
         stage={{
           ...created(),

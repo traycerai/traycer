@@ -1193,6 +1193,7 @@ function KnownThread(
             botId={botId}
             chatId={threadId}
             hostId={hostId}
+            boundHostId={boundHostId}
             title={botTitle}
             instanceId={`bot-thread:${threadId}`}
             surface={surface}

@@ -1191,6 +1191,7 @@ function renderChatMessages(options: RenderChatMessagesOptions) {
           taskId={taskId}
           epicId={epicId}
           hostId={null}
+          payerHostId={null}
           messages={state.messages}
           baselineEpoch={state.baselineEpoch}
           hydrationSequence={state.hydrationSequence}
@@ -6318,6 +6319,7 @@ describe("ChatMessages scroll policy", () => {
             taskId="task-1"
             epicId="epic-1"
             hostId={null}
+            payerHostId={null}
             messages={messages}
             baselineEpoch={0}
             hydrationSequence={0}

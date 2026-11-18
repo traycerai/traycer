@@ -130,6 +130,7 @@ export function Fixture() {
             taskId={TASK_ID}
             epicId={EPIC_ID}
             hostId={null}
+            payerHostId={null}
             messages={messages}
             transcriptWindow={null}
             onVisibleOrdinalRangeChange={() => undefined}

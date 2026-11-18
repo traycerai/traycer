@@ -90,6 +90,8 @@ async function request(
         },
         body: init.body,
         signal: abort.signal,
+        // Carries a credential: never follow a redirect.
+        redirect: "manual",
       }),
       abort.signal,
     );

@@ -265,6 +265,7 @@ export function Channel(): ReactElement {
           taskId="channel-1"
           epicId={BOT_ID}
           hostId={null}
+          payerHostId={null}
           messages={MESSAGES}
           transcriptWindow={null}
           onVisibleOrdinalRangeChange={() => undefined}

@@ -110,7 +110,10 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 // in this file before this fix.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: (hostId: string | null) =>
-    hostId === null ? (hostBindingMock.current?.hostClient ?? null) : hostId,
+    hostId === null
+      ? (hostBindingMock.current?.hostClient ?? null)
+      : { getActiveHostId: () => hostId },
+  useHostDirectoryEntryForHostId: (_hostId: string | null): null => null,
 }));
 
 // This suite's host binding is a bare fake with no directory, which the real

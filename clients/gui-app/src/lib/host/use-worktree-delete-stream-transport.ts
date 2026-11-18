@@ -26,10 +26,10 @@ export function useWorktreeDeleteStreamTransportFactory(): (
 ) => DurableStreamTransport {
   const directory = useHostDirectory();
   const globalClient = useHostClient();
-  const authnBaseUrl = useRunnerHost().authnBaseUrl;
-  const liveRef = useRef({ directory, globalClient, authnBaseUrl });
+  const { authnBaseUrl, hostTokens } = useRunnerHost();
+  const liveRef = useRef({ directory, globalClient, authnBaseUrl, hostTokens });
   useEffect(() => {
-    liveRef.current = { directory, globalClient, authnBaseUrl };
+    liveRef.current = { directory, globalClient, authnBaseUrl, hostTokens };
   });
   return useCallback((hostId: string) => {
     const target = liveRef.current.directory.findById(hostId);
@@ -55,6 +55,7 @@ export function useWorktreeDeleteStreamTransportFactory(): (
       bearer: () =>
         liveRef.current.globalClient.getRequestContext()?.credentials ?? null,
       authnBaseUrl: liveRef.current.authnBaseUrl,
+      hostTokens: liveRef.current.hostTokens,
     });
   }, []);
 }

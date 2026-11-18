@@ -39,14 +39,11 @@ vi.mock("@/lib/host", async (importOriginal) => {
   };
 });
 
-// What `useHostCredentialRefusal` answers for the scoped host: `null` is a
-// host that takes credentials, a string is a sandbox's refusal line. Mocked
-// because the bare binding above carries no host directory to read it from.
-const credentialRefusal = vi.hoisted(() => ({
+const sandboxCredentialRefusal = vi.hoisted(() => ({
   current: null as string | null,
 }));
 vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
-  useHostCredentialRefusal: () => credentialRefusal.current,
+  useHostCredentialRefusal: () => sandboxCredentialRefusal.current,
 }));
 
 import {
@@ -60,6 +57,11 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  ABANDONED_SAVE_MESSAGE,
+  abandonedSaveError,
+  saveTransportFailure,
+} from "@/lib/environment/__tests__/settings-save-failure-fixtures";
 import {
   advanceLegendListTime,
   installLegendListTestClock,
@@ -78,6 +80,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import type { HostScopeOption } from "@/components/settings/host-scope/host-scope-model";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { ShellSettingsPanel } from "@/components/settings/panels/shell-settings-panel";
 import {
@@ -89,7 +92,7 @@ import { useRereadHostReadsOnFocus } from "@/hooks/environment/use-reread-host-r
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { EnvironmentStaleWrite } from "@traycer/protocol/framework/environment-stale-write";
 import { PERSONAL_PICK } from "@/lib/settings-environment-pages";
-import { environmentMutationKeys, queryKeys } from "@/lib/query-keys";
+import { queryKeys } from "@/lib/query-keys";
 import {
   ALL_CONFIG_RPC_METHODS,
   CONFIG_SHELL_METHODS,
@@ -105,7 +108,7 @@ afterEach(() => {
   resetNegotiatedManifests();
   scopeOverrides.current = {};
   hostBindingMock.current = null;
-  credentialRefusal.current = null;
+  sandboxCredentialRefusal.current = null;
 });
 
 // A non-login program: its family default is no flags, so switching to it must
@@ -152,6 +155,7 @@ function renderShellPanelOverRpc(options: {
    * distinct from a recorded-but-empty manifest.
    */
   readonly methods?: readonly string[] | null;
+  readonly hostKind?: HostScopeOption["kind"];
 }): ConfigHostFixture & {
   readonly queryClient: QueryClient;
   readonly rerenderPanel: () => void;
@@ -184,6 +188,17 @@ function renderShellPanelOverRpc(options: {
       hostId,
       isLocalMachine,
       connectable: options.connectable ?? true,
+      kind: options.hostKind ?? "personal",
+      sandbox:
+        options.hostKind === "sandbox"
+          ? {
+              state: null,
+              frozen: false,
+              summary: null,
+              teamOwned: false,
+              ownerKind: "unknown",
+            }
+          : null,
     }),
     hostId,
     status: "ready",
@@ -1251,8 +1266,7 @@ describe("<ShellSettingsPanel /> partially failed rename refreshes the editor", 
   // test that cannot fail. Do not re-add one in this shape.
 });
 
-describe("<ShellSettingsPanel /> host environment on a host that takes no credentials", () => {
-  const REFUSAL = "Sandboxes don't take sign-ins";
+describe("<ShellSettingsPanel /> host environment variables", () => {
   const SIGN_IN_URL = "https://ghp_x@github.com/o/r";
 
   function envCli(): MockTraycerCli {
@@ -1287,8 +1301,7 @@ describe("<ShellSettingsPanel /> host environment on a host that takes no creden
     fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
   }
 
-  it("refuses a value that is a URL with a sign-in: the line shows, the value stays, and config.env.set is never sent", async () => {
-    credentialRefusal.current = REFUSAL;
+  it("saves a value that is a URL with a sign-in", async () => {
     const cli = envCli();
     const set = envSetSpy(cli);
     renderShellPanelOverRpc({
@@ -1296,19 +1309,65 @@ describe("<ShellSettingsPanel /> host environment on a host that takes no creden
       overrideHandlers: { "config.env.set": set },
     });
 
-    await addVariable("NODE_ENV", "REPO_URL", SIGN_IN_URL);
+    await addVariable("OPENAI_API_KEY", "REPO_URL", SIGN_IN_URL);
 
-    expect(
-      await screen.findByText(`${REFUSAL}: remove the sign-in from this URL.`),
-    ).toBeTruthy();
-    const valueField = screen.getByLabelText("New variable value");
-    expect((valueField as HTMLInputElement).value).toBe(SIGN_IN_URL);
-    expect(set).not.toHaveBeenCalled();
-    expect(cli.envOverrides).toEqual([]);
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({
+      key: "REPO_URL",
+      value: SIGN_IN_URL,
+    });
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
+  });
+
+  it("saves a credential-shaped variable from a sandbox's Variables and shells settings", async () => {
+    sandboxCredentialRefusal.current = "Sandboxes don't take sign-ins";
+    const cli = envCli();
+    const set = envSetSpy(cli);
+    renderShellPanelOverRpc({
+      cli,
+      isLocalMachine: false,
+      hostKind: "sandbox",
+      overrideHandlers: { "config.env.set": set },
+    });
+
+    await addVariable("OPENAI_API_KEY", "OPENAI_API_KEY", "sk-test");
+
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({
+      key: "OPENAI_API_KEY",
+      value: "sk-test",
+    });
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
+  });
+
+  it("hides an abandoned shell-variable save but reports a transport failure", async () => {
+    const cli = envCli();
+    const set = envSetSpy(cli);
+    set.mockRejectedValueOnce(abandonedSaveError("config.env.set"));
+    renderShellPanelOverRpc({
+      cli,
+      overrideHandlers: { "config.env.set": set },
+    });
+
+    await addVariable("OPENAI_API_KEY", "NODE_ENV", "production");
+
+    await waitFor(() => {
+      expect(set).toHaveBeenCalledTimes(1);
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", {
+          name: "Apply variable",
+        }).disabled,
+      ).toBe(false);
+    });
+    expect(screen.queryByText(ABANDONED_SAVE_MESSAGE)).toBeNull();
+
+    const transportFailure = saveTransportFailure("config.env.set");
+    set.mockRejectedValueOnce(transportFailure);
+    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
+    expect(await screen.findByText(transportFailure.message)).toBeTruthy();
   });
 
   it("still saves a plain value", async () => {
-    credentialRefusal.current = REFUSAL;
     const cli = envCli();
     const set = envSetSpy(cli);
     renderShellPanelOverRpc({
@@ -1316,18 +1375,16 @@ describe("<ShellSettingsPanel /> host environment on a host that takes no creden
       overrideHandlers: { "config.env.set": set },
     });
 
-    await addVariable("NODE_ENV", "NODE_ENV", "production");
+    await addVariable("OPENAI_API_KEY", "NODE_ENV", "production");
 
     await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
     expect(set).toHaveBeenCalledWith({
       key: "NODE_ENV",
       value: "production",
-      executableWriteGrant: null,
     });
   });
 
-  it("refuses a sign-in URL typed into an existing variable on blur, and sends nothing", async () => {
-    credentialRefusal.current = REFUSAL;
+  it("saves a sign-in URL typed into an existing variable on blur", async () => {
     const cli = envCli();
     cli.envOverrides = [{ key: "REPO_URL", value: "https://github.com/o/r" }];
     const set = envSetSpy(cli);
@@ -1340,54 +1397,26 @@ describe("<ShellSettingsPanel /> host environment on a host that takes no creden
     fireEvent.change(field, { target: { value: SIGN_IN_URL } });
     fireEvent.blur(field);
 
-    expect(
-      await screen.findByText(`${REFUSAL}: remove the sign-in from this URL.`),
-    ).toBeTruthy();
-    expect(set).not.toHaveBeenCalled();
-  });
-
-  it("hints NODE_ENV on the add row, not a key-shaped name", async () => {
-    credentialRefusal.current = REFUSAL;
-    renderShellPanelOverRpc({ cli: envCli() });
-
-    await openEnvAdd();
-
-    expect(screen.getByPlaceholderText("NODE_ENV")).toBeTruthy();
-    expect(screen.queryByPlaceholderText("OPENAI_API_KEY")).toBeNull();
-  });
-
-  it("control: on a host that takes credentials the sign-in URL is saved and the hint is OPENAI_API_KEY", async () => {
-    credentialRefusal.current = null;
-    const cli = envCli();
-    const set = envSetSpy(cli);
-    renderShellPanelOverRpc({
-      cli,
-      overrideHandlers: { "config.env.set": set },
-    });
-
-    await openEnvAdd();
-    expect(screen.getByPlaceholderText("OPENAI_API_KEY")).toBeTruthy();
-    fireEvent.change(screen.getByPlaceholderText("OPENAI_API_KEY"), {
-      target: { value: "REPO_URL" },
-    });
-    fireEvent.change(screen.getByLabelText("New variable value"), {
-      target: { value: SIGN_IN_URL },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
-
     await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
     expect(set).toHaveBeenCalledWith({
       key: "REPO_URL",
       value: SIGN_IN_URL,
-      executableWriteGrant: null,
     });
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
+  });
+
+  it("hints OPENAI_API_KEY on the add row", async () => {
+    renderShellPanelOverRpc({ cli: envCli() });
+
+    await openEnvAdd();
+
+    expect(screen.getByPlaceholderText("OPENAI_API_KEY")).toBeTruthy();
+    expect(screen.queryByPlaceholderText("NODE_ENV")).toBeNull();
   });
 });
 
 describe("<ShellSettingsPanel /> host environment names that look like credentials", () => {
-  const REFUSAL = "Sandboxes don't take sign-ins";
-  const NAME_LINE = `${REFUSAL}: a variable whose name looks like a credential is not stored here.`;
-  const USERNAME_ONLY_URL = "https://short-token@example.com/path";
+  const PASSWORD_URL = "https://user:pw@example.com/x";
 
   function envCli(): MockTraycerCli {
     const cli = new MockTraycerCli();
@@ -1433,8 +1462,7 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
     fireEvent.click(screen.getByRole("button", { name: "Apply variable" }));
   }
 
-  it("never sends config.env.set for OPENAI_API_KEY=sk-x on a sandbox scope, and shows the line", async () => {
-    credentialRefusal.current = REFUSAL;
+  it("saves OPENAI_API_KEY=sk-x", async () => {
     const cli = envCli();
     const { set, remove } = envHandlers(cli);
     renderShellPanelOverRpc({
@@ -1444,14 +1472,16 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
 
     await addVariable("OPENAI_API_KEY", "sk-x");
 
-    expect(await screen.findByText(NAME_LINE)).toBeTruthy();
-    expect(set).not.toHaveBeenCalled();
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({
+      key: "OPENAI_API_KEY",
+      value: "sk-x",
+    });
     expect(remove).not.toHaveBeenCalled();
-    expect(cli.envOverrides).toEqual([]);
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 
-  it("never sends set or delete when a row is renamed to a credential-shaped name", async () => {
-    credentialRefusal.current = REFUSAL;
+  it("sends set and delete when a row is renamed to a credential-shaped name", async () => {
     const cli = envCli();
     cli.envOverrides = [{ key: "EDITOR", value: "vim" }];
     const { set, remove } = envHandlers(cli);
@@ -1464,14 +1494,17 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
     fireEvent.change(name, { target: { value: "GITHUB_TOKEN" } });
     fireEvent.blur(name);
 
-    expect(await screen.findByText(NAME_LINE)).toBeTruthy();
-    expect(set).not.toHaveBeenCalled();
-    expect(remove).not.toHaveBeenCalled();
-    expect(cli.envOverrides.map((row) => row.key)).toEqual(["EDITOR"]);
+    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
+    expect(set).toHaveBeenCalledWith({
+      key: "GITHUB_TOKEN",
+      value: "vim",
+    });
+    await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
+    expect(remove).toHaveBeenCalledWith({ key: "EDITOR" });
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 
-  it("still saves EDITOR=vim on a sandbox scope", async () => {
-    credentialRefusal.current = REFUSAL;
+  it("still saves EDITOR=vim", async () => {
     const cli = envCli();
     const { set } = envHandlers(cli);
     renderShellPanelOverRpc({
@@ -1485,31 +1518,11 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
     expect(set).toHaveBeenCalledWith({
       key: "EDITOR",
       value: "vim",
-      executableWriteGrant: null,
     });
-    expect(screen.queryByText(NAME_LINE)).toBeNull();
+    expect(screen.queryByTestId("env-key-refusal")).toBeNull();
   });
 
-  it("control: on a personal host OPENAI_API_KEY=sk-x saves", async () => {
-    credentialRefusal.current = null;
-    const cli = envCli();
-    const { set } = envHandlers(cli);
-    renderShellPanelOverRpc({
-      cli,
-      overrideHandlers: { "config.env.set": set },
-    });
-
-    await addVariable("OPENAI_API_KEY", "sk-x");
-
-    await waitFor(() => expect(set).toHaveBeenCalledTimes(1));
-    expect(set).toHaveBeenCalledWith({
-      key: "OPENAI_API_KEY",
-      value: "sk-x",
-      executableWriteGrant: null,
-    });
-  });
-
-  it("refuses Use everywhere for a sign-in URL, without setting or clearing it", async () => {
+  it("offers Use everywhere for a password URL shown as dots and saves that URL", async () => {
     const cli = envCli();
     cli.envOverrides = [{ key: "REPO_URL", value: "https://example.com/path" }];
     const { set } = envHandlers(cli);
@@ -1519,9 +1532,9 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
         overrides: [],
       }),
     );
-    const panel = renderShellPanelOverRpc({
+    renderShellPanelOverRpc({
       cli,
-      localOverrides: [localVariableOverride("REPO_URL", USERNAME_ONLY_URL)],
+      localOverrides: [localVariableOverride("REPO_URL", PASSWORD_URL)],
       overrideHandlers: {
         "config.env.set": set,
         "config.env.localOverride.clear": clear,
@@ -1529,30 +1542,26 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
     });
 
     const ownValue = await screen.findByTestId("env-row-own-value");
+    expect(ownValue.textContent).toContain("••••••••");
     expect(ownValue.textContent).toContain("Use everywhere");
-    expect(ownValue.textContent).toContain(USERNAME_ONLY_URL);
+    expect(ownValue.textContent).not.toContain(PASSWORD_URL);
 
-    credentialRefusal.current = REFUSAL;
-    panel.rerenderPanel();
     fireEvent.click(screen.getByRole("button", { name: "Use everywhere" }));
 
-    const writeMutationKeys = panel.queryClient
-      .getMutationCache()
-      .getAll()
-      .map(({ options }) => options.mutationKey);
-    expect(writeMutationKeys).not.toContainEqual(["config.env.set"]);
-    expect(writeMutationKeys).not.toContainEqual(
-      environmentMutationKeys.localOverrideClear(),
-    );
-    expect(set).not.toHaveBeenCalled();
-    expect(clear).not.toHaveBeenCalled();
-    expect(cli.envOverrides).toEqual([
-      { key: "REPO_URL", value: "https://example.com/path" },
-    ]);
+    await waitFor(() => {
+      expect(set).toHaveBeenCalledOnce();
+      expect(clear).toHaveBeenCalledOnce();
+    });
+    expect(set).toHaveBeenCalledWith({
+      key: "REPO_URL",
+      value: PASSWORD_URL,
+    });
+    expect(clear).toHaveBeenCalledWith({
+      target: { kind: "variable", key: "REPO_URL" },
+    });
   });
 
   it("still moves an ordinary local variable everywhere", async () => {
-    credentialRefusal.current = REFUSAL;
     const cli = envCli();
     cli.envOverrides = [{ key: "LOG_LEVEL", value: "info" }];
     const { set } = envHandlers(cli);
@@ -1582,7 +1591,6 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
     expect(set).toHaveBeenCalledWith({
       key: "LOG_LEVEL",
       value: "error",
-      executableWriteGrant: null,
     });
     expect(clear).toHaveBeenCalledWith({
       target: { kind: "variable", key: "LOG_LEVEL" },
@@ -1590,7 +1598,6 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
   });
 
   it("clears a host's own variable after its save resolves, even if the panel unmounts", async () => {
-    credentialRefusal.current = REFUSAL;
     let releaseSave: (() => void) | undefined;
     const cli = envCli();
     cli.envOverrides = [{ key: "LOG_LEVEL", value: "info" }];
@@ -1631,7 +1638,6 @@ describe("<ShellSettingsPanel /> host environment names that look like credentia
   });
 
   it("keeps a host's own variable when saving it for everyone fails", async () => {
-    credentialRefusal.current = REFUSAL;
     let rejectSave: ((error: Error) => void) | undefined;
     const failedSave = new Promise<never>((_resolve, reject) => {
       rejectSave = reject;

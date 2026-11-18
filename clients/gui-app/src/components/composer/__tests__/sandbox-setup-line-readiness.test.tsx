@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
+import { renderWithQueryClient } from "@/components/composer/__tests__/composer-query-wrapper";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import {
   SandboxSetupLine,
@@ -134,7 +135,7 @@ describe("the staged New setup line's readiness", () => {
         warm,
         coldCreateMeasuredMs: measured,
       });
-      render(<StagedLine />);
+      renderWithQueryClient(<StagedLine />);
       const line = screen.queryByTestId("sandbox-staged-readiness");
       if (text === null) expect(line).toBeNull();
       else expect(line?.textContent).toBe(text);
@@ -155,7 +156,7 @@ describe("the staged New setup line's readiness", () => {
         coldCreateMeasuredMs: SERVED_MS,
       });
       readinessState = state;
-      render(<StagedLine />);
+      renderWithQueryClient(<StagedLine />);
       expect(screen.queryByTestId("sandbox-staged-readiness")).toBeNull();
     },
   );
@@ -169,7 +170,7 @@ describe("the staged New setup line's readiness", () => {
       const minutes = Math.max(1, Math.round(servedMs / 60_000));
       const unit = minutes === 1 ? "minute" : "minutes";
 
-      render(<StagedLine />);
+      renderWithQueryClient(<StagedLine />);
 
       expect(screen.getByTestId("sandbox-staged-readiness").textContent).toBe(
         `This create takes about ${minutes} ${unit}.`,

@@ -409,7 +409,7 @@ describe("stampRuntime", () => {
 // that left pid.json behind would satisfy every check with a fabricated
 // pid (the pre-fix `writePid({})` default of 4242 is never a real
 // process). These tests spawn a REAL process so the new liveness probe
-// has genuine positive evidence to find - `sleep` has no Windows
+// has genuine positive evidence to find - `cat` has no Windows
 // equivalent fixture, matching `store/__tests__/process-identity.test.ts`'s
 // own convention of skipping this exact scenario there.
 describe.skipIf(process.platform === "win32")(
@@ -434,12 +434,14 @@ describe.skipIf(process.platform === "win32")(
       readonly pid: number;
       readonly startedAt: string;
     }> {
-      const proc = spawn("sleep", ["30"]);
+      // Blocks on its open stdin until `afterEach` kills it: the process
+      // lives for the case, not for a fixed number of seconds.
+      const proc = spawn("cat");
       child = proc;
       const pid = await new Promise<number>((resolve, reject) => {
         proc.once("spawn", () => {
           if (proc.pid === undefined) {
-            reject(new Error("spawned sleep process has no pid"));
+            reject(new Error("spawned live process has no pid"));
             return;
           }
           resolve(proc.pid);

@@ -25,6 +25,7 @@ import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-s
 import type { ListTaskLight } from "@traycer/protocol/host/epic/unary-schemas";
 import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { EnvironmentEffectiveRole } from "@traycer/protocol/host/environment/contracts";
 import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 
 export type OpenResult =
@@ -164,7 +165,7 @@ export const mocks = {
       isFetchedAfterMount: true,
       isFetching: false,
     },
-    membersSupport: null as boolean | null,
+    membersReadAvailable: true,
     openResult: null as OpenResult | null,
     threads: [] as BotThreadSummary[],
     // Whether a bot.thread.list answer is held: true serves `threads` as that
@@ -179,6 +180,7 @@ export const mocks = {
       label: string;
       ownerKind: "organization" | "user";
       providerHandle: string | null;
+      effectiveRole?: EnvironmentEffectiveRole;
     }>,
   },
 };
@@ -186,7 +188,6 @@ export const mocks = {
 export const hostSupportsMethodMock = {
   useHostMethodSupport: (hostId: string | null, method: string) => {
     mocks.supportQueries.push({ hostId, method });
-    if (method === "environment.members") return mocks.state.membersSupport;
     if (method === "bot.onboarding.read") return mocks.state.onboardingSupport;
     if (
       method === "bot.thread.list" &&
@@ -328,17 +329,17 @@ export const hostEnvironmentBindingsMock = {
 // one teammate it knows by name.
 export const environmentMembersMock = {
   useEnvironmentMemberDirectory: (
-    _client: unknown,
     environmentId: string | null,
     enabled: boolean,
   ) => {
     mocks.membersQueries.push({ environmentId, enabled });
+    const readable = enabled && mocks.state.membersReadAvailable;
     return {
       resolve: (userId: string) =>
-        enabled && userId === "user-teammate"
+        readable && userId === "user-teammate"
           ? { displayName: "Tess Teammate", avatarUrl: null }
           : null,
-      members: enabled
+      members: readable
         ? [
             {
               userId: "user-teammate",

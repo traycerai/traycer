@@ -321,6 +321,7 @@ function SnapshotBundleFileRow(props: {
         {props.leading}
         <FileChangeHeader
           filePath={props.entry.filePath}
+          label={props.entry.filePath}
           operation={props.entry.operation}
           additions={props.additions}
           deletions={props.deletions}

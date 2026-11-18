@@ -16,10 +16,12 @@ import {
   hostQueryKeys,
 } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { noteOwnClaim } from "@/stores/hosts/claimed-computer-notice-store";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { requestFleetRefresh } from "@/lib/host/fleet-refresh";
-import { invalidateLocalTeamAdmissionAfterClaim } from "@/lib/host/app-local-open-auth";
+import { noteHostMembershipChanged } from "@/lib/host/local-admission-invalidation";
 import { hostEnvironmentBindingQueryKey } from "@/hooks/bots/use-host-environment-bindings-query";
+import { invalidateEnvironmentReads } from "@/hooks/environment/use-environment-cloud";
 
 function computerFailure(result: TeamComputerFailure): never {
   switch (result.kind) {
@@ -43,8 +45,6 @@ function computerFailure(result: TeamComputerFailure): never {
 export function useTeamComputers(environmentId: string) {
   const binding = useHostBinding();
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
-  const runnerHost = useRunnerHost();
-  const queryClient = useQueryClient();
   const auth = binding?.auth ?? null;
   const queryKey = authQueryKeys.teamComputers(auth, userId, environmentId);
   const read = useQuery(
@@ -61,39 +61,8 @@ export function useTeamComputers(environmentId: string) {
       },
     }),
   );
-  const settle = () => {
-    void queryClient.invalidateQueries({ queryKey });
-    void queryClient.invalidateQueries({
-      queryKey: authQueryKeys.registeredHostsAll(),
-    });
-    void binding?.directory.refresh();
-    requestFleetRefresh(runnerHost);
-  };
-  const setBotHost = useMutation({
-    mutationKey: authMutationKeys.setEnvironmentBotHost(environmentId),
-    retry: false,
-    mutationFn: async (input: {
-      readonly hostId: string;
-      readonly sharingGeneration: number;
-    }) => {
-      if (
-        auth === null ||
-        userId === null ||
-        useAuthStore.getState().contextMetadata?.userId !== userId
-      )
-        throw new Error("Sign in to choose a bot host.");
-      const result = await auth.setEnvironmentBotHost(
-        environmentId,
-        input.hostId,
-        input.sharingGeneration,
-      );
-      if (result.kind !== "ok") return computerFailure(result);
-      return result.host;
-    },
-    onSettled: settle,
-  });
   const claim = useTeamComputerClaim(environmentId, undefined);
-  return { read, setBotHost, claim };
+  return { read, claim };
 }
 
 export function useTeamComputerClaim(
@@ -117,7 +86,9 @@ export function useTeamComputerClaim(
         throw new Error("Sign in to claim this computer.");
       const result = await auth.releaseTeamComputer(hostId, environmentId);
       if (result.kind === "ok") {
-        await invalidateLocalTeamAdmissionAfterClaim(hostId, runnerHost);
+        noteHostMembershipChanged(hostId);
+        // This person made the claim: it is not a teammate's to tell them.
+        noteOwnClaim(userId, { environmentId, hostId });
         return;
       }
       if (result.kind === "not-computer")
@@ -148,22 +119,18 @@ export function useTeamComputerClaim(
           queryKey: hostEnvironmentBindingQueryKey(hostId, userId),
         });
       }
-      for (const method of [
-        "environment.status",
-        "environment.host.list",
-      ] as const) {
-        void queryClient.invalidateQueries({
-          queryKey: hostQueryKeys.methodScope(
-            hostRpcServingTierHostId(
-              method,
-              hostId,
-              readProcessHostRpcTierPlan(),
-              null,
-            ),
-            method,
+      void queryClient.invalidateQueries({
+        queryKey: hostQueryKeys.methodScope(
+          hostRpcServingTierHostId(
+            "environment.status",
+            hostId,
+            readProcessHostRpcTierPlan(),
+            null,
           ),
-        });
-      }
+          "environment.status",
+        ),
+      });
+      void invalidateEnvironmentReads(queryClient, ["environment.host.list"]);
       void binding?.directory.refresh();
       requestFleetRefresh(runnerHost);
     },

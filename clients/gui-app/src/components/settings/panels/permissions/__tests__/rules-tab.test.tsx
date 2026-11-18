@@ -20,12 +20,21 @@ import {
   RulesTab,
   type RulesEditorState,
 } from "@/components/settings/panels/permissions/rules-tab";
+import { HostRuntimeTestProvider } from "@/lib/host/__tests__/host-runtime-test-provider";
+import type { AutoPolicySave } from "@/hooks/auto-mode/use-auto-policy-set-mutation";
 
 // ---- host boundary --------------------------------------------------------
 
-vi.mock("@/components/settings/host-scope/use-host-scope", () => {
-  const useHostScope = () =>
-    hostScopeFixture({ status: "following", hostId: "host-a" });
+vi.mock("@/components/settings/host-scope/use-host-scope", async () => {
+  const { useHostBinding } = await import("@/lib/host/runtime");
+  const useHostScope = () => {
+    const binding = useHostBinding();
+    return hostScopeFixture({
+      status: "following",
+      hostId: "host-a",
+      client: binding?.hostClient ?? null,
+    });
+  };
   return {
     useHostScope,
     usePersonalHostScope: useHostScope,
@@ -36,9 +45,20 @@ vi.mock(
   async () => {
     const { scopedHostBindingFixture } =
       await import("@/components/settings/host-scope/host-scope-fixture");
+    const { useHostBinding } = await import("@/lib/host/runtime");
     return {
-      useScopedHostBinding: (scope: HostScope) =>
-        scopedHostBindingFixture(scope),
+      useScopedHostBinding: (scope: HostScope) => {
+        const binding = useHostBinding();
+        const scoped = scopedHostBindingFixture(scope);
+        if (binding === null || scoped === null || scope.client === null) {
+          return null;
+        }
+        return {
+          ...binding,
+          hostClient: scope.client,
+          ...scoped,
+        };
+      },
     };
   },
 );
@@ -93,12 +113,7 @@ interface SetPolicyCallbacks {
   readonly onSuccess: (response: { readonly updatedAt: string | null }) => void;
 }
 const setPolicyMutate = vi.hoisted(() =>
-  vi.fn<
-    (
-      variables: { readonly body: string },
-      callbacks: SetPolicyCallbacks,
-    ) => void
-  >(),
+  vi.fn<(variables: AutoPolicySave, callbacks: SetPolicyCallbacks) => void>(),
 );
 const setPolicyState = vi.hoisted((): { isPending: boolean } => ({
   isPending: false,
@@ -176,7 +191,11 @@ function tab(overrides: Partial<TabProps>): ReactElement {
     onSnapshot: noop,
     ...overrides,
   };
-  return <RulesTab {...props} />;
+  return (
+    <HostRuntimeTestProvider>
+      <RulesTab {...props} />
+    </HostRuntimeTestProvider>
+  );
 }
 
 function input(key: string): HTMLTextAreaElement {
@@ -334,7 +353,7 @@ describe("RulesTab", () => {
       );
 
       expect(setPolicyMutate).toHaveBeenCalledTimes(1);
-      expect(setPolicyMutate.mock.calls[0][0]).toEqual({ body: "" });
+      expect(setPolicyMutate.mock.calls[0][0].request).toEqual({ body: "" });
 
       policy.current = record({
         body: "",
@@ -418,7 +437,7 @@ describe("RulesTab", () => {
       });
       fireEvent.click(confirm);
       expect(setPolicyMutate).toHaveBeenCalledTimes(1);
-      expect(setPolicyMutate.mock.calls[0][0]).toEqual({ body: "" });
+      expect(setPolicyMutate.mock.calls[0][0].request).toEqual({ body: "" });
     });
   });
 
@@ -448,7 +467,9 @@ describe("RulesTab", () => {
         notes: "",
       });
       expect(setPolicyMutate).toHaveBeenCalledTimes(1);
-      expect(setPolicyMutate.mock.calls[0][0]).toEqual({ body: expectedBody });
+      expect(setPolicyMutate.mock.calls[0][0].request).toEqual({
+        body: expectedBody,
+      });
 
       // The write-through the real mutation performs: the cache now holds the
       // saved body under the server's new stamp, and the response carries the
@@ -880,10 +901,13 @@ describe("RulesTab", () => {
 
     fireEvent.click(await settledSave());
 
-    expect(setPolicyMutate.mock.calls[0][0]).toEqual({
+    expect(setPolicyMutate.mock.calls[0][0].request).toEqual({
       body: joinAutoPolicySections(EMPTY_AUTO_POLICY_SECTIONS),
     });
-    expect(setPolicyMutate.mock.calls[0][0].body).toBe("");
+    expect(setPolicyMutate.mock.calls[0][0].request.body).toBe("");
+    expect(setPolicyMutate.mock.calls[0][0].operation.onOriginSignIn).toEqual(
+      expect.any(Function),
+    );
   });
 
   describe("re-seed on a record equal to the unsaved edit", () => {

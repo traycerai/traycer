@@ -293,7 +293,6 @@ function buildSession(
       appVersion: "0.0.0-test",
     },
     livenessProbe: null,
-    mintMemberCredential: null,
   });
 }
 
