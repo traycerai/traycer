@@ -4,15 +4,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
 import { vi } from "vitest";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
-import {
-  EpicSidebarCloudChatRow,
-  type CloudChatRowExpansion,
-} from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
-import type { UnifiedCloudChatEntry } from "@/lib/chats/unified-chat-list";
+import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
 import type { HostReachabilityStatus } from "@/hooks/agent/use-host-reachability";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makePublishedChatTileRef } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
-import type { TreeRowExpansion } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
  * The row's active-state wiring, verified against the REAL canvas store.
@@ -47,23 +42,13 @@ vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
       prepare(),
 }));
 
-function staticExpansion(
-  expandedIds: ReadonlySet<string>,
-  toggleExpanded: (id: string) => void,
-): TreeRowExpansion {
-  return {
-    subscribe: () => () => undefined,
-    isExpanded: (id) => expandedIds.has(id),
-    toggleExpanded,
-  };
-}
-
-/** A leaf row: no subagents beneath it, so no expansion state to consult. */
-const NO_CHILDREN: readonly UnifiedCloudChatEntry[] = [];
-const LEAF_EXPANSION: CloudChatRowExpansion = staticExpansion(
-  new Set<string>(),
-  () => undefined,
-);
+/** A leaf row: no subagents beneath it, so nothing to expand. */
+const LEAF_ROW = {
+  hasChildren: false,
+  expanded: false,
+  expansionId: "leaf",
+  onToggleExpanded: () => undefined,
+} as const;
 
 const CHAT: CloudChatSummary = {
   identity: {
@@ -101,8 +86,7 @@ function renderRow(tabId: string): HTMLElement {
     <QueryClientProvider client={new QueryClient()}>
       <EpicSidebarCloudChatRow
         chat={CHAT}
-        childEntries={NO_CHILDREN}
-        expansion={LEAF_EXPANSION}
+        {...LEAF_ROW}
         tabId={tabId}
         depth={0}
         selectionMode={false}

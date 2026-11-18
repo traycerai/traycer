@@ -13,6 +13,10 @@ import {
  * of ancestor rails - giving an unambiguous read of what is nested under what.
  *
  * The host `<ul>` must be `relative` for the rail to position against it.
+ *
+ * The virtualised chat tree has no group elements: each row draws one rail for
+ * every group it sits in, spanning the row, and the rails of consecutive rows
+ * join into the same continuous line.
  */
 export function TreeGroupGuide({ parentDepth }: { parentDepth: number }) {
   return (

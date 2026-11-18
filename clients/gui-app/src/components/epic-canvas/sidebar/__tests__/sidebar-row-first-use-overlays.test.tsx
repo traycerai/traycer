@@ -27,11 +27,7 @@ import type { TaskHostsView } from "@/hooks/epic/use-task-hosts-view";
 import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
 import { ArtifactTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-artifact-tree";
 import { ChatTreePanelBody } from "@/components/epic-canvas/sidebar/epic-sidebar-chat-tree";
-import {
-  EpicSidebarCloudChatRow,
-  type CloudChatRowExpansion,
-} from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
-import type { UnifiedCloudChatEntry } from "@/lib/chats/unified-chat-list";
+import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
 import {
   CHAT_TREE_MESSAGE_HITS_NONE,
   type ChatTreeMessageHits,
@@ -59,7 +55,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import type { TreeRowExpansion } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 const overlayMounted = vi.hoisted(() => ({
   contextMenu: 0,
@@ -307,23 +302,13 @@ const ART_A = "ticket-a";
 const ART_B = "spec-b";
 const TITLE_ART_A = "Alpha ticket";
 const TOOLTIP_DELAY_MS = 150;
-function staticExpansion(
-  expandedIds: ReadonlySet<string>,
-  toggleExpanded: (id: string) => void,
-): TreeRowExpansion {
-  return {
-    subscribe: () => () => undefined,
-    isExpanded: (id) => expandedIds.has(id),
-    toggleExpanded,
-  };
-}
-
-/** A leaf row: no subagents beneath it, so no expansion state to consult. */
-const NO_CHILDREN: readonly UnifiedCloudChatEntry[] = [];
-const LEAF_EXPANSION: CloudChatRowExpansion = staticExpansion(
-  new Set<string>(),
-  () => undefined,
-);
+/** A leaf row: no subagents beneath it, so nothing to expand. */
+const LEAF_ROW = {
+  hasChildren: false,
+  expanded: false,
+  expansionId: "leaf",
+  onToggleExpanded: () => undefined,
+} as const;
 
 /** Same summary the cloud-row suite already mounts. */
 const CLOUD_CHAT: CloudChatSummary = {
@@ -729,8 +714,7 @@ function renderCloudRow(): HTMLElement {
         <TooltipProvider delayDuration={150}>
           <EpicSidebarCloudChatRow
             chat={CLOUD_CHAT}
-            childEntries={NO_CHILDREN}
-            expansion={LEAF_EXPANSION}
+            {...LEAF_ROW}
             tabId={TAB_ID}
             depth={0}
             selectionMode={false}

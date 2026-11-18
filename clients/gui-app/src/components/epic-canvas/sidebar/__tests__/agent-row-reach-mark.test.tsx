@@ -74,7 +74,6 @@ import {
   openStoreForTest,
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
-import type { TreeRowExpansion } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /** What the test says about each host the rows live on. */
 const hostState = vi.hoisted(() => {
@@ -213,17 +212,6 @@ const USER_ID = "user-1";
 
 const VIEWER: TaskHostPrincipal = { kind: "user", id: USER_ID };
 const TEAM: TaskHostPrincipal = { kind: "team", id: "team-acme" };
-
-function staticExpansion(
-  expandedIds: ReadonlySet<string>,
-  toggleExpanded: (id: string) => void,
-): TreeRowExpansion {
-  return {
-    subscribe: () => () => undefined,
-    isExpanded: (id) => expandedIds.has(id),
-    toggleExpanded,
-  };
-}
 
 function hostRow(
   hostId: string,
@@ -503,8 +491,10 @@ function renderCloudRow(
   const row = (
     <EpicSidebarCloudChatRow
       chat={{ ...CLOUD_CHAT, ownerHostId }}
-      childEntries={[]}
-      expansion={staticExpansion(new Set<string>(), () => undefined)}
+      hasChildren={false}
+      expanded={false}
+      expansionId="leaf"
+      onToggleExpanded={() => undefined}
       tabId={TAB_ID}
       depth={0}
       selectionMode={false}

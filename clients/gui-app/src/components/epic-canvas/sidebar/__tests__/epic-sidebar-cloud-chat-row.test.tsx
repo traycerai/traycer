@@ -38,11 +38,7 @@ import {
 } from "@traycer-clients/shared/host-client/host-connection-registry";
 import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { poolEntry } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
-import {
-  EpicSidebarCloudChatRow,
-  type CloudChatRowExpansion,
-} from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
-import type { UnifiedCloudChatEntry } from "@/lib/chats/unified-chat-list";
+import { EpicSidebarCloudChatRow } from "@/components/epic-canvas/sidebar/epic-sidebar-cloud-chat-row";
 import {
   ChatTreeSurfaceContext,
   type ChatTreeSurface,
@@ -56,7 +52,6 @@ import { publishedChatTileId } from "@/stores/epics/canvas/tile-schema/published
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import type { TaskHostsView } from "@/hooks/epic/use-task-hosts-view";
 import { TaskHostsViewContext } from "@/hooks/sandboxes/use-chat-sandbox-row-line";
-import type { TreeRowExpansion } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
  * The row's HOST SCOPE, pinned.
@@ -186,23 +181,13 @@ afterEach(() => {
   });
 });
 
-function staticExpansion(
-  expandedIds: ReadonlySet<string>,
-  toggleExpanded: (id: string) => void,
-): TreeRowExpansion {
-  return {
-    subscribe: () => () => undefined,
-    isExpanded: (id) => expandedIds.has(id),
-    toggleExpanded,
-  };
-}
-
-/** A leaf row: no subagents beneath it, so no expansion state to consult. */
-const NO_CHILDREN: readonly UnifiedCloudChatEntry[] = [];
-const LEAF_EXPANSION: CloudChatRowExpansion = staticExpansion(
-  new Set<string>(),
-  () => undefined,
-);
+/** A leaf row: no subagents beneath it, so nothing to expand. */
+const LEAF_ROW = {
+  hasChildren: false,
+  expanded: false,
+  expansionId: "leaf",
+  onToggleExpanded: () => undefined,
+} as const;
 
 const CHAT: CloudChatSummary = {
   identity: {
@@ -255,8 +240,7 @@ describe("EpicSidebarCloudChatRow", () => {
     render(
       <EpicSidebarCloudChatRow
         chat={CHAT}
-        childEntries={NO_CHILDREN}
-        expansion={LEAF_EXPANSION}
+        {...LEAF_ROW}
         tabId="tab-1"
         depth={0}
         selectionMode={false}
@@ -277,8 +261,7 @@ describe("EpicSidebarCloudChatRow", () => {
       <TaskHostsViewContext value={taskHosts(null)}>
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          childEntries={NO_CHILDREN}
-          expansion={LEAF_EXPANSION}
+          {...LEAF_ROW}
           tabId="tab-1"
           depth={0}
           selectionMode={false}
@@ -308,8 +291,7 @@ describe("EpicSidebarCloudChatRow", () => {
       <TaskHostsViewContext value={view}>
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          childEntries={NO_CHILDREN}
-          expansion={LEAF_EXPANSION}
+          {...LEAF_ROW}
           tabId="tab-1"
           depth={0}
           selectionMode={false}
@@ -330,8 +312,7 @@ describe("EpicSidebarCloudChatRow", () => {
     render(
       <EpicSidebarCloudChatRow
         chat={CHAT}
-        childEntries={NO_CHILDREN}
-        expansion={LEAF_EXPANSION}
+        {...LEAF_ROW}
         tabId="tab-1"
         depth={0}
         selectionMode={false}
@@ -349,8 +330,7 @@ describe("EpicSidebarCloudChatRow", () => {
     render(
       <EpicSidebarCloudChatRow
         chat={CHAT}
-        childEntries={NO_CHILDREN}
-        expansion={LEAF_EXPANSION}
+        {...LEAF_ROW}
         tabId="tab-1"
         depth={0}
         selectionMode={false}
@@ -365,8 +345,7 @@ describe("EpicSidebarCloudChatRow", () => {
     render(
       <EpicSidebarCloudChatRow
         chat={CHAT}
-        childEntries={NO_CHILDREN}
-        expansion={LEAF_EXPANSION}
+        {...LEAF_ROW}
         tabId="tab-1"
         depth={0}
         selectionMode={false}
@@ -382,8 +361,7 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          childEntries={NO_CHILDREN}
-          expansion={LEAF_EXPANSION}
+          {...LEAF_ROW}
           tabId="tab-1"
           depth={0}
           selectionMode={false}
@@ -420,8 +398,7 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          childEntries={NO_CHILDREN}
-          expansion={LEAF_EXPANSION}
+          {...LEAF_ROW}
           tabId="tab-1"
           depth={0}
           selectionMode
@@ -460,8 +437,7 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          childEntries={NO_CHILDREN}
-          expansion={LEAF_EXPANSION}
+          {...LEAF_ROW}
           tabId="tab-1"
           depth={0}
           selectionMode={false}
@@ -486,8 +462,7 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          childEntries={NO_CHILDREN}
-          expansion={LEAF_EXPANSION}
+          {...LEAF_ROW}
           tabId="tab-1"
           depth={0}
           selectionMode={false}
@@ -522,8 +497,7 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          childEntries={NO_CHILDREN}
-          expansion={LEAF_EXPANSION}
+          {...LEAF_ROW}
           tabId="tab-1"
           depth={0}
           selectionMode={false}
@@ -547,8 +521,7 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          childEntries={NO_CHILDREN}
-          expansion={LEAF_EXPANSION}
+          {...LEAF_ROW}
           tabId="tab-1"
           depth={0}
           selectionMode={false}
@@ -570,8 +543,7 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          childEntries={NO_CHILDREN}
-          expansion={LEAF_EXPANSION}
+          {...LEAF_ROW}
           tabId="tab-1"
           depth={0}
           selectionMode={false}
@@ -591,8 +563,7 @@ describe("EpicSidebarCloudChatRow", () => {
       render(
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          childEntries={NO_CHILDREN}
-          expansion={LEAF_EXPANSION}
+          {...LEAF_ROW}
           tabId="tab-1"
           depth={0}
           selectionMode={false}
@@ -667,8 +638,7 @@ describe("EpicSidebarCloudChatRow on a mounting surface", () => {
       >
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          childEntries={NO_CHILDREN}
-          expansion={LEAF_EXPANSION}
+          {...LEAF_ROW}
           tabId="tab-1"
           depth={0}
           selectionMode={false}
@@ -689,8 +659,7 @@ describe("EpicSidebarCloudChatRow on a mounting surface", () => {
     render(
       <EpicSidebarCloudChatRow
         chat={CHAT}
-        childEntries={NO_CHILDREN}
-        expansion={LEAF_EXPANSION}
+        {...LEAF_ROW}
         tabId="tab-1"
         depth={0}
         selectionMode={false}
@@ -769,8 +738,7 @@ describe("EpicSidebarCloudChatRow for an owner sandbox at rest", () => {
       <ChatServingWitnessContext value={witness}>
         <EpicSidebarCloudChatRow
           chat={CHAT}
-          childEntries={NO_CHILDREN}
-          expansion={LEAF_EXPANSION}
+          {...LEAF_ROW}
           tabId="tab-1"
           depth={0}
           selectionMode={false}
@@ -947,8 +915,7 @@ describe("EpicSidebarCloudChatRow for a collaborator's chat", () => {
             <TaskHostsViewContext value={hosts}>
               <EpicSidebarCloudChatRow
                 chat={chat}
-                childEntries={NO_CHILDREN}
-                expansion={LEAF_EXPANSION}
+                {...LEAF_ROW}
                 tabId="tab-1"
                 depth={0}
                 selectionMode={false}
