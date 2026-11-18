@@ -5,9 +5,11 @@ import { act, cleanup, render, renderHook } from "@testing-library/react";
 
 import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import {
-  botPictureGeneration,
   botPictureLink,
-  holdBotPicture,
+  keepBotPictures,
+  nextWantedBotPicture,
+  settleBotPictureRead,
+  wantBotPicture,
 } from "@/lib/bots/bot-picture-cache";
 import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
@@ -637,11 +639,15 @@ describe("<EpicSessionLifecycleBridge />", () => {
         .spyOn(URL, "revokeObjectURL")
         .mockImplementation(() => undefined);
       const hash = "d".repeat(64);
-      holdBotPicture(
-        hash,
-        { mediaType: "image/png", bytesBase64: "AAAA" },
-        botPictureGeneration(),
-      );
+      keepBotPictures(new Set([hash]));
+      const withdraw = wantBotPicture(hash, "bot_alice");
+      const read = nextWantedBotPicture();
+      if (read === null) throw new Error("no picture is wanted");
+      settleBotPictureRead(read, {
+        mediaType: "image/png",
+        bytesBase64: "AAAA",
+      });
+      withdraw();
       render(
         <EpicSessionLifecycleBridge>
           <div />

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -19,7 +19,11 @@ import {
   useBotPictureLink,
   useBotPictureLoads,
 } from "@/hooks/bots/use-bot-picture";
-import { botPictureLink, clearBotPictures } from "@/lib/bots/bot-picture-cache";
+import {
+  botPictureLink,
+  clearBotPictures,
+  nextWantedBotPicture,
+} from "@/lib/bots/bot-picture-cache";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { HomeBotsGroup, HomeBotsModel } from "@/lib/home-bots/bots-model";
@@ -136,11 +140,35 @@ function drawn(botId: string, look: BotAppearance) {
   return renderHook(() => useBotPictureLink(botId, look), { wrapper });
 }
 
-/** Lets every settled promise run, without waiting on a clock. */
-async function flush(): Promise<void> {
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
+/** The cached `bot.readPicture` queries, whichever host and request they are keyed by. */
+function readQueries() {
+  return queryClient.getQueryCache().findAll({
+    predicate: (query) => query.queryKey.includes("bot.readPicture"),
+  });
+}
+
+/** How many `bot.readPicture` requests are in flight right now. */
+function readsInFlight(): number {
+  return queryClient.isFetching({
+    predicate: (query) => query.queryKey.includes("bot.readPicture"),
+  });
+}
+
+/**
+ * Asserts no read is in flight and none is about to be: every read query the
+ * hooks made is idle. The hooks' effects have run by the time a render
+ * returns, so a read they meant to issue would be fetching by now.
+ */
+function expectNoRequestInFlight(): void {
+  expect(readsInFlight()).toBe(0);
+  for (const query of readQueries())
+    expect(query.state.fetchStatus).toBe("idle");
+}
+
+/** Waits for the loader to have taken in a settled read: nothing is wanted that it still has to read. */
+async function settled(): Promise<void> {
+  await waitFor(() => {
+    expect(nextWantedBotPicture()).toBeNull();
   });
 }
 
@@ -210,8 +238,8 @@ describe("reading the pictures that drawn bots want", () => {
       },
       { wrapper },
     );
-    await flush();
     expect(host.reads).toEqual([]);
+    expectNoRequestInFlight();
 
     drawn(PICTURE_BOT, pictureLook(HASH));
 
@@ -242,8 +270,8 @@ describe("reading the pictures that drawn bots want", () => {
       expect(result.current).toBe("blob:picture-1");
     });
     drawn(SECOND_PICTURE_BOT, pictureLook(HASH));
-    await flush();
     expect(host.reads).toHaveLength(1);
+    expectNoRequestInFlight();
   });
 
   it("issues one read at a time: the second is not asked until the first has settled", async () => {
@@ -263,7 +291,7 @@ describe("reading the pictures that drawn bots want", () => {
     await waitFor(() => {
       expect(host.reads).toHaveLength(1);
     });
-    await flush();
+    expect(readsInFlight()).toBe(1);
     expect(host.reads).toHaveLength(1);
 
     host.reads[0].answer();
@@ -293,20 +321,52 @@ describe("reading the pictures that drawn bots want", () => {
       expect(host.reads).toHaveLength(1);
     });
     host.reads[0].fail(hostFailure("RPC_ERROR"));
-    await flush();
+    await settled();
 
     drawn(SECOND_PICTURE_BOT, pictureLook(OTHER));
     await waitFor(() => {
       expect(host.reads).toHaveLength(2);
     });
     host.reads[1].fail(hostFailure("RPC_ERROR"));
+    await settled();
     drawn(PICTURE_BOT, pictureLook(HASH));
-    await flush();
 
+    expectNoRequestInFlight();
     expect(host.reads.map((read) => read.request.sha256)).toEqual([
       HASH,
       OTHER,
     ]);
+  });
+
+  it("reads a picture again when it is drawn again after its link was dropped with its last drawer", async () => {
+    const host = pictureHost();
+    const model = modelOf([PICTURE_BOT, "env-1", MASCOT_LOOK]);
+    renderHook(
+      () => {
+        useBotPictureLoads(host.client, true, model);
+      },
+      { wrapper },
+    );
+    const first = drawn(PICTURE_BOT, pictureLook(HASH));
+    await waitFor(() => {
+      expect(host.reads).toHaveLength(1);
+    });
+    host.reads[0].answer();
+    await waitFor(() => {
+      expect(first.result.current).toBe("blob:picture-1");
+    });
+    first.unmount();
+    expect(botPictureLink(HASH)).toBeNull();
+
+    const second = drawn(PICTURE_BOT, pictureLook(HASH));
+
+    await waitFor(() => {
+      expect(host.reads).toHaveLength(2);
+    });
+    host.reads[1].answer();
+    await waitFor(() => {
+      expect(second.result.current).toBe("blob:picture-2");
+    });
   });
 
   it("tries a failed hash again for a new client", async () => {
@@ -324,7 +384,7 @@ describe("reading the pictures that drawn bots want", () => {
       expect(first.reads).toHaveLength(1);
     });
     first.reads[0].fail(hostFailure("RPC_ERROR"));
-    await flush();
+    await settled();
 
     rerender({ client: second.client });
 
@@ -348,10 +408,10 @@ describe("reading the pictures that drawn bots want", () => {
       expect(host.reads).toHaveLength(1);
     });
     host.reads[0].fail(hostFailure("RPC_ERROR"));
-    await flush();
+    await settled();
 
     rerender({ supported: false });
-    await flush();
+    expectNoRequestInFlight();
     expect(host.reads).toHaveLength(1);
     rerender({ supported: true });
 
@@ -360,7 +420,7 @@ describe("reading the pictures that drawn bots want", () => {
     });
   });
 
-  it("asks for nothing when the host does not support the method, and not with no client", async () => {
+  it("asks for nothing when the host does not support the method, and not with no client", () => {
     const host = pictureHost();
     const model = modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]);
 
@@ -372,9 +432,115 @@ describe("reading the pictures that drawn bots want", () => {
       { wrapper },
     );
     drawn(PICTURE_BOT, pictureLook(HASH));
-    await flush();
 
     expect(host.reads).toEqual([]);
+    expectNoRequestInFlight();
+    expect(nextWantedBotPicture()?.sha256).toBe(HASH);
+  });
+
+  it("makes one request for a failed read and no retry of it, whatever the query client's default", async () => {
+    const host = pictureHost();
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: 3, retryDelay: 1 } },
+    });
+    const model = modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]);
+    renderHook(
+      () => {
+        useBotPictureLoads(host.client, true, model);
+      },
+      { wrapper },
+    );
+    drawn(PICTURE_BOT, pictureLook(HASH));
+    await waitFor(() => {
+      expect(host.reads).toHaveLength(1);
+    });
+
+    host.reads[0].fail(hostFailure("RPC_ERROR"));
+    await settled();
+
+    expectNoRequestInFlight();
+    expect(host.reads).toHaveLength(1);
+  });
+
+  describe("when the client changes mid-read", () => {
+    /** A read begun through the first client, which the second then replaces. */
+    async function replacedMidRead() {
+      const first = pictureHost();
+      const second = pictureHost();
+      const model = modelOf([PICTURE_BOT, "env-1", pictureLook(HASH)]);
+      const { rerender } = renderHook(
+        ({ client }) => {
+          useBotPictureLoads(client, true, model);
+        },
+        { wrapper, initialProps: { client: first.client } },
+      );
+      const { result } = drawn(PICTURE_BOT, pictureLook(HASH));
+      await waitFor(() => {
+        expect(first.reads).toHaveLength(1);
+      });
+
+      rerender({ client: second.client });
+      await waitFor(() => {
+        expect(second.reads.map((read) => read.request)).toEqual([
+          { botId: PICTURE_BOT, sha256: HASH },
+        ]);
+      });
+      return { first, second, result };
+    }
+
+    it("has the new client ask for the hash itself, and holds its answer, though the old client's read never settles", async () => {
+      const { first, second, result } = await replacedMidRead();
+
+      second.reads[0].answer();
+
+      await waitFor(() => {
+        expect(result.current).toBe("blob:picture-1");
+      });
+      expect(first.reads).toHaveLength(1);
+      expect(createLink).toHaveBeenCalledTimes(1);
+    });
+
+    it("makes no link from the old client's answer when it arrives late, and marks nothing tried by it", async () => {
+      const { first, second, result } = await replacedMidRead();
+
+      first.reads[0].answer();
+      await waitFor(() => {
+        expect(readsInFlight()).toBe(1);
+      });
+
+      expect(result.current).toBeNull();
+      expect(createLink).not.toHaveBeenCalled();
+      expect(nextWantedBotPicture()?.sha256).toBe(HASH);
+      second.reads[0].answer();
+      await waitFor(() => {
+        expect(result.current).toBe("blob:picture-1");
+      });
+      expect(createLink).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("holds no link for the answer of a read whose picture nothing wants any more by the time it arrives", async () => {
+    const host = pictureHost();
+    const model = modelOf([PICTURE_BOT, "env-1", MASCOT_LOOK]);
+    renderHook(
+      () => {
+        useBotPictureLoads(host.client, true, model);
+      },
+      { wrapper },
+    );
+    const want = drawn(PICTURE_BOT, pictureLook(HASH));
+    await waitFor(() => {
+      expect(host.reads).toHaveLength(1);
+    });
+    want.unmount();
+
+    host.reads[0].answer();
+    await waitFor(() => {
+      expect(readsInFlight()).toBe(0);
+    });
+
+    expect(botPictureLink(HASH)).toBeNull();
+    expect(createLink).not.toHaveBeenCalled();
   });
 
   describe("a picture the bot no longer wears", () => {

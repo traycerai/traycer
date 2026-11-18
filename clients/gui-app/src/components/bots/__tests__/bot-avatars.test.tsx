@@ -22,9 +22,9 @@ import {
 } from "@traycer/protocol/host/bot/schemas";
 import { BotLooksContext, botLooksOf } from "@/hooks/bots/use-bot-appearance";
 import {
-  botPictureGeneration,
   clearBotPictures,
-  holdBotPicture,
+  nextWantedBotPicture,
+  settleBotPictureRead,
 } from "@/lib/bots/bot-picture-cache";
 import {
   DEFAULT_MASCOT_RAMP,
@@ -830,10 +830,19 @@ describe("a bot's picture when it wears an uploaded one", () => {
     );
   }
 
-  const holdPicture = (): void => {
+  /** Settles the read the drawn picture asked for, as the loader would. */
+  const settleWith = (answer: {
+    readonly mediaType: unknown;
+    readonly bytesBase64: unknown;
+  }): void => {
+    const read = nextWantedBotPicture();
+    if (read === null) throw new Error("no picture is wanted");
     act(() => {
-      holdBotPicture(HASH, PNG, botPictureGeneration());
+      settleBotPictureRead(read, answer);
     });
+  };
+  const holdPicture = (): void => {
+    settleWith(PNG);
   };
   const picture = (): HTMLElement =>
     screen
@@ -890,13 +899,7 @@ describe("a bot's picture when it wears an uploaded one", () => {
   it("keeps the mascot when the answer that was read is no picture, drawing the shape kept beside it", () => {
     render(wearing("cat", "idle"));
 
-    act(() => {
-      holdBotPicture(
-        HASH,
-        { mediaType: "text/html", bytesBase64: "AAAA" },
-        botPictureGeneration(),
-      );
-    });
+    settleWith({ mediaType: "text/html", bytesBase64: "AAAA" });
 
     expect(drawsPicture()).toBe(false);
     expect(drawn()[0].paths).toEqual(
@@ -929,7 +932,9 @@ describe("a bot's picture when it wears an uploaded one", () => {
     expect(picture().classList.contains("opacity-55")).toBe(false);
     cleanup();
 
+    // The unmount withdrew the want and dropped the link, so it is read again.
     render(wearing(null, "away"));
+    holdPicture();
 
     expect(picture().classList.contains("grayscale")).toBe(true);
     expect(picture().classList.contains("opacity-55")).toBe(true);

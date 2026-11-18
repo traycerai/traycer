@@ -5,12 +5,13 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcRegistry } from "@/lib/host";
 import type { HomeBotsModel } from "@/lib/home-bots/bots-model";
 import { invalidateBotLists } from "@/hooks/bots/use-bot-mutations";
+import { useHostQuery } from "@/hooks/host/use-host-query";
 import {
-  botPictureGeneration,
   botPictureLink,
-  holdBotPicture,
   keepBotPictures,
   nextWantedBotPicture,
+  retryBotPictures,
+  settleBotPictureRead,
   subscribeBotPictures,
   wantBotPicture,
 } from "@/lib/bots/bot-picture-cache";
@@ -50,13 +51,16 @@ export function useBotPictureLink(
   );
 }
 
+/** The request a disabled read is keyed by; it is never sent. */
+const NO_READ = { botId: "", sha256: "" };
+
 /**
  * Reads the pictures that drawn bots want, through the host that serves the
  * directory, one at a time: the smallest fixed number, which leaves the
  * host's requests to the surface the person is using.
  *
- * Each picture is tried once for this client and this answer to whether the
- * host serves the method; a new client or a changed answer tries again. A
+ * Each picture is read once for this client and this answer to whether the
+ * host serves the method; a new client or a changed answer reads again. A
  * host without the method is never asked. A picture the bot no longer wears
  * is answered as none, so the lists are read again.
  */
@@ -67,40 +71,42 @@ export function useBotPictureLoads(
 ): void {
   const queryClient = useQueryClient();
   useEffect(() => {
-    if (client === null || !supported) return undefined;
-    const tried = new Set<string>();
-    let reading = false;
-    let stopped = false;
-    const readNext = (): void => {
-      if (reading || stopped) return;
-      const next = nextWantedBotPicture((sha256) => tried.has(sha256));
-      if (next === null) return;
-      tried.add(next.sha256);
-      reading = true;
-      const readIn = botPictureGeneration();
-      client
-        .request("bot.readPicture", next)
-        .then((answer) => {
-          if (answer.picture === null) {
-            invalidateBotLists(queryClient);
-          } else {
-            holdBotPicture(next.sha256, answer.picture, readIn);
-          }
-        })
-        // A failed read is tried again only for a new client: see above.
-        .catch(() => undefined)
-        .finally(() => {
-          reading = false;
-          readNext();
-        });
-    };
-    const unsubscribe = subscribeBotPictures(readNext);
-    readNext();
-    return () => {
-      stopped = true;
-      unsubscribe();
-    };
-  }, [client, supported, queryClient]);
+    retryBotPictures();
+  }, [client, supported]);
+
+  const next = useSyncExternalStore(
+    subscribeBotPictures,
+    nextWantedBotPicture,
+    () => null,
+  );
+  const { isSuccess, isError, data } = useHostQuery<
+    HostRpcRegistry,
+    "bot.readPicture"
+  >({
+    // One entry per round, so a read begun through an earlier client is
+    // neither waited on nor taken: it is cancelled with its entry.
+    cacheKeyIdentity: [next?.round ?? null],
+    client,
+    method: "bot.readPicture",
+    params:
+      next === null ? NO_READ : { botId: next.botId, sha256: next.sha256 },
+    options: {
+      enabled: supported && next !== null,
+      retry: false,
+      staleTime: Infinity,
+      gcTime: 0,
+    },
+  });
+  useEffect(() => {
+    if (next === null) return;
+    if (isError) {
+      settleBotPictureRead(next, null);
+    } else if (isSuccess) {
+      // Unparsed at an equal method version, so the answer is read as is.
+      if (data.picture === null) invalidateBotLists(queryClient);
+      settleBotPictureRead(next, data.picture ?? null);
+    }
+  }, [next, isSuccess, isError, data, queryClient]);
 
   useEffect(() => {
     const worn = new Set<string>();
