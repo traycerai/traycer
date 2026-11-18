@@ -834,6 +834,11 @@ export type FallbackPolicyDraftAction =
       readonly policy: FallbackPolicy;
     }
   | FallbackSaveFailedAction
+  /** Never sent (its sign-in ended first): nothing is reported, and a draft it carried counts as unsent again. */
+  | {
+      readonly type: "save-abandoned";
+      readonly requestId: number;
+    }
   /**
    * The authoritative read-back after a save whose outcome was unknown.
    *
@@ -1873,6 +1878,25 @@ function withoutPendingSave(
   );
 }
 
+function applySaveAbandoned(
+  state: FallbackPolicyDraftState,
+  requestId: number,
+): FallbackPolicyDraftState {
+  const pending = pendingSaveFor(state, requestId);
+  if (pending === null) return state;
+  return {
+    ...state,
+    pendingSaves: withoutPendingSave(state, requestId),
+    // Dispatched only after its own `edited`, so one below is the mark under which the
+    // display is unsent again; a later dispatch has already raised it.
+    lastDispatchedRevision:
+      pending.carries === "draft" &&
+      state.lastDispatchedRevision === pending.revision
+        ? pending.revision - 1
+        : state.lastDispatchedRevision,
+  };
+}
+
 /**
  * The `edited` arm. Extracted for the same reason as {@link applySaveSucceeded}:
  * the reducer's own complexity ceiling, which this pass pushed over again by
@@ -2196,6 +2220,8 @@ function reduceDraft(
       return applySaveSucceeded(state, action);
     case "save-failed":
       return applySaveFailed(state, action);
+    case "save-abandoned":
+      return applySaveAbandoned(state, action.requestId);
     case "reset-unrefreshed":
       return applyResetUnrefreshed(state, action);
     case "reconciled":

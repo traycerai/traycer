@@ -40,7 +40,7 @@ import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentHistoryResponse } from "@traycer/protocol/host/environment/configuration-contracts";
-import { environmentStatusResponseSchemaV12 } from "@traycer/protocol/host/environment-schemas";
+import { environmentStatusResponseSchemaV13 } from "@traycer/protocol/host/environment-schemas";
 import type {
   EnvironmentSecretRemovalV12,
   EnvironmentSecretsListResponseV12,
@@ -62,7 +62,7 @@ import {
   recordNegotiatedHostManifest,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
-import { sandboxQueryKeys } from "@/lib/query-keys";
+import { hostQueryKeys, sandboxQueryKeys } from "@/lib/query-keys";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { formatSettingsDate } from "@/lib/settings/settings-date";
 import {
@@ -345,6 +345,71 @@ describe("the drawer's reader scopes", () => {
   });
 });
 
+describe("the all-secrets drawer", () => {
+  it("counts and lists only sandboxes using the cached host kinds", async () => {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () =>
+        history({
+          hostStates: [
+            {
+              ...brokenHost,
+              hostId: "computer-1",
+              hostName: "dev-box",
+              state: "applied",
+              reason: null,
+            },
+            {
+              ...brokenHost,
+              hostId: "sandbox-1",
+              hostName: "worker",
+              state: "applied",
+              reason: null,
+            },
+          ],
+        }),
+      "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+    });
+    harness.queryClient.setQueryData(
+      [
+        ...hostQueryKeys.method(null, "environment.host.list", {
+          environmentId: "env-a",
+        }),
+        "user-me",
+      ],
+      {
+        hosts: [
+          { hostId: "computer-1", kind: "personal", hostLabel: "dev-box" },
+          { hostId: "sandbox-1", kind: "sandbox", hostLabel: "worker" },
+        ],
+      },
+    );
+    openDrawer(harness, { kind: "secret", key: "" }, "Secrets");
+
+    expect(await screen.findByText("Applied on 1 host")).toBeTruthy();
+    expect(screen.getByText("worker")).toBeTruthy();
+    expect(screen.queryByText("dev-box")).toBeNull();
+  });
+
+  it("shows no summary or host rows before the host list is cached", async () => {
+    const harness = mountTeamPage(poolSource("admin"), {
+      "environment.history": () =>
+        history({
+          hostStates: [{ ...brokenHost, state: "applied", reason: null }],
+        }),
+      "environment.secrets.list": () => ({ secrets: [], removed: [] }),
+    });
+    openDrawer(harness, { kind: "secret", key: "" }, "Secrets");
+
+    await screen.findByRole("tab", { name: "Status" });
+    expect(
+      screen.queryByText(
+        /Applied on|Not applied on|Applying on|Not on any host/,
+      ),
+    ).toBeNull();
+    expect(screen.queryByText("dev-box")).toBeNull();
+  });
+});
+
 describe("the subject's own controls", () => {
   function openWithControls(
     harness: TeamPageHarness,
@@ -419,7 +484,7 @@ describe("the subject's own controls", () => {
 });
 
 describe("Export diagnostics", () => {
-  it("keeps an export failure's own message, not the details-load line", async () => {
+  it("shows the connection refusal when the export reread cannot reach authn", async () => {
     let reads = 0;
     const harness = mountTeamPage(poolSource("admin"), {
       "environment.history": () => {
@@ -436,7 +501,7 @@ describe("Export diagnostics", () => {
     await user.click(screen.getByRole("button", { name: "Save diagnostics" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Couldn't reach the history.");
+    expect(alert.textContent).toContain("Connect to manage settings.");
     expect(alert.textContent).not.toContain("Couldn't load details.");
   });
 
@@ -652,8 +717,8 @@ describe("the Secrets header's Details", () => {
     });
     openDrawer(harness, { kind: "secret", key: "" }, "Secrets");
 
-    // No host has reported yet, so the page's Now says so.
-    expect(await screen.findByText("Not on any host")).toBeTruthy();
+    await screen.findByRole("tab", { name: "Status" });
+    expect(screen.queryByText("Not on any host")).toBeNull();
     const items = screen.getAllByRole("listitem").map((row) => row.textContent);
     expect(items).toEqual([
       expect.stringContaining("STRIPE_KEY"),
@@ -672,16 +737,37 @@ describe("the Secrets header's Details", () => {
       false,
     ]);
     expect(screen.queryByText("OLD_DESTROYED")).toBeNull();
-    const call = harness.messenger.calls.find(
-      (entry) => entry.method === "environment.secrets.list",
-    );
-    expect(call?.requiredHostMethodVersion).toEqual({
-      method: "environment.secrets.list",
-      version: { major: 1, minor: 1 },
-    });
+    expect(
+      harness.cloudRequests
+        .filter(
+          (request) =>
+            request.method === "GET" &&
+            new URL(request.url).pathname ===
+              "/api/v3/environments/env-a/secrets",
+        )
+        .map((request) => new URL(request.url).searchParams.get("include")),
+    ).toEqual(["cleanup_failure"]);
   });
 
-  it("opens one removed secret's own details and retries its unfinished cleanup", async () => {
+  it("shows only sandbox status for one removed secret and retries its cleanup", async () => {
+    const targets = [
+      {
+        target: "host" as const,
+        hostId: "sandbox-a",
+        hostName: "worker",
+        state: "requested" as const,
+        at: AT,
+        failedAt: AT,
+      },
+      {
+        target: "broker_current" as const,
+        hostId: null,
+        hostName: null,
+        state: "requested" as const,
+        at: AT,
+        failedAt: null,
+      },
+    ];
     const versions: EnvironmentSecretsVersionsResponseV11 = {
       versions: [
         {
@@ -696,29 +782,32 @@ describe("the Secrets header's Details", () => {
       ],
       removal: removal({
         outcome: "cleanup_requested",
-        targets: [
-          {
-            target: "host",
-            hostId: "host-a",
-            hostName: "dev-box",
-            state: "confirmed",
-            at: AT,
-            failedAt: null,
-          },
-          {
-            target: "broker_current",
-            hostId: null,
-            hostName: null,
-            state: "requested",
-            at: AT,
-            failedAt: null,
-          },
-        ],
+        targets,
       }),
     };
     const harness = mountTeamPage(poolSource("editor"), {
-      "environment.history": () => history({}),
-      "environment.secrets.list": () => secretsList,
+      "environment.history": () =>
+        history({
+          hostStates: [
+            {
+              ...brokenHost,
+              hostId: "sandbox-a",
+              hostName: "worker",
+              state: "not_applied",
+              reason: "permission_denied",
+            },
+          ],
+        }),
+      "environment.secrets.list": () => ({
+        ...secretsList,
+        removed: [
+          {
+            id: "sec-cleanup",
+            name: "CLEANUP_KEY",
+            removal: removal({ outcome: "cleanup_requested", targets }),
+          },
+        ],
+      }),
       "environment.secrets.versions": () => versions,
       "environment.secrets.destroy": () => ({ outcome: "revoked" as const }),
     });
@@ -729,19 +818,32 @@ describe("the Secrets header's Details", () => {
       within(row as HTMLElement).getByRole("button", { name: "Details" }),
     );
 
-    expect(await screen.findByText(/Cleanup requested/)).toBeTruthy();
+    expect(
+      await screen.findByText(/worker couldn't delete its copy/),
+    ).toBeTruthy();
     expect(screen.getByText("Version 2")).toBeTruthy();
-    expect(screen.getByText("Removed from 1 host")).toBeTruthy();
+    expect(screen.getByText("Removed from 0 hosts")).toBeTruthy();
+    expect(screen.getByText("worker")).toBeTruthy();
+    expect(screen.queryByText("dev-box")).toBeNull();
+    expect(screen.queryByText("laptop")).toBeNull();
+    expect(harness.paramsOf("environment.history")).toContainEqual({
+      environmentId: "env-a",
+      subject: { kind: "secret", key: "sec-cleanup" },
+    });
     expect(harness.paramsOf("environment.secrets.versions")).toEqual([
       { environmentId: "env-a", secretId: "sec-cleanup" },
     ]);
-    const call = harness.messenger.calls.find(
-      (entry) => entry.method === "environment.secrets.versions",
-    );
-    expect(call?.requiredHostMethodVersion).toEqual({
-      method: "environment.secrets.versions",
-      version: { major: 1, minor: 1 },
-    });
+    expect(
+      harness.cloudRequests
+        .filter(
+          (request) =>
+            request.method === "GET" &&
+            new URL(request.url).pathname.endsWith(
+              "/secrets/sec-cleanup/versions",
+            ),
+        )
+        .map((request) => new URL(request.url).pathname),
+    ).toEqual(["/api/v3/environments/env-a/secrets/sec-cleanup/versions"]);
 
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => {
@@ -749,6 +851,46 @@ describe("the Secrets header's Details", () => {
         { environmentId: "env-a", secretId: "sec-cleanup", versionId: "ver-2" },
       ]);
     });
+  });
+
+  it("shows the summary and no host row for a secret with no sandbox status", async () => {
+    const harness = mountTeamPage(poolSource("editor"), {
+      "environment.history": () => history({ hostStates: [] }),
+      "environment.secrets.list": () => ({
+        secrets: [],
+        removed: [
+          {
+            id: "sec-cleanup",
+            name: "CLEANUP_KEY",
+            removal: removal({ outcome: "cleanup_requested" }),
+          },
+        ],
+      }),
+      "environment.secrets.versions": () => ({
+        versions: [
+          {
+            versionId: "ver-2",
+            ordinal: 2,
+            createdAt: AT,
+            supersededAt: null,
+            destroyedAt: null,
+            current: true,
+            rotationState: null,
+          },
+        ],
+        removal: null,
+      }),
+    });
+    const user = userEvent.setup();
+    openDrawer(harness, { kind: "secret", key: "" }, "Secrets");
+    const row = (await screen.findByText("CLEANUP_KEY")).closest("li");
+    await user.click(
+      within(row as HTMLElement).getByRole("button", { name: "Details" }),
+    );
+
+    expect(await screen.findByText(/Cleanup requested/)).toBeTruthy();
+    expect(screen.getByText("Removed from 0 hosts")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Open / })).toBeNull();
   });
 
   it("retries a removal still under way by removing its current version again", async () => {
@@ -906,7 +1048,7 @@ describe("a sandbox's unused settings", () => {
     at: AT,
     lastReportedAt: AT,
   };
-  const status = environmentStatusResponseSchemaV12.parse({
+  const status = environmentStatusResponseSchemaV13.parse({
     principal: { kind: "personal" },
     reachability: "connected",
     bindingGeneration: 1,
@@ -980,7 +1122,7 @@ describe("a sandbox's unused settings", () => {
     }
 
     // The guest is fine; only a settings item failed to apply.
-    const environmentFailed = environmentStatusResponseSchemaV12.parse({
+    const environmentFailed = environmentStatusResponseSchemaV13.parse({
       ...status,
       items: [
         {

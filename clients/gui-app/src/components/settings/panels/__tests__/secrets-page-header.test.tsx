@@ -13,6 +13,7 @@ import type {
 import {
   mountTeamPage,
   poolSource,
+  requireTeamCloudAuth,
   requireTeamHostClient,
   resetTeamPageHarness,
   type TeamPageHarness,
@@ -26,10 +27,17 @@ import {
   RETIRED_SECRET_ROW_FIELDS,
 } from "@traycer/protocol/host/released-wire-rows";
 
-vi.mock("@/lib/host", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/host")>()),
-  useHostClient: () => requireTeamHostClient(),
-}));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => requireTeamHostClient(),
+    useHostBinding: () => ({
+      ...actual.useHostBinding(),
+      auth: requireTeamCloudAuth(),
+    }),
+  };
+});
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/chats/use-cloud-chat-queries")
@@ -106,7 +114,7 @@ function renderPanel(options: {
           effectiveRole: role,
           kind: "team" as const,
           hostCount: 1,
-          providerHandle: null,
+          providerHandle: "handle-a",
         },
       ],
     }),
@@ -274,7 +282,10 @@ describe("the Secrets page header", () => {
     });
 
     const page = await screen.findByTestId("secrets-page");
-    const details = await screen.findByRole("button", { name: "Details" });
+    const details = (
+      await screen.findAllByRole("button", { name: "Details" })
+    ).find((button) => button.closest("li") === null);
+    if (details === undefined) throw new Error("the page has no Details");
     const header = details.closest("header");
     if (header === null) throw new Error("Details is not inside a header");
     expect(within(header).getByTestId("page-chip")).toBeTruthy();

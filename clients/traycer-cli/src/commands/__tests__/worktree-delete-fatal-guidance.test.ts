@@ -104,14 +104,42 @@ describe("worktree-delete fatal close -> CLI guidance", () => {
     expect(error.message).toContain("update the host or CLI");
   });
 
-  it("leaves UNAUTHORIZED and unexpected closes untouched", () => {
+  it("maps a reasonless non-retryable UNAUTHORIZED as an older host", () => {
     const auth = fatalCloseToCliError({
       code: "UNAUTHORIZED",
       reason: "bad bearer",
       incompatibleMethods: null,
       upgradeGuidance: null,
+      retryable: false,
     });
-    expect(auth.code).toBe("E_AUTH_REJECTED");
+    expect(auth.code).toBe("E_HOST_INCOMPATIBLE");
+    expect(auth.message).toBe(
+      "The host is out of date. Reinstall the latest host with 'traycer host update'.",
+    );
+    expect(auth.message).not.toContain("traycer login");
+    const retryable = fatalCloseToCliError({
+      code: "UNAUTHORIZED",
+      reason: "bad bearer",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      retryable: true,
+    });
+    expect(retryable.code).toBe("E_AUTH_REJECTED");
+    expect(retryable.message).toBe(
+      "traycer: host rejected the credential for worktree delete - run `traycer login` and retry.",
+    );
+    const membership = fatalCloseToCliError({
+      code: "TEAM_MEMBERSHIP_REQUIRED",
+      reason: "legacy host refusal",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      retryable: false,
+    });
+    expect(membership.code).toBe("E_HOST_INCOMPATIBLE");
+    expect(membership.message).toContain("traycer host update");
+  });
+
+  it("keeps unrelated protocol closes unexpected", () => {
     const other = fatalCloseToCliError({
       code: "STREAM_PROTOCOL_ERROR",
       reason: "malformed frame",

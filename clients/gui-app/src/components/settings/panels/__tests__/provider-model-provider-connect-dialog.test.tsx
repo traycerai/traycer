@@ -8,19 +8,34 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  ModelProviderAuthAction,
   ModelProviderAuthResult,
   ModelProviderEntry,
   ProviderModelProvidersCapabilities,
 } from "@traycer/protocol/host/provider-native-schemas";
+import type { ModelProviderAuthVariables } from "@/hooks/providers/use-providers-model-provider-auth-mutation";
 import { connectChoicesFor } from "@/components/settings/panels/model-provider-connect-model";
 import { ProviderModelProviderConnectDialog } from "@/components/settings/panels/provider-model-provider-connect-dialog";
+import { isRecord } from "@/lib/editor/prosemirror-json";
 import { useModelProviderPendingAuthStore } from "@/stores/settings/model-provider-pending-auth-store";
 
-type AuthCall = {
-  readonly variables: unknown;
+type SettlementCall = {
   readonly onSuccess: (data: { result: ModelProviderAuthResult }) => void;
   readonly onSettled: (() => void) | undefined;
   readonly onError: (() => void) | undefined;
+  readonly clearActionInput: (() => void) | null;
+};
+
+type AuthCall = SettlementCall & {
+  readonly variables: ModelProviderAuthVariables;
+  readonly request: {
+    readonly providerId: ModelProviderAuthVariables["providerId"];
+    readonly action: ModelProviderAuthAction;
+  };
+};
+
+type AwaitCall = SettlementCall & {
+  readonly variables: unknown;
 };
 
 type CancelCall = {
@@ -40,7 +55,7 @@ type MutateOptions = {
 
 const mocks = vi.hoisted(() => ({
   authCalls: [] as AuthCall[],
-  awaitCalls: [] as AuthCall[],
+  awaitCalls: [] as AwaitCall[],
   cancelCalls: [] as CancelCall[],
   openLink: vi.fn(),
   authIsPending: false,
@@ -53,17 +68,39 @@ vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
 }));
 
 vi.mock("@/hooks/providers/use-providers-model-provider-auth-mutation", () => ({
-  useProvidersModelProviderAuth: () => ({
-    mutate: (variables: unknown, options: MutateOptions) => {
-      mocks.authCalls.push({
-        variables,
-        onSuccess: options.onSuccess,
-        onSettled: options.onSettled,
-        onError: options.onError,
-      });
-    },
-    isPending: mocks.authIsPending,
-  }),
+  useProvidersModelProviderAuth: (
+    readAction:
+      | ((
+          target: ModelProviderAuthVariables["action"],
+        ) => ModelProviderAuthAction)
+      | null,
+    clearActionInput: (() => void) | null,
+  ) => {
+    return {
+      mutate: (
+        variables: ModelProviderAuthVariables,
+        options: MutateOptions,
+      ) => {
+        let action: ModelProviderAuthAction;
+        if (variables.action.action === "disconnect") {
+          action = variables.action;
+        } else {
+          if (readAction === null)
+            throw new Error("Model provider input is unavailable.");
+          action = readAction(variables.action);
+        }
+        mocks.authCalls.push({
+          variables,
+          request: { providerId: variables.providerId, action },
+          onSuccess: options.onSuccess,
+          onSettled: options.onSettled,
+          onError: options.onError,
+          clearActionInput,
+        });
+      },
+      isPending: mocks.authIsPending,
+    };
+  },
 }));
 
 vi.mock(
@@ -76,6 +113,7 @@ vi.mock(
           onSuccess: options.onSuccess,
           onSettled: options.onSettled,
           onError: options.onError,
+          clearActionInput: null,
         });
       },
       isPending: false,
@@ -199,6 +237,46 @@ function renderDialog(args: {
   );
 }
 
+function exactPayloadMatches(actual: unknown, expected: unknown): boolean {
+  if (actual === expected) return true;
+  if (Array.isArray(actual) || Array.isArray(expected)) {
+    return (
+      Array.isArray(actual) &&
+      Array.isArray(expected) &&
+      actual.length === expected.length &&
+      actual.every((value, index) =>
+        exactPayloadMatches(value, expected[index]),
+      )
+    );
+  }
+  if (!isRecord(actual) || !isRecord(expected)) return false;
+  const actualKeys = Object.keys(actual).sort();
+  const expectedKeys = Object.keys(expected).sort();
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every(
+      (key, index) =>
+        key === expectedKeys[index] &&
+        exactPayloadMatches(actual[key], expected[key]),
+    )
+  );
+}
+
+function expectAuthDispatch(args: {
+  readonly call: AuthCall | undefined;
+  readonly variables: unknown;
+  readonly request: unknown;
+}): void {
+  expect({
+    variablesMatch:
+      args.call !== undefined &&
+      exactPayloadMatches(args.call.variables, args.variables),
+    requestMatches:
+      args.call !== undefined &&
+      exactPayloadMatches(args.call.request, args.request),
+  }).toEqual({ variablesMatch: true, requestMatches: true });
+}
+
 const OAUTH_ONLY = entry({
   id: "github-copilot",
   name: "GitHub Copilot",
@@ -211,9 +289,10 @@ const OAUTH_ONLY = entry({
  * `onSettled`, so a mock that skipped it would make single-flight polling look
  * like it had stopped after one request.
  */
-function settle(call: AuthCall, result: ModelProviderAuthResult): void {
+function settle(call: SettlementCall, result: ModelProviderAuthResult): void {
   act(() => {
     call.onSuccess({ result });
+    call.clearActionInput?.();
     call.onSettled?.();
   });
 }
@@ -345,19 +424,25 @@ describe("connect with an API key", () => {
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
 
     expect(mocks.authCalls).toHaveLength(1);
-    expect(mocks.authCalls[0]?.variables).toEqual({
-      providerId: "opencode",
-      action: {
-        action: "connect",
-        modelProviderId: "anthropic",
-        // The host's synthesized key method is a real entry in `methods[]`, so
-        // it is addressed by INDEX like any other. `methodIndex: null` still
-        // reaches the same host path; we simply have an index to send now.
-        methodIndex: 0,
-        // `key` is the pasted SECRET - upstream's `ApiAuth.key`, which reads
-        // like an identifier and is not one. No env-var name travels any more.
-        key: "sk-secret",
-        inputs: {},
+    expectAuthDispatch({
+      call: mocks.authCalls[0],
+      variables: {
+        providerId: "opencode",
+        action: {
+          action: "connect",
+          modelProviderId: "anthropic",
+          methodIndex: 0,
+        },
+      },
+      request: {
+        providerId: "opencode",
+        action: {
+          action: "connect",
+          modelProviderId: "anthropic",
+          methodIndex: 0,
+          key: "sk-secret",
+          inputs: {},
+        },
       },
     });
   });
@@ -579,16 +664,27 @@ describe("connect with an API key", () => {
       target: { value: "sk-enterprise" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-    expect(mocks.authCalls[0]?.variables).toEqual({
-      providerId: "opencode",
-      action: {
-        action: "connect",
-        modelProviderId: "anthropic",
-        methodIndex: 0,
-        key: "sk-enterprise",
-        inputs: {
-          deploymentType: "enterprise",
-          instanceUrl: "https://ghe.example.test",
+    expectAuthDispatch({
+      call: mocks.authCalls[0],
+      variables: {
+        providerId: "opencode",
+        action: {
+          action: "connect",
+          modelProviderId: "anthropic",
+          methodIndex: 0,
+        },
+      },
+      request: {
+        providerId: "opencode",
+        action: {
+          action: "connect",
+          modelProviderId: "anthropic",
+          methodIndex: 0,
+          key: "sk-enterprise",
+          inputs: {
+            deploymentType: "enterprise",
+            instanceUrl: "https://ghe.example.test",
+          },
         },
       },
     });
@@ -701,14 +797,25 @@ describe("method picker", () => {
       target: { value: "sk-second-arm" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
-    expect(mocks.authCalls[0]?.variables).toEqual({
-      providerId: "opencode",
-      action: {
-        action: "connect",
-        modelProviderId: "xai",
-        methodIndex: 1,
-        key: "sk-second-arm",
-        inputs: {},
+    expectAuthDispatch({
+      call: mocks.authCalls[0],
+      variables: {
+        providerId: "opencode",
+        action: {
+          action: "connect",
+          modelProviderId: "xai",
+          methodIndex: 1,
+        },
+      },
+      request: {
+        providerId: "opencode",
+        action: {
+          action: "connect",
+          modelProviderId: "xai",
+          methodIndex: 1,
+          key: "sk-second-arm",
+          inputs: {},
+        },
       },
     });
   });
@@ -723,13 +830,24 @@ describe("OAuth code flow", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     const start = mocks.authCalls[0];
-    expect(start.variables).toEqual({
-      providerId: "opencode",
-      action: {
-        action: "startOauth",
-        modelProviderId: "github-copilot",
-        methodIndex: 0,
-        inputs: {},
+    expectAuthDispatch({
+      call: start,
+      variables: {
+        providerId: "opencode",
+        action: {
+          action: "startOauth",
+          modelProviderId: "github-copilot",
+          methodIndex: 0,
+        },
+      },
+      request: {
+        providerId: "opencode",
+        action: {
+          action: "startOauth",
+          modelProviderId: "github-copilot",
+          methodIndex: 0,
+          inputs: {},
+        },
       },
     });
 
@@ -751,13 +869,24 @@ describe("OAuth code flow", () => {
       target: { value: " pasted-code " },
     });
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
-    expect(mocks.authCalls[1]?.variables).toEqual({
-      providerId: "opencode",
-      action: {
-        action: "submitCode",
-        modelProviderId: "github-copilot",
-        attemptId: "attempt-1",
-        code: "pasted-code",
+    expectAuthDispatch({
+      call: mocks.authCalls[1],
+      variables: {
+        providerId: "opencode",
+        action: {
+          action: "submitCode",
+          modelProviderId: "github-copilot",
+          attemptId: "attempt-1",
+        },
+      },
+      request: {
+        providerId: "opencode",
+        action: {
+          action: "submitCode",
+          modelProviderId: "github-copilot",
+          attemptId: "attempt-1",
+          code: "pasted-code",
+        },
       },
     });
   });

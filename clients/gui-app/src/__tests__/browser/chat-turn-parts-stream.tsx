@@ -103,6 +103,7 @@ function ChatMessagesHarness({
       taskId="turn-part-stream-chat"
       epicId="turn-part-stream-epic"
       hostId={null}
+      payerHostId={null}
       messages={messages}
       transcriptWindow={null}
       onVisibleOrdinalRangeChange={onVisibleOrdinalRangeChange}

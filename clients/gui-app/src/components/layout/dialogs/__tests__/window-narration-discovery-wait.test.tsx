@@ -39,6 +39,28 @@ import { useHostDiscoveryConcluded } from "@/hooks/host/use-host-discovery-concl
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { setMobileApp } from "@/lib/mobile-app";
+import { toast } from "sonner";
+import { toastFromHostError } from "@/lib/host-error-toast";
+import { hostOfFailedCall } from "@/lib/host/refused-host";
+import {
+  clearHostDoorState,
+  useHostDoorStateStore,
+} from "@/stores/host/host-door-state-store";
+import { isDoorCoverDrawn } from "@/stores/host/drawn-door-cover-store";
+import {
+  fatalDoorRefusal,
+  signInForUnaryTest,
+  UNARY_DOOR_HOST_ID,
+  unaryDoorHarness,
+} from "@/lib/__tests__/fixtures/unary-door-harness";
+
+const toastHarness = vi.hoisted(() => ({ error: vi.fn() }));
+vi.mock("sonner", () => ({
+  toast: Object.assign(vi.fn(), {
+    error: toastHarness.error,
+    success: vi.fn(),
+  }),
+}));
 
 // Narration DETAIL, and mounting its query would put a host round-trip between
 // these fixtures and the one thing they are about.
@@ -202,6 +224,12 @@ const LAUNCH_CONTROLLER: HostReadinessController = {
   hasBeenDefaultHostReady: false,
 };
 
+const READY_CONTROLLER: HostReadinessController = {
+  readinessFor: () => ({ kind: "ready" }),
+  defaultHostPresentation: EMPTY_PRESENTATION,
+  hasBeenDefaultHostReady: true,
+};
+
 function applySnapshot(overrides: Partial<SelectionKernelSnapshot>): void {
   const snapshot: SelectionKernelSnapshot = {
     attached: true,
@@ -235,10 +263,14 @@ function makeShell(): MockRunnerHost {
 function renderNarrator(
   runnerHost: MockRunnerHost,
   refreshDirectory: () => void,
+  base: HostReadinessController,
 ): void {
   const controller: HostReadinessController = {
-    ...LAUNCH_CONTROLLER,
-    defaultHostPresentation: { ...EMPTY_PRESENTATION, refreshDirectory },
+    ...base,
+    defaultHostPresentation: {
+      ...base.defaultHostPresentation,
+      refreshDirectory,
+    },
   };
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -265,6 +297,10 @@ beforeEach(() => {
   mocks.directory = new FakeDirectory();
   setMobileApp(true);
   useAuthStore.setState({ status: "signed-in" });
+  clearHostDoorState(UNARY_DOOR_HOST_ID);
+  clearHostDoorState("window-host-a");
+  clearHostDoorState("window-host-b");
+  vi.mocked(toast.error).mockClear();
 });
 
 afterEach(() => {
@@ -273,6 +309,10 @@ afterEach(() => {
   useSelectionAuthorityStore.getState().reset();
   useAuthStore.setState({ status: "signed-out" });
   setMobileApp(false);
+  clearHostDoorState(UNARY_DOOR_HOST_ID);
+  clearHostDoorState("window-host-a");
+  clearHostDoorState("window-host-b");
+  vi.mocked(toast.error).mockClear();
 });
 
 /** The fixture's own directory, as the hook under test will see it. */
@@ -327,7 +367,7 @@ describe("the narrator across the launch, on a shell with no local host", () => 
     // The launch frame: the kernel has attached, and its lease list is empty
     // because nothing has asked the registry yet.
     applySnapshot({ attached: true, effectiveHostId: null, leases: [] });
-    renderNarrator(makeShell(), () => undefined);
+    renderNarrator(makeShell(), () => undefined, LAUNCH_CONTROLLER);
 
     // THE FIX: no failure card over an unanswered fleet.
     await waitFor(() => {
@@ -359,7 +399,7 @@ describe("the narrator across the launch, on a shell with no local host", () => 
     // this card off screen for the entire outage, and the user with no Retry.
     const directory = directoryUnderTest();
     applySnapshot({ attached: true, effectiveHostId: null, leases: [] });
-    renderNarrator(makeShell(), () => undefined);
+    renderNarrator(makeShell(), () => undefined, LAUNCH_CONTROLLER);
 
     await waitFor(() => {
       expect(narratorSurface()).toBeNull();
@@ -395,12 +435,110 @@ describe("the narrator across the launch, on a shell with no local host", () => 
         },
       ],
     });
-    renderNarrator(makeShell(), () => undefined);
+    renderNarrator(makeShell(), () => undefined, LAUNCH_CONTROLLER);
 
     await waitFor(() => {
       expect(screen.getByTestId("window-host-startup-card")).toBeTruthy();
     });
     expect(screen.queryByText("No host is available")).toBeNull();
+  });
+});
+
+describe("door toasts follow the cover this window actually draws", () => {
+  const hostA = "window-host-a";
+  const hostB = "window-host-b";
+  const failureLine = "Couldn't update this task.";
+
+  it("shows B's refusal while this window is served by A", async () => {
+    signInForUnaryTest();
+    applySnapshot({
+      effectiveHostId: hostA,
+      targetHostId: hostA,
+      leases: [{ hostId: hostA, status: "ready", dead: null }],
+    });
+    renderNarrator(makeShell(), () => undefined, READY_CONTROLLER);
+    await waitFor(() => expect(narratorSurface()).toBeNull());
+
+    const harness = await unaryDoorHarness({
+      hostId: hostB,
+      refusals: [
+        fatalDoorRefusal("UNAUTHORIZED", "not_admitted"),
+        fatalDoorRefusal("UNAUTHORIZED", "not_admitted"),
+      ],
+    });
+    const error = await harness.call();
+
+    expect(hostOfFailedCall(error)).toBe(hostB);
+    expect(useHostDoorStateStore.getState().byHost.get(hostB)).toMatchObject({
+      kind: "not-admitted",
+    });
+    expect(isDoorCoverDrawn(hostB)).toBe(false);
+    toastFromHostError(error, failureLine);
+    expect(toast.error).toHaveBeenCalledWith(failureLine, {
+      id: "host-error:UNAUTHORIZED:UNAUTHORIZED",
+      cancel: null,
+    });
+  });
+
+  it.each(["ready", "degraded"] as const)(
+    "keeps A's refusal quiet while its served lease is %s: not being admitted covers even then",
+    async (status) => {
+      signInForUnaryTest();
+      applySnapshot({
+        effectiveHostId: hostA,
+        targetHostId: hostA,
+        leases: [{ hostId: hostA, status, dead: null }],
+      });
+      renderNarrator(makeShell(), () => undefined, READY_CONTROLLER);
+      await waitFor(() => expect(narratorSurface()).toBeNull());
+
+      const harness = await unaryDoorHarness({
+        hostId: hostA,
+        refusals: [
+          fatalDoorRefusal("UNAUTHORIZED", "not_admitted"),
+          fatalDoorRefusal("UNAUTHORIZED", "not_admitted"),
+        ],
+      });
+      const error = await harness.call();
+
+      await waitFor(() => {
+        expect(narratorSurface()?.getAttribute("data-variant")).toBe(
+          "not-admitted",
+        );
+        expect(isDoorCoverDrawn(hostA)).toBe(true);
+      });
+      expect(hostOfFailedCall(error)).toBe(hostA);
+      toastFromHostError(error, failureLine);
+      expect(toast.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps A's refusal quiet while its blocking cover is on screen", async () => {
+    signInForUnaryTest();
+    applySnapshot({ effectiveHostId: hostA, targetHostId: hostA, leases: [] });
+    renderNarrator(makeShell(), () => undefined, READY_CONTROLLER);
+
+    const harness = await unaryDoorHarness({
+      hostId: hostA,
+      refusals: [
+        fatalDoorRefusal("UNAUTHORIZED", "not_admitted"),
+        fatalDoorRefusal("UNAUTHORIZED", "not_admitted"),
+      ],
+    });
+    const error = await harness.call();
+
+    await waitFor(() => {
+      const card = screen.getByTestId("window-host-startup-card");
+      expect(card.getAttribute("data-cause")).toBe("door-state");
+      expect(card.getAttribute("data-variant")).toBe("not-admitted");
+      expect(isDoorCoverDrawn(hostA)).toBe(true);
+    });
+    expect(hostOfFailedCall(error)).toBe(hostA);
+    expect(useHostDoorStateStore.getState().byHost.get(hostA)).toMatchObject({
+      kind: "not-admitted",
+    });
+    toastFromHostError(error, failureLine);
+    expect(toast.error).not.toHaveBeenCalled();
   });
 });
 
@@ -450,7 +588,7 @@ describe("the narrator when the fleet refresh a listing triggers is unavailable"
     });
     const directory = await startedDirectory(shell);
     applySnapshot({ attached: true, effectiveHostId: null, leases: [] });
-    renderNarrator(shell, () => undefined);
+    renderNarrator(shell, () => undefined, LAUNCH_CONTROLLER);
 
     await act(async () => {
       await directory.refresh();
@@ -483,9 +621,13 @@ describe("the narrator when the fleet refresh a listing triggers is unavailable"
       });
     const directory = await startedDirectory(shell);
     applySnapshot({ attached: true, effectiveHostId: null, leases: [] });
-    renderNarrator(shell, () => {
-      void directory.refresh();
-    });
+    renderNarrator(
+      shell,
+      () => {
+        void directory.refresh();
+      },
+      LAUNCH_CONTROLLER,
+    );
 
     await act(async () => {
       await directory.refresh();

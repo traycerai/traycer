@@ -51,7 +51,7 @@ vi.mock(
   }),
 );
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: () => ({ data: undefined }),
+  useEnvironmentListQuery: () => ({ data: undefined, error: null }),
 }));
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,

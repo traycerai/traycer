@@ -30,12 +30,26 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import type { FailedProviderProfileAttempt } from "./add-provider-profile-dialog";
 import {
   duplicateProfileLabel,
+  listOffersSignIns,
   profileEligibilityToggleDisabledReason,
   profileInventorySummary,
   profileInventoryAttributes,
   profileCommitId,
   profileDisplayLabel,
+  profileOtherNames,
+  profilePersonNoticeText,
+  profileTerminalAccountLine,
+  removedProfilesForProvider,
+  resolveProfilePin,
+  type ProfilePinResolution,
+  type RemovedProviderProfile,
 } from "@/components/providers/provider-profile-model";
+import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
+import { ProfileOtherNames } from "./provider-profile-other-names";
+import {
+  NOT_ON_THIS_COMPUTER_YET_TEXT,
+  SIGN_IN_TO_USE_EVERYWHERE_TEXT,
+} from "@/components/providers/profile-sync-copy";
 import { isProviderAmbientSignedOut } from "@/lib/providers/provider-ambient-auth";
 import {
   isRateLimitProfileFetchEligible,
@@ -98,6 +112,29 @@ function ownLoginLabel(providerLabel: string, hostName: string | null): string {
   return hostName === null
     ? `${providerLabel}'s own login`
     : `${providerLabel}'s own login on ${hostName}`;
+}
+
+/**
+ * A pin reaches the selection only through a focus intent.
+ */
+function settingsProfileSelection(
+  profiles: readonly ProviderProfile[],
+  removedProfiles: readonly RemovedProviderProfile[],
+  selectedProfileId: string | null,
+): { readonly pin: ProfilePinResolution; readonly profile: ProviderProfile } {
+  const pin = resolveProfilePin(profiles, removedProfiles, selectedProfileId);
+  return pin.kind === "row"
+    ? { pin, profile: pin.profile }
+    : { pin: { kind: "unknown" }, profile: profiles[0] };
+}
+
+/** The Terminal login's row is drawn under its own-login name, so a pin on it carries that name. */
+function labelledPin(
+  pin: ProfilePinResolution,
+  ownLogin: string,
+): ProfilePinResolution {
+  if (pin.kind !== "row" || pin.profile.kind !== "ambient") return pin;
+  return { kind: "row", profile: { ...pin.profile, label: ownLogin } };
 }
 
 /**
@@ -187,8 +224,11 @@ function ProfileScopedSectionMessages(props: {
       {props.failedAttempt !== null ? (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-xs text-destructive">
           <span className="min-w-0">
-            Sign-in did not finish for{" "}
-            {PROVIDER_DISPLAY_NAMES[props.failedAttempt.providerId]}.
+            {props.failedAttempt.hostSentence
+              ? props.failedAttempt.message
+              : `Sign-in did not finish for ${
+                  PROVIDER_DISPLAY_NAMES[props.failedAttempt.providerId]
+                }.`}
           </span>
           <div className="flex shrink-0 items-center gap-1">
             <Button
@@ -279,13 +319,24 @@ export function ProviderProfileScopedSection(
   const [editIntent, setEditIntent] = useState<"manage" | "sign-in">(() =>
     startInReauth ? "sign-in" : "manage",
   );
+  const providersList = useProvidersList({
+    enabled: true,
+    subscribed: true,
+  }).data;
+  const removedProfiles = removedProfilesForProvider(
+    providersList,
+    state.providerId,
+  );
+  const offersSignIns = listOffersSignIns(providersList);
 
   if (profiles.length === 0) return null;
 
-  const selectedProfile =
-    profiles.find(
-      (candidate) => profileCommitId(candidate) === selectedProfileId,
-    ) ?? profiles[0];
+  const selection = settingsProfileSelection(
+    profiles,
+    removedProfiles,
+    selectedProfileId,
+  );
+  const selectedProfile = selection.profile;
   const providerLabel = PROVIDER_DISPLAY_NAMES[state.providerId];
   const addProfileDisabled = !canAddProfile;
   const { signInUnavailableHint, cliSetupNeeded, managementHeldReason } =
@@ -351,7 +402,7 @@ export function ProviderProfileScopedSection(
         <ProfileDropdown
           providerLabel={providerLabel}
           profiles={labelledProfiles}
-          activeProfileId={selectedProfileId}
+          pin={labelledPin(selection.pin, ownLogin)}
           onSelectProfile={onSelectedProfileIdChange}
           onCreateProfile={onAddProfile}
           createProfileDisabled={addProfileDisabled}
@@ -379,21 +430,31 @@ export function ProviderProfileScopedSection(
           }
           admissionByProfileId={null}
           showTerminalBadge={false}
+          terminalComputerName={hostName}
         />
         <ProviderOnHostOnlyLine
-          hostId={hostId}
           providerId={state.providerId}
           profileId={selectedProfile.profileId}
         />
         <SelectedProfileRow
           state={state}
           profile={selectedProfile}
+          computerName={hostName}
+          offersSignIns={offersSignIns}
           canAddProfile={canAddProfile}
           signInUnavailableHint={signInUnavailableHint}
           managementHeldReason={managementHeldReason}
           onSignIn={openProfileSignIn}
+          onAddProfile={onAddProfile}
           onManage={openProfileEditor}
         />
+        {profileOtherNames(selectedProfile).length > 0 ? (
+          <ProfileOtherNames
+            hostId={hostId}
+            providerId={state.providerId}
+            profile={selectedProfile}
+          />
+        ) : null}
 
         <ProfileScopedSectionMessages
           addProfileDisabled={addProfileDisabled}
@@ -452,17 +513,26 @@ export function ProviderProfileScopedSection(
  * The selected profile's row under the dropdown. Identity, status and plan
  * wrap with Sign in and Manage profile. The terminal login uses this same
  * row. Details is not on this row.
+ *
+ * On a computer that offers sign-ins by itself, the Terminal login's own row
+ * (one the environment does not have yet) carries `Sign in to use everywhere`
+ * in place of Sign in: it opens the same sign-in Add a profile does, and the
+ * tool's own login is never touched from here.
  */
 function SelectedProfileRow(props: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
+  readonly computerName: string | null;
+  readonly offersSignIns: boolean;
   readonly canAddProfile: boolean;
   readonly signInUnavailableHint: string | null;
   readonly managementHeldReason: string | null;
   readonly onSignIn: () => void;
+  readonly onAddProfile: () => void;
   readonly onManage: () => void;
 }): ReactNode {
   const { profile, managementHeldReason } = props;
+  const signInEverywhere = props.offersSignIns && profile.kind === "ambient";
   return (
     <ProfileSummaryActions
       onManage={props.onManage}
@@ -473,8 +543,32 @@ function SelectedProfileRow(props: {
         key={profile.profileId}
         state={props.state}
         profile={profile}
+        computerName={props.computerName}
+        offersSignIns={props.offersSignIns}
       />
-      {profileReadsSignedOut(props.state, profile) ? (
+      {signInEverywhere ? (
+        <TooltipWrapper
+          label={props.canAddProfile ? null : props.signInUnavailableHint}
+          side="top"
+          sideOffset={6}
+          align="start"
+        >
+          <span className="inline-flex">
+            <Button
+              type="button"
+              size="xs"
+              variant="secondary"
+              className="shrink-0"
+              disabled={!props.canAddProfile}
+              onClick={props.onAddProfile}
+            >
+              <LogIn data-icon="inline-start" />
+              {SIGN_IN_TO_USE_EVERYWHERE_TEXT}
+            </Button>
+          </span>
+        </TooltipWrapper>
+      ) : null}
+      {!signInEverywhere && profileOffersSignIn(props.state, profile) ? (
         <TooltipWrapper
           label={props.canAddProfile ? null : props.signInUnavailableHint}
           side="top"
@@ -497,6 +591,16 @@ function SelectedProfileRow(props: {
         </TooltipWrapper>
       ) : null}
     </ProfileSummaryActions>
+  );
+}
+
+function profileOffersSignIn(
+  state: ProviderCliState,
+  profile: ProviderProfile,
+): boolean {
+  return (
+    profilePersonNoticeText(profile) !== null ||
+    profileReadsSignedOut(state, profile)
   );
 }
 
@@ -563,14 +667,19 @@ function ProfileIdentity({
 function ProfileSummary({
   state,
   profile,
+  computerName,
+  offersSignIns,
 }: {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
+  readonly computerName: string | null;
+  readonly offersSignIns: boolean;
 }): ReactNode {
   const tier = profile.identity?.tier;
   const planText =
     tier === null || tier === undefined || tier.length === 0 ? null : tier;
   const inventory = profileInventorySummary(profile);
+  const terminalLine = profileTerminalAccountLine(profile, computerName);
 
   return (
     <div className="flex min-w-0 flex-auto flex-col gap-1 text-ui-xs text-muted-foreground">
@@ -586,7 +695,9 @@ function ProfileSummary({
           largely to itself. */}
         <ProfileIdentity profile={profile} />
         <Badge variant="outline" size="xs" className="shrink-0">
-          {profile.kind === "ambient" && isProviderAmbientSignedOut(state)
+          {profile.kind === "ambient" &&
+          isProviderAmbientSignedOut(state) &&
+          profilePersonNoticeText(profile) === null
             ? "Signed out"
             : inventory.badge}
         </Badge>
@@ -608,9 +719,16 @@ function ProfileSummary({
         ) : null}
       </div>
       <div>
+        {terminalLine === null ? null : (
+          <p className="min-w-0 whitespace-normal break-words">
+            {terminalLine}
+          </p>
+        )}
         {profile.presence?.kind === "no-home" ? (
           <p className="min-w-0 whitespace-normal break-words">
-            Not on this device yet
+            {offersSignIns
+              ? NOT_ON_THIS_COMPUTER_YET_TEXT
+              : "Not on this device yet"}
           </p>
         ) : null}
         {profile.presence?.kind === "placeholder-only" ? (

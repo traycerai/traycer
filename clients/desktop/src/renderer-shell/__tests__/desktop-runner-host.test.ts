@@ -135,8 +135,6 @@ function buildFakeBridge(
     updateHostVersionPolicy: async () => ({ kind: "network-error" as const }),
     readHostOwnership: () => Promise.resolve({ kind: "unauthorized" as const }),
     listTeamComputers: () => Promise.resolve({ kind: "unauthorized" as const }),
-    setEnvironmentBotHost: () =>
-      Promise.resolve({ kind: "unauthorized" as const }),
     mintTeamComputerInstallToken: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
     releaseTeamComputer: () =>
@@ -146,6 +144,14 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
+    listEnvironments: () => Promise.resolve({ kind: "unauthorized" as const }),
+    getTeamChatAutoArchive: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    setTeamChatAutoArchive: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    saveAutoPolicy: () => Promise.resolve({ kind: "unauthorized" as const }),
+    attachTaskEnvironment: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxCosts: async () => ({
       kind: "network-error" as const,
       detail: "test",
@@ -224,6 +230,9 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
+    updateBotRunSettings: async () => ({ kind: "no_response" as const }),
+    updateBotReplyMode: async () => ({ kind: "no_response" as const }),
+    deleteBot: async () => ({ kind: "no_response" as const }),
     getSandboxGrants: async () => ({
       kind: "network-error" as const,
       detail: "test",
@@ -232,15 +241,12 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
+    replaceEnvironmentApiKey: async () => ({ kind: "failed" as const }),
     getEnvironmentProviders: async () => ({
       kind: "network-error" as const,
       detail: "test",
     }),
     decideSecretRequest: async () => ({
-      kind: "network-error" as const,
-      detail: "test",
-    }),
-    mintExecutableWriteGrant: async () => ({
       kind: "network-error" as const,
       detail: "test",
     }),
@@ -279,6 +285,14 @@ function buildFakeBridge(
         migrateLegacyCredentials: async () => "identity-unknown" as const,
       };
     })(),
+    hostTokens: {
+      era: (_userId: string) => 0,
+      obtain: async () => ({ outcome: { kind: "no-sign-in" }, era: 0 }),
+      renew: async () => ({ renewal: { kind: "already-current" }, era: 0 }),
+      adopt: async () => ({ era: 0 }),
+      forgetUser: async () => ({ era: 0 }),
+      subscribe: () => ({ dispose: () => undefined }),
+    },
     listUserSessions: async () => ({ kind: "network-error" as const }),
     revokeUserSession: async () => ({ kind: "network-error" as const }),
     revokeAllSessions: async () => ({ kind: "network-error" as const }),
@@ -1023,6 +1037,46 @@ describe("DesktopRunnerHost.runSandboxVerb", () => {
   });
 });
 
+describe("DesktopRunnerHost bot setup writes", () => {
+  it("forwards each bearer and request unchanged to the preload bridge", async () => {
+    const runSettings = vi.fn<DesktopPreloadBridge["updateBotRunSettings"]>(
+      async () => ({ kind: "no_response" }),
+    );
+    const replyMode = vi.fn<DesktopPreloadBridge["updateBotReplyMode"]>(
+      async () => ({ kind: "no_response" }),
+    );
+    const deleteBot = vi.fn<DesktopPreloadBridge["deleteBot"]>(async () => ({
+      kind: "no_response",
+    }));
+    const host = new DesktopRunnerHost({
+      bridge: {
+        ...buildFakeBridge(null).bridge,
+        updateBotRunSettings: runSettings,
+        updateBotReplyMode: replyMode,
+        deleteBot,
+      },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+    const settings = {
+      botId: "bot-1",
+      harness: "claude",
+      model: "model-1",
+      effort: null,
+      profile: null,
+    };
+    const reply = { botId: "bot-1", replyMode: "thread" } as const;
+    const deletion = { botId: "bot-1" };
+
+    await host.updateBotRunSettings("bearer-1", settings);
+    await host.updateBotReplyMode("bearer-1", reply);
+    await host.deleteBot("bearer-1", deletion);
+
+    expect(runSettings).toHaveBeenCalledWith("bearer-1", settings);
+    expect(replyMode).toHaveBeenCalledWith("bearer-1", reply);
+    expect(deleteBot).toHaveBeenCalledWith("bearer-1", deletion);
+  });
+});
+
 describe("DesktopRunnerHost Automations calls", () => {
   it("hands the preload bridge the bearer for the read and for the open, and returns each answer", async () => {
     const getSandboxAutomation = vi.fn<
@@ -1141,6 +1195,32 @@ describe("DesktopRunnerHost.getTeamEnvironment", () => {
 
     expect(getTeamEnvironment).toHaveBeenCalledTimes(1);
     expect(getTeamEnvironment).toHaveBeenCalledWith("bearer-1", "team-acme");
+  });
+});
+
+describe("DesktopRunnerHost.replaceEnvironmentApiKey", () => {
+  it("passes the bearer and request to the preload bridge and returns its answer", async () => {
+    const result = { kind: "ok" as const };
+    const replaceEnvironmentApiKey = vi.fn<
+      DesktopPreloadBridge["replaceEnvironmentApiKey"]
+    >(async () => result);
+    const host = new DesktopRunnerHost({
+      bridge: { ...buildFakeBridge(null).bridge, replaceEnvironmentApiKey },
+      signInUrl: "https://auth.example.invalid/sign-in",
+    });
+    const request = {
+      environmentId: "env-acme",
+      profileId: "profile-1",
+      harnessId: "claude",
+      key: "fixture-key",
+    };
+
+    await expect(
+      host.replaceEnvironmentApiKey("bearer-1", request),
+    ).resolves.toEqual(result);
+
+    expect(replaceEnvironmentApiKey).toHaveBeenCalledTimes(1);
+    expect(replaceEnvironmentApiKey).toHaveBeenCalledWith("bearer-1", request);
   });
 });
 

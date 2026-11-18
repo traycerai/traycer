@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildAgentActivityFromHookCommand } from "../agent-activity-from-hook";
-import { callHostRpcFastFail } from "../../internal/host-rpc";
+import { callAgentHostRpcFastFail } from "../../internal/host-rpc";
 import { cliError, CLI_ERROR_CODES } from "../../runner/errors";
 import { HostRpcError } from "../../../../shared/host-transport/host-messenger";
 import { prepareRequestPayload } from "../../../../shared/host-transport/ws-rpc-client";
@@ -37,11 +37,11 @@ vi.mock("../../internal/host-rpc", async () => {
   >("../../internal/host-rpc");
   return {
     ...actual,
-    callHostRpcFastFail: vi.fn(),
+    callAgentHostRpcFastFail: vi.fn(),
   };
 });
 
-const rpcMock = vi.mocked(callHostRpcFastFail);
+const rpcMock = vi.mocked(callAgentHostRpcFastFail);
 
 const PREV_SPAWN_TOKEN = process.env.TRAYCER_TERMINAL_SPAWN_TOKEN;
 

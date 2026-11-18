@@ -2,10 +2,12 @@ import {
   terminalSubscribeServerFrameSchema,
   terminalSubscribeServerFrameSchemaV14,
   terminalSubscribeServerFrameSchemaV15,
+  terminalSubscribeServerFrameSchemaV18,
   type TerminalSubscribeClientFrameV17,
   type TerminalSubscribeServerFrame,
   type TerminalSubscribeServerFrameV14,
   type TerminalSubscribeServerFrameV15,
+  type TerminalSubscribeServerFrameV18,
   type TerminalSubscribeViewer,
 } from "@traycer/protocol/host/terminal/subscribe";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -32,7 +34,8 @@ import type { IHostStreamClient } from "./host-stream-client";
 type TerminalSubscribeServerFrameOnWire =
   | TerminalSubscribeServerFrame
   | TerminalSubscribeServerFrameV14
-  | TerminalSubscribeServerFrameV15;
+  | TerminalSubscribeServerFrameV15
+  | TerminalSubscribeServerFrameV18;
 
 export interface TerminalStreamCallbacks {
   readonly onSnapshot: (
@@ -71,6 +74,13 @@ export interface TerminalStreamCallbacks {
     frame: Extract<
       TerminalSubscribeServerFrameOnWire,
       { readonly kind: "sessionUpdated" }
+    >,
+  ) => void;
+  /** The whole set each time; never called on an older connection, whose set stays unknown. */
+  readonly onViewers: (
+    frame: Extract<
+      TerminalSubscribeServerFrameOnWire,
+      { readonly kind: "viewers" }
     >,
   ) => void;
   readonly onConnectionStatus: StatusChangeHandler;
@@ -204,11 +214,13 @@ export class TerminalStreamClient {
     // cannot.
     const version = this.session.getNegotiatedSchemaVersion();
     const parsed =
-      version !== null && version.major === 1 && version.minor >= 5
-        ? terminalSubscribeServerFrameSchemaV15.safeParse(envelope)
-        : version !== null && version.major === 1 && version.minor >= 4
-          ? terminalSubscribeServerFrameSchemaV14.safeParse(envelope)
-          : terminalSubscribeServerFrameSchema.safeParse(envelope);
+      version !== null && version.major === 1 && version.minor >= 8
+        ? terminalSubscribeServerFrameSchemaV18.safeParse(envelope)
+        : version !== null && version.major === 1 && version.minor >= 5
+          ? terminalSubscribeServerFrameSchemaV15.safeParse(envelope)
+          : version !== null && version.major === 1 && version.minor >= 4
+            ? terminalSubscribeServerFrameSchemaV14.safeParse(envelope)
+            : terminalSubscribeServerFrameSchema.safeParse(envelope);
     if (!parsed.success) {
       // Schema mismatch: a version-skewed host/client or a genuine wire bug.
       // Log the envelope kind and issue paths only - never `parsed.error` or
@@ -278,6 +290,10 @@ export class TerminalStreamClient {
         return;
       }
       case "pong": {
+        return;
+      }
+      case "viewers": {
+        this.callbacks.onViewers(frame);
         return;
       }
     }

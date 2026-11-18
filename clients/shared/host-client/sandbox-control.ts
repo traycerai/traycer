@@ -30,6 +30,7 @@ import {
   type GuiAgentModelOption,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import { z } from "zod";
+import { isRedirectAnswer } from "../auth/redirect-answer";
 import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 
 /**
@@ -258,11 +259,21 @@ async function callWithSignal(
   let response: Response;
   try {
     response = await untilAborted(
-      fetch(url, { method: init.method, headers, body: init.body, signal }),
+      fetch(url, {
+        method: init.method,
+        headers,
+        body: init.body,
+        signal,
+        // The bearer rides in a header: never follow a redirect.
+        redirect: "manual",
+      }),
       signal,
     );
   } catch (error: unknown) {
     return neverCompleted(error);
+  }
+  if (isRedirectAnswer(response.status)) {
+    return { kind: "response", status: response.status, body: null };
   }
   let body: unknown = null;
   try {
@@ -915,6 +926,9 @@ export const SANDBOXES_UNAVAILABLE_IN_STAGING =
 
 export const SANDBOX_FROZEN_MESSAGE =
   "This sandbox is paused because your credits ran out. Add credits to wake it.";
+
+/** Said with no remedy, where the reader cannot buy credits or the sandbox may not be theirs. */
+export const SANDBOX_OUT_OF_CREDITS = "This sandbox is out of credits.";
 
 /**
  * Wakes a sandbox before a tab dials it: resume a suspended (or suspending)

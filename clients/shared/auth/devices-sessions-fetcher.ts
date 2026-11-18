@@ -83,12 +83,18 @@ function authnApiUrl(authnBaseUrl: string, path: string): string {
   ).toString();
 }
 
-function jsonHeaders(bearerToken: string): Record<string, string> {
-  return {
+// authn refuses a body-less request that declares JSON (`FST_ERR_CTP_EMPTY_JSON_BODY`).
+function jsonHeaders(
+  bearerToken: string,
+  body: RequestInit["body"],
+): Record<string, string> {
+  const headers = {
     Authorization: `Bearer ${bearerToken}`,
     Accept: "application/json",
-    "Content-Type": "application/json",
   };
+  return body === undefined || body === null
+    ? headers
+    : { ...headers, "Content-Type": "application/json" };
 }
 
 /** Statuses whose `Response` cannot carry a body, even an empty one. */
@@ -111,7 +117,7 @@ async function fetchAuthn(
   authnBaseUrl: string,
   path: string,
   bearerToken: string,
-  init: Omit<RequestInit, "headers" | "signal">,
+  init: Omit<RequestInit, "headers" | "signal" | "redirect">,
   callerSignal: AbortSignal | null,
 ): Promise<Response | null> {
   const abort = composeRequestAbort(
@@ -122,8 +128,10 @@ async function fetchAuthn(
     const response = await untilAborted(
       fetch(authnApiUrl(authnBaseUrl, path), {
         ...init,
-        headers: jsonHeaders(bearerToken),
+        headers: jsonHeaders(bearerToken, init.body),
         signal: abort.signal,
+        // Carries a credential: never follow a redirect.
+        redirect: "manual",
       }),
       abort.signal,
     );

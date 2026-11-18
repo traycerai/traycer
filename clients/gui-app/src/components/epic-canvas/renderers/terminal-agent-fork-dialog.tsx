@@ -49,6 +49,7 @@ import { guiHarnessIdToProviderId } from "@/lib/provider-ordering";
 import {
   profileCommitId,
   profileDisplayLabel,
+  removedProfilesForProvider,
   type ProfileRowAdmission,
 } from "@/components/providers/provider-profile-model";
 import {
@@ -353,6 +354,12 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
   const capabilityLockExemptProfileId = resolveSeededProfileId(
     sourceProfileId,
     sourceHarnessProfiles,
+    removedProfilesForProvider(
+      providersQuery.data,
+      target === null
+        ? null
+        : guiHarnessIdToProviderId(target.sourceAgent.harnessId),
+    ),
     providersSettled,
   );
   // Only continue mode proactively disables unshared rows (bulk-admission

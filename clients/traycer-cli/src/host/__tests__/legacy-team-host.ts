@@ -17,7 +17,7 @@ import type { HostRpcDispatch } from "../../internal/host-rpc";
 export const LEGACY_TEAM = {
   environmentId: "environment-acme",
   ownerKind: "organization",
-  ownerId: "organization-acme",
+  ownerId: "00000000-0000-4000-8000-000000000002",
   roomId: "room-acme",
   label: "Acme",
   effectiveRole: "editor",
@@ -59,7 +59,7 @@ export class LegacyTeamHost {
                   manifest: frame.manifest,
                   optionalManifest: {
                     ...frame.optionalManifest,
-                    "environment.host.bind": { major: 1, minor: 0 },
+                    "environment.move.plan": { major: 1, minor: 2 },
                   },
                 }),
               });
@@ -83,7 +83,7 @@ export class LegacyTeamHost {
       idempotencyKey: null,
       authority: {
         endpoint: {
-          hostId: "host-local",
+          hostId: "00000000-0000-4000-8000-000000000001",
           websocketUrl: "ws://127.0.0.1:1/rpc",
         },
         bearer: new MutableBearerLease("test-token", "test-person"),

@@ -1,3 +1,8 @@
+import {
+  credentialProvisionForResult,
+  formatCredentialProvisionNote,
+  maybeProvisionCredential,
+} from "../host/install-auth";
 import { baseDispatchAckReason } from "@traycer/protocol/config/host-update-ack-reason";
 import { reportBoundedWait } from "../runner/bounded-wait-progress";
 import type { CommandFn, CommandResult } from "../runner/runner";
@@ -125,9 +130,23 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
     // whose `installId` no longer matches any held record, which the consulting
     // gate treats as inert (the hold is set-only, never cleared - see
     // `held-host-version`).
+    // The activation arm can start installed bytes that never ran after a
+    // sign-in. Borrowed apply legs remain inside this run's lifecycle lock;
+    // this outer command owns the credential probe after that run returns.
+    const credentialProvision =
+      outcome.startedStoppedHost &&
+      outcome.legacy.serviceLifecycle.postSwapAction !== "none" &&
+      outcome.legacy.serviceLifecycle.postSwapError === null
+        ? await maybeProvisionCredential(ctx, "start", null)
+        : null;
+    const note = formatCredentialProvisionNote(credentialProvision);
+    const human = humanSummary(outcome);
     return {
-      data: outcome.legacy,
-      human: humanSummary(outcome),
+      data: {
+        ...outcome.legacy,
+        credentialProvision: credentialProvisionForResult(credentialProvision),
+      },
+      human: note === null ? human : `${human}; ${note}`,
       exitCode: 0,
     };
   };

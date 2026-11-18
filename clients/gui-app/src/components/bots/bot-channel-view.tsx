@@ -1001,6 +1001,7 @@ export function BotChannelView(props: {
                             botId={botId}
                             chatId={channel.conversationId}
                             hostId={hostId}
+                            boundHostId={boundHostId}
                             title={botTitle}
                             instanceId={`bot-channel:${botId}`}
                             surface={surface}
@@ -1102,7 +1103,6 @@ export function BotChannelView(props: {
                 <BotSearchPanel
                   botId={botId}
                   botTitle={botTitle}
-                  hostId={hostId}
                   environmentId={environmentId}
                   onClose={() => closeBotSearch(botId)}
                 />

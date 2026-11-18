@@ -9,10 +9,12 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EnvironmentPickerRow } from "./environment-picker-row";
-import { configurationRoleOf } from "./configuration-source";
+import {
+  configurationRoleOf,
+  mayChangeConfiguration,
+} from "./configuration-source";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentInvitationsQuery } from "@/hooks/environment/use-environment-invitations";
-import { useHostClient } from "@/lib/host";
 
 /** Team rows share the picker's configuration radio group. */
 export interface TeamRowsProps {
@@ -28,9 +30,8 @@ export interface TeamRowsProps {
  * list must not hide an invitation the person can still review.
  */
 export function TeamRows(props: TeamRowsProps): ReactNode {
-  const client = useHostClient();
-  const query = useEnvironmentListQuery(client, true);
-  const invitationsQuery = useEnvironmentInvitationsQuery(client);
+  const query = useEnvironmentListQuery(true);
+  const invitationsQuery = useEnvironmentInvitationsQuery();
   const teams =
     query.data?.environments.filter(
       (entry) => entry.ownerKind === "organization",
@@ -98,9 +99,10 @@ export function TeamRows(props: TeamRowsProps): ReactNode {
             badge={null}
             badgeTooltip={null}
             subtitle={
-              configurationRoleOf(team) === null
-                ? "Read-only settings"
-                : "You edit"
+              !query.isError &&
+              mayChangeConfiguration(configurationRoleOf(team))
+                ? "You edit"
+                : "Read-only settings"
             }
             nested={false}
             disabled={false}

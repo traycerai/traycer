@@ -1,8 +1,9 @@
 import { AMBIENT_PROFILE_ID_SENTINEL } from "@traycer/protocol/host/agent/shared";
 import {
   PROVIDER_DISPLAY_NAMES,
-  type ProviderCliState,
   type ProviderId,
+  type ProviderProfile,
+  type ProvidersListResponse,
 } from "@traycer/protocol/host/provider-schemas";
 import {
   GUI_HARNESS_BY_PROVIDER_ID,
@@ -28,12 +29,42 @@ import {
  * The commands that change anything name their own floors.
  */
 export async function readProviderStates(): Promise<
-  readonly ProviderCliState[]
+  readonly ProviderListState[]
 > {
-  const response = await toAgentCliError(
+  return (await readProvidersList()).providers;
+}
+
+export async function readProvidersList(): Promise<ProvidersListResponse> {
+  return await toAgentCliError(
     callHostRpcWithDispatch("providers.list", { native: null }, PLAIN_DISPATCH),
   );
-  return response.providers;
+}
+
+export type ProviderListState = ProvidersListResponse["providers"][number];
+
+/** An id more than one row lists is not guessed: null when no row or several list it. */
+export function findProfileByIdOrAlias(
+  profiles: readonly ProviderProfile[],
+  id: string,
+): ProviderProfile | null {
+  const listing = profiles.filter(
+    (profile) =>
+      profile.profileId === id || profile.aliases?.includes(id) === true,
+  );
+  return listing.length === 1 ? (listing[0] ?? null) : null;
+}
+
+/** Null when not listed: `id` goes as typed, and the host's answer is what the person sees. */
+export async function readListedProfile(
+  providerId: ProviderId,
+  id: string,
+): Promise<ProviderProfile | null> {
+  const state = (await readProviderStates()).find(
+    (provider) => provider.providerId === providerId,
+  );
+  return state === undefined
+    ? null
+    : findProfileByIdOrAlias(state.profiles, id);
 }
 
 /**

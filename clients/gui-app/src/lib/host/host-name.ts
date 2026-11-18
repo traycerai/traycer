@@ -51,3 +51,11 @@ export function quotedHostReference(
   }
   return `${atSentenceStart ? "Host" : "host"} "${hostLabel}"`;
 }
+
+export function computerNameFromLabel(
+  label: string | null,
+  hostId: string,
+): string {
+  const name = hostNameFromLabel(label, hostId);
+  return name === UNNAMED_HOST_LABEL ? "Unnamed computer" : name;
+}

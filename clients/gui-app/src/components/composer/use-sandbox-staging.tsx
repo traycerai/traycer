@@ -27,6 +27,7 @@ import type {
 import type { HostSwitcherComposerMode } from "@/components/settings/host-scope/host-switcher";
 import type { HostSwitcherNewRow } from "@/components/settings/host-scope/host-switcher-new-rows";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
+import { useTeamBundleBalances } from "@/hooks/sandboxes/use-team-bundle-balances";
 import { useRegisteredHostEnvironmentStatuses } from "@/hooks/environment/use-registered-host-environment-statuses";
 import {
   useCloudChatHasCloudAuthorization,
@@ -65,6 +66,7 @@ import {
   stageProviderFor,
   type ConsequencesInput,
   type SandboxConfigurationDefaults,
+  type TeamBalanceMc,
   type StageAudience,
   type StageConfiguration,
   type StagePrice,
@@ -264,6 +266,7 @@ export function useSandboxStaging(input: {
   const task = surface === null ? null : surface.task;
   const viewerUserId = useCloudChatViewerId();
   const user = useAuthUser().data ?? null;
+  const teamBalanceMc = useTeamBundleBalances();
   // Neither read without a surface: nothing prices or shapes a stage.
   const reads = surface !== null;
   const catalogueQuery = useSandboxCatalogue(reads);
@@ -293,8 +296,9 @@ export function useSandboxStaging(input: {
   );
 
   const rows = useMemo(
-    () => newRowFacts({ user, catalogue, defaults: defaultsFor }),
-    [catalogue, defaultsFor, user],
+    () =>
+      newRowFacts({ user, teamBalanceMc, catalogue, defaults: defaultsFor }),
+    [catalogue, defaultsFor, teamBalanceMc, user],
   );
   const audienceFor = useCallback(
     (configuration: StageConfiguration): StageAudience =>
@@ -318,15 +322,15 @@ export function useSandboxStaging(input: {
     () =>
       stage === null || stage.target.kind !== "new" || catalogue === null
         ? null
-        : stagedNewFacts(user, catalogue, stage.target),
-    [catalogue, stage, user],
+        : stagedNewFacts(user, teamBalanceMc, catalogue, stage.target),
+    [catalogue, stage, teamBalanceMc, user],
   );
   const consequences = useMemo<ConsequencesInput | null>(() => {
     if (stage === null) return null;
     const stagedConfiguration = stage.target.configuration;
     const principal = configurationPrincipal(stagedConfiguration, viewerUserId);
     const price = stagedTargetPrice(stage.target, input.hosts, stagedFacts);
-    const balance = stageBalanceMc(user, stagedConfiguration);
+    const balance = stageBalanceMc(user, stagedConfiguration, teamBalanceMc);
     const existingHostId =
       stage.target.kind === "existing" ? stage.target.hostId : null;
     const existingHost = input.hosts.find(
@@ -336,7 +340,6 @@ export function useSandboxStaging(input: {
       (host) => host.hostId === (stage.createdHostId ?? existingHostId),
     );
     const existingSummary = existingHost?.sandbox?.summary;
-    const payer = existingSummary?.wakePayer;
     return {
       configuration: stagedConfiguration,
       os:
@@ -353,10 +356,8 @@ export function useSandboxStaging(input: {
         balance === null || price === null
           ? null
           : Math.max(1, price.awakeMcPerHour - balance),
-      wakingName:
-        stage.target.kind === "existing" && payer?.userId !== viewerUserId
-          ? stage.target.name
-          : null,
+      // Waking a team's sandbox uses the team's credits whoever woke it last.
+      wakingName: stage.target.kind === "existing" ? stage.target.name : null,
       audience: audienceFor(stagedConfiguration),
       reachHost: reachFor(
         stage.target.kind === "existing" ? stage.target.hostId : "",
@@ -371,6 +372,7 @@ export function useSandboxStaging(input: {
     reachFor,
     stage,
     stagedFacts,
+    teamBalanceMc,
     user,
     viewerUserId,
   ]);
@@ -684,6 +686,7 @@ function computerSettingsLine(
 
 function newRowFacts(input: {
   readonly user: AuthenticatedUser | null;
+  readonly teamBalanceMc: TeamBalanceMc;
   readonly catalogue: SandboxCatalogue | null;
   readonly defaults: (
     configurationKey: string,
@@ -707,7 +710,7 @@ function newRowFacts(input: {
       uncreatable: input.catalogue !== null && shape === null,
       price,
       needsCredits: stageNeedsCredits(
-        stageBalanceMc(input.user, configuration),
+        stageBalanceMc(input.user, configuration, input.teamBalanceMc),
         price,
       ),
     };
@@ -716,6 +719,7 @@ function newRowFacts(input: {
 
 function stagedNewFacts(
   user: AuthenticatedUser | null,
+  teamBalanceMc: TeamBalanceMc,
   catalogue: SandboxCatalogue,
   target: Extract<StagedSandboxTarget, { kind: "new" }>,
 ): NewRowFacts {
@@ -726,7 +730,7 @@ function stagedNewFacts(
     uncreatable: false,
     price,
     needsCredits: stageNeedsCredits(
-      stageBalanceMc(user, target.configuration),
+      stageBalanceMc(user, target.configuration, teamBalanceMc),
       price,
     ),
   };
@@ -734,8 +738,8 @@ function stagedNewFacts(
 
 /**
  * `New Acme sandbox` over `Linux · 2 vCPU · 4 GB · $0.12 an hour while awake ·
- * uses your Acme credits`; at a short balance `New Acme sandbox · needs
- * credits` over `Linux · 2 vCPU · 4 GB · from $0.12 an hour · uses your Acme
+ * uses Acme's credits`; at a short balance `New Acme sandbox · needs
+ * credits` over `Linux · 2 vCPU · 4 GB · from $0.12 an hour · uses Acme's
  * credits`.
  */
 function newRowPresentation(
@@ -1018,16 +1022,12 @@ function sandboxRowLines(
   ];
   if (team !== null)
     lines.unshift(
-      sandboxShapeAndCostLine(
-        summary,
-        {
-          kind: "team",
-          teamId: team.teamId,
-          teamName: team.teamName,
-          environmentId: summary.environmentId,
-        },
-        context.viewerUserId,
-      ),
+      sandboxShapeAndCostLine(summary, {
+        kind: "team",
+        teamId: team.teamId,
+        teamName: team.teamName,
+        environmentId: summary.environmentId,
+      }),
     );
   return lines;
 }

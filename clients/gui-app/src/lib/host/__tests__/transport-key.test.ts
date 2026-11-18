@@ -183,7 +183,7 @@ describe("the transport's refusal gate", () => {
   });
 });
 
-describe("hostTransportKeyFor - what OPEN presents is identity", () => {
+describe("hostTransportKeyFor - whose computer it is is identity", () => {
   const personal = remoteEntry({ sandbox: null });
   const sandbox = remoteEntry({
     sandbox: {
@@ -193,14 +193,6 @@ describe("hostTransportKeyFor - what OPEN presents is identity", () => {
       ownerTeamName: null,
       ownerTeamId: null,
     },
-  });
-
-  it("keys a sandbox row apart from the same host projected as a personal one, so a stale read rebuilds the stream", () => {
-    const asPersonal = hostTransportKeyFor(personal, false);
-    const asSandbox = hostTransportKeyFor(sandbox, false);
-    expect(asPersonal).not.toBeNull();
-    expect(asSandbox).not.toBeNull();
-    expect(asSandbox).not.toBe(asPersonal);
   });
 
   it("changes transport identity when a physical host's owner changes from personal to team", () => {
@@ -236,8 +228,8 @@ describe("hostTransportKeyFor - what OPEN presents is identity", () => {
         false,
       ),
     ).toBe(hostTransportKeyFor(sandbox, false));
-    // The lifecycle word is not part of what OPEN presents: waking it must
-    // not tear the stream down.
+    // The lifecycle word is not identity: waking it must not tear the stream
+    // down.
     expect(
       hostTransportKeyFor(
         remoteEntry({
