@@ -911,15 +911,21 @@ describe("agent worktree create policy", () => {
     }
   });
 
-  it("sync read refuses recovery when recoverMissing is not a boolean", async () => {
-    for (const recoverMissing of ["yes", 1, null]) {
+  // An invalid `recoverMissing` turns recovery off and nothing else: before
+  // the field existed the block's unknown keys were stripped, so a bad value
+  // must not now invalidate the block and hand a `never` policy back to
+  // `allow`.
+  it("refuses recovery for a non-boolean recoverMissing and keeps the agent-create policy", async () => {
+    for (const recoverMissing of ["false", 1, null]) {
       await writeRaw(
-        JSON.stringify({ ...BASE, worktrees: { recoverMissing } }),
+        JSON.stringify({
+          ...BASE,
+          worktrees: { agentCreate: "never", recoverMissing },
+        }),
       );
-      expect(readWorktreesConfigSync()).toEqual({
-        agentCreate: "allow",
-        recoverMissing: false,
-      });
+      const expected = { agentCreate: "never", recoverMissing: false };
+      expect(readWorktreesConfigSync()).toEqual(expected);
+      expect(await readWorktreesConfig()).toEqual(expected);
     }
   });
 

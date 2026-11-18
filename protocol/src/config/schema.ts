@@ -116,13 +116,16 @@ export type AgentWorktreeCreatePolicy =
  *
  * `recoverMissing` is whether a run whose bound worktree or folder is gone is
  * recovered (the worktree's repository folder is used, a missing folder is
- * detached) instead of refused. On unless the file says `false`.
+ * detached) instead of refused. On when absent; off when it is anything but a
+ * boolean.
  */
 export const worktreesConfigSchema = lazySchema(() =>
   z
     .object({
       agentCreate: z.enum(AGENT_WORKTREE_CREATE_POLICIES).default("allow"),
-      recoverMissing: z.boolean().default(true),
+      // An invalid value turns recovery off and leaves the block valid, so a
+      // typo here cannot also undo the `agentCreate` policy beside it.
+      recoverMissing: z.boolean().catch(false).default(true),
     })
     .default({ agentCreate: "allow", recoverMissing: true }),
 );

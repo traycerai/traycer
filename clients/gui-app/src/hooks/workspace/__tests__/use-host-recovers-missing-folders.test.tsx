@@ -30,9 +30,22 @@ interface Fixture {
   /** Queries in flight. A disabled read never starts one, so 0 right after
    * the mount is the whole answer, with nothing to wait for. */
   readonly fetching: () => number;
+  readonly refetch: () => Promise<void>;
 }
 
 function createFixture(recoverMissing: boolean): Fixture {
+  return createFixtureAnswering(() => ({
+    agentCreate: "allow",
+    recoverMissing,
+  }));
+}
+
+function createFixtureAnswering(
+  answer: () => {
+    readonly agentCreate: "allow";
+    readonly recoverMissing: boolean;
+  },
+): Fixture {
   const queryClient = createAppQueryClient();
   let reads = 0;
   const spine = new HostClient<HostRpcRegistry>({
@@ -46,7 +59,7 @@ function createFixture(recoverMissing: boolean): Fixture {
       handlers: {
         "config.worktrees.get": () => {
           reads += 1;
-          return { agentCreate: "allow", recoverMissing };
+          return answer();
         },
       },
     }),
@@ -64,6 +77,9 @@ function createFixture(recoverMissing: boolean): Fixture {
     Wrapper,
     reads: () => reads,
     fetching: () => queryClient.isFetching(),
+    refetch: async () => {
+      await queryClient.refetchQueries();
+    },
   };
 }
 
@@ -92,6 +108,27 @@ describe("useHostRecoversMissingFolders", () => {
     await waitFor(() => {
       expect(result.current).toBe(true);
     });
+  });
+
+  // A failed refetch keeps the last answer's data in the cache; the block must
+  // come back rather than stay lifted on a read that has since failed.
+  it("is false again once a refetch fails after a true answer", async () => {
+    negotiated.version = { major: 1, minor: 1 };
+    let failing = false;
+    const fixture = createFixtureAnswering(() => {
+      if (failing) throw new Error("config unreadable");
+      return { agentCreate: "allow", recoverMissing: true };
+    });
+    const result = mount(fixture, true);
+    await waitFor(() => {
+      expect(result.current).toBe(true);
+    });
+    failing = true;
+    await fixture.refetch();
+    await waitFor(() => {
+      expect(fixture.fetching()).toBe(0);
+    });
+    expect(result.current).toBe(false);
   });
 
   it("is false when a 1.1 host answers recoverMissing false", async () => {

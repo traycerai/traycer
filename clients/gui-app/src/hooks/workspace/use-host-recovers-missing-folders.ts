@@ -46,5 +46,7 @@ export function useHostRecoversMissingFolders(
     params: {},
     options: { enabled: enabled && supported },
   });
-  return supported && query.data?.recoverMissing === true;
+  // `isSuccess`, not just `data`: a refetch that fails keeps the last answer's
+  // data, and the block must return on a read that has since failed.
+  return supported && query.isSuccess && query.data.recoverMissing;
 }
