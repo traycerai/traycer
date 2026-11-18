@@ -8,8 +8,12 @@ import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 const mocks = vi.hoisted(() => ({
   sessions: {} as Record<string, ChatSessionStoreHandle>,
   navigateToTabIntent: vi.fn<(...args: unknown[]) => void>(),
-  hostClient: { getActiveHostId: () => "host-tab" } as {
+  hostClient: {
+    getActiveHostId: () => "host-tab",
+    onChange: () => () => undefined,
+  } as {
     readonly getActiveHostId: () => string | null;
+    readonly onChange: () => () => void;
   } | null,
   billingAdmin: false,
 }));
@@ -92,6 +96,7 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
 // `canEnsure` gates on the method; the mutation hooks only need to exist.
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: () => true,
+  useHostMethodSupport: () => true,
 }));
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
@@ -229,7 +234,10 @@ beforeEach(() => {
   mocks.billingAdmin = false;
   const handle = frozenSession(TRUNK_ID);
   mocks.sessions = { [TRUNK_ID]: handle };
-  mocks.hostClient = { getActiveHostId: () => HOST_ID };
+  mocks.hostClient = {
+    getActiveHostId: () => HOST_ID,
+    onChange: () => () => undefined,
+  };
   getChatSessionRegistry().acquire(
     { epicId: BOT_ID, chatId: TRUNK_ID, hostId: HOST_ID, scopeKey: "t" },
     () => handle,
