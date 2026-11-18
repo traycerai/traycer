@@ -5,6 +5,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { PromotableModalFrame } from "@/components/layout/dialogs/promotable-modal-frame";
@@ -30,7 +31,10 @@ describe("PromotableModalFrame", () => {
     });
   }
 
-  function renderFrame(onOpenChange: (open: boolean) => void): void {
+  function renderFrame(
+    onOpenChange: (open: boolean) => void,
+    headerActions: ReactNode,
+  ): void {
     render(
       <DialogPrimitive.Root open onOpenChange={onOpenChange}>
         <PromotableModalFrame
@@ -38,6 +42,7 @@ describe("PromotableModalFrame", () => {
           title="Settings"
           contentClassName="h-[80vh] w-[80vw]"
           dataAttributes={{}}
+          headerActions={headerActions}
           promoteAriaLabel="Open Settings as a tab"
           promoteTestId="promote"
           closeTestId="close"
@@ -53,11 +58,26 @@ describe("PromotableModalFrame", () => {
   }
 
   it("renders the framed chrome (title + promote/close) around its body", () => {
-    renderFrame(vi.fn());
+    renderFrame(vi.fn(), null);
     screen.getByText("Settings");
     screen.getByTestId("promote");
     screen.getByTestId("close");
     screen.getByTestId("modal-body");
+  });
+
+  it("places its header actions in the title bar before Promote and Close", () => {
+    renderFrame(vi.fn(), <button data-testid="header-action" />);
+
+    const action = screen.getByTestId("header-action");
+    const order = (other: HTMLElement): number =>
+      action.compareDocumentPosition(other);
+    expect(action.closest("header")).not.toBeNull();
+    expect(order(screen.getByTestId("promote"))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(order(screen.getByTestId("close"))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
   });
 
   // The frame lies over the side strip's and header's window-drag regions,
@@ -65,7 +85,7 @@ describe("PromotableModalFrame", () => {
   // bottom-left corner (Settings' Host rows) took no clicks.
   it("suppresses the window drag regions for exactly as long as it is up", () => {
     expect(useTitleBarDragStore.getState().suppressors.size).toBe(0);
-    renderFrame(vi.fn());
+    renderFrame(vi.fn(), null);
     expect(useTitleBarDragStore.getState().suppressors.size).toBe(1);
     cleanup();
     expect(useTitleBarDragStore.getState().suppressors.size).toBe(0);
@@ -73,7 +93,7 @@ describe("PromotableModalFrame", () => {
 
   it("still closes on Escape (Escape is deliberately NOT guarded)", async () => {
     const onOpenChange = vi.fn();
-    renderFrame(onOpenChange);
+    renderFrame(onOpenChange, null);
     await waitForDismissableLayerListener();
 
     fireEvent.keyDown(document.body, { key: "Escape" });
