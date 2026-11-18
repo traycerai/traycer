@@ -15,9 +15,9 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
-  MOVE_STOPPED_REASONS,
   moveAwaitsConsent,
   moveHasStopped,
+  moveStoppedReason,
 } from "@/lib/environment/move-in-progress";
 import { environmentMutationKeys } from "@/lib/query-keys";
 
@@ -79,7 +79,7 @@ function rerunReading(
     return "waiting";
   const setup = status.setup;
   if (setup === null) return "waiting";
-  if (MOVE_STOPPED_REASONS[setup.state] !== undefined) return "stopped_again";
+  if (moveStoppedReason(setup.state) !== null) return "stopped_again";
   if (setup.state === "done") return "resumed";
   const resuming =
     status.move?.state === "retry" || status.move?.state === "running";
