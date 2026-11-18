@@ -38,6 +38,7 @@ import {
   artifactOperationBlockSchema,
   artifactOperationBlockSchemaPreHtml,
   autonomousResumeBlockSchema,
+  autonomousResumeBlockSchemaPreConversationImages,
   autonomousResumeBlockSchemaPreConversationMessage,
   commandBlockSchema,
   compactionBlockSchema,
@@ -241,6 +242,30 @@ export const openContentBlockSchema = lazySchema(() =>
 export type OpenContentBlock = z.infer<typeof openContentBlockSchema>;
 
 /**
+ * Open blocks `chat.subscribe@1.43` ships: the live union with the resume
+ * divider before `1.44`'s images on a trigger's member's message.
+ */
+const openContentBlockSchemaPreConversationImages = lazySchema(() =>
+  z.discriminatedUnion("type", [
+    openTextBlockSchema,
+    reasoningBlockSchema,
+    toolCallBlockSchema,
+    fileChangeBlockSchema,
+    commandBlockSchema,
+    subAgentBlockSchema,
+    approvalBlockSchema,
+    todoBlockSchema,
+    openPlanBlockSchema,
+    errorBlockSchema,
+    compactionBlockSchema,
+    autonomousResumeBlockSchemaPreConversationImages,
+    openSteerBlockSchema,
+    interviewBlockSchema,
+    artifactOperationBlockSchema,
+  ]),
+);
+
+/**
  * Open blocks `chat.subscribe@1.42` ships: the live union with the resume
  * divider before `1.43`'s member's message on a trigger.
  */
@@ -403,6 +428,14 @@ export const openAssistantMessageSchema = lazySchema(() =>
 );
 export type OpenAssistantMessage = z.infer<typeof openAssistantMessageSchema>;
 
+/** The open assistant row `chat.subscribe@1.43` ships: no images on a trigger. */
+const openAssistantMessageSchemaPreConversationImages = lazySchema(() =>
+  assistantMessageSchema.extend({
+    sender: openAgentSenderSchema,
+    blocks: z.array(openContentBlockSchemaPreConversationImages),
+  }),
+);
+
 /**
  * The open assistant row `chat.subscribe@1.42` ships: its questions say no
  * `multiSelect`, and its resume dividers' triggers no `conversationMessage`.
@@ -442,6 +475,13 @@ export const openMessageSchema = lazySchema(() =>
   z.discriminatedUnion("role", [
     openUserMessageSchema,
     openAssistantMessageSchema,
+  ]),
+);
+/** The open row `chat.subscribe@1.43` ships: no images on a resume trigger. */
+export const openMessageSchemaPreConversationImages = lazySchema(() =>
+  z.discriminatedUnion("role", [
+    openUserMessageSchema,
+    openAssistantMessageSchemaPreConversationImages,
   ]),
 );
 /** The open row `chat.subscribe@1.37` through `@1.41` ship. */

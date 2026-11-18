@@ -366,6 +366,8 @@ declare global {
     __titleFrames?: TitleFrame[];
     __moveBeforeCalls?: number;
     __referenceFrames?: ReferenceFrame[];
+    /** The group a Threads move started from. */
+    __markedGroup?: Element;
   }
 }
 
@@ -660,6 +662,34 @@ interface Move {
   readonly back: (page: Page) => Promise<void>;
 }
 
+/**
+ * The group the last move started from is still the only group, and sits in
+ * the header holding `anchor`; with `inAnchorRow`, in the same row as it.
+ */
+async function expectMarkedGroupIn(
+  page: Page,
+  anchor: string,
+  inAnchorRow: boolean,
+): Promise<void> {
+  const where = await page.evaluate(
+    ({ selector, sameRow }) => {
+      const groups = document.querySelectorAll(
+        '[role="group"][aria-label="Music playback"]',
+      );
+      const group = groups.item(0);
+      const anchored = document.querySelector(selector);
+      return {
+        count: groups.length,
+        same: group === window.__markedGroup,
+        inHeader: anchored?.closest("header")?.contains(group) === true,
+        inRow: !sameRow || anchored?.parentElement?.contains(group) === true,
+      };
+    },
+    { selector: anchor, sameRow: inAnchorRow },
+  );
+  expect(where).toEqual({ count: 1, same: true, inHeader: true, inRow: true });
+}
+
 const channelHeader = (page: Page): Locator =>
   page.getByTestId("bot-channel-header");
 
@@ -710,19 +740,35 @@ const OTHER_BOT: Move = {
   },
 };
 
-// Threads draws the controls in their own row, with its own title.
+// Threads draws the controls in its header's title row, after its heading.
 const THREADS: Move = {
   name: "Threads",
   query: "bots=2",
   prepare: () => Promise.resolve(),
   out: async (page) => {
-    await page.evaluate(() => window.__botChannelProbe?.showThreads(true));
+    await page.evaluate(() => {
+      window.__markedGroup =
+        document.querySelector('[role="group"][aria-label="Music playback"]') ??
+        undefined;
+      window.__botChannelProbe?.showThreads(true);
+    });
     await expect(page.getByTestId("bot-threads-view")).toBeVisible();
     await expectOneGroup(page);
+    await expectMarkedGroupIn(
+      page,
+      '[data-testid="bot-threads-view"] header h1',
+      true,
+    );
   },
   back: async (page) => {
     await page.evaluate(() => window.__botChannelProbe?.showThreads(false));
     await expect(channelHeader(page)).toBeVisible();
+    await expectOneGroup(page);
+    await expectMarkedGroupIn(
+      page,
+      '[data-testid="bot-channel-header"]',
+      false,
+    );
   },
 };
 
@@ -754,6 +800,208 @@ async function moveOutAndBack(
     await expectContinuous(page, `${move.name} ${leg}`, mode);
   }
 }
+
+test.describe("the music controls in the desktop Threads header", () => {
+  test.use({
+    viewport: { width: 1280, height: 800 },
+    hasTouch: false,
+    isMobile: false,
+  });
+
+  const GROUP = { name: "Music playback" } as const;
+  /** Wide enough that Threads draws no Back button of its own; 560 draws it. */
+  const WIDE = 1280;
+  const NARROW = 560;
+
+  async function openThreads(page: Page, query: string): Promise<Locator> {
+    await page.goto(
+      `${fixture("bot-compact-actions-menu")}?form=desktop&${query}`,
+    );
+    await page.waitForFunction(() => window.__botChannelProbe !== undefined);
+    await page.evaluate(() => window.__botChannelProbe?.showThreads(true));
+    const header = page.getByTestId("bot-threads-view").locator("header");
+    await expect(header).toBeVisible();
+    return header;
+  }
+
+  async function boxOf(locator: Locator) {
+    const box = await locator.boundingBox();
+    if (box === null) throw new Error(`no box for ${locator.toString()}`);
+    return box;
+  }
+
+  async function setPaneWidth(page: Page, px: number): Promise<void> {
+    await page.evaluate((w) => window.__botChannelProbe?.setPaneWidth(w), px);
+    await nextFrames(page, 2);
+  }
+
+  const threadsGroupIn = (page: Page): Locator =>
+    page
+      .getByTestId("bot-threads-view")
+      .locator("header")
+      .getByRole("group", GROUP);
+
+  test("sit in the title row right of the heading", async ({ page }) => {
+    const header = await openThreads(page, "music=1");
+    const group = header.getByRole("group", GROUP);
+    const heading = header.getByRole("heading", { name: "Threads" });
+
+    await expect(group).toBeVisible();
+    const row = await boxOf(heading.locator(".."));
+    const box = await boxOf(group);
+    const headingBox = await boxOf(heading);
+    expect(box.x).toBeGreaterThanOrEqual(headingBox.x + headingBox.width);
+    expect(box.y).toBeGreaterThanOrEqual(row.y);
+    expect(box.y + box.height).toBeLessThanOrEqual(row.y + row.height);
+    expect(
+      (await boxOf(header.getByTestId("epic-playback-track"))).width,
+    ).toBeGreaterThan(100);
+  });
+
+  for (const pane of [
+    { name: "Back hidden", width: WIDE },
+    { name: "Back shown", width: NARROW },
+  ]) {
+    test(`leave the header and its title row as tall with the setting off as on, ${pane.name}`, async ({
+      page,
+    }) => {
+      const header = await openThreads(page, "music=1");
+      await setPaneWidth(page, pane.width);
+      const back = header.getByTestId("bot-threads-back");
+      await expect(back).toBeVisible({ visible: pane.name === "Back shown" });
+      const row = header
+        .getByRole("heading", { name: "Threads" })
+        .locator("..");
+      await expect(threadsGroupIn(page)).toBeVisible();
+      const on = { header: await boxOf(header), row: await boxOf(row) };
+
+      await page.evaluate(() => window.__botChannelProbe?.setControls(false));
+      await expect(threadsGroupIn(page)).toHaveCount(0);
+      const off = { header: await boxOf(header), row: await boxOf(row) };
+
+      expect(off.header.height).toBe(on.header.height);
+      expect(off.row.height).toBe(on.row.height);
+    });
+  }
+
+  test("give way as the pane narrows: the track first, then previous and next, and Pause stays and works", async ({
+    page,
+  }) => {
+    const header = await openThreads(page, "music=1");
+    const track = header.getByTestId("epic-playback-track");
+    const previous = header.getByTestId("epic-playback-previous");
+    const next = header.getByTestId("epic-playback-next");
+
+    // Under 40rem of title row the track is read by screen readers only.
+    await setPaneWidth(page, NARROW);
+    await expect.poll(async () => (await boxOf(track)).width).toBeLessThan(2);
+    await expect(previous).toBeVisible();
+    await expect(next).toBeVisible();
+
+    // Under 24rem previous and next go; Pause stays and works.
+    await setPaneWidth(page, 340);
+    await expect(previous).toBeHidden();
+    await expect(next).toBeHidden();
+    await header.getByRole("button", { name: "Pause" }).click();
+    await expect(header.getByRole("button", { name: "Play" })).toBeVisible();
+  });
+
+  test("put Back before the playback buttons, and those before the cards", async ({
+    page,
+  }) => {
+    const header = await openThreads(page, "music=1");
+    await setPaneWidth(page, NARROW);
+    await expect(header.getByTestId("bot-threads-back")).toBeVisible();
+
+    await header.getByTestId("bot-threads-back").focus();
+    const order: string[] = [];
+    for (let step = 0; step < 3; step++) {
+      await page.keyboard.press("Tab");
+      order.push(
+        await page.evaluate(
+          () => document.activeElement?.getAttribute("aria-label") ?? "",
+        ),
+      );
+    }
+    expect(order).toEqual(["Previous track", "Pause", "Next track"]);
+    expect(
+      await page.evaluate(() => {
+        const group = document.querySelector(
+          '[role="group"][aria-label="Music playback"]',
+        );
+        const scroll = document.querySelector(
+          '[data-testid="bot-threads-scroll"]',
+        );
+        if (group === null || scroll === null) return false;
+        return Boolean(
+          group.compareDocumentPosition(scroll) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+        );
+      }),
+    ).toBe(true);
+  });
+
+  test("a ready channel to Threads and back never draws the row, and never holds zero or two groups", async ({
+    page,
+  }) => {
+    await recordGroupFrames(page);
+    await page.goto(
+      `${fixture("bot-compact-actions-menu")}?form=desktop&music=1`,
+    );
+    await expect(channelHeader(page)).toBeVisible();
+    await nextFrames(page, 3);
+    const ready = (await groupFramesSince(page, 0)).length;
+    await page.evaluate(() => window.__botChannelProbe?.showThreads(true));
+    await expect(threadsGroupIn(page)).toBeVisible();
+    await nextFrames(page, 3);
+    await page.evaluate(() => window.__botChannelProbe?.showThreads(false));
+    await expect(channelHeader(page)).toBeVisible();
+    await nextFrames(page, 3);
+
+    const frames = await groupFramesSince(page, ready);
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames.filter((f) => f.groups !== 1)).toEqual([]);
+    expect(frames.filter((f) => f.placement !== "header")).toEqual([]);
+  });
+
+  test("Threads to a channel still connecting lands in the reserved title row, never in the tab's own row", async ({
+    page,
+  }) => {
+    await recordGroupFrames(page);
+    await page.goto(
+      `${fixture("bot-compact-actions-menu")}?form=desktop&music=1&bots=2&snapshot=held`,
+    );
+    await expect(page.getByTestId("bot-channel-opening-header")).toBeVisible();
+    await page.evaluate(
+      (botId) => window.__botChannelProbe?.holdSnapshots(botId),
+      SECOND_BOT_ID,
+    );
+    await expect(channelHeader(page)).toBeVisible();
+    await page.evaluate(() => window.__botChannelProbe?.showThreads(true));
+    await expect(threadsGroupIn(page)).toBeVisible();
+    await nextFrames(page, 3);
+    const opened = (await groupFramesSince(page, 0)).length;
+
+    await page.evaluate((botId) => {
+      window.__botChannelProbe?.selectBot(botId);
+      window.__botChannelProbe?.showThreads(false);
+    }, SECOND_BOT_ID);
+    await expect(page.getByTestId("bot-channel-opening-header")).toBeVisible();
+    await nextFrames(page, 3);
+    await page.evaluate(() => window.__botChannelProbe?.holdSnapshots(null));
+    await expect(channelHeader(page)).toBeVisible();
+    await nextFrames(page, 3);
+
+    const frames = await groupFramesSince(page, opened);
+    expect(frames.some((f) => f.placement === "reserved")).toBe(true);
+    expect(frames.filter((f) => f.groups !== 1)).toEqual([]);
+    expect(
+      frames.filter(
+        (f) => f.placement !== "header" && f.placement !== "reserved",
+      ),
+    ).toEqual([]);
+  });
+});
 
 test.describe("the playback controls across the Tracy tab's moves", () => {
   test.use({

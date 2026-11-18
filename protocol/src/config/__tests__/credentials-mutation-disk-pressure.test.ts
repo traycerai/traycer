@@ -25,6 +25,10 @@ import {
   type StoredCredentials,
 } from "../credentials";
 import { writeJsonFileAtomic } from "../credentials-fs";
+import {
+  acquireCredentialsLock,
+  type CredentialsLockHandle,
+} from "../credentials-lock";
 import { isCredentialsReserveComplete } from "../credentials-reserve";
 import { digestCredentials, writeSidecarState } from "../credentials-wal";
 import { createCaseWorkDir, endCaseWorkDir } from "./credentials-run-root";
@@ -79,6 +83,7 @@ type CaseMock = {
   onReserveLockRelease: (() => void) | null;
   onReserveLockBusy: (() => void) | null;
   onMutationLockBusy: (() => void) | null;
+  reserveLockLinkAttempts: number;
   reserveLocksInFlight: number;
   reserveStatGate: ReserveStatGate | null;
   reserveAllocationAttempts: number;
@@ -106,6 +111,7 @@ function createCaseMock(directory: string): CaseMock {
     onReserveLockRelease: null,
     onReserveLockBusy: null,
     onMutationLockBusy: null,
+    reserveLockLinkAttempts: 0,
     reserveLocksInFlight: 0,
     reserveStatGate: null,
     reserveAllocationAttempts: 0,
@@ -290,6 +296,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
           isReserveLock = false;
         }
       }
+      if (isReserveLock) mock.reserveLockLinkAttempts += 1;
       return actual
         .link(...args)
         .then((value) => {
@@ -406,14 +413,17 @@ describe("credentials store disk pressure", () => {
   let refreshCalls: string[];
   let pressures: string[];
   let refreshOk: RefreshFn;
+  let restoreTimerSpies: (() => void) | null = null;
+  let testHolder: CredentialsLockHandle | null = null;
 
   function makeStore(refresh: RefreshFn): CredentialsMutationStore {
-    return makeStoreWaiting(refresh, 500);
+    return makeStoreWaiting(refresh, 500, 10);
   }
 
   function makeStoreWaiting(
     refresh: RefreshFn,
     lockWaitMs: number,
+    lockPollIntervalMs: number,
   ): CredentialsMutationStore {
     const casePressures = pressures;
     const caseMock = filesystemMock;
@@ -425,7 +435,7 @@ describe("credentials store disk pressure", () => {
       },
       refresh,
       lockWaitMs,
-      lockPollIntervalMs: 10,
+      lockPollIntervalMs,
       continuationRetryMs: 60_000,
     });
     stores.push(store);
@@ -532,9 +542,13 @@ describe("credentials store disk pressure", () => {
     beginCase(workDir);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const store of stores) store.dispose();
     stores.length = 0;
+    restoreTimerSpies?.();
+    restoreTimerSpies = null;
+    await testHolder?.release();
+    testHolder = null;
     vi.useRealTimers();
     vi.clearAllMocks();
     endCaseWorkDir(workDir);
@@ -607,7 +621,8 @@ describe("credentials store disk pressure", () => {
     ).toBe(1);
     expect(filesystemMock.reserveAllocationAttempts).toBe(1);
     expect(filesystemMock.reserveExclusiveOpenAttempts).toBe(2);
-    expect(filesystemMock.reserveHandleStats).toBe(17);
+    // Two scans of 16 pieces, plus the read inside the replacement.
+    expect(filesystemMock.reserveHandleStats).toBe(33);
   });
 
   it("cleans up a partial reserve piece when sync fails without failing sign-in", async () => {
@@ -628,7 +643,7 @@ describe("credentials store disk pressure", () => {
     await fillReserve();
   });
 
-  it("does not replace a full file installed after the reserve scan", async () => {
+  it("does not replace a full file installed after the reserve scan under the lock", async () => {
     for (let index = 0; index < 16; index += 1) {
       writeFileSync(
         join(workDir, `credentials.reserve.${index}`),
@@ -649,7 +664,8 @@ describe("credentials store disk pressure", () => {
       path: reservePath,
       operation: "stat",
       entered: statEntered,
-      skip: 0,
+      // The first scan runs before the lock; the second decides.
+      skip: 1,
       wait: statGate,
     };
     const reserveLockReleased = new Promise<void>((resolve) => {
@@ -665,11 +681,11 @@ describe("credentials store disk pressure", () => {
     expect(readFileSync(reservePath)).toEqual(Buffer.alloc(65_536, 0x71));
     expect(filesystemMock.reserveAllocationAttempts).toBe(0);
     expect(filesystemMock.reserveExclusiveOpenAttempts).toBe(1);
-    expect(filesystemMock.reserveHandleStats).toBe(17);
+    expect(filesystemMock.reserveHandleStats).toBe(33);
   });
 
   it.skipIf(process.platform === "win32")(
-    "does not follow a symlink installed after the reserve scan",
+    "does not follow a symlink installed after the reserve scan under the lock",
     async () => {
       for (let index = 0; index < 16; index += 1) {
         writeFileSync(
@@ -695,7 +711,8 @@ describe("credentials store disk pressure", () => {
         path: reservePath,
         operation: "stat",
         entered: statEntered,
-        skip: 0,
+        // The first scan runs before the lock; the second decides.
+        skip: 1,
         wait: statGate,
       };
       const reserveLockReleased = new Promise<void>((resolve) => {
@@ -860,6 +877,188 @@ describe("credentials store disk pressure", () => {
     );
   });
 
+  // Each call polls at an interval no other store uses, so the timer it
+  // identifies can only be this refill's. Stays above MIN_POLL_MS (25), which
+  // the lock code would otherwise raise it to.
+  let nextRefillPollMs = 40;
+
+  // Leaves the store's refill after a clean save with its scan done, the lock
+  // held by another holder, and the refill asleep between two lock attempts.
+  // `pollTimer` is that sleep's timer: the only waiter at that point is the
+  // refill. `clearedTimers` lists every handle passed to clearTimeout.
+  async function refillWaitsForHeldLock(): Promise<{
+    store: CredentialsMutationStore;
+    holder: CredentialsLockHandle;
+    pollTimer: unknown;
+    clearedTimers: unknown[];
+  }> {
+    const pollMs = nextRefillPollMs;
+    nextRefillPollMs += 1;
+    const store = makeStoreWaiting(refreshOk, 500, pollMs);
+    await seed(store);
+    rmSync(join(workDir, "credentials.reserve.15"));
+
+    let releaseScanRead: () => void = () => {};
+    let scanReadEntered: () => void = () => {};
+    const scanReadIsHeld = new Promise<void>((resolve) => {
+      scanReadEntered = resolve;
+    });
+    filesystemMock.reserveStatGate = {
+      path: join(workDir, "credentials.reserve.15"),
+      operation: "open",
+      entered: scanReadEntered,
+      skip: 0,
+      wait: new Promise<void>((resolve) => {
+        releaseScanRead = resolve;
+      }),
+    };
+    let firstBusy: () => void = () => {};
+    const reserveFillContended = new Promise<void>((resolve) => {
+      firstBusy = resolve;
+    });
+    filesystemMock.onReserveLockBusy = firstBusy;
+
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    const clearedTimers: unknown[] = [];
+    let pollTimer: unknown = null;
+    let pollSleepArmed: () => void = () => {};
+    const pollSleepIsArmed = new Promise<void>((resolve) => {
+      pollSleepArmed = resolve;
+    });
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((...args: Parameters<typeof setTimeout>) => {
+        const handle = realSetTimeout(...args);
+        if (args[1] === pollMs && pollTimer === null) {
+          pollTimer = handle;
+          pollSleepArmed();
+        }
+        return handle;
+      });
+    const clearTimeoutSpy = vi
+      .spyOn(globalThis, "clearTimeout")
+      .mockImplementation((handle: Parameters<typeof clearTimeout>[0]) => {
+        clearedTimers.push(handle);
+        realClearTimeout(handle);
+      });
+    restoreTimerSpies = () => {
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+    };
+
+    expect(
+      (await store.signIn({ ...CREDS, token: "second-token" }, false, null))
+        .outcome,
+    ).toBe("applied");
+    await scanReadIsHeld;
+    const held = await acquireCredentialsLock({
+      lockPath,
+      reason: "test holder",
+      waitMs: 0,
+      pollIntervalMs: 25,
+      signal: null,
+    });
+    if (!held.acquired) throw new Error("the test holder must get the lock");
+    testHolder = held.handle;
+    releaseScanRead();
+    await reserveFillContended;
+    await pollSleepIsArmed;
+    return { store, holder: held.handle, pollTimer, clearedTimers };
+  }
+
+  it("a refill that found the lock held happens once the lock is free", async () => {
+    const { holder } = await refillWaitsForHeldLock();
+    await holder.release();
+    await fillReserve();
+
+    expect(await isCredentialsReserveComplete(credentialsPath)).toBe(true);
+  });
+
+  it("a refill that waited fills the pieces the holder consumed while it waited", async () => {
+    const { holder } = await refillWaitsForHeldLock();
+    rmSync(join(workDir, "credentials.reserve.0"));
+    rmSync(join(workDir, "credentials.reserve.1"));
+    await holder.release();
+    await fillReserve();
+
+    expect(await isCredentialsReserveComplete(credentialsPath)).toBe(true);
+  });
+
+  it("a refill that waited does no probe write and no allocation when the reserve was filled meanwhile", async () => {
+    const { holder } = await refillWaitsForHeldLock();
+    writeFileSync(
+      join(workDir, "credentials.reserve.15"),
+      Buffer.alloc(65_536, 0x5a),
+      { mode: 0o600 },
+    );
+    const isProbeWrite = (record: WriteRecord): boolean =>
+      record.path.includes("credentials.space-check.");
+    const probesBeforeRelease =
+      filesystemMock.writes.filter(isProbeWrite).length;
+    const allocationsBeforeRelease = filesystemMock.reserveAllocationAttempts;
+    const refillFinished = new Promise<void>((resolve) => {
+      filesystemMock.onReserveLockRelease = resolve;
+    });
+    await holder.release();
+    await refillFinished;
+
+    expect(filesystemMock.writes.filter(isProbeWrite)).toHaveLength(
+      probesBeforeRelease,
+    );
+    expect(filesystemMock.reserveAllocationAttempts).toBe(
+      allocationsBeforeRelease,
+    );
+  });
+
+  it("a store's own write ends the wait of its refill, and that write's end refills", async () => {
+    const { store, holder, pollTimer, clearedTimers } =
+      await refillWaitsForHeldLock();
+    const reserveAttemptsAtWriteStart = filesystemMock.reserveLockLinkAttempts;
+    let writeFoundLockHeld: () => void = () => {};
+    const writeIsWaiting = new Promise<void>((resolve) => {
+      writeFoundLockHeld = resolve;
+    });
+    filesystemMock.onMutationLockBusy = writeFoundLockHeld;
+    const saving = store.signIn(
+      { ...CREDS, token: "third-token" },
+      false,
+      null,
+    );
+    // The sleep also clears its own timer when it fires, so only a check made
+    // before any turn passes shows that the write ended it.
+    expect(clearedTimers).toContain(pollTimer);
+    await writeIsWaiting;
+
+    expect(filesystemMock.reserveLockLinkAttempts).toBe(
+      reserveAttemptsAtWriteStart,
+    );
+    await holder.release();
+    expect((await saving).outcome).toBe("applied");
+    await fillReserve();
+    expect(await isCredentialsReserveComplete(credentialsPath)).toBe(true);
+  });
+
+  it("a store disposed while its refill waits for the lock allocates nothing and leaves no poll behind", async () => {
+    const { store, holder, pollTimer, clearedTimers } =
+      await refillWaitsForHeldLock();
+    const reserveAttemptsAtDispose = filesystemMock.reserveLockLinkAttempts;
+    const allocationsAtDispose = filesystemMock.reserveAllocationAttempts;
+    store.dispose();
+
+    expect(clearedTimers).toContain(pollTimer);
+    await holder.release();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(filesystemMock.reserveLockLinkAttempts).toBe(
+      reserveAttemptsAtDispose,
+    );
+    expect(filesystemMock.reserveAllocationAttempts).toBe(allocationsAtDispose);
+    expect(existsSync(join(workDir, "credentials.reserve.15"))).toBe(false);
+  });
+
   it("stops a same-store fill after an allocation stat held across sign-in", async () => {
     for (let index = 0; index < 16; index += 1) {
       writeFileSync(
@@ -886,7 +1085,7 @@ describe("credentials store disk pressure", () => {
     const mutationIsWaiting = new Promise<void>((resolve) => {
       filesystemMock.onMutationLockBusy = resolve;
     });
-    const store = makeStoreWaiting(refreshOk, PRODUCTION_LOCK_WAIT_MS);
+    const store = makeStoreWaiting(refreshOk, PRODUCTION_LOCK_WAIT_MS, 10);
     await statIsHeld;
     const signingIn = store.signIn(CREDS, false, null);
     await mutationIsWaiting;
@@ -1126,9 +1325,9 @@ describe("credentials store disk pressure", () => {
       await spendGate;
       return refreshOk(args);
     };
-    const storeA = makeStoreWaiting(heldRefresh, PRODUCTION_LOCK_WAIT_MS);
+    const storeA = makeStoreWaiting(heldRefresh, PRODUCTION_LOCK_WAIT_MS, 10);
     await seed(storeA);
-    const storeB = makeStoreWaiting(heldRefresh, PRODUCTION_LOCK_WAIT_MS);
+    const storeB = makeStoreWaiting(heldRefresh, PRODUCTION_LOCK_WAIT_MS, 10);
     fail("writeFile", ".space-check.", "ENOSPC", 2);
 
     const winning = rotate(storeA);

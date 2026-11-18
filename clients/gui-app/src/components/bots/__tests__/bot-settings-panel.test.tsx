@@ -119,6 +119,18 @@ const mocks = vi.hoisted(() => ({
   threadListEnabled: [] as boolean[],
   // What the bot's memory reads as (`useBotMemory`); `null` = unsupported.
   memoryEntries: null as number | "loading" | null,
+  // What `useVoiceAvailabilityQuery` answers; `undefined` data = still reading.
+  voiceAvailability: undefined as
+    | {
+        readonly available: boolean;
+        readonly voiceSelection: {
+          readonly version: 1;
+          readonly defaultVoice: string;
+          readonly voices: ReadonlyArray<string>;
+          readonly exactVoiceRenewal: true;
+        } | null;
+      }
+    | undefined,
   // The binding `useHostBinding` answers: its `auth` is the Slack adapter.
   binding: null as { readonly auth: object } | null,
   // What each write's mutation reports as its error; `null` = no refusal.
@@ -164,6 +176,13 @@ vi.mock("@/hooks/usage-analytics/use-usage-summary-support", () => ({
 }));
 // The memory pane has its own suite (`bot-memory-pane.test.tsx`); here the
 // entry only counts what the stream reads.
+vi.mock("@/hooks/voice/use-voice-availability-query", () => ({
+  useVoiceAvailabilityQuery: () => ({
+    data: mocks.voiceAvailability,
+    isPending: mocks.voiceAvailability === undefined,
+    isError: false,
+  }),
+}));
 vi.mock("@/hooks/bots/use-bot-memory", () => ({
   useBotMemory: (): BotMemoryReading => {
     if (mocks.memoryEntries === null) return { kind: "unsupported" };
@@ -472,6 +491,7 @@ beforeEach(() => {
   mocks.threadListEnabled.length = 0;
   mocks.usageChatIds = [];
   mocks.memoryEntries = null;
+  mocks.voiceAvailability = undefined;
   mocks.notificationLevels = {};
   mocks.notificationSupport = true;
   mocks.notificationReadError = null;
@@ -983,6 +1003,7 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
     expect(groupTitles()).toEqual([
       "Details",
       "Model",
+      "Voice",
       "Notifications",
       "Bots in this channel",
       "Slack",
@@ -1180,6 +1201,7 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
     expect(groupTitles()).toEqual([
       "Details",
       "Model",
+      "Voice",
       "Notifications",
       "Slack",
     ]);
@@ -1743,5 +1765,49 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
     );
     expect(refusal.textContent).toBe("You can't change this bot's Slack app.");
     expect(screen.queryByTestId("bot-settings-slack-setup")).toBeNull();
+  });
+});
+
+describe("<BotChannelSettingsPanel /> voice", () => {
+  it("draws the Voice group after Model, with the offered voices when the server offers a choice", () => {
+    mocks.voiceAvailability = {
+      available: true,
+      voiceSelection: {
+        version: 1,
+        defaultVoice: "marin",
+        voices: ["alloy", "cedar", "marin"],
+        exactVoiceRenewal: true,
+      },
+    };
+    mountPanel(BOT, false);
+
+    const model = screen.getByTestId("bot-settings-model");
+    const voice = screen.getByTestId("bot-settings-voice");
+    expect(model.compareDocumentPosition(voice)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(
+      within(voice)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["Deployment default (Marin)", "Alloy", "Cedar", "Marin"]);
+  });
+
+  it("does not draw the Voice group when voice is not available on the deployment", () => {
+    mocks.voiceAvailability = { available: false, voiceSelection: null };
+    mountPanel(BOT, false);
+
+    expect(screen.queryByTestId("bot-settings-voice")).toBeNull();
+  });
+
+  it("says choices are not offered when the server offers no choice of voice", () => {
+    mocks.voiceAvailability = { available: true, voiceSelection: null };
+    mountPanel(BOT, false);
+
+    expect(
+      within(screen.getByTestId("bot-settings-voice")).getByText(
+        "Voice choices aren't available on this connection. Calls use the default voice.",
+      ),
+    ).toBeTruthy();
   });
 });

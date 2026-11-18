@@ -66,6 +66,7 @@ import { useBotThreadFoldStore } from "@/stores/bots/bot-thread-fold-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import { useLayoutStore } from "@/stores/layout/layout-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 import { mocks } from "./bot-threads-view-state";
 import {
   callThread,
@@ -99,6 +100,10 @@ import {
   withReplies,
 } from "./bot-threads-view-harness";
 
+vi.mock("@/lib/soundtrack/manifest", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/soundtrack/manifest")>()),
+  soundtrackOffered: () => true,
+}));
 vi.mock(
   "@/hooks/host/use-host-client-for-host-id",
   () => botMentionHostClientMock,
@@ -1856,6 +1861,49 @@ describe("<BotThreadsView /> in the compact app header", () => {
 
     expect(screen.queryByRole("button", { name: /^Threads$/ })).toBeNull();
   });
+});
+
+describe("<BotThreadsView /> the tab's music group", () => {
+  const GROUP = { name: "Music playback" } as const;
+
+  beforeEach(() => {
+    mocks.hosted[TRACY] = script([], {});
+    mocks.hosted[TEAM] = script([], {});
+    useSettingsStore.setState({
+      soundtrackEnabled: true,
+      soundtrackPlaybackControls: true,
+    });
+  });
+  afterEach(() => {
+    useSettingsStore.setState(useSettingsStore.getInitialState(), true);
+  });
+
+  it("draws the one group in the desktop header's title row after the heading, and no row of its own", () => {
+    mount();
+
+    const view = screen.getByTestId("bot-threads-view");
+    // `getByRole` throws on a second group, as it does on none.
+    const group = screen.getByRole("group", GROUP);
+    const header = group.closest("header");
+    expect(header?.parentElement).toBe(view);
+    const heading = within(view).getByRole("heading", { name: "Threads" });
+    expect(header?.contains(heading)).toBe(true);
+    expect(
+      heading.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it.each(["menu", "bar"] as const)(
+    "gives the %s form no slot: the group is the tab's own row, outside the view",
+    (form) => {
+      setMountLevel2(form);
+      mount();
+
+      const view = screen.getByTestId("bot-threads-view");
+      expect(within(view).queryByTestId("tracy-playback-slot")).toBeNull();
+      expect(view.contains(screen.getByRole("group", GROUP))).toBe(false);
+    },
+  );
 });
 
 describe("<BotThreadsView /> before the bots are listed", () => {
