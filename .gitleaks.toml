@@ -180,4 +180,6 @@ paths = [
   '''^clients/gui-app/src/components/settings/environment/__tests__/environment-mcp-servers\.test\.tsx$''',
   '''^clients/gui-app/src/components/settings/secrets/__tests__/secrets-page-own-environment-authn\.test\.tsx$''',
 ]
-regexes = ['''const (?:OWNED_MCP_|EXTERNAL_MCP_)?SECRET: EnvironmentSecretV12 = \{''']
+regexes = [
+  '''const (?:OWNED_MCP_|EXTERNAL_MCP_)?SECRET: EnvironmentSecretV12 = \{''',
+]
