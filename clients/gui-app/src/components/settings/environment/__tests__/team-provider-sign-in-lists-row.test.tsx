@@ -184,7 +184,8 @@ describe("a team sign-in that closes before its row is listed", () => {
     await waitFor(() => {
       expect(colourWrites()).toHaveLength(1);
     });
-    expect(JSON.stringify(colourWrites()[0]?.body)).toContain(
+    const written = colourWrites()[0]?.body;
+    expect(typeof written === "string" ? written : null).toContain(
       `"color":"${PICKED_COLOR}"`,
     );
     expect(harness.paramsOf("providers.startLogin")).toHaveLength(1);
