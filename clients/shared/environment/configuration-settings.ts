@@ -560,9 +560,10 @@ export async function setConfigurationMcpServerEnabled(
     );
     if (kept.outcome !== "saved") return kept;
     // A PATCH that moves a credential the row still held encrypted marks the
-    // item, moving its revision, and answers with the row alone. The same
-    // value at a later revision is that mark; any other change, or a failed
-    // read, sends the held revision as before.
+    // item, moving its revision, and answers with the row alone. The re-read
+    // row's revision is adopted when its value matches the held one, so a server
+    // switched off and on elsewhere inside this round trip is removed too; any
+    // other change, or a failed read, sends the held revision.
     let revision = held.revision;
     try {
       const marked = (
