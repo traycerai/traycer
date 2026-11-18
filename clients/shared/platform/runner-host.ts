@@ -1428,8 +1428,10 @@ export interface IPushPermissionHost {
  *   authority (a signed-out empty fleet included - that is an answer).
  * - `unavailable`: the read failed or was refused, and nothing was published.
  *   The authority keeps whatever fleet it had, possibly none.
- * - `superseded`: the read finished but was not adopted - the identity moved
- *   during it, or a newer read had already been adopted.
+ * - `superseded`: the read finished but nothing current came of it - the
+ *   identity moved during it, or the source was disposed. A read that lost
+ *   only to a newer read of the same identity is `published`: the authority
+ *   already holds that newer fleet.
  */
 export type FleetRefreshOutcome =
   | { readonly kind: "published" }

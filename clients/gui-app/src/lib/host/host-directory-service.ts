@@ -313,11 +313,14 @@ export class HostDirectoryService implements IHostDirectoryService {
    */
   private lastCommitCredentialGeneration: number | null = null;
   /**
-   * Counts commits on the success path (`hosts` or `signed-out`). A fleet
-   * refresh's outcome applies only while this still names the commit that
-   * requested it; see {@link requestFleet}.
+   * Advances when a fleet refresh is REQUESTED, and when a commit withdraws
+   * the listing (`signed-out`). An outcome applies only while this still
+   * names its own request; see {@link requestFleet}. It deliberately does not
+   * advance on a commit that requests nothing - an unchanged listing landing
+   * while a read is in flight - because that read is still the newest word on
+   * the fleet, and dropping it would leave nothing to report its outcome.
    */
-  private commitSequence = 0;
+  private fleetRequestSequence = 0;
   /**
    * The identity the committed `remoteEntries` belong to - the OWNERSHIP half
    * of the retention rule. The `failed` branch keeps the last-known list on
@@ -1041,7 +1044,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       );
       return this.snapshot();
     }
-    this.recordCommit(era);
+    this.recordCommit(era, outcome.kind === "signed-out");
     // Captured BEFORE the overwrite: this is the only place that holds both
     // sides of a membership transition.
     const previousRemoteIds = new Set(
@@ -1099,9 +1102,9 @@ export class HostDirectoryService implements IHostDirectoryService {
     // other moment.
     //
     if (fleetStep === "hold-conclusion") {
-      await this.requestFleet(era, this.commitSequence, true);
+      await this.requestFleet(era, true);
     } else if (fleetStep === "request") {
-      void this.requestFleet(era, this.commitSequence, false);
+      void this.requestFleet(era, false);
     }
     // The conclusion flag crosses on its own schedule, and the snapshot compare
     // cannot see it. Two empty listings either side of an account switch are
@@ -1137,13 +1140,15 @@ export class HostDirectoryService implements IHostDirectoryService {
 
   /**
    * The bookkeeping every success-path commit makes before touching rows: the
-   * ordering watermark, the owning identity, and the sequence a fleet
-   * refresh's outcome is fenced on.
+   * ordering watermark and the owning identity. A withdrawal also retires any
+   * fleet read in flight - its outcome describes a listing that no longer
+   * stands, including one withdrawn within the same era after the
+   * session-verified path dropped the in-flight slot.
    */
-  private recordCommit(era: AuthEra): void {
+  private recordCommit(era: AuthEra, withdraws: boolean): void {
     this.lastCommitCredentialGeneration = era.credentialGeneration;
     this.lastCommitIdentity = era.identity;
-    this.commitSequence += 1;
+    if (withdraws) this.fleetRequestSequence += 1;
   }
 
   /**
@@ -1190,13 +1195,13 @@ export class HostDirectoryService implements IHostDirectoryService {
    * outcome does - one rule in one place, so no path can ignore an
    * `unavailable` and leave the fleet stale with nothing re-asking.
    *
-   * The outcome applies only while the commit that requested it is still the
-   * newest and the identity is unchanged. That covers a newer credential
-   * generation and a withdrawal in the SAME era alike: the session-verified
-   * path drops the in-flight slot and re-asks within the era, so a same-era
-   * read can commit while this one waits. `superseded` applies nothing: the
-   * read was not adopted, and whichever era is current holds or requests its
-   * own.
+   * The outcome applies only while this is still the newest fleet request,
+   * nothing has withdrawn the listing, and the identity is unchanged (see
+   * {@link fleetRequestSequence}). A newer request - a newer era's own hold,
+   * or a later membership change - owns the answer instead; a later commit
+   * that requests nothing does not, so its read's `unavailable` still marks
+   * the fleet stale. `superseded` applies nothing: nothing current came of
+   * the read, and whichever era is current holds or requests its own.
    *
    * `holdsConclusion`: this request is what discovery waits on (a phone's
    * first listing for the identity), so the outcome concludes it - `published`
@@ -1206,14 +1211,15 @@ export class HostDirectoryService implements IHostDirectoryService {
    */
   private async requestFleet(
     era: AuthEra,
-    commit: number,
     holdsConclusion: boolean,
   ): Promise<void> {
+    this.fleetRequestSequence += 1;
+    const request = this.fleetRequestSequence;
     const fleet = await this.runnerHost.refreshHostFleet();
     if (
       fleet.kind === "superseded" ||
       this.authContextId() !== era.identity ||
-      this.commitSequence !== commit
+      this.fleetRequestSequence !== request
     ) {
       return;
     }

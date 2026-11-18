@@ -429,6 +429,43 @@ describe("HostDirectoryService - announcing a concluded listing against the flee
     };
   }
 
+  it("an unchanged listing while a concluded era's fleet read is in flight does not discard its unavailable", async () => {
+    const host = makeHost(false, null);
+    const fleet = heldFleetRefresh(host);
+    const addedHost: HostDirectoryEntry = {
+      ...listedHost,
+      hostId: "added-host-id",
+    };
+    const { directory } = await rotatingDirectory(host, [
+      { kind: "hosts", entries: [listedHost] },
+      { kind: "hosts", entries: [listedHost, addedHost] },
+      { kind: "hosts", entries: [listedHost, addedHost] },
+      { kind: "hosts", entries: [listedHost, addedHost] },
+    ]);
+    const concluding = directory.refresh();
+    await vi.waitFor(() => {
+      expect(fleet.calls()).toBe(1);
+    });
+    fleet.release(0);
+    await concluding;
+
+    await directory.refresh();
+    expect(fleet.calls()).toBe(2);
+    await directory.refresh();
+    expect(fleet.calls()).toBe(2);
+    fleet.settle(1, { kind: "unavailable" });
+    await vi.waitFor(() => {
+      expect(directory.hasFailedDiscovery()).toBe(true);
+    });
+    await directory.refresh();
+
+    expect(fleet.calls()).toBe(3);
+    fleet.release(2);
+    await vi.waitFor(() => {
+      expect(directory.hasFailedDiscovery()).toBe(false);
+    });
+  });
+
   it("a no-local-host shell holds the announcement until the fleet refresh resolves", async () => {
     const host = makeHost(false, null);
     const fleet = heldFleetRefresh(host);

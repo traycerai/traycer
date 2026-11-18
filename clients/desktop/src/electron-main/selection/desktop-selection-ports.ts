@@ -508,7 +508,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
       // `readAtMs` here is this observation's own time, not a registry read's:
       // signing out is a fact about the account learned right now, and it must
       // supersede any read that observed the fleet before it - in every scope.
-      return adoptionOutcome(
+      return this.adoptionOutcome(
         this.applyFetched(
           generation,
           seq,
@@ -517,6 +517,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
           { personal: [], team: [] },
           readAtMs,
         ),
+        generation,
       );
     }
     // Stamped BEFORE the read, so ordering follows what each read OBSERVED.
@@ -553,7 +554,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
       // rows it could not refresh marks them stale, which the subscription
       // forwards anyway: they are still the freshest personal rows anyone has.
       // It speaks for the personal scope alone (see `RegistryScope`).
-      return adoptionOutcome(
+      return this.adoptionOutcome(
         this.publishAndAdopt(
           identity,
           generation,
@@ -564,6 +565,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
           scopeRows(pushed.response, PUSH_SCOPES),
           readAtMs,
         ),
+        generation,
       );
     }
     let result: HostListFetchResult;
@@ -592,7 +594,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
       this.adoptLocalIdentityRead(generation, identitySeq, localHostId);
       return { kind: "unavailable" };
     }
-    return adoptionOutcome(
+    return this.adoptionOutcome(
       this.publishAndAdopt(
         identity,
         generation,
@@ -603,6 +605,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
         scopeRows(result.response, REGISTRY_SCOPES),
         readAtMs,
       ),
+      generation,
     );
   }
 
@@ -876,6 +879,27 @@ export class DesktopHostFleetSource implements HostFleetSource {
     }
     this.publishAt(generation);
     return true;
+  }
+
+  /**
+   * What a read this port adopted or declined did to the authority's fleet.
+   *
+   * A declined read for the identity that is STILL current lost only to a
+   * newer read of the same identity - the watermarks advance on adoption
+   * alone - so the authority already holds a fleet at least as fresh as this
+   * one: `published`, which is what a caller waiting on that fleet needs to
+   * hear. Declined for a retired identity, or by a disposed source, nothing
+   * current was published: `superseded`.
+   */
+  private adoptionOutcome(
+    adopted: boolean,
+    generation: number,
+  ): FleetRefreshOutcome {
+    if (adopted) return { kind: "published" };
+    return !this.disposed &&
+      generation === this.options.identity.current().generation
+      ? { kind: "published" }
+      : { kind: "superseded" };
   }
 
   /** Publishes under the generation that is current right now. */
@@ -1184,9 +1208,4 @@ export function createDesktopLocalHostEnsurePort(
       };
     },
   };
-}
-
-/** A read this port adopted reached the authority; one it declined did not. */
-function adoptionOutcome(adopted: boolean): FleetRefreshOutcome {
-  return adopted ? { kind: "published" } : { kind: "superseded" };
 }

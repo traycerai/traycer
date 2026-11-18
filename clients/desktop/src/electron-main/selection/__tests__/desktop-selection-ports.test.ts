@@ -1547,7 +1547,7 @@ describe("DesktopHostFleetSource.refresh outcome", () => {
     fleet.dispose();
   });
 
-  it("reports superseded for a read a newer completion has already replaced", async () => {
+  it("reports published for a read a newer same-identity completion has already replaced", async () => {
     const registry = recordingRegistryFetch();
     const { fleet } = await signedInFleet(registry.fetch, { verified: true });
 
@@ -1565,7 +1565,7 @@ describe("DesktopHostFleetSource.refresh outcome", () => {
       response: { hosts: [buildHostListItem("local-host")] },
     });
 
-    await expect(older).resolves.toEqual({ kind: "superseded" });
+    await expect(older).resolves.toEqual({ kind: "published" });
     fleet.dispose();
   });
 
