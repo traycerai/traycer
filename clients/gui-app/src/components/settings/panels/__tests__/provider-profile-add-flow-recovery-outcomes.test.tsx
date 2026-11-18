@@ -22,12 +22,21 @@ import {
   expectAddDidNotFinish,
   mintedSignedInRow,
   ADD_MISFITS,
+  nothingChanged,
 } from "./provider-profile-add-flow-sign-in-outcomes-test-support";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/providers/provider-ambient-auth", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/lib/providers/provider-ambient-auth")
+    >();
+  return { ...actual, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS: 20 };
+});
 
 describe("Add a profile around one sign-in", () => {
-  it("waits, with Done, when the signed-in id is still absent after one re-read", async () => {
+  it("holds on its checking line while the signed-in id is absent, then shows the listed profile", async () => {
     const auth = await createAddProfileNameAuthFixture("forbidden");
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
@@ -38,16 +47,22 @@ describe("Add a profile around one sign-in", () => {
       authService: auth.service,
     });
     await pressAccount();
-    expect(await screen.findByText(WAITING)).toBeTruthy();
-    expect(harness.listsAfterAwait()).toBe(1);
-    expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Save profile" })).toBeNull();
-    expect(harness.created).not.toHaveBeenCalled();
+    await waitFor(() => expect(harness.listsAfterAwait()).toBeGreaterThan(1));
+    expect(screen.queryByText(WAITING)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
     expect(screen.queryByText(SIGNED_IN)).toBeNull();
-    expect(methodCount(harness.messenger.calls, "providers.setEnabled")).toBe(
-      0,
+    expect(harness.created).not.toHaveBeenCalled();
+    expect(methodCount(harness.messenger.calls, "providers.awaitLogin")).toBe(
+      1,
     );
-    expect(auth.requests).toEqual([]);
+
+    harness.listProfiles([workProfile()]);
+
+    expect(await screen.findByText(SIGNED_IN)).toBeTruthy();
+    expect(screen.queryByText(WAITING)).toBeNull();
+    expect(methodCount(harness.messenger.calls, "providers.awaitLogin")).toBe(
+      1,
+    );
   });
 
   it.each([true, "10.11"] as const)(
@@ -147,7 +162,7 @@ describe("Add a profile around one sign-in", () => {
     expect(methodCount(harness.calls, "providers.setEnabled")).toBe(0);
   });
 
-  it("waits when an already-signed-in id is absent after the re-read", async () => {
+  it("holds when an already-signed-in id is absent, then shows the listed profile", async () => {
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
@@ -156,24 +171,50 @@ describe("Add a profile around one sign-in", () => {
       outcome: { kind: "already-signed-in", profileId: PROFILE_ID },
     });
     await pressAccount();
-    expect(await screen.findByText(WAITING)).toBeTruthy();
+    await waitFor(() => expect(harness.listsAfterAwait()).toBeGreaterThan(1));
+    expect(screen.queryByText(WAITING)).toBeNull();
     expect(screen.queryByText(ALREADY_SIGNED_IN)).toBeNull();
-    expect(screen.queryByRole("button", { name: "Use" })).toBeNull();
+
+    harness.listProfiles([workProfile()]);
+
+    expect(await screen.findByText(ALREADY_SIGNED_IN)).toBeTruthy();
+    expect(screen.queryByText(WAITING)).toBeNull();
     expect(harness.created).not.toHaveBeenCalled();
   });
 
-  it.each(["Done", "Close", "Escape"] as const)(
-    "closing a waiting-for-profile footer by %s sends no cancelLogin",
+  it("asks the host again, ending nowhere, when it has not named the profile", async () => {
+    const harness = renderAddFlow({
+      ...ADD_FLOW_DEFAULTS,
+      offers: true,
+      profilesBefore: [],
+      profilesAfter: [workProfile()],
+      outcome: null,
+      awaitAnswers: [
+        nothingChanged({ kind: "waiting-for-profile" }),
+        nothingChanged({ kind: "signed-in", profileId: PROFILE_ID }),
+      ],
+    });
+    await pressAccount();
+
+    expect(await screen.findByText(SIGNED_IN)).toBeTruthy();
+    expect(screen.queryByText(WAITING)).toBeNull();
+    expect(methodCount(harness.messenger.calls, "providers.awaitLogin")).toBe(
+      2,
+    );
+  });
+
+  it.each(["Close", "Escape"] as const)(
+    "closing a held sign-in by %s sends no cancelLogin",
     async (how) => {
       const harness = renderAddFlow({
         ...ADD_FLOW_DEFAULTS,
         offers: true,
         profilesBefore: [],
         profilesAfter: [],
-        outcome: { kind: "waiting-for-profile" },
+        outcome: { kind: "signed-in", profileId: PROFILE_ID },
       });
       await pressAccount();
-      expect(await screen.findByText(WAITING)).toBeTruthy();
+      await waitFor(() => expect(harness.listsAfterAwait()).toBeGreaterThan(1));
       expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
       if (how === "Escape") {
         fireEvent.keyDown(document, { key: "Escape" });
@@ -292,7 +333,7 @@ describe("Add a profile around one sign-in", () => {
     expect(harness.listsAfterAwait()).toBe(3);
   });
 
-  it("waits after Retry when the re-read failed and then still lacks the profile", async () => {
+  it("holds after Retry when the re-read failed and then still lacks the profile", async () => {
     const harness = renderAddFlow({
       ...ADD_FLOW_DEFAULTS,
       offers: true,
@@ -306,13 +347,17 @@ describe("Add a profile around one sign-in", () => {
     expect(harness.listsAfterAwait()).toBe(1);
     expect(methodCount(harness.calls, "providers.startLogin")).toBe(1);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByText(WAITING)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+    await waitFor(() => expect(harness.listsAfterAwait()).toBeGreaterThan(2));
+    expect(screen.queryByText(WAITING)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
     expect(screen.queryByText(UNREADABLE)).toBeNull();
     expect(screen.queryByText(SIGNED_IN)).toBeNull();
     expect(methodCount(harness.calls, "providers.startLogin")).toBe(1);
-    expect(harness.listsAfterAwait()).toBe(2);
     expect(harness.created).not.toHaveBeenCalled();
+
+    harness.listProfiles([workProfile()]);
+
+    expect(await screen.findByText(SIGNED_IN)).toBeTruthy();
   });
 
   it("keeps the unreadable footer when Retry cannot read the list", async () => {

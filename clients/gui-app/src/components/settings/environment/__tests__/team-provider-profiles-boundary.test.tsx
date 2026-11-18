@@ -7,10 +7,9 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
 import { TeamProfileApiKeyForm } from "@/components/settings/environment/team-profile-api-key-form";
-import { WAITING_FOR_PROFILE_TEXT } from "@/components/providers/profile-sync-copy";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   admitCurrentUserToTeamWindow,
@@ -34,6 +33,17 @@ import {
   railButton,
   teamProviderProfile,
 } from "./team-providers-test-support";
+
+vi.mock("@/lib/providers/provider-ambient-auth", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/lib/providers/provider-ambient-auth")
+    >();
+  return { ...actual, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS: 20 };
+});
+
+const RETIRED_WAITING_SENTENCE =
+  "Waiting for Traycer. Your sign-in is complete.";
 
 describe("Team Providers boundary and sign-in", () => {
   it.each([
@@ -423,7 +433,7 @@ describe("Team Providers boundary and sign-in", () => {
             ...teamLoginStartedAnswer(),
           }),
           "providers.awaitLogin": () =>
-            teamAwaitLoginOutcomeAnswer({ kind: "waiting-for-profile" }),
+            teamAwaitLoginOutcomeAnswer({ kind: "account-mismatch" }),
         },
         "providers",
       );
@@ -632,9 +642,8 @@ describe("Team Providers boundary and sign-in", () => {
     },
   );
 
-  it.each(["Done", "Close"] as const)(
-    "closes the completed sign-in waiting footer by %s, then reads one ordinary team row",
-    async (closeWith) => {
+  describe("a completed sign-in whose team row is not listed yet", () => {
+    async function openHeldSignIn() {
       teamProfileRecordHttpBoundary.list = {
         status: 200,
         body: teamProfileRecordsBody([]),
@@ -655,7 +664,10 @@ describe("Team Providers boundary and sign-in", () => {
             awaits += 1;
             return awaits === 1
               ? teamAwaitLoginSignInRequestAnswer()
-              : teamAwaitLoginOutcomeAnswer({ kind: "waiting-for-profile" });
+              : teamAwaitLoginOutcomeAnswer({
+                  kind: "signed-in",
+                  profileId: "team-completed-profile",
+                });
           },
         },
         "providers",
@@ -680,27 +692,13 @@ describe("Team Providers boundary and sign-in", () => {
       await userEvent.click(
         within(addDialog).getByRole("button", { name: "Sign in" }),
       );
-
-      expect(await screen.findByText(WAITING_FOR_PROFILE_TEXT)).toBeTruthy();
       await waitFor(() => {
         expect(harness.paramsOf("providers.awaitLogin")).toHaveLength(2);
       });
-      expect(teamProfileRecordReadCount()).toBe(2);
-      const awaitRequests = harness.paramsOf("providers.awaitLogin");
-      expect(awaitRequests[0]).not.toHaveProperty("recordedOperationId");
-      expect(awaitRequests[1]).toHaveProperty(
-        "recordedOperationId",
-        "11111111-1111-4111-8111-111111111111",
-      );
-      const footer = screen.getByRole("dialog", { name: "Add a profile" });
-      await userEvent.click(
-        within(footer).getByRole("button", { name: closeWith }),
-      );
-      await waitFor(() => {
-        expect(screen.queryByRole("dialog")).toBeNull();
-      });
-      expect(harness.paramsOf("providers.cancelLogin")).toEqual([]);
+      return harness;
+    }
 
+    function listTeamRecord(): void {
       teamProfileRecordHttpBoundary.list = {
         status: 200,
         body: teamProfileRecordsBody([
@@ -713,16 +711,49 @@ describe("Team Providers boundary and sign-in", () => {
           }),
         ]),
       };
-      fireEvent.focus(window);
+    }
+
+    it("holds on its checking line, then closes on the listed profile", async () => {
+      const harness = await openHeldSignIn();
+
+      expect(screen.queryByText(RETIRED_WAITING_SENTENCE)).toBeNull();
+      expect(
+        screen.getByRole("dialog", { name: "Add a profile" }),
+      ).toBeTruthy();
+      const awaitRequests = harness.paramsOf("providers.awaitLogin");
+      expect(awaitRequests[0]).not.toHaveProperty("recordedOperationId");
+      expect(awaitRequests[1]).toHaveProperty(
+        "recordedOperationId",
+        "11111111-1111-4111-8111-111111111111",
+      );
+
+      listTeamRecord();
       expect(
         await screen.findByRole("button", {
           name: "Claude Code profile: Team account ready",
         }),
       ).toBeTruthy();
-      expect(teamProfileRecordReadCount()).toBe(3);
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
       expect(harness.paramsOf("providers.startLogin")).toHaveLength(1);
       expect(harness.paramsOf("providers.awaitLogin")).toHaveLength(2);
       expect(harness.paramsOf("providers.cancelLogin")).toEqual([]);
-    },
-  );
+    });
+
+    it("closing it while it holds sends no cancelLogin", async () => {
+      const harness = await openHeldSignIn();
+
+      await userEvent.click(
+        within(screen.getByRole("dialog", { name: "Add a profile" })).getByRole(
+          "button",
+          { name: "Close" },
+        ),
+      );
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+      expect(harness.paramsOf("providers.cancelLogin")).toEqual([]);
+    });
+  });
 });

@@ -26,6 +26,13 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
     useAuthService: currentAuthService,
   };
 });
+vi.mock("@/lib/providers/provider-ambient-auth", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/lib/providers/provider-ambient-auth")
+    >();
+  return { ...actual, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS: 20 };
+});
 vi.mock("@/lib/links/open-link", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/links/open-link")>();
   return { ...actual, useOpenLink: () => () => Promise.resolve() };
@@ -426,11 +433,6 @@ const REAUTH_MISFITS = [
 
 const SETTLED_CLOSE = [
   {
-    name: "waiting-for-profile",
-    outcome: { kind: "waiting-for-profile" },
-    sentence: WAITING_FOR_PROFILE,
-  },
-  {
     name: "account-mismatch",
     outcome: { kind: "account-mismatch" },
     sentence: DIFFERENT_ACCOUNT,
@@ -526,15 +528,23 @@ describe("ProfileEditDialog startInReauth sign-in outcomes", () => {
     expect(methodCount(harness.calls, "providers.awaitLogin")).toBe(1);
   });
 
-  it("shows the waiting-for-profile sentence and Done", async () => {
-    renderReauth({
+  it("asks the host again, ending nowhere, when it has not named the profile", async () => {
+    const harness = renderReauth({
       ...REAUTH_DEFAULTS,
       offers: true,
-      outcome: { kind: "waiting-for-profile" },
+      outcome: null,
       holdAwait: false,
+      awaitAnswers: [
+        nothingChanged({ kind: "waiting-for-profile" }),
+        nothingChanged({ kind: "signed-in", profileId: PROFILE_ID }),
+      ],
     });
-    expect(await screen.findByText(WAITING_FOR_PROFILE)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+
+    await waitFor(() => {
+      expect(harness.onOpenChange).toHaveBeenCalledWith(false);
+    });
+    expect(screen.queryByText(WAITING_FOR_PROFILE)).toBeNull();
+    expect(methodCount(harness.calls, "providers.awaitLogin")).toBe(2);
   });
 
   it.each(REAUTH_MISFITS)(
