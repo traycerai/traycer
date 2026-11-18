@@ -13,6 +13,7 @@ import { TeamProfileApiKeyForm } from "@/components/settings/environment/team-pr
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   admitCurrentUserToTeamWindow,
+  configurationItem,
   mountTeamPageThroughBoundary,
   recordAppLoggerCalls,
   TEAM_PROFILE_KEY_CANARY,
@@ -699,6 +700,26 @@ describe("Team Providers boundary and sign-in", () => {
     }
 
     function listTeamRecord(): void {
+      teamProfileRecordHttpBoundary.items = {
+        status: 200,
+        body: {
+          items: [
+            configurationItem({
+              kind: "managed_profile",
+              key: "claude:team-completed-profile",
+              value: {
+                name: "Team account ready",
+                color: null,
+                harnessId: "claude",
+                accountIdentity: null,
+                needsLink: false,
+                enabled: true,
+              },
+              revision: 1,
+            }),
+          ],
+        },
+      };
       teamProfileRecordHttpBoundary.list = {
         status: 200,
         body: teamProfileRecordsBody([

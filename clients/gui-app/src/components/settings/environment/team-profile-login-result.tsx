@@ -328,9 +328,11 @@ function TeamNamedLoginResult(props: {
     );
   if (profile === null)
     return (
-      <DialogFooter>
-        <MutedAgentSpinner />
-      </DialogFooter>
+      <ResultFooter
+        message={<MutedAgentSpinner />}
+        onDone={props.onClose}
+        action={null}
+      />
     );
   if (saveFailed)
     return (
