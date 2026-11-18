@@ -33,6 +33,7 @@ import { providerLoginRetryLabel } from "@/lib/providers/provider-login-retry-la
 import {
   AddProfileIdentityStep,
   AddProfileWaitingStep,
+  DuplicateAccountNotice,
 } from "./add-provider-profile-dialog";
 import {
   useProviderProfileOutcomeLoginFlow,
@@ -284,6 +285,17 @@ function ProviderProfileReauthOutcome({
   readonly onDone: () => void;
 }): ReactNode {
   if (flowState.kind === "waiting-for-profile") return <MutedAgentSpinner />;
+  if (flowState.kind === "already-signed-in")
+    return (
+      <div className="flex flex-col gap-3">
+        <DuplicateAccountNotice profile={flowState.profile} />
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button type="button" size="sm" variant="outline" onClick={onDone}>
+            Done
+          </Button>
+        </div>
+      </div>
+    );
   if (flowState.kind !== "not-changed") return null;
   const mismatch = flowState.reason === "account-mismatch";
   return (
@@ -327,6 +339,7 @@ function useSettledReport(
     signInOutcomes === null ? null : signInOutcomes.onSettledChange;
   const settled =
     flowState.kind === "waiting-for-profile" ||
+    flowState.kind === "already-signed-in" ||
     flowState.kind === "not-changed";
   useEffect(() => {
     if (onSettledChange === null) return;

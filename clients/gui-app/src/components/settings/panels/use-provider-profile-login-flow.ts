@@ -232,13 +232,11 @@ function resolveProfileOutcome(
         listedProfiles,
       );
     case "already-signed-in":
-      return mode === "create"
-        ? resolveListedOutcome(
-            { kind: "already-signed-in", profileId: outcome.profileId },
-            echoedProfiles,
-            listedProfiles,
-          )
-        : null;
+      return resolveListedOutcome(
+        { kind: "already-signed-in", profileId: outcome.profileId },
+        echoedProfiles,
+        listedProfiles,
+      );
     case "account-mismatch":
     case "account-unproven":
       return mode === "reauth"
