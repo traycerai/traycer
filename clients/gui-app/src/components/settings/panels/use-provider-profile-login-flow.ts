@@ -1343,19 +1343,8 @@ export function useProviderDestinationLoginFlow(
             }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
             return true;
           };
-          const handleAwaitSuccess = (result: AwaitLoginAnswer): void => {
-            if (attemptAbandoned()) return;
+          const settleAwaitAnswer = (result: AwaitLoginAnswer): void => {
             const profileOutcome = result.profileOutcome ?? null;
-            // The sign-in is complete but the host has not named the profile:
-            // no dialog ends here, the await is asked again.
-            if (profileOutcome?.kind === "waiting-for-profile") {
-              repollTimerRef.current = window.setTimeout(() => {
-                repollTimerRef.current = null;
-                if (attemptAbandoned()) return;
-                awaitOnce();
-              }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
-              return;
-            }
             if (target !== null && profileOutcome !== null) {
               setState({
                 ...result,
@@ -1442,6 +1431,20 @@ export function useProviderDestinationLoginFlow(
             }
             awaitOutcomeRef.current = "notAuthenticated";
             settleAttempt(thisAttemptId);
+          };
+          const handleAwaitSuccess = (result: AwaitLoginAnswer): void => {
+            if (attemptAbandoned()) return;
+            // The sign-in is complete but the host has not named the profile:
+            // no dialog ends here, the await is asked again.
+            if (result.profileOutcome?.kind === "waiting-for-profile") {
+              repollTimerRef.current = window.setTimeout(() => {
+                repollTimerRef.current = null;
+                if (attemptAbandoned()) return;
+                awaitOnce();
+              }, AMBIENT_AUTH_PENDING_REPOLL_DELAY_MS);
+              return;
+            }
+            settleAwaitAnswer(result);
           };
           const handleAwaitError = (error: unknown): void => {
             if (attemptAbandoned()) return;
