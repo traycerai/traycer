@@ -130,7 +130,8 @@ async function fetchAuthn(
         ...init,
         headers: jsonHeaders(bearerToken, init.body),
         signal: abort.signal,
-        // Carries a credential: never follow a redirect.
+        // The bearer rides along: a redirect is answered here, as a failure,
+        // and never followed with it.
         redirect: "manual",
       }),
       abort.signal,

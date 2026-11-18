@@ -642,7 +642,12 @@ export interface IRunnerHost {
     bearerToken: string,
     request: SlackAppDmsRequest,
   ): Promise<SlackAppWriteResult>;
-  /** No host in the path. Never throws. */
+  /**
+   * A bot's settings (traycer-server `/api/bots/*`) with the person's bearer,
+   * with no host in the path. Same placement as the Slack app above, sent
+   * once and following no redirect. See `host-client/bot-setup.ts`. Never
+   * throw.
+   */
   updateBotRunSettings(
     bearerToken: string,
     request: BotUpdateRunSettingsRequest,
