@@ -229,12 +229,12 @@ const stagedLandings = new Map<string, BotTabLanding>();
  * for at one count has lost its landing at any later one, whether or not the
  * surface is on the same host again.
  *
- * Seven writes set the surface's host, and two of them withdraw: `rebind` to
+ * Eight writes set the surface's host, and two of them withdraw: `rebind` to
  * another host and `closeSurface`. Another account signing in withdraws too
- * and writes no host. The other five move the host and withdraw nothing:
- * `openSurface`, the store's own hydration, `adoptLegacyActiveBotTab`,
- * `bindTracySurfaceToWindow` reading the window's record back,
- * `bindTracySurfaceToWindow` writing the closed surface, and
+ * and writes no host. The other six move the host and withdraw nothing:
+ * `openSurface`, the store's own hydration (its migration included),
+ * `adoptLegacyActiveBotTab`, `bindTracySurfaceToWindow` reading the window's
+ * record back, `bindTracySurfaceToWindow` writing the closed surface, and
  * `settleTracySurfaceAdoption`. Whoever holds an opening across those
  * compares `tracySurfaceHostId` as well as this count.
  */
