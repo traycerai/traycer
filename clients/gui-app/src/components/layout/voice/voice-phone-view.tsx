@@ -4,6 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { CallVoiceNotice } from "@/components/layout/voice/call-voice-notice";
 import { ResumeAfterDictation } from "@/components/layout/voice/composer-call";
 import { VoiceOutcomeLine } from "@/components/layout/voice/voice-ended-line";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -151,6 +152,7 @@ export function VoicePhoneView(): ReactNode {
                 </Button>
               </header>
               <div className="flex min-h-0 flex-1 flex-col justify-end overflow-y-auto px-4">
+                <CallVoiceNotice />
                 {state.captions ? (
                   <ul
                     data-testid="voice-phone-captions-lines"

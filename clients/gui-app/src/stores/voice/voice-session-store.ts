@@ -51,7 +51,16 @@ export type VoiceEndReason =
   /** Another account took over the window; the call was the outgoing one's. */
   | "account"
   /** A send was queued: no host can reach the bot now. What was said is kept. */
-  | "unreachable";
+  | "unreachable"
+  /** A renewal found the call's voice no longer offered; it never changes voice mid-call. */
+  | "voice-unavailable"
+  /** The server's answer did not confirm the voice the call asked for. */
+  | "voice-unconfirmed"
+  /**
+   * The call's account is no longer the one signed in, whatever the cause:
+   * a new sign-in, a sign-out (finished or not), or the window going away.
+   */
+  | "session-changed";
 
 /** Why a call never began; nothing ended, so this is not a `VoiceEndReason`. */
 export type VoiceRefusal =
@@ -66,7 +75,29 @@ export type VoiceRefusal =
   /** `bot.open` said the bot is paused; `pausedCopy` is the tab's own line. */
   | "paused"
   /** The bot's host is too old to take a call's words as spoken. */
-  | "update";
+  | "update"
+  /** The server's answer did not confirm the voice the call asked for. */
+  | "voice-unconfirmed"
+  /** The call's account is no longer the one signed in. */
+  | "session-changed"
+  /**
+   * The deployment answered that it offers no calls now; Call hides for this
+   * window.
+   */
+  | "calls-unavailable";
+
+/**
+ * What the call says about its voice while it runs: the saved voice is not
+ * offered, so the default speaks (`fallback`); or the connection offers no
+ * choice of voice, so nothing about it is promised (`legacy`).
+ */
+export type CallVoiceNotice =
+  | {
+      readonly kind: "fallback";
+      readonly saved: string;
+      readonly voice: string;
+    }
+  | { readonly kind: "legacy" };
 
 export type VoiceAvailability =
   /** The server has not said yet: Call waits. */
@@ -174,8 +205,18 @@ export interface VoiceSessionState {
    */
   readonly phoneViewOpen: boolean;
   readonly driver: VoiceSessionDriver | null;
+  /** What the call in progress says about its voice; `null` with nothing to say. */
+  readonly voiceNotice: CallVoiceNotice | null;
+  /**
+   * The voice the server confirmed for the call in progress, which every
+   * renewal keeps; `null` before the first confirmation and for the whole of
+   * a call on a connection that offers no choice of voice.
+   */
+  readonly attestedVoice: string | null;
 
   readonly setAvailability: (availability: VoiceAvailability) => void;
+  readonly setVoiceNotice: (notice: CallVoiceNotice | null) => void;
+  readonly setAttestedVoice: (voice: string) => void;
   /** A new call begins with `focus`: a new token and a new engine generation. */
   readonly sessionConnecting: (focus: CallFocus, title: string) => void;
   /** The engine is being replaced under the same call: a new generation only. */
@@ -256,6 +297,8 @@ function idleSession(state: VoiceSessionState): Partial<VoiceSessionState> {
     talkHeld: false,
     dictationPauseLatched: false,
     pausedForDictation: state.dictationHolds.size > 0,
+    voiceNotice: null,
+    attestedVoice: null,
   };
 }
 
@@ -286,8 +329,12 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   talkHeld: false,
   phoneViewOpen: false,
   driver: null,
+  voiceNotice: null,
+  attestedVoice: null,
 
   setAvailability: (availability) => set({ availability }),
+  setVoiceNotice: (voiceNotice) => set({ voiceNotice }),
+  setAttestedVoice: (attestedVoice) => set({ attestedVoice }),
   sessionConnecting: (focus, title) =>
     set({
       phase: "connecting",
@@ -307,6 +354,8 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
       // Started while dictation records: paused until the person resumes.
       dictationPauseLatched: get().dictationHolds.size > 0,
       phoneViewOpen: true,
+      voiceNotice: null,
+      attestedVoice: null,
     }),
   engineReplacing: () =>
     set({

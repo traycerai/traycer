@@ -45,6 +45,7 @@ function resetSettingsStore(): void {
     diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
     notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
     notificationNotify: DEFAULT_NOTIFICATION_NOTIFY,
+    callVoice: null,
     startPageWallpaper: null,
     showGreeting: true,
     showRecentHistory: true,
@@ -1377,5 +1378,27 @@ describe("soundtrack settings", () => {
 
     useSettingsStore.getState().setSoundtrackPlaybackControls(false);
     expect(useSettingsStore.getState().soundtrackPaused).toBe(false);
+  });
+});
+
+describe("call voice", () => {
+  beforeEach(resetSettingsStore);
+  afterEach(resetSettingsStore);
+
+  it("keeps a saved call voice that is a valid name when rehydrating", async () => {
+    await rehydrateFrom({ callVoice: "cedar" });
+    expect(useSettingsStore.getState().callVoice).toBe("cedar");
+  });
+
+  it.each([
+    ["a non-string", 7],
+    ["upper case", "Cedar"],
+    ["whitespace", "ce dar"],
+    ["longer than 64 characters", "a".repeat(65)],
+    ["empty", ""],
+  ])("drops a saved call voice that is %s", async (_label, saved) => {
+    useSettingsStore.setState({ callVoice: "cedar" });
+    await rehydrateFrom({ callVoice: saved });
+    expect(useSettingsStore.getState().callVoice).toBeNull();
   });
 });
