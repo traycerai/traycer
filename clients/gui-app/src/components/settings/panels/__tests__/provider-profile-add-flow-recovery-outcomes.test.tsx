@@ -2,7 +2,6 @@ import {
   PROFILE_ID,
   MINTED_PROFILE_ID,
   DID_NOT_FINISH,
-  WAITING,
   UNREADABLE,
   SIGNED_IN,
   ALREADY_SIGNED_IN,
@@ -26,6 +25,7 @@ import {
 } from "./provider-profile-add-flow-sign-in-outcomes-test-support";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { AMBIENT_AUTH_PENDING_REPOLL_CAP } from "@/lib/providers/provider-ambient-auth";
 
 vi.mock("@/lib/providers/provider-ambient-auth", async (importOriginal) => {
   const actual =
@@ -54,7 +54,6 @@ describe("Add a profile around one sign-in", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).toBeNull();
     });
-    expect(screen.queryByText(WAITING)).toBeNull();
     expect(harness.listsAfterAwait()).toBe(1);
     expect(methodCount(harness.messenger.calls, "providers.awaitLogin")).toBe(
       1,
@@ -172,7 +171,6 @@ describe("Add a profile around one sign-in", () => {
     });
     await pressAccount();
     expect(await screen.findByText(DID_NOT_FINISH)).toBeTruthy();
-    expect(screen.queryByText(WAITING)).toBeNull();
     expect(harness.listsAfterAwait()).toBe(1);
     expect(harness.created).not.toHaveBeenCalled();
   });
@@ -192,10 +190,31 @@ describe("Add a profile around one sign-in", () => {
     await pressAccount();
 
     expect(await screen.findByText(SIGNED_IN)).toBeTruthy();
-    expect(screen.queryByText(WAITING)).toBeNull();
     expect(methodCount(harness.messenger.calls, "providers.awaitLogin")).toBe(
       2,
     );
+  });
+
+  it("settles as a completed sign-in once the host has answered with no profile past the re-ask cap", async () => {
+    const harness = renderAddFlow({
+      ...ADD_FLOW_DEFAULTS,
+      offers: true,
+      profilesBefore: [],
+      profilesAfter: [],
+      outcome: { kind: "waiting-for-profile" },
+    });
+    await pressAccount();
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(methodCount(harness.messenger.calls, "providers.awaitLogin")).toBe(
+      AMBIENT_AUTH_PENDING_REPOLL_CAP + 1,
+    );
+    expect(methodCount(harness.messenger.calls, "providers.cancelLogin")).toBe(
+      0,
+    );
+    expect(harness.created).not.toHaveBeenCalled();
   });
 
   it.each(ADD_MISFITS)(
@@ -290,7 +309,6 @@ describe("Add a profile around one sign-in", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
     expect(screen.queryByText(DID_NOT_FINISH)).toBeNull();
-    expect(screen.queryByText(WAITING)).toBeNull();
     expect(screen.queryByText(SIGNED_IN)).toBeNull();
     expect(harness.listsAfterAwait()).toBe(1);
     expect(methodCount(harness.calls, "providers.startLogin")).toBe(1);
@@ -361,7 +379,6 @@ describe("Add a profile around one sign-in", () => {
     expect(screen.getByText(UNREADABLE)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.queryByText(DID_NOT_FINISH)).toBeNull();
-    expect(screen.queryByText(WAITING)).toBeNull();
     expect(screen.queryByText(SIGNED_IN)).toBeNull();
     expect(methodCount(harness.calls, "providers.startLogin")).toBe(1);
     expect(harness.created).not.toHaveBeenCalled();
@@ -382,7 +399,6 @@ describe("Add a profile around one sign-in", () => {
       expect(await screen.findByText(UNREADABLE)).toBeTruthy();
       expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
       expect(screen.queryByText(DID_NOT_FINISH)).toBeNull();
-      expect(screen.queryByText(WAITING)).toBeNull();
       expect(screen.queryByText(SIGNED_IN)).toBeNull();
       if (how === "Escape") {
         fireEvent.keyDown(document, { key: "Escape" });

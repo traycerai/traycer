@@ -2,7 +2,9 @@ import "./team-provider-profiles-test-support";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PROVIDER_PROFILE_ACCENT_COLORS } from "@traycer/protocol/host/provider-schemas";
 import { TeamProviders } from "@/components/settings/environment/team-providers";
+import { AMBIENT_AUTH_PENDING_REPOLL_CAP } from "@/lib/providers/provider-ambient-auth";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   admitCurrentUserToTeamWindow,
@@ -13,7 +15,11 @@ import {
   teamLoginStartedAnswer,
   teamProfileRecord,
   teamProfileRecordHttpBoundary,
+  teamProfileRecordReadCount,
   teamProfileRecordsBody,
+  type TeamAwaitLoginWireAnswer,
+  type TeamBoundaryPageHarness,
+  type TeamProfileRecordWireRow,
 } from "./team-configuration-test-support";
 import { negotiateMethods, reachableHost } from "./mcp-skills-test-support";
 import {
@@ -22,8 +28,16 @@ import {
 } from "./team-providers-test-support";
 
 const POLL_MS = 5_000;
-const RETIRED_WAITING_SENTENCE =
-  "Waiting for Traycer. Your sign-in is complete.";
+const REASK_MS = 2_000;
+const PICKED_COLOR = PROVIDER_PROFILE_ACCENT_COLORS[2];
+
+const EXISTING = teamProfileRecord({
+  profileId: "team-login-profile",
+  harnessId: "claude",
+  name: "Team login profile",
+  readerLabel: "live",
+  kind: "oauth_code",
+});
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -43,62 +57,86 @@ function colourWrites() {
   );
 }
 
-describe("a team sign-in that closes before its row is listed", () => {
-  it("lists the row on the configuration revision's own poll, with no focus, and applies the picked colour", async () => {
-    teamProfileRecordHttpBoundary.list = {
-      status: 200,
-      body: teamProfileRecordsBody([]),
-    };
-    let revision = "10";
-    let awaits = 0;
-    const harness = mountTeamPageThroughBoundary(
-      "admin",
-      {
-        ...handlers(() => []),
-        "environment.host.list": () => ({ hosts: [reachableHost] }),
-        "environment.configuration.revision": () => ({ revision }),
-        "providers.list": () => ({
-          providers: [claudeLoginProviderRow()],
-          native: null,
-          offersSignIns: true,
-        }),
-        "providers.startLogin": () => teamLoginStartedAnswer(),
-        "providers.awaitLogin": () => {
-          awaits += 1;
-          return awaits === 1
-            ? teamAwaitLoginSignInRequestAnswer()
-            : teamAwaitLoginOutcomeAnswer({
-                kind: "signed-in",
-                profileId: "team-completed-profile",
-              });
-        },
+/** The team Providers page, with the sign-in's second answer chosen by the test. */
+async function mountTeamProviders(options: {
+  readonly records: readonly TeamProfileRecordWireRow[];
+  readonly revision: () => string;
+  readonly answerAfterRequest: () => TeamAwaitLoginWireAnswer;
+}): Promise<TeamBoundaryPageHarness> {
+  teamProfileRecordHttpBoundary.list = {
+    status: 200,
+    body: teamProfileRecordsBody([...options.records]),
+  };
+  let awaits = 0;
+  const harness = mountTeamPageThroughBoundary(
+    "admin",
+    {
+      ...handlers(() => []),
+      "environment.host.list": () => ({ hosts: [reachableHost] }),
+      "environment.configuration.revision": () => ({
+        revision: options.revision(),
+      }),
+      "providers.list": () => ({
+        providers: [claudeLoginProviderRow()],
+        native: null,
+        offersSignIns: true,
+      }),
+      "providers.startLogin": () => teamLoginStartedAnswer(),
+      "providers.awaitLogin": () => {
+        awaits += 1;
+        return awaits === 1
+          ? teamAwaitLoginSignInRequestAnswer()
+          : options.answerAfterRequest();
       },
-      "providers",
+    },
+    "providers",
+  );
+  negotiateMethods({
+    "providers.startLogin": { major: 1, minor: 5 },
+    "providers.awaitLogin": { major: 2, minor: 5 },
+  });
+  await waitFor(() => {
+    expect(useAuthStore.getState().contextMetadata?.userId).toBe(
+      "team-test-user",
     );
-    negotiateMethods({
-      "providers.startLogin": { major: 1, minor: 5 },
-      "providers.awaitLogin": { major: 2, minor: 5 },
+  });
+  admitCurrentUserToTeamWindow();
+  render(<TeamProviders />, { wrapper: harness.Wrapper });
+  return harness;
+}
+
+async function advance(ms: number): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}
+
+describe("a team sign-in that closes before its row is listed", () => {
+  it("lists the row on the configuration revision's own poll, with no focus, and writes the picked colour", async () => {
+    let revision = "10";
+    const harness = await mountTeamProviders({
+      records: [],
+      revision: () => revision,
+      answerAfterRequest: () =>
+        teamAwaitLoginOutcomeAnswer({
+          kind: "signed-in",
+          profileId: "team-completed-profile",
+        }),
     });
-    await waitFor(() => {
-      expect(useAuthStore.getState().contextMetadata?.userId).toBe(
-        "team-test-user",
-      );
-    });
-    admitCurrentUserToTeamWindow();
-    render(<TeamProviders />, { wrapper: harness.Wrapper });
     await userEvent.click(
       await screen.findByRole("button", { name: "Add a profile" }),
     );
+    const dialog = await screen.findByRole("dialog", { name: "Add a profile" });
     await userEvent.click(
-      within(
-        await screen.findByRole("dialog", { name: "Add a profile" }),
-      ).getByRole("button", { name: "Sign in" }),
+      within(dialog).getByRole("button", { name: `Use color ${PICKED_COLOR}` }),
+    );
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Sign in" }),
     );
 
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).toBeNull();
     });
-    expect(screen.queryByText(RETIRED_WAITING_SENTENCE)).toBeNull();
     expect(harness.paramsOf("providers.cancelLogin")).toEqual([]);
     expect(colourWrites()).toEqual([]);
 
@@ -136,9 +174,7 @@ describe("a team sign-in that closes before its row is listed", () => {
       ]),
     };
     revision = "11";
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(POLL_MS);
-    });
+    await advance(POLL_MS);
 
     expect(
       await screen.findByRole("button", {
@@ -148,10 +184,72 @@ describe("a team sign-in that closes before its row is listed", () => {
     await waitFor(() => {
       expect(colourWrites()).toHaveLength(1);
     });
-    expect(JSON.stringify(colourWrites()[0]?.body)).not.toContain(
-      '"color":null',
+    expect(JSON.stringify(colourWrites()[0]?.body)).toContain(
+      `"color":"${PICKED_COLOR}"`,
     );
     expect(harness.paramsOf("providers.startLogin")).toHaveLength(1);
     expect(harness.paramsOf("providers.awaitLogin")).toHaveLength(2);
+  });
+
+  it.each(["Add a profile", "Sign in again"] as const)(
+    "settles %s as a completed sign-in once the host keeps answering with no profile past the re-ask cap",
+    async (entry) => {
+      const harness = await mountTeamProviders({
+        records: entry === "Sign in again" ? [EXISTING] : [],
+        revision: () => "10",
+        answerAfterRequest: () =>
+          teamAwaitLoginOutcomeAnswer({ kind: "waiting-for-profile" }),
+      });
+      await userEvent.click(await screen.findByRole("button", { name: entry }));
+      const dialog = await screen.findByRole("dialog", { name: entry });
+      if (entry === "Add a profile")
+        await userEvent.click(
+          within(dialog).getByRole("button", { name: "Sign in" }),
+        );
+
+      await advance(REASK_MS * (AMBIENT_AUTH_PENDING_REPOLL_CAP + 1));
+
+      await waitFor(() => {
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+      expect(harness.paramsOf("providers.awaitLogin")).toHaveLength(
+        AMBIENT_AUTH_PENDING_REPOLL_CAP + 2,
+      );
+      expect(harness.paramsOf("providers.cancelLogin")).toEqual([]);
+    },
+  );
+});
+
+describe("a team Switch account whose new row is not listed yet", () => {
+  it("keeps the dialog open and reads the team records again, because its move needs the row", async () => {
+    const harness = await mountTeamProviders({
+      records: [EXISTING],
+      revision: () => "10",
+      answerAfterRequest: () =>
+        teamAwaitLoginOutcomeAnswer({
+          kind: "signed-in",
+          profileId: "team-switched-profile",
+        }),
+    });
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Manage" }),
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Switch account" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Add a profile" });
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Sign in" }),
+    );
+    await waitFor(() => {
+      expect(harness.paramsOf("providers.awaitLogin")).toHaveLength(2);
+    });
+    const readsBefore = teamProfileRecordReadCount();
+
+    await advance(REASK_MS * 2);
+
+    expect(teamProfileRecordReadCount()).toBeGreaterThan(readsBefore);
+    expect(screen.getByRole("dialog", { name: "Add a profile" })).toBeTruthy();
+    expect(harness.paramsOf("providers.cancelLogin")).toEqual([]);
   });
 });

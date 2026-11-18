@@ -60,6 +60,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
+import { AMBIENT_AUTH_PENDING_REPOLL_CAP } from "@/lib/providers/provider-ambient-auth";
 import {
   profile,
   provider,
@@ -93,7 +94,6 @@ const DIFFERENT_ACCOUNT = `That sign-in is a different account. ${PROFILE_LABEL}
 const UNPROVEN =
   "This sign-in can't be matched to the account this profile uses.";
 const NOT_CHANGED = `${PROFILE_LABEL} was not changed.`;
-const WAITING_FOR_PROFILE = "Waiting for Traycer. Your sign-in is complete.";
 const DUPLICATE_REASON = `${PROFILE_LABEL} already uses this account and organization. Sign in again and choose a different organization.`;
 const DID_NOT_FINISH = "Sign-in did not finish. Try again.";
 const ADD_AS_NEW = "Add as a new profile";
@@ -549,8 +549,24 @@ describe("ProfileEditDialog startInReauth sign-in outcomes", () => {
     await waitFor(() => {
       expect(harness.onOpenChange).toHaveBeenCalledWith(false);
     });
-    expect(screen.queryByText(WAITING_FOR_PROFILE)).toBeNull();
     expect(methodCount(harness.calls, "providers.awaitLogin")).toBe(2);
+  });
+
+  it("settles as a completed sign-in once the host has answered with no profile past the re-ask cap", async () => {
+    const harness = renderReauth({
+      ...REAUTH_DEFAULTS,
+      offers: true,
+      outcome: { kind: "waiting-for-profile" },
+      holdAwait: false,
+    });
+
+    await waitFor(() => {
+      expect(harness.onOpenChange).toHaveBeenCalledWith(false);
+    });
+    expect(methodCount(harness.calls, "providers.awaitLogin")).toBe(
+      AMBIENT_AUTH_PENDING_REPOLL_CAP + 1,
+    );
+    expect(harness.cancelCount()).toBe(0);
   });
 
   it.each(REAUTH_MISFITS)(
@@ -574,7 +590,6 @@ describe("ProfileEditDialog startInReauth sign-in outcomes", () => {
       expect(screen.queryByText(DIFFERENT_ACCOUNT)).toBeNull();
       expect(screen.queryByText(UNPROVEN)).toBeNull();
       expect(screen.queryByText(ADD_AS_NEW)).toBeNull();
-      expect(screen.queryByText(WAITING_FOR_PROFILE)).toBeNull();
       expect(harness.selected).not.toHaveBeenCalled();
       const cancel = harness.calls.find(
         (call) => call.method === "providers.cancelLogin",
@@ -605,7 +620,6 @@ describe("ProfileEditDialog startInReauth sign-in outcomes", () => {
       expect(screen.queryByText(DIFFERENT_ACCOUNT)).toBeNull();
       expect(screen.queryByText(UNPROVEN)).toBeNull();
       expect(screen.queryByText(ADD_AS_NEW)).toBeNull();
-      expect(screen.queryByText(WAITING_FOR_PROFILE)).toBeNull();
       expect(harness.selected).not.toHaveBeenCalled();
       const cancel = harness.calls.find(
         (call) => call.method === "providers.cancelLogin",
@@ -633,7 +647,6 @@ describe("ProfileEditDialog startInReauth sign-in outcomes", () => {
     expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
     expect(screen.queryByText(DID_NOT_FINISH)).toBeNull();
     expect(screen.queryByText(ADD_AS_NEW)).toBeNull();
-    expect(screen.queryByText(WAITING_FOR_PROFILE)).toBeNull();
     expect(harness.selected).not.toHaveBeenCalled();
     expect(harness.cancelCount()).toBe(0);
   });
