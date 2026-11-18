@@ -919,8 +919,10 @@ describe("secrets use the app's own environment client", () => {
     const sources = await Promise.all(
       files.map((file) => readFile(file, "utf8")),
     );
+    // The method has to sit in the host call itself: the window stops where
+    // another hook's call begins.
     const hostSecretsCall =
-      /(?:useHostQuery|useHostMutation|client\.request)[\s\S]{0,600}["']environment\.secrets\.[^"']+["']/;
+      /(?:useHostQuery|useHostMutation|client\.request)(?:(?!\buse[A-Z]\w*\s*(?:<[^>]*>)?\s*\()[\s\S]){0,600}["']environment\.secrets\.[^"']+["']/;
     const violations = sources.flatMap((source, index) =>
       hostSecretsCall.test(source) ? [files[index]] : [],
     );
