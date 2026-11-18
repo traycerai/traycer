@@ -692,7 +692,7 @@ describe("a signed-out Terminal login beside enabled, signed-in managed profiles
     expect(landing(profiles)).toBe("work-uuid");
   });
 
-  it("does not dim the tab for two signed-in managed profiles, and a click only browses: it commits nothing", () => {
+  it("does not dim the tab for two signed-in managed profiles, and a click only browses", () => {
     const profiles = [
       terminal,
       profile("a-uuid", "managed", "A"),
