@@ -113,21 +113,13 @@ export type AgentWorktreeCreatePolicy =
  * has never touched Settings keeps that behaviour. Additive and `.default()`-ed
  * like every other block, so older config files keep validating without a
  * `CLI_CONFIG_VERSION` bump.
- *
- * `recoverMissing` is whether a run whose bound worktree or folder is gone is
- * recovered (the worktree's repository folder is used, a missing folder is
- * detached) instead of refused. On when absent; off when it is anything but a
- * boolean.
  */
 export const worktreesConfigSchema = lazySchema(() =>
   z
     .object({
       agentCreate: z.enum(AGENT_WORKTREE_CREATE_POLICIES).default("allow"),
-      // An invalid value turns recovery off and leaves the block valid, so a
-      // typo here cannot also undo the `agentCreate` policy beside it.
-      recoverMissing: z.boolean().catch(false).default(true),
     })
-    .default({ agentCreate: "allow", recoverMissing: true }),
+    .default({ agentCreate: "allow" }),
 );
 export type WorktreesConfig = z.infer<typeof worktreesConfigSchema>;
 
@@ -209,6 +201,29 @@ export const agentFeedbackOnlyConfigSchema = lazySchema(() =>
 export type AgentFeedbackConfig = z.infer<
   typeof agentFeedbackOnlyConfigSchema
 >["agentFeedback"];
+
+/**
+ * The `worktreeRecovery` block in `~/.traycer/cli/config.json`: whether a run
+ * whose bound worktree or folder is gone is recovered - the worktree's
+ * repository folder is used, a missing folder is detached - instead of refused.
+ * On when absent; off when it holds anything but a boolean.
+ *
+ * Its own top-level block, not a key of `worktrees`, for the reason
+ * `agentFeedback` is: the value that must survive is the user's `false`, and an
+ * older binary strips an unknown key inside `worktrees` on its next write. The
+ * top level of `cliConfigSchema` is passthrough, so this block survives.
+ */
+export const worktreeRecoveryOnlyConfigSchema = lazySchema(() =>
+  z.object({
+    worktreeRecovery: z
+      .object({ recoverMissing: z.boolean().catch(false).default(true) })
+      .catch({ recoverMissing: false })
+      .default({ recoverMissing: true }),
+  }),
+);
+export type WorktreeRecoveryConfig = z.infer<
+  typeof worktreeRecoveryOnlyConfigSchema
+>["worktreeRecovery"];
 
 /**
  * The `simulator` block in `~/.traycer/cli/config.json`: the one switch for
@@ -545,7 +560,7 @@ export const EMPTY_CLI_CONFIG: CliConfig = {
   logs: { cliLogLevel: DEFAULT_LOG_LEVEL, hostLogLevel: DEFAULT_LOG_LEVEL },
   features: { agentRoles: false, artifactVersioning: false },
   browser: { agentAccess: true },
-  worktrees: { agentCreate: "allow", recoverMissing: true },
+  worktrees: { agentCreate: "allow" },
   catalog: { probeTimeoutSeconds: CATALOG_PROBE_TIMEOUT_DEFAULT_SECONDS },
   catalogOverrides: {},
 };

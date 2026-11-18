@@ -154,14 +154,8 @@ describe("adversarial: hostile config content is tolerated (no crash)", () => {
       envOverrides: {},
       worktrees: { agentCreate: "never", bogus: 42 },
     });
-    expect(await readWorktreesConfig()).toEqual({
-      agentCreate: "never",
-      recoverMissing: true,
-    });
-    expect(readWorktreesConfigSync()).toEqual({
-      agentCreate: "never",
-      recoverMissing: true,
-    });
+    expect(await readWorktreesConfig()).toEqual({ agentCreate: "never" });
+    expect(readWorktreesConfigSync()).toEqual({ agentCreate: "never" });
   });
 
   it("never crashes the sync worktrees reader on hostile block shapes", async () => {
@@ -180,10 +174,7 @@ describe("adversarial: hostile config content is tolerated (no crash)", () => {
         envOverrides: {},
         worktrees,
       });
-      expect(readWorktreesConfigSync()).toEqual({
-        agentCreate: "allow",
-        recoverMissing: false,
-      });
+      expect(readWorktreesConfigSync()).toEqual({ agentCreate: "allow" });
     }
   });
 

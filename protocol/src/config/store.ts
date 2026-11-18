@@ -34,6 +34,8 @@ import {
   type AgentWorktreeCreatePolicy,
   type WorktreesConfig,
   agentFeedbackOnlyConfigSchema,
+  worktreeRecoveryOnlyConfigSchema,
+  type WorktreeRecoveryConfig,
   type AgentFeedbackConfig,
   visualizationOnlyConfigSchema,
   type VisualizationConfig,
@@ -1258,9 +1260,7 @@ export function readWorktreesConfigSync(): WorktreesConfig {
     // An unreadable config must not revoke a capability the user never
     // restricted - fall through to the permissive default.
   }
-  // `recoverMissing` falls the other way: recovery changes which folder a run
-  // uses, so a config that cannot be read keeps the refusal.
-  return { agentCreate: "allow", recoverMissing: false };
+  return { agentCreate: "allow" };
 }
 
 /**
@@ -1279,6 +1279,31 @@ export async function setAgentWorktreeCreatePolicy(
   }));
 }
 
+/** Whether a run whose bound worktree or folder is gone is recovered. */
+export async function readWorktreeRecoveryConfig(): Promise<WorktreeRecoveryConfig> {
+  return worktreeRecoveryOnlyConfigSchema.parse(await readCliConfig())
+    .worktreeRecovery;
+}
+
+/**
+ * Best-effort synchronous read for the host's recovery decision. No config
+ * file is the unset case, so it reads on. A file that cannot be read or parsed
+ * fails CLOSED: recovery changes which folder a run uses, and that file may
+ * hold the user's `false`.
+ */
+export function readWorktreeRecoveryConfigSync(): WorktreeRecoveryConfig {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(cliConfigPath(), "utf8"));
+    const result = worktreeRecoveryOnlyConfigSchema.safeParse(parsed);
+    if (result.success) return result.data.worktreeRecovery;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return { recoverMissing: true };
+    }
+  }
+  return { recoverMissing: false };
+}
+
 /**
  * Sets whether a run whose bound worktree or folder is gone is recovered,
  * while preserving the rest of the config.
@@ -1287,10 +1312,7 @@ export async function setWorktreeRecoverMissing(
   enabled: boolean,
 ): Promise<void> {
   await updateCliConfig((current) => ({
-    next: {
-      ...current,
-      worktrees: { ...current.worktrees, recoverMissing: enabled },
-    },
+    next: { ...current, worktreeRecovery: { recoverMissing: enabled } },
     result: undefined,
   }));
 }
