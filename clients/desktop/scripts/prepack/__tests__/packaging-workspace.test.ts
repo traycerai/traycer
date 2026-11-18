@@ -199,7 +199,18 @@ describe("packaging workspace", () => {
     writeFileDeep(path.join(layout.releaseDir, "x"), "packed");
     writeFileDeep(path.join(layout.parkDir, "blocker"), "held");
 
-    expect(() => workspace.teardown()).toThrow(/ENOTEMPTY|EEXIST/);
+    let thrown: unknown;
+    try {
+      workspace.teardown();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toMatchObject({
+      syscall: "rename",
+      path: layout.releaseDir,
+      dest: layout.parkDir,
+    });
 
     expect(readFileSync(path.join(layout.releaseDir, "x"), "utf8")).toBe(
       "packed",
