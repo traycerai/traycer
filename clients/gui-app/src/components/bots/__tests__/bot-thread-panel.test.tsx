@@ -327,6 +327,10 @@ const activityStore = create<{ activity: BotActivity | null }>()(() => ({
   activity: null,
 }));
 
+import {
+  failedNotice,
+  staleNotice,
+} from "@/components/bots/__tests__/bot-read-notice-test-support";
 import { BotThreadPanel } from "@/components/bots/bot-thread-panel";
 import type { BotThreadPanelThread } from "@/components/bots/bot-thread-panel";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
@@ -974,7 +978,13 @@ describe("<BotThreadPanel /> a direct reply's box through a failed read", () => 
 
     // The read after the bot's binding moved fails; the new binding has not
     // said it opens a thread under the reply.
-    panel.rerender(panelTree({ kind: "unopened", retry, sendable: false }));
+    panel.rerender(
+      panelTree({
+        kind: "unopened",
+        retry: failedNotice(retry),
+        sendable: false,
+      }),
+    );
 
     expect(boxInput("Reply in a new thread")).toBe(box);
     expect(textOf(box)).toBe("Which job?");
@@ -1206,11 +1216,12 @@ describe("<BotThreadPanel /> a listed thread", () => {
     const user = userEvent.setup();
     const retry = vi.fn<() => void>();
     const taking = listed("user-teammate");
-    const panel = mountPanel({ ...taking, retry, sendable: false }, [
-      botReply(null),
-    ]);
+    const panel = mountPanel(
+      { ...taking, retry: staleNotice(retry), sendable: false },
+      [botReply(null)],
+    );
 
-    const failure = screen.getByTestId("bot-thread-error");
+    const failure = screen.getByTestId("bot-thread-stale");
     expect(
       within(screen.getByTestId("bot-thread-replies")).getByText(
         "Which way should I go?",
@@ -1223,7 +1234,7 @@ describe("<BotThreadPanel /> a listed thread", () => {
     expect(retry).toHaveBeenCalledTimes(1);
 
     panel.rerender(panelTree(taking));
-    expect(screen.queryByTestId("bot-thread-error")).toBeNull();
+    expect(screen.queryByTestId("bot-thread-stale")).toBeNull();
     typeInto(
       editableIn(screen.getByTestId("bot-thread-composer-input")),
       "Thanks",
@@ -1414,7 +1425,7 @@ describe("<BotThreadPanel /> a thread its post opened as it was sent", () => {
     const user = userEvent.setup();
     const retry = vi.fn<() => void>();
     channelMessages = [announcement("anchor-1", "Ship the release today?")];
-    const view = mountPanel({ ...POSTED, retry }, []);
+    const view = mountPanel({ ...POSTED, retry: failedNotice(retry) }, []);
     const box = replyBox();
     typeInto(box, "And the nightly?");
 
@@ -1610,7 +1621,7 @@ describe("<BotThreadPanel /> the anchor", () => {
 
   it("opens a thread whose list read failed on its post in its own scroll region", () => {
     channelMessages = [announcement("anchor-1", "Ship the release today?")];
-    mountPanel({ kind: "failed", retry: () => undefined }, []);
+    mountPanel({ kind: "failed", retry: failedNotice(() => undefined) }, []);
 
     expectPostScrolls();
     expect(screen.queryByTestId("bot-thread-composer")).toBeNull();
@@ -2320,7 +2331,10 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
 
   it.each([
     ["not listed yet", { kind: "pending" } as const],
-    ["failed to read", { kind: "failed", retry: () => undefined } as const],
+    [
+      "failed to read",
+      { kind: "failed", retry: failedNotice(() => undefined) } as const,
+    ],
   ])(
     "says a refused retry of the anchor post in the panel while the thread is %s",
     async (_name, thread) => {
