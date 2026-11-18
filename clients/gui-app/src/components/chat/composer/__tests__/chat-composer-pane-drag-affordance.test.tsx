@@ -11,12 +11,7 @@ import {
   type FakeTransfer,
   pdfFile,
 } from "@/lib/composer/__tests__/file-drop-fixtures";
-import {
-  forwardRef,
-  useCallback,
-  type ComponentProps,
-  type ReactNode,
-} from "react";
+import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,14 +23,11 @@ import type {
   SandboxCatalogue,
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
-import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
-import { type FileAttachmentUploadClient } from "@/lib/composer/file-attachment-upload";
 import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import {
   harnessRow,
   providerRow,
 } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
-import { UNUSED_REQUESTER } from "@/lib/composer/__tests__/file-attachment-fixtures";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 
 const answers = vi.hoisted(() => ({
@@ -47,16 +39,6 @@ const answers = vi.hoisted(() => ({
   tabHostId: "host-local",
   /** This renderer's own host id; `null` where it knows no local host. */
   localHostId: null as string | null,
-  /** The tab host's client, whose `drafts.putBlob` is observed. */
-  client: null as FileAttachmentUploadClient | null,
-  /** The last document the editor reported through the draft hook. */
-  document: null as JsonContent | null,
-  /** The mounted editor's handle, held by the forwarding wrapper below. */
-  editorHandle: null as ComposerPromptEditorHandle | null,
-}));
-
-const host = vi.hoisted(() => ({
-  requestWithOptions: vi.fn<FileAttachmentUploadClient["requestWithOptions"]>(),
 }));
 
 const fileDrops = vi.hoisted(() => ({
@@ -65,12 +47,6 @@ const fileDrops = vi.hoisted(() => ({
   copyDroppedFilePaths:
     vi.fn<(paths: ReadonlyArray<string>) => Promise<string[]>>(),
   readNativeClipboardFilePaths: vi.fn<() => Promise<string[]>>(),
-}));
-
-const toasts = vi.hoisted(() => ({ error: vi.fn() }));
-
-vi.mock("@/lib/reportable-error-toast", () => ({
-  reportableErrorToast: toasts.error,
 }));
 
 function modelOption(harnessId: string, slug: string) {
@@ -192,7 +168,7 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ fileDrops }),
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
-  useTabHostClient: () => answers.client,
+  useTabHostClient: () => null,
 }));
 vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => answers.tabHostId,
@@ -227,43 +203,13 @@ vi.mock("@/components/chat/composer/use-chat-composer-draft", () => ({
     draftContent: EMPTY_DOCUMENT,
     draftHasText: true,
     draftHasImages: false,
-    handleDocumentChange: (content: JsonContent) => {
-      answers.document = content;
-    },
+    handleDocumentChange: () => undefined,
     handleSelectionChange: () => undefined,
   }),
 }));
 vi.mock("@/hooks/drafts/use-chat-composer-draft-authority", () => ({
   useChatComposerDraftAuthority: () => ({ noteEdit: () => undefined }),
 }));
-// The real editor behind a wrapper that only keeps its handle: whether the
-// editor has finished initializing is `isReady()`, which is what a path or file
-// insertion asks, and the composer does not hand its ref out.
-vi.mock(
-  "@/components/chat/composer/composer-prompt-editor",
-  async (importOriginal) => {
-    const actual =
-      await importOriginal<
-        typeof import("@/components/chat/composer/composer-prompt-editor")
-      >();
-    const HandleKeepingEditor = forwardRef<
-      ComposerPromptEditorHandle,
-      ComponentProps<typeof actual.ComposerPromptEditor>
-    >((props, ref) => {
-      const keepHandle = useCallback(
-        (handle: ComposerPromptEditorHandle | null): void => {
-          answers.editorHandle = handle;
-          if (typeof ref === "function") ref(handle);
-          else if (ref !== null) ref.current = handle;
-        },
-        [ref],
-      );
-      return <actual.ComposerPromptEditor {...props} ref={keepHandle} />;
-    });
-    HandleKeepingEditor.displayName = "HandleKeepingEditor";
-    return { ...actual, ComposerPromptEditor: HandleKeepingEditor };
-  },
-);
 vi.mock("@/hooks/composer/use-composer-dictation", () => ({
   useComposerDictation: () => ({
     dictationControl: null,
@@ -321,11 +267,7 @@ vi.mock("@/components/chat/composer/composer-attachment-drop-zone", () => ({
   ComposerAttachmentDropZone: (props: { readonly children: ReactNode }) =>
     props.children,
 }));
-// The shell's frame and strip are not under test; its editor slot is, and so is
-// what the toolbar is told: `attachmentPending` is the composer's own send hold
-// (every ingest the paste hook runs, or a file node still unconfirmed), and the
-// stand-in toolbar below shows it. The frame's own drop affordance is marked, so
-// a test can see whether the composer drew one of its own.
+// The shell's frame and strip are not under test; its editor slot is.
 vi.mock(
   "@/components/home/composer/composer-shell",
   async (importOriginal) => ({
@@ -335,12 +277,8 @@ vi.mock(
     ComposerShell: (props: {
       readonly editor: ReactNode;
       readonly toolbar: ReactNode;
-      readonly dragOverlayVariant: string | null;
     }) => (
       <>
-        {props.dragOverlayVariant === null ? null : (
-          <span data-testid="composer-frame-overlay" />
-        )}
         {props.editor}
         {props.toolbar}
       </>
@@ -348,12 +286,7 @@ vi.mock(
   }),
 );
 vi.mock("@/components/chat/composer/chat-composer-toolbar-slot", () => ({
-  ChatComposerToolbarSlot: (props: { readonly attachmentPending: boolean }) => (
-    <span
-      data-testid="composer-attachment-pending"
-      data-busy={String(props.attachmentPending)}
-    />
-  ),
+  ChatComposerToolbarSlot: () => null,
 }));
 vi.mock("@/components/chat/segments/steer-settings-conflict-dialog", () => ({
   SteerSettingsConflictDialog: () => null,
@@ -388,15 +321,6 @@ beforeEach(() => {
   answers.sandboxes = [];
   answers.tabHostId = "host-local";
   answers.localHostId = null;
-  answers.document = null;
-  answers.editorHandle = null;
-  host.requestWithOptions.mockReset();
-  host.requestWithOptions.mockResolvedValue({ ok: true });
-  answers.client = {
-    ...UNUSED_REQUESTER,
-    requestWithOptions: host.requestWithOptions,
-  };
-  toasts.error.mockClear();
   fileDrops.resolveDroppedFilePaths.mockReset();
   fileDrops.resolveDroppedFilePaths.mockResolvedValue([REPORT_PATH]);
   fileDrops.copyDroppedFilePaths.mockReset();

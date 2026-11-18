@@ -22,6 +22,7 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
+import { botDropNoticeId } from "@/components/bots/bot-box-drops";
 import { DROP_WITHOUT_IMAGE_HOST } from "@/components/bots/bot-drop-lines";
 import { BOT_CONVERSATION_ATTACHMENTS_MAX } from "@traycer/protocol/host/bot/conversation-schemas";
 import { BOT_CONVERSATION_IMAGES_VERSION } from "@/hooks/bots/use-bot-send-version";
@@ -60,8 +61,6 @@ import {
   filesTransfer,
   gatedImage,
   imageFile,
-  noticeIds,
-  noticeMessages,
   spyOnNotices,
 } from "@/components/bots/__tests__/bot-drop-test-support";
 
@@ -438,8 +437,9 @@ describe("<BotChannelView tiles={null} /> a host that stops taking images while 
     act(() => slow.open());
     await settleLong();
 
-    expect(noticeMessages(notices)).toEqual([DROP_WITHOUT_IMAGE_HOST]);
-    expect(noticeIds(notices)[0]).toBeDefined();
+    expect(notices.mock.calls).toEqual([
+      [DROP_WITHOUT_IMAGE_HOST, { id: botDropNoticeId(BOT_ID, CHANNEL_ID) }],
+    ]);
     act(() => negotiateBotSend(HOST_ID, BOT_CONVERSATION_IMAGES_VERSION));
     reopen(null);
     await chipsAre(["shot.png"]);
