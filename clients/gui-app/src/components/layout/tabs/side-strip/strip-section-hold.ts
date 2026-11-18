@@ -6,6 +6,7 @@ import {
 } from "@/stores/tabs/layout";
 import {
   groupEntriesBySection,
+  moreUrgentSection,
   type StripSection,
   type StripSectionEntry,
   type StripSectionGroup,
@@ -149,7 +150,7 @@ function openingOf(
   };
 }
 
-interface OpenedHoldState {
+interface CurrentHoldState {
   readonly sections: ReadonlyArray<StripSectionGroup>;
   readonly opening: StripOpening | null;
   readonly hold: StripSectionHold | null;
@@ -165,12 +166,12 @@ function sameOpened(a: StripOpening | null, b: StripOpening): boolean {
 
 /**
  * Where an item's row was drawn when the person opened it in this render,
- * which a read landing in the same render has not changed yet. Opening a
+ * which a change landing in the same render has not moved yet. Opening a
  * pair's other member is an opening too, and the pair's row is one row.
  * `null` for an item with no row before this render.
  */
 function drawnWhenOpened(
-  prev: OpenedHoldState,
+  prev: CurrentHoldState,
   itemId: string,
   holds: ReadonlyArray<StripSectionHold>,
 ): StripSection | null {
@@ -181,8 +182,8 @@ function drawnWhenOpened(
   );
 }
 
-function openedHoldOf(
-  prev: OpenedHoldState,
+function currentHoldOf(
+  prev: CurrentHoldState,
   sections: ReadonlyArray<StripSectionGroup>,
   opening: StripOpening | null,
   holds: ReadonlyArray<StripSectionHold>,
@@ -190,34 +191,42 @@ function openedHoldOf(
   if (opening === null) return null;
   const { itemId } = opening;
   const now = sectionOfItem(sections, itemId);
-  if (now !== "to-review" && now !== "idle") return null;
-  if (sameOpened(prev.opening, opening)) {
-    const { hold } = prev;
-    return hold === null || hold.itemId === itemId ? hold : { ...hold, itemId };
-  }
-  const opened = drawnWhenOpened(prev, itemId, holds) ?? now;
-  return opened === "to-review" ? { itemId, section: "to-review" } : null;
+  if (now === null) return null;
+  const floor = sameOpened(prev.opening, opening)
+    ? prev.hold?.section
+    : drawnWhenOpened(prev, itemId, holds);
+  const section = moreUrgentSection(floor ?? now, now);
+  return prev.hold?.itemId === itemId && prev.hold.section === section
+    ? prev.hold
+    : { itemId, section };
 }
 
 /**
- * The current task's row, held in To review when the person opened it from
- * there. Opening a task reads it, which would send its row down to Idle, out
- * from where the person just clicked and often out of view. It stays until
- * they open another task, or until this one starts working or needs them,
- * which is a move its own state makes.
+ * The current task's row, held in the most urgent section it has been drawn
+ * in since it became the current one: it rises with its state and never
+ * sinks. Opening a task reads it, and answering it ends its wait, either of
+ * which would send its row down the list, out from where the person clicked
+ * and often out of view. It stays until they open another task. A task that
+ * is current when the list mounts is held from the section it mounts in.
  */
-export function useOpenedSectionHold(
+export function useCurrentSectionHold(
   sections: ReadonlyArray<StripSectionGroup>,
   layoutItems: ReadonlyArray<StripItem>,
   activeItemId: string | null,
   holds: ReadonlyArray<StripSectionHold>,
 ): StripSectionHold | null {
   const opening = openingOf(layoutItems, activeItemId);
-  // No hold at mount: the task current then was not opened from anywhere.
-  const [state, setState] = useState<OpenedHoldState>({
-    sections,
-    opening,
-    hold: null,
+  const [state, setState] = useState<CurrentHoldState>(() => {
+    const section =
+      opening === null ? null : sectionOfItem(sections, opening.itemId);
+    return {
+      sections,
+      opening,
+      hold:
+        opening === null || section === null
+          ? null
+          : { itemId: opening.itemId, section },
+    };
   });
   if (
     state.sections !== sections ||
@@ -227,7 +236,7 @@ export function useOpenedSectionHold(
     setState({
       sections,
       opening,
-      hold: openedHoldOf(state, sections, opening, holds),
+      hold: currentHoldOf(state, sections, opening, holds),
     });
   }
   return state.hold;

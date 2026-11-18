@@ -193,6 +193,28 @@ test("keeps a task opened from To review there once it is read, until another ta
   await expect.poll(() => laneOf(release)).toBe("idle");
 });
 
+test("keeps an answered task in Needs you while it is the current one, out of that section's count", async ({
+  page,
+}) => {
+  await openStrip(page);
+  const onboarding = row(page, "onboarding");
+  const needsYou = page.getByTestId("side-strip-section-needs-you");
+  await expect(needsYou).toHaveText("Needs you2");
+  const at = await centreOf(onboarding);
+  await page.mouse.click(at.x, at.y);
+  await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+
+  await moveTask(page, "onboarding", "working");
+
+  // Answered, so one task fewer waits on the person, and its row has not moved.
+  await expect(needsYou).toHaveText("Needs you1");
+  expect(await laneOf(onboarding)).toBe("needs-you");
+
+  await page.evaluate('window.__sideTabStripProbe.activate("fixture-watcher")');
+
+  await expect.poll(() => laneOf(onboarding)).toBe("working");
+});
+
 test.describe("over a list that overflows", () => {
   test.use({ viewport: { width: 900, height: 700 } });
 

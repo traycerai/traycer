@@ -32,7 +32,7 @@ import { StripSectionHeader } from "./strip-section-header";
 import { useStripSectionFolded } from "./strip-section-fold";
 import {
   holdInPlace,
-  useOpenedSectionHold,
+  useCurrentSectionHold,
   useStripSectionHolds,
 } from "./strip-section-hold";
 import { sectionStyleOf, twoLineStatusOf } from "./strip-section-row";
@@ -66,8 +66,9 @@ import { StripSectionsContext } from "./strip-sections-context";
  *
  * A task that changes section slides there and glows, unless the pointer is on
  * its row or keyboard focus is, in which case it stays until the person leaves
- * it. A task opened from To review stays there while it is the current one,
- * though opening it read it. Arrivals in Needs you are announced, and while that section's header is
+ * it. The current task's row rises with its state and never sinks: it stays
+ * in the most urgent section it has been in until another task is opened.
+ * Needs you counts only the tasks still waiting on the person. Arrivals in Needs you are announced, and while that section's header is
  * out of view the header stuck on top holds a "↑ N need you" chip.
  */
 export function SideStripSections(props: {
@@ -84,16 +85,16 @@ export function SideStripSections(props: {
     props;
   const assigned = use(StripSectionsContext);
   const holds = useStripSectionHolds(scroller);
-  const opened = useOpenedSectionHold(
+  const current = useCurrentSectionHold(
     assigned,
     controller.layoutItems,
     controller.activeItemId,
     holds,
   );
-  // A row the person is on is held where it is drawn, over where it was opened.
+  // A row the person is on is held where it is drawn, over the current task's hold.
   const sections = useMemo(
-    () => holdInPlace(assigned, opened === null ? holds : [opened, ...holds]),
-    [assigned, opened, holds],
+    () => holdInPlace(assigned, current === null ? holds : [current, ...holds]),
+    [assigned, current, holds],
   );
   const announcement = useNeedsYouAnnouncement(assigned);
   const slide = useMotionEnabled();
