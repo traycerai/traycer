@@ -28,6 +28,21 @@ const ACCOUNT_CHANGED: SettingsSaveBeginning = { kind: "account_changed" };
 /** An apply that went unanswered is tried once more at the same hold revision. */
 const TRIES_PER_HOLD_REVISION = 2;
 
+/**
+ * An apply authn could not take just now (no answer at all, a redirect, 408,
+ * 429 or any 5xx) spends no try: a short outage would otherwise use both
+ * within the first follow-ups, and the hold would wait out its TTL unapplied.
+ */
+function passingFailure(status: number | null): boolean {
+  return (
+    status === null ||
+    (status >= 300 && status < 400) ||
+    status === 408 ||
+    status === 429 ||
+    status >= 500
+  );
+}
+
 /** Another window may still have the save out; its answer comes within this time. */
 const UNLISTED_GRACE_MS = 60_000;
 
@@ -207,8 +222,17 @@ export function createSettingsSaveCoordinator(
     ) {
       return "stays";
     }
+    const answered: { status: number | null } = { status: null };
+    const watched: EnvironmentCloud = {
+      ...cloud,
+      transport: async (request) => {
+        const answer = await cloud.transport(request);
+        answered.status = answer.status;
+        return answer;
+      },
+    };
     try {
-      const { outcome } = await applyHeldChange(cloud, record.environmentId, {
+      const { outcome } = await applyHeldChange(watched, record.environmentId, {
         heldId: hold.heldId,
         revision: hold.revision,
         expectedLiveRevision: record.expectedLiveRevision,
@@ -216,7 +240,9 @@ export function createSettingsSaveCoordinator(
       // A conflict, gone or forbidden decides this hold for this save too.
       return outcome === "applied" ? "applied" : "decided";
     } catch {
-      store().noteUnanswered(id, hold.revision);
+      if (!passingFailure(answered.status)) {
+        store().noteUnanswered(id, hold.revision);
+      }
       return "stays";
     }
   };
@@ -284,7 +310,10 @@ export function createSettingsSaveCoordinator(
     return true;
   };
 
-  const followUps = new Map<string, () => void>();
+  const followUps = new Map<
+    string,
+    { readonly dueAt: number; readonly cancel: () => void }
+  >();
   let generation = 0;
   /** A save begun before a stop arms nothing when it settles after it. */
   const begunIn = new Map<string, number>();
@@ -292,20 +321,28 @@ export function createSettingsSaveCoordinator(
   const awaitsHold = (hostId: string): boolean =>
     Object.values(store().records).some((record) => record.hostId === hostId);
 
+  // A later arm never pushes out a sooner one: a new save's short wait stands
+  // against an older run's long one, whichever of them arms last.
   const armFollowUp = (hostId: string, step: number, armedIn: number): void => {
     if (generation !== armedIn) return;
-    followUps.get(hostId)?.();
-    followUps.delete(hostId);
-    if (!awaitsHold(hostId)) return;
+    const armed = followUps.get(hostId);
+    if (!awaitsHold(hostId)) {
+      armed?.cancel();
+      followUps.delete(hostId);
+      return;
+    }
     const delay = Math.min(
       FOLLOW_UP_FIRST_MS * 2 ** step,
       FOLLOW_UP_LONGEST_MS,
     );
+    const dueAt = ports.now() + delay;
+    if (armed !== undefined && armed.dueAt <= dueAt) return;
+    armed?.cancel();
     const cancel = ports.schedule(() => {
       followUps.delete(hostId);
       void run(hostId, Math.min(step + 1, FOLLOW_UP_LONGEST_STEP), armedIn);
     }, delay);
-    followUps.set(hostId, cancel);
+    followUps.set(hostId, { dueAt, cancel });
   };
 
   const run = (
@@ -332,7 +369,7 @@ export function createSettingsSaveCoordinator(
 
   const stop = (): void => {
     generation += 1;
-    for (const cancel of followUps.values()) cancel();
+    for (const { cancel } of followUps.values()) cancel();
     followUps.clear();
   };
 

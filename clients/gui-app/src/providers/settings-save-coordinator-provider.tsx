@@ -67,7 +67,7 @@ export function SettingsSaveCoordinatorProvider(props: {
       }),
     [binding],
   );
-  // A coordinator for a binding no longer here reads no host again.
+  // A coordinator for a binding no longer here arms no more follow-up reads.
   useEffect(() => () => coordinator.stop(), [coordinator]);
   return (
     <SettingsSaveMemoryPersistLifecycleBridge>
