@@ -49,7 +49,11 @@ import { tabRouteOptions } from "@/stores/tabs/registry";
 import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 import { HOME_TAB_REF, isHomePath } from "@/stores/tabs/kinds/home";
 import { isTracySurfaceOpen, TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
-import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import {
+  tracySurfaceHostId,
+  useTracySurfaceStore,
+} from "@/stores/bots/tracy-surface-store";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import {
   tabCommandCoordinator,
@@ -202,6 +206,35 @@ interface QueuedActivation {
   readonly intent: TabActivationIntent;
   readonly options: TabNavigationOptions | undefined;
   readonly tracyOrigin: StampedTracyOrigin | null;
+  readonly tracyAsk: TracyAsk | null;
+}
+
+/**
+ * The account and the surface host an opening of the Tracy surface was asked
+ * under while the tabs were hydrating. It runs once they are ready only if
+ * both still stand: after another account signs in, or the surface moves to
+ * another host or closes, it was asked of something the app no longer shows.
+ */
+interface TracyAsk {
+  readonly botLifetime: number;
+  readonly surfaceHostId: string | null;
+}
+
+function tracyAskOf(intent: TabActivationIntent): TracyAsk | null {
+  return intent.kind === "tracy"
+    ? {
+        botLifetime: currentBotLifetime(),
+        surfaceHostId: tracySurfaceHostId(),
+      }
+    : null;
+}
+
+function tracyAskStands(ask: TracyAsk | null): boolean {
+  return (
+    ask === null ||
+    (ask.botLifetime === currentBotLifetime() &&
+      ask.surfaceHostId === tracySurfaceHostId())
+  );
 }
 
 interface QueuedExternal {
@@ -781,7 +814,13 @@ export class TabNavigationController {
     const tracyOrigin = stampedTracyOriginOf(intent);
     if (!this.hydrationReady) {
       const superseded = this.queuedActivation;
-      this.queuedActivation = { navigate, intent, options, tracyOrigin };
+      this.queuedActivation = {
+        navigate,
+        intent,
+        options,
+        tracyOrigin,
+        tracyAsk: tracyAskOf(intent),
+      };
       this.notifyPendingListeners();
       superseded?.options?.onRejected?.(
         new Error("Another task was opened before this task could open."),
@@ -1017,12 +1056,14 @@ export class TabNavigationController {
     this.queuedActivation = null;
     if (queuedActivation !== null) {
       this.notifyPendingListeners();
-      const accepted = this.executeActivation(
-        queuedActivation.navigate,
-        queuedActivation.intent,
-        queuedActivation.options,
-        queuedActivation.tracyOrigin,
-      );
+      const accepted =
+        tracyAskStands(queuedActivation.tracyAsk) &&
+        this.executeActivation(
+          queuedActivation.navigate,
+          queuedActivation.intent,
+          queuedActivation.options,
+          queuedActivation.tracyOrigin,
+        );
       if (!accepted) {
         queuedActivation.options?.onRejected?.(
           new Error("The task could not be opened. Try again."),

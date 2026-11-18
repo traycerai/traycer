@@ -64,7 +64,16 @@ import {
   type RenderResult,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
+import { toast } from "sonner";
 
 import type {
   BotThreadSummary,
@@ -704,7 +713,9 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       expect(openThreadBeside()).toBe("none");
     });
 
-    it("is closed by a requested landing on a thread the list does not name", () => {
+    it("is kept open, and the landing refused and spent, when a requested landing names a message of a thread the settled list does not name", () => {
+      const toastError = vi.spyOn(toast, "error").mockReturnValue("toast");
+      onTestFinished(() => toastError.mockRestore());
       mocks.state.threads = [];
       useBotTabLandingStore.getState().request(BOT_ID, {
         kind: "thread",
@@ -713,7 +724,11 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       });
       render(surface());
 
-      expect(openThreadBeside()).toBe("none");
+      expect(openThreadBeside()).toBe("post-other");
+      expect(toastError).toHaveBeenCalledTimes(1);
+      expect(
+        Object.hasOwn(useBotTabLandingStore.getState().byBotId, BOT_ID),
+      ).toBe(false);
     });
   });
 

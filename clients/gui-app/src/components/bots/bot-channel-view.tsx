@@ -288,10 +288,12 @@ function useChannelLanding(
     setAsked(landOn);
     if (landOn !== null && landOn.threadId === null) {
       const { messageId, sendPostId } = landOn;
+      const reportsMiss = landOn.reportsMiss === true;
       setLanding((previous) => ({
         messageId,
         sendPostId,
         visit: (previous?.visit ?? 0) + 1,
+        reportsMiss,
       }));
     }
   }

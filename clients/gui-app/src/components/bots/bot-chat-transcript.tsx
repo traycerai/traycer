@@ -22,7 +22,13 @@ import {
 } from "@tanstack/react-query";
 import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
-import { useChatLocateRowAnswer } from "@/hooks/chats/use-chat-locate-row";
+import {
+  useChatLocateRowAnswer,
+  type ChatLocateRowAnswer,
+} from "@/hooks/chats/use-chat-locate-row";
+import { toast } from "sonner";
+import { NOTIFICATION_MESSAGE_UNAVAILABLE } from "@/lib/notifications/destination-copy";
+import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import type { BotReplyTarget } from "@/lib/bots/bot-reply-target";
 import { replyRowIdFor, sendCardFor } from "@/lib/bots/reply-row";
 import { botTurnIndexOf, turnOfMessages } from "@/lib/bots/bot-turn-receipt";
@@ -624,7 +630,11 @@ function BotChatTranscriptBody(props: {
     (landing: BotTranscriptLanding) =>
       jumpTo(
         landing.sendPostId === null
-          ? { kind: "message", messageId: landing.messageId }
+          ? {
+              kind: "message",
+              messageId: landing.messageId,
+              reportsMiss: landing.reportsMiss === true,
+            }
           : {
               kind: "send",
               postId: landing.sendPostId,
@@ -662,8 +672,15 @@ function BotChatTranscriptBody(props: {
     setPendingJump({
       kind: "message",
       messageId: pendingJump.fallbackMessageId,
+      reportsMiss: false,
     });
   }
+  useReportedMiss({
+    pendingJump,
+    withdrawn: landOn === null,
+    located,
+    end: () => setPendingJump(null),
+  });
   const locatedOrdinal = located.status === "found" ? located.ordinal : null;
   const { requestTranscriptOrdinal } = state;
   // The store's pending-jump ordinal follows the pending jump: named while
@@ -691,7 +708,8 @@ function BotChatTranscriptBody(props: {
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const rowIdOf = useCallback(
     (messageId: string): string | null =>
-      jumpTargetIn(messages, { kind: "message", messageId })?.rowId ?? null,
+      jumpTargetIn(messages, { kind: "message", messageId, reportsMiss: false })
+        ?.rowId ?? null,
     [messages],
   );
   useBotSearchWordMarks(transcriptRef, chatId, rowIdOf);
@@ -791,7 +809,8 @@ function BotChatTranscriptBody(props: {
     return {
       ...repliesBase,
       above: (messageId) => above.get(messageId) ?? null,
-      open: (messageId) => jumpTo({ kind: "message", messageId }),
+      open: (messageId) =>
+        jumpTo({ kind: "message", messageId, reportsMiss: false }),
     };
   }, [flow, jumpTo, messages, repliesBase, transcriptWindow]);
   const listHeader = surface?.kind === "channel" ? surface.history : header;
@@ -1354,6 +1373,12 @@ export interface BotTranscriptLanding {
   readonly messageId: string;
   readonly sendPostId: string | null;
   readonly visit: number;
+  /**
+   * Set by a landing the person was told they would see (a notification's
+   * message): the list says so when the message cannot be opened. Any other
+   * landing that finds no row is left unlanded quietly.
+   */
+  readonly reportsMiss?: boolean;
 }
 
 /**
@@ -1374,11 +1399,53 @@ function useLandOnMessage(
 }
 
 /**
+ * A jump that reports its miss is one the person was told they would see. It
+ * ends unlanded, and says so, once the host answers that it has no such row
+ * or cannot be asked; a host that locates no rows says nothing about this
+ * one, whose transcript may still carry it. It ends silently once the landing
+ * that asked for it is withdrawn, or the pane it waited in view of leaves
+ * view: an answer arriving after that moves nothing. One asked of a pane not
+ * yet in view waits for it to show. Settled during render, as a pending jump
+ * is.
+ */
+function useReportedMiss(args: {
+  readonly pendingJump: PendingJump | null;
+  readonly withdrawn: boolean;
+  readonly located: ChatLocateRowAnswer;
+  readonly end: () => void;
+}): void {
+  const { pendingJump, withdrawn, located, end } = args;
+  const paneVisible = usePaneVisible();
+  const [seenJump, setSeenJump] = useState<PendingJump | null>(null);
+  const [unopened, setUnopened] = useState<PendingJump | null>(null);
+  const toldUnopened = useRef<PendingJump | null>(null);
+  useEffect(() => {
+    if (unopened === null || toldUnopened.current === unopened) return;
+    toldUnopened.current = unopened;
+    toast.error(NOTIFICATION_MESSAGE_UNAVAILABLE);
+  }, [unopened]);
+  if (pendingJump?.kind !== "message" || !pendingJump.reportsMiss) return;
+  if (paneVisible && seenJump !== pendingJump) setSeenJump(pendingJump);
+  if (withdrawn || (!paneVisible && seenJump === pendingJump)) {
+    end();
+    return;
+  }
+  if (located.status === "missing" && located.cause !== "unsupported") {
+    end();
+    setUnopened(pendingJump);
+  }
+}
+
+/**
  * A jump waiting on its row: to a message, or to the card of the send that
  * wrote a post, landing on `fallbackMessageId` where the session has none.
  */
 type PendingJump =
-  | { readonly kind: "message"; readonly messageId: string }
+  | {
+      readonly kind: "message";
+      readonly messageId: string;
+      readonly reportsMiss: boolean;
+    }
   | {
       readonly kind: "send";
       readonly postId: string;

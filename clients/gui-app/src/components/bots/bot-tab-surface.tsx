@@ -1,3 +1,5 @@
+import { toast } from "sonner";
+import { NOTIFICATION_MESSAGE_UNAVAILABLE } from "@/lib/notifications/destination-copy";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -101,6 +103,7 @@ import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useBotDraftsAdmitted } from "@/hooks/bots/use-bot-drafts-admitted";
 import { TRACY_TAB_LABEL } from "@/stores/tabs/kinds/tracy";
 import {
+  isBotThreadMessageLanding,
   useBotTabLandingStore,
   type BotTabLanding,
 } from "@/stores/bots/bot-tab-landing-store";
@@ -324,7 +327,7 @@ function TracySurfaceShell(props: {
     listedAt: botList.dataUpdatedAt,
     select,
   });
-  useSenderLandingSpentOnDeparture(botId);
+  useWaitingLandingSpentOnDeparture(botId, shown);
   const channelTitle =
     botList.data?.bots.find((bot) => bot.botId === botId)?.title ??
     TRACY_TAB_LABEL;
@@ -419,42 +422,74 @@ function useSurfaceTileForm(): {
 }
 
 /**
- * A `sender` landing waits in its channel's pane for the thread list, and a
- * move of the channel while it waits spends it unlanded
- * (`useSpendTabLanding`). Leaving the channel is such a move, but it unmounts
- * the pane and its wait with it, so the shell spends it here: the sender
- * landing the channel held while shown is withdrawn once another is selected.
- * Only that same request: one asked of the channel since (an opener staging
- * it before navigating back) is the channel's next landing.
+ * A `sender` landing, and a landing on a thread's message, wait in their
+ * channel's pane for the thread list, and a move of the channel while one
+ * waits spends it unlanded (`useSpendTabLanding`). Leaving the channel is
+ * such a move, but it unmounts the pane and its wait with it, so the shell
+ * spends it here: the landing the channel held while selected is withdrawn
+ * once another is selected. A thread message's is withdrawn as well once the
+ * surface it was shown on is out of view: the person has gone elsewhere, and
+ * a list answering later lands nothing behind them. Only that same request:
+ * one asked of the channel since (an opener staging it before navigating
+ * back) is the channel's next landing.
  */
-function useSenderLandingSpentOnDeparture(botId: string | null): void {
-  const shownLanding = useBotTabLandingStore((state) =>
+function useWaitingLandingSpentOnDeparture(
+  botId: string | null,
+  shown: boolean,
+): void {
+  const selectedLanding = useBotTabLandingStore((state) =>
     botId !== null && Object.hasOwn(state.byBotId, botId)
       ? state.byBotId[botId]
       : null,
   );
-  const held = useRef<{
-    readonly botId: string;
-    readonly landing: BotTabLanding;
-  } | null>(null);
+  const held = useRef<HeldLanding | null>(null);
   useEffect(() => {
     // Compared with the channel last seen, not run on cleanup, so a remount
     // of the same channel is no departure.
     const previous = held.current;
-    if (previous !== null && previous.botId !== botId) {
-      const { byBotId, clear } = useBotTabLandingStore.getState();
-      if (
-        Object.hasOwn(byBotId, previous.botId) &&
-        byBotId[previous.botId] === previous.landing
-      ) {
-        clear(previous.botId);
-      }
+    const leftView = previous !== null && leftViewWhileWaiting(previous, shown);
+    if (previous !== null && (previous.botId !== botId || leftView)) {
+      withdrawLanding(previous.botId, previous.landing);
     }
-    held.current =
-      botId !== null && shownLanding?.kind === "sender"
-        ? { botId, landing: shownLanding }
-        : null;
-  }, [botId, shownLanding]);
+    held.current = leftView
+      ? null
+      : heldLandingOf(botId, selectedLanding, previous, shown);
+  }, [botId, selectedLanding, shown]);
+}
+
+/** A landing its selected channel holds while it waits for the thread list. */
+interface HeldLanding {
+  readonly botId: string;
+  readonly landing: BotTabLanding;
+  /** The surface was in view at some commit while this request waited. */
+  readonly seen: boolean;
+}
+
+function leftViewWhileWaiting(held: HeldLanding, shown: boolean): boolean {
+  return held.seen && !shown && isBotThreadMessageLanding(held.landing);
+}
+
+/** Withdraws `landing` while it is still what `botId`'s tab is asked for. */
+function withdrawLanding(botId: string, landing: BotTabLanding): void {
+  const { byBotId, clear } = useBotTabLandingStore.getState();
+  if (Object.hasOwn(byBotId, botId) && byBotId[botId] === landing) {
+    clear(botId);
+  }
+}
+
+function heldLandingOf(
+  botId: string | null,
+  landing: BotTabLanding | null,
+  previous: HeldLanding | null,
+  shown: boolean,
+): HeldLanding | null {
+  if (botId === null || landing === null) return null;
+  if (landing.kind !== "sender" && !isBotThreadMessageLanding(landing)) {
+    return null;
+  }
+  const seenBefore =
+    previous !== null && previous.landing === landing && previous.seen;
+  return { botId, landing, seen: shown || seenBefore };
 }
 
 /**
@@ -1142,6 +1177,10 @@ function useBotTabSession(args: {
   readonly showChannel: (messageId: string | null) => void;
   readonly landChannel: (messageId: string | null) => void;
   readonly showThread: (threadId: string, messageId: string | null) => void;
+  readonly landNotified: (
+    threadId: string | null,
+    messageId: string | null,
+  ) => void;
 } {
   const { botId, threads, onViewChange, setOpenThread } = args;
   // Which session shows is the surface's place, kept in its store; where it
@@ -1251,28 +1290,32 @@ function useBotTabSession(args: {
   // A landing asked of the tab from outside it (a tapped push) shows the
   // channel with nothing beside it, on its row where one is named. Unlike
   // Back to the channel, it is never a return to a thread left open.
-  const landChannel = useCallback(
-    (messageId: string | null) => {
+  const landChannelRow = useCallback(
+    (messageId: string | null, reportsMiss: boolean) => {
       setOpenThread(null);
       showLanded(
         messageId === null
           ? null
-          : { messageId, sendPostId: null, threadId: null },
+          : { messageId, sendPostId: null, threadId: null, reportsMiss },
       );
     },
     [setOpenThread, showLanded],
   );
+  const landChannel = useCallback(
+    (messageId: string | null) => landChannelRow(messageId, false),
+    [landChannelRow],
+  );
   // A thread the list does not name has no post to open it by: the channel
   // shows instead, with no other thread beside it. One it names opens on
   // `messageId` where one is named.
-  const showThread = useCallback(
-    (threadId: string, messageId: string | null) => {
+  const showThreadMessage = useCallback(
+    (threadId: string, messageId: string | null, reportsMiss: boolean) => {
       const anchor =
         threads?.find((thread) => thread.threadId === threadId)?.anchor ?? null;
       showLanded(
         anchor === null || messageId === null
           ? null
-          : { messageId, sendPostId: null, threadId },
+          : { messageId, sendPostId: null, threadId, reportsMiss },
       );
       setOpenThread(
         anchor === null
@@ -1287,6 +1330,20 @@ function useBotTabSession(args: {
     },
     [setOpenThread, showLanded, threads],
   );
+  const showThread = useCallback(
+    (threadId: string, messageId: string | null) =>
+      showThreadMessage(threadId, messageId, false),
+    [showThreadMessage],
+  );
+  // Where a notification says a message is: the channel's row, or a message
+  // of a listed thread. The list that shows it says so when it cannot.
+  const landNotified = useCallback(
+    (threadId: string | null, messageId: string | null) => {
+      if (threadId === null) landChannelRow(messageId, true);
+      else showThreadMessage(threadId, messageId, true);
+    },
+    [landChannelRow, showThreadMessage],
+  );
   return {
     session,
     channelLanding: shown.channelLanding,
@@ -1296,6 +1353,7 @@ function useBotTabSession(args: {
     showChannel,
     landChannel,
     showThread,
+    landNotified,
   };
 }
 
@@ -1355,6 +1413,91 @@ function spendSenderLanding(input: {
   else input.showThread(thread.threadId, null);
 }
 
+function spendThreadLanding(input: {
+  readonly botId: string;
+  readonly landing: Extract<BotTabLanding, { kind: "thread" }>;
+  readonly list: ThreadListReading;
+  readonly place: BotTabPlace;
+  readonly waiting: { current: WaitingLanding | null };
+  readonly landNotified: (
+    threadId: string | null,
+    messageId: string | null,
+  ) => void;
+}): void {
+  const { landing, waiting, place, list } = input;
+  const store = useBotTabLandingStore.getState();
+  if (store.byBotId[input.botId] !== landing) return;
+  const held = waiting.current?.landing === landing ? waiting.current : null;
+  if (held !== null && held.place !== place) {
+    waiting.current = null;
+    store.clear(input.botId);
+    return;
+  }
+  if (landing.threadId === null) {
+    waiting.current = null;
+    store.clear(input.botId);
+    input.landNotified(null, landing.messageId);
+    return;
+  }
+  // The wait belongs to this request and its original place, not a deadline.
+  if (threadListMayStillAnswer(list)) {
+    waiting.current = held ?? { landing, place };
+    return;
+  }
+  waiting.current = null;
+  store.clear(input.botId);
+  if (!threadOpensInChannel(list, landing.threadId)) {
+    toast.error(NOTIFICATION_MESSAGE_UNAVAILABLE);
+    return;
+  }
+  input.landNotified(landing.threadId, landing.messageId);
+}
+
+/** What the tab knows of its channel's thread list as a landing is spent. */
+interface ThreadListReading {
+  readonly channelChatId: string | null;
+  /** `null` while the list is read, or when that read failed. */
+  readonly threads: ReadonlyArray<BotThreadSummary> | null;
+  /** `null` while it is not known whether the host lists threads. */
+  readonly threadsSupported: boolean | null;
+  readonly threadsFetching: boolean;
+  readonly threadsFailed: boolean;
+}
+
+/**
+ * Whether an answer that may name the thread is still coming: the host's
+ * support for the list is not known yet, or a read of it is in flight or has
+ * not been made. A held list is no verdict while a read runs over it.
+ */
+function threadListMayStillAnswer(list: ThreadListReading): boolean {
+  if (list.threadsSupported === null) return true;
+  return (
+    list.threadsSupported &&
+    (list.threadsFetching || (list.threads === null && !list.threadsFailed))
+  );
+}
+
+/**
+ * Whether the settled list names `threadId` as a thread this channel can
+ * open: one with its post still in the channel, hanging off this channel's
+ * own conversation.
+ */
+function threadOpensInChannel(
+  list: ThreadListReading,
+  threadId: string,
+): boolean {
+  if (list.threadsSupported !== true || list.threadsFailed) return false;
+  const thread = list.threads?.find(
+    (candidate) => candidate.threadId === threadId,
+  );
+  return (
+    thread !== undefined &&
+    thread.anchor !== null &&
+    list.channelChatId !== null &&
+    thread.conversationId === list.channelChatId
+  );
+}
+
 /**
  * Lands the tab where it was asked to from outside, once the thread list has
  * answered, since a thread opens by the post it hangs off. Each request is
@@ -1378,20 +1521,26 @@ function useSpendTabLanding(args: {
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
   /** A read of the list is in flight, over `threads` when they are held. */
   readonly threadsFetching: boolean;
+  readonly threadsSupported: boolean | null;
   /** The last read of the list failed. */
   readonly threadsFailed: boolean;
   /** Where the tab is; a new value is a move, the person's or a landing's. */
   readonly place: BotTabPlace;
   readonly landChannel: (messageId: string | null) => void;
   readonly showThread: (threadId: string, messageId: string | null) => void;
+  readonly landNotified: (
+    threadId: string | null,
+    messageId: string | null,
+  ) => void;
   readonly openSession: BotSessionOpen;
   /** Shows one of the tab's views: it also leaves Threads. */
   readonly onViewChange: (view: BotTabView) => void;
 }): void {
   const { botId, channelChatId, trunkChatId, threads } = args;
-  const { threadsFetching, threadsFailed } = args;
+  const { threadsFetching, threadsFailed, threadsSupported } = args;
   const { openSession, onViewChange, place } = args;
   const { landChannel: landOnChannel, showThread: showLandedThread } = args;
+  const { landNotified: landOnNotified } = args;
   // Where a landing puts the tab is nobody's own move: the route records it
   // over the entry the opener made, so one step back leaves it.
   const landChannel = useCallback(
@@ -1407,6 +1556,13 @@ function useSpendTabLanding(args: {
       showLandedThread(threadId, messageId);
     },
     [showLandedThread],
+  );
+  const landNotified = useCallback(
+    (threadId: string | null, messageId: string | null) => {
+      useTracyPlaceStore.getState().markAutomaticMove();
+      landOnNotified(threadId, messageId);
+    },
+    [landOnNotified],
   );
   const landing = useBotTabLandingStore((state) =>
     Object.hasOwn(state.byBotId, botId) ? state.byBotId[botId] : null,
@@ -1429,14 +1585,34 @@ function useSpendTabLanding(args: {
       });
       return;
     }
+    if (landing.kind === "thread") {
+      // An opening of a thread itself names no message to land on: it opens
+      // by the held list, as a `chat` landing does.
+      if (landing.threadId !== null && landing.messageId === null) {
+        if (threads === null) return;
+        useBotTabLandingStore.getState().clear(botId);
+        showThread(landing.threadId, null);
+        return;
+      }
+      spendThreadLanding({
+        botId,
+        landing,
+        list: {
+          channelChatId,
+          threads,
+          threadsSupported,
+          threadsFetching,
+          threadsFailed,
+        },
+        place,
+        waiting,
+        landNotified,
+      });
+      return;
+    }
     if (threads === null) return;
     useBotTabLandingStore.getState().clear(botId);
     const { messageId } = landing;
-    if (landing.kind === "thread") {
-      if (landing.threadId === null) landChannel(messageId);
-      else showThread(landing.threadId, messageId);
-      return;
-    }
     const { chatId } = landing;
     if (chatId === channelChatId) {
       landChannel(messageId);
@@ -1464,6 +1640,7 @@ function useSpendTabLanding(args: {
     botId,
     channelChatId,
     landChannel,
+    landNotified,
     landing,
     onViewChange,
     openSession,
@@ -1472,6 +1649,7 @@ function useSpendTabLanding(args: {
     threads,
     threadsFailed,
     threadsFetching,
+    threadsSupported,
     trunkChatId,
   ]);
 }
@@ -1669,12 +1847,13 @@ function BotTabContent(props: {
   );
   // Any host with the list lists the threads; Activity names a thread's work
   // by it, and the label tells a thread's session from the bot's other chats.
-  const threadListSupported =
-    useHostMethodSupport(hostId, "bot.thread.list") === true;
+  const threadListSupport = useHostMethodSupport(hostId, "bot.thread.list");
+  const threadListSupported = threadListSupport === true;
   const threadList = useBotThreadListQuery(client, botId, {
     enabled: threadListSupported,
   });
-  const threads = threadListSupported ? (threadList.data?.threads ?? null) : [];
+  const threads =
+    threadListSupport === false ? [] : (threadList.data?.threads ?? null);
   const {
     session,
     channelLanding,
@@ -1684,6 +1863,7 @@ function BotTabContent(props: {
     showChannel,
     landChannel,
     showThread,
+    landNotified,
   } = useBotTabSession({ botId, threads, onViewChange, setOpenThread });
   // Threads is the shell's, shown in place of the channel: a move too.
   const place = useMemo(
@@ -1711,11 +1891,13 @@ function BotTabContent(props: {
     channelChatId: snapshot.bot.appConversationChatId,
     trunkChatId: snapshot.bot.trunkChatId,
     threads,
+    threadsSupported: threadListSupport,
     threadsFetching: threadList.isFetching,
     threadsFailed: threadList.isError,
     place,
     landChannel,
     showThread,
+    landNotified,
     openSession,
     onViewChange,
   });
