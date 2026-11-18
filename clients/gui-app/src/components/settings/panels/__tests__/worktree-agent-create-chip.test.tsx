@@ -17,7 +17,6 @@ import {
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import type { AgentWorktreeCreatePolicy } from "@traycer/protocol/config/schema";
-import type { ConfigWorktreesSetRequest } from "@traycer/protocol/host/config/schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -93,7 +92,7 @@ interface Harness {
   readonly client: HostClient<HostRpcRegistry>;
   readonly gets: () => number;
   /** Every `config.worktrees.set` request body, in order. */
-  readonly sets: () => ReadonlyArray<ConfigWorktreesSetRequest>;
+  readonly sets: () => ReadonlyArray<AgentWorktreeCreatePolicy>;
   /** The host each request was ADDRESSED to, read off the recorded call. */
   readonly addressed: () => ReadonlyArray<string>;
 }
@@ -118,7 +117,7 @@ function createHarness(options: HarnessOptions): {
   });
   let stored = options.initial;
   let getCount = 0;
-  const sets: ConfigWorktreesSetRequest[] = [];
+  const sets: AgentWorktreeCreatePolicy[] = [];
   const addressed: string[] = [];
   const messenger: MockHostMessenger<HostRpcRegistry> =
     new MockHostMessenger<HostRpcRegistry>({
@@ -132,16 +131,16 @@ function createHarness(options: HarnessOptions): {
           );
           if (options.holdGet !== null) await options.holdGet.promise;
           if (options.failReads) throw new Error("config.json is garbage");
-          return { agentCreate: stored, recoverMissing: true };
+          return { agentCreate: stored };
         },
         "config.worktrees.set": async (params) => {
-          sets.push(params);
+          sets.push(params.agentCreate);
           addressed.push(
             messenger.calls.at(-1)?.authority.endpoint.hostId ?? "",
           );
           if (options.holdSet !== null) await options.holdSet.promise;
-          if (params.agentCreate !== null) stored = params.agentCreate;
-          return { agentCreate: stored, recoverMissing: true };
+          stored = params.agentCreate;
+          return { agentCreate: stored };
         },
       },
     });
@@ -439,9 +438,7 @@ describe("WorktreeAgentCreateChip ready", () => {
     fireEvent.click(radio("Never"));
 
     await waitFor(() => {
-      expect(harness.sets()).toEqual([
-        { agentCreate: "never", recoverMissing: null },
-      ]);
+      expect(harness.sets()).toEqual(["never"]);
     });
     expect(new Set(harness.addressed())).toEqual(
       new Set([mockRemoteHostEntry.hostId]),
@@ -466,9 +463,7 @@ describe("WorktreeAgentCreateChip ready", () => {
     await waitFor(() => {
       expect(chip().textContent).toBe("Agent worktrees · Ask first");
     });
-    expect(harness.sets()).toEqual([
-      { agentCreate: "ask", recoverMissing: null },
-    ]);
+    expect(harness.sets()).toEqual(["ask"]);
     expect(harness.gets()).toBeGreaterThan(readsBefore);
   });
 
@@ -532,9 +527,7 @@ describe("WorktreeAgentCreateChip ready", () => {
     await waitFor(() => {
       expect(screen.queryByTestId("worktree-agent-create-saving")).toBeNull();
     });
-    expect(harness.sets()).toEqual([
-      { agentCreate: "never", recoverMissing: null },
-    ]);
+    expect(harness.sets()).toEqual(["never"]);
   });
 
   it("replaces the choices with the repair sentence when the read fails", async () => {

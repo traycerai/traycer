@@ -637,12 +637,8 @@ import {
   configShellSetV10,
   configShellSetV11,
   configShellSetUpgradeV10ToV11,
-  configWorktreesGetUpgradeV10ToV11,
   configWorktreesGetV10,
-  configWorktreesGetV11,
-  configWorktreesSetUpgradeV10ToV11,
   configWorktreesSetV10,
-  configWorktreesSetV11,
   configVisualizationGetV10,
   configVisualizationSetV10,
   configSessionNamesGetV10,
@@ -7245,15 +7241,11 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.worktrees.get": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 0,
       versions: {
         0: {
           contract: configWorktreesGetV10,
           upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: configWorktreesGetV11,
-          upgradeFromPreviousVersion: configWorktreesGetUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -7262,15 +7254,11 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.worktrees.set": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 0,
       versions: {
         0: {
           contract: configWorktreesSetV10,
           upgradeFromPreviousVersion: null,
-        },
-        1: {
-          contract: configWorktreesSetV11,
-          upgradeFromPreviousVersion: configWorktreesSetUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

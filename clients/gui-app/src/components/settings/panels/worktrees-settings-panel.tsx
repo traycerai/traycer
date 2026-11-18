@@ -123,7 +123,6 @@ import { WorktreeDeleteProgressStrip } from "./worktree-delete-progress-strip";
 import { WorktreeDeleteProgressModal } from "@/components/settings/panels/worktree-delete-progress-modal";
 import { WorktreeAutoCleanupChip } from "@/components/settings/panels/worktree-auto-cleanup-chip";
 import { WorktreeAgentCreateChip } from "@/components/settings/panels/worktree-agent-create-chip";
-import { WorktreeRecoverMissingChip } from "@/components/settings/panels/worktree-recover-missing-chip";
 import { WorktreeCleanupHistory } from "@/components/settings/panels/worktree-cleanup-history";
 import { useWorktreeCleanupViewStore } from "@/stores/settings/worktree-cleanup-view-store";
 import { WorktreeListRenderProfiler } from "@/components/settings/panels/worktree-list-render-profiler";
@@ -681,7 +680,6 @@ function WorktreesBody(props: {
       <>
         <WorktreeAutoCleanupChip scope={scope} onOpenHistory={onOpenHistory} />
         <WorktreeAgentCreateChip scope={scope} />
-        <WorktreeRecoverMissingChip scope={scope} />
       </>
     ),
     onRefresh,

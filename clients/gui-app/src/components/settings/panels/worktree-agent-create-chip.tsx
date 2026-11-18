@@ -235,10 +235,7 @@ function AgentWorktreesPolicyChip(props: {
               );
               if (match === undefined || match.value === policy) return;
               trackSettingChanged("worktrees", "agentWorktreeCreate");
-              setPolicy.mutate({
-                agentCreate: match.value,
-                recoverMissing: null,
-              });
+              setPolicy.mutate({ agentCreate: match.value });
             }}
           >
             {POLICY_OPTIONS.map((option) => (
