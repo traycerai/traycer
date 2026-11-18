@@ -280,6 +280,7 @@ export function useCurrentSectionHold(
 const NO_HOLDS: ReadonlyArray<StripSectionHold> = [];
 
 interface ReleasedHoldState {
+  readonly sections: ReadonlyArray<StripSectionGroup>;
   readonly current: StripSectionHold | null;
   readonly released: ReadonlyArray<StripSectionHold>;
 }
@@ -322,14 +323,17 @@ export function useReleasedSectionHolds(
   pointerInside: boolean,
 ): ReadonlyArray<StripSectionHold> {
   const [state, setState] = useState<ReleasedHoldState>({
+    sections,
     current,
     released: NO_HOLDS,
   });
   if (
     state.current !== current ||
+    (state.sections !== sections && state.released.length > 0) ||
     (!pointerInside && state.released.length > 0)
   ) {
     setState({
+      sections,
       current,
       released: releasedHoldsOf(state, current, sections, pointerInside),
     });

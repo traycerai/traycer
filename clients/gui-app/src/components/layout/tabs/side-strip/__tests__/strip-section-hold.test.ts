@@ -7,7 +7,7 @@
  * `browser-tests/side-strip-section-motion.spec.ts`'s.
  */
 import { act, renderHook } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   emptyTabStripLayout,
   removeLayoutRef,
@@ -386,6 +386,10 @@ describe("useStripPointerInside", () => {
     });
   }
 
+  afterEach(() => {
+    Reflect.deleteProperty(document, "visibilityState");
+  });
+
   it("is false at mount", () => {
     expect(mounted().inside()).toBe(false);
   });
@@ -567,6 +571,28 @@ describe("useReleasedSectionHolds", () => {
 
     list.set({ current: { itemId: ID_A, section: "needs-you" } });
 
+    expect(list.holds()).toEqual([]);
+  });
+
+  it("lets a waiting row go when its own section becomes the one it waits in", () => {
+    const list = released(openingA);
+    list.set({ current: HELD_B });
+    expect(list.holds()).toEqual([HELD_A]);
+
+    list.set({
+      sections: sectionsOf([
+        [ID_A, "to-review"],
+        [ID_B, "idle"],
+      ]),
+    });
+    expect(list.holds()).toEqual([]);
+
+    list.set({
+      sections: sectionsOf([
+        [ID_A, "needs-you"],
+        [ID_B, "idle"],
+      ]),
+    });
     expect(list.holds()).toEqual([]);
   });
 });
