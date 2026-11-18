@@ -1,5 +1,8 @@
 import { useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { z } from "zod";
+import { PROFILE_RECORD_FAILURE_COPY } from "@traycer-clients/shared/host-client/profile-record-actions";
 import {
   providerProfileAccentColorSchema,
   type ProviderProfile,
@@ -16,6 +19,9 @@ import { ProfileSummaryActions } from "@/components/settings/panels/profile-summ
 import { ProfileEditDialogPresentation } from "@/components/settings/panels/profile-edit-dialog-presentation";
 import { configurationProfileValueSchema } from "@/hooks/environment/team/configuration-item-values";
 import { useConfigurationItemMutations } from "@/hooks/environment/team/use-configuration-item-mutations";
+import { invalidateConfigurationReads } from "@/hooks/environment/environment-host-list-key";
+import { useEnvironmentCloudMutation } from "@/hooks/environment/use-environment-cloud";
+import { environmentMutationKeys } from "@/lib/query-keys";
 import type { ConfigurationItem } from "@/hooks/environment/team/use-configuration-items-query";
 import {
   useCanEditConfiguration,
@@ -49,8 +55,8 @@ function pickerProfile(item: ConfigurationItem): ProviderProfile {
 
 /**
  * A team's profiles in the personal profile picker. An editor turns each
- * profile on or off from its row and manages the selected one; a reader sees
- * On or Off and no Manage profile. A team profile has no sign-in, so there is
+ * profile on or off from its row and manages the selected one; a reader has the
+ * switch too, and the host's refusal answers its press, with no Manage profile. A team profile has no sign-in, so there is
  * no Add a profile and no Sign in.
  */
 export function ConfigurationProfiles(props: {
@@ -62,7 +68,16 @@ export function ConfigurationProfiles(props: {
 }): ReactNode {
   const source = useConfigurationSource();
   const canEdit = useCanEditConfiguration();
-  const { put } = useConfigurationItemMutations();
+  const queries = useQueryClient();
+  // A role refusal says the permission sentence, not the generic save failure: this write keeps
+  // it out of the shared toast and says the sentence itself.
+  const setEnabledPut = useEnvironmentCloudMutation({
+    method: "environment.configuration.items.put",
+    mutationKey: environmentMutationKeys.configurationItemsPut(),
+    errorMessage: "Couldn't save these settings.",
+    invalidateMethods: [],
+    silentCodes: ["E_ROLE_FORBIDDEN"],
+  });
   const [pickedKey, setPickedKey] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   const [editSession, setEditSession] = useState(0);
@@ -72,21 +87,39 @@ export function ConfigurationProfiles(props: {
   const profiles = props.profiles.map(pickerProfile);
   const value = configurationProfileValueSchema.parse(selected.value);
   const setEnabled = (profileId: string | null, enabled: boolean): void => {
-    if (!canEdit || source.kind !== "pool" || put.isPending) return;
+    if (source.kind !== "pool" || setEnabledPut.isPending) return;
     const item = props.profiles.find(
       (candidate) => candidate.key === profileId,
     );
     if (item === undefined) return;
-    put.mutate(
+    const environmentId = source.environmentId;
+    const reread = (): void =>
+      invalidateConfigurationReads(queries, environmentId, [
+        "environment.configuration.items",
+      ]);
+    setEnabledPut.mutate(
       {
-        environmentId: source.environmentId,
+        environmentId,
         kind: "managed_profile",
         key: item.key,
         os: null,
         value: { ...z.record(z.string(), z.json()).parse(item.value), enabled },
         revision: item.revision,
       },
-      { onSuccess: props.onOutcome },
+      {
+        onSuccess: (result) => {
+          // authn's 403 on an item write is an answer, not an error: the press says the same sentence.
+          if (result.outcome === "forbidden")
+            toast.error(PROFILE_RECORD_FAILURE_COPY.forbidden);
+          else props.onOutcome(result);
+          reread();
+        },
+        onError: (error) => {
+          if (error.code === "E_ROLE_FORBIDDEN")
+            toast.error(PROFILE_RECORD_FAILURE_COPY.forbidden);
+          reread();
+        },
+      },
     );
   };
   return (
@@ -101,14 +134,14 @@ export function ConfigurationProfiles(props: {
         createProfileDisabled={false}
         createProfileDisabledReason={undefined}
         shortcutHintForIndex={() => null}
-        profileEnablementPending={() => put.isPending}
+        profileEnablementPending={() => setEnabledPut.isPending}
         contentContainer={null}
         onCloseAutoFocus={null}
         usagePresentation={null}
         eligibilityControls={{
-          pending: () => put.isPending,
+          pending: () => setEnabledPut.isPending,
           disabledReason: () => null,
-          onSetEnabled: canEdit ? setEnabled : null,
+          onSetEnabled: setEnabled,
         }}
         admissionByProfileId={null}
         showTerminalBadge={false}

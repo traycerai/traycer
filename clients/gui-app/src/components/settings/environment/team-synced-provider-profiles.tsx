@@ -97,7 +97,7 @@ export function TeamSyncedProviderProfiles(props: {
     setLogin({ profile, switchSource });
   };
   const setEnabled = (profileId: string | null, enabled: boolean): void => {
-    if (!canEdit || put.isPending || profileId === null) return;
+    if (put.isPending || profileId === null) return;
     put.mutate({ environmentId: source.environmentId, profileId, enabled });
   };
   return (
@@ -249,7 +249,7 @@ function TeamSelectedProviderProfile(props: {
         eligibilityControls={{
           pending: () => props.pending,
           disabledReason: () => null,
-          onSetEnabled: props.canEdit ? props.onSetEnabled : null,
+          onSetEnabled: props.onSetEnabled,
         }}
         admissionByProfileId={null}
         showTerminalBadge={false}

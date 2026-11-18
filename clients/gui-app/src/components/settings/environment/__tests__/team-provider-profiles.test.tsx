@@ -487,6 +487,125 @@ describe("TeamProviders profiles", () => {
     },
   );
 
+  it("draws the switch for a viewer, refuses its press with the existing sentence, and leaves the switch as stored", async () => {
+    teamProfileRecordHttpBoundary.list = {
+      status: 200,
+      body: teamProfileRecordsBody([
+        teamProfileRecord({
+          profileId: "team-viewer-switch-profile",
+          harnessId: "claude",
+          name: "Team viewer switch profile",
+          readerLabel: "live",
+          kind: "oauth_code",
+        }),
+      ]),
+    };
+    teamProfileRecordHttpBoundary.items = {
+      status: 200,
+      body: {
+        items: [
+          configurationItem({
+            kind: "managed_profile",
+            key: "claude:team-viewer-switch-profile",
+            value: {
+              name: "Team viewer switch profile",
+              color: null,
+              harnessId: "claude",
+              accountIdentity: null,
+              needsLink: false,
+              enabled: true,
+            },
+            revision: 1,
+          }),
+        ],
+      },
+    };
+    teamProfileRecordHttpBoundary.itemWriteStatus = 403;
+    const harness = mountTeamPageThroughBoundary(
+      "viewer",
+      {
+        ...handlers(() => []),
+        "environment.host.list": () => ({ hosts: [reachableHost] }),
+      },
+      "providers",
+    );
+    await waitFor(() => {
+      expect(useAuthStore.getState().contextMetadata?.userId).toBe(
+        "team-test-user",
+      );
+    });
+    admitCurrentUserToTeamWindow();
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+    await screen.findByRole("button", {
+      name: "Claude Code profile: Team viewer switch profile",
+    });
+    openProfileMenu(profileTriggerName("Team viewer switch profile", false));
+    expect(
+      profileRowSwitch("Team viewer switch profile").getAttribute(
+        "aria-checked",
+      ),
+    ).toBe("true");
+
+    await userEvent.click(profileRowSwitch("Team viewer switch profile"));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "You don't have permission to do that.",
+      );
+      expect(teamProfileRecordReadCount()).toBe(2);
+    });
+    expect(
+      teamProfileRecordHttpBoundary.calls.some(
+        (call) =>
+          call.url.endsWith(
+            "/api/v3/environments/env-a/items/managed_profile",
+          ) && call.method === "PUT",
+      ),
+    ).toBe(true);
+    expect(
+      profileRowSwitch("Team viewer switch profile").getAttribute(
+        "aria-checked",
+      ),
+    ).toBe("true");
+  });
+
+  it("draws the switch for a viewer on the items fallback, refuses its press with the existing sentence, and leaves the switch as stored", async () => {
+    const harness = mountVerifiedTeamProvidersPage(poolSource("viewer"), {
+      ...handlers(() => [profile(true, 4)]),
+    });
+    harness.cloudResponses.set(
+      "PUT /api/v3/environments/env-a/items/managed_profile",
+      () => ({ status: 403, text: "{}" }),
+    );
+    render(<TeamProviders />, { wrapper: harness.Wrapper });
+    await screen.findByText("Work");
+    const trigger = screen.getByRole("switch", {
+      name: "Allow agents to use Work",
+    });
+    expect(trigger.getAttribute("aria-checked")).toBe("true");
+
+    await userEvent.click(trigger);
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "You don't have permission to do that.",
+      );
+    });
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(
+      harness.cloudRequests.some(
+        (request) =>
+          request.method === "PUT" &&
+          request.url.endsWith("/items/managed_profile"),
+      ),
+    ).toBe(true);
+    expect(
+      screen
+        .getByRole("switch", { name: "Allow agents to use Work" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
   it("updates a synced row through its exact managed-profile item key and rereads records", async () => {
     const stored = {
       name: "Shared Work",
@@ -742,7 +861,7 @@ describe("TeamProviders profiles", () => {
     });
   });
 
-  it("gives a viewer On/Off for a profile with no switch, plus the member-only verbs withheld", async () => {
+  it("gives a viewer the switch for a profile, plus the member-only verbs withheld", async () => {
     const harness = mountVerifiedTeamProvidersPage(poolSource("viewer"), {
       ...handlers(() => [profile(true, 4)]),
       "environment.secrets.list": () => ({
@@ -762,8 +881,11 @@ describe("TeamProviders profiles", () => {
     expect(screen.queryByText("Use")).toBeNull();
     expect(screen.queryByRole("heading", { name: "Key" })).toBeNull();
     expect(screen.queryByText("CURSOR_API_KEY")).toBeNull();
-    expect(screen.getByText("On")).toBeTruthy();
-    expect(screen.queryByRole("switch")).toBeNull();
+    expect(
+      screen
+        .getByRole("switch", { name: "Allow agents to use Work" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
     expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
     expect(screen.queryByText("Signed in")).toBeNull();
     expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
@@ -775,7 +897,7 @@ describe("TeamProviders profiles", () => {
     ).toBeTruthy();
   });
 
-  it("lets a reader select a disabled profile and keeps On or Off with no Manage", async () => {
+  it("lets a reader select a disabled profile and keeps the switch with no Manage", async () => {
     const harness = mountVerifiedTeamProvidersPage(poolSource("viewer"), {
       ...handlers(() => [
         teamProfile({
@@ -802,13 +924,20 @@ describe("TeamProviders profiles", () => {
       name: profileTriggerName("Work", false),
     });
     expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
-    expect(screen.queryByRole("switch")).toBeNull();
+    expect(
+      screen
+        .getByRole("switch", { name: "Allow agents to use Work" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
     openProfileMenu(profileTriggerName("Work", false));
     const homeGroup = screen.getByRole("group", {
       name: "Home profile controls",
     });
-    expect(within(homeGroup).getByText("Off")).toBeTruthy();
-    expect(within(homeGroup).queryByRole("switch")).toBeNull();
+    expect(
+      within(homeGroup)
+        .getByRole("switch", { name: "Allow agents to use Home" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
     const homeRow = within(homeGroup).getByRole("menuitem", {
       name: "Home, Disabled",
     });
@@ -816,8 +945,11 @@ describe("TeamProviders profiles", () => {
     const workGroup = screen.getByRole("group", {
       name: "Work profile controls",
     });
-    expect(within(workGroup).getByText("On")).toBeTruthy();
-    expect(within(workGroup).queryByRole("switch")).toBeNull();
+    expect(
+      within(workGroup)
+        .getByRole("switch", { name: "Allow agents to use Work" })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
     fireEvent.click(homeRow);
 
     expect(
@@ -827,8 +959,11 @@ describe("TeamProviders profiles", () => {
     ).toBeTruthy();
     expect(screen.getByText("Home label")).toBeTruthy();
     expect(screen.queryByText("Work label")).toBeNull();
-    expect(screen.getByText("Off")).toBeTruthy();
-    expect(screen.queryByRole("switch")).toBeNull();
+    expect(
+      screen
+        .getByRole("switch", { name: "Allow agents to use Home" })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
     expect(screen.queryByRole("button", { name: "Manage profile" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Add a profile" })).toBeNull();
