@@ -1,5 +1,4 @@
 export type ProfilePersonAction = "sign-out" | "remove";
-export type ProfilePersonActionScope = "record" | "legacy";
 
 interface ProfilePersonActionCopy {
   readonly title: string;
@@ -7,37 +6,21 @@ interface ProfilePersonActionCopy {
   readonly actionLabel: string;
 }
 
-export function profilePersonActionLabel(
-  action: ProfilePersonAction,
-  scope: ProfilePersonActionScope,
-): string {
-  if (action === "remove") return "Remove";
-  return scope === "record" ? "Sign out" : "Sign out on every host";
+export function profilePersonActionLabel(action: ProfilePersonAction): string {
+  return action === "remove" ? "Remove" : "Sign out";
 }
 
 export function profilePersonActionCopy(
   action: ProfilePersonAction,
-  scope: ProfilePersonActionScope,
   profileName: string,
   environmentName: string | null,
 ): ProfilePersonActionCopy {
   const environment = environmentName ?? "this environment";
-  const actionLabel = profilePersonActionLabel(action, scope);
+  const actionLabel = profilePersonActionLabel(action);
   if (action === "remove") {
     return {
       title: `Remove ${profileName}?`,
-      description:
-        scope === "record"
-          ? `Remove ${profileName} from every list in ${environment}. Running work finishes first. You can add this account again later by signing in.`
-          : `Agents that ran on ${profileName} will show it as removed. Running sessions on this profile must be stopped first.`,
-      actionLabel,
-    };
-  }
-  if (scope === "legacy") {
-    return {
-      title: "Sign this account out on every host?",
-      description:
-        "You’ll need to sign in again to use this account on any host.",
+      description: `Remove ${profileName} from every list in ${environment}. Running work finishes first. You can add this account again later by signing in.`,
       actionLabel,
     };
   }

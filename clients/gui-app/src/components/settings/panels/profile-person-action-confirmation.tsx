@@ -3,12 +3,10 @@ import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-di
 import {
   profilePersonActionCopy,
   type ProfilePersonAction,
-  type ProfilePersonActionScope,
 } from "./profile-person-action-copy";
 
 export interface ProfilePersonActionConfirmationProps {
   readonly action: ProfilePersonAction;
-  readonly scope: ProfilePersonActionScope;
   readonly profileName: string;
   readonly environmentName: string | null;
   readonly open: boolean;
@@ -24,7 +22,6 @@ export function ProfilePersonActionConfirmation(
 ): ReactNode {
   const copy = profilePersonActionCopy(
     props.action,
-    props.scope,
     props.profileName,
     props.environmentName,
   );

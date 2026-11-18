@@ -645,9 +645,6 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
     renderDialog(profile({ kind: "admitted", bindingVersion: 1 }, undefined));
 
     expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Sign out on every host" }),
-    ).toBeNull();
   });
 
   it.each(["unknown", "transitional"] as const)(
@@ -662,9 +659,6 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
       );
 
       expect(screen.queryByRole("button", { name: "Sign out" })).toBeNull();
-      expect(
-        screen.queryByRole("button", { name: "Sign out on every host" }),
-      ).toBeNull();
       expect(fixture.supportChecks).toContainEqual({
         hostId: fixture.hostId,
         method: "providers.signOutProfile",
@@ -716,15 +710,10 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
         credentialHome("brokered"),
       ),
     );
-    const copy = profilePersonActionCopy(
-      "sign-out",
-      "record",
-      "Work account",
-      null,
-    );
+    const copy = profilePersonActionCopy("sign-out", "Work account", null);
     fireEvent.click(
       screen.getByRole("button", {
-        name: profilePersonActionLabel("sign-out", "record"),
+        name: profilePersonActionLabel("sign-out"),
       }),
     );
     expect(messenger.calls).toEqual([]);
@@ -759,9 +748,6 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
         "Running work finishes first. The account stays in the list and needs a sign-in. This does not reach a computer that already left or has not updated, or a separate Terminal login.",
       ),
     ).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: "Sign out on every host" }),
-    ).toBeNull();
     fireEvent.click(screen.getByTestId("confirm-action"));
 
     await waitFor(() =>
@@ -905,7 +891,7 @@ describe("<ProfileEditDialog /> sign-out gate", () => {
     function confirmSignOut(): void {
       fireEvent.click(
         screen.getByRole("button", {
-          name: profilePersonActionLabel("sign-out", "record"),
+          name: profilePersonActionLabel("sign-out"),
         }),
       );
       fireEvent.click(screen.getByTestId("confirm-action"));
