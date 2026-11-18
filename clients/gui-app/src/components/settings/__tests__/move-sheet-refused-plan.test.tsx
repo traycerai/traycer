@@ -13,6 +13,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -32,6 +33,7 @@ import type { EnvironmentDirectoryResult } from "@traycer-clients/shared/host-cl
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { fakeEnvironmentCloud } from "@/components/settings/host-scope/__tests__/host-access-test-support";
 import type { HostsRunningConfiguration } from "@/components/settings/environment/hosts-running-configuration-model";
+import { MoveProgressDialog } from "@/components/settings/move/move-progress-dialog";
 import { MoveSheet } from "@/components/settings/move-sheet";
 import { MOVE_DISCLOSURE_VERSION } from "@/components/settings/move-sheet-model";
 import { TeamGiveDialog } from "@/components/settings/panels/team-give-dialog";
@@ -161,6 +163,33 @@ function stoppedStatus(): EnvironmentStatusResponseV13 {
   });
 }
 
+/** What the computer can read once a Retry has run the stopped move again. */
+const RESUMED_STATUSES: readonly [string, EnvironmentStatusResponseV13][] = [
+  [
+    "running",
+    environmentStatusFixture({
+      setup: { stage: "moving_settings", state: "running" },
+      move: {
+        state: "running",
+        attemptId: ATTEMPT_ID,
+        acceptanceId: ACCEPTANCE_ID,
+      },
+    }),
+  ],
+  [
+    "already done",
+    environmentStatusFixture({
+      setup: { stage: "done", state: "done" },
+      move: {
+        state: "done",
+        attemptId: ATTEMPT_ID,
+        acceptanceId: ACCEPTANCE_ID,
+      },
+    }),
+  ],
+  ["without a setup", environmentStatusFixture({ setup: null })],
+];
+
 function awaitingConsentStatus(): EnvironmentStatusResponseV13 {
   return environmentStatusFixture({
     setup: { stage: "moving_settings", state: "awaiting_consent" },
@@ -173,6 +202,8 @@ interface Computer {
   /** While set, every plan read is refused with it. */
   planFailure: Error | null;
   status: EnvironmentStatusResponseV13;
+  /** Whether the computer's handshake lists `environment.setup.retry`. */
+  servesRetry: boolean;
 }
 
 interface Harness {
@@ -180,6 +211,7 @@ interface Harness {
   readonly queryClient: QueryClient;
   readonly planReads: () => number;
   readonly retries: () => number;
+  readonly stages: () => number;
   readonly starts: EnvironmentMoveStartRequest[];
   readonly client: HostClient<HostRpcRegistry>;
 }
@@ -259,7 +291,9 @@ function mountComputer(computer: Computer): Harness {
     "environment.move.stage": { major: 1, minor: 0 },
     "environment.move.start": { major: 1, minor: 0 },
     "environment.status": { major: 1, minor: 3 },
-    "environment.setup.retry": { major: 1, minor: 0 },
+    ...(computer.servesRetry
+      ? { "environment.setup.retry": { major: 1, minor: 0 } }
+      : {}),
   });
   return {
     computer,
@@ -274,6 +308,9 @@ function mountComputer(computer: Computer): Harness {
       messenger.calls.filter((call) => call.method === "environment.move.plan")
         .length,
     retries: () => retries,
+    stages: () =>
+      messenger.calls.filter((call) => call.method === "environment.move.stage")
+        .length,
     starts,
   };
 }
@@ -283,6 +320,7 @@ function mountSheet(computer: Computer): Harness {
   render(
     <QueryClientProvider client={harness.queryClient}>
       <MoveSheet />
+      <MoveProgressDialog />
     </QueryClientProvider>,
   );
   act(() => {
@@ -386,6 +424,7 @@ describe("<MoveSheet /> after a refused plan read", () => {
       plan: STALE_PLAN,
       planFailure: null,
       status: awaitingConsentStatus(),
+      servesRetry: true,
     });
     await settle();
     expect(summaryText()).toBe("2 variables");
@@ -412,6 +451,7 @@ describe("<MoveSheet /> after a refused plan read", () => {
         plan: STALE_PLAN,
         planFailure: null,
         status: awaitingConsentStatus(),
+        servesRetry: true,
       });
       await settle();
       expect(summaryText()).toBe("2 variables");
@@ -430,6 +470,7 @@ describe("<MoveSheet /> after a refused plan read", () => {
       plan: STALE_PLAN,
       planFailure: null,
       status: awaitingConsentStatus(),
+      servesRetry: true,
     });
     await settle();
     harness.computer.status = stoppedStatus();
@@ -472,11 +513,77 @@ describe("<MoveSheet /> after a refused plan read", () => {
     ]);
   });
 
+  it.each(RESUMED_STATUSES)(
+    "hands over to the move's progress when the re-run resumes without asking and the status reads %s",
+    async (_name, resumedStatus) => {
+      const harness = mountSheet({
+        plan: STALE_PLAN,
+        planFailure: null,
+        status: awaitingConsentStatus(),
+        servesRetry: true,
+      });
+      await settle();
+      harness.computer.status = stoppedStatus();
+      harness.computer.planFailure = NOT_AWAITING;
+      await rereadPlan(harness);
+      await deliverNextStatusRead();
+      const readsBeforeRetry = harness.planReads();
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await settle();
+      expect(harness.retries()).toBe(1);
+      expect(useMoveSheetStore.getState().target).not.toBeNull();
+
+      harness.computer.status = resumedStatus;
+      await deliverNextStatusRead();
+      const dialog = await screen.findByTestId("move-progress-dialog");
+
+      expect(useMoveSheetStore.getState().target).toBeNull();
+      expect(useMoveProgressDialogStore.getState().target).toEqual({
+        hostId: HOST_ID,
+        hostName: "Old laptop",
+      });
+      expect(
+        within(dialog).getByText("Moving Old laptop to Personal"),
+      ).toBeTruthy();
+      expect(screen.queryByTestId("move-sheet-accept")).toBeNull();
+      expect(harness.planReads()).toBe(readsBeforeRetry);
+      expect(harness.stages()).toBe(0);
+      expect(harness.starts).toEqual([]);
+    },
+  );
+
+  it("keeps the plan refetch on a host without environment.setup.retry", async () => {
+    const harness = mountSheet({
+      plan: STALE_PLAN,
+      planFailure: null,
+      status: stoppedStatus(),
+      servesRetry: false,
+    });
+    await settle();
+    harness.computer.planFailure = NOT_AWAITING;
+    await rereadPlan(harness);
+    await deliverNextStatusRead();
+    const readsBeforeRetry = harness.planReads();
+    expect(screen.getByText(NOT_AWAITING.message)).toBeTruthy();
+
+    harness.computer.planFailure = null;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+
+    expect(harness.retries()).toBe(0);
+    expect(harness.planReads()).toBe(readsBeforeRetry + 1);
+    expect(summaryText()).toBe("2 variables");
+    expect(acceptIsDisabled()).toBe(false);
+    expect(harness.stages()).toBe(0);
+  });
+
   it("only reads the plan again on Retry when the move is waiting for the person", async () => {
     const harness = mountSheet({
       plan: STALE_PLAN,
       planFailure: null,
       status: awaitingConsentStatus(),
+      servesRetry: true,
     });
     await settle();
     harness.computer.planFailure = NOT_AWAITING;
@@ -502,6 +609,7 @@ describe("<TeamGiveDialog /> after a refused plan read", () => {
       plan: GIVE_PLAN,
       planFailure: null,
       status: awaitingConsentStatus(),
+      servesRetry: true,
     });
     await settle();
     const confirm = (): HTMLElement =>
