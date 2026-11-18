@@ -917,7 +917,9 @@ describe("<TeamGiveDialog /> after a refused plan read", () => {
     expect(screen.getByText(NOT_AWAITING.message)).toBeTruthy();
     expect(confirm().hasAttribute("disabled")).toBe(true);
   });
+});
 
+describe("<TeamGiveDialog /> reopened over an earlier opening's answer", () => {
   it("holds Confirm at this computer on a reopen until this opening's read answers", async () => {
     const harness = mountComputer(
       {
@@ -982,6 +984,7 @@ describe("<MoveSheet /> reopened over an earlier opening's answer", () => {
     openMoveSheet();
     await settle();
 
+    expect(harness.planReads()).toBe(2);
     expect(planIsDrawn()).toBe(false);
     expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
     expect(
@@ -1001,27 +1004,17 @@ describe("<MoveSheet /> reopened over an earlier opening's answer", () => {
       screen.getAllByRole("button", { name: "Leave on this computer only" })
         .length,
     ).toBeGreaterThan(0);
-  });
 
-  it("reads the plan again on a reopen within a minute of the last answer", async () => {
-    const harness = mountWithAppCache(awaitingComputer());
-    await settle();
-    expect(harness.planReads()).toBe(1);
-    closeMoveSheet();
-    await advanceLegendListTime(30_000);
-
-    harness.computer.plan = FRESH_PLAN;
-    const answer = harness.holdNextPlanRead();
-    openMoveSheet();
+    fireEvent.click(acceptButton());
     await settle();
 
-    expect(harness.planReads()).toBe(2);
-    expect(summaryText()).toBeNull();
-
-    answer();
-    await settle();
-
-    expect(summaryText()).toBe("3 variables");
+    expect(harness.starts).toEqual([
+      {
+        attemptId: ATTEMPT_ID,
+        planHash: FRESH_PLAN.planHash,
+        acceptanceId: ACCEPTANCE_ID,
+      },
+    ]);
   });
 
   it("shows no refusal line or Retry from the last opening until this opening's read answers", async () => {

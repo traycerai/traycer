@@ -198,12 +198,9 @@ function MoveProgressDialogBody(props: {
   );
 }
 
-/** The answers, data or refusal, a cache entry has taken; 0 for none. */
+/** The answers a cache entry has taken; 0 for none. A refusal is not one: the entry keeps the data it held before it. */
 function answerCount(queryClient: QueryClient, hash: string): number {
-  const state = queryClient.getQueryCache().get(hash)?.state;
-  return state === undefined
-    ? 0
-    : state.dataUpdateCount + state.errorUpdateCount;
+  return queryClient.getQueryCache().get(hash)?.state.dataUpdateCount ?? 0;
 }
 
 /** `data`, once the entry `hash` names has answered since this component first read it; null before. */

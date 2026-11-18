@@ -967,6 +967,33 @@ describe("<MoveProgressDialog />", () => {
       expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     });
 
+    it("keeps the moving view when this opening's first status read fails, until a later read answers", async () => {
+      const harness = mountWithAppCache(stoppedStatus("failed"));
+      openDialog();
+      await settle();
+      expect(screen.getByTestId("move-progress-dialog-stopped")).toBeTruthy();
+      closeDialog();
+      await settle();
+
+      let refuse = (): void => undefined;
+      harness.feed.hold = new Promise<void>((_resolve, reject) => {
+        refuse = () => reject(new Error("status read refused"));
+      });
+      openDialog();
+      await advance(10_000);
+      refuse();
+      await settle();
+
+      expect(screen.queryByTestId("move-progress-dialog-stopped")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+
+      harness.feed.hold = null;
+      await advance(5_000);
+
+      expect(screen.getByTestId("move-progress-dialog-stopped")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    });
+
     it("shows neither the done view nor closes itself until a status answers after the reopen", async () => {
       const harness = mountWithAppCache(movedStatus());
       openDialog();
