@@ -289,6 +289,7 @@ function useChannelLanding(
       setLanding((previous) => ({
         messageId,
         sendPostId,
+        notificationToken: landOn.notificationToken,
         visit: (previous?.visit ?? 0) + 1,
       }));
     }

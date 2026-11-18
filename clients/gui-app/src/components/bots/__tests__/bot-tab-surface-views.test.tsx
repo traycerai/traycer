@@ -53,7 +53,7 @@ import { KEYBOARD_FOCUS_OWNER_PROPS } from "@/hooks/ui/use-keyboard-focus-layout
 
 import { StrictMode, useContext, useState, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   afterEach,
@@ -86,6 +86,7 @@ import {
   endBotTabSurfaceCase,
   admitBotDrafts,
   resetBotTabSurfaceMocks,
+  scriptTeamControlPlane,
   snapshot,
   TAB_HOST,
   trackingTask,
@@ -331,6 +332,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
         data-open-thread={props.openThread?.anchorMessageId ?? "none"}
         data-land-on={props.landOn?.messageId ?? "none"}
         data-land-on-thread={props.landOn?.threadId ?? "none"}
+        data-land-token={props.landOn?.notificationToken ?? "none"}
         data-open-memory={String(props.openMemory !== null)}
         data-trunk-chat-id={props.trunkChatId}
         data-teammate-name={
@@ -486,6 +488,9 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
 }));
 
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
+import { useNotificationActivation } from "@/hooks/notifications/use-notification-activation";
+import { botMember } from "@/components/notifications/__tests__/notification-bot-members-test-support";
+import { rowFromHostEntry } from "@/stores/notifications/merged-notifications";
 import { MobileAppHeader } from "@/components/layout/header/mobile-app-header";
 import { MobileBotHeaderSlotProvider } from "@/components/layout/header/mobile-bot-header-slot";
 import { tabItemId } from "@/stores/tabs/layout";
@@ -1284,4 +1289,189 @@ describe("the Channel actions trigger's active count in the compact header", () 
       screen.getByRole("button", { name: "Channel actions" }),
     ).toBeTruthy();
   });
+});
+
+describe("a bot notification activated beside the tab", () => {
+  const MAIN = "conversation-app";
+
+  /** The host the opening asks: the bot's main channel, and the thread summaries it lists. */
+  function bindOpeningHost(threadParent: string): void {
+    const answer = (method: string): Promise<unknown> => {
+      if (method === "bot.read")
+        return Promise.resolve({
+          bot: { ...snapshot().bot, appConversationChatId: MAIN },
+        });
+      if (method === "bot.thread.list")
+        return Promise.resolve({
+          threads: [
+            {
+              threadId: "thread-1",
+              conversationId: threadParent,
+              sessionChatId: "session-thread-1",
+              anchor: {
+                messageId: "post-7",
+                requestId: "req-7",
+                senderUserId: "user-1",
+                sentAt: 1_000,
+                resolvedAt: null,
+                excerpt: null,
+              },
+              replyCount: 1,
+              lastReplyAt: 2_000,
+              openRequestCount: 0,
+              costUsd: null,
+            },
+          ],
+          trunkCostUsd: null,
+          threadAnchors: null,
+          nextCursor: null,
+          total: 1,
+        });
+      return Promise.resolve({});
+    };
+    const hostClient = {
+      getActiveHostId: () => TAB_HOST,
+      createRequesterForHostId: () => hostClient,
+      request: answer,
+      requestWithSignal: answer,
+      requestWithSignalRequiringHostMethodVersion: answer,
+    };
+    scriptTeamControlPlane();
+    if (mocks.binding === null) throw new Error("no binding scripted");
+    const binding = { ...mocks.binding, hostClient };
+    mocks.binding = binding;
+  }
+
+  function Activator(props: {
+    readonly messageId: string;
+    readonly threadId: string | null;
+    readonly onResult: (outcome: "success" | "failure") => void;
+  }): ReactNode {
+    const { activate } = useNotificationActivation();
+    const row = rowFromHostEntry(
+      botMember(props.messageId, 100, "A message", {
+        event: props.threadId === null ? "post" : "reply",
+        severity: props.threadId === null ? "info" : "done",
+        conversationId: MAIN,
+        threadId: props.threadId,
+        messageId: props.messageId,
+      }),
+    );
+    return (
+      <button
+        type="button"
+        data-testid="activate-notification"
+        onClick={() => {
+          if (row.payload === null) return;
+          activate({
+            payload: row.payload,
+            receivedAt: 2_000,
+            feedId: row.feedId,
+            originHostId: null,
+            onResult: props.onResult,
+          });
+        }}
+      />
+    );
+  }
+
+  function renderBesideTab(activator: ReactNode): void {
+    render(
+      <StrictMode>
+        <QueryClientProvider client={queryClient}>
+          {activator}
+          <BotTabSurface botId={BOT_ID} hostId={TAB_HOST} />
+        </QueryClientProvider>
+      </StrictMode>,
+    );
+  }
+
+  beforeEach(() => {
+    useBotTabLandingStore.setState({ byBotId: {} });
+  });
+
+  it("hands the channel the exact message and the opening's own token", async () => {
+    bindOpeningHost(MAIN);
+    const user = userEvent.setup();
+    const onResult = vi.fn();
+    renderBesideTab(
+      <Activator messageId="post-9" threadId={null} onResult={onResult} />,
+    );
+
+    await user.click(screen.getByTestId("activate-notification"));
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("stub-channel").getAttribute("data-land-on"),
+      ).toBe("post-9");
+    });
+    const channel = screen.getByTestId("stub-channel");
+    expect(channel.getAttribute("data-land-on-thread")).toBe("none");
+    expect(channel.getAttribute("data-land-token")).not.toBe("none");
+    expect(onResult).not.toHaveBeenCalled();
+  });
+
+  it("opens the thread of its anchor and hands the channel the exact reply and the token", async () => {
+    bindOpeningHost(MAIN);
+    mocks.state.threads = [threadOf(MAIN)];
+    const user = userEvent.setup();
+    const onResult = vi.fn();
+    renderBesideTab(
+      <Activator messageId="reply-9" threadId="thread-1" onResult={onResult} />,
+    );
+
+    await user.click(screen.getByTestId("activate-notification"));
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("stub-channel").getAttribute("data-land-on-thread"),
+      ).toBe("thread-1");
+    });
+    const channel = screen.getByTestId("stub-channel");
+    expect(channel.getAttribute("data-land-on")).toBe("reply-9");
+    expect(channel.getAttribute("data-open-thread")).toBe("post-7");
+    expect(channel.getAttribute("data-land-token")).not.toBe("none");
+    expect(onResult).not.toHaveBeenCalled();
+  });
+
+  it("lands nothing and ends as a failure when the thread's own conversation is not the channel", async () => {
+    bindOpeningHost("conversation-other");
+    mocks.state.threads = [threadOf("conversation-other")];
+    const user = userEvent.setup();
+    const onResult = vi.fn();
+    renderBesideTab(
+      <Activator messageId="reply-9" threadId="thread-1" onResult={onResult} />,
+    );
+
+    await user.click(screen.getByTestId("activate-notification"));
+
+    await waitFor(() => {
+      expect(onResult.mock.calls).toEqual([["failure"]]);
+    });
+    expect(
+      screen.getByTestId("stub-channel").getAttribute("data-land-on"),
+    ).toBe("none");
+  });
+
+  function threadOf(
+    conversationId: string,
+  ): (typeof mocks.state.threads)[number] {
+    return {
+      threadId: "thread-1",
+      conversationId,
+      sessionChatId: "session-thread-1",
+      anchor: {
+        messageId: "post-7",
+        requestId: "req-7",
+        senderUserId: "user-1",
+        sentAt: 1_000,
+        resolvedAt: null,
+        excerpt: null,
+      },
+      replyCount: 1,
+      lastReplyAt: 2_000,
+      openRequestCount: 0,
+      costUsd: null,
+    };
+  }
 });

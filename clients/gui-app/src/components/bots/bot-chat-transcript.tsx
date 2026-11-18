@@ -1,3 +1,12 @@
+import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
+import {
+  isBotNotificationLandingLive,
+  retainBotNotificationTranscript,
+  settleBotNotificationLanding,
+  cancelBotNotificationLanding,
+  retireBotNotificationNavigation,
+  type BotNotificationTranscript,
+} from "@/lib/notifications/bot-notification-opening";
 import {
   BotUnreadBoundaryContext,
   BotUnreadPageNavigationContext,
@@ -8,6 +17,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -48,6 +58,7 @@ import {
 import {
   ChatMessages,
   type ChatMessageScrollRequest,
+  type ChatScrollRequestOutcome,
 } from "@/components/chat/chat-messages";
 import {
   ChatBotPresentationContext,
@@ -521,6 +532,78 @@ function useUnreadOrdinal(
   return { ordinal: current ? pending.ordinal : null, seek };
 }
 
+function useNotificationTranscript(input: {
+  readonly botId: string;
+  readonly hostId: string;
+  readonly chatId: string;
+  readonly surface: BotTranscriptSurface | null;
+  readonly landOn: BotTranscriptLanding | null;
+  readonly fatalClose: ChatSessionState["fatalClose"];
+}): BotNotificationTranscript {
+  const { botId, hostId, chatId, surface, landOn, fatalClose } = input;
+  const [notificationAttempt] = useState(() =>
+    Symbol("notification transcript"),
+  );
+  const notificationToken = landOn?.notificationToken;
+  const paneVisible = usePaneVisible();
+  const notificationTranscript = useMemo<BotNotificationTranscript>(
+    () => ({
+      botId,
+      hostId,
+      chatId,
+      kind: surface?.kind ?? null,
+      messageId: landOn?.messageId ?? "",
+      attempt: notificationAttempt,
+    }),
+    [
+      botId,
+      hostId,
+      chatId,
+      surface?.kind,
+      landOn?.messageId,
+      notificationAttempt,
+    ],
+  );
+  useLayoutEffect(() => {
+    if (notificationToken === undefined) return;
+    return retainBotNotificationTranscript(
+      notificationToken,
+      notificationTranscript,
+    );
+  }, [notificationToken, notificationTranscript]);
+  useEffect(() => {
+    if (
+      notificationToken !== undefined &&
+      (!paneVisible || fatalClose !== null)
+    )
+      cancelBotNotificationLanding(notificationToken);
+  }, [notificationToken, paneVisible, fatalClose]);
+  return notificationTranscript;
+}
+
+function notificationOf(jump: PendingJump | null): NotificationJump | null {
+  return jump?.notification ?? null;
+}
+
+function notificationJumpLive(notification: NotificationJump | null): boolean {
+  return (
+    notification === null ||
+    isBotNotificationLandingLive(notification.token, notification.transcript)
+  );
+}
+
+interface BotTranscriptScroll {
+  readonly request: ChatMessageScrollRequest | null;
+  readonly issued: number;
+  readonly notification: NotificationJump | null;
+}
+
+function liveTranscriptScroll(
+  scroll: BotTranscriptScroll,
+): ChatMessageScrollRequest | null {
+  return notificationJumpLive(scroll.notification) ? scroll.request : null;
+}
+
 function BotChatTranscriptBody(props: {
   readonly minimapEnabled: boolean;
   readonly handle: ChatSessionStoreHandle;
@@ -583,18 +666,30 @@ function BotChatTranscriptBody(props: {
   // Requests are numbered past every one issued, settled ones included: the
   // list drops a request whose id it has handled, and a settled request is
   // cleared.
-  const [scroll, setScroll] = useState<{
-    readonly request: ChatMessageScrollRequest | null;
-    readonly issued: number;
-  }>({ request: null, issued: 0 });
-  const scrollRequest = scroll.request;
+  const [scroll, setScroll] = useState<BotTranscriptScroll>({
+    request: null,
+    issued: 0,
+    notification: null,
+  });
+  const notificationTranscript = useNotificationTranscript({
+    botId,
+    hostId,
+    chatId,
+    surface,
+    landOn,
+    fatalClose: state.fatalClose,
+  });
+  const scrollRequest = liveTranscriptScroll(scroll);
   const [pendingJump, setPendingJump] = useState<PendingJump | null>(null);
   const { ordinal: seekOrdinal, seek: setSeekOrdinal } = useUnreadOrdinal(
     state.transcriptBaselineEpoch,
     handle.sessionGeneration,
   );
   const issueScroll = useCallback(
-    (target: { readonly rowId: string; readonly blockId: string | null }) => {
+    (
+      target: { readonly rowId: string; readonly blockId: string | null },
+      notification: NotificationJump | null,
+    ) => {
       setScroll((previous) => ({
         request: {
           kind: "message",
@@ -603,6 +698,7 @@ function BotChatTranscriptBody(props: {
           requestId: previous.issued + 1,
         },
         issued: previous.issued + 1,
+        notification,
       }));
     },
     [],
@@ -613,7 +709,7 @@ function BotChatTranscriptBody(props: {
       const target = jumpTargetIn(messages, jump);
       if (target !== null) {
         setPendingJump(null);
-        issueScroll(target);
+        issueScroll(target, jump.notification ?? null);
         return;
       }
       setPendingJump(jump);
@@ -621,26 +717,44 @@ function BotChatTranscriptBody(props: {
     [issueScroll, messages, setSeekOrdinal],
   );
   const land = useCallback(
-    (landing: BotTranscriptLanding) =>
+    (landing: BotTranscriptLanding) => {
+      const token = landing.notificationToken;
+      if (token !== undefined && landing.sendPostId !== null) {
+        cancelBotNotificationLanding(token);
+        return;
+      }
+      if (
+        token !== undefined &&
+        !isBotNotificationLandingLive(token, notificationTranscript)
+      )
+        return;
+      if (token === undefined)
+        retireBotNotificationNavigation(botId, undefined);
+      const notification =
+        token === undefined
+          ? undefined
+          : { token, transcript: notificationTranscript };
       jumpTo(
         landing.sendPostId === null
-          ? { kind: "message", messageId: landing.messageId }
+          ? { kind: "message", messageId: landing.messageId, notification }
           : {
               kind: "send",
               postId: landing.sendPostId,
               fallbackMessageId: landing.messageId,
             },
-      ),
-    [jumpTo],
+      );
+    },
+    [botId, jumpTo, notificationTranscript],
   );
   // The row a pending jump waited on has rendered: settle it during render
   // (the adjust-state-on-prop-change pattern), so the scroll is issued in the
   // same pass the row appears in and no effect sets state.
-  const pendingTarget =
-    pendingJump === null ? null : jumpTargetIn(messages, pendingJump);
+  const pendingTarget = jumpTargetIn(messages, pendingJump);
   if (pendingTarget !== null) {
     setPendingJump(null);
-    issueScroll(pendingTarget);
+    const notification = notificationOf(pendingJump);
+    if (notificationJumpLive(notification))
+      issueScroll(pendingTarget, notification);
   }
   // A send's card is located by the post its call wrote; a message by its id.
   const pendingLocator = useMemo<TranscriptRowLocator | null>(() => {
@@ -680,13 +794,27 @@ function BotChatTranscriptBody(props: {
     },
     [requestTranscriptOrdinal],
   );
-  const onScrollRequestSettled = useCallback((requestId: number) => {
-    setScroll((current) =>
-      current.request !== null && current.request.requestId === requestId
-        ? { request: null, issued: current.issued }
-        : current,
-    );
-  }, []);
+  useEffect(() => {
+    if (pendingJump?.notification !== undefined && located.status === "missing")
+      cancelBotNotificationLanding(pendingJump.notification.token);
+  }, [pendingJump, located.status]);
+  const onScrollRequestSettled = useCallback(
+    (requestId: number, outcome: ChatScrollRequestOutcome) => {
+      if (scroll.request?.requestId !== requestId) return;
+      if (scroll.notification !== null)
+        settleBotNotificationLanding(
+          scroll.notification.token,
+          scroll.notification.transcript,
+          outcome,
+        );
+      setScroll((current) =>
+        current.request?.requestId === requestId
+          ? { request: null, issued: current.issued, notification: null }
+          : current,
+      );
+    },
+    [scroll],
+  );
   useLandOnMessage(landOn, state.snapshotLoaded, land);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const rowIdOf = useCallback(
@@ -791,9 +919,12 @@ function BotChatTranscriptBody(props: {
     return {
       ...repliesBase,
       above: (messageId) => above.get(messageId) ?? null,
-      open: (messageId) => jumpTo({ kind: "message", messageId }),
+      open: (messageId) => {
+        retireBotNotificationNavigation(botId, undefined);
+        jumpTo({ kind: "message", messageId });
+      },
     };
-  }, [flow, jumpTo, messages, repliesBase, transcriptWindow]);
+  }, [flow, jumpTo, messages, botId, repliesBase, transcriptWindow]);
   const listHeader = surface?.kind === "channel" ? surface.history : header;
   const intro = channelIntro(
     surface,
@@ -830,6 +961,7 @@ function BotChatTranscriptBody(props: {
           requestId: previous.issued + 1,
         },
         issued: previous.issued + 1,
+        notification: null,
       }));
     },
     [setSeekOrdinal],
@@ -869,6 +1001,9 @@ function BotChatTranscriptBody(props: {
               flow === null && surface?.kind === "thread" && landOn === null
             }
             onNavigate={navigateUnread}
+            onExplicitNavigation={() => {
+              retireBotNotificationNavigation(botId, undefined);
+            }}
           >
             <BotTranscriptRows
               ref={transcriptRef}
@@ -1354,6 +1489,7 @@ export interface BotTranscriptLanding {
   readonly messageId: string;
   readonly sendPostId: string | null;
   readonly visit: number;
+  readonly notificationToken?: string;
 }
 
 /**
@@ -1377,19 +1513,26 @@ function useLandOnMessage(
  * A jump waiting on its row: to a message, or to the card of the send that
  * wrote a post, landing on `fallbackMessageId` where the session has none.
  */
-type PendingJump =
+type PendingJump = { readonly notification?: NotificationJump } & (
   | { readonly kind: "message"; readonly messageId: string }
   | {
       readonly kind: "send";
       readonly postId: string;
       readonly fallbackMessageId: string;
-    };
+    }
+);
+
+interface NotificationJump {
+  readonly token: string;
+  readonly transcript: BotNotificationTranscript;
+}
 
 /** Where a jump lands among the rendered rows; `null` while no row carries it. */
 function jumpTargetIn(
   messages: ReadonlyArray<ChatMessage>,
-  jump: PendingJump,
+  jump: PendingJump | null,
 ): { readonly rowId: string; readonly blockId: string | null } | null {
+  if (jump === null) return null;
   if (jump.kind === "send") return sendCardFor(messages, jump.postId);
   const rowId = replyRowIdFor(messages, jump.messageId);
   return rowId === null ? null : { rowId, blockId: null };
@@ -1403,7 +1546,8 @@ function sameLanding(
     landed !== null &&
     landed.messageId === landing.messageId &&
     landed.sendPostId === landing.sendPostId &&
-    landed.visit === landing.visit
+    landed.visit === landing.visit &&
+    landed.notificationToken === landing.notificationToken
   );
 }
 

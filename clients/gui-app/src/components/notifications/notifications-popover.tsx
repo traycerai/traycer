@@ -495,26 +495,36 @@ export function NotificationsPopover(
   const handleActivate = useCallback(
     (row: MergedNotificationRow) => {
       if (row.payload === null) return;
+      const group = [...presentation.byKey.values()].find(
+        (entry) => entry.group !== null && entry.row.feedId === row.feedId,
+      );
+      const guarded =
+        row.source !== "app-local" &&
+        row.payload.kind === "chat" &&
+        row.payload.bot !== undefined;
+      const acknowledge = guarded
+        ? actions.captureGroupRead(group?.members ?? [row])
+        : null;
       activate({
         payload: row.payload,
         receivedAt: Date.now(),
         feedId: row.feedId,
         originHostId: row.originHostId,
-        // Fires synchronously right after routing, so the center closes on
-        // dispatch (`onSuccess: onNavigate`). The origin-host guard inside
-        // the hook can still settle this as `"failure"` (no toast, nothing
-        // actually failed) - in that case the center stays open and the row
-        // stays unread, same as before.
         onResult: activationResultHandler({
           row,
           feedId: row.feedId,
           surface: "center",
-          markAsRead: actions.markAsRead,
-          onSuccess: onNavigate,
+          markAsRead:
+            acknowledge === null
+              ? actions.markAsRead
+              : () => {
+                  if (acknowledge()) onNavigate();
+                },
+          onSuccess: acknowledge === null ? onNavigate : null,
         }),
       });
     },
-    [actions, activate, onNavigate],
+    [actions, activate, onNavigate, presentation.byKey],
   );
 
   const handleAcknowledge = useCallback(
@@ -536,9 +546,13 @@ export function NotificationsPopover(
         category: row.category,
         acknowledgment_source: "explicit_action",
       });
-      actions.markAsRead(row);
+      const group = [...presentation.byKey.values()].find(
+        (entry) => entry.group !== null && entry.row.feedId === row.feedId,
+      );
+      if (group === undefined) actions.markAsRead(row);
+      else actions.captureGroupRead(group.members)();
     },
-    [actions],
+    [actions, presentation.byKey],
   );
 
   const handleMarkAllRead = useCallback(() => {

@@ -1,4 +1,9 @@
 import {
+  notificationLandingAllowed,
+  cancelBotNotificationLanding,
+  retireBotNotificationNavigation,
+} from "@/lib/notifications/bot-notification-opening";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -1141,6 +1146,9 @@ function useBotTabSession(args: {
   readonly closeSession: () => void;
   readonly showChannel: (messageId: string | null) => void;
   readonly landChannel: (messageId: string | null) => void;
+  readonly landNotification: (
+    landing: Extract<BotTabLanding, { kind: "thread" }>,
+  ) => void;
   readonly showThread: (threadId: string, messageId: string | null) => void;
 } {
   const { botId, threads, onViewChange, setOpenThread } = args;
@@ -1190,6 +1198,7 @@ function useBotTabSession(args: {
   );
   const openSession = useCallback<BotSessionOpen>(
     (target) => {
+      retireBotNotificationNavigation(botId, undefined);
       const { chatId, messageId } = target;
       setShown((previous) => {
         const visit = previous.visits + 1;
@@ -1222,6 +1231,7 @@ function useBotTabSession(args: {
   // The channel shows, landed on a message of it or of the thread beside it.
   const showLanded = useCallback(
     (landOn: Omit<BotChannelLanding, "visit"> | null) => {
+      retireBotNotificationNavigation(botId, landOn?.notificationToken);
       setShown((previous) => {
         const visit = previous.visits + 1;
         return {
@@ -1287,9 +1297,44 @@ function useBotTabSession(args: {
     },
     [setOpenThread, showLanded, threads],
   );
+  const landNotification = useCallback(
+    (landing: Extract<BotTabLanding, { kind: "thread" }>) => {
+      const anchor =
+        landing.threadId === null
+          ? null
+          : (threads?.find((thread) => thread.threadId === landing.threadId)
+              ?.anchor ?? null);
+      if (
+        landing.messageId === null ||
+        (landing.threadId !== null && anchor === null)
+      ) {
+        if (landing.notificationToken !== undefined)
+          cancelBotNotificationLanding(landing.notificationToken);
+        return;
+      }
+      showLanded({
+        messageId: landing.messageId,
+        sendPostId: null,
+        threadId: landing.threadId,
+        notificationToken: landing.notificationToken,
+      });
+      setOpenThread(
+        anchor === null
+          ? null
+          : {
+              anchorMessageId: anchor.messageId,
+              announcement: false,
+              anchorKind: null,
+              sent: null,
+            },
+      );
+    },
+    [setOpenThread, showLanded, threads],
+  );
   return {
     session,
     channelLanding: shown.channelLanding,
+    landNotification,
     openSession,
     openTurn,
     closeSession,
@@ -1355,6 +1400,65 @@ function spendSenderLanding(input: {
   else input.showThread(thread.threadId, null);
 }
 
+function spendNotificationLanding(input: {
+  readonly landing: BotTabLanding;
+  readonly botId: string;
+  readonly channelChatId: string | null;
+  readonly threads: ReadonlyArray<BotThreadSummary> | null;
+  readonly threadsFailed: boolean;
+  readonly place: BotTabPlace;
+  readonly waiting: { current: WaitingLanding | null };
+  readonly landNotification: (
+    landing: Extract<BotTabLanding, { kind: "thread" }>,
+  ) => void;
+}): void {
+  const {
+    landing,
+    botId,
+    channelChatId,
+    threads,
+    threadsFailed,
+    place,
+    waiting,
+    landNotification,
+  } = input;
+  const token = landing.notificationToken;
+  if (token === undefined) return;
+  const held = waiting.current?.landing === landing ? waiting.current : null;
+  const moved = held !== null && held.place !== place;
+  const valid =
+    landing.kind === "thread" &&
+    notificationLandingAllowed({
+      token,
+      botId,
+      conversationId: channelChatId,
+      threadId: landing.threadId,
+      messageId: landing.messageId,
+    });
+  if (!valid || moved || threadsFailed) {
+    cancelBotNotificationLanding(token);
+    return;
+  }
+  if (threads === null) {
+    waiting.current = held ?? { landing, place };
+    return;
+  }
+  const thread = threads.find((entry) => entry.threadId === landing.threadId);
+  if (
+    landing.threadId !== null &&
+    (thread === undefined ||
+      thread.anchor === null ||
+      thread.conversationId !== channelChatId)
+  ) {
+    cancelBotNotificationLanding(token);
+    return;
+  }
+  waiting.current = null;
+  useBotTabLandingStore.getState().clear(botId);
+  useTracyPlaceStore.getState().markAutomaticMove();
+  landNotification(landing);
+}
+
 /**
  * Lands the tab where it was asked to from outside, once the thread list has
  * answered, since a thread opens by the post it hangs off. Each request is
@@ -1383,6 +1487,9 @@ function useSpendTabLanding(args: {
   /** Where the tab is; a new value is a move, the person's or a landing's. */
   readonly place: BotTabPlace;
   readonly landChannel: (messageId: string | null) => void;
+  readonly landNotification: (
+    landing: Extract<BotTabLanding, { kind: "thread" }>,
+  ) => void;
   readonly showThread: (threadId: string, messageId: string | null) => void;
   readonly openSession: BotSessionOpen;
   /** Shows one of the tab's views: it also leaves Threads. */
@@ -1390,7 +1497,7 @@ function useSpendTabLanding(args: {
 }): void {
   const { botId, channelChatId, trunkChatId, threads } = args;
   const { threadsFetching, threadsFailed } = args;
-  const { openSession, onViewChange, place } = args;
+  const { openSession, onViewChange, place, landNotification } = args;
   const { landChannel: landOnChannel, showThread: showLandedThread } = args;
   // Where a landing puts the tab is nobody's own move: the route records it
   // over the entry the opener made, so one step back leaves it.
@@ -1429,6 +1536,19 @@ function useSpendTabLanding(args: {
       });
       return;
     }
+    if (landing.notificationToken !== undefined) {
+      spendNotificationLanding({
+        landing,
+        botId,
+        channelChatId,
+        threads,
+        threadsFailed,
+        place,
+        waiting,
+        landNotification,
+      });
+      return;
+    }
     if (threads === null) return;
     useBotTabLandingStore.getState().clear(botId);
     const { messageId } = landing;
@@ -1464,6 +1584,7 @@ function useSpendTabLanding(args: {
     botId,
     channelChatId,
     landChannel,
+    landNotification,
     landing,
     onViewChange,
     openSession,
@@ -1683,6 +1804,7 @@ function BotTabContent(props: {
     closeSession,
     showChannel,
     landChannel,
+    landNotification,
     showThread,
   } = useBotTabSession({ botId, threads, onViewChange, setOpenThread });
   // Threads is the shell's, shown in place of the channel: a move too.
@@ -1714,11 +1836,20 @@ function BotTabContent(props: {
     threadsFetching: threadList.isFetching,
     threadsFailed: threadList.isError,
     place,
+    landNotification,
     landChannel,
     showThread,
     openSession,
     onViewChange,
   });
+  const previousNotificationPlace = useRef(place);
+  useEffect(() => {
+    const previous = previousNotificationPlace.current;
+    previousNotificationPlace.current = place;
+    const token = previous.channelLanding?.notificationToken;
+    if (token !== undefined && previous !== place)
+      cancelBotNotificationLanding(token);
+  }, [place]);
   useRailDrawnReport(place, threadListSupported, onRailDrawn);
   const activeTasks = useBotActiveTasks(
     snapshot.tasks,

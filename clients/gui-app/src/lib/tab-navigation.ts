@@ -131,6 +131,7 @@ export type TabNavigationOptions = Pick<
 > & {
   /** Rejected before navigate runs, including a superseded hydration queue entry. */
   readonly onRejected?: (error: Error) => void;
+  readonly signal?: AbortSignal;
 };
 
 export interface TabNavigationDiagnostics {
@@ -171,6 +172,8 @@ interface PreparedPairRestore {
 }
 
 interface PendingNavigation {
+  readonly signal?: AbortSignal;
+  readonly onCancelled?: () => void;
   readonly envelope: TabNavigationEnvelope;
   readonly destination: TabNavigationDestination;
   readonly expectedRef: TabRef | null;
@@ -765,6 +768,9 @@ export class TabNavigationController {
   private queuedExternal: QueuedExternal | null = null;
   private resolutionFailure: TabNavigationResolutionFailure | null = null;
   private readonly pendingListeners = new Set<() => void>();
+  private readonly activationListeners = new Set<
+    (signal: AbortSignal | undefined) => void
+  >();
   private readonly pending = new PendingNavigations(() =>
     this.notifyPendingListeners(),
   );
@@ -777,6 +783,12 @@ export class TabNavigationController {
     intent: TabActivationIntent,
     options: TabNavigationOptions | undefined,
   ): boolean {
+    if (options?.signal?.aborted === true) return false;
+    const signal = options?.signal;
+    this.announceActivation(signal);
+    signal?.addEventListener("abort", () => this.cancelActivation(signal), {
+      once: true,
+    });
     this.navigator = navigate;
     const tracyOrigin = stampedTracyOriginOf(intent);
     if (!this.hydrationReady) {
@@ -845,7 +857,7 @@ export class TabNavigationController {
       focusedRef,
       options?.search,
     );
-    this.supersedeAll();
+    this.supersedeAll(undefined);
     const envelope = this.createAuthorityEnvelope(
       destinationForRef(focusedRef, canonical),
       replace ? "focus-replace" : "activate-push",
@@ -1119,12 +1131,28 @@ export class TabNavigationController {
     this.queuedExternal = null;
   }
 
+  private cancelActivation(signal: AbortSignal): void {
+    const queued = this.queuedActivation;
+    if (queued?.options?.signal === signal) {
+      this.queuedActivation = null;
+      queued.options.onRejected?.(new Error("The opening was cancelled."));
+    }
+    for (const [token, pending] of this.pending) {
+      if (pending.signal === signal && this.navigator !== null) {
+        this.cancelUserNavigation(token, this.navigator);
+      }
+    }
+    this.notifyPendingListeners();
+  }
+
   private executeActivation(
     navigate: NavigateFn,
     requestedIntent: TabActivationIntent,
     options: TabNavigationOptions | undefined,
     tracyOrigin: StampedTracyOrigin | null,
   ): boolean {
+    const signal = options?.signal;
+    if (signal?.aborted === true) return false;
     const layoutBefore = currentLayout();
     if (requestedIntent.kind === "open-epic") {
       const prepared = this.prepareDraftSwap(
@@ -1166,7 +1194,7 @@ export class TabNavigationController {
       activation.ref,
       options?.search,
     );
-    this.supersedeAll();
+    this.supersedeAll(signal);
     const envelope = this.createAuthorityEnvelope(
       destinationForRef(activation.ref, intent),
       replace ? "focus-replace" : "activate-push",
@@ -1177,6 +1205,12 @@ export class TabNavigationController {
       replace,
     } satisfies NavigateOptions;
     const pending: PendingNavigation = {
+      signal: signal,
+      onCancelled:
+        signal === undefined
+          ? undefined
+          : () =>
+              options?.onRejected?.(new Error("The opening was cancelled.")),
       envelope,
       destination: envelope.destination,
       expectedRef: activation.ref,
@@ -1381,7 +1415,7 @@ export class TabNavigationController {
       tabId: swap.epicTabId,
       focus: requested.focus,
     });
-    this.supersedeAll();
+    this.supersedeAll(undefined);
     const ref: TabRef = { kind: "epic", id: swap.epicTabId };
     const envelope = this.createAuthorityEnvelope(
       destinationForRef(ref, intent),
@@ -1447,7 +1481,7 @@ export class TabNavigationController {
   }
 
   private establishExternalAuthority(): void {
-    this.supersedeAll();
+    this.supersedeAll(undefined);
     this.nextAuthoritySerial();
   }
 
@@ -1475,6 +1509,10 @@ export class TabNavigationController {
     location: TabNavigationLocation,
     navigate: NavigateFn,
   ): void {
+    if (pending.signal?.aborted === true) {
+      this.cancelUserNavigation(pending.envelope.token, navigate);
+      return;
+    }
     this.authoritySerial = Math.max(
       this.authoritySerial,
       pending.envelope.serial,
@@ -1556,6 +1594,7 @@ export class TabNavigationController {
       return;
     }
     this.pending.delete(token);
+    pending.onCancelled?.();
     if (pending.activation !== null) {
       tabCommandCoordinator.restoreTabActivation(pending.activation);
     }
@@ -1575,13 +1614,29 @@ export class TabNavigationController {
     }
   }
 
-  private supersedeAll(): void {
+  subscribeActivation(
+    listener: (signal: AbortSignal | undefined) => void,
+  ): () => void {
+    this.activationListeners.add(listener);
+    return () => {
+      this.activationListeners.delete(listener);
+    };
+  }
+
+  private announceActivation(signal: AbortSignal | undefined): void {
+    for (const listener of this.activationListeners) listener(signal);
+  }
+
+  private supersedeAll(signal: AbortSignal | undefined): void {
+    const cancelled = [...this.pending.values()];
     this.pending.forEach((pending, token) => {
       if (pending.correctionKey !== null) {
         this.correctionKeys.delete(pending.correctionKey);
       }
       this.pending.delete(token);
     });
+    for (const pending of cancelled) pending.onCancelled?.();
+    this.announceActivation(signal);
   }
 
   private restorePreparedPair(pair: PreparedPairRestore): void {
@@ -1691,7 +1746,7 @@ export class TabNavigationController {
   ): void {
     const { navigation, kind, attempt, correctionKey } = request;
     if (this.correctionKeys.has(correctionKey)) return;
-    this.supersedeAll();
+    this.supersedeAll(undefined);
     this.correctionKeys.add(correctionKey);
     const envelope = this.createAuthorityEnvelope(navigation.destination, kind);
     const routeOptions = {
@@ -2337,4 +2392,11 @@ export function tracyChannelNavigationPending(botId: string): boolean {
 
 export function tabNavigationResolutionFailed(state: unknown): boolean {
   return tabNavigationController.hasResolutionFailure(state);
+}
+
+/** Announces a new route owner, including one queued behind hydration. */
+export function subscribeTabNavigationActivation(
+  listener: (signal: AbortSignal | undefined) => void,
+): () => void {
+  return tabNavigationController.subscribeActivation(listener);
 }

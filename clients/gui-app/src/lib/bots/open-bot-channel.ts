@@ -19,6 +19,7 @@ import {
 } from "@/stores/bots/tracy-surface-store";
 
 export interface OpenBotChannelOptions {
+  readonly signal?: AbortSignal;
   /** Where the channel lands once it shows; `null` shows it as it was. */
   readonly landing: BotTabLanding | null;
   /**
@@ -90,6 +91,7 @@ function openTracySurface(
   intent: Extract<TabNavigationIntent, { kind: "tracy" }>,
   options: OpenBotChannelOptions,
 ): boolean {
+  if (options.signal?.aborted === true) return false;
   const windowHostId = activeHostIdOrNull();
   const servingHostId = servingHostFor(windowHostId, options.isConnectable);
   const surface = useTracySurfaceStore.getState();
@@ -107,6 +109,7 @@ function openTracySurface(
   if (botId !== null && landing !== null) stageTracyLanding(botId, landing);
   const accepted = activateTabIntent(navigate, intent, {
     onRejected: options.onRejected ?? undefined,
+    signal: options.signal,
   });
   if (botId !== null && landing !== null) {
     if (accepted) releaseLandingIfNeverLanded(botId, landing);

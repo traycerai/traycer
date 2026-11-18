@@ -1,3 +1,5 @@
+import { useBotLifetime } from "@/lib/bots/bot-lifetime";
+import { openBotNotification } from "@/lib/notifications/bot-notification-opening";
 import { useCallback, useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useHostBinding } from "@/lib/host";
@@ -24,10 +26,8 @@ export interface NotificationActivationInput {
   /** Cloud rows retain their owning host. Approval/interview navigation must
    * target that host rather than the relay host that delivered the feed. */
   readonly originHostId?: string | null;
-  /** Fires exactly once, synchronously, right after routing. `"success"`
-   * unless the origin-host guard below trips, in which case `"failure"` -
-   * the row settles as unread/no-acknowledgment, same as a genuine failure
-   * but without an error toast (nothing actually failed). */
+  /** Bot messages complete after their exact destination lands; other routes
+   * retain their dispatch result. Failed or cancelled openings do not acknowledge. */
   readonly onResult: ((outcome: NotificationActivationOutcome) => void) | null;
 }
 
@@ -65,39 +65,9 @@ function hostFeedStayedOnOrigin(input: {
   );
 }
 
-/**
- * Opens feed-backed notifications through the default host scope.
- *
- * Routes synchronously exactly once per `activate()` call, then completes
- * immediately - the destination enforces its own access (an unauthorized
- * user's epic/chat subscribe fails closed at `ensureEpicAccess`/cloud), so
- * this hook no longer runs a host preflight to gate completion. `onResult`
- * fires synchronously right after routing, so a caller closing on success
- * (the notification center) closes on dispatch; any resulting `markRead` is
- * a real background host write - success marks the row read, failure
- * leaves it unread via server truth (no optimistic read-state here for a
- * failed write to reconcile).
- *
- * Activation does NOT move the app-wide selection (redesign P1.2): the
- * routed surface resolves against the effective host or its own tab binding,
- * and a notification click is not the user answering "which host do you work
- * on" - that gesture exists only in Settings ▸ Activate. The origin-host
- * SELECTION that used to happen here is gone; the caller (the notification
- * center / focus bridge) is what decides a foreign-origin row is not
- * routable at all.
- *
- * What activation still owns is whether it may CLAIM the prompt was opened.
- * An origin-required payload (approval / interview) that did not reach a
- * target bound to its origin completes as `"failure"`, so the row stays
- * unread instead of being credited to a host that never showed it.
- *
- * The origin-host guard still applies to the acknowledgment: a host-scoped
- * feed id (`isHostFeedId`) only completes as `"success"` while the client's
- * CURRENT bound host still matches the host captured just before routing -
- * routing can still re-point the window through the authority (an epic that
- * lives on a different host), so this settles the row as unread/
- * no-acknowledgment rather than crediting the wrong host's notification.
- */
+/** Opens notifications without changing the window's selected host.
+ * Bot destinations validate and settle through their request owner; other
+ * routes retain the origin-host guard around dispatch. */
 export function useNotificationActivation(): NotificationActivationController {
   return useNotificationActivationWithNavigate(useNavigate());
 }
@@ -114,6 +84,7 @@ export function useNotificationActivation(): NotificationActivationController {
 export function useNotificationActivationWithNavigate(
   navigate: NotificationNavigate,
 ): NotificationActivationController {
+  const lifetime = useBotLifetime();
   const binding = useHostBinding();
   const effectiveHostId = useEffectiveHostId();
   // APP-WIDE BY INTENT, and it must stay that way if this ever mounts under a
@@ -152,6 +123,17 @@ export function useNotificationActivationWithNavigate(
         input.onResult?.("failure");
         return;
       }
+      if (
+        openBotNotification({
+          client,
+          navigate,
+          payload: input.payload,
+          onResult: input.onResult,
+          lifetime,
+          hostId: effectiveHostId,
+        })
+      )
+        return;
       // ORIGIN-REQUIRED routes may not fall back to the hostless intent.
       //
       // `ensureOriginHostSelected` used to carry two rules at once: it SELECTED
@@ -235,7 +217,7 @@ export function useNotificationActivationWithNavigate(
       }
       input.onResult?.("success");
     },
-    [client, navigate],
+    [client, navigate, lifetime, effectiveHostId],
   );
 
   return { activate };

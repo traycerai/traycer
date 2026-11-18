@@ -1,3 +1,4 @@
+import { retireBotNotificationNavigation } from "@/lib/notifications/bot-notification-opening";
 import { BotUnreadPageNavigationContext } from "@/components/bots/bot-unread-boundary";
 import {
   useCallback,
@@ -954,7 +955,7 @@ function KnownThread(
     opening,
     ref: openingRef,
     highlighted: openingHighlighted,
-  } = useThreadOpening(originMessageId, conversationId);
+  } = useThreadOpening(originMessageId, conversationId, botId);
   const {
     mutate: send,
     mutateAsync: sendAsync,
@@ -1211,6 +1212,7 @@ function ThreadReplyCount(props: {
 function useThreadOpening(
   messageId: string,
   conversationId: string,
+  botId: string,
 ): {
   readonly opening: ChatBotThreadOpening;
   readonly ref: RefObject<HTMLDivElement | null>;
@@ -1227,6 +1229,7 @@ function useThreadOpening(
     [],
   );
   const show = useCallback(() => {
+    retireBotNotificationNavigation(botId, undefined);
     pageNavigation?.cancel();
     ref.current?.scrollIntoView({ block: "nearest" });
     if (timer.current !== null) window.clearTimeout(timer.current);
@@ -1235,7 +1238,7 @@ function useThreadOpening(
       timer.current = null;
       setHighlighted(false);
     }, CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS);
-  }, [pageNavigation]);
+  }, [botId, pageNavigation]);
   const opening = useMemo(
     () => ({ messageId, conversationId, show }),
     [conversationId, messageId, show],

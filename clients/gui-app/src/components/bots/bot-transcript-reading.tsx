@@ -473,6 +473,7 @@ export function BotTranscriptReading(props: {
   readonly rows: readonly TranscriptListRow[];
   readonly records: readonly OpenMessage[];
   readonly onNavigate: (landing: BotUnreadLanding) => void;
+  readonly onExplicitNavigation?: () => void;
   readonly children: ReactNode;
 }): ReactNode {
   const client = useTabHostClient();
@@ -542,7 +543,10 @@ export function BotTranscriptReading(props: {
           <BotUnreadBanner
             label="Unread messages"
             navigateTestId={undefined}
-            onNavigate={navigation.navigate}
+            onNavigate={() => {
+              props.onExplicitNavigation?.();
+              navigation.navigate();
+            }}
             onMarkRead={mark.markRead}
             pending={mark.pending}
             failed={mark.failed}

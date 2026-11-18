@@ -95,6 +95,8 @@ export interface FeedbackDraftNotificationPayload {
  * channel, Tracy Bots VN4): the bot, the thread of it, and the row.
  */
 export interface BotNotificationTarget {
+  /** Absent on older native payloads; null on legacy thread verdicts. */
+  readonly conversationId?: string | null;
   readonly botId: string;
   /** `null` for a row of the channel no thread hangs off. */
   readonly threadId: string | null;
@@ -260,6 +262,7 @@ function parseChatPayload(
       : {
           bot: {
             botId,
+            conversationId: readString(value.conversationId),
             threadId: readString(value.threadId),
             messageId,
           },

@@ -12,7 +12,7 @@ import { create } from "zustand";
  *  - `sender` (a message's sender chip): the session that sent it, whose
  *    thread shows beside the channel, or the channel for the trunk.
  */
-export type BotTabLanding =
+export type BotTabLanding = { readonly notificationToken?: string } & (
   | {
       readonly kind: "thread";
       readonly threadId: string | null;
@@ -24,7 +24,8 @@ export type BotTabLanding =
       readonly messageId: string | null;
       readonly sendPostId: string | null;
     }
-  | { readonly kind: "sender"; readonly chatId: string };
+  | { readonly kind: "sender"; readonly chatId: string }
+);
 
 interface BotTabLandingState {
   readonly byBotId: Readonly<Record<string, BotTabLanding>>;

@@ -1,3 +1,5 @@
+import { currentBotLifetime, useBotLifetime } from "@/lib/bots/bot-lifetime";
+import { readEffectiveHostIdSnapshot } from "@/stores/host/selection-authority-store";
 import {
   botNotificationMessage,
   type BotNotificationMessage,
@@ -126,6 +128,8 @@ export type MergedNotificationSource =
   | "cloud";
 
 export interface MergedNotificationRow {
+  /** Replacement fence for captured actions; independent of read state. */
+  readonly actionIdentity?: string;
   readonly botMessage?: BotNotificationMessage | null;
   readonly feedId: string;
   readonly source: MergedNotificationSource;
@@ -177,6 +181,9 @@ function isHostUnsupportedError(error: unknown): boolean {
 }
 
 export interface MergedNotificationsActions {
+  readonly captureGroupRead: (
+    members: readonly MergedNotificationRow[],
+  ) => () => boolean;
   readonly markAsRead: (row: MergedNotificationRow | string) => void;
   readonly clear: (row: MergedNotificationRow) => void;
   readonly clearAll: () => void;
@@ -262,6 +269,7 @@ interface HostFeedBulkVariables {
 }
 
 interface CloudMarkReadVariables extends CloudFeedEntryVariables {
+  readonly groupGuard?: () => boolean;
   /** Null for a single-entry gesture; expansions retain the feed they began on. */
   readonly bulkFeed: NotificationFeedDispatchContext | null;
 }
@@ -901,6 +909,10 @@ function hostOriginWriteAuthorized(): boolean {
 }
 
 export function useMergedNotificationsActions(): MergedNotificationsActions {
+  const renderedBotLifetime = useBotLifetime();
+  const renderedHostSnapshotEpoch = useHostNotificationsStore(
+    (state) => state.snapshotEpoch,
+  );
   const originatingAccountId = useAuthStore(
     (state) => state.contextMetadata?.userId ?? null,
   );
@@ -1091,6 +1103,11 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     client,
     method: "host.notifications.cloudFeed.markRead",
     mapVariables: (variables) => {
+      if (variables.groupGuard?.() === false) {
+        throw new NotificationFeedChangedError(
+          "host.notifications.cloudFeed.markRead",
+        );
+      }
       if (variables.bulkFeed !== null) {
         requireCurrentFeed(
           variables.bulkFeed,
@@ -1108,12 +1125,18 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         );
       }
       variables.mutationContext.current = captureCloudMutationContext();
+      if (variables.groupGuard !== undefined) {
+        useCloudNotificationsStore
+          .getState()
+          .markReadLocally(variables.entryId, Date.now());
+      }
       return { entryId: variables.entryId };
     },
     options: {
       mutationKey: notificationsMutationKeys.cloudMarkRead(),
       onMutate: (variables) => variables.mutationContext,
-      onSuccess: (data, _variables, context) => {
+      onSuccess: (data, variables, context) => {
+        if (variables.groupGuard?.() === false) return;
         if (
           context.current !== null &&
           isCurrentCloudMutation(context.current)
@@ -1121,7 +1144,8 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           handleCloudMutationResult(data);
         }
       },
-      onError: (error, _variables, context) => {
+      onError: (error, variables, context) => {
+        if (variables.groupGuard?.() === false) return;
         if (error instanceof NotificationFeedChangedError) return;
         if (context !== undefined && isCurrentCloudMutation(context.current)) {
           markCloudUnavailable();
@@ -1267,11 +1291,18 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     HostRpcRegistry,
     "host.notifications.markRead",
     HostNotificationMutationContext,
-    { readonly feedId: string; readonly sourceId: string }
+    {
+      readonly feedId: string;
+      readonly sourceId: string;
+      readonly groupGuard?: () => boolean;
+    }
   >({
     client,
     method: "host.notifications.markRead",
     mapVariables: (variables) => {
+      if (variables.groupGuard?.() === false) {
+        throw new NotificationFeedChangedError("host.notifications.markRead");
+      }
       if (
         liveFeedMode.current === "upgrade-required" ||
         !Object.hasOwn(
@@ -1288,6 +1319,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       mutationKey: notificationsMutationKeys.markRead(),
       onMutate: () => captureHostNotificationMutationContext(client),
       onSuccess: (_data, variables, context) => {
+        if (variables.groupGuard?.() === false) return;
         if (!isCurrentHostNotificationMutation(client, context)) return;
         useHostNotificationsStore
           .getState()
@@ -1307,7 +1339,8 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           variables.sourceId,
         );
       },
-      onError: (error, _variables, context) => {
+      onError: (error, variables, context) => {
+        if (variables.groupGuard?.() === false) return;
         if (error instanceof NotificationFeedChangedError) return;
         if (!isCurrentHostNotificationMutation(client, context)) return;
         toastFromHostError(error, "Couldn't mark the notification as read.");
@@ -1635,6 +1668,84 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
 
   return useMemo(
     () => ({
+      captureGroupRead: (members) => {
+        const lifetime = renderedBotLifetime;
+        const effectiveHost = readEffectiveHostIdSnapshot();
+        const feed = renderedFeed;
+        const hostContext = {
+          ...captureHostNotificationMutationContext(client),
+          snapshotEpoch: renderedHostSnapshotEpoch,
+        };
+        const captured = members.map((row) => ({
+          row,
+          identity: notificationReadIdentity(row),
+        }));
+        const current = (member: {
+          readonly row: MergedNotificationRow;
+          readonly identity: string;
+        }): boolean => {
+          if (
+            currentBotLifetime() !== lifetime ||
+            readEffectiveHostIdSnapshot() !== effectiveHost ||
+            !isCurrentFeed(feed) ||
+            liveFeedModeSettling.current
+          )
+            return false;
+          const { row } = member;
+          let live: MergedNotificationRow | null = null;
+          if (row.source === "host") {
+            if (!isCurrentHostNotificationMutation(client, hostContext))
+              return false;
+            const entries = useHostNotificationsStore.getState().byId;
+            if (Object.hasOwn(entries, row.sourceId))
+              live = rowFromHostEntryForOrigin(
+                entries[row.sourceId],
+                row.originHostId,
+              );
+          } else if (row.source === "cloud") {
+            const entry =
+              useCloudNotificationsStore.getState().rows[
+                cloudNotificationFeedId(row.sourceId)
+              ];
+            if (entry !== undefined) live = rowFromCloudFeedRow(entry);
+          }
+          return (
+            live !== null && notificationReadIdentity(live) === member.identity
+          );
+        };
+        let consumed = false;
+        return () => {
+          if (consumed) return false;
+          const stillCurrent = captured.some(current);
+          consumed = true;
+          for (const member of captured) {
+            const groupGuard = () => current(member);
+            if (!groupGuard()) continue;
+            const { row } = member;
+            if (row.source === "host") {
+              if (
+                client === null ||
+                notificationHostId === null ||
+                !hostOriginWriteAuthorized()
+              )
+                continue;
+              markHostRead.mutate({
+                feedId: row.feedId,
+                sourceId: row.sourceId,
+                groupGuard,
+              });
+            } else if (row.source === "cloud") {
+              cloudMarkRead.mutate({
+                entryId: row.sourceId,
+                bulkFeed: feed,
+                mutationContext: { originatingAccountId, current: null },
+                groupGuard,
+              });
+            }
+          }
+          return stillCurrent;
+        };
+      },
       markAsRead: (target) => {
         if (liveFeedMode.current === "upgrade-required") return;
         const feedId = typeof target === "string" ? target : target.feedId;
@@ -2032,6 +2143,8 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       isCurrentFeed,
       captureCurrentFeed,
       renderedFeed,
+      renderedBotLifetime,
+      renderedHostSnapshotEpoch,
       canMutateCloudEntry,
       originatingAccountId,
       cloudConnectionState,
@@ -2124,6 +2237,7 @@ function rowFromHostEntryForOrigin(
     botAnswer: isBotAttention(entry),
     botAuthorUserId: botConversationAuthorUserId(entry),
     botMessage: botNotificationMessage(entry),
+    actionIdentity: JSON.stringify({ ...entry, readAt: null }),
     hostKind: entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -2215,6 +2329,7 @@ export function rowFromCloudFeedRow(
     botAnswer: isBotAttention(row.entry),
     botAuthorUserId: botConversationAuthorUserId(row.entry),
     botMessage: botNotificationMessage(row.entry),
+    actionIdentity: JSON.stringify({ ...row.entry, readAt: null }),
     hostKind: row.entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -2511,6 +2626,7 @@ function navigationPayloadForBotRow(known: BotRowPayload): NotificationPayload {
     chatId: verdict ? known.threadId : (known.threadId ?? known.conversationId),
     bot: {
       botId: known.botId,
+      conversationId: verdict ? null : known.conversationId,
       threadId: known.threadId,
       messageId: verdict ? known.replyMessageId : known.messageId,
     },
@@ -2571,4 +2687,21 @@ function isBotAttention(entry: {
   return (
     isBotThreadVerdictNotification(entry) || isBotConversationAttention(entry)
   );
+}
+
+/** Read state can advance independently; a replacement's content or destination cannot. */
+function notificationReadIdentity(row: MergedNotificationRow): string {
+  return JSON.stringify([
+    row.actionIdentity,
+    row.feedId,
+    row.createdAt,
+    row.sourceRef,
+    row.originHostId,
+    row.hostKind,
+    row.severity,
+    row.outcome,
+    row.body,
+    row.payload,
+    row.botMessage,
+  ]);
 }
