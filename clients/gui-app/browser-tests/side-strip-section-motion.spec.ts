@@ -288,6 +288,48 @@ test.describe("when another task is opened with the pointer in the list", () => 
     expect((await boxOf(row(page, "watcher"))).y).toBe(before.y);
   });
 
+  test("keeps a waiting row that holds keyboard focus drawn in a folded section after the pointer leaves the list", async ({
+    page,
+  }) => {
+    await holdReleaseAboveWatcher(page);
+    await page.getByTestId("side-strip-section-to-review").click();
+    await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+    await expect(row(page, "migration")).toHaveCount(0);
+    const release = row(page, "release");
+    await release.evaluate((node) => {
+      node.blur();
+    });
+    await page.keyboard.press("Insert");
+    await release.focus();
+    expect(
+      await release.evaluate((node) => node.matches(":focus-visible")),
+    ).toBe(true);
+    await expect(release).toBeVisible();
+
+    const at = await centreOf(row(page, "watcher"));
+    await page.mouse.move(at.x, at.y);
+    await page.evaluate(
+      'window.__sideTabStripProbe.activate("fixture-watcher")',
+    );
+    await expect(row(page, "watcher")).toHaveAttribute("data-active", "true");
+    await expect(release).toBeFocused();
+    await expect(release).toBeVisible();
+    expect(await laneOf(release)).toBe("to-review");
+
+    await page.mouse.move(OUTSIDE_THE_STRIP.x, OUTSIDE_THE_STRIP.y);
+    await nextFrames(page, 3);
+
+    await expect(release).toBeVisible();
+    expect(await laneOf(release)).toBe("to-review");
+    await expect(release).toBeFocused();
+
+    await release.evaluate((node) => {
+      node.blur();
+    });
+
+    await expect.poll(() => laneOf(release)).toBe("idle");
+  });
+
   test("moves the previous row to its section once the pointer leaves the list", async ({
     page,
   }) => {

@@ -114,6 +114,8 @@ export function SideStripSections(props: {
       ]),
     [assigned, released, current, holds],
   );
+  // The current task's row is drawn by being the current one.
+  const held = useMemo(() => [...released, ...holds], [released, holds]);
   const announcement = useNeedsYouAnnouncement(assigned);
   const slide = useMotionEnabled();
   const { keys, offsets } = useMemo(() => visualOrderOf(sections), [sections]);
@@ -161,7 +163,7 @@ export function SideStripSections(props: {
             variant={variant}
             chip={group.section === stuck ? chip : null}
             memberOffsets={offsets}
-            waiting={released}
+            held={held}
             controller={controller}
             handlers={handlers}
           />
@@ -192,13 +194,12 @@ function StripSectionRows(props: {
   readonly chip: ReactNode | null;
   /** Tabs drawn before each item, for its Alt-digit badge. */
   readonly memberOffsets: ReadonlyMap<string, number>;
-  /** The rows waiting where they were drawn, this section's among them. */
-  readonly waiting: ReadonlyArray<StripSectionHold>;
+  /** The rows a hold keeps where they are drawn, this section's among them. */
+  readonly held: ReadonlyArray<StripSectionHold>;
   readonly controller: TabStripController;
   readonly handlers: SideStripHandlers;
 }): ReactNode {
-  const { group, variant, memberOffsets, waiting, controller, handlers } =
-    props;
+  const { group, variant, memberOffsets, held, controller, handlers } = props;
   const rail = variant === "collapsed";
   const [folded] = useStripSectionFolded(group.section);
   const draggedItemId = useActiveHeaderTab()?.stripItemId ?? null;
@@ -206,9 +207,10 @@ function StripSectionRows(props: {
     (entry): entry is StripTabEntry => entry.kind === "tabs",
   );
   // A folded section keeps the current task's row, so the person still sees
-  // where they are, and a row waiting in it, which would otherwise vanish from
-  // under the pointer; the header's count is still the whole section's. The
-  // rail has no header to fold from, so it draws every tile.
+  // where they are, and every row a hold keeps in it: one waiting there, under
+  // the pointer or holding keyboard focus, which no other section would draw.
+  // The header's count is still the whole section's. The rail has no header to
+  // fold from, so it draws every tile.
   let shown: ReadonlyArray<StripSectionEntry> = group.entries;
   if (rail) {
     shown = tabEntries;
@@ -217,7 +219,7 @@ function StripSectionRows(props: {
       (entry) =>
         entry.kind === "tabs" &&
         (entry.itemId === controller.activeItemId ||
-          waiting.some((held) => held.itemId === entry.itemId)),
+          held.some((hold) => hold.itemId === entry.itemId)),
     );
   }
   // A tab dragged inside this section reorders among the tabs it draws, so its

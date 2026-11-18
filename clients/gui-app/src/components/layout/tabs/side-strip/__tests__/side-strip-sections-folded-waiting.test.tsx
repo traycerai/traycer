@@ -113,50 +113,55 @@ function Strip(props: {
 
 afterEach(cleanup);
 
-describe("a folded section when another task is opened with the pointer in the list", () => {
-  it("draws the row waiting in it until the pointer leaves, and no other row of it", () => {
-    const scroller = document.body.appendChild(document.createElement("div"));
-    const view = render(
-      <Strip
-        scroller={scroller}
-        activeItemId="old"
-        sections={sectionsOf([
-          ["old", "to-review"],
-          ["other-review", "to-review"],
-          ["next", "working"],
-        ])}
-      />,
-    );
+const ROWS: ReadonlyArray<readonly [string, StripSection]> = [
+  ["old", "idle"],
+  ["other-review", "to-review"],
+  ["next", "working"],
+];
+
+/** `old` is current and settled to Idle while held in the folded To review. */
+function renderOldHeldInFoldedToReview() {
+  const scroller = document.body.appendChild(document.createElement("div"));
+  const view = render(
+    <Strip
+      scroller={scroller}
+      activeItemId="old"
+      sections={sectionsOf([["old", "to-review"], ...ROWS.slice(1)])}
+    />,
+    { container: scroller },
+  );
+  // The fold lives in a session store the tests share: fold only when open.
+  if (screen.queryByTestId("row-other-review") !== null) {
     act(() => {
       screen.getByTestId("side-strip-section-to-review").click();
     });
-    // The current task's state settles: its own section is now Idle, but it
-    // stays in To review while it is the current one.
-    view.rerender(
-      <Strip
-        scroller={scroller}
-        activeItemId="old"
-        sections={sectionsOf([
-          ["old", "idle"],
-          ["other-review", "to-review"],
-          ["next", "working"],
-        ])}
-      />,
-    );
-    act(() => {
-      scroller.dispatchEvent(new Event("pointerover", { bubbles: true }));
-    });
+  }
+  view.rerender(
+    <Strip
+      scroller={scroller}
+      activeItemId="old"
+      sections={sectionsOf(ROWS)}
+    />,
+  );
+  const openNext = (): void => {
     view.rerender(
       <Strip
         scroller={scroller}
         activeItemId="next"
-        sections={sectionsOf([
-          ["old", "idle"],
-          ["other-review", "to-review"],
-          ["next", "working"],
-        ])}
+        sections={sectionsOf(ROWS)}
       />,
     );
+  };
+  return { scroller, openNext };
+}
+
+describe("a folded section when another task is opened with the pointer in the list", () => {
+  it("draws the row waiting in it until the pointer leaves, and no other row of it", () => {
+    const { scroller, openNext } = renderOldHeldInFoldedToReview();
+    act(() => {
+      scroller.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    });
+    openNext();
 
     expect(screen.getByTestId("row-old").dataset.stripLane).toBe("to-review");
     expect(screen.queryByTestId("row-other-review")).toBeNull();
@@ -167,5 +172,30 @@ describe("a folded section when another task is opened with the pointer in the l
 
     expect(screen.getByTestId("row-old").dataset.stripLane).toBe("idle");
     expect(screen.queryByTestId("row-other-review")).toBeNull();
+  });
+
+  it("keeps a waiting row under the pointer drawn when the window loses focus", () => {
+    const { scroller, openNext } = renderOldHeldInFoldedToReview();
+    act(() => {
+      screen
+        .getByTestId("row-old")
+        .dispatchEvent(new Event("pointerover", { bubbles: true }));
+    });
+    openNext();
+
+    expect(screen.getByTestId("row-old").dataset.stripLane).toBe("to-review");
+
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+
+    expect(screen.getByTestId("row-old").dataset.stripLane).toBe("to-review");
+    expect(screen.queryByTestId("row-other-review")).toBeNull();
+
+    act(() => {
+      scroller.dispatchEvent(new Event("pointerleave"));
+    });
+
+    expect(screen.getByTestId("row-old").dataset.stripLane).toBe("idle");
   });
 });
