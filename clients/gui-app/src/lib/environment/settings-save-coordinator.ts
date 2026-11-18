@@ -270,15 +270,21 @@ export function createSettingsSaveCoordinator(
       : null;
   };
 
-  const reconcileOnce = async (hostId: string): Promise<void> => {
+  const reconcileOnce = async (
+    hostId: string,
+    current: () => boolean,
+  ): Promise<void> => {
     // Until the memory is the signed-in account's, its records are another
     // account's, and they wait for that account.
     const account = memoryAccount();
     if (account === null) return;
-    // Once the run's sign-in ends, the run stops even where the account is the same.
+    // Once the run's sign-in ends, the run stops even where the account is the
+    // same; a follow-up also stops once `stop()` has run since it was armed.
     const cloud = ports.cloud();
-    const sameAccount = (): boolean =>
-      memoryAccount() === account && (cloud === null || cloud.onOriginSignIn());
+    const mayAct = (): boolean =>
+      current() &&
+      memoryAccount() === account &&
+      (cloud === null || cloud.onOriginSignIn());
     forgetExpired();
     dropUnremembered();
     const mine = Object.entries(store().records).filter(
@@ -295,7 +301,7 @@ export function createSettingsSaveCoordinator(
     }
     // Not connected, or nothing answered: every record waits for the next
     // connection.
-    if (proposals === null || !sameAccount()) return;
+    if (proposals === null || !mayAct()) return;
 
     // A later save of the same item may have replaced a record since the reads; then
     // neither its apply nor its forgetting is this run's.
@@ -306,7 +312,7 @@ export function createSettingsSaveCoordinator(
     if (sorted.proposed.size === 0 || cloud === null) return;
 
     for (const [environmentId, saves] of sorted.proposed) {
-      if (!(await applyProposed(cloud, environmentId, saves, sameAccount))) {
+      if (!(await applyProposed(cloud, environmentId, saves, mayAct))) {
         return;
       }
     }
@@ -316,7 +322,7 @@ export function createSettingsSaveCoordinator(
     cloud: EnvironmentCloud,
     environmentId: string,
     saves: readonly RememberedSave[],
-    sameAccount: () => boolean,
+    mayAct: () => boolean,
   ): Promise<boolean> => {
     let holds: readonly HeldChangeForMatch[];
     try {
@@ -324,16 +330,18 @@ export function createSettingsSaveCoordinator(
     } catch {
       return true;
     }
-    for (const { id, record } of saves) {
-      if (!sameAccount()) return false;
-      if (!isCurrent(id)) continue;
+    for (const { id } of saves) {
+      if (!mayAct()) return false;
+      // Read after the waits: another coordinator may have spent a try since.
+      const record = settingsSaveMemoryRecord(store().records, id);
+      if (record === null) continue;
       // The reads may have outlasted the save's TTL.
       if (expired(record)) {
         forget(id);
         continue;
       }
       const result = await applyHold(cloud, id, record, holds);
-      if (!sameAccount()) return false;
+      if (!mayAct()) return false;
       if (result === "applied") appliedListeners.get(id)?.();
       if (result !== "stays") forget(id);
     }
@@ -354,7 +362,8 @@ export function createSettingsSaveCoordinator(
   // A later arm never pushes out a sooner one: a new save's short wait stands
   // against an older run's long one, whichever of them arms last.
   const armFollowUp = (hostId: string, step: number, armedIn: number): void => {
-    if (generation !== armedIn) return;
+    // Another account's records wait for that account: its sign-in reconciles them.
+    if (generation !== armedIn || memoryAccount() === null) return;
     const armed = followUps.get(hostId);
     if (!awaitsHold(hostId)) {
       armed?.cancel();
@@ -389,11 +398,10 @@ export function createSettingsSaveCoordinator(
     const previous = running.get(hostId) ?? Promise.resolve();
     // A failed run reaches no error report: what it remembers stays private,
     // and the records it did not settle wait for the next run. A follow-up
-    // that waited here past a stop reads nothing.
+    // that waited here past a stop, or reaches one while it runs, acts on nothing.
+    const current = followUp ? () => generation === armedIn : () => true;
     const next = previous
-      .then(() =>
-        followUp && generation !== armedIn ? undefined : reconcileOnce(hostId),
-      )
+      .then(() => (current() ? reconcileOnce(hostId, current) : undefined))
       .catch(() => undefined)
       .then(() => armFollowUp(hostId, nextStep, armedIn));
     running.set(hostId, next);
