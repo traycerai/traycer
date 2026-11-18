@@ -181,3 +181,21 @@ test.describe("the iPad Pro 11's keyboard", () => {
     await expect(page.locator(PANEL)).not.toHaveAttribute("data-focus-layout");
   });
 });
+
+// A thread opened at Send whose first attempt came back uncertain, on a phone:
+// the pane shows the thread alone, so the post the thread opens on is where the
+// person reads that the send may not have arrived, and where they send it again.
+test.describe("a thread opened at Send, its send unconfirmed", () => {
+  test.use({ viewport: { width: 390, height: 700 } });
+
+  test("the post it opens on shows the unconfirmed mark and Retry", async ({
+    page,
+  }) => {
+    await page.goto(
+      `${fixture("bot-thread-tasks-bound")}?thread=posted&pending=uncertain`,
+    );
+    const origin = page.locator(ANCHOR);
+    await expect(origin.getByText(/Not confirmed/)).toBeVisible();
+    await expect(origin.getByRole("button", { name: "Retry" })).toBeVisible();
+  });
+});

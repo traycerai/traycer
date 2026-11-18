@@ -1,6 +1,7 @@
-import type {
-  BotOpenThread,
-  BotRail,
+import {
+  heldThreadsOf,
+  type BotOpenThread,
+  type BotRail,
 } from "@/stores/bots/bot-open-thread-store";
 
 /** One of a channel's two views. */
@@ -200,20 +201,11 @@ function heldThreadOf(
   rail: BotRail | null,
   anchorMessageId: string,
 ): BotOpenThread | null {
-  if (rail === null) return null;
-  switch (rail.kind) {
-    case "thread":
-      return rail.anchorMessageId === anchorMessageId ? rail : null;
-    case "memory":
-      return rail.back?.anchorMessageId === anchorMessageId ? rail.back : null;
-    case "exchange":
-      return heldThreadOf(rail.back, anchorMessageId);
-    case "search":
-      return rail.showing.kind === "thread" &&
-        rail.showing.thread.anchorMessageId === anchorMessageId
-        ? rail.showing.thread
-        : heldThreadOf(rail.back, anchorMessageId);
-  }
+  return (
+    heldThreadsOf(rail).find(
+      (held) => held.thread.anchorMessageId === anchorMessageId,
+    )?.thread ?? null
+  );
 }
 
 /**

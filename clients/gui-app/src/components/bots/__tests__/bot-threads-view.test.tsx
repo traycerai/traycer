@@ -1983,7 +1983,12 @@ describe("a member's own reply in a card, drawn before its host answers", () => 
   const THREAD = "team-a";
   const CHANNEL = `channel-${TEAM}`;
   const REPLY_TEXT = "Is the nightly green?";
-  const HOST_STORED_AT = Date.UTC(2020, 0, 2, 3, 4, 5);
+  /**
+   * When the host stored the reply, later than the press stamped the pending
+   * row: a read position past the pending row's own cannot be the pending
+   * row's, whatever the clock says.
+   */
+  let hostStoredAt = 0;
   const IDS: WindowedChatIds = {
     epicId: TEAM,
     chatId: THREAD,
@@ -2059,6 +2064,7 @@ describe("a member's own reply in a card, drawn before its host answers", () => 
     });
     if (held.started === null) throw new Error("Send started nothing");
     const { messageId, request } = held.started;
+    hostStoredAt = Date.now() + 1_000;
     return { rowId: messageId, request };
   }
 
@@ -2123,7 +2129,7 @@ describe("a member's own reply in a card, drawn before its host answers", () => 
       messageAccepted(
         session,
         IDS,
-        storedRowOfSend(request, "user-1", HOST_STORED_AT),
+        storedRowOfSend(request, "user-1", hostStoredAt),
       );
     });
 
@@ -2144,7 +2150,7 @@ describe("a member's own reply in a card, drawn before its host answers", () => 
     // The host has written the reply, and its read names it the newest.
     mocks.hosted[TEAM].cursors = {
       cursors: { [THREAD]: { messageId: "team-a-reply-1", seq: 500 } },
-      latest: { [THREAD]: { messageId: rowId, seq: HOST_STORED_AT } },
+      latest: { [THREAD]: { messageId: rowId, seq: hostStoredAt } },
     };
     await act(async () => {
       await queryClient.invalidateQueries();
@@ -2161,7 +2167,7 @@ describe("a member's own reply in a card, drawn before its host answers", () => 
       messageAccepted(
         session,
         IDS,
-        storedRowOfSend(request, "user-1", HOST_STORED_AT),
+        storedRowOfSend(request, "user-1", hostStoredAt),
       );
     });
     // The stored row is in view again, for the read hold.
@@ -2173,7 +2179,7 @@ describe("a member's own reply in a card, drawn before its host answers", () => 
           botId: TEAM,
           conversationId: THREAD,
           messageId: rowId,
-          seq: HOST_STORED_AT,
+          seq: hostStoredAt,
         },
       ]),
     );
@@ -2193,7 +2199,7 @@ describe("a member's own reply in a card, drawn before its host answers", () => 
     // The host has written the reply, and its read names it the newest.
     mocks.hosted[TEAM].cursors = {
       cursors: { [THREAD]: { messageId: "team-a-reply-1", seq: 500 } },
-      latest: { [THREAD]: { messageId: rowId, seq: HOST_STORED_AT } },
+      latest: { [THREAD]: { messageId: rowId, seq: hostStoredAt } },
     };
     await act(async () => {
       await queryClient.invalidateQueries();
@@ -2222,7 +2228,7 @@ describe("a member's own reply in a card, drawn before its host answers", () => 
         {
           messages: [
             earlierReply(),
-            storedRowOfSend(request, "user-1", HOST_STORED_AT),
+            storedRowOfSend(request, "user-1", hostStoredAt),
           ],
           events: [],
           activeTurnId: null,
@@ -2240,7 +2246,7 @@ describe("a member's own reply in a card, drawn before its host answers", () => 
           botId: TEAM,
           conversationId: THREAD,
           messageId: rowId,
-          seq: HOST_STORED_AT,
+          seq: hostStoredAt,
         },
       ]),
     );

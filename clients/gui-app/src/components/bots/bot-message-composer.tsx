@@ -49,6 +49,7 @@ import {
   type BotPendingSendStart,
 } from "@/lib/bots/bot-pending-send";
 import { settlePendingSend } from "@/stores/bots/bot-pending-sends-store";
+import { settleSentThread } from "@/stores/bots/bot-open-thread-store";
 import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
 import { useBotSentAs, type BotSentAs } from "@/lib/bots/bot-sent-as";
 import type {
@@ -584,7 +585,10 @@ export function BotMessageComposer(props: {
         // The send went, so it is reported whatever the box did meanwhile,
         // unless the box is gone; the delivery is said under the box only
         // while it is still empty.
-        if (!mountedRef.current) return;
+        if (!mountedRef.current) {
+          settleThreadOfGoneBox(started, response, sentAs.lifetime);
+          return;
+        }
         const deliverySaid = onSent(
           response,
           text,
@@ -1612,6 +1616,30 @@ function boxSendRequest(input: {
     ...(attachments.length === 0 ? {} : { attachments: [...attachments] }),
     ...(replyTo === null ? {} : { replyTo }),
   };
+}
+
+/**
+ * Settles the thread a box's Send opened (T249) when the box is gone before
+ * the first attempt's answer: the owner that settles it (`onSent`) went
+ * with the box, so it is settled here, as a refusal and a Retry's answer
+ * settle it. Nothing for a send not drawn at Send.
+ */
+function settleThreadOfGoneBox(
+  started: BotPendingSendStart | null,
+  response: BotConversationSendResponse,
+  lifetime: number,
+): void {
+  if (started === null) return;
+  settleSentThread(
+    started.request.botId,
+    response.requestId,
+    {
+      kind: "answered",
+      threadId: response.threadId,
+      delivery: response.delivery,
+    },
+    lifetime,
+  );
 }
 
 /**

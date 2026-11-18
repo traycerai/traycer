@@ -12,6 +12,7 @@ import {
 } from "react";
 import {
   ChatBotPendingSendsContext,
+  type ChatBotPendingSend,
   type ChatBotThreadOpening,
 } from "@/components/chat/chat-bot-presentation-context";
 import { X } from "lucide-react";
@@ -20,6 +21,7 @@ import type {
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
+import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ChatBotMessage } from "@/components/chat/chat-bot-message";
@@ -97,13 +99,18 @@ import {
   threadOriginRow,
   type ThreadOriginRow,
 } from "@/lib/bots/reply-row";
-import { useHeldPendingSends } from "@/stores/bots/bot-pending-sends-store";
+import {
+  useBotPendingSendsStore,
+  useHeldPendingSends,
+  type BotPendingSend,
+} from "@/stores/bots/bot-pending-sends-store";
 import { usePendingSendRows } from "@/hooks/bots/use-pending-send-rows";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useKeptBoxDraft } from "@/hooks/bots/use-kept-box-draft";
 import { useBotDraftActions } from "@/stores/bots/bot-drafts-store";
 import type { BotTurnOpen } from "@/stores/bots/bot-open-thread-store";
 import {
+  closeUnwrittenPostThread,
   openSentThread,
   settleSentThread,
   type BotSentPost,
@@ -407,6 +414,10 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
       botMemberAvatarUrl(senderUserId, viewer, resolveMember),
     [resolveMember, viewer],
   );
+  // A send of this window still carrying the post's id may yet write it.
+  const held = useBotPendingSendsStore(
+    (state) => state.entries[originMessageId] !== undefined,
+  );
   return (
     <ChannelPost
       botId={props.botId}
@@ -415,7 +426,7 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
       messageId={originMessageId}
       fetchCold
     >
-      {(post) => {
+      {(post, _missing, absent) => {
         const origin = threadOriginRow({
           messageId: originMessageId,
           post,
@@ -424,16 +435,45 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
           senderLabel: anchorSenderLabel,
           senderAvatarUrl,
         });
-        return origin === null ? null : (
-          <ThreadOriginPost
-            {...props}
-            origin={origin}
-            queued={post === null && sent?.delivery === "queued"}
-          />
+        // A place naming a post the host holds no row of, which nothing
+        // listed or sent here names either, ends: its thread closes.
+        const unwritten =
+          absent && props.thread.kind === "pending" && sent === null && !held;
+        return (
+          <>
+            {unwritten ? (
+              <CloseUnwrittenPostThread
+                botId={props.botId}
+                anchorMessageId={originMessageId}
+              />
+            ) : null}
+            {origin === null ? null : (
+              <ThreadOriginPost
+                {...props}
+                origin={origin}
+                queued={post === null && sent?.delivery === "queued"}
+              />
+            )}
+          </>
         );
       }}
     </ChannelPost>
   );
+}
+
+/**
+ * Closes the rail's thread of a post the host holds no row of
+ * (`closeUnwrittenPostThread`), once, as the post's read ends that way.
+ */
+function CloseUnwrittenPostThread(props: {
+  readonly botId: string;
+  readonly anchorMessageId: string;
+}): ReactNode {
+  const { botId, anchorMessageId } = props;
+  useEffect(() => {
+    closeUnwrittenPostThread(botId, anchorMessageId);
+  }, [anchorMessageId, botId]);
+  return null;
 }
 
 /**
@@ -469,6 +509,7 @@ function ThreadOriginPost(
     (requestId: string) => failedOnRequest(activity, requestId),
     [activity],
   );
+  const pendingSendOf = useOriginPendingSends(props);
   const listed = props.thread.kind === "listed" ? props.thread.thread : null;
   // The turn behind the post: the bot's post draws the receipt of the turn
   // that wrote it, as in the channel; a member's post, while the bot failed
@@ -594,16 +635,18 @@ function ThreadOriginPost(
         hostId={hostId}
       >
         <TracyTranscriptOriginScope botId={botId}>
-          <ChatBotMessage
-            message={origin.row}
-            presentation={
-              origin.loaded ? loadedPresentation : unloadedPresentation
-            }
-            hoverActions={false}
-            timeLink={
-              props.layout.kind === "card" ? props.layout.onShowPost : null
-            }
-          />
+          <ChatBotPendingSendsContext value={pendingSendOf}>
+            <ChatBotMessage
+              message={origin.row}
+              presentation={
+                origin.loaded ? loadedPresentation : unloadedPresentation
+              }
+              hoverActions={false}
+              timeLink={
+                props.layout.kind === "card" ? props.layout.onShowPost : null
+              }
+            />
+          </ChatBotPendingSendsContext>
         </TracyTranscriptOriginScope>
       </BotTranscriptImageScope>
       {queued ? (
@@ -613,6 +656,40 @@ function ThreadOriginPost(
       ) : null}
     </div>
   );
+}
+
+const NO_HELD_SENDS: ReadonlyArray<BotPendingSend> = [];
+
+/**
+ * What the post a thread opened at Send (T249) offers while that send is
+ * unanswered (`sent` provisional): the channel's own held send of it, read
+ * from the entry the channel's row reads, so the post says here what its row
+ * says there, and its Retry is the channel's. `null` once the send is
+ * answered, stored or gone, and for a thread opened any other way: an
+ * announcement's `sent` is its first reply, not the post the thread opens on.
+ */
+function useOriginPendingSends(
+  props: ThreadPanelBodyProps,
+): ((messageId: string) => ChatBotPendingSend | null) | null {
+  const { botId, conversationId, originMessageId, sent } = props;
+  const { hostId, boundHostId, boundHostEpoch, onBindingMoved } = props;
+  const channelHeld = useHeldPendingSends(botId, conversationId);
+  const sentPostId =
+    sent !== null && sent.provisional
+      ? conversationRequestMessageId(sent.requestId)
+      : null;
+  const held = useMemo(
+    () =>
+      sentPostId === originMessageId
+        ? channelHeld.filter((send) => send.row.messageId === sentPostId)
+        : NO_HELD_SENDS,
+    [channelHeld, originMessageId, sentPostId],
+  );
+  const binding = useMemo(
+    () => ({ hostId, boundHostId, boundHostEpoch, onMoved: onBindingMoved }),
+    [boundHostEpoch, boundHostId, hostId, onBindingMoved],
+  );
+  return usePendingSendRows(botId, held, useTabHostClient(), binding);
 }
 
 /**

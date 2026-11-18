@@ -50,6 +50,15 @@ export interface DomReading {
   readonly images: ReadonlyArray<string>;
 }
 
+/** What the host has said about a cold row, as `useChatLocateRowAnswer` reports it. */
+export type LocateAnswer =
+  | { readonly status: "waiting" }
+  | { readonly status: "found"; readonly ordinal: number }
+  | {
+      readonly status: "missing";
+      readonly cause: "absent" | "unsupported" | "failed";
+    };
+
 /** The state one case shares with the mocked boundaries and the probes. */
 export const scene = {
   host: null as HeldHost | null,
@@ -62,6 +71,8 @@ export const scene = {
   panelKinds: [] as string[],
   /** The `sent` each call of `threadOriginRow` was given, in order. */
   originSents: [] as Array<BotSentPost | null>,
+  /** What the host says of a cold row the channel does not hold. */
+  locate: { status: "waiting" } as LocateAnswer,
   /** The line the host negotiated for `bot.conversation.send`; `null` while none is read. */
   sendLine: { major: 1, minor: 7 } as {
     readonly major: number;
@@ -154,7 +165,7 @@ export const guiHarnessCatalogMock = {
 
 export const chatLocateRowMock = {
   useChatLocateRow: () => null,
-  useChatLocateRowAnswer: () => ({ status: "waiting" }),
+  useChatLocateRowAnswer: () => scene.locate,
 };
 
 export const resolvedThemeMock = {

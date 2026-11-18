@@ -29,6 +29,12 @@ import {
   type BotThreadPanelThread,
 } from "@/components/bots/bot-thread-panel";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
+import { startPendingSend } from "@/lib/bots/bot-pending-send";
+import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
+import {
+  settlePendingSend,
+  useBotPendingSendsStore,
+} from "@/stores/bots/bot-pending-sends-store";
 import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import {
   BotIdentityContext,
@@ -90,6 +96,12 @@ import "@/index.css";
  * other bots and tasks, as the tab's directory hands them to the box and the
  * rows (decision 177); and `?post=mentions`, a post that names a bot, a task
  * and a member.
+ *
+ * The pending-origin spec adds `?pending=uncertain`: the thread was opened at
+ * Send (`posted`, its send not yet answered), and the first attempt ended without
+ * saying whether the host wrote it, so the post the thread opens on shows the
+ * channel's unconfirmed mark and Retry (the held send is the window's, made once
+ * the fixture's account is signed in).
  *
  * The quote spec adds `?quote=box`: the fixture plays the channel's part for
  * a quote, as `BotChannelView` does for a thread's panel, and `?post=paragraphs`,
@@ -355,7 +367,7 @@ function panelThread(): BotThreadPanelThread {
 }
 
 const sent = sentText();
-const sentPost: BotSentPost | null =
+let sentPost: BotSentPost | null =
   sent === null
     ? null
     : {
@@ -367,6 +379,70 @@ const sentPost: BotSentPost | null =
         delivery: "written",
         provisional: false,
       };
+/** The post the thread opens on: the one the fixture lists, or the held send's. */
+let originMessageId = "post-1";
+
+const PENDING_TEXT = "Is the release train still leaving at noon?";
+
+/**
+ * The send the person pressed, its first attempt uncertain: the thread is the
+ * one opened at Send and the post is the held send's row. Made once the
+ * account is signed in, as a send made before it would be retired with the
+ * lifetime that sign-in starts.
+ */
+function holdUncertainSend(): void {
+  const started = startPendingSend({
+    request: {
+      botId: "bot-1",
+      conversationId: "channel-1",
+      text: PENDING_TEXT,
+      threadId: null,
+      announcementId: null,
+      redeliver: null,
+      supersedes: null,
+      answer: null,
+    },
+    authority: { hostId: HOST_ID, hostEpoch: 1 },
+    senderUserId: VIEWER_ID,
+    sentAs: { lifetime: currentBotLifetime(), account: VIEWER_ID },
+    text: PENDING_TEXT,
+    content: {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: PENDING_TEXT }] },
+      ],
+    },
+    images: [],
+    release: noop,
+  });
+  settlePendingSend(started.messageId, "uncertain");
+  originMessageId = started.messageId;
+  sentPost = {
+    threadId: started.threadId ?? THREAD_ID,
+    requestId: started.requestId,
+    text: PENDING_TEXT,
+    senderUserId: VIEWER_ID,
+    sentAt: Date.now(),
+    delivery: "written",
+    provisional: true,
+  };
+}
+
+/** Holds the uncertain send before the pane draws, where the case asks for one. */
+function PendingSeed(props: {
+  readonly children: ReactNode;
+}): ReactElement | null {
+  const wanted = params.get("pending") === "uncertain";
+  const authStatus = useAuthStore((state) => state.status);
+  const held = useBotPendingSendsStore(
+    (state) => Object.keys(state.entries).length > 0,
+  );
+  useEffect(() => {
+    if (!wanted || held || authStatus !== "signed-in") return;
+    holdUncertainSend();
+  }, [authStatus, held, wanted]);
+  return !wanted || held ? <>{props.children}</> : null;
+}
 
 export function SignedInFixture(props: {
   readonly children: ReactNode;
@@ -512,7 +588,7 @@ function ThreadPanel(props: {
       replyReach="none"
       botTitle="Release Bot"
       conversationId="channel-1"
-      originMessageId="post-1"
+      originMessageId={originMessageId}
       sent={sentPost}
       thread={panelThread()}
       tasks={params.get("tasks") === "none" ? [] : tasks}
@@ -555,7 +631,9 @@ function buildRouter() {
             <WindowsBridgeContext.Provider value={windowsBridgeValue}>
               <TooltipProvider>
                 <SignedInFixture>
-                  <Pane />
+                  <PendingSeed>
+                    <Pane />
+                  </PendingSeed>
                 </SignedInFixture>
               </TooltipProvider>
             </WindowsBridgeContext.Provider>

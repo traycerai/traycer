@@ -47,6 +47,10 @@ import {
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { currentBotLifetime } from "@/lib/bots/bot-lifetime";
+import {
+  resetBotFailedRequestSupport,
+  signInViewer,
+} from "@/components/bots/__tests__/bot-failed-request-test-support";
 
 /**
  * The Tracy surface's place (view, Threads, a session, the rail's thread,
@@ -982,5 +986,45 @@ describe("the Tracy surface's place on the route", () => {
       expect(isHistoryEntryDead(ENTRIES[1])).toBe(false);
       expect(isHistoryEntryEligible(ENTRIES[1], canvas)).toBe(true);
     });
+  });
+  describe("an account change", () => {
+    afterEach(() => {
+      resetBotFailedRequestSupport();
+    });
+
+    it.each([
+      { name: "to another account", cross: () => signInViewer("user-b") },
+      { name: "to signed out", cross: resetBotFailedRequestSupport },
+    ])(
+      "empties the rail over the entry that named it, so Back does not reopen the previous account's thread $name",
+      async ({ cross }) => {
+        signInViewer("user-a");
+        const harness = await mountOnChannel(BOT_A);
+        const opened: Surface = { ...NOTHING, rail: T1 };
+        establish(BOT_A, opened);
+        await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(opened));
+        const length = harness.history.length;
+        const index = harness.location().index;
+
+        act(cross);
+        expect(surfaceOf(BOT_A)).toEqual(NOTHING);
+        await waitForUrl(harness, `/bot/${BOT_A}`, placeOf(NOTHING));
+
+        expect(
+          harness.history.length,
+          "the account change pushed a history entry",
+        ).toBe(length);
+        expect(harness.location().index).toBe(index);
+
+        stepBack(harness);
+        await waitFor(() => {
+          expect(harness.location().index).toBe(index - 1);
+        });
+        expect(
+          surfaceOf(BOT_A).rail,
+          "Back reopened the previous account's thread",
+        ).toBeNull();
+      },
+    );
   });
 });

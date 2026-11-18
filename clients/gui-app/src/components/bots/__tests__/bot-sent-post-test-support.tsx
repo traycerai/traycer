@@ -352,6 +352,7 @@ export function startCase(
     store: createChannelStore([]),
   } as ChatSessionStoreHandle;
   scene.threads = [];
+  scene.locate = { status: "waiting" };
   scene.commits = [];
   scene.panelKinds = [];
   scene.originSents = [];
@@ -448,10 +449,32 @@ export async function mountSurfaceOnRouteAs(
   userId: string,
   queryClient: QueryClient,
 ): Promise<PlaceRoute> {
+  return mountSurfaceOnRouteAt(userId, queryClient, `/bot/${BOT_ID}`, true);
+}
+
+/**
+ * {@link mountSurfaceOnRouteAs} on `entry`, the route a reload starts on.
+ * `completes` is whether that entry names no place, so the route completes it
+ * over itself; an entry that names one is read as it is.
+ */
+export async function mountSurfaceOnRouteAtEntry(
+  userId: string,
+  queryClient: QueryClient,
+  entry: string,
+): Promise<PlaceRoute> {
+  return mountSurfaceOnRouteAt(userId, queryClient, entry, false);
+}
+
+async function mountSurfaceOnRouteAt(
+  userId: string,
+  queryClient: QueryClient,
+  entry: string,
+  completes: boolean,
+): Promise<PlaceRoute> {
   switchAccount(userId);
   await admitBotDrafts();
   const history = createMemoryHistory({
-    initialEntries: [`/bot/${BOT_ID}`],
+    initialEntries: [entry],
   });
   const rootRoute = createRootRoute({
     component: () => surfaceTree(queryClient, <Outlet />),
@@ -492,12 +515,14 @@ export async function mountSurfaceOnRouteAs(
   await screen.findByRole("group", { name: "Message Release Bot" });
   // The fixture reaches the mechanism the cases name: an entry that names no
   // place is completed over itself, a write that carries the place's `view`.
-  await waitFor(() =>
-    expect(
-      navigations.join(" | "),
-      "the route's mount asked the router for no place: the place route is not in the tree",
-    ).toContain('"view"'),
-  );
+  if (completes) {
+    await waitFor(() =>
+      expect(
+        navigations.join(" | "),
+        "the route's mount asked the router for no place: the place route is not in the tree",
+      ).toContain('"view"'),
+    );
+  }
   return {
     history,
     describe: () =>

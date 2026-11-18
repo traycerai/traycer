@@ -37,9 +37,11 @@ import {
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type {
-  BotConversationSendRequest,
-  BotThreadSummary,
+import {
+  BOT_THREAD_ANCHOR_MESSAGE,
+  type BotConversationSendRequest,
+  type BotThreadAnchors,
+  type BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import { BotTestRunnerHost } from "@/components/bots/__tests__/bot-test-runner-host";
@@ -111,6 +113,8 @@ const mocks = vi.hoisted(() => ({
   channelHandle: null as ChatSessionStoreHandle | null,
   threadHandle: null as ChatSessionStoreHandle | null,
   threads: [] as BotThreadSummary[],
+  /** The rows the bound host opens their own thread under, as its thread list says. */
+  threadAnchors: null as BotThreadAnchors | null,
   client: null as HostRequester<HostRpcRegistry> | null,
 }));
 
@@ -164,7 +168,7 @@ vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
 }));
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
   useBotThreadListQuery: () => ({
-    data: { threads: mocks.threads, threadAnchors: null },
+    data: { threads: mocks.threads, threadAnchors: mocks.threadAnchors },
     isError: false,
     refetch: vi.fn(),
   }),
@@ -218,7 +222,11 @@ vi.mock("@/components/chat/chat-messages", async () => {
 
 import { botThreadIdFor } from "@traycer/protocol/persistence/epic/messages";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
-import { countedScriptedSession } from "@/components/bots/__tests__/bot-turn-test-support";
+import {
+  ANNOUNCEMENT_ID,
+  botAnnouncement,
+  countedScriptedSession,
+} from "@/components/bots/__tests__/bot-turn-test-support";
 import {
   useBotPendingSendsStore,
   type BotPendingSend,
@@ -523,6 +531,7 @@ beforeEach(() => {
   strictWindow = true;
   sends = [];
   cursorWrites = [];
+  mocks.threadAnchors = null;
   mocks.client = holdingHostClient();
   negotiateBotSend(HOST_ID, { major: 1, minor: 7 });
   signInViewer(VIEWER_USER_ID);
@@ -1121,6 +1130,45 @@ describe('<BotChannelView replyMode="thread" /> the provisional panel at Send', 
     expect(textOf(channelBox())).toBe(TEXT);
   });
 
+  it("closes the post's rail when the receipt says the bot answered in the channel and the box had unmounted before it", async () => {
+    mountChannel("thread");
+    await screen.findByRole("group", { name: "Message Release Bot" });
+    pressSend(TEXT);
+    await screen.findByTestId("bot-thread-panel");
+    await waitFor(() => expect(sends).toHaveLength(1));
+    unmountChannel();
+
+    await act(async () => {
+      firstSend().resolve(null);
+      await Promise.resolve();
+    });
+
+    expect(
+      useBotOpenThreadStore.getState().byBotId[BOT_ID],
+      "the thread opened at Send stayed open after an answer nobody was there to hear",
+    ).toBeUndefined();
+  });
+
+  it("settles the post's rail on the thread the receipt names when the box had unmounted before it", async () => {
+    mountChannel("thread");
+    await screen.findByRole("group", { name: "Message Release Bot" });
+    pressSend(TEXT);
+    await screen.findByTestId("bot-thread-panel");
+    await waitFor(() => expect(sends).toHaveLength(1));
+    unmountChannel();
+
+    await act(async () => {
+      firstSend().resolve("thread-from-receipt");
+      await Promise.resolve();
+    });
+
+    const rail = useBotOpenThreadStore.getState().byBotId[BOT_ID];
+    expect(rail.kind === "thread" && rail.sent).toMatchObject({
+      threadId: "thread-from-receipt",
+      provisional: false,
+    });
+  });
+
   it("keeps one panel when the same send is retried", async () => {
     const user = userEvent.setup();
     mountChannel("thread");
@@ -1139,6 +1187,168 @@ describe('<BotChannelView replyMode="thread" /> the provisional panel at Send', 
     await waitFor(() => expect(sends).toHaveLength(2));
 
     expect(screen.getAllByTestId("bot-thread-panel")).toHaveLength(1);
+  });
+});
+
+describe('<BotChannelView replyMode="thread" /> the post a thread opened at Send, while its send is unconfirmed', () => {
+  const NOT_CONFIRMED = /Not confirmed/;
+
+  function origin(): HTMLElement {
+    return screen.getByTestId("bot-thread-anchor");
+  }
+
+  /** The send is held, its thread open, and its first attempt came back uncertain. */
+  async function sendThatTurnsUncertain(): Promise<void> {
+    mountChannel("thread");
+    await screen.findByRole("group", { name: "Message Release Bot" });
+    pressSend(TEXT);
+    await screen.findByTestId("bot-thread-panel");
+    await waitFor(() => expect(sends).toHaveLength(1));
+    await act(async () => {
+      firstSend().reject(unmarkedRefusal("timed out"));
+      await Promise.resolve();
+    });
+    await within(origin()).findByText(NOT_CONFIRMED);
+  }
+
+  const retryIn = (container: HTMLElement): HTMLElement =>
+    within(container).getByRole("button", { name: "Retry" });
+
+  it("draws the unconfirmed mark and Retry on the origin, and Retry from it sends the same request once, which the answer settles", async () => {
+    const user = userEvent.setup();
+    await sendThatTurnsUncertain();
+
+    await user.click(retryIn(origin()));
+    await waitFor(() => expect(sends).toHaveLength(2));
+    expect(sends[1].request).toEqual(sends[0].request);
+    expect(sends[1].request.sendNonce).toBeDefined();
+    await act(async () => {
+      sends[1].resolve("thread-from-receipt");
+      await Promise.resolve();
+    });
+
+    await waitFor(() =>
+      expect(within(origin()).queryByText(NOT_CONFIRMED)).toBeNull(),
+    );
+    expect(
+      within(origin()).queryByRole("button", { name: "Retry" }),
+    ).toBeNull();
+    const rail = useBotOpenThreadStore.getState().byBotId[BOT_ID];
+    expect(rail.kind === "thread" && rail.sent).toMatchObject({
+      threadId: "thread-from-receipt",
+      provisional: false,
+    });
+    expect(sends).toHaveLength(2);
+  });
+
+  it("shows the mark and Retry in the channel and on the origin, and Retry pressed on the origin leaves neither offering it while it is in flight", async () => {
+    const user = userEvent.setup();
+    await sendThatTurnsUncertain();
+    const channelRow = rowsSaying(TEXT)[0];
+    expect(within(channelRow).getByText(NOT_CONFIRMED)).toBeDefined();
+    expect(retryIn(channelRow)).toBeDefined();
+
+    await user.click(retryIn(origin()));
+    await waitFor(() => expect(sends).toHaveLength(2));
+
+    // The one held entry is in flight: neither Retry can send it again.
+    await waitFor(() => {
+      expect(retryIn(origin())).toHaveProperty("disabled", true);
+      expect(retryIn(rowsSaying(TEXT)[0])).toHaveProperty("disabled", true);
+    });
+    await act(async () => {
+      sends[1].resolve("thread-from-receipt");
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(within(origin()).queryByText(NOT_CONFIRMED)).toBeNull();
+      expect(
+        within(screen.getByTestId("chat-messages-stub")).queryByText(
+          NOT_CONFIRMED,
+        ),
+      ).toBeNull();
+    });
+  });
+
+  it("reflects a Retry pressed in the channel on the origin", async () => {
+    const user = userEvent.setup();
+    await sendThatTurnsUncertain();
+
+    await user.click(retryIn(rowsSaying(TEXT)[0]));
+    await waitFor(() => expect(sends).toHaveLength(2));
+
+    await waitFor(() =>
+      expect(retryIn(origin())).toHaveProperty("disabled", true),
+    );
+    await act(async () => {
+      sends[1].resolve("thread-from-receipt");
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(within(origin()).queryByText(NOT_CONFIRMED)).toBeNull(),
+    );
+  });
+
+  it("draws no mark on the origin of an announcement's thread opened by its first reply, while the reply itself is unconfirmed", async () => {
+    mocks.threads = [];
+    mocks.threadAnchors = {
+      hostId: HOST_ID,
+      epoch: 1,
+      kinds: [BOT_THREAD_ANCHOR_MESSAGE],
+    };
+    renderChannel(
+      "thread",
+      createChannelStore([
+        EARLIER_POST,
+        botAnnouncement({
+          messageId: ANNOUNCEMENT_ID,
+          text: "The nightly is red.",
+          timestamp: 700,
+        }),
+      ]),
+    );
+    mocks.threadHandle = {
+      store: createChannelStore([]),
+    } as ChatSessionStoreHandle;
+    act(() => {
+      useBotOpenThreadStore.getState().setRail(
+        BOT_ID,
+        {
+          kind: "thread",
+          anchorMessageId: ANNOUNCEMENT_ID,
+          announcement: true,
+          anchorKind: null,
+          sent: null,
+        },
+        currentBotLifetime(),
+      );
+    });
+    const panel = await screen.findByTestId("bot-thread-panel");
+    const box = await within(panel).findByRole("group", {
+      name: "Reply in a new thread",
+    });
+    typeInto(
+      box.querySelector<HTMLElement>("[data-composer-editor]") ?? box,
+      `${TEXT}{Enter}`,
+    );
+    await waitFor(() => expect(sends).toHaveLength(1));
+    await act(async () => {
+      firstSend().reject(unmarkedRefusal("timed out"));
+      await Promise.resolve();
+    });
+
+    // The reply's own row carries the mark; the announcement above it does not.
+    await within(panel).findByText(NOT_CONFIRMED);
+    expect(
+      within(screen.getByTestId("bot-thread-anchor")).queryByText(
+        NOT_CONFIRMED,
+      ),
+    ).toBeNull();
+    expect(
+      within(screen.getByTestId("bot-thread-anchor")).getByText(
+        "The nightly is red.",
+      ),
+    ).toBeDefined();
   });
 });
 
