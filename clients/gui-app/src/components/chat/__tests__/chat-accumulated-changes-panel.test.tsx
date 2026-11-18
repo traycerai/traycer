@@ -366,6 +366,78 @@ describe("<ChatAccumulatedChangesPanel /> partial summary set", () => {
     expect(screen.getByTestId("revert-artifacts-checkbox")).not.toBeNull();
     expect(dialog.textContent).not.toMatch(/also revert \d+ artifact/i);
   });
+
+  describe("with three files of one canvas", () => {
+    const canvasPaths = [
+      "/repo/artifacts/board/canvas.json",
+      "/repo/artifacts/board/notes.md",
+      "/repo/artifacts/board/assets/logo.svg",
+    ];
+    const canvasChanges = canvasPaths.map((filePath, index) => ({
+      ...fileChange(filePath),
+      artifact: { artifactId: "c1", kind: "canvas", title: "Board" },
+      counts: { additions: index + 1, deletions: 1 },
+    })) satisfies ReadonlyArray<AccumulatedChangeRow>;
+
+    function renderCanvasPanel() {
+      const restore = baseRestore(canvasChanges, null);
+      render(
+        <TooltipProvider delayDuration={0}>
+          <ChatDiffTargetContext.Provider value={null}>
+            <ChatAccumulatedChangesPanel
+              restore={restore}
+              separated={false}
+              scrollRegionMaxHeightClass="max-h-96"
+            />
+          </ChatDiffTargetContext.Provider>
+        </TooltipProvider>,
+      );
+      fireEvent.click(summary());
+      return restore;
+    }
+
+    it("shows one row with the summed counts that expands to its files", () => {
+      renderCanvasPanel();
+
+      expect(screen.getAllByTestId("accumulated-artifact-toggle")).toHaveLength(
+        1,
+      );
+      expect(screen.getByText("3 files")).not.toBeNull();
+      expect(screen.getByText("Board")).not.toBeNull();
+      expect(
+        screen.getByTestId("accumulated-artifact-toggle").parentElement
+          ?.textContent,
+      ).toBe("Updated·Board3 files+6−3");
+      expect(screen.queryAllByTestId("accumulated-undo-file")).toHaveLength(0);
+
+      fireEvent.click(screen.getByTestId("accumulated-artifact-toggle"));
+
+      expect(screen.getAllByTestId("accumulated-undo-file")).toHaveLength(3);
+    });
+
+    it("reverts every file of the artifact from its own Undo", () => {
+      const restore = renderCanvasPanel();
+
+      fireEvent.click(screen.getByTestId("accumulated-undo-artifact"));
+
+      expect(restore.revertFileChanges).toHaveBeenCalledTimes(1);
+      expect(restore.revertFileChanges).toHaveBeenCalledWith(
+        null,
+        canvasPaths,
+        true,
+      );
+    });
+
+    it("counts the artifact once in the Undo all opt-out", () => {
+      renderCanvasPanel();
+
+      fireEvent.click(screen.getByTestId("accumulated-undo-all"));
+
+      expect(screen.getByTestId("undo-all-dialog").textContent).toContain(
+        "Also revert 1 artifact",
+      );
+    });
+  });
 });
 
 // Layout ▸ Composer folding (L-142): while this section's pill is the open

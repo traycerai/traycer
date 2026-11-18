@@ -83,6 +83,7 @@ export function FileChangeSegment(props: FileChangeSegmentProps) {
   const header = (
     <FileChangeHeader
       filePath={filePath}
+      label={filePath}
       operation={operation}
       additions={segment.additions}
       deletions={segment.deletions}
@@ -366,6 +367,8 @@ const FILE_EDIT_STATUS_LABEL: Partial<Record<FileEditReason, string>> = {
 
 interface FileChangeHeaderProps {
   filePath: string;
+  // The text the row shows for the file; the full path stays in the tooltip.
+  label: string;
   operation: string;
   additions: number;
   deletions: number;
@@ -382,6 +385,7 @@ interface FileChangeHeaderProps {
 export function FileChangeHeader(props: FileChangeHeaderProps) {
   const {
     filePath,
+    label,
     operation,
     additions,
     deletions,
@@ -403,7 +407,7 @@ export function FileChangeHeader(props: FileChangeHeaderProps) {
       {clickHandlers === null ? (
         <FilePathTooltip content={filePath} side="bottom">
           <StartTruncatedText className="min-w-0 flex-1 font-mono text-code-sm text-foreground/85">
-            {filePath}
+            {label}
           </StartTruncatedText>
         </FilePathTooltip>
       ) : (
@@ -436,7 +440,7 @@ export function FileChangeHeader(props: FileChangeHeaderProps) {
             "cursor-pointer",
           )}
         >
-          {filePath}
+          {label}
         </StartTruncatedText>
       )}
       {statusLabel !== null ? (

@@ -7,7 +7,16 @@ import type { TurnCheckpointManifest } from "@traycer/protocol/persistence/epic/
 import { ChatRestoreProvider } from "@/components/chat/chat-restore-context";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
-import type { FileChangeSegment as FileChangeSegmentModel } from "@/stores/composer/chat-store";
+import type {
+  ArtifactChangeRow,
+  FileChangeSegment as FileChangeSegmentModel,
+} from "@/stores/composer/chat-store";
+import type { ArtifactProjection } from "@/stores/epics/open-epic/types";
+import { groupArtifactFolderChanges } from "@/lib/chat/artifact-folder-bundles";
+import {
+  disposeArtifactEpicSessions,
+  withArtifactEpicSession,
+} from "./artifact-epic-session";
 import type { ChatRestoreSlot } from "@/stores/chats/chat-session-store";
 import { FileChangeGroupSegment } from "@/components/chat/segments/file-change-group-segment";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
@@ -147,6 +156,9 @@ const MANIFEST = {
 } satisfies TurnCheckpointManifest;
 
 interface RenderGroupInput {
+  readonly files: ReadonlyArray<FileChangeSegmentModel>;
+  readonly artifactRows: ReadonlyArray<ArtifactChangeRow>;
+  readonly epicArtifacts: ReadonlyArray<ArtifactProjection>;
   readonly accessRole: ChatAccess["role"] | null;
   readonly activeHostId: string | null;
   readonly activeTurnStatus: ChatActiveTurn["status"] | null;
@@ -160,35 +172,45 @@ interface RenderGroupInput {
 
 function renderGroup(input: RenderGroupInput) {
   return render(
-    <TooltipProvider delayDuration={0}>
-      <ResolvedThemeContext.Provider
-        value={{ resolvedTheme: "dark", themePreset: "traycer-green" }}
-      >
-        <ChatRestoreProvider
-          value={{
-            accessRole: input.accessRole,
-            activeHostId: input.activeHostId,
-            activeTurnStatus: input.activeTurnStatus,
-            localSnapshotsClearedAt: input.localSnapshotsClearedAt,
-            restore: input.restore,
-            restoreActionPending: input.restoreActionPending,
-            restoreCheckpoint: input.restoreCheckpoint,
-            accumulatedFileChanges: [],
-            undeliveredChangeCount: 0,
-            accumulatedSetComplete: true,
-            revertFileChanges: () => null,
-          }}
+    withArtifactEpicSession(
+      input.epicArtifacts,
+      <TooltipProvider delayDuration={0}>
+        <ResolvedThemeContext.Provider
+          value={{ resolvedTheme: "dark", themePreset: "traycer-green" }}
         >
-          <FileChangeGroupSegment
-            findUnitId={null}
-            files={FILES}
-            artifacts={[]}
-            checkpointManifest={input.manifest}
-            hasLaterOverlappingChanges={input.hasLaterOverlappingChanges}
-          />
-        </ChatRestoreProvider>
-      </ResolvedThemeContext.Provider>
-    </TooltipProvider>,
+          <ChatRestoreProvider
+            value={{
+              accessRole: input.accessRole,
+              activeHostId: input.activeHostId,
+              activeTurnStatus: input.activeTurnStatus,
+              localSnapshotsClearedAt: input.localSnapshotsClearedAt,
+              restore: input.restore,
+              restoreActionPending: input.restoreActionPending,
+              restoreCheckpoint: input.restoreCheckpoint,
+              accumulatedFileChanges: [],
+              undeliveredChangeCount: 0,
+              accumulatedSetComplete: true,
+              revertFileChanges: () => null,
+            }}
+          >
+            <FileChangeGroupSegment
+              findUnitId={null}
+              files={input.files}
+              artifacts={groupArtifactFolderChanges(
+                input.artifactRows,
+                (row) => ({
+                  artifactId: row.artifactId,
+                  kind: row.artifactKind,
+                  title: row.title,
+                }),
+              )}
+              checkpointManifest={input.manifest}
+              hasLaterOverlappingChanges={input.hasLaterOverlappingChanges}
+            />
+          </ChatRestoreProvider>
+        </ResolvedThemeContext.Provider>
+      </TooltipProvider>,
+    ),
   );
 }
 
@@ -196,6 +218,9 @@ function baseInput(
   restoreCheckpoint: (checkpointId: string) => string | null,
 ): RenderGroupInput {
   return {
+    files: FILES,
+    artifactRows: [],
+    epicArtifacts: [],
     accessRole: "owner",
     activeHostId: "host-1",
     activeTurnStatus: null,
@@ -226,6 +251,7 @@ function expectUndoUnavailable(): void {
 describe("<FileChangeGroupSegment /> checkpoint undo", () => {
   afterEach(() => {
     cleanup();
+    disposeArtifactEpicSessions();
     vi.clearAllMocks();
     useSettingsStore.setState({
       diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
@@ -472,5 +498,77 @@ describe("<FileChangeGroupSegment /> checkpoint undo", () => {
     expect(diff.getAttribute("data-backgrounds")).toBe("false");
     expect(diff.getAttribute("data-indicator-style")).toBe("classic");
     expect(diff.getAttribute("data-mode")).toBe("unified");
+  });
+});
+
+describe("<FileChangeGroupSegment /> html and canvas artifacts", () => {
+  afterEach(() => {
+    cleanup();
+    disposeArtifactEpicSessions();
+  });
+
+  function pageRow(
+    fileName: string,
+    operation: ArtifactChangeRow["operation"],
+  ): ArtifactChangeRow {
+    return {
+      artifactId: "page-1",
+      artifactKind: "html",
+      title: "Checkout",
+      operation,
+      filePath: `/repo/artifacts/checkout/${fileName}`,
+      beforeHash: null,
+      afterHash: "b".repeat(64),
+    };
+  }
+
+  const PAGE_PROJECTION: ArtifactProjection = {
+    id: "page-1",
+    kind: "html",
+    title: "Checkout",
+    folderName: "checkout",
+    parentId: null,
+    artifactRoomId: null,
+    createdAt: 1,
+    updatedAt: 1,
+    status: null,
+    createdManually: false,
+    layout: "folder",
+  };
+
+  function renderArtifacts(epicArtifacts: ReadonlyArray<ArtifactProjection>) {
+    renderGroup({
+      ...baseInput(vi.fn(() => "action-1")),
+      files: [],
+      artifactRows: [
+        pageRow("index.html", "create"),
+        pageRow("style.css", "create"),
+      ],
+      epicArtifacts,
+    });
+  }
+
+  it("counts an artifact folder once and expands to its changed files", () => {
+    renderArtifacts([PAGE_PROJECTION]);
+
+    expect(screen.getByText("1 artifact")).toBeTruthy();
+    fireEvent.click(screen.getByText("Changes"));
+    expect(screen.getByText("Checkout")).toBeTruthy();
+    expect(screen.getByText("2 files")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("2 files"));
+
+    expect(screen.getByText("index.html")).toBeTruthy();
+    expect(screen.getByText("style.css")).toBeTruthy();
+  });
+
+  it("shows a loose page as one artifact row with its own verb", () => {
+    renderArtifacts([{ ...PAGE_PROJECTION, layout: "file" }]);
+
+    fireEvent.click(screen.getByText("Changes"));
+
+    expect(screen.getByText("Checkout")).toBeTruthy();
+    expect(screen.getByText("Created")).toBeTruthy();
+    expect(screen.queryByText("2 files")).toBeNull();
   });
 });

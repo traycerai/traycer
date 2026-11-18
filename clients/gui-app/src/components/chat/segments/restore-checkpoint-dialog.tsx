@@ -19,9 +19,15 @@ import {
 } from "@/components/ui/dialog";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
+import { useIsLooseFileArtifact } from "@/lib/epic-selectors";
 import { cn } from "@/lib/utils";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { useChatRestoreContext } from "@/components/chat/use-chat-restore-context";
+import {
+  distinctArtifactCount,
+  groupArtifactFolderChanges,
+  type ArtifactFolderBundle,
+} from "@/lib/chat/artifact-folder-bundles";
 import { RevertArtifactsCheckbox } from "./revert-artifacts-checkbox";
 import { useArtifactRowDisplay } from "./use-artifact-row-display";
 
@@ -67,9 +73,9 @@ function RestoreCheckpointDialogContent(props: RestoreCheckpointDialogProps) {
     (entry) => !isNoOpCheckpointEntry(entry),
   );
   const state = restoreCheckpointDialogState(manifest, entries, restore);
-  const artifactCount = entries.filter(
-    (entry) => entry.artifact && entry.undoable,
-  ).length;
+  const artifactCount = distinctArtifactCount(
+    entries.filter((entry) => entry.undoable),
+  );
   const [revertArtifacts, setRevertArtifacts] = useState(true);
 
   useEffect(() => {
@@ -116,12 +122,22 @@ function RestoreCheckpointDialogContent(props: RestoreCheckpointDialogProps) {
 
         <div className="-m-1 min-h-0 min-w-0 space-y-3 overflow-y-auto px-7 pt-1 pb-3">
           <div className="max-h-[min(45vh,22rem)] min-w-0 overflow-y-auto overflow-x-hidden rounded-lg border border-border/60 bg-foreground/3">
-            {entries.map((entry) => (
-              <RestoreFileRow
-                key={`${entry.filePath}:${entry.operation}:${entry.beforeHash ?? ""}`}
-                entry={entry}
-              />
-            ))}
+            {groupArtifactFolderChanges(
+              entries,
+              (entry) => entry.artifact ?? null,
+            ).map((row) =>
+              row.kind === "single" ? (
+                <RestoreFileRow
+                  key={`${row.item.filePath}:${row.item.operation}:${row.item.beforeHash ?? ""}`}
+                  entry={row.item}
+                />
+              ) : (
+                <RestoreArtifactBundleRow
+                  key={`artifact:${row.artifactId}`}
+                  bundle={row}
+                />
+              ),
+            )}
           </div>
 
           {hasLaterOverlappingChanges ? (
@@ -344,6 +360,53 @@ function RestoreFileRow(props: {
         </FilePathTooltip>
       )}
       {entry.undoable ? null : <SkippedIndicator entry={entry} />}
+    </div>
+  );
+}
+
+/**
+ * One html or canvas artifact's changed files as a single restore row; a
+ * loose HTML page is its own single file and reads as any artifact entry. A
+ * folder is skipped only when none of its files can be undone; a partly
+ * undoable artifact still restores the files that can be.
+ */
+function RestoreArtifactBundleRow(props: {
+  readonly bundle: ArtifactFolderBundle<TurnCheckpointManifestEntry>;
+}) {
+  const { bundle } = props;
+  return useIsLooseFileArtifact(bundle.artifactId) ? (
+    <RestoreFileRow entry={bundle.members[0].item} />
+  ) : (
+    <RestoreArtifactFolderRow bundle={bundle} />
+  );
+}
+
+function RestoreArtifactFolderRow(props: {
+  readonly bundle: ArtifactFolderBundle<TurnCheckpointManifestEntry>;
+}) {
+  const { bundle } = props;
+  const anyUndoable = bundle.members.some((member) => member.item.undoable);
+  const memberCount = bundle.members.length;
+  return (
+    <div
+      className={cn(
+        "flex min-w-0 items-center gap-2.5 border-t border-border/40 px-3 py-1.5 first:border-t-0",
+        anyUndoable ? null : "text-muted-foreground/70",
+      )}
+    >
+      <OperationDot operation={bundle.operation} />
+      <RestoreArtifactTitle
+        artifact={{
+          artifactId: bundle.artifactId,
+          kind: bundle.artifactKind,
+          title: bundle.title,
+        }}
+        operation={bundle.operation}
+      />
+      <span className="shrink-0 text-ui-xs text-muted-foreground">
+        {memberCount} {fileLabel(memberCount)}
+      </span>
+      {anyUndoable ? null : <SkippedIndicator entry={bundle.members[0].item} />}
     </div>
   );
 }
