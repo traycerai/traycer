@@ -67,6 +67,7 @@ import {
   USER_A,
   endCase,
   heldRail,
+  watchThreadRail,
   mountSurfaceOnRouteAs,
   type PlaceRoute,
   pressSend,
@@ -560,9 +561,11 @@ describe("a place restored over a thread removed in place", () => {
         expect(route.history.location.search).not.toContain("thread"),
       );
 
+      const sawThread = watchThreadRail();
       await stepBack(route);
 
       await waitFor(() => expect(heldRail()).toBeNull());
+      expect(sawThread(), "Back restored no thread rail to close").toBe(true);
       expect(screen.queryByTestId("bot-thread-loading")).toBeNull();
       expect(route.history.location.search).not.toContain("thread");
     },

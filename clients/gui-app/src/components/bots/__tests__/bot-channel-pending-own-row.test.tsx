@@ -67,8 +67,10 @@ import {
   VIEWER_USER_ID,
 } from "@/components/bots/__tests__/bot-failed-request-test-support";
 import {
+  drawnRowHolding,
   FakeIntersectionObserver,
   foregroundWindow,
+  observersOf,
   seeEverythingDrawn,
 } from "@/components/bots/__tests__/bot-read-observer-test-support";
 import { recordNegotiatedHostManifest } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
@@ -853,11 +855,10 @@ describe("<BotChannelView /> where the pending row sits", () => {
 
       await seeEverythingDrawn();
 
-      await waitFor(() =>
-        expect(cursorWrites).toEqual([
-          expect.objectContaining({ botId: BOT_ID, ...EARLIER_POSITION }),
-        ]),
-      );
+      // Inside the fake-clock window the pending case below relies on.
+      expect(cursorWrites).toEqual([
+        expect.objectContaining({ botId: BOT_ID, ...EARLIER_POSITION }),
+      ]);
     });
 
     it("asks the host for no read-cursor write for a row that is still pending", async () => {
@@ -878,6 +879,11 @@ describe("<BotChannelView /> where the pending row sits", () => {
           ),
         ).toBe(true),
       );
+
+      expect(
+        observersOf(drawnRowHolding(TEXT), "view").length,
+        "reading is not on for the pending row",
+      ).toBeGreaterThan(0);
 
       // The dwell runs past READ_AFTER_MS on a fake clock, the send unresolved.
       await seeEverythingDrawn();
@@ -962,6 +968,10 @@ describe("<BotChannelView /> a pending row and the account", () => {
     await screen.findByRole("group", { name: "Message Release Bot" });
     pressSend(TEXT);
     await waitFor(() => expect(sends).toHaveLength(1));
+    expect(
+      rowsSaying(TEXT),
+      "the pending row was not drawn before the box left",
+    ).toHaveLength(1);
     unmountChannel();
     await act(async () => {
       firstSend().reject(notWrittenRefusal("refused"));
@@ -983,6 +993,10 @@ describe("<BotChannelView /> a send that fails after its box unmounted, in the s
     await screen.findByRole("group", { name: "Message Release Bot" });
     pressSend(TEXT);
     await waitFor(() => expect(sends).toHaveLength(1));
+    expect(
+      rowsSaying(TEXT),
+      "the pending row was not drawn before the box left",
+    ).toHaveLength(1);
     unmountChannel();
 
     await act(async () => {
@@ -1007,6 +1021,10 @@ describe("<BotChannelView /> a send that fails after its box unmounted, in the s
         Object.keys(useBotDraftsStore.getState().threadBoxes[BOT_ID] ?? {}),
       ).toHaveLength(1),
     );
+    expect(
+      rowsSaying(TEXT),
+      "the pending row was not drawn before the box left",
+    ).toHaveLength(1);
     unmountChannel();
 
     await act(async () => {
@@ -1052,6 +1070,10 @@ describe("<BotChannelView /> a send that fails after its box unmounted, in the s
     await screen.findByRole("group", { name: "Message Release Bot" });
     pressSend(TEXT);
     await waitFor(() => expect(sends).toHaveLength(1));
+    expect(
+      rowsSaying(TEXT),
+      "the pending row was not drawn before the box left",
+    ).toHaveLength(1);
     unmountChannel();
 
     remountChannel();
@@ -1122,6 +1144,10 @@ describe("<BotChannelView /> after a reload", () => {
     await screen.findByRole("group", { name: "Message Release Bot" });
     pressSend(TEXT);
     await waitFor(() => expect(sends).toHaveLength(1));
+    expect(
+      rowsSaying(TEXT),
+      "the pending row was not drawn before the reload",
+    ).toHaveLength(1);
 
     await reload(createChannelStore([EARLIER_POST]));
 
@@ -1213,6 +1239,10 @@ describe('<BotChannelView replyMode="thread" /> the provisional panel at Send', 
     pressSend(TEXT);
     await screen.findByTestId("bot-thread-panel");
     await waitFor(() => expect(sends).toHaveLength(1));
+    expect(
+      rowsSaying(TEXT),
+      "the pending row was not drawn before the box left",
+    ).toHaveLength(1);
     unmountChannel();
 
     await act(async () => {
@@ -1232,6 +1262,10 @@ describe('<BotChannelView replyMode="thread" /> the provisional panel at Send', 
     pressSend(TEXT);
     await screen.findByTestId("bot-thread-panel");
     await waitFor(() => expect(sends).toHaveLength(1));
+    expect(
+      rowsSaying(TEXT),
+      "the pending row was not drawn before the box left",
+    ).toHaveLength(1);
     unmountChannel();
 
     await act(async () => {

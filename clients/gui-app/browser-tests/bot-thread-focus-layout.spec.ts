@@ -210,7 +210,7 @@ test.describe("a long held reply, in the panel layout", () => {
     page,
   }) => {
     await page.goto(
-      `${fixture("bot-thread-tasks-bound")}?thread=posted&pending=long-reply`,
+      `${fixture("bot-thread-tasks-bound")}?thread=posted&post=short&pending=long-reply`,
     );
     const held = page.locator(HELD);
     await expect(held).toBeVisible();
