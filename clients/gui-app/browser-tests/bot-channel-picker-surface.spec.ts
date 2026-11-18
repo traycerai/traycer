@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
-import { z } from "zod";
 
 import { fixture } from "./support/fixtures.ts";
+import { followSurface, type SurfaceEntry } from "./support/follow-surface.ts";
 
 // The installed app's bot picker is a full-width surface that enters from the
 // right edge. Its width, where it rests and the movement that brings it there
@@ -25,90 +25,9 @@ test.use({
 const PICKER = '[data-testid="bot-channel-picker"]';
 const TRIGGER = '[data-testid="bot-channel-picker-trigger"]';
 
-const BoxSchema = z.object({
-  left: z.number(),
-  right: z.number(),
-  top: z.number(),
-  width: z.number(),
-});
-const EntrySchema = z.object({
-  /** One box per frame the surface had a running animation. */
-  inFlight: z.array(BoxSchema),
-  /** The box once every animation on the surface had finished. */
-  settled: BoxSchema,
-});
-type Entry = z.infer<typeof EntrySchema>;
-
-/**
- * Clicks the trigger, then follows the picker's entry. A frame loop starts at
- * the click, takes the surface's box each frame it has a running animation
- * (`getAnimations()` covers a CSS animation and a transition alike), and ends
- * once an animation has been seen and none is running. A surface that never
- * animates fails here by name instead of passing on its resting box.
- */
-async function openAndFollow(page: Page): Promise<Entry> {
-  return EntrySchema.parse(
-    await page.evaluate(
-      async (selectors: {
-        readonly picker: string;
-        readonly trigger: string;
-      }) => {
-        const trigger = document.querySelector(selectors.trigger);
-        if (!(trigger instanceof HTMLElement)) throw new Error("no trigger");
-        interface Box {
-          left: number;
-          right: number;
-          top: number;
-          width: number;
-        }
-        const boxOf = (node: Element): Box => {
-          const box = node.getBoundingClientRect();
-          return {
-            left: box.left,
-            right: box.right,
-            top: box.top,
-            width: box.width,
-          };
-        };
-        return new Promise((resolve, reject) => {
-          const inFlight: Box[] = [];
-          let seenAnimation = false;
-          const deadline = performance.now() + 5_000;
-          const tick = (): void => {
-            const node = document.querySelector(selectors.picker);
-            const running =
-              node === null
-                ? []
-                : node
-                    .getAnimations({ subtree: true })
-                    .filter((animation) => animation.playState === "running");
-            if (node !== null && running.length > 0) {
-              seenAnimation = true;
-              inFlight.push(boxOf(node));
-            }
-            if (node !== null && seenAnimation && running.length === 0) {
-              resolve({ inFlight, settled: boxOf(node) });
-              return;
-            }
-            if (performance.now() > deadline) {
-              reject(
-                new Error(
-                  seenAnimation
-                    ? "the picker's animation never finished"
-                    : "no animation ran on the picker: nothing to follow",
-                ),
-              );
-              return;
-            }
-            requestAnimationFrame(tick);
-          };
-          trigger.click();
-          requestAnimationFrame(tick);
-        });
-      },
-      { picker: PICKER, trigger: TRIGGER },
-    ),
-  );
+/** Clicks the trigger, then follows the picker's entry to where it rests. */
+function openAndFollow(page: Page): Promise<SurfaceEntry> {
+  return followSurface(page, { surface: PICKER, trigger: TRIGGER });
 }
 
 interface Insets {
@@ -138,6 +57,8 @@ test("the picker enters from the right edge and rests across the full width", as
   // Full width: the 3/4 default and the small-screen cap both leave it short.
   expect(entry.settled.left).toBeCloseTo(0, 0);
   expect(entry.settled.width).toBeCloseTo(PHONE.width, 0);
+  // Full height: it rests on the bottom edge when no keyboard is up.
+  expect(entry.settled.bottom).toBeCloseTo(PHONE.height, 0);
   // From the right: while it moved, it was right of where it rests, it moved
   // only leftward, and it began with most of its width still off screen.
   expect(entry.inFlight.length).toBeGreaterThan(0);
@@ -150,6 +71,22 @@ test("the picker enters from the right edge and rests across the full width", as
   for (const box of entry.inFlight) {
     expect(box.top).toBeCloseTo(entry.settled.top, 0);
   }
+});
+
+test("the picker's bottom edge rises with the keyboard", async ({ page }) => {
+  const keyboardInset = 300;
+  await page.goto(fixture("bot-compact-actions-menu"));
+  await expect(page.locator(TRIGGER)).toBeVisible();
+  await page.evaluate((inset: number) => {
+    document.documentElement.style.setProperty(
+      "--keyboard-inset",
+      `${String(inset)}px`,
+    );
+  }, keyboardInset);
+
+  const entry = await openAndFollow(page);
+
+  expect(entry.settled.bottom).toBeCloseTo(PHONE.height - keyboardInset, 0);
 });
 
 for (const insets of [

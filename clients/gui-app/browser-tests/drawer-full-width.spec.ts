@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { fixture } from "./support/fixtures.ts";
+import { followSurface } from "./support/follow-surface.ts";
 
 // What `fullWidth` does to a side drawer, and that it does nothing else: the
 // width is painted geometry, which jsdom does not compute. The drawer is the
@@ -22,24 +23,8 @@ const DRAWER = '[data-testid="drawer"]';
 const NO_INSETS: Insets = { top: 0, left: 0, right: 0 };
 
 async function settledBox(page: Page): Promise<Box> {
-  const read = async (): Promise<Box> =>
-    page.locator(DRAWER).evaluate((node) => {
-      const box = node.getBoundingClientRect();
-      return { left: box.left, right: box.right, width: box.width };
-    });
-  let previous = await read();
-  let stableFrames = 0;
-  for (let attempt = 0; attempt < 200 && stableFrames < 10; attempt += 1) {
-    await page.evaluate(() => new Promise(requestAnimationFrame));
-    const next = await read();
-    stableFrames =
-      next.left === previous.left && next.width === previous.width
-        ? stableFrames + 1
-        : 0;
-    previous = next;
-  }
-  expect(stableFrames).toBeGreaterThanOrEqual(10);
-  return previous;
+  const entry = await followSurface(page, { surface: DRAWER, trigger: null });
+  return entry.settled;
 }
 
 async function open(
