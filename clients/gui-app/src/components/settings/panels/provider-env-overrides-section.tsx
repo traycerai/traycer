@@ -105,8 +105,8 @@ export function ProviderEnvOverridesSection(props: {
     clearOwnValue.isPending ||
     useEverywhere.isPending ||
     commitOverride.isPending;
-  // The whole save: the write and the overrides re-read after it, the window
-  // the editor keeps its rows disabled for.
+  // The overrides re-read after a write: `disabled` ends with the write, and
+  // the spinner stays until the re-read lands.
   const [saving, setSaving] = useState(false);
   const notes = usePersonalRowNotes({
     kind: "env_override",
@@ -163,9 +163,7 @@ export function ProviderEnvOverridesSection(props: {
           </div>
           <ProviderEnvSubtitleLine />
         </div>
-        {saving || setOverride.isPending || deleteOverride.isPending ? (
-          <MutedAgentSpinner />
-        ) : null}
+        {saving || disabled ? <MutedAgentSpinner /> : null}
       </div>
       <EnvOverrideEditor
         key={JSON.stringify([viewerId, configurationKey, providerId])}
