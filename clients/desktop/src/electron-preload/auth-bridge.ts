@@ -66,6 +66,8 @@ import type {
   SignInSaveResult,
 } from "../ipc-contracts/auth-types";
 import type {
+  DesktopAuthSessionPendingRefused,
+  DesktopAuthSessionRefusalReason,
   DesktopAuthSessionSetResult,
   DesktopAuthSessionSnapshot,
   DesktopAuthVerificationRevoked,
@@ -693,6 +695,15 @@ export interface AuthSessionBridgeSurface {
   onVerificationRevoked(
     handler: (rejectedToken: string, revocation: "user-epoch" | null) => void,
   ): Disposable;
+  /**
+   * A bearer main was holding or checking after a `pending` answer reached a
+   * verdict, on main's re-check or on a later set of the same pair, fanned to
+   * every window. Each window applies it only to the session it wrote, as it
+   * would a refused set.
+   */
+  onPendingRefused(
+    handler: (token: string, reason: DesktopAuthSessionRefusalReason) => void,
+  ): Disposable;
 }
 
 export function buildAuthSessionBridge(): AuthSessionBridgeSurface {
@@ -727,6 +738,13 @@ export function buildAuthSessionBridge(): AuthSessionBridgeSurface {
         RunnerHostEvent.authVerificationRevoked,
         (revoked) => {
           handler(revoked.token, revoked.revocation);
+        },
+      ),
+    onPendingRefused: (handler) =>
+      subscribe<DesktopAuthSessionPendingRefused>(
+        RunnerHostEvent.authSessionPendingRefused,
+        (refused) => {
+          handler(refused.token, refused.reason);
         },
       ),
   };

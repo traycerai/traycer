@@ -1,10 +1,18 @@
 import { useEffect, type ReactNode } from "react";
+import { toast } from "sonner";
+import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { appLogger } from "@/lib/logger";
 import { useAuthService } from "@/lib/host";
+import { createReportIssueContext } from "@/lib/report-issue-context";
+import {
+  createRetainingReportAction,
+  reportableWarningToast,
+} from "@/lib/reportable-error-toast";
 import { useWindowsBridge } from "@/providers/windows-bridge-context";
 import { authSessionRefusedToast } from "@/lib/toast/channels";
 import type { AuthSessionSnapshot } from "@/lib/auth/auth-service";
 import type {
+  DesktopAuthSessionPendingReason,
   DesktopAuthSessionRefusalReason,
   DesktopAuthSessionSnapshot,
 } from "@/lib/windows/types";
@@ -25,6 +33,15 @@ import type {
  *     `auth.onSessionSnapshotChange` and projects each snapshot into
  *     `bridge.authSession.set(...)`. Same-user refresh and signed-out
  *     transitions are forwarded so sibling windows stay in sync.
+ *   - Main's answer is shown as one notice. `pending` (main could not check
+ *     the token yet and keeps checking it) is about main's check: it stays
+ *     until main fans out any session (its verified echo of this one, or
+ *     another), or until a verdict against this bearer replaces it with the
+ *     refused notice. `refused` is about this window's own bearer: it names
+ *     its reason and, for a verdict against the token, offers Sign out, and
+ *     it stays until this window's own session changes - its next write, or
+ *     main's session actually landing in its AuthService. Every notice shows
+ *     the reason code and offers Report issue.
  *   - Inbound (bridge → this window): subscribes to
  *     `bridge.authSession.onChange` and forwards each inbound snapshot to
  *     `auth.ingestProjectedSessionSnapshot(...)`. The auth service
@@ -50,9 +67,57 @@ export function WindowsBridgeAuthSessionBridge(
       return;
     }
 
-    let projectingInbound = false;
+    // Main's sessions this window is projecting, counted per projection still
+    // in flight: a fan-out can arrive while an earlier one is still being
+    // validated, and the earlier one settling must not end the later one.
+    const projecting = new Map<string, number>();
     let lastWrittenSerialized: string | null = null;
+    // The bearer of `lastWrittenSerialized`; read only while that is set.
+    let lastWrittenToken: string | null = null;
+    // A write main has since moved past: main fanned out a session after it
+    // (its verified echo, or another), so a `pending` answer for it still in
+    // flight then describes a check main is no longer making.
+    let movedPastSerialized: string | null = null;
+    // What the notice on screen is about: main's undecided check (`pending`),
+    // or this window's own bearer (`refused`).
+    let noticeKind: "pending" | "refused" | null = null;
     let lastLocalRestoreSerialized: string | null = null;
+
+    const dismissNotice = (): void => {
+      noticeKind = null;
+      authSessionRefusedToast.dismiss();
+    };
+
+    const showNotice = (
+      notice: AuthSessionNotice,
+      kind: "pending" | "refused",
+      onSignOut: (() => void) | null,
+    ): void => {
+      noticeKind = kind;
+      showAuthSessionNotice(notice, onSignOut);
+    };
+
+    // Shown in the notice's place, on its toast id. Sonner merges a toast's
+    // options into the toast already up under that id, so every option the
+    // notice sets is cleared here; otherwise the notice's description, code
+    // and Report issue (with the notice's context) stay under this title.
+    const showLocalRestoreWarning = (message: string): void => {
+      noticeKind = null;
+      toast.warning(message, {
+        id: authSessionRefusedToast.id,
+        duration: undefined,
+        description: undefined,
+        action: undefined,
+        cancel: null,
+      });
+    };
+
+    const signOutFromNotice = (): void => {
+      Analytics.getInstance().track(AnalyticsEvent.SignOutRequested, {
+        source: "notification",
+      });
+      void auth.signOut();
+    };
 
     const restoreLocal = (snapshot: AuthSessionSnapshot): void => {
       if (
@@ -76,7 +141,7 @@ export function WindowsBridgeAuthSessionBridge(
             lastLocalRestoreSerialized = null;
           }
           if (result === "unavailable") {
-            authSessionRefusedToast.warning(
+            showLocalRestoreWarning(
               "Traycer could not read your local session. Reload the window to try again.",
             );
           }
@@ -89,7 +154,7 @@ export function WindowsBridgeAuthSessionBridge(
             "[auth] could not restore the desktop local session",
             {},
           );
-          authSessionRefusedToast.warning(
+          showLocalRestoreWarning(
             "Traycer could not restore your local session. Reload the window to try again.",
           );
         },
@@ -97,7 +162,21 @@ export function WindowsBridgeAuthSessionBridge(
     };
 
     const writeOutbound = (snapshot: AuthSessionSnapshot): void => {
-      if (projectingInbound) return;
+      if (projecting.size > 0) {
+        // This window's own session changed while it projected main's, so a
+        // notice about the session it held no longer applies. When the change
+        // is one of main's sessions landing, the latch moves to it and its
+        // echo is not written back.
+        dismissNotice();
+        if (snapshot.status === "unverified") return;
+        const adopted = toDesktopSnapshot(snapshot);
+        const serialized = serializeDesktopSnapshot(adopted);
+        if (projecting.has(serialized)) {
+          lastWrittenSerialized = serialized;
+          lastWrittenToken = adopted.token;
+        }
+        return;
+      }
       if (snapshot.status === "unverified") {
         // Main needs a local identity to select the already-running host.
         // It reads that identity from disk rather than trusting this profile;
@@ -114,18 +193,38 @@ export function WindowsBridgeAuthSessionBridge(
         return;
       }
       lastWrittenSerialized = serialized;
+      lastWrittenToken = desktopSnapshot.token;
+      movedPastSerialized = null;
+      // A newer session makes any notice about an older one stale.
+      dismissNotice();
       void bridge.authSession.set(desktopSnapshot).then(
         (result) => {
+          if (result.outcome === "pending") {
+            // Main holds this exact session and keeps checking it, so the latch
+            // stays: its fan-out once verified is this window's own echo.
+            if (lastWrittenSerialized !== serialized) return;
+            if (movedPastSerialized === serialized) return;
+            showNotice(
+              pendingNotice(result.reason, result.heldLocally),
+              "pending",
+              null,
+            );
+            return;
+          }
           if (result.outcome !== "refused") return;
           // The latch is an echo suppressor, not a record of what the bridge
           // holds: a refused write left nothing there, so keeping it latched
           // makes the very next projection of the SAME snapshot a no-op and
           // the window never re-attempts. Cleared only while the latch is
           // still this write's - a newer projection has already superseded it.
-          if (lastWrittenSerialized === serialized)
-            lastWrittenSerialized = null;
-          authSessionRefusedToast.warning(
-            describeAuthSessionRefusalReason(result.reason),
+          // A refusal of an older write says nothing about the session now.
+          if (lastWrittenSerialized !== serialized) return;
+          lastWrittenSerialized = null;
+          const notice = refusalNotice(result.reason);
+          showNotice(
+            notice,
+            "refused",
+            notice.offersSignOut ? signOutFromNotice : null,
           );
         },
         (cause: unknown) => {
@@ -147,15 +246,23 @@ export function WindowsBridgeAuthSessionBridge(
       // Main's local selection identity is neither a cloud verdict nor a
       // sign-out. Each window restores it through its own AuthService.
       if (snapshot.status === "unverified") return;
+      // Whichever session main fanned out, it has moved past the check a
+      // pending notice describes, and past a `pending` answer still in flight.
+      // A refused notice is about this window's own bearer: it stays until
+      // this window's session changes (`writeOutbound`).
+      if (noticeKind === "pending") dismissNotice();
+      movedPastSerialized = lastWrittenSerialized;
       const serialized = serializeDesktopSnapshot(snapshot);
-      if (serialized === lastWrittenSerialized) {
-        return;
-      }
-      lastWrittenSerialized = serialized;
-      projectingInbound = true;
+      if (serialized === lastWrittenSerialized) return;
+      // Not adopted until this window's AuthService says so: it re-validates
+      // the bearer and keeps its own session when that fails. The latch moves
+      // only when the session lands (`writeOutbound`).
+      projecting.set(serialized, (projecting.get(serialized) ?? 0) + 1);
       const projection = fromDesktopSnapshot(snapshot);
       void auth.ingestProjectedSessionSnapshot(projection).finally(() => {
-        projectingInbound = false;
+        const inFlight = projecting.get(serialized) ?? 1;
+        if (inFlight > 1) projecting.set(serialized, inFlight - 1);
+        else projecting.delete(serialized);
       });
     };
 
@@ -202,6 +309,25 @@ export function WindowsBridgeAuthSessionBridge(
         },
       ) ?? null;
 
+    // Main's own re-check of a session it answered `pending` for reached a
+    // verdict. The set's answer came long ago, so this is the refused answer
+    // arriving late, and it is applied exactly as one: the latch clears and the
+    // verdict notice replaces the pending one. Fenced to the bearer this window
+    // wrote; any other bearer is not this window's verdict.
+    const pendingRefusedSubscription =
+      bridge.authSession.onPendingRefused?.((token, reason) => {
+        if (lastWrittenSerialized === null || lastWrittenToken !== token) {
+          return;
+        }
+        lastWrittenSerialized = null;
+        const notice = refusalNotice(reason);
+        showNotice(
+          notice,
+          "refused",
+          notice.offersSignOut ? signOutFromNotice : null,
+        );
+      }) ?? null;
+
     // HostRuntimeProvider has already awaited auth.start(), restoring the
     // shared credentials file. Subscribing synchronously replays that session
     // to main. Do not read main's initial projection back: its signed-in write
@@ -215,6 +341,7 @@ export function WindowsBridgeAuthSessionBridge(
       inboundSubscription.dispose();
       revokeSubscription.dispose();
       verdictLossSubscription?.dispose();
+      pendingRefusedSubscription?.dispose();
     };
   }, [auth, bridge]);
 
@@ -276,26 +403,110 @@ function fromDesktopSnapshot(
   };
 }
 
-const AUTH_SESSION_REFUSAL_COPY: Record<
-  DesktopAuthSessionRefusalReason,
-  string
-> = {
-  "malformed-token": "the sign-in token was malformed",
-  "unsupported-algorithm": "the sign-in token used an unsupported algorithm",
-  "unknown-signing-key": "the sign-in token's signing key was not recognized",
-  "key-source-unavailable": "the signing-key source was unavailable",
-  "bad-signature": "the sign-in token's signature did not verify",
-  expired: "the sign-in token had expired",
-  "issuer-mismatch": "the sign-in token's issuer did not match",
-  "audience-mismatch": "the sign-in token's audience did not match",
-  "subject-mismatch": "the sign-in token's subject did not match",
-};
+/**
+ * One sign-in notice. `code` is the reason main gave, shown as-is so the
+ * person can quote it and carried into the report; it is a statement about
+ * the token, never about the account, and the notice carries nothing else
+ * that identifies anyone.
+ */
+interface AuthSessionNotice {
+  readonly title: string;
+  readonly description: string;
+  readonly code: DesktopAuthSessionRefusalReason;
+  readonly offersSignOut: boolean;
+}
 
-/** Names the refusal category in plain words. Never renders the token. */
-function describeAuthSessionRefusalReason(
+const CANNOT_REACH_SIGN_IN = "Can't reach Traycer's sign-in service.";
+const STILL_CONFIRMING_SIGN_IN = "Traycer is still confirming your sign-in.";
+const OTHER_DEVICES_AFTER_REACHING =
+  "Hosts on your other devices will appear once it's back.";
+const OTHER_DEVICES_AFTER_CONFIRMING =
+  "Hosts on your other devices will appear once it's done.";
+const KEEPS_TRYING = "Traycer will keep trying.";
+
+/** Main keeps checking the session; nothing for the person to do but wait. */
+function pendingNotice(
+  reason: DesktopAuthSessionPendingReason,
+  heldLocally: boolean,
+): AuthSessionNotice {
+  if (reason === "key-source-unavailable") {
+    return {
+      title: CANNOT_REACH_SIGN_IN,
+      description: heldLocally ? OTHER_DEVICES_AFTER_REACHING : KEEPS_TRYING,
+      code: reason,
+      offersSignOut: false,
+    };
+  }
+  return {
+    title: STILL_CONFIRMING_SIGN_IN,
+    description: heldLocally ? OTHER_DEVICES_AFTER_CONFIRMING : KEEPS_TRYING,
+    code: reason,
+    offersSignOut: false,
+  };
+}
+
+/**
+ * A verdict against the token: a fresh sign-in mints one main can check, so
+ * signing out and back in is the action. The two reasons a shell from before
+ * `pending` still refuses with are not verdicts, and signing out would not
+ * help with them.
+ */
+function refusalNotice(
   reason: DesktopAuthSessionRefusalReason,
-): string {
-  return `Traycer could not verify this sign-in with the auth service (${AUTH_SESSION_REFUSAL_COPY[reason]}). Sign out and back in.`;
+): AuthSessionNotice {
+  if (
+    reason === "key-source-unavailable" ||
+    reason === "signing-key-unconfirmed"
+  ) {
+    return {
+      title: CANNOT_REACH_SIGN_IN,
+      description: "Restart Traycer once you're back online.",
+      code: reason,
+      offersSignOut: false,
+    };
+  }
+  return {
+    title: "Traycer couldn't confirm this sign-in.",
+    description: "Sign out and back in.",
+    code: reason,
+    offersSignOut: true,
+  };
+}
+
+/**
+ * Stays up until the session changes or the person closes it: while main is
+ * still checking, the startup card can be what is behind it. Report issue
+ * keeps the notice on screen so its code stays readable; Sign out ends it.
+ */
+function showAuthSessionNotice(
+  notice: AuthSessionNotice,
+  onSignOut: (() => void) | null,
+): void {
+  const report = createReportIssueContext({
+    title: notice.title,
+    message: notice.description,
+    code: notice.code,
+    source: "Desktop sign-in",
+  });
+  reportableWarningToast(
+    notice.title,
+    {
+      id: authSessionRefusedToast.id,
+      duration: Number.POSITIVE_INFINITY,
+      description: (
+        <span className="flex flex-col gap-1">
+          <span>{notice.description}</span>
+          <span className="font-mono text-code-xs text-muted-foreground select-text">
+            {notice.code}
+          </span>
+        </span>
+      ),
+      action: createRetainingReportAction(report),
+      cancel:
+        onSignOut === null ? null : { label: "Sign out", onClick: onSignOut },
+    },
+    report,
+  );
 }
 
 function serializeDesktopSnapshot(
