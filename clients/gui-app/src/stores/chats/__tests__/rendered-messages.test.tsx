@@ -47,6 +47,12 @@ import {
   RETRY_IN_PROGRESS_ERROR_CODE,
   RETRY_RECOVERED_ERROR_CODE,
 } from "@traycer/protocol/host/agent/gui/retry-feedback";
+import {
+  PENDING,
+  SOURCE,
+} from "@/components/bots/__tests__/bot-feedback-draft-card-test-support";
+
+const draftProjection = { source: SOURCE, draft: PENDING };
 
 // Mirror the host accumulator: a persisted tool_call/approval block carries
 // precomputed display fields, not the raw input. Computed via the same protocol
@@ -1954,36 +1960,17 @@ describe("useRenderedMessages", () => {
   });
 
   it("carries a bot row's feedback draft projection onto the rendered row and refreshes it when the stamp settles", () => {
-    const pending = {
-      source: {
-        hostId: "host-source",
-        epicId: "epic-1",
-        chatId: "chat-1",
-        blockId: "block-1",
-      },
-      draft: {
-        category: "tool_problem",
-        toolName: "traycer_run_shell",
-        goal: "Restart a shell with a new working directory.",
-        observed: "The process kept the old directory.",
-        suggestion: null,
-        suggestDiagnostics: false,
-        state: "pending" as const,
-        decidedAt: null,
-        failureReason: null,
-      },
-    };
     const sent = {
-      ...pending,
-      draft: { ...pending.draft, state: "sent" as const, decidedAt: 5000 },
+      ...draftProjection,
+      draft: { ...PENDING, state: "sent" as const, decidedAt: 5000 },
     };
     const row: Message = {
       ...assistantMessage("turn-1", 2000),
-      feedbackDraft: pending,
+      feedbackDraft: draftProjection,
     };
 
     const driver = renderRenderedMessages({ messages: [row] });
-    expect(driver.result.current[0].feedbackDraft).toEqual(pending);
+    expect(driver.result.current[0].feedbackDraft).toEqual(draftProjection);
 
     // Same row id and timestamp, only the mirrored stamp changed: the cached
     // turn must not hide it.
@@ -1993,25 +1980,6 @@ describe("useRenderedMessages", () => {
   });
 
   describe("a bot turn's feedback draft across split rows", () => {
-    const draftProjection = {
-      source: {
-        hostId: "host-source",
-        epicId: "epic-1",
-        chatId: "chat-1",
-        blockId: "block-1",
-      },
-      draft: {
-        category: "tool_problem",
-        toolName: "traycer_run_shell",
-        goal: "Restart a shell with a new working directory.",
-        observed: "The process kept the old directory.",
-        suggestion: null,
-        suggestDiagnostics: false,
-        state: "pending" as const,
-        decidedAt: null,
-        failureReason: null,
-      },
-    };
     const steerContent = {
       type: "doc" as const,
       content: [{ type: "paragraph" as const, content: [] }],

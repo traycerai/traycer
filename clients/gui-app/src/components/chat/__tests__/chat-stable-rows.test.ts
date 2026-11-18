@@ -8,6 +8,10 @@ import {
   EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
   type StableChatTimelineRowsState,
 } from "@/components/chat/chat-stable-rows";
+import {
+  PENDING,
+  SOURCE,
+} from "@/components/bots/__tests__/bot-feedback-draft-card-test-support";
 import { makeMessage } from "./chat-message-fixtures";
 
 function cloneMessage(message: ChatMessage): ChatMessage {
@@ -538,26 +542,9 @@ describe("computeStableChatTimelineRows", () => {
   // A feedback draft's decision is mirrored onto the bot's row as a new
   // projection, the row's text as it was: the card must draw the outcome.
   it("treats a mirrored decision on a bot row's feedback draft as a real change, and the same projection as no change at all", () => {
-    const source = {
-      hostId: "host-source",
-      epicId: "epic-1",
-      chatId: "chat-1",
-      blockId: "block-1",
-    };
-    const draft = {
-      category: "tool_problem",
-      toolName: "traycer_run_shell",
-      goal: "Restart a shell with a new working directory.",
-      observed: "The process kept the old directory.",
-      suggestion: null,
-      suggestDiagnostics: false,
-      state: "pending" as const,
-      decidedAt: null,
-      failureReason: null,
-    };
     const pending: ChatMessage = {
       ...makeMessage(0, "assistant"),
-      feedbackDraft: { source, draft },
+      feedbackDraft: { source: SOURCE, draft: PENDING },
     };
     const state = computeStableChatTimelineRows(
       [pending],
@@ -570,8 +557,8 @@ describe("computeStableChatTimelineRows", () => {
     const sent: ChatMessage = {
       ...pending,
       feedbackDraft: {
-        source,
-        draft: { ...draft, state: "sent" as const, decidedAt: 5 },
+        source: SOURCE,
+        draft: { ...PENDING, state: "sent" as const, decidedAt: 5 },
       },
     };
     const afterSent = computeStableChatTimelineRows([sent], afterSame);

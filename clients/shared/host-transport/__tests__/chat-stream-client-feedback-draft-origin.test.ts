@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import {
+  CHANNEL_ORIGIN,
+  PROJECTION,
+  STAMP,
+} from "@traycer/protocol/host/agent/gui/__tests__/feedback-draft-fixtures";
 import { ChatStreamClient } from "../chat-stream-client";
 import {
   noopCallbacks,
@@ -16,37 +21,6 @@ import {
  * is pinned by the protocol freeze tests, not by this client.
  */
 
-const STAMP = {
-  category: "tool_problem",
-  toolName: "traycer_run_shell",
-  goal: "Restart a shell with a new working directory.",
-  observed: "The process kept the old directory.",
-  suggestion: null,
-  suggestDiagnostics: false,
-  state: "pending",
-  decidedAt: null,
-  failureReason: null,
-};
-
-const ORIGIN = {
-  kind: "channel",
-  botId: "bot-1",
-  hostEpoch: 3,
-  conversationId: "conv-1",
-  initiatingMessageId: "msg-1",
-  initiatingRequestId: "req-1",
-};
-
-const PROJECTION = {
-  source: {
-    hostId: "host-1",
-    epicId: "epic-1",
-    chatId: "chat-1",
-    blockId: "block-1",
-  },
-  draft: STAMP,
-};
-
 function assistantRow(): Record<string, unknown> {
   return {
     role: "assistant",
@@ -60,13 +34,13 @@ function assistantRow(): Record<string, unknown> {
     blocks: [
       {
         type: "tool_call",
-        blockId: "block-1",
+        blockId: PROJECTION.source.blockId,
         status: "completed",
         timestamp: 5,
         toolName: "traycer_draft_feedback",
         error: null,
         feedbackDraft: STAMP,
-        feedbackDraftOrigin: ORIGIN,
+        feedbackDraftOrigin: CHANNEL_ORIGIN,
       },
     ],
     startedAt: 1,
@@ -115,7 +89,7 @@ describe("ChatStreamClient on a negotiated 1.45 session", () => {
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ feedbackDraft: PROJECTION });
       expect(rows[0]).toMatchObject({
-        blocks: [{ feedbackDraft: STAMP, feedbackDraftOrigin: ORIGIN }],
+        blocks: [{ feedbackDraft: STAMP, feedbackDraftOrigin: CHANNEL_ORIGIN }],
       });
       client.close();
     },
