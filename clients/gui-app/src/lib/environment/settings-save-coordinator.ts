@@ -31,6 +31,16 @@ const TRIES_PER_HOLD_REVISION = 2;
 /** Another window may still have the save out; its answer comes within this time. */
 const UNLISTED_GRACE_MS = 60_000;
 
+// The host answers a save before it proposes it, and nothing tells the app when
+// the proposal is made, so a host with a remembered save is read again: soon at
+// first, then no more often than the longest wait, until the memory forgets the
+// save (applied, decided, refused or past its TTL).
+const FOLLOW_UP_FIRST_MS = 2_000;
+const FOLLOW_UP_LONGEST_MS = 5 * 60_000;
+const FOLLOW_UP_LONGEST_STEP = Math.ceil(
+  Math.log2(FOLLOW_UP_LONGEST_MS / FOLLOW_UP_FIRST_MS),
+);
+
 export interface SettingsSaveContext {
   /** Read before the preparation's first await. */
   readonly accountId: string;
@@ -48,6 +58,8 @@ export interface SettingsSaveCoordinatorPorts {
     hostId: string,
   ) => Promise<EnvironmentProposalsResponse | null>;
   readonly now: () => number;
+  /** Runs `run` once after `delayMs`; the returned function cancels it. */
+  readonly schedule: (run: () => void, delayMs: number) => () => void;
 }
 
 export interface SettingsSaveTicket {
@@ -75,6 +87,8 @@ export interface SettingsSaveCoordinator {
   ) => Promise<void>;
   /** One at a time per host; a call while one runs waits for it. */
   readonly reconcile: (hostId: string) => Promise<void>;
+  /** Cancels every follow-up read, including one a run still out would arm; a later call arms them again. */
+  readonly stop: () => void;
 }
 
 function receiptMatches(
@@ -270,18 +284,60 @@ export function createSettingsSaveCoordinator(
     return true;
   };
 
-  const reconcile = (hostId: string): Promise<void> => {
+  const followUps = new Map<string, () => void>();
+  let generation = 0;
+  /** A save begun before a stop arms nothing when it settles after it. */
+  const begunIn = new Map<string, number>();
+
+  const awaitsHold = (hostId: string): boolean =>
+    Object.values(store().records).some((record) => record.hostId === hostId);
+
+  const armFollowUp = (hostId: string, step: number, armedIn: number): void => {
+    if (generation !== armedIn) return;
+    followUps.get(hostId)?.();
+    followUps.delete(hostId);
+    if (!awaitsHold(hostId)) return;
+    const delay = Math.min(
+      FOLLOW_UP_FIRST_MS * 2 ** step,
+      FOLLOW_UP_LONGEST_MS,
+    );
+    const cancel = ports.schedule(() => {
+      followUps.delete(hostId);
+      void run(
+        hostId,
+        Math.min(step + 1, FOLLOW_UP_LONGEST_STEP),
+        armedIn,
+      );
+    }, delay);
+    followUps.set(hostId, cancel);
+  };
+
+  const run = (
+    hostId: string,
+    nextStep: number,
+    armedIn: number,
+  ): Promise<void> => {
     const previous = running.get(hostId) ?? Promise.resolve();
     // A failed run reaches no error report: what it remembers stays private,
     // and the records it did not settle wait for the next run.
     const next = previous
       .then(() => reconcileOnce(hostId))
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .then(() => armFollowUp(hostId, nextStep, armedIn));
     running.set(hostId, next);
     void next.finally(() => {
       if (running.get(hostId) === next) running.delete(hostId);
     });
     return next;
+  };
+
+  const reconcile = (hostId: string): Promise<void> =>
+    run(hostId, 0, generation);
+
+  const stop = (): void => {
+    generation += 1;
+    for (const cancel of followUps.values()) cancel();
+    followUps.clear();
   };
 
   const account = (): string | null => {
@@ -323,6 +379,7 @@ export function createSettingsSaveCoordinator(
     store().markSent(id);
     dropUnremembered();
     appliedListeners.set(id, applied);
+    begunIn.set(id, generation);
     return { kind: "remembered", ticket: { id } };
   };
 
@@ -331,10 +388,18 @@ export function createSettingsSaveCoordinator(
     hostAnswered: boolean,
   ): Promise<void> => {
     store().markAnswered(ticket.id);
+    const armedIn = begunIn.get(ticket.id) ?? null;
+    begunIn.delete(ticket.id);
     const record = settingsSaveMemoryRecord(store().records, ticket.id);
-    if (!hostAnswered || record === null) return;
-    await reconcile(record.hostId);
+    if (record === null || armedIn === null) return;
+    // An unanswered save may still reach the host, so it is read for later
+    // rather than now.
+    if (!hostAnswered) {
+      armFollowUp(record.hostId, 0, armedIn);
+      return;
+    }
+    await run(record.hostId, 0, armedIn);
   };
 
-  return { account, begin, settle, reconcile };
+  return { account, begin, settle, reconcile, stop };
 }

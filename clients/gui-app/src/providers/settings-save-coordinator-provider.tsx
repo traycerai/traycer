@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import type { EnvironmentProposalsResponse } from "@traycer/protocol/host/environment/settings-proposals";
 import { tryAcquireReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import { readHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
@@ -45,6 +45,11 @@ function nowMs(): number {
   return Date.now();
 }
 
+function scheduleOnce(run: () => void, delayMs: number): () => void {
+  const timer = window.setTimeout(run, delayMs);
+  return () => window.clearTimeout(timer);
+}
+
 /** Applies each hold as its host connects, with or without an editor open. */
 export function SettingsSaveCoordinatorProvider(props: {
   readonly children: ReactNode;
@@ -58,9 +63,12 @@ export function SettingsSaveCoordinatorProvider(props: {
           binding === null ? null : binding.auth.environmentCloud(),
         readProposals: proposalsReader(binding),
         now: nowMs,
+        schedule: scheduleOnce,
       }),
     [binding],
   );
+  // A coordinator for a binding no longer here reads no host again.
+  useEffect(() => () => coordinator.stop(), [coordinator]);
   return (
     <SettingsSaveMemoryPersistLifecycleBridge>
       <SettingsSaveCoordinatorContext.Provider value={coordinator}>
