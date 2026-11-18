@@ -116,7 +116,7 @@ export function TeamProfileEditor(props: {
             disabled={busy}
             onClick={() => setConfirmSignOut(true)}
           >
-            {profilePersonActionLabel("sign-out", "record")}
+            {profilePersonActionLabel("sign-out")}
           </Button>
         }
         removePending={actions.remove.isPending}
@@ -130,7 +130,6 @@ export function TeamProfileEditor(props: {
         removeConfirmation={
           <ProfilePersonActionConfirmation
             action="remove"
-            scope="record"
             profileName={profileDisplayLabel(props.profile)}
             environmentName={teamName}
             open={confirmRemove}
@@ -185,7 +184,6 @@ export function TeamProfileEditor(props: {
       </ProfileEditDialogPresentation>
       <ProfilePersonActionConfirmation
         action="sign-out"
-        scope="record"
         profileName={profileDisplayLabel(props.profile)}
         environmentName={teamName}
         open={confirmSignOut}

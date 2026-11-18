@@ -571,10 +571,7 @@ function ProfileSignOutAction(props: {
   if (!profileSignOutAvailable(props.profile, recordAccount, supported))
     return null;
   const environmentAccount = recordAccount || custodyClass === "brokered";
-  const scope = "record";
-  const label = environmentAccount
-    ? profilePersonActionLabel("sign-out", scope)
-    : "Sign out";
+  const label = profilePersonActionLabel("sign-out");
   const signOutOnHost = (): void =>
     signOut.mutate(
       { providerId: props.providerId, profileId: props.profile.profileId },
@@ -608,7 +605,6 @@ function ProfileSignOutAction(props: {
       {environmentAccount ? (
         <ProfilePersonActionConfirmation
           action="sign-out"
-          scope={scope}
           profileName={profileDisplayLabel(props.profile)}
           environmentName={props.environmentName}
           open={confirmOpen}
@@ -966,7 +962,6 @@ export function ProfileEditDialog(props: {
         recordAccount ? (
           <ProfilePersonActionConfirmation
             action="remove"
-            scope="record"
             profileName={profileDisplayLabel(props.profile)}
             environmentName={environmentName}
             open={confirmRemoveOpen}
