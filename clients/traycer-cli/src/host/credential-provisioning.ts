@@ -396,7 +396,7 @@ export async function provisionInstalledHostCredential(
       // the recovery below. Recorded before the early return so even a
       // recovery the deadline cannot cover still counts as contact.
       hostAnswered = true;
-      // The CLI sets
+      // Never START a rotation the deadline cannot cover. The CLI sets
       // `process.exitCode` rather than calling `process.exit` (see
       // `runner/exit.ts`), so the process waits for the event loop to
       // drain: a mint or refresh begun as the budget ran out would keep
